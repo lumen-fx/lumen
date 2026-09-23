@@ -1118,9 +1118,8 @@ built against, and that the library reports the `name` the app declared; a
 mismatch fails the compile with an error naming the plugin and the fix
 (rebuild against the matching Lumen tag). The IR format version moves with
 the compiled-app format, which grows whenever the artifact carries something
-new, such as the translation catalogues it now carries, so a plugin built
-against an earlier Lumen needs a rebuild after an upgrade even when its own
-code did not change. Plugins must build with the
+new, so a plugin built against an earlier Lumen needs a rebuild after an
+upgrade even when its own code did not change. Plugins must build with the
 default `panic = "unwind"`: the generated thunks catch a hook panic and
 turn it into a compile error, which needs unwinding, so a plugin built with
 `panic = "abort"` is refused at load with an error saying so.

@@ -4,11 +4,107 @@
 //! happens to the tree before a document is written from it rather than to
 //! the document afterwards. A build does this once per locale; a server
 //! embedding the emitter does it once per locale it holds a tree for.
+//! [`locale_trees`] is where both build those trees.
+
+use std::sync::Arc;
 
 use lumen_core::components::AuthoredStrings;
-use lumen_i18n::SharedI18n;
+use lumen_i18n::{Catalogues, LanguageIdentifier, SharedI18n};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_ir::translate::translate;
+
+use crate::server::PageHead;
+use crate::spec::{LocaleSpec, PageSpec, SiteSpec};
+
+/// What a site's trees are built from: the app, its pages, the languages it
+/// is written in and what every tree shares.
+#[derive(Debug, Clone, Copy)]
+pub struct SiteLocales<'a> {
+    /// The app's tree, in the text it was authored with.
+    pub ir: &'a LayoutIR,
+    /// Every page key, in the order the pages are written.
+    pub keys: &'a [String],
+    /// What each page says about itself. A page with no head keeps the site's
+    /// title and description.
+    pub heads: &'a [PageHead],
+    /// Every locale the site is written in, the one at the site root first.
+    pub locales: &'a [String],
+    /// The catalogues each tree's text is resolved through.
+    pub catalogues: &'a Catalogues,
+    /// What every tree shares: the site settings, the assets and the lifted
+    /// markup rules. Its pages and locale are ignored.
+    pub shared: &'a SiteSpec,
+}
+
+/// One tree of a site: the app in one language.
+#[derive(Clone)]
+pub struct LocaleTree {
+    /// Every page of the tree, sharing one translated tree, with its head on.
+    pub spec: SiteSpec,
+    /// The registry the tree's text was resolved through, for resolving
+    /// markup that reaches the tree later, such as a row's component body.
+    /// `None` for a locale that is not a language tag, whose tree is in the
+    /// text the author wrote.
+    pub i18n: Option<SharedI18n>,
+}
+
+/// One tree per locale in `site.locales`, the root's first.
+///
+/// This is how a build writes its locale trees and how a server holding the
+/// build's files builds the same ones, so the two cannot drift. Each tree is
+/// the app with every `translatable` element resolved for its locale, one
+/// [`PageSpec`] per key sharing it, each with its [`PageHead`] applied, and a
+/// [`LocaleSpec`] naming the root and every other locale as an alternate.
+///
+/// A locale that is not a language tag is said in `warnings`, and its tree is
+/// written in the text the author wrote.
+pub fn locale_trees(site: SiteLocales<'_>, warnings: &mut Vec<String>) -> Vec<LocaleTree> {
+    let Some(root) = site.locales.first() else {
+        return Vec::new();
+    };
+    site.locales
+        .iter()
+        .map(|locale| {
+            let i18n = match locale.parse::<LanguageIdentifier>() {
+                Ok(_) => site.catalogues.i18n(locale).ok().map(SharedI18n::new),
+                Err(e) => {
+                    warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
+                    None
+                }
+            };
+            let ir = Arc::new(match &i18n {
+                Some(i18n) => translate_ir(site.ir, i18n),
+                None => site.ir.clone(),
+            });
+            let pages = site
+                .keys
+                .iter()
+                .map(|key| {
+                    let mut page = PageSpec::new(key.clone(), Arc::clone(&ir));
+                    if let Some(head) = site.heads.iter().find(|head| &head.key == key) {
+                        head.apply(&mut page);
+                    }
+                    page
+                })
+                .collect();
+            let spec = SiteSpec {
+                pages,
+                locale: LocaleSpec {
+                    alternates: site
+                        .locales
+                        .iter()
+                        .filter(|other| *other != locale)
+                        .cloned()
+                        .collect(),
+                    default_locale: root.clone(),
+                    ..LocaleSpec::new(locale.clone())
+                },
+                ..site.shared.clone()
+            };
+            LocaleTree { spec, i18n }
+        })
+        .collect()
+}
 
 /// `ir` with every `translatable` element's strings resolved through `i18n`.
 ///
@@ -180,5 +276,75 @@ mod tests {
             root.children[0].attrs.text.as_deref(),
             Some("Du hast \u{2068}Nachrichten\u{2069}")
         );
+    }
+
+    #[test]
+    fn every_locale_gets_a_translated_tree_naming_the_others() {
+        let ir = LayoutIR {
+            root: Element {
+                tag: "root".to_string(),
+                children: vec![label("greeting", "Hello")],
+                ..Element::default()
+            },
+            ..LayoutIR::default()
+        };
+        let catalogues = Catalogues::parse(
+            &[("de-DE".to_string(), "greeting = Hallo\n".to_string())],
+            &[],
+        )
+        .expect("a valid catalogue");
+        let keys = ["index".to_string(), "settings".to_string()];
+        let heads = [PageHead {
+            key: "settings".to_string(),
+            title: Some("Settings".to_string()),
+            description: None,
+            index: false,
+        }];
+        let locales = [
+            "en-US".to_string(),
+            "de-DE".to_string(),
+            "not a tag".to_string(),
+        ];
+        let mut warnings = Vec::new();
+        let trees = locale_trees(
+            SiteLocales {
+                ir: &ir,
+                keys: &keys,
+                heads: &heads,
+                locales: &locales,
+                catalogues: &catalogues,
+                shared: &SiteSpec::default(),
+            },
+            &mut warnings,
+        );
+
+        assert_eq!(trees.len(), 3);
+        let german = &trees[1].spec;
+        assert_eq!(german.locale.locale, "de-DE");
+        assert_eq!(german.locale.default_locale, "en-US");
+        assert_eq!(german.locale.alternates, ["en-US", "not a tag"]);
+        assert!(!german.locale.is_root());
+        assert!(trees[0].spec.locale.is_root());
+        // One translated tree, shared by every page of the locale.
+        assert!(Arc::ptr_eq(&german.pages[0].ir, &german.pages[1].ir));
+        assert_eq!(
+            german.pages[0].ir.root.children[0].attrs.text.as_deref(),
+            Some("Hallo")
+        );
+        // The head goes on the page it names, and only there.
+        assert_eq!(german.pages[1].title.as_deref(), Some("Settings"));
+        assert!(!german.pages[1].index);
+        assert_eq!(german.pages[0].title, None);
+        // A locale that is no tag is said, and written as authored.
+        assert!(trees[2].i18n.is_none());
+        assert_eq!(
+            trees[2].spec.pages[0].ir.root.children[0]
+                .attrs
+                .text
+                .as_deref(),
+            Some("Hello")
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("not a tag"), "{warnings:?}");
     }
 }

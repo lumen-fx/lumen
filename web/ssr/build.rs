@@ -13,14 +13,18 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-/// The fixtures, by source file stem.
+/// The fixtures, by source path. Each compiles to `<stem>.cdlb`.
+///
+/// `translates` is the program `lumen-prerender`'s suite runs too, and a
+/// render and a build run have to agree on what it answers, so both read the
+/// one file.
 const FIXTURES: &[&str] = &[
-    "reads_request",
-    "answers",
-    "fetches",
-    "components",
-    "writes_nodes",
-    "translates",
+    "fixtures/reads_request.cdl",
+    "fixtures/answers.cdl",
+    "fixtures/fetches.cdl",
+    "fixtures/components.cdl",
+    "fixtures/writes_nodes.cdl",
+    "../prerender/fixtures/translates.cdl",
 ];
 
 fn main() {
@@ -30,10 +34,14 @@ fn main() {
         return;
     }
     let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
-    for stem in FIXTURES {
-        let source_path = Path::new("fixtures").join(format!("{stem}.cdl"));
+    for fixture in FIXTURES {
+        let source_path = Path::new(fixture);
+        let stem = source_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("a fixture is a named file");
         println!("cargo::rerun-if-changed={}", source_path.display());
-        let source = fs::read_to_string(&source_path)
+        let source = fs::read_to_string(source_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", source_path.display()));
         // These fixtures import no native library and register no module or
         // plugin function, so a bare host with nothing folded in is enough.
