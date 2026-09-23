@@ -39,8 +39,8 @@ use std::sync::{Arc, RwLock};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore, ScriptHost,
-    ScriptNs, ScriptValue,
+    CallOutcome, Credentials, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore,
+    ScriptHost, ScriptNs, ScriptValue,
 };
 use mlua::{
     Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value as LuaValue, Variadic,
@@ -2138,12 +2138,22 @@ fn build_lua(
                     }
                     _ => Vec::new(),
                 };
+                // One of `fetch`'s three names, or absent for the browser's
+                // own default. Anything else is an error rather than a
+                // silent default.
+                let credentials = match get_str(&req, "credentials") {
+                    None => Credentials::default(),
+                    Some(value) => value
+                        .parse::<Credentials>()
+                        .map_err(|e| mlua::Error::RuntimeError(format!("http(): {e}")))?,
+                };
                 sink.lock().push(ScriptCommand::Http {
                     method,
                     url,
                     headers,
                     body,
                     timeout_ms,
+                    credentials,
                     tag,
                 });
                 Ok(())

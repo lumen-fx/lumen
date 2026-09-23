@@ -1,6 +1,6 @@
 use super::*;
 
-use lumen_scene::dom::build_dom_index;
+use lumen_scene::dom::{build_dom_index, install_dom_events};
 use lumen_scene::i18n::install_retranslate;
 use lumen_scene::script_commands::apply_scene_script_commands;
 
@@ -72,15 +72,15 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         // native handlers, so any compiled host serves; a build with none
         // installs nothing and delivers no DOM events to native handlers.
         #[cfg(feature = "host-rhai")]
-        register_dom_event_dispatchers::<RhaiHost>(app);
+        install_dom_events::<RhaiHost>(app);
         #[cfg(all(not(feature = "host-rhai"), feature = "host-candela"))]
-        register_dom_event_dispatchers::<CandelaHost>(app);
+        install_dom_events::<CandelaHost>(app);
         #[cfg(all(
             not(feature = "host-rhai"),
             not(feature = "host-candela"),
             feature = "host-lua"
         ))]
-        register_dom_event_dispatchers::<LuaHost>(app);
+        install_dom_events::<LuaHost>(app);
     }
     app.add_systems(
         TickStage::Systems,
@@ -325,46 +325,6 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     }
 }
 
-/// Dynamic DOM events (phase 4): turn input messages into DOM events and run
-/// capture -> target -> bubble propagation over the binding registry.
-///
-/// Ordered like the legacy `on_click` dispatch: after the input producers and
-/// the snapshot build, before `collect_dom_commands` so a handler's queued DOM
-/// mutations apply this same tick. `.before(navigate_on_anchor_click)` lets a
-/// `prevent_default` on a link click be observed before the anchor-navigation
-/// executor runs.
-///
-/// Both dispatchers take an optional host, so a script-less app still installs
-/// them (against any host this build compiled) and delivers to C-ABI / SDK
-/// native handlers.
-fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutability = Mutable>>(
-    app: &mut App,
-) {
-    app.add_systems(
-        TickStage::Systems,
-        lumen_script::dispatch_pointer_and_key_events::<H>
-            .in_set(ScriptSet::DomInput)
-            .after(build_dom_index)
-            .after(lumen_input::dispatch_clicks)
-            .after(lumen_input::dispatch_focused_keys)
-            .before(crate::pages::navigate_on_anchor_click),
-    );
-    app.add_systems(
-        TickStage::Systems,
-        lumen_script::dispatch_state_events::<H>
-            .in_set(ScriptSet::DomState)
-            .after(build_dom_index)
-            // `input` is derived from the edit stream, so this reads the
-            // messages the text mutator writes. Anchor the edge on the
-            // shared set label: an edit applied this tick raises `input`
-            // on the same tick, in one fixed order, instead of leaving
-            // the reader and the writer ambiguous for the executor to
-            // interleave however it likes. Inert when no text plugin is
-            // installed (empty set).
-            .after(lumen_core::text_events::TextEditSet::Apply),
-    );
-}
-
 /// Install the per-host half of the script wiring, once for each active
 /// [`ScriptHost`]. Every system here joins a [`lumen_script::ScriptSet`], so
 /// the host-neutral edges in [`register_script_common`] cover it without
@@ -431,5 +391,5 @@ pub(crate) fn register_script_host_systems<
             .after(crate::run::introspection::publish_node_details)
             .after(ScriptSet::SyncSignals),
     );
-    register_dom_event_dispatchers::<H>(app);
+    install_dom_events::<H>(app);
 }

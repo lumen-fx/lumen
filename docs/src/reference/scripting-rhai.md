@@ -516,7 +516,14 @@ signals each tick, so markup binds to them directly.
 
 `request` is a map: `url` and `tag` are required; `method` defaults to `"GET"`;
 `headers` is a map of header name to value; `body` is a string; `timeout_ms` is
-a positive integer.
+a positive integer; `credentials` is a string.
+
+`credentials` says whether a request carries the page's cookies and HTTP
+authentication, with the values the browser's `fetch` takes: `"same-origin"`
+(the default), `"include"`, or `"omit"`. It matters in a web build, where the
+request is the page's own `fetch`; a cross-origin `"include"` also needs the
+server to answer with `Access-Control-Allow-Credentials: true`. A desktop app
+has no page and ignores it. Any other value is a script error.
 
 `response` is a map of `ok` (true for a 2xx status), `status` (`0` on a
 transport failure), `headers` (names lowercased), `body`, and `error` (empty on

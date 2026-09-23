@@ -27,6 +27,7 @@ mod events;
 mod head;
 mod navigation;
 mod nodes;
+mod pointer;
 mod project;
 
 use bevy_ecs::prelude::*;
@@ -147,7 +148,11 @@ impl Plugin for WebDomPlugin {
         // about to throw away.
         app.add_systems(
             TickStage::Input,
-            (events::drain_dom_events, events::drain_dismissed_dialogs)
+            (
+                events::drain_dom_events,
+                events::drain_dismissed_dialogs,
+                pointer::drain_pointer_events,
+            )
                 .after(bevy_ecs::message::message_update_system)
                 .before(lumen_scene::spawn::close_dialogs_on_escape),
         );

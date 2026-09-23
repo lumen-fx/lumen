@@ -56,7 +56,7 @@ use std::sync::Arc;
 use crate::PluginEvent;
 use crate::dnd;
 use crate::http::{
-    DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
+    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
     ThreadDispatch,
 };
 use crate::script_fn::ScriptFnRegistry;
@@ -415,6 +415,18 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             app.add_systems(
                 TickStage::Systems,
                 drain_fetch_commands.after(ScriptSet::Tick),
+            );
+            // The clipboard builtins, answered by whichever clipboard backend
+            // the assembly installed. After every set that runs script code,
+            // so a command queued anywhere this tick is carried out this tick.
+            app.add_systems(
+                TickStage::Systems,
+                crate::clipboard::apply_clipboard_commands
+                    .after(ScriptSet::Tick)
+                    .after(ScriptSet::Dispatch)
+                    .after(ScriptSet::DomInput)
+                    .after(ScriptSet::Frame)
+                    .after(ScriptSet::Fill),
             );
             // Must run after `fire_due_timers`: a repeating timer cancelled
             // from inside its own `on_timer` emits a `CancelTimer` during the
@@ -1207,6 +1219,7 @@ pub fn drain_fetch_commands(
                     headers: Vec::new(),
                     body: None,
                     timeout_ms: None,
+                    credentials: Credentials::default(),
                 },
                 tag.clone(),
                 DeliveryStyle::Fetch,
@@ -1217,6 +1230,7 @@ pub fn drain_fetch_commands(
                 headers,
                 body,
                 timeout_ms,
+                credentials,
                 tag,
             } => (
                 HttpRequest {
@@ -1225,6 +1239,7 @@ pub fn drain_fetch_commands(
                     headers: headers.clone(),
                     body: body.clone(),
                     timeout_ms: *timeout_ms,
+                    credentials: *credentials,
                 },
                 tag.clone(),
                 DeliveryStyle::Http,

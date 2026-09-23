@@ -24,7 +24,12 @@
 //! stay on the runtime side of the seam, so a client implementation never has
 //! to know what a script is.
 
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// A request handed to a client on a per-request worker thread. Method, url,
 /// headers, and body in: the input half of the Qt `QNetworkRequest` shape.
@@ -41,6 +46,68 @@ pub struct HttpRequest {
     /// Whole-request deadline. `None` leaves the client's own default in
     /// place.
     pub timeout_ms: Option<u64>,
+    /// Whether the request carries the page's cookies and HTTP
+    /// authentication. A browser transport acts on it; a desktop client has
+    /// no page and ignores it.
+    pub credentials: Credentials,
+}
+
+/// Which requests carry credentials (cookies, HTTP authentication, client
+/// certificates), with the meaning web `fetch` gives its `credentials`
+/// option.
+///
+/// Only a transport that runs inside a page has credentials to send, so the
+/// desktop client ignores this and a browser transport passes it to `fetch`.
+/// The default is the browser's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Credentials {
+    /// Never send credentials, and ignore any a reply sets.
+    Omit,
+    /// Send credentials to the page's own origin only.
+    #[default]
+    SameOrigin,
+    /// Send credentials to every origin, cross-origin included. The server
+    /// has to allow it with `Access-Control-Allow-Credentials`.
+    Include,
+}
+
+impl Credentials {
+    /// The spelling a script writes, which is web `fetch`'s.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Credentials::Omit => "omit",
+            Credentials::SameOrigin => "same-origin",
+            Credentials::Include => "include",
+        }
+    }
+}
+
+impl fmt::Display for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A `credentials` value that is none of the three web `fetch` names.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error("credentials must be \"include\", \"same-origin\" or \"omit\", not {0:?}")]
+pub struct UnknownCredentials(pub String);
+
+impl FromStr for Credentials {
+    type Err = UnknownCredentials;
+
+    /// Read a script's spelling. Exact and case-sensitive, like `fetch`:
+    /// a misspelled value is an error rather than a silent default, since
+    /// the default sends no cookies cross-origin and the failure would show
+    /// up only as a server refusing the request.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "omit" => Ok(Credentials::Omit),
+            "same-origin" => Ok(Credentials::SameOrigin),
+            "include" => Ok(Credentials::Include),
+            other => Err(UnknownCredentials(other.to_string())),
+        }
+    }
 }
 
 /// The reply half of the Qt `QNetworkReply` shape: status, headers, and body

@@ -4,7 +4,7 @@
 //! and that `fetch(url, tag)` still lowers to `ScriptCommand::Fetch`
 //! (the sugar path is not broken).
 
-use lumen_script::{ScriptCommand, ScriptValue};
+use lumen_script::{Credentials, ScriptCommand, ScriptValue};
 use lumen_script_rhai::RhaiHost;
 
 /// Return the single `ScriptCommand::Http` emitted, or panic.
@@ -26,6 +26,7 @@ fn http_full_request_parses() {
                 headers: #{ "Content-Type": "application/json", "X-Token": "abc" },
                 body: "{\"a\":1}",
                 timeout_ms: 1500,
+                credentials: "include",
                 tag: "create",
             });
         }
@@ -39,6 +40,7 @@ fn http_full_request_parses() {
         headers,
         body,
         timeout_ms,
+        credentials,
         tag,
     } = only_http(&cmds)
     else {
@@ -48,6 +50,7 @@ fn http_full_request_parses() {
     assert_eq!(url, "http://127.0.0.1:9/things");
     assert_eq!(body.as_deref(), Some("{\"a\":1}"));
     assert_eq!(*timeout_ms, Some(1500));
+    assert_eq!(*credentials, Credentials::Include);
     assert_eq!(tag, "create");
     assert!(
         headers
@@ -75,6 +78,7 @@ fn http_defaults_when_fields_omitted() {
         headers,
         body,
         timeout_ms,
+        credentials,
         tag,
     } = only_http(&cmds)
     else {
@@ -85,7 +89,30 @@ fn http_defaults_when_fields_omitted() {
     assert!(headers.is_empty());
     assert_eq!(*body, None);
     assert_eq!(*timeout_ms, None);
+    assert_eq!(*credentials, Credentials::SameOrigin); // browser default
     assert_eq!(tag, "g");
+}
+
+/// A mode that is not one of `fetch`'s three names is the script's error,
+/// not a silent default.
+#[test]
+fn http_rejects_an_unknown_credentials_mode() {
+    let mut host = RhaiHost::new();
+    host.load(
+        r#"
+        fn on_start() {
+            http(#{ url: "http://127.0.0.1:9/x", credentials: "Include", tag: "g" });
+        }
+        "#,
+    )
+    .expect("load");
+    let err = host
+        .call_event("on_start", &[])
+        .expect_err("an unknown credentials mode is an error");
+    assert!(
+        err.to_string().contains("credentials must be") && err.to_string().contains("\"Include\""),
+        "the error names the option and the bad value: {err}"
+    );
 }
 
 #[test]

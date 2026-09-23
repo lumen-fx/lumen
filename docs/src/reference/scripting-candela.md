@@ -609,6 +609,12 @@ carrying the buffer as it stands after that edit. A caret move raises nothing.
 field is committed with Enter. Only `click` has a default action (link
 navigation); `prevent_default` on a click skips it.
 
+In a web build the pointer events come from the browser's Pointer Events, so a
+touch or a pen raises the same `pointerdown` and `pointerup` a mouse does.
+`event_x` and `event_y` equal `event_client_x` and `event_client_y` there,
+because the browser lays out the page and the app holds no box for the
+target. The page scrolls under a `wheel` handler as it does without one.
+
 ## Method sugar
 
 The prelude wraps a raw handle in a `Node` or `Event` struct so calls read as
@@ -800,7 +806,8 @@ lumen::http(request: any)
 ```
 
 Issues any HTTP request. The request is a map; only `url` and `tag` are
-required. `method` defaults to `GET`, and `body` and `timeout_ms` are optional.
+required. `method` defaults to `GET`, and `body`, `timeout_ms`, and
+`credentials` are optional.
 Each header rides on a `header:<Name>` key, because a candela map literal holds
 one value type:
 
@@ -817,6 +824,13 @@ lumen::http({
 
 A request built from `parse_json` or handed in from the host may instead carry a
 nested `headers` map and an integer `timeout_ms`; both forms are accepted.
+
+`credentials` says whether a request carries the page's cookies and HTTP
+authentication, with the values the browser's `fetch` takes: `"same-origin"`
+(the default), `"include"`, or `"omit"`. It matters in a web build, where the
+request is the page's own `fetch`; a cross-origin `"include"` also needs the
+server to answer with `Access-Control-Allow-Credentials: true`. A desktop app
+has no page and ignores it. Any other value is a script error.
 
 Every completed request fires `on_http(tag, response)`, including a 4xx or 5xx.
 The response is a map:

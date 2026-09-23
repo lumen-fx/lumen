@@ -2,7 +2,7 @@
 //! surfaces: `http`, `parse_json`, `parse_markdown`, `local_id`, `is_valid`,
 //! the color-signal pair, `print`, and `window::size`.
 
-use lumen_script::{ScriptCommand, ScriptHost, ScriptValue};
+use lumen_script::{Credentials, ScriptCommand, ScriptHost, ScriptValue};
 use lumen_script_candela::CandelaHost;
 
 /// Load `src` with the prelude available.
@@ -27,8 +27,12 @@ fn go() {
         "header:Accept": "application/json",
         "body": "{\"n\":1}",
         "timeout_ms": "2500",
+        "credentials": "include",
         "tag": "items"
     });
+}
+fn misspelled() {
+    lumen::http({"url": "https://example.test/ping", "credentials": "Include", "tag": "ping"});
 }
 fn minimal() {
     lumen::http({"url": "https://example.test/ping", "tag": "ping"});
@@ -53,11 +57,13 @@ fn main() {}
         headers,
         body,
         timeout_ms,
+        credentials,
         tag,
     } = cmd
     else {
         unreachable!()
     };
+    assert_eq!(*credentials, Credentials::Include);
     assert_eq!(method, "POST");
     assert_eq!(url, "https://example.test/items");
     assert_eq!(
@@ -74,6 +80,7 @@ fn main() {}
         headers,
         body,
         timeout_ms,
+        credentials,
         ..
     }) = out
         .commands
@@ -86,6 +93,21 @@ fn main() {}
     assert!(headers.is_empty());
     assert_eq!(body.as_deref(), None);
     assert_eq!(*timeout_ms, None);
+    assert_eq!(
+        *credentials,
+        Credentials::SameOrigin,
+        "credentials default to the browser's own"
+    );
+
+    // A value that is not one of `fetch`'s names is the script's error, and
+    // no request is queued for it.
+    let err = host
+        .call("misspelled", &[])
+        .expect_err("an unknown credentials mode is an error");
+    assert!(
+        err.to_string().contains("credentials must be") && err.to_string().contains("\"Include\""),
+        "the error names the option and the bad value: {err}"
+    );
 
     // A request that did not come from a literal may carry the nested
     // `headers` map and an int `timeout_ms` the other hosts take.

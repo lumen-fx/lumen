@@ -18,7 +18,9 @@ use bevy_ecs::prelude::Entity;
 use bincode::Options;
 use lumen_core::components::Color;
 use lumen_core::property_store::{PropertyKey, PropertyValue};
-use lumen_script::{FileDialogKind, PluginEvent, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptValue};
+use lumen_script::{
+    Credentials, FileDialogKind, PluginEvent, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptValue,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -106,6 +108,7 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
                 headers: vec![(s("h"), s("v"))],
                 body: Some(s("b")),
                 timeout_ms: Some(9),
+                credentials: Credentials::Include,
                 tag: s("g"),
             },
         ),
@@ -436,7 +439,7 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
     ("Fetch", "07000000010000000000000075010000000000000067"),
     (
         "Http",
-        "080000000300000000000000474554010000000000000075010000000000000001000000000000006801000000000000007601010000000000000062010900000000000000010000000000000067",
+        "08000000030000000000000047455401000000000000007501000000000000000100000000000000680100000000000000760101000000000000006201090000000000000002000000010000000000000067",
     ),
     ("SetResponseStatus", "090000009401"),
     (
@@ -600,7 +603,7 @@ const EVENT_GOLDEN: &[(&str, &str)] = &[
 
 #[test]
 fn wire_version_is_pinned() {
-    assert_eq!(SCRIPT_WIRE_VERSION, 2);
+    assert_eq!(SCRIPT_WIRE_VERSION, 3);
 }
 
 #[test]

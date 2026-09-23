@@ -16,7 +16,7 @@
 //! - Script commands: `SetText` updates the matching `LumenId`'s [`TextContent`]; other variants (`Print`, `AddClicks`, `SetString`) no-op here.
 
 use bevy_ecs::component::Mutable;
-use bevy_ecs::message::{MessageReader, MessageWriter};
+use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_assets::AssetsPlugin;
 use lumen_capability::Preflight;

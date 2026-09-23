@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 
+use bevy_ecs::component::Mutable;
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
@@ -40,7 +41,9 @@ use lumen_ir::layout_ir::Element;
 use lumen_script::event::{register_host_binding, unregister_binding};
 use lumen_script::node_query::drain_external_dom_commands;
 use lumen_script::runtime::{ScriptCommandEvent, register_script_commands};
-use lumen_script::{ScriptCommand, ScriptSet};
+use lumen_script::{
+    ScriptCommand, ScriptHost, ScriptSet, dispatch_pointer_and_key_events, dispatch_state_events,
+};
 
 use crate::fragments::{
     FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args, instance_body,
@@ -83,6 +86,46 @@ pub fn install_dom(app: &mut App) {
     app.add_systems(
         TickStage::Systems,
         apply_dom_commands.after(collect_dom_commands),
+    );
+}
+
+/// Deliver DOM events to the handlers bound with `on(type, handler)`: turn the
+/// input messages into DOM events and run capture -> target -> bubble
+/// propagation over the binding registry, for host `H`.
+///
+/// The same on every platform: the desktop's window backend and a page's
+/// event listeners write the same input messages, and these read them.
+///
+/// Ordered after the input producers and the snapshot build, and before
+/// [`collect_dom_commands`], so a handler's queued DOM mutations apply this
+/// same tick. Before [`navigate_on_anchor_click`](crate::routing::navigate_on_anchor_click),
+/// so a `prevent_default` on a link click is seen before the anchor-navigation
+/// executor runs.
+///
+/// Both dispatchers take an optional host, so a script-less app still installs
+/// them (against any host the build compiled) and delivers to C-ABI and SDK
+/// native handlers.
+pub fn install_dom_events<H: ScriptHost + Resource<Mutability = Mutable>>(app: &mut App) {
+    app.add_systems(
+        TickStage::Systems,
+        dispatch_pointer_and_key_events::<H>
+            .in_set(ScriptSet::DomInput)
+            .after(build_dom_index)
+            .after(lumen_input::dispatch_clicks)
+            .after(lumen_input::dispatch_focused_keys)
+            .before(crate::routing::navigate_on_anchor_click),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        dispatch_state_events::<H>
+            .in_set(ScriptSet::DomState)
+            .after(build_dom_index)
+            // `input` is derived from the edit stream, so this reads the
+            // messages the text mutator writes. Anchored on the shared set
+            // label, so an edit applied this tick raises `input` on the same
+            // tick, in one fixed order. Inert when no text plugin is
+            // installed (empty set).
+            .after(lumen_core::text_events::TextEditSet::Apply),
     );
 }
 
