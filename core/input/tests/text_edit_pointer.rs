@@ -68,13 +68,17 @@ fn press_at(app: &mut App, p: glam::Vec2) {
     app.world.resource_mut::<PointerState>().position = Some(p);
     app.world
         .resource_mut::<Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
     app.world.resource_mut::<PointerState>().primary_down = true;
     app.world
         .resource_mut::<Messages<PointerPressed>>()
         .write(PointerPressed {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
     // Hover state must exist before the press is dispatched, and the
     // press producers run in the same tick as hit_test - one tick
@@ -89,6 +93,7 @@ fn release_at(app: &mut App, p: glam::Vec2) {
         .write(PointerReleased {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
     app.tick();
 }
@@ -97,7 +102,10 @@ fn move_to(app: &mut App, p: glam::Vec2) {
     app.world.resource_mut::<PointerState>().position = Some(p);
     app.world
         .resource_mut::<Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
     app.tick();
 }
 

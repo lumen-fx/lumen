@@ -139,6 +139,11 @@ impl Plugin for WebDomPlugin {
             TickStage::Systems,
             head::sync_head.after(lumen_scene::routing::apply_navigation),
         );
+        // A field the visitor edits raises the edit message a desktop field
+        // raises, which is what a script's `input` handler runs off.
+        bevy_ecs::message::MessageRegistry::register_message::<
+            lumen_core::text_events::TextEditApplied,
+        >(&mut app.world);
         let table = NodeTable::adopting(self.root, self.root_entity);
         app.world.insert_non_send(table);
         // A dialog the browser dismisses writes the signal it hangs off, so
@@ -207,3 +212,5 @@ impl Plugin for WebDomPlugin {
 pub fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), wasm_bindgen::JsValue> {
     events::listen(root, routes)
 }
+
+pub use events::set_run_now;

@@ -6,7 +6,7 @@ use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_script::ScriptCommand;
 use lumen_script::ScriptHost;
 use lumen_script::introspect::{
-    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, PointerSnapshot, publish_introspection,
+    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, publish_introspection,
 };
 use lumen_script_lua::LuaHost;
 
@@ -64,7 +64,6 @@ fn publish_fixture() -> u64 {
         geometry,
         components,
         vec!["LayoutBox".to_string()],
-        PointerSnapshot::default(),
         FrameInfo {
             frame: 7,
             dt_ms: 16.0,

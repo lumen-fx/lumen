@@ -732,10 +732,7 @@ none of them means anything without an absolute address.
 - Pointer handlers (`pointerdown`, `pointerup`, `pointermove`,
   `pointerenter`, `pointerleave`, `wheel`) run on the browser's Pointer
   Events, so a tap raises the same `pointerdown` and `pointerup` a click
-  does. `event_x` and `event_y` report the same values as `event_client_x`
-  and `event_client_y`: the browser lays out the page, so the app holds no box
-  to measure the target from. Moves between two frames arrive as one, at the
-  last position.
+  does. Moves between two frames arrive as one, at the last position.
 - A `wheel` handler cannot stop the page scrolling. The browser scrolls as it
   would without the handler, the same as a desktop app, where a wheel has no
   default action to prevent.

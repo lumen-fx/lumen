@@ -94,7 +94,10 @@ fn move_pointer(world: &mut World, p: glam::Vec2) {
     world.resource_mut::<PointerState>().position = Some(p);
     world
         .resource_mut::<Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
 }
 
 fn press(world: &mut World, p: glam::Vec2) {
@@ -104,6 +107,7 @@ fn press(world: &mut World, p: glam::Vec2) {
         .write(PointerPressed {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
 }
 
@@ -114,6 +118,7 @@ fn release(world: &mut World, p: glam::Vec2) {
         .write(PointerReleased {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
 }
 
@@ -334,6 +339,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
+            local: None,
         });
     app.tick();
 
@@ -355,6 +361,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, -lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
+            local: None,
         });
     app.tick();
     assert!(

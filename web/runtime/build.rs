@@ -28,6 +28,7 @@ const FIXTURES: &[&str] = &[
     "clipboard",
     "components",
     "fetch",
+    "link_and_field",
     "pointer",
     "smoke",
     "unbound",

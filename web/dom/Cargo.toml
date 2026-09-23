@@ -31,6 +31,10 @@ lumen-primitives = { workspace = true }
 # browser as it does on the desktop; the crate is already in the wasm graph
 # through `lumen-scene`, so naming it pulls no new code.
 lumen-os-dnd = { workspace = true }
+# The event bindings a script made and the clicks its handlers cancelled,
+# which a link click has to consult before the browser follows the link.
+# Already in the wasm graph through `lumen-scene`.
+lumen-script = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Not target-gated. The crate is a browser backend and only a browser runs it,
@@ -45,6 +49,8 @@ web-sys = { workspace = true, features = [
     "AddEventListenerOptions",
     "DataTransfer",
     "Document",
+    "DomRect",
+    "DomRectReadOnly",
     "DomTokenList",
     "DragEvent",
     "Element",

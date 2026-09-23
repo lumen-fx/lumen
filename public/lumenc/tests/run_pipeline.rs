@@ -130,13 +130,17 @@ mod pipeline_integration_tests {
         app.world.resource_mut::<PointerState>().position = Some(p);
         app.world
             .resource_mut::<bevy_ecs::message::Messages<PointerMoved>>()
-            .write(PointerMoved { position: p });
+            .write(PointerMoved {
+                position: p,
+                local: None,
+            });
         app.world.resource_mut::<PointerState>().primary_down = true;
         app.world
             .resource_mut::<bevy_ecs::message::Messages<PointerPressed>>()
             .write(PointerPressed {
                 position: p,
                 button: PointerButton::Primary,
+                local: None,
             });
         app.tick();
         assert_eq!(
@@ -363,6 +367,7 @@ mod pipeline_integration_tests {
             entity: target,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     }
 
@@ -590,13 +595,17 @@ mod pipeline_integration_tests {
         app.world.resource_mut::<PointerState>().position = Some(p);
         app.world
             .resource_mut::<bevy_ecs::message::Messages<PointerMoved>>()
-            .write(PointerMoved { position: p });
+            .write(PointerMoved {
+                position: p,
+                local: None,
+            });
         app.world.resource_mut::<PointerState>().primary_down = true;
         app.world
             .resource_mut::<bevy_ecs::message::Messages<PointerPressed>>()
             .write(PointerPressed {
                 position: p,
                 button: PointerButton::Primary,
+                local: None,
             });
         app.tick();
         app.world.resource_mut::<PointerState>().primary_down = false;
@@ -605,6 +614,7 @@ mod pipeline_integration_tests {
             .write(lumen_core::input::PointerReleased {
                 position: p,
                 button: PointerButton::Primary,
+                local: None,
             });
         app.tick();
         // One extra settle tick: the flip tick writes the store; readers
@@ -841,6 +851,7 @@ mod virtualization_tests {
             .write(MouseWheel {
                 delta: glam::Vec2::new(0.0, dy),
                 position: glam::Vec2::new(400.0, 300.0),
+                local: None,
             });
     }
 

@@ -45,7 +45,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{AddEventListenerOptions, Document, Event, MouseEvent, WheelEvent};
 
-use crate::events::path_of;
+use crate::events::{Hit, hit_of, origin_of};
 use crate::nodes::NodeTable;
 
 /// One thing the pointer did, waiting for the next tick.
@@ -53,8 +53,9 @@ use crate::nodes::NodeTable;
 enum PointerInput {
     /// A button went down.
     Down {
-        /// Node path of the element under the pointer, if it stands for one.
-        path: Option<String>,
+        /// The element under the pointer, if it stands for one, and where its
+        /// box was.
+        hit: Option<Hit>,
         /// Client coordinates.
         position: Vec2,
         /// Which button.
@@ -62,8 +63,9 @@ enum PointerInput {
     },
     /// A button came up.
     Up {
-        /// Node path of the element under the pointer, if it stands for one.
-        path: Option<String>,
+        /// The element under the pointer, if it stands for one, and where its
+        /// box was.
+        hit: Option<Hit>,
         /// Client coordinates.
         position: Vec2,
         /// Which button.
@@ -71,15 +73,17 @@ enum PointerInput {
     },
     /// The pointer moved.
     Move {
-        /// Node path of the element under the pointer, if it stands for one.
-        path: Option<String>,
+        /// The element under the pointer, if it stands for one, and where its
+        /// box was.
+        hit: Option<Hit>,
         /// Client coordinates.
         position: Vec2,
     },
     /// The wheel turned, or a touchpad scrolled.
     Wheel {
-        /// Node path of the element under the pointer, if it stands for one.
-        path: Option<String>,
+        /// The element under the pointer, if it stands for one, and where its
+        /// box was.
+        hit: Option<Hit>,
         /// Client coordinates.
         position: Vec2,
         /// Scroll distance in pixels, positive down and right.
@@ -186,18 +190,18 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
             let Some(mouse) = event.dyn_ref::<MouseEvent>() else {
                 return;
             };
-            let path = path_of(&event);
+            let hit = hit_of(&event);
             let position = position_of(mouse);
             let button = button_of(mouse.button());
             queue(if down {
                 PointerInput::Down {
-                    path,
+                    hit,
                     position,
                     button,
                 }
             } else {
                 PointerInput::Up {
-                    path,
+                    hit,
                     position,
                     button,
                 }
@@ -207,7 +211,7 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
     on(document, "pointermove", true, move |event: Event| {
         if let Some(mouse) = event.dyn_ref::<MouseEvent>() {
             queue(PointerInput::Move {
-                path: path_of(&event),
+                hit: hit_of(&event),
                 position: position_of(mouse),
             });
         }
@@ -215,7 +219,7 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
     on(document, "wheel", true, move |event: Event| {
         if let Some(wheel) = event.dyn_ref::<WheelEvent>() {
             queue(PointerInput::Wheel {
-                path: path_of(&event),
+                hit: hit_of(&event),
                 position: position_of(wheel),
                 delta: wheel_delta(wheel),
             });
@@ -300,18 +304,15 @@ pub fn drain_pointer_events(
     let mut hover = hovered.iter().next();
     let mut rest = pending.into_iter();
     while let Some(input) = rest.next() {
-        let under = |path: &Option<String>| {
-            path.as_deref()
-                .and_then(|p| table.entity_at(p))
-                .and_then(|e| hover_target(e, &parents, &disabled))
-        };
-        let target = match &input {
-            PointerInput::Down { path, .. }
-            | PointerInput::Up { path, .. }
-            | PointerInput::Move { path, .. }
-            | PointerInput::Wheel { path, .. } => under(path),
+        let hit = match &input {
+            PointerInput::Down { hit, .. }
+            | PointerInput::Up { hit, .. }
+            | PointerInput::Move { hit, .. }
+            | PointerInput::Wheel { hit, .. } => hit.clone(),
             PointerInput::Left => None,
         };
+        let landed = hit.as_ref().and_then(|hit| table.entity_at(&hit.path));
+        let target = landed.and_then(|e| hover_target(e, &parents, &disabled));
         // Held by a press: the pressed entity or nothing.
         let target = match tracking.captured {
             Some(captured) => target.filter(|t| *t == captured),
@@ -327,6 +328,14 @@ pub fn drain_pointer_events(
             break;
         }
         hover = target;
+        // Where the pointer is on the target's box. The listener measured the
+        // box the event landed on; a disabled one hands the pointer to the
+        // element around it, whose box is measured here instead.
+        let local = |position: Vec2| match (&hit, target) {
+            (Some(hit), Some(target)) if landed == Some(target) => Some(position - hit.origin),
+            (_, Some(target)) => table.element(target).map(|el| position - origin_of(el)),
+            (_, None) => None,
+        };
         match input {
             PointerInput::Down {
                 position, button, ..
@@ -337,7 +346,11 @@ pub fn drain_pointer_events(
                     state.primary_down = true;
                     tracking.captured = target;
                 }
-                writers.presses.write(PointerPressed { position, button });
+                writers.presses.write(PointerPressed {
+                    position,
+                    button,
+                    local: local(position),
+                });
             }
             PointerInput::Up {
                 position, button, ..
@@ -348,19 +361,30 @@ pub fn drain_pointer_events(
                     state.primary_down = false;
                     tracking.captured = None;
                 }
-                writers.releases.write(PointerReleased { position, button });
+                writers.releases.write(PointerReleased {
+                    position,
+                    button,
+                    local: local(position),
+                });
             }
             PointerInput::Move { position, .. } => {
                 aimed = Some(target);
                 state.position = Some(position);
-                writers.moves.write(PointerMoved { position });
+                writers.moves.write(PointerMoved {
+                    position,
+                    local: local(position),
+                });
             }
             PointerInput::Wheel {
                 position, delta, ..
             } => {
                 aimed = Some(target);
                 state.position = Some(position);
-                writers.wheels.write(MouseWheel { delta, position });
+                writers.wheels.write(MouseWheel {
+                    delta,
+                    position,
+                    local: local(position),
+                });
             }
             PointerInput::Left => {
                 state.position = None;
@@ -448,7 +472,10 @@ mod tests {
 
     fn moved(x: f32) -> PointerInput {
         PointerInput::Move {
-            path: Some("0".to_string()),
+            hit: Some(crate::events::Hit {
+                path: "0".to_string(),
+                origin: Vec2::ZERO,
+            }),
             position: Vec2::new(x, 0.0),
         }
     }
@@ -468,7 +495,7 @@ mod tests {
     fn a_press_breaks_the_run() {
         let mut queue = Vec::new();
         let down = PointerInput::Down {
-            path: None,
+            hit: None,
             position: Vec2::ZERO,
             button: PointerButton::Primary,
         };

@@ -829,6 +829,7 @@ fn a_click_whose_handler_panics_the_vm_leaves_the_app_ticking() {
         entity: Entity::try_from_bits(btn).expect("a packed handle"),
         position: Default::default(),
         button: PointerButton::Primary,
+        local: None,
     });
     app.tick();
     app.tick();
