@@ -1086,9 +1086,10 @@ USAGE:
                           where the state they are rendered with comes from;
                           --lib-dir points at a directory holding
                           lumen-web.wasm and lumen-web.js; --strict fails
-                          the build on any warning; --serve serves the
-                          result on 127.0.0.1 and prints the URL, with
-                          --port to choose the port (0 picks a free one).
+                          the build on any warning; --serve runs the
+                          lumen-server beside lumenc on the result, on
+                          127.0.0.1, with --port to choose the port (0
+                          picks a free one).
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]

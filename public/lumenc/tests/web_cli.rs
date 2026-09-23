@@ -12,8 +12,6 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lumen_server::{LOOPBACK, Server};
-
 /// The repository this test is built from.
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -978,34 +976,130 @@ fn a_changed_style_renames_the_stylesheet_and_leaves_the_rest_alone() {
     );
 }
 
+/// `lumenc web --serve` on `app`, with `extra` flags, until it says where it
+/// listens.
+fn serving(
+    app: &str,
+    scratch: &Path,
+    extra: &[&str],
+) -> (std::process::Child, std::net::SocketAddr) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(repo().join(app))
+        .arg("--out")
+        .arg(scratch.join("site"))
+        .arg("--lib-dir")
+        .arg(runtime_dir(scratch))
+        .args(["--serve", "--port", "0"])
+        .args(extra)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("running lumenc web --serve");
+    match serving_at(&mut child) {
+        Some(address) => (child, address),
+        None => {
+            stop(child);
+            panic!("the server never said where it was listening");
+        }
+    }
+}
+
 #[test]
 fn the_served_site_is_what_a_browser_needs() {
     let scratch = scratch("serve");
+    let (child, address) = serving("apps/pages-demo", &scratch, &[]);
     let out = scratch.join("site");
-    web("apps/pages-demo", &out, &[]);
-
-    let server = Server::bind(&out, "/", LOOPBACK, 0).expect("bind a free port");
-    let address = server.addr();
-    std::thread::spawn(move || server.run());
 
     let root = request(address, "/");
-    assert!(root.starts_with("HTTP/1.1 200 "), "{root}");
-    assert!(root.contains("Content-Type: text/html"), "{root}");
-    assert!(root.contains("<!doctype html>"), "{root}");
-
     // The one that breaks silently: a browser refuses to instantiate a
     // streamed module served as anything else. The name comes from the
     // manifest, which is where the runtime reads it.
     let wasm = request(address, &format!("/{}", hashed(&out, "lumen-web.wasm")));
-    assert!(wasm.starts_with("HTTP/1.1 200 "), "{wasm}");
-    assert!(wasm.contains("Content-Type: application/wasm"), "{wasm}");
-
     // A deep path has no file, so it is answered by the shell, with the
     // status a static host would send.
     let deep = request(address, "/user/42");
+    stop(child);
+
+    assert!(root.starts_with("HTTP/1.1 200 "), "{root}");
+    assert!(root.contains("Content-Type: text/html"), "{root}");
+    assert!(root.contains("<!doctype html>"), "{root}");
+    assert!(wasm.starts_with("HTTP/1.1 200 "), "{wasm}");
+    assert!(wasm.contains("Content-Type: application/wasm"), "{wasm}");
     assert!(deep.starts_with("HTTP/1.1 404 "), "{deep}");
     assert!(deep.contains("Content-Type: text/html"), "{deep}");
     assert!(deep.contains("data-lm-contract"), "{deep}");
+}
+
+#[test]
+fn a_served_site_of_files_answers_under_its_base_path() {
+    let scratch = scratch("serve-base");
+    let (child, address) = serving(
+        "apps/pages-demo",
+        &scratch,
+        &["--render", "static", "--base", "/docs"],
+    );
+    let under = request(address, "/docs/settings.html");
+    let outside = request(address, "/settings.html");
+    stop(child);
+
+    assert!(under.starts_with("HTTP/1.1 200 "), "{under}");
+    assert!(under.contains(r#"data-lm-page="settings""#), "{under}");
+    assert!(outside.starts_with("HTTP/1.1 404 "), "{outside}");
+}
+
+/// A stop lumenc is sent reaches the server, which finishes and exits, and
+/// lumenc exits the way the server did.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_to_lumenc_stops_the_server_it_started() {
+    let scratch = scratch("serve-sigterm");
+    let (mut child, address) = serving("apps/pages-demo", &scratch, &[]);
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("run kill");
+    assert!(status.success());
+    let exit = wait_for(&mut child, std::time::Duration::from_secs(30));
+    assert_eq!(exit.and_then(|exit| exit.code()), Some(0), "{exit:?}");
+    assert!(
+        TcpStream::connect(address).is_err(),
+        "the server still answers after lumenc exited"
+    );
+}
+
+/// A lumenc that is killed outright takes the server with it.
+#[cfg(unix)]
+#[test]
+fn a_killed_lumenc_leaves_no_server_behind() {
+    let scratch = scratch("serve-sigkill");
+    let (child, address) = serving("apps/pages-demo", &scratch, &["--render", "ssr"]);
+    stop(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while TcpStream::connect(address).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server still answers on {address} after lumenc was killed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Wait for `child` to exit, for up to `within`.
+#[cfg(unix)]
+fn wait_for(
+    child: &mut std::process::Child,
+    within: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + within;
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 /// One GET, start to finish.
@@ -1241,7 +1335,7 @@ fn a_served_render_answers_every_link_a_document_carries() {
         .arg("--lib-dir")
         .arg(runtime_dir(&scratch))
         .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("running lumenc web --render ssr");
     let address = match serving_at(&mut child) {
@@ -1324,7 +1418,7 @@ fn a_served_render_answers_a_path_no_document_stands_for() {
         .arg("--lib-dir")
         .arg(runtime_dir(&scratch))
         .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("running lumenc web --render ssr");
     let address = match serving_at(&mut child) {
@@ -1364,7 +1458,7 @@ fn a_rendered_site_answers_in_the_locale_the_request_asks_for() {
         .arg(runtime_dir(&scratch))
         .args(["--locale", "en-US", "--locale", "de-DE"])
         .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("running lumenc web --render ssr");
     let address = match serving_at(&mut child) {
@@ -1628,7 +1722,7 @@ fn a_rendered_page_with_no_runtime_carries_nothing_to_run() {
         .arg("--out")
         .arg(&out)
         .args(["--render", "ssr", "--no-runtime", "--serve", "--port", "0"])
-        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("running lumenc web --render ssr --no-runtime");
     let address = match serving_at(&mut child) {
@@ -1714,23 +1808,37 @@ fn stop(mut child: std::process::Child) {
     let _ = child.wait();
 }
 
-/// Read the server's output on a thread of its own, and hand back the address
-/// it says it is listening on.
+/// Read the server's log on a thread of its own, and hand back the address it
+/// says it is listening on.
 ///
 /// The reader keeps reading for as long as the server runs, rather than
 /// stopping at the line this wants. A pipe nobody reads fills up, and a pipe
 /// whose reader has gone is broken for the writer; neither belongs between a
 /// test and the process it is asking for pages.
 fn serving_at(child: &mut std::process::Child) -> Option<std::net::SocketAddr> {
-    let stdout = child.stdout.take()?;
+    // `--serve` runs the lumen-server beside lumenc, which a build of this
+    // package alone does not produce.
+    let server = Path::new(env!("CARGO_BIN_EXE_lumenc"))
+        .with_file_name(format!("lumen-server{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        server.is_file(),
+        "no {} beside lumenc; `cargo build -p lumen-server` builds it, and a workspace test run \
+         builds it too",
+        server.display()
+    );
+    let stderr = child.stderr.take()?;
     let (found, address) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for line in std::io::BufReader::new(stdout)
+        for line in std::io::BufReader::new(stderr)
             .lines()
             .map_while(Result::ok)
         {
             if let Some(url) = line.split(" at http://").nth(1) {
-                let _ = found.send(url.trim_end_matches('/').to_string());
+                let address: String = url
+                    .chars()
+                    .take_while(|c| !c.is_whitespace() && *c != '/' && *c != ',')
+                    .collect();
+                let _ = found.send(address);
             }
         }
     });

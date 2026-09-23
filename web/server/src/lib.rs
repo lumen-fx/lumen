@@ -2,7 +2,7 @@
 //!
 //! `lumenc web --render ssr` writes a site directory: `lumen.site.json`, the
 //! compiled app, and the files a page loads. This crate serves that
-//! directory. Files come straight from disk, every page is a render of the
+//! directory, and serves any other site `lumenc web` builds as its files. Files come straight from disk, every page is a render of the
 //! app through [`lumen_ssr`], and the process holds the limits a server
 //! facing the public needs: a bounded number of connections, a bounded
 //! render queue that turns a request away with a 503 when it is full,
@@ -10,7 +10,7 @@
 //! graceful stop, and worker processes that restart themselves.
 //!
 //! The `lumen-server` binary is the production server. `lumenc web --serve`
-//! runs the same [`Server`] with development defaults.
+//! starts the same binary with `--dev`, which turns on development defaults.
 //!
 //! A process renders one page at a time, because the buses an app reads its
 //! state through belong to the process. On unix, `--workers N` runs N worker
@@ -21,6 +21,7 @@ pub mod cli;
 pub mod config;
 pub mod http;
 pub mod log;
+mod parent;
 pub mod proxy;
 pub mod render;
 pub mod server;

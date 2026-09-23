@@ -33,14 +33,13 @@ use lumen_runtime::config::{
 };
 use lumen_runtime::pages::PagePlan;
 use lumen_runtime::run::locale_dir;
-use lumen_ssr::{RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, PageHead, PageSpec, RowFills, SERVER_SPEC_FILE,
     ServerPolicy, ServerSpec, SignalEnv, SiteSpec, WebSpec, intrinsic_size,
 };
 
-use lumen_server::{LOOPBACK, Log, LogFormat, RenderHandler, RenderSettings, Server, Trust};
+use super::serve::{self, LOOPBACK, Serve, host_address};
 
 /// Where a site is written when `lumen.toml` and `--out` both stay quiet.
 const DEFAULT_OUT_DIR: &str = "dist/web";
@@ -100,8 +99,10 @@ a page loads them.
     --strict          Fail the build on any warning it prints.
     --offline         Resolve the app's registry packages from what is
                       already downloaded, and never reach the network.
-    --serve           Serve the site after emitting it, and print the URL.
-                      Under --render ssr every page comes from a render.
+    --serve           Serve the site after emitting it with lumen-server
+                      --dev, found beside lumenc, else at $LUMEN_SERVER,
+                      else on PATH. Under --render ssr every page comes
+                      from a render.
     --port N          Port to serve on (default: 8787; 0 picks a free one).
     --host ADDR       Address to listen on (default: 127.0.0.1). Any other
                       address makes the site reachable from other machines.
@@ -142,16 +143,25 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             if options.serve {
-                return serve(report, &options);
+                return serve::run(&Serve {
+                    site: &report.out,
+                    base: &report.base,
+                    per_request: report.per_request,
+                    host: options.host,
+                    port: options.port,
+                    allow_hosts: &options.allow_hosts,
+                });
             }
             // A rendered site is the files a render needs and no documents, so
             // there is nothing here for a file server to hand out. The spec
             // file names everything else, the compiled app included.
             if report.per_request {
                 say_line!(
-                    "lumenc web: pass --serve to render the pages here, or point a server built \
-                     on lumen-ssr at this directory: {SERVER_SPEC_FILE} names the files it \
-                     renders from, the compiled app {} among them",
+                    "lumenc web: pass --serve to render the pages here, run `lumen-server {}` \
+                     to serve them, or point a server built on lumen-ssr at this directory: \
+                     {SERVER_SPEC_FILE} names the files it renders from, the compiled app {} \
+                     among them",
+                    report.out.display(),
                     report.artifact
                 );
             }
@@ -180,7 +190,7 @@ struct Options {
     strict: bool,
     serve: bool,
     port: u16,
-    host: Option<String>,
+    host: IpAddr,
     allow_hosts: Vec<String>,
 }
 
@@ -200,7 +210,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         strict: false,
         serve: false,
         port: DEFAULT_PORT,
-        host: None,
+        host: LOOPBACK,
         allow_hosts: Vec::new(),
     };
     let mut args = args.peekable();
@@ -257,7 +267,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--lib-dir" => options.lib_dir = Some(PathBuf::from(value("--lib-dir")?)),
             "--strict" => options.strict = true,
             "--serve" => options.serve = true,
-            "--host" => options.host = Some(value("--host")?),
+            "--host" => options.host = host_address(Some(&value("--host")?))?,
             "--allow-host" => options.allow_hosts.push(value("--allow-host")?),
             "--port" => {
                 let raw = value("--port")?;
@@ -294,10 +304,6 @@ struct Report {
     /// the directory holds what a render needs rather than the documents.
     per_request: bool,
     warnings: Vec<String>,
-    /// The app a server renders per request, when one was asked for. It holds
-    /// one tree per locale, so a rendered page reads in the language the
-    /// request asks for.
-    site: Option<SsrSite>,
 }
 
 /// A file the site carries under a name taken from its own contents.
@@ -751,7 +757,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // the request asking, which is the whole difference between a rendered
     // page and a built one. What the build knew beyond the app goes into the
     // spec file, so a server of anyone's holds the site this build holds.
-    let site = if per_request {
+    if per_request {
         let spec = ServerSpec {
             locales: locales.clone(),
             fallback: fallback_tags.clone(),
@@ -765,17 +771,7 @@ fn build(options: &Options) -> Result<Report, String> {
             ..ServerSpec::new(web).with_images(&assets)
         };
         write_file(&out.join(SERVER_SPEC_FILE), spec.to_json().as_bytes())?;
-        // The server here renders from what any server would. The
-        // catalogues are this build's own, read from the app directory, so
-        // a site whose pages load none still renders in every language.
-        if options.serve {
-            Some(SsrSite::from_spec(compiled, &spec, catalogues).map_err(|e| e.to_string())?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    }
 
     Ok(Report {
         out,
@@ -784,7 +780,6 @@ fn build(options: &Options) -> Result<Report, String> {
         artifact: artifact_path,
         per_request,
         warnings,
-        site,
     })
 }
 
@@ -1698,121 +1693,9 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
         .map_err(|e| format!("copy {} to {}: {e}", source.display(), target.display()))
 }
 
-/// Serve the emitted site until the process is stopped.
-///
-/// This is the development path: one directory, one machine, one process,
-/// and a render that fails says why in the page. It is the server
-/// `lumen-server` runs, with the limits a server facing the public needs
-/// left at their defaults, and a site that answers the public belongs
-/// behind `lumen-server` instead.
-fn serve(report: Report, options: &Options) -> ExitCode {
-    let host = match host_address(options.host.as_deref()) {
-        Ok(host) => host,
-        Err(message) => {
-            warn_line!("lumenc web: {message}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if !host.is_loopback() {
-        warn_line!(
-            "lumenc web: warning: --host {host} makes the site reachable from other machines. \
-             This server is for development; run the site with lumen-server, behind a reverse \
-             proxy, before anyone else uses it."
-        );
-    }
-    let mut server = match Server::bind(&report.out, &report.base, host, options.port) {
-        Ok(server) => server,
-        Err(message) => {
-            warn_line!("lumenc web: {message}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Only this machine reaches the default address, so whatever sits in
-    // front of it and says the visitor arrived over TLS is believed.
-    if host.is_loopback() {
-        server = server.with_trust(Trust::Everybody);
-    }
-
-    if let Some(site) = report.site {
-        // The app's own policy, then whatever the command line adds to it.
-        let mut render = RenderOptions::default().with_policy(site.policy());
-        for allowed in &options.allow_hosts {
-            render.fetch = render.fetch.allow_host(allowed);
-        }
-        let reaches_nothing = render.fetch.hosts.is_empty();
-        let log = Arc::new(Log::new(LogFormat::Text, "lumenc web"));
-        let handler = match RenderHandler::start(site, render, RenderSettings::development(log)) {
-            Ok(handler) => handler,
-            Err(message) => {
-                warn_line!("lumenc web: {message}");
-                return ExitCode::FAILURE;
-            }
-        };
-        server = server.with_handler(Arc::new(handler));
-        // The number is the process's, not the machine's: a Lumen app reads
-        // its state through buses that belong to the process, so two apps
-        // ticking at once would read each other's writes.
-        say_line!(
-            "lumenc web: rendering every page for the request that asks, one render at a time"
-        );
-        if reaches_nothing {
-            say_line!(
-                "lumenc web: a render reaches no host; list them in [web.ssr] allow_hosts, or pass \
-                 --allow-host, to let the app fetch its data while the page is rendered"
-            );
-        }
-    }
-
-    say_line!(
-        "lumenc web: serving {} at {}",
-        report.out.display(),
-        server.url()
-    );
-    say_line!("lumenc web: press Ctrl-C to stop");
-    server.run();
-    ExitCode::SUCCESS
-}
-
-/// The address to listen on. Nothing named means the loopback address, which
-/// is the machine this runs on and nobody else.
-fn host_address(host: Option<&str>) -> Result<IpAddr, String> {
-    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
-        return Ok(LOOPBACK);
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return Ok(LOOPBACK);
-    }
-    host.parse::<IpAddr>().map_err(|_| {
-        format!(
-            "--host takes an address this machine has, such as 127.0.0.1 or 0.0.0.0, got `{host}`"
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nothing_named_means_this_machine_and_nobody_else() {
-        assert_eq!(host_address(None), Ok(LOOPBACK));
-        assert_eq!(host_address(Some("")), Ok(LOOPBACK));
-        assert_eq!(host_address(Some(" localhost ")), Ok(LOOPBACK));
-        assert!(host_address(Some("127.0.0.1")).is_ok_and(|host| host.is_loopback()));
-    }
-
-    #[test]
-    fn an_address_that_reaches_further_is_taken_as_written() {
-        let any = host_address(Some("0.0.0.0")).expect("an address this machine can have");
-        assert!(!any.is_loopback(), "the warning is on this being reachable");
-        assert!(host_address(Some("::1")).is_ok_and(|host| host.is_loopback()));
-    }
-
-    #[test]
-    fn something_that_is_not_an_address_is_named_back() {
-        let error = host_address(Some("my-laptop")).expect_err("that is not an address");
-        assert!(error.contains("my-laptop"), "{error}");
-    }
 
     /// The fix a warning prints is the function's own parameter list, not a
     /// stand-in: pasting it is the whole remedy.

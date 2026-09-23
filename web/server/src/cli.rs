@@ -59,33 +59,42 @@ fn serve(config: Config) -> ExitCode {
             // holds a thread that nothing can join.
             std::process::exit(exit_code(exit));
         }
-        crate::supervisor::run(&config, &log)
-    }
-    #[cfg(not(unix))]
-    {
-        if config.workers > 1 {
-            log.error(
-                "--workers above 1 needs the unix supervisor, which Windows does not have. Run \
-                 one lumen-server per port behind a balancer instead.",
-            );
-            return ExitCode::from(2);
+        // Development runs one process, with nothing between the developer
+        // and the server that answers them.
+        if !config.dev {
+            return crate::supervisor::run(&config, &log);
         }
-        if let Some(renders) = config.max_renders {
-            log.warn(&format!(
-                "--max-renders ends this process after about {renders} renders, and nothing here \
-                 starts another; run it under a service manager that restarts it"
-            ));
-        }
-        let listener = match bind(&config) {
-            Ok(listener) => listener,
-            Err(message) => {
-                log.error(&message);
-                return ExitCode::FAILURE;
-            }
-        };
-        let exit = serve_on(listener, &config, &log, false);
-        std::process::exit(exit_code(exit));
     }
+    if config.workers > 1 {
+        log.error(
+            "--workers above 1 needs the unix supervisor, which Windows does not have. Run \
+             one lumen-server per port behind a balancer instead.",
+        );
+        return ExitCode::from(2);
+    }
+    if let Some(renders) = config.max_renders {
+        log.warn(&format!(
+            "--max-renders ends this process after about {renders} renders, and nothing here \
+             starts another; run it under a service manager that restarts it"
+        ));
+    }
+    if config.dev && !config.bind.is_loopback() {
+        log.warn(&format!(
+            "--bind {} makes the site reachable from other machines, and --dev shows them \
+             what went wrong inside a render. Serve it without --dev, behind a reverse proxy, \
+             before anyone else uses it.",
+            config.bind
+        ));
+    }
+    let listener = match bind(&config) {
+        Ok(listener) => listener,
+        Err(message) => {
+            log.error(&message);
+            return ExitCode::FAILURE;
+        }
+    };
+    let exit = serve_on(listener, &config, &log, false);
+    std::process::exit(exit_code(exit));
 }
 
 /// The exit status a server that stopped for `exit` reports.
@@ -107,18 +116,48 @@ pub(crate) fn bind(config: &Config) -> Result<TcpListener, String> {
     })
 }
 
-/// The site a server renders, read from the directory a build wrote, and the
+/// What a site directory holds.
+pub(crate) enum Site {
+    /// A build rendered per request: the app every page is rendered from.
+    Rendered(Box<SsrSite>),
+    /// Any other build, served as the files it is.
+    Files,
+}
+
+/// The site a server serves, read from the directory a build wrote, and the
 /// base path it is served under.
-pub(crate) fn load_site(dir: &Path) -> Result<(SsrSite, String), String> {
+///
+/// A directory with a spec file is a rendered site, and its base path is
+/// the one it was built for; `base_path` has to agree with it or be left
+/// out. Any other directory is served as files, under `base_path`.
+pub(crate) fn load_site(dir: &Path, base_path: Option<&str>) -> Result<(Site, String), String> {
     let spec_path = dir.join(SERVER_SPEC_FILE);
+    if !spec_path.exists() {
+        if !dir.is_dir() {
+            return Err(format!(
+                "{} is not a directory. Point lumen-server at the directory `lumenc web` wrote.",
+                dir.display()
+            ));
+        }
+        return Ok((Site::Files, base_path.unwrap_or("/").to_string()));
+    }
     let bytes = std::fs::read(&spec_path).map_err(|e| {
         format!(
-            "cannot read {}: {e}. Point lumen-server at the directory `lumenc web --render ssr` \
-             wrote.",
+            "cannot read {}: {e}. Point lumen-server at the directory `lumenc web` wrote.",
             spec_path.display()
         )
     })?;
     let spec = ServerSpec::from_json(&bytes).map_err(|e| e.to_string())?;
+    let built = spec.web.base_path.clone();
+    if let Some(asked) = base_path
+        && asked.trim_matches('/') != built.trim_matches('/')
+    {
+        return Err(format!(
+            "--base-path {asked} is not the base path {built} this site was built for; a \
+             rendered page links under the one it was built with. Drop --base-path, or build \
+             again with `lumenc web --base {asked}`."
+        ));
+    }
     let artifact_path = dir.join(&spec.web.artifact);
     let artifact = std::fs::read(&artifact_path)
         .map_err(|e| format!("cannot read {}: {e}", artifact_path.display()))?;
@@ -130,7 +169,31 @@ pub(crate) fn load_site(dir: &Path) -> Result<(SsrSite, String), String> {
         catalogues.push((tag.clone(), source));
     }
     let site = SsrSite::from_build(&artifact, &spec, catalogues).map_err(|e| e.to_string())?;
-    Ok((site, spec.web.base_path.clone()))
+    Ok((Site::Rendered(Box::new(site)), built))
+}
+
+/// What renders run with under `config`, on top of the site's own policy.
+pub(crate) fn render_options(site: &SsrSite, config: &Config) -> RenderOptions {
+    let mut options = RenderOptions::default().with_policy(site.policy());
+    for host in &config.allow_hosts {
+        options.fetch = options.fetch.allow_host(host);
+    }
+    options.queue = config.queue_depth;
+    options
+}
+
+/// How the render handler runs under `config`.
+pub(crate) fn render_settings(config: &Config, log: &Arc<Log>) -> RenderSettings {
+    RenderSettings {
+        limit: config.render_timeout,
+        max_renders: config.max_renders,
+        errors: if config.dev {
+            ErrorPages::Detailed
+        } else {
+            ErrorPages::Plain
+        },
+        log: Arc::clone(log),
+    }
 }
 
 /// Serve on `listener` until stopped, and say why it stopped.
@@ -141,49 +204,59 @@ pub(crate) fn serve_on(
     worker: bool,
 ) -> Exit {
     let dir: PathBuf = config.site.clone().unwrap_or_default();
-    let (site, base) = match load_site(&dir) {
+    let (site, base) = match load_site(&dir, config.base_path.as_deref()) {
         Ok(site) => site,
         Err(message) => {
             log.error(&message);
             std::process::exit(1);
         }
     };
-    let mut options = RenderOptions::default().with_policy(site.policy());
-    options.queue = Some(config.queue_depth);
-    let handler = match RenderHandler::start(
-        site,
-        options,
-        RenderSettings {
-            limit: Some(config.render_timeout),
-            max_renders: config.max_renders,
-            errors: ErrorPages::Plain,
-            log: Arc::clone(log),
-        },
-    ) {
-        Ok(handler) => handler,
-        Err(message) => {
-            log.error(&message);
-            std::process::exit(1);
-        }
-    };
-    let server = Server::on(listener, &dir, &base)
-        .with_handler(Arc::new(handler))
+    let mut server = Server::on(listener, &dir, &base)
         .with_limits(config.limits)
         .with_health_path(&config.health_path)
         .with_trust(config.trust.clone())
         .with_access_log(Arc::clone(log));
+    let rendered = matches!(site, Site::Rendered(_));
+    if let Site::Rendered(site) = site {
+        let options = render_options(&site, config);
+        let reaches_nothing = options.fetch.hosts.is_empty();
+        let handler = match RenderHandler::start(*site, options, render_settings(config, log)) {
+            Ok(handler) => handler,
+            Err(message) => {
+                log.error(&message);
+                std::process::exit(1);
+            }
+        };
+        server = server.with_handler(Arc::new(handler));
+        if config.dev && reaches_nothing {
+            log.info(
+                "a render reaches no host; list them in lumen.toml [web.ssr] allow_hosts, or \
+                 pass --allow-host, to let the app fetch its data while the page is rendered",
+            );
+        }
+    }
     let stop = server.shutdown_handle();
     on_signal(stop.clone());
-    #[cfg(unix)]
-    if worker {
-        crate::supervisor::watch_parent(stop);
+    if worker || config.dev {
+        crate::parent::watch(stop);
     }
-    #[cfg(not(unix))]
-    let _ = worker;
     if worker {
         log.info(&format!("worker {} serving", std::process::id()));
+    } else if rendered {
+        log.info(&format!(
+            "serving {} at {}, rendering every page for the request that asks",
+            dir.display(),
+            server.url()
+        ));
     } else {
-        log.info(&format!("serving {} at {}", dir.display(), server.url()));
+        log.info(&format!(
+            "serving the files in {} at {} (it has no {SERVER_SPEC_FILE})",
+            dir.display(),
+            server.url()
+        ));
+    }
+    if config.dev && !worker {
+        log.info("press Ctrl-C to stop");
     }
     let exit = server.run();
     match exit {
@@ -276,4 +349,59 @@ fn ask(address: SocketAddr, path: &str) -> std::io::Result<u16> {
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|status| status.parse().ok())
         .ok_or_else(|| std::io::Error::other("the answer is not HTTP"))
+}
+
+#[cfg(test)]
+mod tests {
+    use lumen_ir::artifact::CompiledApp;
+    use lumen_web::WebSpec;
+
+    use super::*;
+    use crate::config::{self, Command};
+
+    fn config(args: &[&str]) -> Config {
+        match config::parse(args.iter().map(|arg| arg.to_string()), |_| None) {
+            Ok(Command::Serve(config)) => config,
+            other => panic!("expected a server config, got {other:?}"),
+        }
+    }
+
+    fn site() -> SsrSite {
+        SsrSite::new(CompiledApp::default(), WebSpec::default()).expect("an empty app")
+    }
+
+    #[test]
+    fn dev_adds_its_hosts_to_the_site_policy_and_lifts_the_limits() {
+        let dev = config(&["--dev", "--allow-host", "api.example.com", "site"]);
+        let options = render_options(&site(), &dev);
+        assert!(options.fetch.hosts.contains("api.example.com"));
+        assert_eq!(options.queue, None);
+        let log = Arc::new(Log::new(dev.log_format, "test"));
+        let settings = render_settings(&dev, &log);
+        assert_eq!(settings.errors, ErrorPages::Detailed);
+        assert_eq!(settings.limit, None);
+
+        let production = config(&["site"]);
+        let options = render_options(&site(), &production);
+        assert!(options.fetch.hosts.is_empty());
+        assert_eq!(options.queue, Some(2));
+        let settings = render_settings(&production, &log);
+        assert_eq!(settings.errors, ErrorPages::Plain);
+        assert_eq!(settings.limit, Some(config::DEFAULT_RENDER_TIMEOUT));
+    }
+
+    #[test]
+    fn a_directory_with_no_spec_file_is_files_under_the_base_asked_for() {
+        let dir = std::env::temp_dir().join(format!("lumen-server-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the directory");
+        let (site, base) = load_site(&dir, Some("/docs")).expect("a site of files");
+        assert!(matches!(site, Site::Files));
+        assert_eq!(base, "/docs");
+        let (_, base) = load_site(&dir, None).expect("a site of files");
+        assert_eq!(base, "/");
+        let error = load_site(&dir.join("missing"), None)
+            .err()
+            .expect("no directory there");
+        assert!(error.contains("not a directory"), "{error}");
+    }
 }

@@ -19,10 +19,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::cli::{EXIT_WEDGED, bind, load_site};
+use lumen_ssr::SERVER_SPEC_FILE;
+
+use crate::cli::{EXIT_WEDGED, Site, bind, load_site};
 use crate::config::Config;
 use crate::log::Log;
-use crate::server::Shutdown;
 
 /// The variable a worker finds its listening descriptor in. The supervisor
 /// sets it; nothing else should.
@@ -54,25 +55,6 @@ pub(crate) fn inherited_listener() -> Option<TcpListener> {
     Some(listener)
 }
 
-/// Stop the worker if its supervisor goes away, so a killed supervisor does
-/// not leave workers answering on a port nobody manages.
-pub(crate) fn watch_parent(stop: Shutdown) {
-    // SAFETY: getppid has no preconditions and cannot fail.
-    let parent = unsafe { libc::getppid() };
-    let _ = std::thread::Builder::new()
-        .name("lumen-server-parent".to_string())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(500));
-                // SAFETY: as above.
-                if unsafe { libc::getppid() } != parent {
-                    stop.shutdown();
-                    return;
-                }
-            }
-        });
-}
-
 /// One worker place: the process in it, and when it started.
 struct Place {
     child: Option<Child>,
@@ -86,8 +68,12 @@ struct Place {
 pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
     // A site that will not load fails here, once, rather than in every
     // worker in a loop.
-    let base = match config.site.as_deref().map(load_site) {
-        Some(Ok((_, base))) => base,
+    let (files, base) = match config
+        .site
+        .as_deref()
+        .map(|dir| load_site(dir, config.base_path.as_deref()))
+    {
+        Some(Ok((site, base))) => (matches!(site, Site::Files), base),
         Some(Err(message)) => {
             log.error(&message);
             return ExitCode::FAILURE;
@@ -145,9 +131,14 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
         .map(|addr| addr.to_string())
         .unwrap_or_default();
     log.info(&format!(
-        "listening on http://{addr}{base} with {} worker{}",
+        "listening on http://{addr}{base} with {} worker{}{}",
         config.workers,
-        if config.workers == 1 { "" } else { "s" }
+        if config.workers == 1 { "" } else { "s" },
+        if files {
+            format!(", serving its files (it has no {SERVER_SPEC_FILE})")
+        } else {
+            String::new()
+        }
     ));
     let mut places: Vec<Place> = (0..config.workers)
         .map(|_| Place {

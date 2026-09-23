@@ -30,8 +30,9 @@ port=8799
 
 # Build before serving. Backgrounding `cargo run` backgrounds the compile
 # with it, and on a cold cache the wait below expires while the compiler is
-# still working, which reads as a server that never came up.
-cargo build -p lumenc
+# still working, which reads as a server that never came up. `--serve` runs
+# the lumen-server beside lumenc, so it is built into the same directory.
+cargo build -p lumenc -p lumen-server
 
 fail() {
   echo "web page smoke: $1" >&2

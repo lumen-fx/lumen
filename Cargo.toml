@@ -428,6 +428,12 @@ libc = "0.2"
 # The Unix arm uses signal-hook directly; ctrlc wraps SetConsoleCtrlHandler
 # so the windows arms mirror the SIGINT/SIGTERM behavior.
 ctrlc = "3"
+# Signalling another process without unsafe code: `lumenc web --serve` passes
+# a stop on to the lumen-server it started.
+rustix = "1"
+# Win32 calls std does not wrap: a `lumen-server --dev` watching the process
+# that started it. The version the rest of the tree already uses.
+windows-sys = "0.61"
 
 # Serialization (used by lumen-mcp + lumen-mcp-server)
 serde = { version = "1", features = ["derive"] }
