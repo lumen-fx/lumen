@@ -238,7 +238,7 @@ fn spawn_extraction(spawn: Option<Arc<dyn Spawn>>, shared: Shared, job: Job) {
         shared.release(&job.tag);
         match outcome {
             Ok(unpacked) => {
-                push_plugin_event(&PluginEvent::Call {
+                push_plugin_event(PluginEvent::Call {
                     event: DONE_EVENT.to_string(),
                     key: job.tag,
                     fallback: DONE_FALLBACK.to_string(),
@@ -267,7 +267,7 @@ fn spawn_extraction(spawn: Option<Arc<dyn Spawn>>, shared: Shared, job: Job) {
 /// Deliver one failure the way every plugin event is delivered: the per-tag
 /// `on("archive_error", tag, fn)` registration wins, else `on_archive_error`.
 fn report_error(tag: &str, message: &str) {
-    push_plugin_event(&PluginEvent::Call {
+    push_plugin_event(PluginEvent::Call {
         event: ERROR_EVENT.to_string(),
         key: tag.to_string(),
         fallback: ERROR_FALLBACK.to_string(),
