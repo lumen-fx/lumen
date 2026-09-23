@@ -137,29 +137,18 @@ fn candela_root(package: &AddonPackage) -> Option<(String, PathBuf)> {
     is_package.then(|| (package.addon.name.clone(), package.dir.clone()))
 }
 
-/// Every add-on and import root the app at `dir` declares for any target,
-/// which is what `lumenc check` compiles against: a check is for no one
-/// target, so a call written for either passes.
+/// What the app at `dir` compiles against for each target, which is what
+/// `lumenc check` compiles against: a check is for no one target, so it
+/// checks the app the way each target's build compiles it.
 ///
 /// # Errors
 ///
 /// As [`target_deps`].
-pub fn every_target(dir: &Path) -> Result<CompileDeps, String> {
-    let mut deps = CompileDeps::new(Target::Desktop);
-    for target in Target::ALL {
-        let found = target_deps(dir, target, None)?;
-        for root in found.compile.import_roots {
-            if !deps.import_roots.contains(&root) {
-                deps.import_roots.push(root);
-            }
-        }
-        for addon in found.compile.addons {
-            if !deps.addons.iter().any(|a| a.name == addon.name) {
-                deps.addons.push(addon);
-            }
-        }
-    }
-    Ok(deps)
+pub fn every_target(dir: &Path) -> Result<Vec<CompileDeps>, String> {
+    Target::ALL
+        .into_iter()
+        .map(|target| target_deps(dir, target, None).map(|found| found.compile))
+        .collect()
 }
 
 /// An add-on's files, as a site ships them: the whole package under one

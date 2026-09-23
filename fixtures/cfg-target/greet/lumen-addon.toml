@@ -1,0 +1,10 @@
+# A test add-on with one function that answers at once.
+[addon]
+namespace = "greet"
+module = "greet.js"
+
+[[function]]
+name = "hello"
+params = ["who: string"]
+returns = "string"
+doc = "A greeting from the browser."

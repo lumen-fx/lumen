@@ -2,11 +2,15 @@
 import "lumen.cdl";
 
 // An add-on's functions are bound before the script loads, so on_start can
-// call them, and its answers land in the first ticks the page runs.
+// call them, and its answers land in the first ticks the page runs. The add-on
+// is a dependency of the web build only, so the calls are compiled only there.
 fn on_start() {
-    lumen::signal_set("sync_result", echo::shout("hello"));
-    echo::later("world", 5, "first");
-    echo::fail("on purpose", "second");
+    @cfg(web)
+    {
+        lumen::signal_set("sync_result", echo::shout("hello"));
+        echo::later("world", 5, "first");
+        echo::fail("on purpose", "second");
+    }
 }
 
 // An attribute written onto the element the add-on owns reaches it as an

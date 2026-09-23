@@ -1,13 +1,16 @@
 // The candela standard library, reached from an app the way an app reaches it:
-// an explicit import of a C-backed module for the wall clock, and the array
-// methods the compiler pulls in from `std/list` with no import at all.
+// explicit imports of the C-backed modules for the wall clock and the maths
+// library, and the array methods the compiler pulls in from `std/list` with no
+// import at all.
 import "lumen.cdl";
 import "std/time";
+import "std/math" as math;
 
 fn on_start() {
     lumen::signal_set("clock", str(now()));
     let counts = [1, 2, 3];
     lumen::signal_set("total", str(counts.sum()));
+    lumen::signal_set("root", str(math::sqrt(16.0)));
 }
 
 fn main() {}

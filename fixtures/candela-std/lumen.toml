@@ -1,7 +1,9 @@
 # Proof fixture for the candela standard library under the Lumen host. The
-# script imports a C-backed module (`std/time`) and calls an array method the
-# compiler loads from `std/list` on its own; both read the library the toolchain
-# ships, so the labels in main.lmn keep their markup text when it is missing.
+# script imports two C-backed modules (`std/time`, `std/math`) and calls an
+# array method the compiler loads from `std/list` on its own; all of them read
+# the library the toolchain ships, so the labels in main.lmn keep their markup
+# text when it is missing. The same app runs in a browser, where the runtime
+# carries the C-backed modules itself.
 [script]
 engine = "candela"
 
