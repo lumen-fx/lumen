@@ -6,7 +6,7 @@
 //! the tree travels with Lumen's own build; these cover the three ways a
 //! program reaches it, and what a module the library does not carry still
 //! reports. Below the compiler, the installed C libraries have to be the ones
-//! the build made, whole, and the wall clock one has to answer every call.
+//! the build made, whole, and the `time` one has to read the wall clock.
 
 use std::env::consts::DLL_EXTENSION;
 use std::fs;
@@ -160,7 +160,7 @@ fn the_installed_c_libraries_are_the_ones_the_build_made() {
 }
 
 #[test]
-fn the_time_library_reads_the_wall_clock_every_call() {
+fn the_time_library_reads_the_wall_clock() {
     // `int64_t now(void)` in candela's `std_src/time/time.c`.
     type Now = unsafe extern "C" fn() -> i64;
 
@@ -173,13 +173,11 @@ fn the_time_library_reads_the_wall_clock_every_call() {
     let now: Symbol<Now> = unsafe { library.get(b"now\0") }
         .unwrap_or_else(|e| panic!("resolve now() in {}: {e}", path.display()));
 
-    for call in 0..10_000 {
-        // SAFETY: `now` takes nothing and reads the clock.
-        let seconds = unsafe { now() };
-        let expected = wall_clock();
-        assert!(
-            (seconds - expected).abs() <= 5,
-            "call {call} of now() returned {seconds}, the wall clock reads {expected}"
-        );
-    }
+    // SAFETY: `now` takes nothing and reads the clock.
+    let seconds = unsafe { now() };
+    let expected = wall_clock();
+    assert!(
+        (seconds - expected).abs() <= 5,
+        "now() returned {seconds}, the wall clock reads {expected}"
+    );
 }

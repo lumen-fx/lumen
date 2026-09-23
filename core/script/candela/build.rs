@@ -26,8 +26,9 @@
 //! same time, for the same profile directory; two C compilers writing the
 //! same object and library paths at once is a failed compile on Windows, and
 //! a rename is the one write that cannot half-happen. A file that already
-//! holds the same bytes is left where it is, so the second run does not
-//! replace the first one's copy under a process that has it loaded.
+//! holds the same bytes is left where it is: Windows refuses a rename over a
+//! DLL a running process has loaded, so replacing an identical copy there
+//! fails the install for nothing.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -233,12 +234,11 @@ fn build_native(
     // what they hold is arithmetic an app calls at run time, which has no
     // reason to be slow because the engine around it was built for debugging.
     //
-    // Without debug information, for the same reason, and so the library is
-    // the same bytes whichever profile asked for it. A build dependency and a
+    // Without debug information in every profile. A build dependency and a
     // normal one install into the same directory, and the install leaves a
-    // file with identical contents alone; debug information carries build
-    // paths and differs per profile, which would make every such run replace
-    // the other's library again.
+    // file with identical contents alone; left to `cc`, debug information is
+    // on in one of those builds and off in the other, so the two would never
+    // be the same bytes and each run would replace the other's library.
     let tool = cc::Build::new()
         .opt_level(2)
         .debug(false)
@@ -257,7 +257,15 @@ fn build_native(
         objects.push(std::path::MAIN_SEPARATOR_STR);
         command.arg(msvc_flag("-Fo", Path::new(&objects)));
     } else if target_os() == "macos" {
-        command.args(["-dynamiclib", "-fPIC", "-o"]).arg(&library);
+        // The linker records the output path as the library's identity
+        // unless told otherwise, and that path is this run's own output
+        // directory, so two runs would build different bytes. candela opens
+        // the library by path, which never consults the identity.
+        command
+            .args(["-dynamiclib", "-fPIC"])
+            .arg(format!("-Wl,-install_name,@rpath/{file_name}"))
+            .arg("-o")
+            .arg(&library);
     } else {
         command.args(["-shared", "-fPIC", "-o"]).arg(&library);
     }
