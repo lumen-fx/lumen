@@ -198,7 +198,7 @@ fn the_windowless_assembly_builds_the_same_tree() {
     let mut booted = lumen_prerender::boot(
         &compiled,
         &lumen_prerender::Location::page("main"),
-        lumen_prerender::Language::default(),
+        lumen_prerender::Language::untranslated("en-US"),
         &lumen_html::contract::Seed::new(),
         Arc::new(lumen_prerender::DenyDispatch::default()),
     );
@@ -216,6 +216,7 @@ fn filled() -> lumen_ir::artifact::CompiledApp {
     lumenc::web::component_fill::fill(
         &mut compiled,
         "main",
+        lumen_prerender::Language::untranslated("en-US"),
         &lumen_html::contract::Seed::new(),
         &mut warnings,
     );
@@ -246,7 +247,7 @@ fn a_filled_tree_still_builds_what_the_runtime_builds() {
     let mut booted = lumen_prerender::boot(
         &compiled,
         &lumen_prerender::Location::page("main"),
-        lumen_prerender::Language::default(),
+        lumen_prerender::Language::untranslated("en-US"),
         &lumen_html::contract::Seed::new(),
         Arc::new(lumen_prerender::DenyDispatch::default()),
     );

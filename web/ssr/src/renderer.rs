@@ -434,7 +434,7 @@ fn render_one(
     );
     if let Some(error) = language_error {
         warnings.push(format!(
-            "the catalogues would not load, so the app ran untranslated: {error}"
+            "the app could not start in this tree's locale, so it ran untranslated: {error}"
         ));
     }
     for engine in unsupported_engines {

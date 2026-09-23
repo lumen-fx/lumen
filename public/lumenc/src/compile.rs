@@ -58,6 +58,10 @@ pub enum CompileError {
     /// The artifact failed to encode.
     #[error("artifact: {0}")]
     Artifact(String),
+    /// A translation catalogue under `locale/` could not be read, is named
+    /// for no language, or is not valid Fluent.
+    #[error("locale catalogue: {0}")]
+    Catalogue(String),
     /// A compiler plugin failed to load or one of its hooks failed. The
     /// message names the plugin.
     #[error("{0}")]
@@ -338,10 +342,18 @@ fn compile_dir(
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
-    // The catalogues travel in the artifact, the same as on the fat path.
-    let i18n =
-        lumen_ir::artifact::CompiledI18n::read_dir(&dir.join("locale"), fallback_locale(dir))
-            .map_err(|e| CompileError::Read(dir.join("locale"), e))?;
+    // The catalogues travel in the artifact, the same as on the fat path, and
+    // are parsed here so a broken one fails the build.
+    let fallback = fallback_locale(dir);
+    let catalogues = lumen_i18n::read_catalogues(&dir.join("locale"), |p| std::fs::read(p))
+        .and_then(|catalogues| {
+            lumen_i18n::Catalogues::parse(&catalogues, &fallback).map(|_| catalogues)
+        })
+        .map_err(|e| CompileError::Catalogue(e.to_string()))?;
+    let i18n = lumen_ir::artifact::CompiledI18n {
+        catalogues,
+        fallback,
+    };
 
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
@@ -698,6 +710,35 @@ mod tests {
             "ua.css's `button {{ min-height: 36 }}` must reach this compile path"
         );
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A catalogue that is not Fluent fails the build that would carry it,
+    /// on this path and on the one `lumenc web` and `package` compile through.
+    #[test]
+    fn a_broken_catalogue_fails_the_build() {
+        let tmp = std::env::temp_dir().join(format!("lumenc-compile-ftl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).expect("mkdir");
+        std::fs::create_dir_all(tmp.join("locale")).expect("mkdir");
+        std::fs::write(tmp.join("src/main.lmn"), "<root/>").expect("write lmn");
+        std::fs::write(tmp.join("locale/de-DE.ftl"), "= no key\n").expect("write ftl");
+
+        let err = compile_dir_to_lmna(&tmp).expect_err("a broken catalogue fails the build");
+        assert!(matches!(err, CompileError::Catalogue(_)), "{err}");
+        #[cfg(feature = "dev-run")]
+        {
+            let err = crate::compile_app(&tmp).expect_err("and the fat path fails it too");
+            assert!(err.to_string().contains("i18n"), "{err}");
+        }
+
+        std::fs::write(tmp.join("locale/de-DE.ftl"), "greeting = Hallo\n").expect("write ftl");
+        let bytes = compile_dir_to_lmna(&tmp).expect("a valid catalogue compiles");
+        let app = lumen_ir::artifact::read_bytes(&bytes).expect("decode");
+        assert_eq!(
+            app.i18n.catalogues,
+            [("de-DE".to_string(), "greeting = Hallo\n".to_string())]
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

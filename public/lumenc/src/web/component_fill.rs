@@ -70,11 +70,14 @@ const MAX_ROUNDS: u32 = 16;
 /// the emitter to write into the rows it writes. They are the last round's:
 /// the tree the last boot ran is the tree the pages are written from.
 ///
-/// `seed` is the state the boot starts from, which is the state the pages are
-/// written with.
+/// `language` is the locale the boot runs in and the catalogues it reads, the
+/// root tree's, so a component that calls `t()` renders in the language the
+/// site root is written in. `seed` is the state the boot starts from, which is
+/// the state the pages are written with.
 pub fn fill(
     compiled: &mut CompiledApp,
     page: &str,
+    language: Language<'_>,
     seed: &Seed,
     warnings: &mut Vec<String>,
 ) -> (RowFills, BTreeSet<String>) {
@@ -88,7 +91,7 @@ pub fn fill(
     let mut fills = RowFills::default();
     let mut exhausted = true;
     for _ in 0..MAX_ROUNDS {
-        let (filled, round_fills) = round(compiled, page, seed, warnings);
+        let (filled, round_fills) = round(compiled, page, language, seed, warnings);
         fills = round_fills;
         if !filled {
             exhausted = false;
@@ -142,13 +145,14 @@ fn markers_in_rows(element: &Element, in_a_row: bool, out: &mut BTreeSet<String>
 fn round(
     compiled: &mut CompiledApp,
     page: &str,
+    language: Language<'_>,
     seed: &Seed,
     warnings: &mut Vec<String>,
 ) -> (bool, RowFills) {
     let mut booted = boot(
         compiled,
         &Location::page(page),
-        Language::default(),
+        language,
         seed,
         Arc::new(DenyDispatch::default()),
     );

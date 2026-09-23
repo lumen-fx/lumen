@@ -139,7 +139,9 @@ pub struct CompiledPages {
 ///
 /// Each catalogue is the Fluent source of one `locale/<tag>.ftl` file, kept as
 /// text: which locale an app runs in is decided when it runs, and every
-/// target parses a catalogue through the same function. A loose file on disk
+/// target parses a catalogue through the same function. The compiler parses
+/// each one before writing it here, so a catalogue that is not Fluent fails
+/// the build rather than the app. A loose file on disk
 /// wins over the copy here, so a translator still edits the file beside an
 /// app and sees the change.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,44 +156,6 @@ pub struct CompiledI18n {
 }
 
 impl CompiledI18n {
-    /// Every `<tag>.ftl` catalogue in `locale_dir`, falling through
-    /// `fallback`.
-    ///
-    /// A directory that does not exist holds no catalogues, which is an app
-    /// with no translations.
-    ///
-    /// # Errors
-    ///
-    /// A catalogue that exists cannot be read as text.
-    pub fn read_dir(locale_dir: &Path, fallback: Vec<String>) -> std::io::Result<Self> {
-        let mut catalogues = Vec::new();
-        let entries = match std::fs::read_dir(locale_dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    catalogues,
-                    fallback,
-                });
-            }
-            Err(error) => return Err(error),
-        };
-        for entry in entries {
-            let path = entry?.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("ftl") {
-                continue;
-            }
-            let Some(tag) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            catalogues.push((tag.to_string(), std::fs::read_to_string(&path)?));
-        }
-        catalogues.sort();
-        Ok(Self {
-            catalogues,
-            fallback,
-        })
-    }
-
     /// True when the app carries no catalogue.
     pub fn is_empty(&self) -> bool {
         self.catalogues.is_empty()
@@ -458,36 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn catalogues_and_the_fallback_chain_round_trip() {
-        let app = sample();
-        let back = deserialize(&serialize(&app).expect("serialize")).expect("deserialize");
-        assert_eq!(back.i18n, app.i18n);
-    }
-
-    #[test]
-    fn a_locale_directory_reads_as_its_catalogues_by_tag() {
-        let dir = std::env::temp_dir().join(format!("lumen-ir-locale-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create the directory");
-        std::fs::write(dir.join("fr-FR.ftl"), "greeting = Bonjour\n").expect("write");
-        std::fs::write(dir.join("de-DE.ftl"), "greeting = Hallo\n").expect("write");
-        std::fs::write(dir.join("notes.txt"), "not a catalogue").expect("write");
-        let read = CompiledI18n::read_dir(&dir, vec!["de-DE".to_string()]).expect("it reads");
-        assert_eq!(
-            read.catalogues,
-            [
-                ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
-                ("fr-FR".to_string(), "greeting = Bonjour\n".to_string()),
-            ]
-        );
-        assert_eq!(read.fallback, ["de-DE"]);
-        let _ = std::fs::remove_dir_all(&dir);
-
-        let none = CompiledI18n::read_dir(&dir, Vec::new()).expect("a missing directory is empty");
-        assert!(none.is_empty());
-    }
-
-    #[test]
     fn round_trip_bytes() {
         let app = sample();
         let bytes = serialize(&app).expect("serialize");
@@ -505,6 +439,7 @@ mod tests {
         let pages = back.pages.expect("the page set round-trips");
         assert_eq!(pages.entry, "index");
         assert_eq!(pages.keys.len(), 2);
+        assert_eq!(back.i18n, app.i18n);
     }
 
     #[test]

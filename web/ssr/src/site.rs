@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use lumen_core::nav;
 use lumen_html::contract::Seed;
-use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n};
+use lumen_i18n::{Catalogues, LanguageIdentifier, SharedI18n};
 use lumen_ir::artifact::CompiledApp;
 use lumen_prerender::Language;
 use lumen_web::{LocaleSpec, PageSpec, ServerPolicy, ServerSpec, SiteSpec, WebSpec};
@@ -43,10 +43,10 @@ pub struct SsrSite {
     entry: String,
     keys: Vec<String>,
     seed: Seed,
-    /// Each locale's Fluent source, by tag, which a render's app reads.
-    catalogues: Vec<(String, String)>,
-    /// The chain a key missing from the active catalogue falls through.
-    fallback: Vec<String>,
+    /// Every locale's catalogue, parsed once, and the chain a key missing
+    /// from the active one falls through. A render builds its app's registry
+    /// from them.
+    catalogues: Catalogues,
     /// What the app allows a render to reach.
     policy: ServerPolicy,
 }
@@ -105,8 +105,7 @@ impl SsrSite {
             entry,
             keys,
             seed: Seed::new(),
-            catalogues: Vec::new(),
-            fallback: Vec::new(),
+            catalogues: Catalogues::default(),
             policy: ServerPolicy::default(),
         })
     }
@@ -160,14 +159,17 @@ impl SsrSite {
         } else {
             spec.locales.clone()
         };
+        let parsed = Catalogues::parse(&catalogues, &fallback)
+            .map_err(|error| SsrError::Catalogue(error.to_string()))?;
         let assets = spec.assets();
         let ir = site.compiled.ir.clone();
         for locale in &locales {
             // A locale that is not a language tag is a tree in the text the
             // author wrote, the same tree the build emitted for it.
             let tree_ir = match locale.parse::<LanguageIdentifier>() {
-                Ok(_) if !catalogues.is_empty() => {
-                    let i18n = I18n::from_sources(locale, &catalogues, &fallback)
+                Ok(_) if !parsed.is_empty() => {
+                    let i18n = parsed
+                        .i18n(locale)
                         .map_err(|error| SsrError::Catalogue(error.to_string()))?;
                     lumen_web::translate_ir(&ir, &SharedI18n::new(i18n))
                 }
@@ -206,9 +208,8 @@ impl SsrSite {
             };
             site = site.with_locale(tree)?;
         }
-        let mut site = site
-            .with_catalogues(catalogues, fallback)?
-            .with_seed(spec.seed.clone());
+        site.catalogues = parsed;
+        let mut site = site.with_seed(spec.seed.clone());
         site.policy = spec.policy.clone();
         Ok(site)
     }
@@ -285,21 +286,15 @@ impl SsrSite {
     /// fallback_locale` is unset. A site with no catalogues runs its renders
     /// with no translator, and `t()` answers with the key.
     ///
-    /// Every catalogue is parsed here, so one that would fail a render fails
-    /// the site instead.
+    /// Every catalogue is parsed here, once, so one that would fail a render
+    /// fails the site instead, and a render only builds its registry.
     pub fn with_catalogues(
         mut self,
         catalogues: Vec<(String, String)>,
         fallback: Vec<String>,
     ) -> Result<Self, SsrError> {
-        if !catalogues.is_empty() {
-            // `und` stands in for the locale: what is checked is the
-            // catalogues and the chain, whichever tree a render is in.
-            I18n::from_sources("und", &catalogues, &fallback)
-                .map_err(|error| SsrError::Catalogue(error.to_string()))?;
-        }
-        self.catalogues = catalogues;
-        self.fallback = fallback;
+        self.catalogues = Catalogues::parse(&catalogues, &fallback)
+            .map_err(|error| SsrError::Catalogue(error.to_string()))?;
         Ok(self)
     }
 
@@ -316,19 +311,7 @@ impl SsrSite {
         Language {
             locale: &self.trees[tree].locale.locale,
             catalogues: &self.catalogues,
-            fallback: &self.fallback,
         }
-    }
-
-    /// Each locale's Fluent source, by tag, as [`Self::with_catalogues`] took
-    /// them.
-    pub fn catalogues(&self) -> &[(String, String)] {
-        &self.catalogues
-    }
-
-    /// The chain a key missing from the active catalogue falls through.
-    pub fn fallback(&self) -> &[String] {
-        &self.fallback
     }
 
     /// The default locale's tree, as the emitter sees it.

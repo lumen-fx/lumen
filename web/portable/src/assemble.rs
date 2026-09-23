@@ -37,7 +37,9 @@ use lumen_core::signals::{
 };
 use lumen_html::contract::{NodePath, NodeSeed, Seed};
 use lumen_html::paths::walk_nodes;
-use lumen_i18n::{I18n, I18nError, SharedI18n, switch_locale};
+/// The parsed catalogues [`install_i18n`] takes.
+pub use lumen_i18n::Catalogues;
+use lumen_i18n::{I18nError, SharedI18n, switch_locale};
 use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
@@ -232,16 +234,15 @@ fn install_bindings(app: &mut App) {
 /// Install the app's translations for `locale`, from catalogues that were
 /// fetched or read rather than found on a disk by the runtime itself.
 ///
-/// `catalogues` pairs a BCP-47 tag with that locale's Fluent source. It is
+/// `catalogues` is every locale's catalogue, already parsed, and the chain a
+/// key missing from `locale`'s catalogue falls through. The registry built
+/// from it is this app's own, so a `set_locale` here reaches no other app
+/// built from the same catalogues. It is
 /// the same registry the desktop builds, reaching the same two readers: the
 /// world resource markup resolves a `translatable` key through as it spawns,
 /// and the process-wide hook every script host's `t()` calls. A page that
 /// arrived already translated still needs both, because a row the app builds
 /// after the page opens was never written into the document.
-///
-/// `fallback` is the chain a key missing from `locale`'s catalogue falls
-/// through, the value `[app] fallback_locale` names. Empty takes the chain a
-/// desktop app gets when that key is unset, which ends in `en-US`.
 ///
 /// No formatter is installed: nothing in this assembly links one, so a
 /// `format` spec leaves its text as it stands, before a locale switch and
@@ -254,15 +255,14 @@ fn install_bindings(app: &mut App) {
 ///
 /// # Errors
 ///
-/// A tag is not BCP-47, or a catalogue is not Fluent. Nothing is installed
-/// then, and the app reads in the language its source strings are written in.
+/// `locale` is not BCP-47. Nothing is installed then, and the app reads in
+/// the language its source strings are written in.
 pub fn install_i18n(
     world: &mut World,
     locale: &str,
-    catalogues: &[(String, String)],
-    fallback: &[String],
+    catalogues: &Catalogues,
 ) -> Result<(), I18nError> {
-    let i18n = I18n::from_sources(locale, catalogues, fallback)?;
+    let i18n = catalogues.i18n(locale)?;
     // The parsed spelling, which is what a switch answers with, so
     // `locale()` reads the same string either way.
     let starting = i18n.current.to_string();
@@ -394,13 +394,9 @@ mod tests {
     fn an_installed_catalogue_answers_both_readers() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut world = World::new();
-        install_i18n(
-            &mut world,
-            "de-DE",
-            &[("de-DE".to_string(), GERMAN.to_string())],
-            &[],
-        )
-        .expect("a valid tag and a valid catalogue");
+        let catalogues = Catalogues::parse(&[("de-DE".to_string(), GERMAN.to_string())], &[])
+            .expect("a valid catalogue");
+        install_i18n(&mut world, "de-DE", &catalogues).expect("a valid tag");
 
         // Scripts, through the process-wide hook.
         assert_eq!(lumen_core::i18n::translate("greeting"), "Hallo");
@@ -417,18 +413,9 @@ mod tests {
     }
 
     #[test]
-    fn a_catalogue_that_will_not_parse_is_reported() {
+    fn a_locale_that_is_no_tag_is_reported() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut world = World::new();
-        assert!(install_i18n(&mut world, "not a tag", &[], &[]).is_err());
-        assert!(
-            install_i18n(
-                &mut world,
-                "de-DE",
-                &[("de-DE".to_string(), "= no key\n".to_string())],
-                &[],
-            )
-            .is_err()
-        );
+        assert!(install_i18n(&mut world, "not a tag", &Catalogues::default()).is_err());
     }
 }

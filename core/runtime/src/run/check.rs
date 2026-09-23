@@ -103,15 +103,23 @@ pub fn compile_app_with_skin(
     ir.external_scripts.clear();
     // Every catalogue travels in the artifact, so an app compiled here reads
     // in its languages with no `locale/` directory beside it. A loose file
-    // still wins where there is one.
-    let fallback = cfg
+    // still wins where there is one. Each is parsed here, so a broken one
+    // fails the build rather than the app.
+    let fallback: Vec<String> = cfg
         .app
         .fallback_locale
         .iter()
         .map(ToString::to_string)
         .collect();
-    let i18n = lumen_ir::artifact::CompiledI18n::read_dir(&super::locale_dir(dir), fallback)
+    let catalogues = lumen_i18n::read_catalogues(&super::locale_dir(dir), |p| std::fs::read(p))
+        .and_then(|catalogues| {
+            lumen_i18n::Catalogues::parse(&catalogues, &fallback).map(|_| catalogues)
+        })
         .map_err(|e| RunError::I18n(e.to_string()))?;
+    let i18n = lumen_ir::artifact::CompiledI18n {
+        catalogues,
+        fallback,
+    };
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
         script_source,
