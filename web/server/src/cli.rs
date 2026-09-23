@@ -11,6 +11,7 @@ use lumen_ssr::{RenderOptions, SERVER_SPEC_FILE, ServerSpec, SsrSite};
 
 use crate::config::{self, Command, Config, USAGE};
 use crate::log::Log;
+use crate::parent::{self, Adopted, Parent};
 use crate::render::{ErrorPages, RenderHandler, RenderSettings};
 use crate::server::{Exit, Server, Shutdown};
 
@@ -51,10 +52,20 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 fn serve(config: Config) -> ExitCode {
     let log = Arc::new(Log::new(config.log_format, "lumen-server"));
+    // First, before the site loads: a parent that exited while this process
+    // was starting has nobody left to serve.
+    let parent = match parent::adopt() {
+        Adopted::Unwatched => None,
+        Adopted::Watching(parent) => Some(parent),
+        Adopted::Gone => {
+            log.info("the process that started this one has already exited; not serving");
+            return ExitCode::SUCCESS;
+        }
+    };
     #[cfg(unix)]
     {
         if let Some(listener) = crate::supervisor::inherited_listener() {
-            let exit = serve_on(listener, &config, &log, true);
+            let exit = serve_on(listener, &config, &log, true, parent);
             // Straight out, rather than through the drops: a wedged render
             // holds a thread that nothing can join.
             std::process::exit(exit_code(exit));
@@ -62,7 +73,7 @@ fn serve(config: Config) -> ExitCode {
         // Development runs one process, with nothing between the developer
         // and the server that answers them.
         if !config.dev {
-            return crate::supervisor::run(&config, &log);
+            return crate::supervisor::run(&config, &log, parent);
         }
     }
     if config.workers > 1 {
@@ -72,9 +83,16 @@ fn serve(config: Config) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // One process, and nothing here to start another when it exits.
     if let Some(renders) = config.max_renders {
         log.warn(&format!(
             "--max-renders ends this process after about {renders} renders, and nothing here \
+             starts another; run it under a service manager that restarts it"
+        ));
+    }
+    if let Some(limit) = config.render_timeout {
+        log.warn(&format!(
+            "a render past --render-timeout ({limit:?}) ends this process, and nothing here \
              starts another; run it under a service manager that restarts it"
         ));
     }
@@ -93,7 +111,7 @@ fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let exit = serve_on(listener, &config, &log, false);
+    let exit = serve_on(listener, &config, &log, false, parent);
     std::process::exit(exit_code(exit));
 }
 
@@ -202,6 +220,7 @@ pub(crate) fn serve_on(
     config: &Config,
     log: &Arc<Log>,
     worker: bool,
+    parent: Option<Parent>,
 ) -> Exit {
     let dir: PathBuf = config.site.clone().unwrap_or_default();
     let (site, base) = match load_site(&dir, config.base_path.as_deref()) {
@@ -238,8 +257,8 @@ pub(crate) fn serve_on(
     }
     let stop = server.shutdown_handle();
     on_signal(stop.clone());
-    if worker || config.dev {
-        crate::parent::watch(stop);
+    if let Some(parent) = parent {
+        parent.watch(move || stop.shutdown());
     }
     if worker {
         log.info(&format!("worker {} serving", std::process::id()));
@@ -263,9 +282,13 @@ pub(crate) fn serve_on(
     match exit {
         Exit::Stopped => log.info("stopped"),
         Exit::Recycled => log.info("recycled after its renders; exiting for a fresh process"),
+        Exit::Wedged if worker => log.error(
+            "a render ran past --render-timeout and cannot be stopped; exiting so the \
+             supervisor starts a fresh worker",
+        ),
         Exit::Wedged => log.error(
-            "a render ran past --render-timeout and cannot be stopped; exiting so a fresh \
-             process takes over",
+            "a render ran past --render-timeout and cannot be stopped; exiting. Nothing here \
+             starts another process: a service manager that restarts it does",
         ),
     }
     exit

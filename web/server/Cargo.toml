@@ -30,19 +30,20 @@ lumen-web = { workspace = true }
 serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# Waiting on the listener with a timeout, handing it to worker processes, and
-# signalling them: what std does not reach.
-libc.workspace = true
+# Waiting on the listener with a timeout, handing it to worker processes,
+# signalling them, and going with the process that started this one: what std
+# does not reach, without unsafe code.
+rustix = { workspace = true, features = ["event", "net", "process"] }
 # SIGTERM and SIGINT, turned into a drain.
 signal-hook.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# Ctrl-C and a service stop, turned into a drain.
+# Ctrl-C and Ctrl-Break in a console, turned into a drain. A Windows service
+# is stopped through the service control manager, which this does not hear.
 ctrlc.workspace = true
-# Finding and waiting on the process that started a `--dev` server.
+# Opening and waiting on the process that started this one.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
-    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
 ] }
 

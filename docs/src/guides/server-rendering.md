@@ -184,8 +184,10 @@ and a fresh process is how to give it back.
 
 A render that ticks past `--render-timeout` cannot be stopped from inside the
 process that is running it. Its visitor gets a 504, and the worker finishes
-what else it is answering and exits so a fresh one takes over. Requests queued
-behind that render are answered with a 503.
+what else it is answering and exits so the supervisor starts a fresh one.
+Requests queued behind that render are answered with a 503. A server running
+as one process, on Windows or under `--dev`, exits the same way with nothing
+to start it again, so run it under a service manager that restarts it.
 
 ### Behind a proxy
 

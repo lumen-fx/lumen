@@ -4,9 +4,9 @@
 //! starts the `lumen-server` installed beside it with `--dev`, pointed at the
 //! directory the build wrote, and stays until it exits: its output is the
 //! server's own, a Ctrl-C or SIGTERM reaches it so it finishes what it is
-//! answering, and its exit status is the command's. Under `--dev` the server
-//! also stops by itself once lumenc is gone, so a lumenc killed outright
-//! leaves nothing listening.
+//! answering, and its exit status is the command's. The server is told
+//! lumenc's process id, and stops by itself once lumenc is gone, so a lumenc
+//! killed outright leaves nothing listening.
 
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr};
@@ -16,6 +16,39 @@ use std::process::{Child, Command, ExitCode, ExitStatus};
 /// The variable that names the `lumen-server` to run, when it is not beside
 /// lumenc.
 pub const SERVER_VAR: &str = "LUMEN_SERVER";
+
+/// The variable lumen-server reads the id of the process it goes with from.
+/// lumen-server declares it by the same name.
+pub const SERVER_PARENT_VAR: &str = "LUMEN_SERVER_PARENT";
+
+/// The variables lumen-server reads its settings from, which `--serve` keeps
+/// from reaching it: the flags lumenc passes are the development server's
+/// whole configuration, and a `LUMEN_WORKERS` or `LUMEN_BASE_PATH` left in
+/// the shell for a production server would otherwise refuse or reshape it.
+/// lumen-server's tests hold this list to the one it reads.
+pub const SERVER_ENV: &[&str] = &[
+    "LUMEN_DEV",
+    "LUMEN_SITE",
+    "LUMEN_BIND",
+    "LUMEN_PORT",
+    "LUMEN_BASE_PATH",
+    "LUMEN_WORKERS",
+    "LUMEN_MAX_CONNECTIONS",
+    "LUMEN_QUEUE_DEPTH",
+    "LUMEN_HEADER_TIMEOUT",
+    "LUMEN_BODY_TIMEOUT",
+    "LUMEN_WRITE_TIMEOUT",
+    "LUMEN_KEEP_ALIVE",
+    "LUMEN_RENDER_TIMEOUT",
+    "LUMEN_MAX_RENDERS",
+    "LUMEN_SHUTDOWN_GRACE",
+    "LUMEN_LOG_FORMAT",
+    "LUMEN_HEALTH_PATH",
+    "LUMEN_TRUSTED_PROXIES",
+    "LUMEN_ALLOW_HOSTS",
+    "LUMEN_SERVER_LISTEN_FD",
+    SERVER_PARENT_VAR,
+];
 
 /// The address `--serve` listens on when none is named: this machine, and
 /// nobody else.
@@ -157,7 +190,13 @@ pub fn run(serve: &Serve<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut child = match Command::new(&server).args(server_args(serve)).spawn() {
+    let mut command = Command::new(&server);
+    command.args(server_args(serve));
+    for var in SERVER_ENV {
+        command.env_remove(var);
+    }
+    command.env(SERVER_PARENT_VAR, std::process::id().to_string());
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
             lumen_core::warn_line!("lumenc web: cannot start {}: {e}", server.display());

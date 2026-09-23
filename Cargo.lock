@@ -4310,11 +4310,11 @@ name = "lumen-server"
 version = "0.0.8"
 dependencies = [
  "ctrlc",
- "libc",
  "lumen-ir",
  "lumen-ssr",
  "lumen-web",
  "lumenc",
+ "rustix 1.1.4",
  "serde_json",
  "signal-hook",
  "windows-sys 0.61.2",

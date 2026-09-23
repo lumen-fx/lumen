@@ -443,18 +443,18 @@ impl Server {
     /// was cut short to look at whether the server is stopping.
     #[cfg(unix)]
     fn next_connection(&self) -> Option<(TcpStream, SocketAddr)> {
-        use std::os::fd::AsRawFd;
-        let mut ready = libc::pollfd {
-            fd: self.listener.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let wait = Timespec {
+            tv_sec: 0,
+            tv_nsec: 200_000_000,
         };
-        // SAFETY: `ready` is one valid pollfd for the length passed, and the
-        // descriptor it names is the listener this server owns.
-        let found = unsafe { libc::poll(&mut ready, 1, 200) };
+        let found = poll(
+            &mut [PollFd::new(&self.listener, PollFlags::IN)],
+            Some(&wait),
+        );
         // A server that started stopping while it waited leaves the
         // connection in the backlog, where a worker still running takes it.
-        if found <= 0 || self.control.draining() {
+        if !found.is_ok_and(|ready| ready > 0) || self.control.draining() {
             return None;
         }
         // Another worker sharing the listener may have taken it first, which
