@@ -216,7 +216,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 
 - **lumen-os-mime**: the shared payload and action types the others exchange.
 - **lumen-os-clipboard**: clipboard read, write, and clear, including the Linux
-  primary selection.
+  primary selection. In a browser it is the page's `navigator.clipboard`, text
+  only, with reads answered asynchronously.
 - **lumen-os-dnd**: drag sources, drop targets, and inbound file drops.
 - **lumen-os-filedialog**: open, save, and folder pickers.
 - **lumen-os-menu**: native menu bar attachment and menu click delivery. The
@@ -236,9 +237,11 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   bindings, the script command stream, key routing, and the widget behaviour
   a browser has no native control for: radio groups, tab strips and their
   panels, progress bindings, validation) and the script host for the engine
-  an app names. It leaves out layout, paint, windowing, the OS surface, and
-  the pointer, text-editing and form-control half of the input layer, which
-  a browser drives itself and a window installs through `lumen-input`.
+  an app names. In a browser it also installs the page's `fetch` and
+  clipboard behind the script builtins. It leaves out layout, paint,
+  windowing, the rest of the OS surface, and the pointer, text-editing and
+  form-control half of the input layer, which a browser drives itself and a
+  window installs through `lumen-input`.
   Nothing it installs is bound to one thread, so
   the app it builds can be built, ticked and dropped anywhere; its `Tick`
   schedule keeps the single-threaded executor rather than the platform

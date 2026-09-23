@@ -3866,6 +3866,9 @@ version = "0.0.8"
 dependencies = [
  "arboard",
  "lumen-os-mime",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -4093,6 +4096,7 @@ dependencies = [
  "lumen-i18n",
  "lumen-input",
  "lumen-ir",
+ "lumen-os-clipboard",
  "lumen-prerender",
  "lumen-primitives",
  "lumen-scene",
@@ -4259,6 +4263,7 @@ dependencies = [
  "lumen-core",
  "lumen-input",
  "lumen-ir",
+ "lumen-os-clipboard",
  "lumen-os-dnd",
  "lumen-plugin-abi",
  "lumen-primitives",

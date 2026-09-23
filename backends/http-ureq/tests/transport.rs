@@ -68,6 +68,7 @@ fn round_trips_over_loopback() {
         headers: vec![("X-Test".to_string(), "1".to_string())],
         body: Some("hello-body".to_string()),
         timeout_ms: Some(5000),
+        ..HttpRequest::default()
     };
     let resp = UreqHttpClient.send(&req, CAP).expect("transport ok");
     assert_eq!(resp.status, 200);
@@ -97,6 +98,7 @@ fn connection_refused_is_err() {
         headers: vec![],
         body: None,
         timeout_ms: Some(2000),
+        ..HttpRequest::default()
     };
     assert!(UreqHttpClient.send(&req, CAP).is_err());
 }
@@ -127,6 +129,7 @@ fn body_over_cap_errors_not_oom() {
         headers: vec![],
         body: None,
         timeout_ms: Some(5000),
+        ..HttpRequest::default()
     };
 
     // Cap well below the body size: the read must abort with an error.

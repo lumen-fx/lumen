@@ -13,7 +13,8 @@
 //! reaches the root, and they are filtered before they are queued: the same
 //! pipeline runs here as on the desktop, so a key the browser's own control
 //! has already acted on would be acted on twice. [`browser_handles`] is that
-//! table.
+//! table. The pointer listens on the document as well; `crate::pointer` owns
+//! it.
 //!
 //! A listener runs whenever the browser says so, which is never during a
 //! tick, so what it records goes on a queue the app drains at the start of
@@ -139,19 +140,19 @@ thread_local! {
     /// different set of things entirely.
     static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
-    /// Whether the document already carries the key listeners.
+    /// Whether the document already carries the key and pointer listeners.
     ///
     /// Everything else listens on an app's own root, so a second app in the
-    /// same page gets its own listener for it. The keys listen on the
-    /// document, which the page has one of, and they push onto the queue
-    /// above, which the page also has one of: binding them twice queues
-    /// every keystroke twice.
-    static KEYS_BOUND: Cell<bool> = const { Cell::new(false) };
+    /// same page gets its own listener for it. The keys and the pointer
+    /// listen on the document, which the page has one of, and they push onto
+    /// queues the page also has one of: binding them twice queues every
+    /// keystroke and every press twice.
+    static DOCUMENT_BOUND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The node path of the element an event landed on, or of the nearest
 /// ancestor that stands for a node.
-fn path_of(event: &Event) -> Option<String> {
+pub(crate) fn path_of(event: &Event) -> Option<String> {
     let target = event.target()?.dyn_into::<Element>().ok()?;
     let element = target
         .closest(&format!("[{DATA_LM}]"))
@@ -988,8 +989,11 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
     // bound for a key is only knowable a tick later, when the browser will
     // no longer take the answer, so the page keeps its own behaviour for
     // every key that is forwarded: Space and PageDown still scroll it.
-    if let Some(document) = root.owner_document().filter(|_| !KEYS_BOUND.get()) {
-        KEYS_BOUND.set(true);
+    if let Some(document) = root.owner_document().filter(|_| !DOCUMENT_BOUND.get()) {
+        DOCUMENT_BOUND.set(true);
+        // The pointer listens on the document too, and for the same kind of
+        // reason: a pointer that leaves the root still has to be seen to go.
+        crate::pointer::listen(&document)?;
         for (kind, down) in [("keydown", true), ("keyup", false)] {
             on(
                 &document,
