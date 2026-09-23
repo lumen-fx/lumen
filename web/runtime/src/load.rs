@@ -39,8 +39,8 @@ pub struct PageContext {
     pub locale: String,
 }
 
-/// The locale every other one falls back to, which is the locale an app's
-/// source strings are written in.
+/// The locale every other one falls back to when the app names none, which is
+/// the locale an app's source strings are written in.
 const FALLBACK_LOCALE: &str = "en-US";
 
 /// The app the page names, loaded and ready to start.
@@ -51,8 +51,8 @@ pub struct LoadedApp {
     pub seed: Seed,
     /// One loaded script per manifest entry, in manifest order.
     pub scripts: Vec<LoadedScript>,
-    /// Fluent catalogue sources: the document's own locale first, then the
-    /// fallback locale when the site carries a catalogue for it.
+    /// Fluent catalogue sources: the document's own locale first, then each
+    /// locale of the fallback chain the site carries a catalogue for.
     pub catalogues: Vec<(String, String)>,
 }
 
@@ -229,26 +229,26 @@ impl PageContext {
         }
 
         let loaded = LoadedApp {
-            artifact,
             seed: self.seed()?,
             scripts,
-            catalogues: self.catalogues(&manifest).await?,
+            catalogues: self.catalogues(&manifest, &artifact.i18n.fallback).await?,
+            artifact,
         };
         Ok((manifest, loaded))
     }
 
-    /// Fetch the catalogue for this document's locale, and the one the
-    /// fallback locale reads through when the site carries it.
+    /// Fetch the catalogue for this document's locale, and the ones its
+    /// fallback chain reads through when the site carries them.
     ///
     /// A locale the manifest names no catalogue for fetches nothing, which
     /// leaves its keys resolving to the text the app was authored with.
-    async fn catalogues(&self, manifest: &Manifest) -> Result<Vec<(String, String)>, LoadError> {
-        let mut wanted = vec![self.locale.as_str()];
-        if self.locale != FALLBACK_LOCALE {
-            wanted.push(FALLBACK_LOCALE);
-        }
+    async fn catalogues(
+        &self,
+        manifest: &Manifest,
+        fallback: &[String],
+    ) -> Result<Vec<(String, String)>, LoadError> {
         let mut catalogues = Vec::new();
-        for tag in wanted {
+        for tag in catalogue_tags(&self.locale, fallback) {
             let Some(path) = manifest.catalogues.get(tag) else {
                 continue;
             };
@@ -257,6 +257,27 @@ impl PageContext {
         }
         Ok(catalogues)
     }
+}
+
+/// The locales a document in `locale` reads a catalogue for: its own, then
+/// each one its fallback chain names, once each.
+///
+/// `fallback` is the chain the compiled app records, `[app] fallback_locale`.
+/// Empty is the default chain, which ends in the locale an app's source
+/// strings are written in.
+fn catalogue_tags<'a>(locale: &'a str, fallback: &'a [String]) -> Vec<&'a str> {
+    let chain: Vec<&str> = if fallback.is_empty() {
+        vec![FALLBACK_LOCALE]
+    } else {
+        fallback.iter().map(String::as_str).collect()
+    };
+    let mut tags = vec![locale];
+    for tag in chain {
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
 }
 
 /// Fetch `url`, or say why it could not be fetched.
@@ -306,4 +327,21 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, LoadError> {
         reason: js_reason(&e),
     })?;
     Ok(Uint8Array::new(&buffer).to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::catalogue_tags;
+
+    /// A page reads its own catalogue and the ones its app's fallback chain
+    /// names, which is the chain the build wrote the document through.
+    #[test]
+    fn a_page_reads_the_catalogues_its_fallback_chain_names() {
+        let german = ["de-DE".to_string()];
+        assert_eq!(catalogue_tags("fr-FR", &german), ["fr-FR", "de-DE"]);
+        // The chain an app gets when it names none.
+        assert_eq!(catalogue_tags("fr-FR", &[]), ["fr-FR", "en-US"]);
+        // A locale already on the chain is read once.
+        assert_eq!(catalogue_tags("de-DE", &german), ["de-DE"]);
+    }
 }

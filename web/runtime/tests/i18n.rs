@@ -76,9 +76,21 @@ fn page_of(ir: LayoutIR) -> DomElement {
 /// Boot `ir` into `root` the way the page's own boot does, with the
 /// catalogues the manifest named, and tick it once.
 fn boot(ir: LayoutIR, root: DomElement, catalogues: &[(String, String)]) -> App {
+    boot_in(ir, root, "de-DE", catalogues, &[])
+}
+
+/// [`boot`], in `locale` and falling through `fallback`, the chain the
+/// compiled app records.
+fn boot_in(
+    ir: LayoutIR,
+    root: DomElement,
+    locale: &str,
+    catalogues: &[(String, String)],
+    fallback: &[String],
+) -> App {
     let mut app = assemble::portable_app();
-    let catalogues = assemble::Catalogues::parse(catalogues, &[]).expect("a valid catalogue");
-    assemble::install_i18n(&mut app.world, "de-DE", &catalogues).expect("a valid tag");
+    let catalogues = assemble::Catalogues::parse(catalogues, fallback).expect("a valid catalogue");
+    assemble::install_i18n(&mut app.world, locale, &catalogues).expect("a valid tag");
     let compiled = CompiledApp {
         ir,
         ..CompiledApp::default()
@@ -149,4 +161,31 @@ fn a_locale_with_no_catalogue_reads_in_the_source_language() {
         .unwrap()
         .expect("the label");
     assert_eq!(label.text_content().as_deref(), Some("Hello"));
+}
+
+/// A key the document's own catalogue lacks falls through the chain the app
+/// names, the one the build wrote the document through, so the text the
+/// page arrived with is the text it keeps.
+#[wasm_bindgen_test]
+fn a_miss_falls_through_the_chain_the_app_names() {
+    let root = page_of(tree("Hallo"));
+    let label = root
+        .query_selector(".greeting")
+        .unwrap()
+        .expect("the build wrote the label");
+
+    let catalogues = vec![
+        ("fr-FR".to_string(), "other = Autre\n".to_string()),
+        ("de-DE".to_string(), GERMAN.to_string()),
+    ];
+    // The app's own tree holds the text it was authored with.
+    let _app = boot_in(
+        tree("Hello"),
+        root,
+        "fr-FR",
+        &catalogues,
+        &["de-DE".to_string()],
+    );
+
+    assert_eq!(label.text_content().as_deref(), Some("Hallo"));
 }

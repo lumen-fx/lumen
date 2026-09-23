@@ -752,6 +752,25 @@ fn a_named_fallback_locale_writes_the_pages() {
         !files.iter().any(|path| path.contains("en-US.ftl")),
         "{files:?}"
     );
+
+    // The runtime that owns the page afterwards falls through the same chain:
+    // the artifact records it, and the catalogue it names travels beside it.
+    // The catalogues themselves are files the manifest names, so the
+    // artifact the browser downloads carries none of them.
+    let artifact = std::fs::read(out.join(hashed(&out, "app.lmna"))).expect("the artifact");
+    let compiled = lumen_ir::artifact::read_bytes(&artifact).expect("it decodes");
+    assert_eq!(compiled.i18n.fallback, ["de-DE"]);
+    assert!(
+        compiled.i18n.catalogues.is_empty(),
+        "{:?}",
+        compiled.i18n.catalogues
+    );
+    let manifest = read(&out, "lumen.web.json");
+    let german = hashed(&out, "locale/de-DE.ftl");
+    assert!(
+        manifest.contains(&format!("\"de-DE\": \"{german}\"")),
+        "{manifest}"
+    );
 }
 
 /// Prehydration runs the app once per page and locale, so what a script
@@ -1555,6 +1574,9 @@ fn an_embedder_renders_a_site_from_the_files_the_build_wrote() {
     let spec = ServerSpec::from_json(read(&out, SERVER_SPEC_FILE).as_bytes())
         .expect("the build wrote a spec this build reads");
     assert_eq!(spec.locales, ["en-US", "de-DE"]);
+    // The app names no fallback locale, and the spec says so the way the
+    // compiled app does: the default chain is the reader's to take.
+    assert!(spec.fallback.is_empty(), "{:?}", spec.fallback);
     assert_eq!(spec.policy.allow_hosts, ["api.example.com"]);
     let artifact = std::fs::read(out.join(&spec.web.artifact)).expect("the artifact it names");
     let catalogues: Vec<(String, String)> = spec
