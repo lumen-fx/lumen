@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
@@ -22,7 +21,7 @@ use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, NavigationMode,
     ScriptFormat, ScriptRef, Seed, SeedValue,
 };
-use lumen_i18n::{Catalogues, I18nPlugin, LanguageIdentifier, SharedI18n};
+use lumen_i18n::{Catalogues, I18nPlugin, LanguageIdentifier};
 use lumen_ir::artifact::{CompiledApp, CompiledI18n};
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_prerender::{self as prerender, Budget, Language, Prerendered, Settled};
@@ -34,8 +33,9 @@ use lumen_runtime::pages::PagePlan;
 use lumen_runtime::run::locale_dir;
 use lumen_web::urls::is_external;
 use lumen_web::{
-    AssetRef, CssMode, HostRewrite, LocaleSpec, PageHead, PageSpec, RowFills, SERVER_SPEC_FILE,
-    ServerPolicy, ServerSpec, SignalEnv, SiteSpec, WebSpec, intrinsic_size,
+    AssetRef, CssMode, HostRewrite, LocaleSpec, LocaleTree, PageHead, PageSpec, RowFills,
+    SERVER_SPEC_FILE, ServerPolicy, ServerSpec, SignalEnv, SiteLocales, SiteSpec, WebSpec,
+    intrinsic_size,
 };
 
 use super::serve::{self, Serve};
@@ -680,41 +680,41 @@ fn build(options: &Options) -> Result<Report, String> {
         ),
         WebPrerender::Seeds | WebPrerender::None => BTreeMap::new(),
     };
+    // What each page says about itself is the same in every language.
+    let heads: Vec<PageHead> = keys.iter().map(|key| page_head(key, &cfg)).collect();
+    let shared = SiteSpec {
+        pages: Vec::new(),
+        web: WebSpec {
+            // A render answers for every locale, including the trees under a
+            // locale prefix, so writing documents for them would put two
+            // answers behind one address.
+            per_request,
+            ..web.clone()
+        },
+        locale: LocaleSpec::default(),
+        assets: assets.clone(),
+        markup: markup.clone(),
+    };
+    // One tree per locale, shared by every page of it: which page a document
+    // shows is a signal inside the tree, not a tree of its own. Building the
+    // trees is the emitter's, because a server holding the build's files
+    // builds the same ones.
+    let trees = lumen_web::locale_trees(
+        SiteLocales {
+            ir: &compiled.ir,
+            keys: &keys,
+            heads: &heads,
+            locales: &locales,
+            catalogues: &parsed,
+            shared: &shared,
+        },
+        &mut warnings,
+    );
     let mut pages_written = 0;
-    let mut heads: Vec<PageHead> = Vec::new();
-    for (index, locale) in locales.iter().enumerate() {
-        let mut spec = SiteSpec {
-            pages: Vec::new(),
-            web: WebSpec {
-                // A render answers for every locale, including the trees under
-                // a locale prefix, so writing documents for them would put two
-                // answers behind one address.
-                per_request,
-                ..web.clone()
-            },
-            locale: LocaleSpec {
-                alternates: locales
-                    .iter()
-                    .filter(|other| *other != locale)
-                    .cloned()
-                    .collect(),
-                default_locale: locales[0].clone(),
-                ..LocaleSpec::new(locale.clone())
-            },
-            assets: assets.clone(),
-            markup: markup.clone(),
-        };
-        // One tree per locale, shared by every page of it: which page a
-        // document shows is a signal inside the tree, not a tree of its own.
-        let catalogue = locale_catalogue(&parsed, locale, &mut warnings);
-        // Resolving the text is the emitter's, because a server holding a tree
-        // per locale builds one the same way.
-        let ir = Arc::new(match &catalogue {
-            Some(i18n) => lumen_web::translate_ir(&compiled.ir, i18n),
-            None => compiled.ir.clone(),
-        });
-        for key in &keys {
-            let run = settled.get(&(locale.clone(), key.clone()));
+    for (index, LocaleTree { mut spec, i18n }) in trees.into_iter().enumerate() {
+        let locale = spec.locale.locale.clone();
+        for page in &mut spec.pages {
+            let run = settled.get(&(locale.clone(), page.key.clone()));
             // A row's component body is markup the tree never held, so it is
             // translated on its own; without that a locale tree reads in its
             // language everywhere except inside its lists. A run read its
@@ -725,17 +725,16 @@ fn build(options: &Options) -> Result<Report, String> {
                 WebPrerender::None => RowFills::default(),
             };
             if prerender != WebPrerender::Run
-                && let Some(i18n) = &catalogue
+                && let Some(i18n) = &i18n
             {
                 for body in fills.bodies_mut() {
                     lumen_web::translate_element(body, i18n);
                 }
             }
-            let mut page = page_spec(key, &ir, &cfg, &seed, prerender, run, fills);
+            settle_page(page, &seed, prerender, run, fills);
             // What a page shows is the app's answer; when it last changed is
             // the sources', so it is put on here rather than rendered.
-            page.modified = stamps.get(key).copied();
-            spec.pages.push(page);
+            page.modified = stamps.get(&page.key).copied();
         }
         let site = lumen_web::emit(&spec).map_err(|e| e.to_string())?;
         for file in &site.files {
@@ -744,7 +743,6 @@ fn build(options: &Options) -> Result<Report, String> {
         if index == 0 {
             pages_written = spec.pages.len();
             warnings.extend(site.warnings);
-            heads = spec.pages.iter().map(PageHead::of).collect();
         }
     }
 
@@ -932,7 +930,7 @@ fn run_pages(
     for (index, locale) in runs.locales.iter().enumerate() {
         let language = language(locale, runs.catalogues);
         // A page is named with its locale only when the site has more than
-        // one, so a one-language build reads the way it always has.
+        // one; a one-language build names the page alone.
         let name = if runs.locales.len() > 1 {
             format!("{locale}/")
         } else {
@@ -1005,33 +1003,35 @@ fn declared_seed(seed: &BTreeMap<String, WebSeedValue>) -> Seed {
     declared
 }
 
-/// One page, rendered with the state it arrives in.
-fn page_spec(
-    key: &str,
-    ir: &Arc<LayoutIR>,
-    cfg: &LumenToml,
+/// What `key` says about itself in its `<head>`, from `[web.pages.<key>]`.
+fn page_head(key: &str, cfg: &LumenToml) -> PageHead {
+    let page_cfg = cfg.web.pages.get(key);
+    PageHead {
+        key: key.to_string(),
+        title: page_cfg.and_then(|page| page.title.clone()),
+        description: page_cfg.and_then(|page| page.description.clone()),
+        index: page_cfg.and_then(|page| page.index).unwrap_or(true),
+    }
+}
+
+/// Put the state `page` is written with onto it.
+fn settle_page(
+    page: &mut PageSpec,
     seed: &BTreeMap<String, WebSeedValue>,
     prerender: WebPrerender,
     settled: Option<&Prerendered>,
     fills: RowFills,
-) -> PageSpec {
-    let page_cfg = cfg.web.pages.get(key);
+) {
+    page.fills = fills;
     // A run started from the declared values and holds the page's route, so
     // what it settled into is the whole state this page is written with.
     if let Some(run) = settled {
-        return PageSpec {
-            key: key.to_string(),
-            ir: Arc::clone(ir),
-            title: page_cfg.and_then(|page| page.title.clone()),
-            description: page_cfg.and_then(|page| page.description.clone()),
-            index: page_cfg.and_then(|page| page.index).unwrap_or(true),
-            signals: run.state.signals.clone(),
-            seed: run.state.seed.clone(),
-            nodes: run.state.nodes.clone(),
-            fills,
-            modified: None,
-        };
+        page.signals = run.state.signals.clone();
+        page.seed = run.state.seed.clone();
+        page.nodes = run.state.nodes.clone();
+        return;
     }
+    let key = page.key.as_str();
     let mut signals = SignalEnv::new();
     let mut page_seed = Seed::new();
     // Which page a document is showing is not app state: it is what the
@@ -1057,18 +1057,8 @@ fn page_spec(
                 .insert(name.clone(), seed_value(value.clone()));
         }
     }
-    PageSpec {
-        key: key.to_string(),
-        ir: Arc::clone(ir),
-        title: page_cfg.and_then(|page| page.title.clone()),
-        description: page_cfg.and_then(|page| page.description.clone()),
-        index: page_cfg.and_then(|page| page.index).unwrap_or(true),
-        signals,
-        seed: page_seed,
-        nodes: BTreeMap::new(),
-        fills,
-        modified: None,
-    }
+    page.signals = signals;
+    page.seed = page_seed;
 }
 
 /// The signal values every page is rendered with: what `[web.seed]` names,
@@ -1102,7 +1092,7 @@ fn collect_signal_seeds(element: &Element, seed: &mut BTreeMap<String, WebSeedVa
 }
 
 /// A seed value as the markup reads it: signals hold text. Rows are not a
-/// signal's value; [`page_spec`] puts them in the page's arrays instead.
+/// signal's value; [`settle_page`] puts them in the page's arrays instead.
 fn seed_text(value: &WebSeedValue) -> String {
     match value {
         WebSeedValue::Str(text) => text.clone(),
@@ -1140,26 +1130,6 @@ fn fallback_chain(cfg: &LumenToml) -> Vec<LanguageIdentifier> {
     match &cfg.app.fallback_locale {
         Some(fallback) => vec![fallback.clone()],
         None => I18nPlugin::default().fallback_chain,
-    }
-}
-
-/// The catalogue `locale`'s documents are written through, which is what makes
-/// a page readable in that language with nothing running: every `translatable`
-/// element's text is resolved through it, and so is a row's component body.
-///
-/// `None` for a locale that is not a language tag: the pages are still
-/// emitted, in the text the author wrote.
-fn locale_catalogue(
-    catalogues: &Catalogues,
-    locale: &str,
-    warnings: &mut Vec<String>,
-) -> Option<SharedI18n> {
-    match catalogues.i18n(locale) {
-        Ok(i18n) => Some(SharedI18n::new(i18n)),
-        Err(e) => {
-            warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
-            None
-        }
     }
 }
 

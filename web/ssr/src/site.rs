@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use lumen_core::nav;
 use lumen_html::contract::Seed;
-use lumen_i18n::{Catalogues, LanguageIdentifier, SharedI18n};
+use lumen_i18n::Catalogues;
 use lumen_ir::artifact::CompiledApp;
 use lumen_prerender::Language;
-use lumen_web::{LocaleSpec, PageSpec, ServerPolicy, ServerSpec, SiteSpec, WebSpec};
+use lumen_web::{PageSpec, ServerPolicy, ServerSpec, SiteLocales, SiteSpec, WebSpec};
 
 use crate::error::SsrError;
 use crate::locale::negotiate;
@@ -26,7 +26,7 @@ const ACCEPT_LANGUAGE: &str = "accept-language";
 /// A site holds one tree per language it answers in. The trees are handed in
 /// already translated, by [`Self::with_locale`], because which strings a tree
 /// carries is decided when it is built rather than when it is rendered;
-/// [`lumen_web::translate_ir`] is what builds one. The catalogues themselves
+/// [`lumen_web::locale_trees`] is what builds them. The catalogues themselves
 /// go in with [`Self::with_catalogues`], because the app reads them while it
 /// runs: a script's `t()`, and every row it builds.
 ///
@@ -132,15 +132,6 @@ impl SsrSite {
     ) -> Result<Self, SsrError> {
         let compiled = lumen_ir::artifact::deserialize(artifact)
             .map_err(|error| SsrError::Artifact(error.to_string()))?;
-        Self::from_spec(compiled, spec, catalogues)
-    }
-
-    /// [`Self::from_build`], for a caller already holding the compiled app.
-    pub fn from_spec(
-        compiled: CompiledApp,
-        spec: &ServerSpec,
-        catalogues: Vec<(String, String)>,
-    ) -> Result<Self, SsrError> {
         // A build whose pages load no catalogue writes none beside them, and
         // the compiled app carries its own.
         let catalogues = if catalogues.is_empty() {
@@ -148,69 +139,40 @@ impl SsrSite {
         } else {
             catalogues
         };
-        let fallback = if spec.fallback.is_empty() {
-            compiled.i18n.fallback.clone()
-        } else {
-            spec.fallback.clone()
-        };
-        let mut site = Self::new(compiled, spec.web.clone())?;
+        let mut site = Self::new(compiled, spec.web.clone())?
+            .with_catalogues(catalogues, spec.fallback.clone())?
+            .with_seed(spec.seed.clone());
+        site.policy = spec.policy.clone();
         let locales = if spec.locales.is_empty() {
             vec![site.trees[0].locale.locale.clone()]
         } else {
             spec.locales.clone()
         };
-        let parsed = Catalogues::parse(&catalogues, &fallback)
-            .map_err(|error| SsrError::Catalogue(error.to_string()))?;
-        let assets = spec.assets();
-        let ir = site.compiled.ir.clone();
-        for locale in &locales {
-            // A locale that is not a language tag is a tree in the text the
-            // author wrote, the same tree the build emitted for it.
-            let tree_ir = match locale.parse::<LanguageIdentifier>() {
-                Ok(_) if !parsed.is_empty() => {
-                    let i18n = parsed
-                        .i18n(locale)
-                        .map_err(|error| SsrError::Catalogue(error.to_string()))?;
-                    lumen_web::translate_ir(&ir, &SharedI18n::new(i18n))
-                }
-                _ => ir.clone(),
-            };
-            let tree_ir = Arc::new(tree_ir);
-            let pages = site
-                .keys
-                .iter()
-                .map(|key| {
-                    let mut page = PageSpec::new(key.clone(), Arc::clone(&tree_ir));
-                    if let Some(head) = spec.pages.iter().find(|head| &head.key == key) {
-                        head.apply(&mut page);
-                    }
-                    page
-                })
-                .collect();
-            let tree = SiteSpec {
-                pages,
-                web: WebSpec {
-                    entry: site.entry.clone(),
-                    per_request: true,
-                    ..spec.web.clone()
-                },
-                locale: LocaleSpec {
-                    alternates: locales
-                        .iter()
-                        .filter(|other| *other != locale)
-                        .cloned()
-                        .collect(),
-                    default_locale: locales[0].clone(),
-                    ..LocaleSpec::new(locale.clone())
-                },
-                assets: assets.clone(),
-                ..SiteSpec::default()
-            };
-            site = site.with_locale(tree)?;
+        let shared = SiteSpec {
+            web: WebSpec {
+                entry: site.entry.clone(),
+                per_request: true,
+                ..spec.web.clone()
+            },
+            assets: spec.assets(),
+            ..SiteSpec::default()
+        };
+        // The trees the build wrote, built the way the build built them. What
+        // they could say about a locale the build said already.
+        let trees = lumen_web::locale_trees(
+            SiteLocales {
+                ir: &site.compiled.ir,
+                keys: &site.keys,
+                heads: &spec.pages,
+                locales: &locales,
+                catalogues: &site.catalogues,
+                shared: &shared,
+            },
+            &mut Vec::new(),
+        );
+        for tree in trees {
+            site = site.with_locale(tree.spec)?;
         }
-        site.catalogues = parsed;
-        let mut site = site.with_seed(spec.seed.clone());
-        site.policy = spec.policy.clone();
         Ok(site)
     }
 
@@ -218,14 +180,21 @@ impl SsrSite {
     ///
     /// The tree is the app in one language: the same pages, with every
     /// `translatable` element resolved for that locale. A build hands the
-    /// renderer the trees it emitted; an embedder builds one with
-    /// [`lumen_web::translate_ir`] over the catalogues it has.
+    /// renderer the trees it emitted; an embedder builds them with
+    /// [`lumen_web::locale_trees`], or one with [`lumen_web::translate_ir`],
+    /// over the catalogues it has.
     ///
-    /// A tree whose locale is the site's default replaces the tree at the
-    /// site root, and so does a second tree for a locale the site already
-    /// holds. A tree that cannot answer for every page the site has is
-    /// refused: a request would otherwise reach a page in the language it
-    /// asked for and the page beside it in another.
+    /// A tree marked as the root, whose locale is its default, replaces the
+    /// tree at the site root, and any other tree the site holds for that
+    /// locale goes. Any other tree replaces the one the site holds for its
+    /// locale, or is added. A tree in the root's locale that is not marked as
+    /// the root is refused, because two trees would answer for one language.
+    /// Every tree's alternates and default locale are then set from the trees
+    /// the site holds, so the links between languages stay whole.
+    ///
+    /// A tree that cannot answer for every page the site has is refused too:
+    /// a request would otherwise reach a page in the language it asked for
+    /// and the page beside it in another.
     pub fn with_locale(mut self, tree: SiteSpec) -> Result<Self, SsrError> {
         if tree.pages.is_empty() {
             return Err(SsrError::LocaleTree {
@@ -243,19 +212,46 @@ impl SsrSite {
                 why: format!("it has no `{missing}` page, and the site does"),
             });
         }
-        let at_root = tree.locale.is_root();
-        match self
+        let same = |held: &SiteSpec| held.locale.locale.eq_ignore_ascii_case(&tree.locale.locale);
+        if tree.locale.is_root() {
+            let mut index = 0;
+            self.trees.retain(|held| {
+                index += 1;
+                index == 1 || !same(held)
+            });
+            self.trees[0] = tree;
+        } else if same(&self.trees[0]) {
+            return Err(SsrError::LocaleTree {
+                locale: tree.locale.locale,
+                why: "it is the locale of the tree at the site root, and it is not marked as the \
+                      root; give it that locale as its default to replace the root"
+                    .to_string(),
+            });
+        } else {
+            match self.trees[1..].iter().position(same) {
+                Some(index) => self.trees[index + 1] = tree,
+                None => self.trees.push(tree),
+            }
+        }
+        self.link_locales();
+        Ok(self)
+    }
+
+    /// Point every tree at the root and at each other, from the trees held.
+    fn link_locales(&mut self) {
+        let locales: Vec<String> = self
             .trees
             .iter()
-            .position(|held| held.locale.locale == tree.locale.locale)
-        {
-            Some(index) => self.trees[index] = tree,
-            // One tree sits at the root, so a root tree in another locale
-            // takes that place rather than standing beside the old one.
-            None if at_root => self.trees[0] = tree,
-            None => self.trees.push(tree),
+            .map(|tree| tree.locale.locale.clone())
+            .collect();
+        for tree in &mut self.trees {
+            tree.locale.default_locale = locales[0].clone();
+            tree.locale.alternates = locales
+                .iter()
+                .filter(|other| **other != tree.locale.locale)
+                .cloned()
+                .collect();
         }
-        Ok(self)
     }
 
     /// Every locale the site answers in, the default one first.
@@ -488,6 +484,7 @@ pub(crate) struct Route {
 #[cfg(test)]
 mod tests {
     use lumen_ir::artifact::CompiledPages;
+    use lumen_web::LocaleSpec;
 
     use super::*;
 
@@ -603,6 +600,70 @@ mod tests {
             .expect("both trees answer for every page");
         assert_eq!(site.locales(), ["en-US", "de-DE"]);
         assert_eq!(site.tree(1).web.title, "Zweite");
+    }
+
+    #[test]
+    fn a_root_tree_takes_the_root_and_drops_the_tree_it_was_beside() {
+        let site = SsrSite::new(app_with_pages(), WebSpec::default()).expect("the entry is a page");
+        let german = tree_for(&site, "de-DE");
+        let french = tree_for(&site, "fr-FR");
+        let site = site
+            .with_locale(german)
+            .and_then(|site| site.with_locale(french))
+            .expect("both trees answer for every page");
+        // German becomes the root: the tree it was beside goes, and so does
+        // the English root it replaces.
+        let root = SiteSpec {
+            locale: LocaleSpec::new("de-DE"),
+            ..site.spec().clone()
+        };
+        let site = site.with_locale(root).expect("it answers for every page");
+        assert_eq!(site.locales(), ["de-DE", "fr-FR"]);
+        assert!(site.tree(0).locale.is_root());
+        // Every tree names the new root and only the trees still held.
+        assert_eq!(site.tree(1).locale.default_locale, "de-DE");
+        assert_eq!(site.tree(1).locale.alternates, ["de-DE"]);
+        assert_eq!(site.tree(0).locale.alternates, ["fr-FR"]);
+    }
+
+    #[test]
+    fn a_tree_in_the_roots_locale_that_is_not_the_root_is_refused() {
+        let site = SsrSite::new(app_with_pages(), WebSpec::default()).expect("the entry is a page");
+        let stray = SiteSpec {
+            locale: LocaleSpec {
+                default_locale: "fr-FR".to_string(),
+                ..LocaleSpec::new("en-US")
+            },
+            ..site.spec().clone()
+        };
+        let error = site
+            .with_locale(stray)
+            .expect_err("two trees would answer for en-US");
+        assert!(error.to_string().contains("en-US"), "{error}");
+    }
+
+    #[test]
+    fn every_tree_names_the_others_as_they_arrive() {
+        let site = two_tree_site()
+            .with_locale(SiteSpec {
+                locale: LocaleSpec {
+                    // Written against another root; the site's root wins.
+                    default_locale: "ja-JP".to_string(),
+                    ..LocaleSpec::new("fr-FR")
+                },
+                ..SsrSite::new(app_with_pages(), WebSpec::default())
+                    .expect("the entry is a page")
+                    .spec()
+                    .clone()
+            })
+            .expect("it answers for every page");
+        assert_eq!(site.locales(), ["en-US", "de-DE", "fr-FR"]);
+        assert_eq!(site.tree(0).locale.alternates, ["de-DE", "fr-FR"]);
+        assert_eq!(site.tree(1).locale.alternates, ["en-US", "fr-FR"]);
+        assert_eq!(site.tree(2).locale.alternates, ["en-US", "de-DE"]);
+        for index in 0..3 {
+            assert_eq!(site.tree(index).locale.default_locale, "en-US");
+        }
     }
 
     fn two_tree_site() -> SsrSite {

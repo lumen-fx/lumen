@@ -34,7 +34,7 @@ pub mod urls;
 
 pub use css::{RESET_CSS, rewrite_css_urls, rules_css, styles_css, token_warnings};
 pub use error::EmitError;
-pub use i18n::{translate_element, translate_ir};
+pub use i18n::{LocaleTree, SiteLocales, locale_trees, translate_element, translate_ir};
 pub use image::intrinsic_size;
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use names::{build_id, content_name, fnv1a64};

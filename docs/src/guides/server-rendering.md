@@ -311,8 +311,9 @@ language with nothing running.
 
 `lumenc web` builds them from the `locale/*.ftl` catalogues beside your markup,
 one per `[web] locales` entry, and `SsrSite::from_build` builds the same trees
-from `lumen.site.json`. A server that builds its site by hand, from
-`SsrSite::new`, builds a tree the same way and hands it over:
+from `lumen.site.json`; both call `lumen_web::locale_trees`. A server that
+builds its site by hand, from `SsrSite::new`, can call it too, or build a tree
+itself and hand it over:
 
 ```rust
 use lumen_web::{LocaleSpec, PageSpec, SiteSpec};
@@ -337,6 +338,13 @@ Every tree has to answer for every page the site has, because a request
 resolves to a page before it resolves to a language; a tree missing one is
 refused rather than answered from another language.
 
+A tree whose locale is its own `default_locale` is the root tree: it replaces
+the tree at the site root, and any other tree for that locale goes. A tree in
+the root's locale that is not marked as the root is refused, because two trees
+would answer for one language. Every tree's alternates and default locale are
+set from the trees the site holds, so the `hreflang` links always name the
+languages the site answers in.
+
 The app a render runs reads the catalogues too: a script's `t()` answers in the
 language of the tree the request resolved to, and `locale()` names it. Hand the
 renderer the catalogue sources, and the fallback chain `[app] fallback_locale`
@@ -352,8 +360,10 @@ let site = site.with_catalogues(
 )?;
 ```
 
-A catalogue that will not load is refused here rather than on the first
-request. A site with no catalogues renders with no translator, and `t()`
+Each catalogue is parsed once, here, so one that will not load is refused
+rather than failing the first request. Every render builds its own registry
+from them, so a `set_locale` in one request never reaches the next. A site
+with no catalogues renders with no translator, and `t()`
 answers with its key.
 
 Which tree answers is decided in this order:

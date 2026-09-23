@@ -1,7 +1,0 @@
-<root>
-  <column id="page">
-    <!-- Written by the script's `t()` while the app starts. -->
-    <label id="status" bind-text="status" text="" />
-  </column>
-  <script src="main.cdl" />
-</root>

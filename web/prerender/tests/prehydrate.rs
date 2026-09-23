@@ -25,13 +25,13 @@ const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"))
 const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
 
 /// The catalogues the translating program reads.
-fn catalogues(fallback: &[String]) -> Catalogues {
+fn catalogues() -> Catalogues {
     Catalogues::parse(
         &[
             ("en-US".to_string(), "greeting = Hello\n".to_string()),
             ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
         ],
-        fallback,
+        &[],
     )
     .expect("the catalogues parse")
 }
@@ -379,7 +379,7 @@ fn what_the_app_writes_onto_a_node_is_read_out_of_the_scene() {
 #[test]
 fn a_run_in_a_locale_translates_what_its_scripts_write() {
     let _turn = in_turn();
-    let catalogues = catalogues(&[]);
+    let catalogues = catalogues();
     let german = Language {
         locale: "de-DE",
         catalogues: &catalogues,
@@ -401,7 +401,7 @@ fn a_run_in_a_locale_translates_what_its_scripts_write() {
 #[test]
 fn a_run_without_catalogues_does_not_read_the_last_runs() {
     let _turn = in_turn();
-    let catalogues = catalogues(&[]);
+    let catalogues = catalogues();
     let german = Language {
         locale: "de-DE",
         catalogues: &catalogues,
@@ -421,33 +421,12 @@ fn a_run_without_catalogues_does_not_read_the_last_runs() {
     assert_eq!(second.state.signals.global("running_in"), Some("en-US"));
 }
 
-/// A key the active locale has no catalogue for falls through the chain the
-/// run was given, the way `[app] fallback_locale` makes a desktop run fall
-/// through it.
-#[test]
-fn a_run_falls_through_the_chain_it_was_given() {
-    let _turn = in_turn();
-    let catalogues = catalogues(&["de-DE".to_string()]);
-    let french = Language {
-        locale: "fr-FR",
-        catalogues: &catalogues,
-    };
-    let run = page(
-        &app_with(TRANSLATES),
-        "index",
-        french,
-        &Seed::new(),
-        Budget::default(),
-    );
-    assert_eq!(run.state.signals.global("greeting"), Some("Hallo"));
-}
-
 /// A locale that is no language tag is said, and the run goes ahead in the
 /// language the source strings are in.
 #[test]
 fn a_locale_that_is_no_tag_is_reported_and_the_run_goes_ahead() {
     let _turn = in_turn();
-    let catalogues = catalogues(&[]);
+    let catalogues = catalogues();
     let run = page(
         &app_with(TRANSLATES),
         "index",

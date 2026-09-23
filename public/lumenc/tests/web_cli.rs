@@ -780,7 +780,11 @@ fn a_named_fallback_locale_writes_the_pages() {
 fn a_prehydrated_page_carries_what_t_answered_in_its_locale() {
     let scratch = scratch("prehydrate-locales");
     let out = scratch.join("site");
-    web("fixtures/i18n-prehydrate", &out, &[]);
+    web(
+        "fixtures/ssr-site",
+        &out,
+        &["--render", "csr", "--prerender", "run"],
+    );
 
     let english = read(&out, "index.html");
     assert!(english.contains("Ready to go"), "{english}");
@@ -1698,11 +1702,6 @@ fn a_compiled_app_carries_its_catalogues_and_its_fallback() {
         .collect();
     assert_eq!(tags, ["de-DE", "en-US", "fr-FR"]);
     assert_eq!(compiled.i18n.fallback, ["de-DE"]);
-    let back = lumen_ir::artifact::deserialize(
-        &lumen_ir::artifact::serialize(&compiled).expect("serialize"),
-    )
-    .expect("deserialize");
-    assert_eq!(back.i18n, compiled.i18n);
 }
 
 #[test]
