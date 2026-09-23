@@ -513,6 +513,8 @@ desktop Lumen keeps exactly one member of each group in the Tab order; on
 the web the members share the browser's own `name` group, and the browser
 does the same. A `tab-index` written on a `<radio>` has no effect on either
 target, because the group decides where its members sit in the Tab order.
+An empty `group` or `value` puts no `name` or `value` on the browser's
+control, so on the web a radio with an empty `group` belongs to no group.
 
 ### `<progress>`
 
