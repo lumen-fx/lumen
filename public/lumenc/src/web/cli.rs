@@ -552,17 +552,18 @@ fn build(options: &Options) -> Result<Report, String> {
         CssMode::Sheet => lumen_web::lift_markup_styles(&mut compiled.ir.root),
     };
 
+    // The catalogues travel in the artifact only where no catalogue file
+    // travels beside it: a page that loads the runtime reads the files the
+    // manifest names, so a copy inside the artifact would be downloaded for
+    // nobody, and a server reads the same files through the spec. The
+    // fallback chain stays, because nothing else carries it to the browser.
+    if runtime.is_some() {
+        compiled.i18n.catalogues.clear();
+    }
     // The compiled app carries the site's asset paths, so a node built from it
     // points where the emitted markup points. The browser runtime loads it,
     // and so does the server that renders the pages, so a rendered site keeps
     // it whether or not its documents run anything.
-    // The catalogues travel in the artifact only where no catalogue file
-    // travels beside it: a page that loads the runtime reads the files the
-    // manifest names, so a copy inside the artifact would be downloaded for
-    // nobody, and a server reads the same files through the spec.
-    if runtime.is_some() {
-        compiled.i18n = CompiledI18n::default();
-    }
     let artifact = if runtime.is_some() || per_request {
         let bytes = crate::artifact::serialize(&compiled)
             .map_err(|e| format!("serialize the compiled app: {e}"))?;
