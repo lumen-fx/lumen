@@ -34,10 +34,9 @@ pub fn install_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Put the file at `from` at `to`, replacing whatever is there.
 ///
-/// A file that already holds the same bytes stays as it is. Two runs of the
-/// build script installing the same tree then leave the first one's file in
-/// place instead of each replacing the other's, and a process that has the
-/// library open keeps the file it opened.
+/// A file that already holds the same bytes stays as it is. Windows refuses
+/// a rename over a DLL a running process has loaded, so replacing an
+/// identical copy there would fail the install with nothing to change.
 ///
 /// A failed rename leaves nothing behind: the temporary copy is removed and
 /// `to` is whatever it was before.
