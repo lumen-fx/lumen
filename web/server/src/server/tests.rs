@@ -313,6 +313,26 @@ fn a_head_longer_than_the_cap_is_refused() {
 }
 
 #[test]
+fn a_malformed_head_is_answered_400_and_the_connection_closed() {
+    let (handler, requests) = probe();
+    let addr = serve(&site("malformed"), Some(handler));
+    // The body a lenient reader would frame, and a second request after it
+    // that a smuggler hopes the server reads as its own.
+    let answer = ask(
+        addr,
+        "POST / HTTP/1.1\r\nHost: test\r\nContent-Length : 5\r\n\r\nhelloGET /styles.css \
+         HTTP/1.1\r\nHost: test\r\n\r\n",
+    );
+    assert_eq!(status(&answer), 400, "{answer}");
+    assert!(answer.contains("Connection: close\r\n"), "{answer}");
+    assert_eq!(answer.matches("HTTP/1.1 ").count(), 1, "{answer}");
+    assert!(
+        requests.try_recv().is_err(),
+        "a malformed request reached the handler"
+    );
+}
+
+#[test]
 fn a_body_past_the_bound_is_refused_before_it_is_read() {
     let (handler, requests) = probe();
     let addr = serve(&site("long-body"), Some(handler));

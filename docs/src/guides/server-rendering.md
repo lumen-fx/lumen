@@ -197,6 +197,11 @@ lumen-server dist/web --trusted-proxy 10.0.0.0/8
 With a trusted proxy, `request.secure` reads what the proxy said about TLS and
 the access log records the visitor's address rather than the proxy's.
 
+A request that a proxy and the server could read two ways, such as one with a
+folded header line, whitespace before a header's colon, or two
+`Content-Length` headers, is answered with a 400 and its connection closed, so
+the two never disagree about where one request ends and the next begins.
+
 ### Caching
 
 A file whose name carries the hash of its contents, which is every file a
