@@ -18,8 +18,12 @@
 #
 # The base carries glibc, libgcc_s and CA certificates and nothing else: no
 # shell, no package manager. Its glibc has to be at least as new as the one on
-# the runner that linked the binary (Ubuntu 24.04), which is why it is the
-# Debian 13 image and not the Debian 12 one. The nonroot tag runs as uid 65532.
+# the runner that linked the binary (Ubuntu 24.04, pinned in
+# build-toolchain.yml), which is why it is the Debian 13 image and not the
+# Debian 12 one. The nonroot tag runs as uid 65532. The base is pinned by
+# digest, so a rebuild of one release gets the base it was tested with; move
+# the digest on purpose, with `docker buildx imagetools inspect
+# gcr.io/distroless/cc-debian13:nonroot`.
 #
 # The site goes at /site, built by `lumenc web --render ssr`. Mount it
 # read-only:
@@ -33,7 +37,7 @@
 #
 # /site is not declared a VOLUME, so the second form keeps what it copies.
 
-FROM gcr.io/distroless/cc-debian13:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
 
 ARG TARGETARCH
 ARG VERSION=dev
