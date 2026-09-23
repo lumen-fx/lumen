@@ -1,0 +1,25 @@
+// One program, two targets. `lumenc web` turns on `web` and `lumenc run` turns
+// on `desktop`, and each compiles only the code whose condition holds.
+import "lumen.cdl";
+
+// Two declarations of one function, one per target. Only one is compiled, so
+// they do not collide, and the web one can call an add-on the desktop build
+// does not have.
+@cfg(web)
+fn side() -> string {
+    return greet::hello("web");
+}
+
+@cfg(not(web))
+fn side() -> string {
+    return "the desktop side";
+}
+
+fn on_start() {
+    lumen::signal_set("side", side());
+    // A statement can carry a condition of its own.
+    @cfg(desktop)
+    print("compiled for " + side());
+}
+
+fn main() {}

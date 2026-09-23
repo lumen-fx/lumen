@@ -145,6 +145,41 @@ in a browser too, and a seeded `std/random` draws the same sequence there. A
 `dylib` block of the app's own names a library the browser cannot open, and an
 image that carries one does not load there.
 
+## Code for one target
+
+`@cfg(...)` in front of a declaration or a statement compiles it only for the
+targets its condition names. Use it for code that belongs to one target, such
+as a call into a [browser add-on](web-addons.md) the desktop build does not
+have:
+
+```rust
+@cfg(web)
+fn track(event: string) { analytics::send(event); }
+@cfg(not(web))
+fn track(event: string) {}
+
+fn on_start() {
+    track("opened");
+    @cfg(desktop)
+    print("running on the desktop");
+}
+```
+
+Code whose condition is false is dropped before any name in it is looked up,
+so the two `track` functions do not collide and `analytics` only has to exist
+in the web build. Lumen turns on one flag per target:
+
+| Flag | On when |
+|------|---------|
+| `web` | `lumenc web` compiles the app, for the browser, a build-time run and a server render |
+| `desktop` | `lumenc run`, `build`, `bundle` and `package` compile the app |
+
+`lumenc check` compiles the scripts once per target, each against that
+target's [dependencies](lumen-toml.md#targetweb-and-targetdesktop) with that
+target's flag on, and reports an error with the target it breaks. The
+conditions (`not`, `any`, `all`, `key = "value"`) are candela's; see
+[conditional compilation](https://docs.lumenfx.dev/candela/language/conditional-compilation/).
+
 ## Lifecycle hooks
 
 Define these as free functions. Each is optional; a missing hook is a no-op.

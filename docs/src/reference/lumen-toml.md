@@ -422,13 +422,15 @@ shape-tools = { path = "modules/shape-tools" }
 ```
 
 `lumenc web` builds for `web`. `lumenc run`, `build`, `bundle`, `package` and a
-compiled app's runtime build for `desktop`. `lumenc check` is for neither, so
-it accepts the markup and the add-on calls of both, and `lumenc fetch`,
-`update` and `add` resolve the registry packages of both.
+compiled app's runtime build for `desktop`. `lumenc check` accepts the markup
+of both and compiles the scripts once for each, and `lumenc fetch`, `update`
+and `add` resolve the registry packages of both.
 
 Use it to keep a browser add-on out of a desktop build and a native library
 out of a site. A script that calls an add-on declared for the web alone does
-not compile for the desktop, since the desktop build has no such function.
+not compile for the desktop, since the desktop build has no such function;
+put the call behind `@cfg(web)` so only the web build compiles it. See
+[code for one target](scripting-candela.md#code-for-one-target).
 
 `web` and `desktop` are the targets there are; any other name under
 `[target]` is a parse error.

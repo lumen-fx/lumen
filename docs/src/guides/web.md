@@ -326,12 +326,18 @@ echo = { path = "addons/echo" }
 [`[target.web]`](../reference/lumen-toml.md#targetweb-and-targetdesktop).
 
 A script calls the add-on's functions in its namespace, with nothing to
-declare, because the build reads the descriptor and declares them itself:
+declare, because the build reads the descriptor and declares them itself. An
+add-on declared for the web alone does not exist in the desktop build, so the
+calls go behind `@cfg(web)`, which compiles them for the web build only (see
+[code for one target](../reference/scripting-candela.md#code-for-one-target)):
 
 ```
 fn on_ready() {
-    let loud = echo::shout("hello");
-    echo::later("world", 500, "greeting");
+    @cfg(web)
+    {
+        let loud = echo::shout("hello");
+        echo::later("world", 500, "greeting");
+    }
 }
 
 fn on_echo(tag: string, value: any) {
