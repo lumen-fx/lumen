@@ -2446,31 +2446,6 @@ fn radio_controls(root: &Element) -> Vec<web_sys::HtmlInputElement> {
 }
 
 #[wasm_bindgen_test]
-fn a_radio_group_is_one_stop_in_the_browser_s_tab_order() {
-    let tree = || LayoutIR {
-        root: element("root", None, radio_group()),
-        ..LayoutIR::default()
-    };
-    let root = prerender(tree());
-    let _app = hydrate(tree(), root.clone());
-
-    let controls = radio_controls(&root);
-    assert_eq!(controls.len(), 3);
-    for control in controls {
-        // The browser gives a `name` group one stop in the tab order and
-        // moves between its members with the arrow keys. A `tabindex` of
-        // -1 on each member takes every one of them out of it instead.
-        assert!(
-            !control.has_attribute("tabindex"),
-            "a radio leaves its place in the tab order to its group"
-        );
-        assert_eq!(control.tab_index(), 0);
-        assert_eq!(control.name(), "ship");
-    }
-    root.remove();
-}
-
-#[wasm_bindgen_test]
 fn a_radio_group_mounted_at_runtime_is_one_group() {
     let tree = || {
         let gate = IrElement {

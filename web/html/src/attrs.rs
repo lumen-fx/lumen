@@ -266,16 +266,11 @@ pub fn control_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, Str
     if let Some(index) = attrs.tab_index.filter(|_| input_type != "radio") {
         out.push(("tabindex", index.to_string()));
     }
-    // A radio's group is the `name` its members share, which is what makes
-    // the browser let only one of them be on at a time, and its value is
-    // what the group's signal holds while it is the one on.
     if input_type == "radio" {
-        if let Some(group) = &attrs.radio_group {
-            out.push(("name", group.clone()));
-        }
-        if let Some(value) = &attrs.radio_value {
-            out.push(("value", value.clone()));
-        }
+        out.extend(radio_attrs(
+            attrs.radio_group.as_deref().unwrap_or_default(),
+            attrs.radio_value.as_deref().unwrap_or_default(),
+        ));
     }
     if attrs.checked == Some(true) {
         out.push(("checked", String::new()));
@@ -288,6 +283,23 @@ pub fn control_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, Str
         out.push(("autofocus", String::new()));
     }
     out
+}
+
+/// The attributes that put a radio's control in its group: the `name` its
+/// members share, which is what makes the browser let only one of them be on
+/// at a time and step between them with the arrow keys, and the `value` the
+/// group's signal holds while this one is on.
+///
+/// An empty group or value writes no attribute. The runtime holds both as
+/// plain strings, where one the author never wrote is empty, so this is the
+/// only rule a document the build wrote and a control mounted at run time
+/// can agree on. The browser reads an empty `name` as no group either way.
+pub fn radio_attrs(group: &str, value: &str) -> Vec<(&'static str, String)> {
+    [("name", group), ("value", value)]
+        .into_iter()
+        .filter(|(_, held)| !held.is_empty())
+        .map(|(name, held)| (name, held.to_string()))
+        .collect()
 }
 
 /// What the styling attributes written on one element declare.
@@ -588,6 +600,17 @@ mod tests {
         let pairs = control_attrs("radio", &a);
         assert_eq!(find(&pairs, "name"), Some("size"));
         assert_eq!(find(&pairs, "value"), Some("large"));
+    }
+
+    #[test]
+    fn an_empty_radio_group_or_value_writes_nothing() {
+        let mut a = attrs();
+        a.radio_group = Some(String::new());
+        a.radio_value = Some(String::new());
+        let pairs = control_attrs("radio", &a);
+        assert_eq!(find(&pairs, "name"), None);
+        assert_eq!(find(&pairs, "value"), None);
+        assert_eq!(radio_attrs("", "large"), [("value", "large".to_string())]);
     }
 
     #[test]

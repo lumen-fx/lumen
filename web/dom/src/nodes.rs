@@ -28,7 +28,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{
     InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, TextContent,
 };
-use lumen_html::attrs::class_value;
+use lumen_html::attrs::{class_value, radio_attrs};
 use lumen_html::contract::{DATA_LM, DATA_LM_PART, NodePath, PathStep};
 use lumen_html::paths::walk_nodes;
 use lumen_html::style::style_value;
@@ -442,15 +442,10 @@ fn build(
         for (name, value) in control.attributes() {
             let _ = node.set_attribute(name, value);
         }
-        // A radio's group is the `name` its members share, which is what the
-        // browser steps with the arrow keys and lets only one member of be
-        // on. Without it every radio mounted here is a group of its own.
+        // Without its group every radio mounted here is a group of its own.
         if let Some(radio) = radio {
-            if !radio.group.is_empty() {
-                let _ = node.set_attribute("name", &radio.group);
-            }
-            if !radio.value.is_empty() {
-                let _ = node.set_attribute("value", &radio.value);
+            for (name, value) in radio_attrs(&radio.group, &radio.value) {
+                let _ = node.set_attribute(name, &value);
             }
         }
         let _ = element.append_child(&node);
