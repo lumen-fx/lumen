@@ -63,9 +63,6 @@ enum PendingEvent {
         position: (f64, f64),
         /// `MouseEvent.button`.
         button: i16,
-        /// The address of the Lumen link the click landed on, when the
-        /// browser follows it rather than the app.
-        followed: Option<String>,
     },
     /// A text entry's value changed as the user typed.
     Input {
@@ -861,14 +858,6 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                     event.prevent_default();
                 }
             }
-            // Unless the click was intercepted above, the browser follows a
-            // link itself, so a navigation the app raises from the same
-            // click is one the browser is already answering.
-            let followed = (!soft_navigation)
-                .then(|| anchor_of(&event))
-                .flatten()
-                .filter(|anchor| anchor.has_attribute(DATA_LM))
-                .and_then(|anchor| anchor.get_attribute("href"));
             let Some(path) = path_of(&event) else {
                 return;
             };
@@ -881,7 +870,6 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                     (f64::from(m.client_x()), f64::from(m.client_y()))
                 }),
                 button: mouse.map_or(0, MouseEvent::button),
-                followed,
             });
         }) as Box<dyn FnMut(Event)>),
     )?;
@@ -1072,7 +1060,6 @@ pub fn drain_dom_events(
     focus: Option<ResMut<FocusTracker>>,
     drop_targets: Query<Option<&DropAccept>, With<DropTarget>>,
     parents: Query<&ChildOf>,
-    mut followed_links: Option<ResMut<crate::navigation::FollowedLinks>>,
     mut hover_depth: Local<HoverDepth>,
 ) {
     let pending = QUEUE.with_borrow_mut(std::mem::take);
@@ -1086,14 +1073,10 @@ pub fn drain_dom_events(
                 path,
                 position,
                 button,
-                followed,
             } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                if let (Some(address), Some(links)) = (followed, followed_links.as_mut()) {
-                    links.follow(address);
-                }
                 clicks.write(ClickEvent {
                     entity,
                     position: glam::Vec2::new(position.0 as f32, position.1 as f32),

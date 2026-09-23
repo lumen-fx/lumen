@@ -615,8 +615,7 @@ fn hard_navigation_leaves_the_browser_s_own_click_alone() {
         "`navigation = \"hard\"` never intercepts; the browser loads the \
          next document exactly as it does for an ordinary site"
     );
-    // The click reaches the app too, and raises a navigation to the same
-    // page a tick later.
+    // The click reaches the app too, which raises no navigation from it.
     app.tick();
     app.tick();
     assert_eq!(
@@ -625,6 +624,11 @@ fn hard_navigation_leaves_the_browser_s_own_click_alone() {
         "the browser is already loading the link, or opening it wherever the \
          visitor asked for it; the app loading it again would do the \
          browser's work twice, or load it in this tab as well"
+    );
+    assert_eq!(
+        route_path(&app).as_deref(),
+        Some("index"),
+        "and nothing swaps in place: the next document is what shows the page"
     );
 }
 

@@ -33,6 +33,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, Plugin, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::NavigationMode;
+use lumen_scene::routing::HostFollowsLinks;
 use web_sys::Element;
 
 pub use navigation::{DocumentLoader, Routes};
@@ -111,7 +112,9 @@ impl Plugin for WebDomPlugin {
             }
             Navigation::Hard => {
                 app.world.init_resource::<DocumentLoader>();
-                app.world.init_resource::<navigation::FollowedLinks>();
+                // The browser follows a link click itself, so the router
+                // raises no navigation from the same click.
+                app.world.insert_resource(HostFollowsLinks);
                 app.add_systems(
                     TickStage::Systems,
                     navigation::load_document.before(lumen_scene::routing::apply_navigation),
@@ -181,8 +184,7 @@ impl Plugin for WebDomPlugin {
 /// the new address names. The click half belongs here rather than in
 /// [`WebDomPlugin`] because only a listener has a browser event still in
 /// hand to prevent. With `None` the browser follows every link click
-/// itself, and under hard navigation the app notes that it does, so it does
-/// not load the same link a second time.
+/// itself.
 ///
 /// The keys are the one set that listens on the document rather than on
 /// `root`: a key pressed while focus sits outside the app never passes the
