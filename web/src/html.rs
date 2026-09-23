@@ -27,11 +27,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lumen_html::attrs::{ImageBox, control_attrs, image_attrs};
 use lumen_html::contract::{
-    DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath, NodeSeed,
+    DATA_LM, DATA_LM_FOREIGN, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, ForeignElement,
+    NodePath, NodeSeed,
 };
 use lumen_html::style::{Emission, rewrite_property, style_value};
 use lumen_html::{
-    Control, PixelSize, drawn_by_control, escape_attr, escape_text, html_attrs, html_tag_for,
+    Control, HtmlTag, PixelSize, drawn_by_control, escape_attr, escape_text, html_attrs,
+    html_tag_for,
 };
 use lumen_i18n::{LanguageIdentifier, LocaleFormatter};
 use lumen_ir::css::computed_style_map;
@@ -104,6 +106,11 @@ struct Walk<'a> {
     /// which decides whether a bounded emit is a prefix the runtime
     /// completes or the whole of what a reader ever gets.
     runtime: bool,
+    /// Markup tag to the element an add-on writes it as.
+    foreign: &'a BTreeMap<String, ForeignElement>,
+    /// How many add-on elements the walk is inside. Their content is the
+    /// add-on's, so it is written without node paths.
+    foreign_depth: u32,
     /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
 }
@@ -159,6 +166,8 @@ pub fn emit_tree(
         hidden: 0,
         eager_used: false,
         runtime: spec.web.runtime,
+        foreign: &spec.web.foreign,
+        foreign_depth: 0,
         warnings,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
@@ -208,10 +217,27 @@ fn emit_element(
     } else {
         element.tag.as_str()
     };
-    let tag = html_tag_for(ir_tag).ok_or_else(|| EmitError::UnknownTag {
-        page: walk.page.to_string(),
-        tag: element.tag.clone(),
-    })?;
+    // A tag with no mapping of its own is one an add-on answers for, or one
+    // nothing does. The add-on's is written as the element it names, with the
+    // markup's own content inside as what a visitor sees until the add-on
+    // takes the element over.
+    let foreign = walk.foreign.get(ir_tag);
+    let tag = match (html_tag_for(ir_tag), foreign) {
+        (Some(tag), _) => tag,
+        (None, Some(foreign)) => HtmlTag {
+            name: "",
+            fixed: &[],
+            void: foreign.void,
+            control: None,
+        },
+        (None, None) => {
+            return Err(EmitError::UnknownTag {
+                page: walk.page.to_string(),
+                tag: element.tag.clone(),
+            });
+        }
+    };
+    let tag_name = foreign.map_or(tag.name, |f| f.html.as_str());
     if !walk.seen.insert(path_text.clone()) {
         return Err(EmitError::DuplicateNodePath {
             page: walk.page.to_string(),
@@ -273,7 +299,7 @@ fn emit_element(
     }
 
     out.push('<');
-    out.push_str(tag.name);
+    out.push_str(tag_name);
     for (name, value) in tag.fixed {
         write_attr(out, name, value);
     }
@@ -298,7 +324,14 @@ fn emit_element(
     for (name, value) in &written.extra {
         write_attr(out, name, value);
     }
-    write_attr(out, DATA_LM, &path_text);
+    // Inside an add-on's element the content is the add-on's, not nodes the
+    // runtime binds, so nothing there carries a path.
+    if walk.foreign_depth == 0 {
+        write_attr(out, DATA_LM, &path_text);
+    }
+    if foreign.is_some() {
+        write_attr(out, DATA_LM_FOREIGN, ir_tag);
+    }
     let mut style = if walk.css_mode == CssMode::Computed {
         computed_style(attrs)
     } else {
@@ -351,6 +384,7 @@ fn emit_element(
         // page's one eager image on what is inside them.
         let out_of_sight = hidden || (ir_tag == "dialog" && !open);
         walk.hidden += u32::from(out_of_sight);
+        walk.foreign_depth += u32::from(foreign.is_some());
         for (index, child) in element.children.iter().enumerate() {
             // The indicator the parser synthesized is the control written
             // above, so it stands for no element of its own here. Its index
@@ -364,12 +398,13 @@ fn emit_element(
             }
             emit_element(out, child, &path.child(index as u32), walk)?;
         }
+        walk.foreign_depth -= u32::from(foreign.is_some());
         walk.hidden -= u32::from(out_of_sight);
     } else if ir_tag == "for" {
         emit_rows(out, element, path, walk)?;
     }
     out.push_str("</");
-    out.push_str(tag.name);
+    out.push_str(tag_name);
     out.push('>');
     Ok(())
 }

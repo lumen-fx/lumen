@@ -20,6 +20,9 @@
 #[cfg(all(feature = "dynamic-engine", not(windows)))]
 use lumen_engine as _;
 
+/// Browser add-ons an app depends on, found for the target a build is for.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub mod addons;
 /// CLI subcommand handlers: `build`, `bundle`, `add`/`remove`/`fetch`/`update`,
 /// `i18n`, the MCP inspection commands, the static signal lint, and the
 /// `lumenc new` scaffolder.
@@ -124,7 +127,9 @@ fn with_default_parser(opts: RunOptions) -> RunOptions {
 /// app still loads its runtime modules.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions, RunError> {
-    let resolved = registry_packages(&opts.dir).map_err(RunError::Plugin)?;
+    let deps = addons::target_deps(&opts.dir, lumen_modules::Target::Desktop, None)
+        .map_err(RunError::Plugin)?;
+    let resolved = &deps.resolved;
     opts.resolved_modules = lumen_runtime::modules::ResolvedModules(
         resolved
             .modules
@@ -132,7 +137,8 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
             .map(|(name, file)| (name.clone(), Ok(file.clone())))
             .collect(),
     );
-    opts.import_roots = resolved.candela_roots.clone();
+    opts.import_roots = deps.compile.import_roots.clone();
+    opts.addons = deps.compile.addons.clone();
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
         let chain = plugin_host::compiler_plugins_for(&opts.dir, false, &resolved.compiler_plugins)
             .map_err(RunError::Plugin)?;
@@ -150,10 +156,12 @@ pub fn with_default_compiler_plugins(opts: RunOptions) -> Result<RunOptions, Run
     Ok(opts)
 }
 
-/// Every `version` source the app in `dir` declares, with the table that
-/// declared it. `[dependencies]` entries become runtime packages and
+/// Every `version` source the app in `dir` declares for a build for any of
+/// `targets`, with the table that declared it. `[dependencies]` entries (with
+/// each target's own table laid over them) become runtime packages and
 /// `[[plugins]]` entries compiler plugins; the registry says which platform
-/// each one is for, and the table says what the app wants it for.
+/// each one is for, and the table says what the app wants it for. A name two
+/// targets declare is asked for once, as the first of them declares it.
 ///
 /// A `lumen.toml` that does not parse is the error, here as everywhere: the
 /// requirements cannot be read out of a file nobody can read, and `lumenc
@@ -161,12 +169,19 @@ pub fn with_default_compiler_plugins(opts: RunOptions) -> Result<RunOptions, Run
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn registry_requirements(
     dir: &std::path::Path,
+    targets: &[lumen_modules::Target],
 ) -> Result<Vec<package::lpm::Requirement>, String> {
     use lumen_runtime::modules::ModuleSource;
 
     let cfg = LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
-    let mut reqs = Vec::new();
-    for dep in &cfg.dependencies.0 {
+    let mut reqs: Vec<package::lpm::Requirement> = Vec::new();
+    let deps = targets
+        .iter()
+        .flat_map(|target| cfg.dependencies_for(*target).0);
+    for dep in deps {
+        if reqs.iter().any(|r| r.name == dep.name) {
+            continue;
+        }
         if let ModuleSource::Version(req) = &dep.source {
             reqs.push(package::lpm::Requirement {
                 name: dep.name.clone(),
@@ -187,14 +202,18 @@ pub fn registry_requirements(
     Ok(reqs)
 }
 
-/// Resolve everything the app in `dir` names in the registry, for this
-/// machine's platform. `lumenc package --target` asks for another one.
+/// Resolve everything the app in `dir` names in the registry for a build for
+/// `target`, for this machine's platform. `lumenc package --target` asks for
+/// another one.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub fn registry_packages(dir: &std::path::Path) -> Result<package::lpm::Resolved, String> {
+pub fn registry_packages(
+    dir: &std::path::Path,
+    target: lumen_modules::Target,
+) -> Result<package::lpm::Resolved, String> {
     package::lpm::resolve(
         dir,
         package::lpm::host_target(),
-        &registry_requirements(dir)?,
+        &registry_requirements(dir, &[target])?,
         package::lpm::Mode::of_invocation(),
     )
 }
@@ -262,40 +281,43 @@ pub fn is_help_flag(arg: &str) -> bool {
 /// Parse + validate an app from source (`lumenc check`), using the compiler's
 /// default parser. See [`lumen_runtime::check_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+///
+/// A check is for no one target: the app's markup and calls are checked
+/// against the add-ons and script libraries of every target it declares.
 pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
-    let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
+    let resolved =
+        registry_packages(dir, lumen_modules::Target::Desktop).map_err(RunError::Plugin)?;
     let plugins = plugin_host::compiler_plugins_for(dir, true, &resolved.compiler_plugins)
         .map_err(RunError::Plugin)?;
-    lumen_runtime::check_app(
-        dir,
-        &parse::source_parser::LumencParser,
-        &*plugins,
-        &resolved.candela_roots,
-    )
+    let deps = addons::every_target(dir).map_err(RunError::Plugin)?;
+    lumen_runtime::check_app(dir, &parse::source_parser::LumencParser, &*plugins, &deps)
 }
 
-/// AOT-compile an app from source (`lumenc build`), using the compiler's
-/// default parser. See [`lumen_runtime::compile_app`].
+/// AOT-compile an app from source for the desktop (`lumenc build`), using the
+/// compiler's default parser. See [`lumen_runtime::compile_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    compile_app_with_skin(dir, None)
+    let deps =
+        addons::target_deps(dir, lumen_modules::Target::Desktop, None).map_err(RunError::Plugin)?;
+    compile_app_with(dir, None, &deps)
 }
 
-/// AOT-compile an app from source with the skin named outright, which is what
-/// `lumenc web` builds a site with. See [`lumen_runtime::compile_app_with_skin`].
+/// AOT-compile an app from source against what was resolved for its target,
+/// with the skin named outright when `skin` is set, which is how `lumenc web`
+/// builds a site. See [`lumen_runtime::compile_app_with_skin`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub fn compile_app_with_skin(
+pub fn compile_app_with(
     dir: &std::path::Path,
     skin: Option<&str>,
+    deps: &addons::TargetDeps,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
-    let plugins = plugin_host::compiler_plugins_for(dir, false, &resolved.compiler_plugins)
+    let plugins = plugin_host::compiler_plugins_for(dir, false, &deps.resolved.compiler_plugins)
         .map_err(RunError::Plugin)?;
     lumen_runtime::compile_app_with_skin(
         dir,
         &parse::source_parser::LumencParser,
         &*plugins,
         skin,
-        &resolved.candela_roots,
+        &deps.compile,
     )
 }

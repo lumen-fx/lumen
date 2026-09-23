@@ -615,5 +615,6 @@ The rest of the limits are the emitter's, and a rendered page has the same ones
 
 Every response carries `warnings`: a value a document cannot hold, a header that
 was refused, an engine this build has no host for, an app that ran out of
-budget. None of them stops a page from being served, and all of them are worth a
+budget, a call to a [browser add-on](../reference/web-addons.md) function,
+which raises in a render because an add-on runs only in a browser. None of them stops a page from being served, and all of them are worth a
 line in your log.

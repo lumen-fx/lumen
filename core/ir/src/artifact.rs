@@ -111,11 +111,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// the fallback chain, so an app, and a server rendering one, reads in every
 /// language it ships with no `locale/` directory beside it.
 ///
+/// `12`: [`CompiledApp::addons`] carries the browser add-ons the app depends
+/// on, their functions and their elements, so every target that runs the
+/// program binds the same names.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 11;
+pub const FORMAT_VERSION: u16 = 12;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -219,6 +223,11 @@ pub struct CompiledApp {
     /// The app's translation catalogues and fallback chain. Empty for an app
     /// with no `locale/` directory.
     pub i18n: CompiledI18n,
+    /// The browser add-ons the app depends on for the target it was compiled
+    /// for, in the order its dependencies sort. A page binds their functions
+    /// to the modules it loads; everywhere else they are bound to a body that
+    /// says they run only in a browser. Empty for an app that declares none.
+    pub addons: Vec<crate::addon::Addon>,
 }
 
 /// Errors from (de)serializing or reading/writing an artifact.
@@ -418,6 +427,25 @@ mod tests {
                 ],
                 fallback: vec!["fr-FR".to_string()],
             },
+            addons: vec![crate::addon::Addon {
+                name: "echo".to_string(),
+                namespace: "echo".to_string(),
+                functions: vec![crate::addon::AddonFunction {
+                    name: "later".to_string(),
+                    params: vec![crate::addon::AddonParam {
+                        name: "ms".to_string(),
+                        ty: "int".to_string(),
+                    }],
+                    returns: "null".to_string(),
+                    event: Some("on_echo".to_string()),
+                    doc: String::new(),
+                }],
+                elements: vec![crate::addon::AddonElement {
+                    tag: "echo-view".to_string(),
+                    html: "div".to_string(),
+                    void: false,
+                }],
+            }],
         }
     }
 
@@ -440,6 +468,7 @@ mod tests {
         assert_eq!(pages.entry, "index");
         assert_eq!(pages.keys.len(), 2);
         assert_eq!(back.i18n, app.i18n);
+        assert_eq!(back.addons, app.addons);
     }
 
     #[test]

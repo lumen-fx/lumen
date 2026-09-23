@@ -46,7 +46,7 @@ use lumen_ir::artifact::CompiledApp;
 use lumen_portable::{apply_node_seed, apply_seed, hosts, install_i18n, portable_app};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
-use lumen_script::{FetchRegistry, HttpDispatch};
+use lumen_script::{FetchRegistry, HttpDispatch, ScriptFnAppExt};
 use lumen_web::{RowFills, State, state_of};
 
 pub use deny::DenyDispatch;
@@ -140,6 +140,10 @@ pub struct Prerendered {
     pub settled: Settled,
     /// Every address the app asked for, once each, in the order it asked.
     pub denied: Vec<String>,
+    /// Every add-on function the app called, as `namespace::name`, once
+    /// each, in the order it first called it. Each call raised in the script
+    /// that made it, because an add-on runs only in a browser.
+    pub browser_only: Vec<String>,
     /// Engines the app carries a program for that this build has no host for.
     /// Their part of the state is missing from [`Self::state`].
     pub unsupported_engines: Vec<String>,
@@ -161,6 +165,9 @@ pub struct Prerendered {
 pub struct Booted {
     /// The app, spawned and seeded, with no tick behind it yet.
     pub app: App,
+    /// The add-on functions the app has called so far. Each one raised in
+    /// the script that called it; read it after the run to report them.
+    pub browser_only: BrowserOnlyCalls,
     /// Engines the app carries a program for that this build has no host for.
     pub unsupported_engines: Vec<String>,
     /// Why the app could not start in its locale, which is a locale that is
@@ -218,6 +225,21 @@ pub fn boot(
     app.world
         .insert_resource(FetchRegistry::with_dispatch(dispatch));
 
+    // An add-on is a module for a page, and a render has none. The program
+    // was compiled against the add-on's functions, so they are bound here to
+    // a body that raises in the script that called it, and each call is
+    // remembered for whoever ran the render. Ahead of the hosts, which bind
+    // what is registered when they load.
+    let browser_only = BrowserOnlyCalls::default();
+    for addon in &compiled.addons {
+        match lumen_script::addon::browser_only_fns(addon, Some(browser_only.listener())) {
+            Ok(fns) => {
+                app.add_script_fns(fns);
+            }
+            Err(reason) => lumen_core::warn_line!("lumen-prerender: {reason}"),
+        }
+    }
+
     // An engine with no host here is reported and passed over rather than
     // refused: what it would have published is missing from the page, which
     // is a page written with less state, not a build that cannot happen.
@@ -251,8 +273,39 @@ pub fn boot(
 
     Booted {
         app,
+        browser_only,
         unsupported_engines,
         language_error,
+    }
+}
+
+/// The add-on functions a render's app called, which a render answers by
+/// raising because an add-on runs only in a browser.
+#[derive(Debug, Default, Clone)]
+pub struct BrowserOnlyCalls {
+    called: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl BrowserOnlyCalls {
+    /// What the bound bodies tell about each call.
+    fn listener(&self) -> lumen_script::addon::OnBrowserOnlyCall {
+        let called = Arc::clone(&self.called);
+        Arc::new(move |name: &str| {
+            if let Ok(mut called) = called.lock()
+                && !called.iter().any(|seen| seen == name)
+            {
+                called.push(name.to_owned());
+            }
+        })
+    }
+
+    /// Every function called, as `namespace::name`, once each, in the order
+    /// it was first called.
+    pub fn take(&self) -> Vec<String> {
+        self.called
+            .lock()
+            .map(|mut called| std::mem::take(&mut *called))
+            .unwrap_or_default()
     }
 }
 
@@ -304,6 +357,7 @@ pub fn page(
         state,
         settled,
         denied: denied.take(),
+        browser_only: booted.browser_only.take(),
         unsupported_engines: booted.unsupported_engines,
         fills,
         language_error: booted.language_error,

@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod events;
+mod foreign;
 mod head;
 mod navigation;
 mod nodes;
@@ -36,11 +37,16 @@ use lumen_html::contract::NavigationMode;
 use lumen_scene::routing::HostFollowsLinks;
 use web_sys::Element;
 
+pub use foreign::{ForeignElements, ForeignHooks, ForeignTag};
 pub use navigation::{DocumentLoader, Routes};
 pub use nodes::{HydrationReport, NodeTable};
 
 /// Install the browser backend on an app whose scene has already been
 /// spawned.
+///
+/// The elements the page's add-ons answer for go into the world before it,
+/// as a [`ForeignElements`] non-send resource; without one, every tag is one
+/// the backend builds itself.
 ///
 /// `root` is the element the app lives in, which is the one the emitter gave
 /// the page-root node path; a page that was emitted without a prerender

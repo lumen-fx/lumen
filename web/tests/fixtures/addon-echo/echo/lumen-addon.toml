@@ -1,0 +1,28 @@
+# A test add-on: one function of each kind, an event the module raises on its
+# own, and an element it takes over.
+[addon]
+namespace = "echo"
+module = "echo.js"
+styles = ["echo.css"]
+
+[[function]]
+name = "shout"
+params = ["text: string"]
+returns = "string"
+doc = "The text in capitals, with an exclamation mark."
+
+[[function]]
+name = "later"
+params = ["text: string", "ms: int"]
+async = "on_echo"
+doc = "The text, after `ms` milliseconds."
+
+[[function]]
+name = "fail"
+params = ["why: string"]
+async = "on_echo"
+doc = "Fails with `why`."
+
+[[element]]
+tag = "echo-view"
+html = "div"

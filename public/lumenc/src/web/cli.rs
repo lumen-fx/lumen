@@ -18,12 +18,13 @@ use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
 use lumen_core::signals::ArrayItem;
 use lumen_core::{say_line, warn_line};
 use lumen_html::contract::{
-    DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, NavigationMode,
-    ScriptFormat, ScriptRef, Seed, SeedValue,
+    DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, ForeignElement,
+    NavigationMode, ScriptFormat, ScriptRef, Seed, SeedValue,
 };
 use lumen_i18n::{Catalogues, I18nPlugin, LanguageIdentifier};
 use lumen_ir::artifact::{CompiledApp, CompiledI18n};
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
+use lumen_modules::Target;
 use lumen_prerender::{self as prerender, Budget, Language, Prerendered, Settled};
 use lumen_runtime::app_layout::src_dir;
 use lumen_runtime::config::{
@@ -94,7 +95,9 @@ a page loads them.
                       is written in) or none (default: [web] prerender).
     --no-hooks        Skip the app's prebuild [[hooks]].
     --lib-dir DIR     Directory holding lumen-web.wasm and lumen-web.js,
-                      instead of the ones shipped with lumenc.
+                      instead of the ones shipped with lumenc. A bundled
+                      browser add-on is looked for under addons/<name>/
+                      here first.
     --strict          Fail the build on any warning it prints.
     --offline         Resolve the app's registry packages from what is
                       already downloaded, and never reach the network.
@@ -361,17 +364,22 @@ fn build(options: &Options) -> Result<Report, String> {
     // Runtime modules are native shared libraries the engine dlopens, and a
     // browser has no dynamic loader to hand one to. A candela package is
     // script source, so it compiles into the app like the app's own scripts
-    // and travels wherever the app does, the web included.
-    let resolved = crate::registry_packages(dir)?;
-    let native = cfg.dependencies.0.iter().find(|dep| {
-        !matches!(dep.source, lumen_modules::ModuleSource::Version(_))
-            || resolved.modules.contains_key(&dep.name)
+    // and travels wherever the app does, the web included, and a browser
+    // add-on is a module the page loads beside the runtime.
+    let deps = crate::addons::target_deps(dir, Target::Web, options.lib_dir.as_deref())?;
+    let native = cfg.dependencies_for(Target::Web).0.into_iter().find(|dep| {
+        let addon = deps.packages.iter().any(|p| p.addon.name == dep.name);
+        !addon
+            && (!matches!(dep.source, lumen_modules::ModuleSource::Version(_))
+                || deps.resolved.modules.contains_key(&dep.name))
     });
     if let Some(dep) = native {
         return Err(format!(
-            "this app declares '{}' under [dependencies], and it is a native library: the \
-             engine loads one by opening it, which a browser cannot do. Drop the declaration \
-             or ship the app as a desktop package.",
+            "this app declares '{}' as a dependency of its web build, and it is a native \
+             library: the engine loads one by opening it, which a browser cannot do. Declare \
+             it under [target.desktop.dependencies] to keep it out of the site, or ship the \
+             app as a desktop package. A browser add-on is a directory holding \
+             lumen-addon.toml.",
             dep.name
         ));
     }
@@ -386,7 +394,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // machine's. `[web] skin` names it; failing that the app's own skin,
     // unless that is `auto`, which is the machine's.
     let skin = skin_for(&cfg, &mut warnings);
-    let mut compiled = crate::compile_app_with_skin(dir, Some(&skin))
+    let mut compiled = crate::compile_app_with(dir, Some(&skin), &deps)
         .map_err(|e| format!("compile {}: {e}", dir.display()))?;
     if compiled.ir.skin.as_deref() == Some("auto") {
         warnings.push(
@@ -544,6 +552,31 @@ fn build(options: &Options) -> Result<Report, String> {
         None => None,
     };
 
+    // Every add-on travels with the site, whether or not the documents run
+    // anything: its stylesheets style its elements' fallback content too. The
+    // documents load its module only when they carry the runtime.
+    let mut addons = Vec::with_capacity(deps.packages.len());
+    let mut addon_files = Vec::new();
+    for package in &deps.packages {
+        let (addon, files) = crate::addons::site::ship(package)?;
+        addons.push(addon);
+        addon_files.extend(files);
+    }
+    let foreign = deps
+        .packages
+        .iter()
+        .flat_map(|package| &package.addon.elements)
+        .map(|element| {
+            (
+                element.tag.clone(),
+                ForeignElement {
+                    html: element.html.clone(),
+                    void: element.void,
+                },
+            )
+        })
+        .collect();
+
     let scripts = script_refs(&compiled, &mut warnings);
     check_exports(&compiled, &browser_filled, &mut warnings);
     let css_mode = match cfg.web.css {
@@ -654,6 +687,8 @@ fn build(options: &Options) -> Result<Report, String> {
             .unwrap_or(sitemap_on && cfg.web.url.is_some()),
         runtime: runtime.is_some(),
         scripts,
+        addons,
+        foreign,
         ..WebSpec::default()
     };
 
@@ -662,6 +697,9 @@ fn build(options: &Options) -> Result<Report, String> {
         write_file(&out.join(&artifact.path), &artifact.bytes)?;
     }
     for (_, file) in &catalogue_files {
+        write_file(&out.join(&file.path), &file.bytes)?;
+    }
+    for file in &addon_files {
         write_file(&out.join(&file.path), &file.bytes)?;
     }
     // The compiled program beside it is the browser's copy: a render runs the
@@ -980,6 +1018,13 @@ fn report_run(key: &str, run: &Prerendered, warnings: &mut Vec<String>) {
         warnings.push(format!(
             "page `{key}` asked for `{url}`, and a build answers the network itself so that \
              every machine writes the same page; the browser fetches it on arrival"
+        ));
+    }
+    for name in &run.browser_only {
+        warnings.push(format!(
+            "page `{key}` called `{name}`, which runs only in a browser; the call raised during \
+             the build, so the page is written with what the app had before it, and the browser \
+             makes the call on arrival"
         ));
     }
     for skipped in &run.state.skipped {
@@ -1388,7 +1433,7 @@ fn check_exports(
     let mut exported: BTreeSet<String> = BTreeSet::new();
     let mut read_any = false;
     for script in &compiled.scripts {
-        let Some(read_back) = lumen_runtime::run::script_exports(script) else {
+        let Some(read_back) = lumen_runtime::run::script_exports(script, &compiled.addons) else {
             continue;
         };
         let exports = match read_back {

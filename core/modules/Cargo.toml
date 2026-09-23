@@ -18,6 +18,9 @@ publish = false
 
 [dependencies]
 lumen-core = { workspace = true }
+# The add-on description a compiled app carries, which a descriptor is read
+# into.
+lumen-ir = { workspace = true }
 # The tag registry the markup parser consults after its built-in table, which
 # is where a `tags = [..]` declaration lands. Unconditional: a build with no
 # loader still parses the table, and the parse is what has to accept the tag.

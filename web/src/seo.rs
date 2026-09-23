@@ -153,7 +153,17 @@ pub fn open_document(
     out.push_str("<link rel=\"stylesheet\"");
     attr(out, "href", &urls::join(&base, &web.css));
     out.push_str(">\n");
+    // An add-on's stylesheets style its elements' fallback content too, so
+    // they are linked whether or not anything runs. After the site's own
+    // sheet, so the add-on's rules win a tie with the reset.
+    for style in web.addons.iter().flat_map(|addon| &addon.styles) {
+        out.push_str("<link rel=\"stylesheet\"");
+        attr(out, "href", &urls::join(&base, &style.path));
+        attr(out, "integrity", &style.integrity);
+        out.push_str(">\n");
+    }
     if web.runtime {
+        write_addon_head(out, web, &base)?;
         out.push_str("<link rel=\"modulepreload\"");
         attr(out, "href", &urls::join(&base, &web.js));
         out.push_str(">\n");
@@ -174,6 +184,47 @@ pub fn open_document(
     Ok(())
 }
 
+/// Write what the head carries for the site's add-ons: the integrity every
+/// module import is held to, their scripts that run before the page paints,
+/// and a preload of each module.
+///
+/// The import map comes first because a module fetch started before it would
+/// not be held to it. A module a page imports is checked against the map and
+/// a preloaded one against its own attribute, so a module whose bytes changed
+/// after the build fails to load either way.
+fn write_addon_head(out: &mut String, web: &WebSpec, base: &str) -> Result<(), EmitError> {
+    if web.addons.is_empty() {
+        return Ok(());
+    }
+    let integrity: serde_json::Map<String, serde_json::Value> = web
+        .addons
+        .iter()
+        .map(|addon| {
+            (
+                urls::join(base, &addon.module.path),
+                serde_json::Value::String(addon.module.integrity.clone()),
+            )
+        })
+        .collect();
+    let map = serde_json::json!({ "integrity": integrity });
+    out.push_str("<script type=\"importmap\">");
+    out.push_str(&serde_json::to_string(&map)?.replace('<', "\\u003c"));
+    out.push_str("</script>\n");
+    for head in web.addons.iter().filter_map(|addon| addon.head.as_ref()) {
+        out.push_str("<script");
+        attr(out, "src", &urls::join(base, &head.path));
+        attr(out, "integrity", &head.integrity);
+        out.push_str("></script>\n");
+    }
+    for addon in &web.addons {
+        out.push_str("<link rel=\"modulepreload\"");
+        attr(out, "href", &urls::join(base, &addon.module.path));
+        attr(out, "integrity", &addon.module.integrity);
+        out.push_str(">\n");
+    }
+    Ok(())
+}
+
 /// Write the boot script and close the document.
 ///
 /// The script is the same on every page of a site: it loads the runtime,
@@ -187,6 +238,10 @@ pub fn open_document(
 /// The manifest URL carries the build's marker, because the manifest is the
 /// one file a site writes under a fixed name: without it a visitor holding a
 /// cached copy would be sent to the files of the build before this one.
+///
+/// A site with add-ons imports each one's module here, statically, and hands
+/// the modules to the runtime in the order the manifest lists the add-ons.
+/// Nothing is evaluated from a string: the page loads what the build named.
 pub fn close_document(out: &mut String, spec: &SiteSpec) {
     if !spec.web.runtime {
         out.push_str("\n</body>\n</html>\n");
@@ -200,11 +255,24 @@ pub fn close_document(out: &mut String, spec: &SiteSpec) {
     );
     out.push_str("\n<script type=\"module\">import init, { boot } from \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.js)));
-    out.push_str("\";init({ module_or_path: \"");
+    out.push_str("\";");
+    for (index, addon) in spec.web.addons.iter().enumerate() {
+        out.push_str(&format!("import * as a{index} from \""));
+        out.push_str(&escape_text(&urls::join(&base, &addon.module.path)));
+        out.push_str("\";");
+    }
+    out.push_str("init({ module_or_path: \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.wasm)));
     out.push_str("\" }).then(() => boot(\"");
     out.push_str(&escape_text(&manifest));
-    out.push_str("\"));</script>\n</body>\n</html>\n");
+    out.push('"');
+    if !spec.web.addons.is_empty() {
+        let modules: Vec<String> = (0..spec.web.addons.len())
+            .map(|index| format!("a{index}"))
+            .collect();
+        out.push_str(&format!(", [{}]", modules.join(", ")));
+    }
+    out.push_str("));</script>\n</body>\n</html>\n");
 }
 
 fn attr(out: &mut String, name: &str, value: &str) {

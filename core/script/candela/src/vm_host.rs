@@ -68,14 +68,20 @@ unsafe impl Sync for VmState {}
 /// build time: a build tool has to know what an app will and will not be able
 /// to call before it ships the app, and the export table is the answer.
 ///
+/// `fns` are bound beside the builtins, the way the runtime that loads the
+/// image binds what an app registered; none of them is called.
+///
 /// # Errors
 ///
 /// The bytes are not a `.cdlb` image this runtime can load, or the image
-/// declares a builtin nothing here answers for.
-pub fn image_exports(image: &[u8]) -> Result<Vec<String>, ScriptError> {
+/// declares a function nothing here answers for.
+pub fn image_exports(image: &[u8], fns: &[ScriptFn]) -> Result<Vec<String>, ScriptError> {
     let registries = Registries::default();
     let mut registry = HostRegistry::new();
     register_lumen_host_fns(&mut registry, &registries);
+    for f in fns.iter().filter(|f| f.visible_to("candela")) {
+        register_script_fn(&mut registry, &registries, f);
+    }
     let program =
         load_program(image, &registry).map_err(|e| ScriptError::Runtime(e.to_string()))?;
     let mut names: Vec<String> = program.exports().map(str::to_owned).collect();

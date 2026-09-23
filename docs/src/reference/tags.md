@@ -407,7 +407,7 @@ patterns, shadows, `measure_text`, `stroke_text`, text alignment and
 baselines, `ellipse` and `arc_to`, dashed strokes, image smoothing, drawing
 an image file or another canvas directly, reading a composed canvas back, and
 a per-canvas device pixel ratio. Canvas does not exist on the web target,
-which refuses `[dependencies]` outright.
+which refuses a native library among the dependencies of its build.
 
 ## Controls
 

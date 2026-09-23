@@ -9,18 +9,10 @@
 
 use lumen_script::{ScriptFn, ScriptNs, ScriptTy};
 
-/// How candela spells a type in a declaration.
+/// How candela spells a type in a declaration: [`ScriptTy`]'s own spelling,
+/// which is candela's.
 fn ty_name(ty: &ScriptTy) -> String {
-    match ty {
-        ScriptTy::Int => "int".to_string(),
-        ScriptTy::Float => "float".to_string(),
-        ScriptTy::Bool => "bool".to_string(),
-        ScriptTy::Str => "string".to_string(),
-        ScriptTy::Unit => "null".to_string(),
-        ScriptTy::Any | ScriptTy::Dynamic => "any".to_string(),
-        ScriptTy::Array(inner) => format!("{}[]", ty_name(inner)),
-        ScriptTy::Map(value) => format!("{{string: {}}}", ty_name(value)),
-    }
+    ty.to_string()
 }
 
 /// The declaration line that binds `f`, without indentation.

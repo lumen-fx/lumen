@@ -30,6 +30,7 @@
 
 #![warn(missing_docs)]
 
+mod addons;
 mod boot;
 mod load;
 
