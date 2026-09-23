@@ -21,15 +21,16 @@ That writes `myapp/dist/web`. To look at it, ask for a server:
 lumenc web myapp --serve
 ```
 
-It prints the address it is listening on. Open that; press Ctrl-C to stop.
-Opening the files directly from disk does not work, because a browser refuses
-to load a module script or a streamed WebAssembly module without a real
-origin.
+The server is `lumen-server`, which every install puts beside `lumenc`,
+started in its development mode. It prints the address it is listening on.
+Open that; press Ctrl-C to stop. Opening the files directly from disk does not
+work, because a browser refuses to load a module script or a streamed
+WebAssembly module without a real origin.
 
 The server listens on 127.0.0.1, so it answers this machine and nobody else.
-`--host <addr>` widens that, and says so when you use it: this is a server for
-developing against, and anything the public reaches belongs behind a reverse
-proxy.
+`--host <addr>` widens that, and the server says so when you use it: this is a
+server for developing against, and anything the public reaches belongs behind
+a reverse proxy.
 
 To watch the app answer per request rather than serve what the build wrote, ask
 for a render:

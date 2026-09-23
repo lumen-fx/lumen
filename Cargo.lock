@@ -4317,6 +4317,7 @@ dependencies = [
  "lumenc",
  "serde_json",
  "signal-hook",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4478,6 +4479,7 @@ dependencies = [
  "bevy_ecs",
  "bincode",
  "cssparser",
+ "ctrlc",
  "flate2",
  "glam 0.33.3",
  "image",
@@ -4510,7 +4512,6 @@ dependencies = [
  "lumen-script-candela",
  "lumen-script-lua",
  "lumen-script-rhai",
- "lumen-server",
  "lumen-ssr",
  "lumen-text",
  "lumen-text-cosmic",
@@ -4519,9 +4520,11 @@ dependencies = [
  "lumenc-plugin",
  "rhai",
  "roxmltree 0.21.1",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook",
  "tar",
  "thiserror 2.0.19",
  "toml 1.1.4+spec-1.1.0",

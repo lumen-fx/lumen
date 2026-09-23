@@ -267,8 +267,8 @@ with the markup already in it. Prints how many pages it wrote and where.
   `lumen.site.json`, which names all of them and carries the page titles, the
   locales, the image sizes, the `[web.seed]` values and the `[web.ssr]`
   policy. A page is produced when it is asked for, by running the app for
-  that request. `--serve` renders them here; without it the directory is for
-  [`lumen-server`](#lumen-server), or for a server you build on
+  that request. `--serve` renders them on this machine; without it the
+  directory is for [`lumen-server`](#lumen-server), or for a server you build on
   [`lumen-ssr`](../guides/server-rendering.md).
 
 Every mode writes the whole markup tree, so a reader and a crawler get the
@@ -301,17 +301,25 @@ document of its own.
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
 | `--strict` | Exit non-zero if the build printed any warning. |
-| `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. Under `--render ssr` every page comes from a render. |
+| `--serve` | Serve the emitted site with `lumen-server --dev` on 127.0.0.1, which prints the address. Ctrl-C stops it. Under `--render ssr` every page comes from a render. |
 | `--port <n>` | Port to serve on. Default 8787; `0` takes any free port and prints which. |
 | `--host <addr>` | Address to listen on. Default 127.0.0.1. Any other address makes the site reachable from other machines, and the command says so. |
-| `--allow-host <name>` | Let a render ask this host for data, on top of `[web.ssr] allow_hosts`; repeat for more. A render reaches nothing that is not named. Applies to `--render ssr --serve`; a build that renders nothing says so and ignores it. |
+| `--allow-host <name>` | Let a render ask this host for data, on top of `[web.ssr] allow_hosts`; repeat for more. A render reaches nothing that is not named. Applies to `--render ssr --serve`, where it becomes `lumen-server --allow-host`; a build that renders nothing says so and ignores it. |
 
 ### Serving
 
-`--serve` is for development: one directory, one machine, one process. It is
-the server [`lumen-server`](#lumen-server) runs, with development defaults: a
-render that fails says why in the page, and there are no worker processes.
-Run a site anyone else uses with `lumen-server`, behind a reverse proxy.
+`--serve` is for development. `lumenc` builds the site, then runs
+[`lumen-server`](#lumen-server) on it with `--dev`, and waits for it: the
+server's output is what you see, Ctrl-C stops the server, and `lumenc` exits
+with the server's exit status. `--host`, `--port` and `--allow-host` become
+the server's `--bind`, `--port` and `--allow-host`, and a site built without
+`--render ssr` is served under its `--base` with `--base-path`. Run a site
+anyone else uses with `lumen-server` without `--dev`, behind a reverse proxy.
+
+`lumenc` looks for `lumen-server` in the directory holding the running
+`lumenc`, where every install puts it, then at the path in `$LUMEN_SERVER`,
+then on `PATH`. When none has it, `--serve` fails, says where the site was
+built, and names the three places.
 
 Under `--render static` and `--render csr` it hands out the documents the
 build wrote, the way a plain file server does. Under `--render ssr` the pages
@@ -844,7 +852,8 @@ from and the one the update check compares against.
 ## lumen-server
 
 `lumen-server` is a separate binary, installed beside `lumenc`, that serves a
-site built with `lumenc web --render ssr` in production. The guide is
+site built with `lumenc web --render ssr` in production. `lumenc web --serve`
+runs it too, with `--dev`. The guide is
 [Running in production](../guides/server-rendering.md#running-in-production).
 
 ```
@@ -854,8 +863,11 @@ lumen-server --help
 lumen-server --version
 ```
 
-`<site_dir>` is the directory `lumenc web --render ssr` wrote; the server reads
-`lumen.site.json` there and nothing else about the app. Every option can be set
+`<site_dir>` is the directory `lumenc web` wrote. When it holds
+`lumen.site.json`, from `--render ssr`, the server reads that file and nothing
+else about the app, and renders every page per request. Any other directory
+is served as the files it holds, the way a static host serves it. Every
+option can be set
 in the environment with the variable beside it, and a flag wins over its
 variable. A duration is a number with a unit, `500ms`, `10s`, `2m` or `1h`, and
 a bare number is seconds.
@@ -863,21 +875,32 @@ a bare number is seconds.
 | Flag | Variable | Effect |
 |------|----------|--------|
 | `<site_dir>` | `LUMEN_SITE` | The built site. |
+| `--dev` | `LUMEN_DEV` | Development mode, for one developer on one machine; see below. The variable turns it on with `1` or `true`. |
 | `--bind <addr>` | `LUMEN_BIND` | Address to listen on. Default 127.0.0.1; `0.0.0.0` listens on every interface. |
 | `--port <n>` | `LUMEN_PORT` | Port to listen on. Default 8080; `0` takes any free port and prints which. |
-| `--workers <n>` | `LUMEN_WORKERS` | Worker processes sharing the port, each rendering one page at a time. Default 1. Above 1 is refused on Windows. |
+| `--base-path <path>` | `LUMEN_BASE_PATH` | URL prefix a site without `lumen.site.json` is served under. Default `/`. A rendered site is served under the base path it was built with, and a different one here is refused. |
+| `--workers <n>` | `LUMEN_WORKERS` | Worker processes sharing the port, each rendering one page at a time. Default 1. Above 1 is refused on Windows and with `--dev`. |
 | `--max-connections <n>` | `LUMEN_MAX_CONNECTIONS` | Connections a worker serves at once; more wait in the listen backlog. Default 256. |
-| `--queue-depth <n>` | `LUMEN_QUEUE_DEPTH` | Page requests a worker lets wait for a render. Past it a page is answered 503 with `Retry-After`. Default 2. |
+| `--queue-depth <n>` | `LUMEN_QUEUE_DEPTH` | Page requests a worker lets wait for a render. Past it a page is answered 503 with `Retry-After`. Default 2; no bound under `--dev`. |
 | `--header-timeout <dur>` | `LUMEN_HEADER_TIMEOUT` | Time a client has to send a request's line and headers. Past it the request is answered 408 and the connection closed. Default 10s. |
 | `--body-timeout <dur>` | `LUMEN_BODY_TIMEOUT` | Time a client has to send a request's body. Default 30s. |
 | `--write-timeout <dur>` | `LUMEN_WRITE_TIMEOUT` | Time a client has to take a response. Default 30s. |
 | `--keep-alive <dur>` | `LUMEN_KEEP_ALIVE` | How long an idle connection waits for its next request. `0` closes every connection after one response. Default 5s. |
-| `--render-timeout <dur>` | `LUMEN_RENDER_TIMEOUT` | Time a render gets once it starts. Past it the page is answered 504 and the worker is replaced. Default 30s. |
+| `--render-timeout <dur>` | `LUMEN_RENDER_TIMEOUT` | Time a render gets once it starts. Past it the page is answered 504 and the worker is replaced. Default 30s; no limit under `--dev`. |
 | `--max-renders <n>` | `LUMEN_MAX_RENDERS` | Replace a worker after about this many renders. `0` never does. Default 0. |
 | `--shutdown-grace <dur>` | `LUMEN_SHUTDOWN_GRACE` | Time a stopping server gives the requests it is answering. Default 30s. |
 | `--log-format text\|json` | `LUMEN_LOG_FORMAT` | How access lines and messages are written. Default `text`. |
 | `--health-path <prefix>` | `LUMEN_HEALTH_PATH` | Where `<prefix>/healthz` and `<prefix>/readyz` answer. Default `/_lumen`. |
-| `--trusted-proxy <cidr>` | `LUMEN_TRUSTED_PROXIES` | An address or block whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed; repeat for more. The variable takes a comma-separated list, and the flag replaces it rather than adding to it. Default: none. |
+| `--trusted-proxy <cidr>` | `LUMEN_TRUSTED_PROXIES` | An address or block whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed; repeat for more. The variable takes a comma-separated list, and the flag replaces it rather than adding to it. Default: none; under `--dev` on a loopback address, this machine. |
+| `--allow-host <name>` | `LUMEN_ALLOW_HOSTS` | Under `--dev`, let a render ask this host for data too, on top of the site's `[web.ssr] allow_hosts`; repeat for more. The variable takes a comma-separated list, and the flag replaces it. Refused without `--dev`: list the host in `lumen.toml` for a site facing the public. |
+
+`--dev` is what `lumenc web --serve` runs. It serves from one process with no
+workers, puts the reason a render failed in the error page rather than only
+in the log, gives a render as long as it takes, lets page requests queue
+without a bound, believes forwarding headers from this machine when it listens
+on a loopback address, and stops when the process that started it exits. It
+warns when `--bind` makes the site reachable from other machines. Every one of
+those defaults gives way to a flag that names the setting.
 
 `/_lumen/healthz` answers 200 while the process runs. `/_lumen/readyz` answers
 200, or 503 while the server is stopping or its render queue is full.

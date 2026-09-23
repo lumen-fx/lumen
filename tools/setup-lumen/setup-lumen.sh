@@ -37,9 +37,10 @@
 # writes an install receipt, and a receipt is what turns lumenc's update check
 # on; a runner has no use for either.
 #
-# Every archive holds bin/, with lumenc, the liblumen shared library, and the
-# lumen-launcher app stub together in it. lumenc loads liblumen from next to
-# its own executable, so bin/ moves as one directory or not at all.
+# Every archive holds bin/, with lumenc, the liblumen shared library, the
+# lumen-launcher app stub and lumen-server together in it. lumenc loads
+# liblumen from next to its own executable and looks for lumen-server there,
+# so bin/ moves as one directory or not at all.
 #
 # The modules archive has the same bin/ layout, so unpacking it over the same
 # tree drops each module beside the engine, which is where the runtime's

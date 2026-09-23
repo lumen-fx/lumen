@@ -591,6 +591,9 @@ fn a_render_past_its_limit_is_answered_504_and_its_worker_replaced() {
     let _held = upstream.held();
     let page = page.join().expect("the page thread");
     assert_eq!(status(&page), 504, "{page}");
+    // A production error page says only what happened, not why.
+    assert!(page.ends_with("the page took too long"), "{page}");
+    assert!(!page.contains("cannot render"), "{page}");
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "answered only after {:?}",
@@ -605,4 +608,119 @@ fn a_render_past_its_limit_is_answered_504_and_its_worker_replaced() {
     let fresh = server.get("/");
     assert_eq!(status(&fresh), 200, "{fresh}");
     assert!(fresh.contains("asking"), "{fresh}");
+}
+
+#[test]
+fn dev_says_in_the_page_why_a_render_failed() {
+    let (_, site) = sites();
+    let upstream = Upstream::start();
+    let mut server = Running::start(site, &["--dev", "--render-timeout", "500ms"]);
+    let addr = server.addr;
+    let target = format!("/?http://{}/data", upstream.addr);
+    let page = thread::spawn(move || {
+        ask(
+            addr,
+            &format!("GET {target} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n"),
+        )
+    });
+    let _held = upstream.held();
+    let page = page.join().expect("the page thread");
+    assert_eq!(status(&page), 504, "{page}");
+    assert!(page.contains("cannot render /"), "{page}");
+    // One process and nothing to start another, so a render that never came
+    // back ends it, with the status that says so.
+    let exit = server.wait(Duration::from_secs(20));
+    assert_eq!(exit.code(), Some(70), "{exit:?}:\n{}", server.stderr());
+}
+
+#[test]
+fn dev_listens_on_this_machine_in_one_process() {
+    let (site, _) = sites();
+    let server = Running::start(site, &["--dev"]);
+    assert!(server.addr.ip().is_loopback(), "{}", server.addr);
+    let page = server.get("/");
+    assert_eq!(status(&page), 200, "{page}");
+    assert!(
+        server.stderr().contains("press Ctrl-C to stop"),
+        "{}",
+        server.stderr()
+    );
+    // No supervisor and no workers: the process started is the one answering.
+    assert!(!server.stderr().contains("worker"), "{}", server.stderr());
+}
+
+#[test]
+fn dev_believes_forwarding_headers_from_this_machine_and_production_does_not() {
+    let (site, _) = sites();
+    for (extra, client) in [(&["--dev"][..], "203.0.113.9"), (&[][..], "127.0.0.1")] {
+        let mut args = vec!["--log-format", "json"];
+        args.extend_from_slice(extra);
+        let server = Running::start(site, &args);
+        let answer = ask(
+            server.addr,
+            "GET /?from=proxy HTTP/1.1\r\nHost: test\r\nX-Forwarded-For: 203.0.113.9\r\n\
+             Connection: close\r\n\r\n",
+        );
+        assert_eq!(status(&answer), 200, "{answer}");
+        server.until("the access line", || server.stdout().contains("from=proxy"));
+        let stdout = server.stdout();
+        let line = stdout
+            .lines()
+            .find(|line| line.contains("from=proxy"))
+            .expect("the access line");
+        let entry: serde_json::Value = serde_json::from_str(line).expect("a JSON access line");
+        assert_eq!(entry["client"], client, "{extra:?}: {line}");
+    }
+}
+
+#[test]
+fn a_directory_without_a_spec_file_is_served_as_its_files() {
+    let dir = scratch("files").join("site");
+    std::fs::create_dir_all(&dir).expect("create the site");
+    std::fs::write(dir.join("index.html"), "<!doctype html><p>files here</p>")
+        .expect("write the page");
+    std::fs::write(dir.join("styles.0123456789abcdef.css"), "p {}").expect("write the sheet");
+    let server = Running::start(&dir, &["--base-path", "/docs"]);
+
+    let page = server.get("/docs/");
+    assert_eq!(status(&page), 200, "{page}");
+    assert!(page.contains("files here"), "{page}");
+    let sheet = server.get("/docs/styles.0123456789abcdef.css");
+    assert_eq!(status(&sheet), 200, "{sheet}");
+    assert_eq!(
+        header(&sheet, "Cache-Control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    assert!(
+        server.stderr().contains("no lumen.site.json"),
+        "{}",
+        server.stderr()
+    );
+}
+
+#[test]
+fn a_rendered_site_refuses_a_base_path_it_was_not_built_for() {
+    let (site, _) = sites();
+    let output = Command::new(env!("CARGO_BIN_EXE_lumen-server"))
+        .arg(site)
+        .args(["--port", "0", "--base-path", "/elsewhere"])
+        .output()
+        .expect("run lumen-server");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/elsewhere"), "{stderr}");
+    assert!(stderr.contains("built for"), "{stderr}");
+}
+
+#[test]
+fn allow_host_without_dev_is_refused() {
+    let (site, _) = sites();
+    let output = Command::new(env!("CARGO_BIN_EXE_lumen-server"))
+        .arg(site)
+        .args(["--port", "0", "--allow-host", "api.example.com"])
+        .output()
+        .expect("run lumen-server");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--dev"), "{stderr}");
 }

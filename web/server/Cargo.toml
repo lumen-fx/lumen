@@ -39,10 +39,17 @@ signal-hook.workspace = true
 [target.'cfg(windows)'.dependencies]
 # Ctrl-C and a service stop, turned into a drain.
 ctrlc.workspace = true
+# Finding and waiting on the process that started a `--dev` server.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 # The unit tests build an app by hand to render.
 lumen-ir = { workspace = true }
 # The integration suite builds the site it serves the way a user does, with
-# `lumenc web --render ssr`, in the test process.
+# `lumenc web`, in the test process. lumenc does not depend on this crate, so
+# this is no cycle.
 lumenc = { workspace = true, features = ["runtime-parse", "dev-run", "web"] }

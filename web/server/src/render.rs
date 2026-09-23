@@ -45,19 +45,6 @@ pub struct RenderSettings {
     pub log: Arc<Log>,
 }
 
-impl RenderSettings {
-    /// What a developer's own server runs with: no limits, and every failure
-    /// explained in the page.
-    pub fn development(log: Arc<Log>) -> Self {
-        Self {
-            limit: None,
-            max_renders: None,
-            errors: ErrorPages::Detailed,
-            log,
-        }
-    }
-}
-
 /// Answers every page by rendering the app for the request that asked for it.
 pub struct RenderHandler {
     renderer: Renderer,

@@ -278,8 +278,9 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `lumen-ssr` behind it: bounded connections and render queue, deadlines on
   every read and write, health endpoints, an access log, a graceful stop, and
   on unix a supervisor that runs worker processes on one inherited listening
-  socket. `lumenc web --serve` runs the same `Server` with development
-  defaults. It is std networking and threads, with no async runtime.
+  socket. `lumenc web --serve` starts the binary with `--dev`; lumenc links
+  none of this crate, because it compiles and serves nothing itself. It is
+  std networking and threads, with no async runtime.
 - **lumen-web-runtime**: the browser runtime, built as a wasm module. One
   prebuilt module serves every app: a page loads it, hands it the app's
   compiled data, and it runs the same tick a desktop app runs. It installs no

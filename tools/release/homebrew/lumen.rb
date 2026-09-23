@@ -20,7 +20,7 @@
 #
 # lumen-server, the production server for server-rendered sites, needs nothing
 # beside it; it gets the same exec script so both commands are installed the
-# same way.
+# same way. `lumenc web --serve` finds it beside lumenc in libexec.
 #
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on

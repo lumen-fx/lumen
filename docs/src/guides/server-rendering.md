@@ -68,12 +68,12 @@ rebuilding them when the app changes.
 lumenc web myapp --render ssr --serve
 ```
 
-That emits the site, then serves it with every page coming from a render of the
-app for the request that asked. It is the server `lumen-server` runs, with
-development defaults: it listens on 127.0.0.1, `--host <addr>` is what widens
-that and says so, a render that fails says why in the page, and there are no
-worker processes. Anything the public reaches belongs on
-[`lumen-server`](#running-in-production).
+That emits the site, then runs `lumen-server --dev` on it, with every page
+coming from a render of the app for the request that asked. Development mode
+listens on 127.0.0.1, and `--host <addr>` is what widens that and says so; a
+render that fails says why in the page; there are no worker processes, and
+there is no render time limit. Anything the public reaches belongs on
+[`lumen-server`](#running-in-production) without `--dev`.
 
 Files keep their own path through it: a stylesheet, an artifact and the wasm
 module are read from the directory the build wrote while a page is being
@@ -96,7 +96,8 @@ than ending a process in the middle of answering somebody.
 ## Running in production
 
 `lumen-server` serves a site built with `--render ssr`. It installs beside
-`lumenc`, and it is published as a container image.
+`lumenc`, and it is published as a container image. It serves a site built
+with `--render static` or `csr` too, as the files it holds.
 
 ```
 lumenc web myapp --render ssr --out dist/web
@@ -161,7 +162,8 @@ No header value is ever written, so a `Cookie`, `Authorization` or
 `Proxy-Authorization` never reaches a log.
 
 A render that fails is logged with what went wrong, and the visitor gets the
-status and nothing else. Only `lumenc web --serve` puts the reason in the page.
+status and nothing else. Only `--dev`, which `lumenc web --serve` runs, puts
+the reason in the page.
 
 ### Stopping
 

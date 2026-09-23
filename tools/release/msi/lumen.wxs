@@ -89,8 +89,9 @@
 
       <!--
         The production server for the server-rendered sites `lumenc web`
-        builds. It loads no liblumen; it sits in bin\ so the PATH entry below
-        covers it.
+        builds, and the one `lumenc web` starts to serve a site. It loads no
+        liblumen; it sits in bin\ beside lumenc.exe, which is the first place
+        lumenc looks for it, and the PATH entry below covers it.
       -->
       <!-- Component GUID generated once for lumen-server.exe; never change it, and never reuse it for another file or product. -->
       <Component Id="LumenServerExe" Guid="{8C73C94E-9BEA-4783-988A-3A41D47F2E86}" Directory="BINFOLDER">
