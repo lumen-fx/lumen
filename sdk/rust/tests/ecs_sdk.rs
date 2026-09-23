@@ -154,6 +154,7 @@ fn on_click_closure_fires_and_writes_signal() {
         entity: go,
         position: glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
+        local: None,
     });
     app.tick();
 
@@ -176,6 +177,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
         entity: special,
         position: glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
+        local: None,
     });
     app.tick();
     assert_eq!(
@@ -191,6 +193,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
         entity: plain,
         position: glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
+        local: None,
     });
     app.tick();
     assert_eq!(

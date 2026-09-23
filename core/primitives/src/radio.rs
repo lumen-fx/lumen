@@ -481,6 +481,7 @@ mod tests {
                 entity: b,
                 position: glam::Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world.run_system_once(dispatch_radio_clicks).unwrap();
         assert_eq!(selected_value(&world).as_deref(), Some("banana"));
@@ -501,6 +502,7 @@ mod tests {
                 entity: dot,
                 position: glam::Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world.run_system_once(dispatch_radio_clicks).unwrap();
         assert_eq!(selected_value(&world).as_deref(), Some("apple"));

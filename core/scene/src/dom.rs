@@ -74,6 +74,17 @@ pub fn install_dom(app: &mut App) {
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
+    // `pointer_state()`, published from what the input layer keeps, which a
+    // window and a page both maintain. Before anything that runs a handler,
+    // so a read from one sees this tick's pointer.
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::introspect::publish_pointer_state
+            .before(ScriptSet::Dispatch)
+            .before(ScriptSet::DomInput)
+            .before(ScriptSet::DomState)
+            .before(lumen_input::dispatch_focused_keys),
+    );
     app.add_systems(
         TickStage::Systems,
         collect_dom_commands

@@ -840,6 +840,7 @@ mod wheel_routing_tests {
             .write(MouseWheel {
                 delta: Vec2::new(0.0, dy),
                 position: Vec2::new(10.0, 60.0),
+                local: None,
             });
     }
 

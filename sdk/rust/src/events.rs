@@ -295,6 +295,7 @@ mod tests {
             entity,
             position: glam_vec2_zero(),
             button: lumen_core::input::PointerButton::Primary,
+            local: None,
         });
         app.tick();
         let store = app.world.resource::<PropertyStore>();
@@ -330,6 +331,7 @@ mod tests {
             entity: special,
             position: glam_vec2_zero(),
             button: lumen_core::input::PointerButton::Primary,
+            local: None,
         });
         app.tick();
         assert_eq!(
@@ -345,6 +347,7 @@ mod tests {
             entity: plain,
             position: glam_vec2_zero(),
             button: lumen_core::input::PointerButton::Primary,
+            local: None,
         });
         app.tick();
         assert_eq!(

@@ -163,6 +163,17 @@ impl LumenWebApp {
             return Err(JsError::new("no window to render into"));
         }
         let app = Rc::new(RefCell::new(self));
+        // A listener that needs a script's answer before the browser acts (a
+        // link click a handler may cancel) runs the next tick itself. A tick
+        // already under way means the browser raised the event from inside
+        // it, and the event waits for the next frame instead.
+        let listener_app = Rc::clone(&app);
+        lumen_web_dom::set_run_now(move || {
+            listener_app
+                .try_borrow_mut()
+                .map(|mut app| app.tick())
+                .is_ok()
+        });
         // The callback re-arms itself, so it has to outlive the call that
         // created it and be reachable from inside its own body; the cell is
         // what breaks that cycle.

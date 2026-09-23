@@ -910,6 +910,7 @@ mod hit_shadowing_tests {
                 entity: target,
                 position: glam::Vec2::ZERO,
                 button: lumen_core::input::PointerButton::Primary,
+                local: None,
             });
     }
 

@@ -23,7 +23,8 @@ use lumen_web_runtime::{assemble, hosts};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{
-    Element as DomElement, EventTarget, PointerEvent, PointerEventInit, WheelEvent, WheelEventInit,
+    Element as DomElement, EventTarget, MouseEvent, MouseEventInit, PointerEvent, PointerEventInit,
+    WheelEvent, WheelEventInit,
 };
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -121,6 +122,24 @@ fn pointer(target: &EventTarget, kind: &str, x: i32, y: i32, button: i16) {
     init.set_pointer_type("mouse");
     let event = PointerEvent::new_with_event_init_dict(kind, &init).unwrap();
     target.dispatch_event(&event).unwrap();
+}
+
+/// Put `pad` at a known place in the viewport, so where the pointer is on it
+/// follows from where the pointer is in the window.
+fn place(pad: &DomElement, left: i32, top: i32) {
+    pad.set_attribute(
+        "style",
+        &format!("position: fixed; left: {left}px; top: {top}px; width: 80px; height: 40px"),
+    )
+    .unwrap();
+}
+
+/// A text signal the handler wrote.
+fn text(app: &App, host: &ScriptHostAccess, name: &str) -> String {
+    match (host.signal)(&app.world, name) {
+        Some(ScriptValue::Str(v)) => v.to_string(),
+        other => panic!("{name}: the handler never wrote it ({other:?})"),
+    }
 }
 
 /// A float signal the handler wrote.
@@ -269,4 +288,74 @@ fn a_tap_s_release_reaches_the_element_before_the_pointer_goes() {
 
     assert_eq!(count(&app, &host, "pointerup") - up_before, 1);
     assert_eq!(float(&app, &host, "pointerup_x"), 7.0);
+}
+
+/// `event_x` and `event_y` are where the pointer was on the element the
+/// handler is bound to, for every kind of pointer event, the click included.
+/// The element's box is read when the browser raises the event, so a page
+/// that moves the element before the next frame does not move the answer.
+#[wasm_bindgen_test]
+fn event_x_and_event_y_are_measured_from_the_element_when_the_event_happens() {
+    let (mut app, host, pad) = boot();
+    place(&pad, 100, 50);
+
+    pointer(&pad, "pointermove", 130, 70, -1);
+    // The page moves the element before the frame that delivers the move.
+    place(&pad, 300, 50);
+    tick(&mut app);
+    assert_eq!(float(&app, &host, "pointermove_local_x"), 30.0);
+    assert_eq!(float(&app, &host, "pointermove_local_y"), 20.0);
+    assert_eq!(
+        float(&app, &host, "pointermove_x"),
+        130.0,
+        "the window coordinates are the browser's"
+    );
+
+    place(&pad, 100, 50);
+    pointer(&pad, "pointerdown", 131, 71, 0);
+    tick(&mut app);
+    assert_eq!(float(&app, &host, "pointerdown_local_x"), 31.0);
+    assert_eq!(float(&app, &host, "pointerdown_local_y"), 21.0);
+
+    pointer(&pad, "pointerup", 132, 72, 0);
+    tick(&mut app);
+    assert_eq!(float(&app, &host, "pointerup_local_x"), 32.0);
+
+    let init = MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x(133);
+    init.set_client_y(73);
+    let click = MouseEvent::new_with_mouse_event_init_dict("click", &init).unwrap();
+    pad.dispatch_event(&click).unwrap();
+    tick(&mut app);
+    assert_eq!(float(&app, &host, "click_local_x"), 33.0);
+    assert_eq!(float(&app, &host, "click_local_y"), 23.0);
+
+    let init = WheelEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x(140);
+    init.set_client_y(80);
+    init.set_delta_y(1.0);
+    let wheel = WheelEvent::new_with_event_init_dict("wheel", &init).unwrap();
+    pad.dispatch_event(&wheel).unwrap();
+    tick(&mut app);
+    assert_eq!(float(&app, &host, "wheel_local_x"), 40.0);
+    assert_eq!(float(&app, &host, "wheel_local_y"), 30.0);
+}
+
+/// `pointer_state()` reads the pointer the page reported, as a handler sees
+/// it while it runs: where it is, and the primary button held.
+#[wasm_bindgen_test]
+fn pointer_state_reads_the_page_s_pointer() {
+    let (mut app, host, pad) = boot();
+
+    pointer(&pad, "pointerdown", 12, 22, 0);
+    tick(&mut app);
+    assert_eq!(text(&app, &host, "pointerdown_state_x"), "12");
+    assert_eq!(text(&app, &host, "pointerdown_state_buttons"), "1");
+
+    pointer(&pad, "pointerup", 14, 24, 0);
+    tick(&mut app);
+    assert_eq!(text(&app, &host, "pointerup_state_x"), "14");
+    assert_eq!(text(&app, &host, "pointerup_state_buttons"), "0");
 }

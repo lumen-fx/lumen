@@ -949,7 +949,10 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 self.app.world.resource_mut::<PointerState>().position = Some(p);
                 if let Some(mut msgs) = self.app.world.get_resource_mut::<Messages<PointerMoved>>()
                 {
-                    msgs.write(PointerMoved { position: p });
+                    msgs.write(PointerMoved {
+                        position: p,
+                        local: None,
+                    });
                 }
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
                     sch.pending = true;
@@ -984,6 +987,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     msgs.write(MouseWheel {
                         delta: v,
                         position: pos,
+                        local: None,
                     });
                 }
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
@@ -1181,6 +1185,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                             msgs.write(PointerPressed {
                                 position: pos,
                                 button: lumen_button,
+                                local: None,
                             });
                         }
                     }
@@ -1193,6 +1198,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                             msgs.write(PointerReleased {
                                 position: pos,
                                 button: lumen_button,
+                                local: None,
                             });
                         }
                     }
