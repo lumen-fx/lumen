@@ -109,12 +109,11 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     let address = lumen_core::request::current()
         .map(|request| request.path)
         .unwrap_or_default();
-    let (path, segment) = manifest.page_at(&address);
     lumen_scene::routing::install_routing(
         &mut app,
         manifest.entry.clone(),
         manifest.page_keys(),
-        Location { path, segment },
+        opening_location(&manifest, &address),
     );
     apply_seed(&mut app.world, &loaded.seed);
     let root_entity = loaded.artifact.spawn_into(&mut app.world);
@@ -143,6 +142,16 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
         web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
     }
     app.start_frame_loop().map_err(|_| BootError::NoWindow)
+}
+
+/// Where an app opened at `address` starts: the page the address names, and
+/// the rest of the path that page answers for.
+///
+/// A deep path such as `/user/42` has no document of its own and is served
+/// the shell, so the address, not the document, is what names the page.
+fn opening_location(manifest: &Manifest, address: &str) -> Location {
+    let (path, segment) = manifest.page_at(address);
+    Location { path, segment }
 }
 
 /// Tell the app the address the page was opened at.
@@ -241,8 +250,10 @@ impl std::error::Error for BootError {}
 
 #[cfg(test)]
 mod tests {
-    use super::navigation;
+    use super::{navigation, opening_location};
     use lumen_html::contract::{Manifest, NavigationMode};
+    use lumen_ir::layout_ir::LayoutIR;
+    use lumen_web::spec::{LocaleSpec, PageSpec, SiteSpec, WebSpec};
     use lumen_web_dom::Navigation;
 
     fn manifest(mode: NavigationMode) -> Manifest {
@@ -253,10 +264,7 @@ mod tests {
     }
 
     /// `navigation = "soft"` (the default) means the runtime intercepts a
-    /// same-page link click and swaps the page in; before this was wired
-    /// up, `start` read the manifest and then discarded it
-    /// (`let _ = manifest;`), so soft and hard navigation were
-    /// indistinguishable no matter what the site declared.
+    /// same-page link click and swaps the page in.
     #[test]
     fn soft_navigation_swaps_pages_in() {
         assert_eq!(
@@ -284,5 +292,69 @@ mod tests {
                  page in place"
             );
         }
+    }
+
+    /// The manifest the build writes for a site of an entry page and a
+    /// `user` page that answers for the paths under it, hung off `base` and
+    /// emitted in `en-US` at the root and `de-DE` under its own tag.
+    fn user_site(base: &str) -> Manifest {
+        let mut locale = LocaleSpec::new("en-US");
+        locale.alternates = vec!["de-DE".to_string()];
+        lumen_web::site::manifest(&SiteSpec {
+            pages: vec![
+                PageSpec::new("index", LayoutIR::default()),
+                PageSpec::new("user", LayoutIR::default()),
+            ],
+            web: WebSpec {
+                base_path: base.to_string(),
+                entry: "index".to_string(),
+                ..WebSpec::default()
+            },
+            locale,
+            ..SiteSpec::default()
+        })
+    }
+
+    /// The page an address opens and the segment it hands that page.
+    fn opens(base: &str, address: &str) -> (String, String) {
+        let at = opening_location(&user_site(base), address);
+        (at.path, at.segment)
+    }
+
+    #[test]
+    fn the_site_root_opens_the_entry_page() {
+        assert_eq!(opens("/", "/"), ("index".into(), String::new()));
+        assert_eq!(opens("/docs/", "/docs/"), ("index".into(), String::new()));
+    }
+
+    /// A deep path is served the shell, and opening the entry page there
+    /// would leave `/user/42` showing the home page.
+    #[test]
+    fn a_deep_path_opens_the_page_that_answers_for_it() {
+        for (base, address) in [
+            ("/", "/user/42"),
+            ("/docs/", "/docs/user/42"),
+            ("/", "/de-DE/user/42"),
+        ] {
+            assert_eq!(
+                opens(base, address),
+                ("user".into(), "/42".into()),
+                "`{address}` under base `{base}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_document_opens_the_page_it_was_emitted_for() {
+        let manifest = user_site("/docs/");
+        let document = manifest.pages["user"].document.clone();
+        assert_eq!(
+            opens("/docs/", &format!("/docs/{document}")),
+            ("user".into(), String::new())
+        );
+        assert_eq!(
+            opens("/docs/", &format!("/docs/de-DE/{document}")),
+            ("user".into(), String::new())
+        );
     }
 }
