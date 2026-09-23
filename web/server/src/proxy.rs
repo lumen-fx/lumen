@@ -136,15 +136,20 @@ impl Trust {
                 .is_some_and(|last| last.trim().eq_ignore_ascii_case("https"))
         });
         // The visitor is the nearest address in the chain that is not itself
-        // a proxy this server trusts.
+        // a proxy this server trusts. The walk goes from the nearest hop
+        // outwards and stops at the first one that is not an address: what a
+        // trusted proxy appended is an address, so anything else was written
+        // by the client, and nothing written before it is believed either.
         let mut client = peer;
-        let chain: Vec<IpAddr> = headers
+        let chain: Vec<&str> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("x-forwarded-for"))
             .flat_map(|(_, value)| value.split(','))
-            .filter_map(|hop| hop.trim().parse().ok())
             .collect();
         for hop in chain.into_iter().rev() {
+            let Ok(hop) = hop.trim().parse::<IpAddr>() else {
+                break;
+            };
             client = Some(hop);
             if !self.trusts(hop) {
                 break;
@@ -213,5 +218,26 @@ mod tests {
         assert_eq!(client, Some(ip("1.2.3.4")));
         assert!(secure);
         assert_eq!(headers.len(), 3);
+    }
+
+    #[test]
+    fn the_walk_stops_at_a_hop_that_is_not_an_address() {
+        let trust = Trust::Only(vec!["10.0.0.0/8".parse().expect("a block")]);
+        // The client wrote `6.6.6.6, junk`; the proxy appended nothing
+        // readable after it. Skipping the junk would make the client's own
+        // claim the visitor.
+        let mut headers = forwarded("https", "6.6.6.6, junk");
+        let (client, _) = trust.resolve(Some(ip("10.0.0.1")), &mut headers);
+        assert_eq!(client, Some(ip("10.0.0.1")));
+
+        // Past a trusted hop, the last address read is the answer.
+        let mut headers = forwarded("https", "6.6.6.6, unknown, 10.0.0.7");
+        let (client, _) = trust.resolve(Some(ip("10.0.0.1")), &mut headers);
+        assert_eq!(client, Some(ip("10.0.0.7")));
+
+        // An empty hop is not an address either.
+        let mut headers = forwarded("https", "6.6.6.6,,10.0.0.7");
+        let (client, _) = trust.resolve(Some(ip("10.0.0.1")), &mut headers);
+        assert_eq!(client, Some(ip("10.0.0.7")));
     }
 }

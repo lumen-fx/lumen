@@ -7,7 +7,9 @@
 //!
 //! No header is written into an access line. `Cookie`, `Authorization` and
 //! `Proxy-Authorization` carry credentials, and the rest are not worth the
-//! risk of the next one that does.
+//! risk of the next one that does. Nor is the query string: a link that
+//! signs someone in, resets a password or tracks a visitor carries its
+//! secret there.
 
 use std::fmt;
 use std::io::Write;
@@ -77,8 +79,8 @@ pub struct Access<'a> {
     pub client: Option<IpAddr>,
     /// The method.
     pub method: &'a str,
-    /// The target as it arrived, without a fragment.
-    pub target: &'a str,
+    /// The path asked for as it arrived, without its query or fragment.
+    pub path: &'a str,
     /// The status sent.
     pub status: u16,
     /// The body bytes sent.
@@ -160,7 +162,7 @@ impl Log {
                     .map(|client| client.to_string())
                     .unwrap_or_else(|| "-".to_string()),
                 entry.method,
-                entry.target.escape_debug(),
+                entry.path.escape_debug(),
                 entry.status,
                 entry.bytes,
             ),
@@ -169,7 +171,7 @@ impl Log {
                 "pid": std::process::id(),
                 "client": entry.client.map(|client| client.to_string()),
                 "method": entry.method,
-                "target": entry.target,
+                "path": entry.path,
                 "status": entry.status,
                 "bytes": entry.bytes,
                 "duration_ms": (millis * 10.0).round() / 10.0,
@@ -189,7 +191,7 @@ mod tests {
         Access {
             client: Some("203.0.113.9".parse().expect("an address")),
             method: "GET",
-            target: "/user/42?tab=posts",
+            path: "/user/42",
             status: 200,
             bytes: 512,
             took: Duration::from_micros(12_345),
@@ -202,12 +204,12 @@ mod tests {
         let text = Log::new(LogFormat::Text, "lumen-server").access_line(&entry(), at);
         assert_eq!(
             text,
-            "1994-11-06T08:49:37.000Z 203.0.113.9 \"GET /user/42?tab=posts\" 200 512 12.3ms"
+            "1994-11-06T08:49:37.000Z 203.0.113.9 \"GET /user/42\" 200 512 12.3ms"
         );
         let line = Log::new(LogFormat::Json, "lumen-server").access_line(&entry(), at);
         let json: serde_json::Value = serde_json::from_str(&line).expect("one JSON object");
         assert_eq!(json["status"], 200);
-        assert_eq!(json["target"], "/user/42?tab=posts");
+        assert_eq!(json["path"], "/user/42");
         assert_eq!(json["client"], "203.0.113.9");
         assert_eq!(json["duration_ms"], 12.3);
     }

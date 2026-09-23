@@ -70,6 +70,14 @@ fn a_path_inside_a_language_tree_falls_back_to_that_trees_shell() {
 }
 
 #[test]
+fn an_access_line_records_the_path_and_not_the_query() {
+    assert_eq!(access_path("/reset?token=s3cret"), "/reset");
+    assert_eq!(access_path("/a#b?c"), "/a");
+    assert_eq!(access_path("/plain"), "/plain");
+    assert_eq!(access_path("?only=query"), "");
+}
+
+#[test]
 fn a_percent_encoded_path_is_read_back() {
     assert_eq!(decode("/a%20b/c"), "/a b/c");
     assert_eq!(decode("/plain"), "/plain");
