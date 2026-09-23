@@ -25,6 +25,17 @@ use lumen_core::property_store::PropertyStore;
 #[derive(Component, Clone, Debug)]
 pub struct Anchor(pub String);
 
+/// Host policy: the host follows a link click on its own, so a click on an
+/// [`Anchor`] raises no navigation here.
+///
+/// A host inserts this when its links are real links it lets through, such
+/// as a browser loading every page as a document of its own. The click
+/// still reaches the app, and navigating from it as well would do the
+/// host's work twice. A script's own navigation is unaffected: this covers
+/// the anchor click and nothing else.
+#[derive(Clone, Copy, Debug, Default, Resource)]
+pub struct HostFollowsLinks;
+
 /// Runtime page registry - the resolver's view of the loaded pages.
 #[derive(Clone, Debug, Resource)]
 pub struct PageRegistry {
@@ -180,11 +191,17 @@ pub fn apply_navigation(
 /// active page. The anchor is a real element; on the web target it is a real
 /// DOM `<a href>`, and under `[web] navigation = "soft"` the browser's own
 /// anchor navigation is prevented so that this system's swap is what the
-/// click ends at.
+/// click ends at. A host holding [`HostFollowsLinks`] follows the link
+/// itself, and the click raises nothing here.
 pub fn navigate_on_anchor_click(
     mut clicks: bevy_ecs::message::MessageReader<lumen_core::input::ClickEvent>,
     anchors: Query<&Anchor>,
+    host_follows: Option<Res<HostFollowsLinks>>,
 ) {
+    if host_follows.is_some() {
+        clicks.clear();
+        return;
+    }
     for click in clicks.read() {
         if let Ok(anchor) = anchors.get(click.entity) {
             // Honor `event.prevent_default()` from a phase-4 click handler:
@@ -196,5 +213,76 @@ pub fn navigate_on_anchor_click(
             }
             nav::navigate(anchor.0.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_core::app::App;
+    use lumen_core::input::{ClickEvent, PointerButton};
+
+    /// An app on the `index` page of a two-page site, with one link to
+    /// `settings`.
+    fn linked_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.extract_fns.clear();
+        app.world.init_resource::<PropertyStore>();
+        install_routing(
+            &mut app,
+            "index".to_string(),
+            vec!["settings".to_string(), "index".to_string()],
+            Location::page("index"),
+        );
+        let link = app.world.spawn(Anchor("settings".to_string())).id();
+        (app, link)
+    }
+
+    /// A primary click on `entity`, read by the next tick.
+    fn click(app: &mut App, entity: Entity) {
+        app.world.write_message(ClickEvent {
+            entity,
+            position: glam::Vec2::ZERO,
+            button: PointerButton::Primary,
+        });
+    }
+
+    /// The page the router has open.
+    fn route_path(app: &App) -> Option<String> {
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str(nav::PATH_SIGNAL)
+            .map(|path| path.to_string())
+    }
+
+    #[test]
+    fn a_host_that_follows_links_gets_no_navigation_from_a_click() {
+        let (mut app, link) = linked_app();
+        app.world.insert_resource(HostFollowsLinks);
+        let before = app
+            .world
+            .resource::<PropertyStore>()
+            .get_global_str(nav::REQUEST_SIGNAL)
+            .map(|request| request.to_string());
+        click(&mut app, link);
+        app.tick();
+        app.tick();
+        assert_eq!(
+            app.world
+                .resource::<PropertyStore>()
+                .get_global_str(nav::REQUEST_SIGNAL)
+                .map(|request| request.to_string()),
+            before,
+            "the host is following the link, so the app raises no navigation"
+        );
+        assert_eq!(route_path(&app).as_deref(), Some("index"));
+
+        // The same click in a host that leaves links to the app navigates,
+        // which is what makes the silence above the policy's doing.
+        app.world.remove_resource::<HostFollowsLinks>();
+        click(&mut app, link);
+        app.tick();
+        app.tick();
+        assert_eq!(route_path(&app).as_deref(), Some("settings"));
     }
 }
