@@ -23,6 +23,44 @@ pub fn parse_json(src: &str) -> ScriptValue {
     }
 }
 
+/// Write `value` as JSON text: the reverse of [`parse_json`].
+///
+/// A map becomes an object with its keys in sorted order, so the same value
+/// always writes the same text; an array an array; a scalar keeps its type;
+/// [`ScriptValue::Unit`] is `null`. JSON has no spelling for a float that is
+/// not finite, so one is written as `null` too. An integer past 2^53 is
+/// written exactly, and a JavaScript reader rounds it.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn script_value_to_json(value: &ScriptValue) -> String {
+    to_json_value(value).to_string()
+}
+
+/// Recursive [`ScriptValue`] -> [`serde_json::Value`] projection.
+#[cfg(feature = "json")]
+fn to_json_value(value: &ScriptValue) -> serde_json::Value {
+    match value {
+        ScriptValue::Unit => serde_json::Value::Null,
+        ScriptValue::Bool(b) => serde_json::Value::Bool(*b),
+        ScriptValue::I64(n) => serde_json::Value::from(*n),
+        ScriptValue::F64(n) => serde_json::Number::from_f64(*n)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        ScriptValue::Str(s) => serde_json::Value::String(s.clone()),
+        ScriptValue::Array(items) => {
+            serde_json::Value::Array(items.iter().map(to_json_value).collect())
+        }
+        ScriptValue::Map(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort();
+            serde_json::Value::Object(
+                keys.into_iter()
+                    .map(|key| (key.clone(), to_json_value(&fields[key])))
+                    .collect(),
+            )
+        }
+    }
+}
+
 /// Recursive [`serde_json::Value`] -> [`ScriptValue`] projection. A JSON
 /// number lands as [`ScriptValue::I64`] when it is integral and
 /// [`ScriptValue::F64`] otherwise, so `as_int` works on `5` and `as_float` on
@@ -205,6 +243,37 @@ mod tests {
     #[test]
     fn json_malformed_is_unit() {
         assert_eq!(parse_json("{"), ScriptValue::Unit);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_written_reads_back_as_the_same_value() {
+        let value = ScriptValue::Map(
+            [
+                ("n".to_owned(), ScriptValue::I64(-5)),
+                ("f".to_owned(), ScriptValue::F64(2.5)),
+                ("b".to_owned(), ScriptValue::Bool(false)),
+                ("s".to_owned(), ScriptValue::Str("a \"q\"".to_owned())),
+                ("u".to_owned(), ScriptValue::Unit),
+                (
+                    "a".to_owned(),
+                    ScriptValue::Array(vec![ScriptValue::I64(1), ScriptValue::Str("x".into())]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let text = script_value_to_json(&value);
+        assert_eq!(parse_json(&text), value);
+        // Keys come out sorted, so one value always writes one text.
+        assert!(text.starts_with(r#"{"a":"#), "{text}");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_has_no_spelling_for_a_float_that_is_not_finite() {
+        assert_eq!(script_value_to_json(&ScriptValue::F64(f64::NAN)), "null");
+        assert_eq!(script_value_to_json(&ScriptValue::Unit), "null");
     }
 
     #[cfg(feature = "markdown")]

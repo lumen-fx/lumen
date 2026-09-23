@@ -154,23 +154,15 @@ pub enum PluginEvent {
     Commands(Vec<crate::ScriptCommand>),
 }
 
-/// Push one event onto the in-process bus a portable plugin's worker would
-/// use, from inside the engine's own address space.
+/// Push one event onto the bus, from inside the engine's own address space.
 ///
-/// This is the delivery path for an in-process plugin or an engine-locked
-/// runtime module: encode the event with the same codec the boundary uses and
-/// hand it to [`lumen_core::plugin_events`], where the script layer's per-tick
-/// drain picks it up and routes it exactly like one a dlopened plugin pushed.
-/// The bus wakes a parked event loop, so an event pushed while the app idles
-/// in `Wait` runs on the tick it triggers, the same as the dlopen path.
-/// Returns `false` when the event does not encode or the bus is gone.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn push_plugin_event(event: &PluginEvent) -> bool {
-    match lumen_plugin_abi::codec::encode(event) {
-        Ok(bytes) => lumen_core::plugin_events::push_plugin_event(bytes),
-        Err(e) => {
-            lumen_core::warn_line!("lumen-script: a plugin event did not encode: {e}");
-            false
-        }
-    }
+/// This is the delivery path for an engine-locked runtime module and for a
+/// browser add-on: the event goes onto [`lumen_core::plugin_events`] as the
+/// value itself, nothing encoded, and the script layer's per-tick drain routes
+/// it exactly like one a dlopened plugin pushed. The bus wakes a parked event
+/// loop, so an event pushed while the app idles in `Wait` runs on the tick it
+/// triggers, the same as the dlopen path. Returns `false` when the bus is
+/// gone.
+pub fn push_plugin_event(event: PluginEvent) -> bool {
+    lumen_core::plugin_events::push_plugin_value(Box::new(event))
 }

@@ -361,7 +361,7 @@ fn spawn_transfer(spawn: Option<Arc<dyn Spawn>>, job: Job, limits: Limits, share
                 // One last figure, unthrottled, so a progress bar reaches its
                 // end before the done handler runs.
                 report_progress(&tag, done.received, done.total);
-                push_plugin_event(&PluginEvent::Call {
+                push_plugin_event(PluginEvent::Call {
                     event: "download_done".to_string(),
                     key: tag.clone(),
                     fallback: "on_download_done".to_string(),
@@ -390,7 +390,7 @@ fn spawn_transfer(spawn: Option<Arc<dyn Spawn>>, job: Job, limits: Limits, share
 /// Report how far one transfer has got. `total` is -1 when the server declared
 /// no size, which is what a chunked or connection-delimited body looks like.
 fn report_progress(tag: &str, received: u64, total: Option<u64>) {
-    push_plugin_event(&PluginEvent::Call {
+    push_plugin_event(PluginEvent::Call {
         event: "download_progress".to_string(),
         key: tag.to_string(),
         fallback: "on_download_progress".to_string(),
@@ -403,7 +403,7 @@ fn report_progress(tag: &str, received: u64, total: Option<u64>) {
 
 /// Report that one tag's download will not happen.
 fn error(tag: &str, message: String) {
-    push_plugin_event(&PluginEvent::Call {
+    push_plugin_event(PluginEvent::Call {
         event: "download_error".to_string(),
         key: tag.to_string(),
         fallback: "on_download_error".to_string(),
