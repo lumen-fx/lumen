@@ -282,8 +282,9 @@ pub fn is_help_flag(arg: &str) -> bool {
 /// default parser. See [`lumen_runtime::check_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 ///
-/// A check is for no one target: the app's markup and calls are checked
-/// against the add-ons and script libraries of every target it declares.
+/// A check is for no one target: the app's markup is checked against the
+/// add-ons of every target, and its scripts are compiled once per target, each
+/// against that target's add-ons, script libraries and `@cfg(...)` flags.
 pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
     let resolved =
         registry_packages(dir, lumen_modules::Target::Desktop).map_err(RunError::Plugin)?;

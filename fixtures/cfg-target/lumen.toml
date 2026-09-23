@@ -1,0 +1,13 @@
+# Proof fixture for target-specific script code. The app depends on the
+# `greet` add-on beside it for its web build only, and its script reaches the
+# add-on only in code compiled for the web; the desktop build compiles the
+# other side of each `@cfg(...)` instead. The label shows which side ran.
+[script]
+engine = "candela"
+
+[target.web.dependencies]
+greet = { path = "greet" }
+
+# No introspection server, so a `--headless` run binds no port.
+[mcp]
+port = 0

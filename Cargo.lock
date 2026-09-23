@@ -4399,6 +4399,7 @@ dependencies = [
  "lumen-os-dnd",
  "lumen-primitives",
  "lumen-scene",
+ "lumen-script",
  "lumen-web",
  "wasm-bindgen",
  "wasm-bindgen-test",
