@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lumen_ssr::{RenderOptions, SERVER_SPEC_FILE, ServerSpec, SsrSite};
+use lumen_web::urls::normalize_base;
 
 use crate::config::{self, Command, Config, USAGE};
 use crate::log::Log;
@@ -17,7 +18,7 @@ use crate::server::{Exit, Server, Shutdown};
 
 /// What a worker whose render never came back exits with, so whatever
 /// watches it can tell that from a clean stop.
-pub const EXIT_WEDGED: i32 = 70;
+pub(crate) const EXIT_WEDGED: i32 = 70;
 
 /// Run `lumen-server` with `args` (the program name left off) and the
 /// process environment.
@@ -168,7 +169,7 @@ pub(crate) fn load_site(dir: &Path, base_path: Option<&str>) -> Result<(Site, St
     let spec = ServerSpec::from_json(&bytes).map_err(|e| e.to_string())?;
     let built = spec.web.base_path.clone();
     if let Some(asked) = base_path
-        && asked.trim_matches('/') != built.trim_matches('/')
+        && normalize_base(asked) != normalize_base(&built)
     {
         return Err(format!(
             "--base-path {asked} is not the base path {built} this site was built for; a \

@@ -146,6 +146,11 @@ fn site(name: &str) -> PathBuf {
     dir
 }
 
+/// A listener on a free port of this machine.
+fn free_port() -> TcpListener {
+    TcpListener::bind((LOOPBACK, 0)).expect("a free port")
+}
+
 /// Start a server on a free port and answer on it until the test ends.
 fn serve(root: &Path, handler: Option<Arc<dyn RequestHandler>>) -> SocketAddr {
     serve_with(root, handler, Limits::default()).0
@@ -156,9 +161,7 @@ fn serve_with(
     handler: Option<Arc<dyn RequestHandler>>,
     limits: Limits,
 ) -> (SocketAddr, Shutdown, std::thread::JoinHandle<Exit>) {
-    let mut server = Server::bind(root, "/", LOOPBACK, 0)
-        .expect("a free port")
-        .with_limits(limits);
+    let mut server = Server::on(free_port(), root, "/").with_limits(limits);
     if let Some(handler) = handler {
         server = server.with_handler(handler);
     }
@@ -347,9 +350,7 @@ fn the_health_endpoints_answer_under_their_prefix() {
     assert!(ready.ends_with("ready"), "{ready}");
 
     let root = site("health-moved");
-    let server = Server::bind(&root, "/", LOOPBACK, 0)
-        .expect("a free port")
-        .with_health_path("/");
+    let server = Server::on(free_port(), &root, "/").with_health_path("/");
     let moved = server.addr();
     std::thread::spawn(move || server.run());
     assert_eq!(status(&get(moved, "/healthz")), 200);
@@ -523,10 +524,9 @@ fn a_post_reaches_a_handler_and_stops_at_a_directory() {
 fn the_headers_a_handler_needs_arrive_intact() {
     let (handler, requests) = probe();
     let root = site("headers");
-    let server = Server::bind(&root, "/", LOOPBACK, 0)
-        .expect("a free port")
+    let server = Server::on(free_port(), &root, "/")
         .with_handler(handler)
-        .with_trust(Trust::Everybody);
+        .with_trust(Trust::Only(vec!["127.0.0.0/8".parse().expect("a block")]));
     let addr = server.addr();
     std::thread::spawn(move || server.run());
     let answer = ask(

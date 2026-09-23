@@ -101,8 +101,6 @@ pub enum Trust {
     /// None: the peer is the visitor, and the headers are dropped.
     #[default]
     Nobody,
-    /// Every peer, which suits a server only this machine can reach.
-    Everybody,
     /// These blocks.
     Only(Vec<Cidr>),
 }
@@ -111,7 +109,6 @@ impl Trust {
     fn trusts(&self, peer: IpAddr) -> bool {
         match self {
             Trust::Nobody => false,
-            Trust::Everybody => true,
             Trust::Only(blocks) => blocks.iter().any(|block| block.contains(peer)),
         }
     }

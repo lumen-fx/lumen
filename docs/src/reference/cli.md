@@ -331,8 +331,8 @@ page, and a path with no file behind it reaches the render too, so `/user/42`
 is answered by the `user` page with `/42` on `route.segment`.
 
 A process renders one request at a time, and requests for pages queue.
-Serving more at once means more processes, which is what `lumen-server
---workers` runs; the reason is in
+Serving more at once means more processes, which is what
+`lumen-server --workers` runs; the reason is in
 [Rendering on a server](../guides/server-rendering.md). A site emitted in
 several locales is rendered in whichever of them the request asks for, by a
 `/<tag>/` prefix on the path or by `Accept-Language`.
@@ -867,10 +867,9 @@ lumen-server --version
 `lumen.site.json`, from `--render ssr`, the server reads that file and nothing
 else about the app, and renders every page per request. Any other directory
 is served as the files it holds, the way a static host serves it. Every
-option can be set
-in the environment with the variable beside it, and a flag wins over its
-variable. A duration is a number with a unit, `500ms`, `10s`, `2m` or `1h`, and
-a bare number is seconds.
+option can be set in the environment with the variable beside it, and a flag
+wins over its variable. A duration is a number with a unit, `500ms`, `10s`,
+`2m` or `1h`, and a bare number is seconds.
 
 | Flag | Variable | Effect |
 |------|----------|--------|

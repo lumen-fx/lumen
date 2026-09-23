@@ -10,7 +10,6 @@
 //! hands the emitter a [`SiteSpec`], and puts the files it gets back on disk.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -39,7 +38,7 @@ use lumen_web::{
     ServerPolicy, ServerSpec, SignalEnv, SiteSpec, WebSpec, intrinsic_size,
 };
 
-use super::serve::{self, LOOPBACK, Serve, host_address};
+use super::serve::{self, Serve};
 
 /// Where a site is written when `lumen.toml` and `--out` both stay quiet.
 const DEFAULT_OUT_DIR: &str = "dist/web";
@@ -147,7 +146,7 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
                     site: &report.out,
                     base: &report.base,
                     per_request: report.per_request,
-                    host: options.host,
+                    host: options.host.as_deref(),
                     port: options.port,
                     allow_hosts: &options.allow_hosts,
                 });
@@ -190,7 +189,9 @@ struct Options {
     strict: bool,
     serve: bool,
     port: u16,
-    host: IpAddr,
+    /// `--host`, as written: lumen-server reads it, and says what is wrong
+    /// with it.
+    host: Option<String>,
     allow_hosts: Vec<String>,
 }
 
@@ -210,7 +211,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         strict: false,
         serve: false,
         port: DEFAULT_PORT,
-        host: LOOPBACK,
+        host: None,
         allow_hosts: Vec::new(),
     };
     let mut args = args.peekable();
@@ -267,7 +268,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--lib-dir" => options.lib_dir = Some(PathBuf::from(value("--lib-dir")?)),
             "--strict" => options.strict = true,
             "--serve" => options.serve = true,
-            "--host" => options.host = host_address(Some(&value("--host")?))?,
+            "--host" => options.host = Some(value("--host")?),
             "--allow-host" => options.allow_hosts.push(value("--allow-host")?),
             "--port" => {
                 let raw = value("--port")?;

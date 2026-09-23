@@ -9,7 +9,8 @@
 //! queues for it, because the buses an app reads its state through belong to
 //! the process. Serving more requests at once means more processes.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,7 +55,36 @@ pub struct RenderHandler {
     renders: AtomicU64,
     /// What has already been said, so a page reloaded twenty times does not
     /// bury a new warning under twenty copies of an old one.
-    said: Mutex<BTreeSet<String>>,
+    said: Mutex<Said>,
+}
+
+/// The warnings already written, held as hashes rather than as text: a
+/// warning can quote the request that caused it, and a process that answers
+/// for weeks should not keep every one it has seen.
+struct Said {
+    hasher: RandomState,
+    seen: HashSet<u64>,
+}
+
+/// How many different warnings are remembered. Past it the memory starts
+/// over, and a warning seen before is written once more.
+const SAID_CAP: usize = 1024;
+
+impl Said {
+    fn new() -> Self {
+        Self {
+            hasher: RandomState::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    /// Whether `warning` is new, remembering it either way.
+    fn first_time(&mut self, warning: &str) -> bool {
+        if self.seen.len() >= SAID_CAP {
+            self.seen.clear();
+        }
+        self.seen.insert(self.hasher.hash_one(warning))
+    }
 }
 
 impl RenderHandler {
@@ -75,14 +105,14 @@ impl RenderHandler {
             settings,
             retire_after,
             renders: AtomicU64::new(0),
-            said: Mutex::new(BTreeSet::new()),
+            said: Mutex::new(Said::new()),
         })
     }
 
     /// Write a warning the render came back with, unless it has been written.
     fn say(&self, warning: &str) {
         if let Ok(mut said) = self.said.lock()
-            && said.insert(warning.to_string())
+            && said.first_time(warning)
         {
             self.settings.log.warn(warning);
         }
@@ -132,16 +162,9 @@ fn spread(limit: u64) -> u64 {
     if range == 0 {
         return 0;
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.subsec_nanos())
-        .unwrap_or_default();
-    let seed = u64::from(nanos) ^ (u64::from(std::process::id()) << 17);
-    // One round of a 64-bit mix, which is plenty for spreading restarts.
-    let mut x = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    (x ^ (x >> 31)) % (range + 1)
+    // Every process seeds its own hasher at random, which is all the
+    // randomness spreading restarts needs.
+    RandomState::new().hash_one(std::process::id()) % (range + 1)
 }
 
 /// The request a render is asked for, from the request the server read.
@@ -255,6 +278,17 @@ mod tests {
     }
 
     #[test]
+    fn a_warning_is_said_once_and_the_memory_of_it_is_bounded() {
+        let mut said = Said::new();
+        assert!(said.first_time("the document is written without x"));
+        assert!(!said.first_time("the document is written without x"));
+        for n in 0..SAID_CAP * 3 {
+            said.first_time(&format!("warning {n}"));
+            assert!(said.seen.len() <= SAID_CAP);
+        }
+    }
+
+    #[test]
     fn restarts_are_spread_by_a_tenth_at_most() {
         assert_eq!(spread(5), 0);
         for _ in 0..100 {
@@ -350,7 +384,7 @@ mod tests {
 
         let busy = page_for(&detailed, &SsrError::Busy);
         assert_eq!(busy.status, 503);
-        assert_eq!(busy.header("Retry-After"), Some("1"));
+        assert_eq!(crate::http::header(&busy.headers, "Retry-After"), Some("1"));
         assert_eq!(page_for(&detailed, &SsrError::TimedOut).status, 504);
     }
 
