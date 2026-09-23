@@ -37,6 +37,9 @@ bevy_ecs.workspace = true
 # installs.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 lumen-web-http = { workspace = true }
+# The page's clipboard, behind the scripts' clipboard builtins. Target-gated for
+# the same reason: a server rendering a page has no clipboard to share.
+lumen-os-clipboard = { workspace = true }
 
 [build-dependencies]
 # Compiles the test fixtures to `.cdlb` at build time, on the host, so the

@@ -19,6 +19,10 @@
 pub mod addon;
 pub mod builtins;
 
+/// The applier behind the `clipboard_write` and `clipboard_read` builtins,
+/// running on whichever clipboard backend the app was assembled with.
+pub mod clipboard;
+
 /// Host-neutral read side of the dynamic DOM API: `query` / `get_by_id` /
 /// traversal over the per-tick [`lumen_core::node::DomIndex`] snapshot.
 pub mod node_query;
@@ -86,8 +90,8 @@ pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
 pub use dom_events::{dispatch_pointer_and_key_events, dispatch_state_events};
 pub use http::{
-    DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
-    ThreadDispatch,
+    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
+    ThreadDispatch, UnknownCredentials,
 };
 pub use runtime::*;
 pub use script_fn::{
@@ -236,6 +240,9 @@ pub enum ScriptCommand {
         /// Optional per-request timeout in milliseconds (`None` = no
         /// client-imposed deadline).
         timeout_ms: Option<u64>,
+        /// Whether the request carries the page's credentials. Only a
+        /// browser transport acts on it.
+        credentials: crate::http::Credentials,
         /// Identifier echoed back in `on_http(tag, response)`.
         tag: String,
     },

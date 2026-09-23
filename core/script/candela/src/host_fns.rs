@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use candela_vm::{HostError, HostType, IntoHostFn, Value};
 use lumen_script::{
-    ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns, with_call_scratch,
+    Credentials, ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns,
+    with_call_scratch,
 };
 
 use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
@@ -1245,8 +1246,8 @@ fn register_color_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
 
 /// Register `http(request)`: one general HTTP request, mirroring the Rhai and
 /// Lua form. Only `url` and `tag` are required; `method` defaults to `GET`, and
-/// `body`, `timeout_ms`, and headers are optional. The reply lands on
-/// `on_http(tag, response)`.
+/// `body`, `timeout_ms`, `credentials`, and headers are optional. The reply
+/// lands on `on_http(tag, response)`.
 ///
 /// It registers variadically because the request carries a map, which a fixed
 /// signature cannot name alongside the rest of the surface.
@@ -1290,6 +1291,16 @@ fn register_http<S: HostFnSink>(engine: &mut S, r: &Registries) {
                 .map(|name| (name.to_owned(), text(v)))
         }));
 
+        // Absent means the browser's own default. A value that is not one of
+        // `fetch`'s three names is the script's mistake, and it is reported
+        // rather than sent as the default.
+        let credentials = match field("credentials") {
+            None => Credentials::default(),
+            Some(value) => value
+                .parse::<Credentials>()
+                .map_err(|e| HostError::new(format!("http(): {e}")))?,
+        };
+
         sink.lock().unwrap().push(ScriptCommand::Http {
             method: field("method")
                 .filter(|m| !m.is_empty())
@@ -1311,6 +1322,7 @@ fn register_http<S: HostFnSink>(engine: &mut S, r: &Registries) {
                 })
                 .and_then(|n| u64::try_from(n).ok())
                 .filter(|n| *n > 0),
+            credentials,
             tag: field("tag").unwrap_or_default(),
         });
         Ok(Value::Null)

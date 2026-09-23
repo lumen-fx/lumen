@@ -16,9 +16,13 @@
 //! `arboard::Clipboard` is `!Send` on Linux/Wayland - store as a
 //! `NonSend` ECS resource (see [`InstallExt::install_clipboard_host`]).
 //!
-//! On `wasm32` there is no OS clipboard to wrap, so [`ClipboardHost::try_new`]
-//! reports the backend as unavailable exactly as it does on a headless Linux
-//! box, and the accessors answer as an absent clipboard does.
+//! On `wasm32` the clipboard is the page's `navigator.clipboard`, text only.
+//! [`ClipboardHost::try_new`] finds it wherever the page has one (a secure
+//! context: `https` or `localhost`) and reports it unavailable otherwise. A
+//! page reads the clipboard asynchronously and only with the visitor's
+//! permission, so a read goes through [`ClipboardHost::read_text_then`]; the
+//! synchronous readers, images, and PRIMARY answer as an absent clipboard
+//! does.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -56,10 +60,11 @@ impl ClipboardHost {
         })
     }
 
-    /// Try to initialize the OS clipboard - no backend on wasm32.
+    /// Find the page's clipboard. `None` outside a secure context, where
+    /// the browser does not expose one.
     #[cfg(target_arch = "wasm32")]
     pub fn try_new() -> Option<Self> {
-        None
+        page_clipboard().map(|_| Self {})
     }
 
     /// Lock the inner clipboard, recovering from a poisoned mutex.
@@ -126,11 +131,14 @@ impl ClipboardHost {
         false
     }
 
-    /// Write a [`MimePayload`] onto the system clipboard - no backend on
-    /// wasm32.
+    /// Write a [`MimePayload`] onto the page's clipboard. Text only: a
+    /// payload with no `text/plain` entry writes nothing.
     #[cfg(target_arch = "wasm32")]
-    pub fn write(&self, _payload: &MimePayload) -> bool {
-        false
+    pub fn write(&self, payload: &MimePayload) -> bool {
+        match payload.text() {
+            Some(text) => self.write_text(&text),
+            None => false,
+        }
     }
 
     /// Convenience: write a plain-text payload. Same as `write` with a
@@ -142,10 +150,28 @@ impl ClipboardHost {
         cb.set_text(text.to_string()).is_ok()
     }
 
-    /// Convenience: write a plain-text payload - no backend on wasm32.
+    /// Convenience: write a plain-text payload through the page's
+    /// `navigator.clipboard.writeText`.
+    ///
+    /// The browser settles the write after this returns, so `true` means the
+    /// page accepted the request. A write the browser refuses later (the
+    /// document lost focus, the visitor denied the permission) is reported
+    /// to the page's console.
     #[cfg(target_arch = "wasm32")]
-    pub fn write_text(&self, _text: &str) -> bool {
-        false
+    pub fn write_text(&self, text: &str) -> bool {
+        let Some(clipboard) = page_clipboard() else {
+            return false;
+        };
+        let written = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(text));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = written.await {
+                web_sys::console::warn_2(
+                    &"clipboard_write: the browser refused the text:".into(),
+                    &error,
+                );
+            }
+        });
+        true
     }
 
     /// Convenience: read the current clipboard text. Returns an empty
@@ -156,10 +182,50 @@ impl ClipboardHost {
         cb.get_text().unwrap_or_default()
     }
 
-    /// Convenience: read the current clipboard text - no backend on wasm32.
+    /// Convenience: read the current clipboard text - a page cannot read it
+    /// synchronously, so this is always empty on wasm32. Use
+    /// [`read_text_then`](Self::read_text_then).
     #[cfg(target_arch = "wasm32")]
     pub fn read_text(&self) -> String {
         String::new()
+    }
+
+    /// Read the clipboard text and hand it to `done`, which is called
+    /// exactly once. Empty when the clipboard holds no text.
+    ///
+    /// On the desktop the read is synchronous and `done` runs before this
+    /// returns.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_text_then(&self, done: impl FnOnce(String) + 'static) {
+        done(self.read_text());
+    }
+
+    /// Read the clipboard text and hand it to `done`, which is called
+    /// exactly once. Empty when the clipboard holds no text.
+    ///
+    /// In a page `done` runs when `navigator.clipboard.readText` settles,
+    /// after this returns. The browser asks the visitor first; a read they
+    /// refuse, or one the browser blocks, answers with empty text.
+    #[cfg(target_arch = "wasm32")]
+    pub fn read_text_then(&self, done: impl FnOnce(String) + 'static) {
+        let Some(clipboard) = page_clipboard() else {
+            done(String::new());
+            return;
+        };
+        let read = wasm_bindgen_futures::JsFuture::from(clipboard.read_text());
+        wasm_bindgen_futures::spawn_local(async move {
+            let text = match read.await {
+                Ok(text) => text.as_string().unwrap_or_default(),
+                Err(error) => {
+                    web_sys::console::warn_2(
+                        &"clipboard_read: the browser refused the read:".into(),
+                        &error,
+                    );
+                    String::new()
+                }
+            };
+            done(text);
+        });
     }
 
     /// Clear the clipboard. Returns `true` on success.
@@ -250,6 +316,15 @@ impl ClipboardHost {
     pub fn write_primary(&self, _payload: &MimePayload) -> bool {
         false
     }
+}
+
+/// The page's `navigator.clipboard`, where the browser exposes one. It is
+/// `undefined` outside a secure context, which the typed getter does not say.
+#[cfg(target_arch = "wasm32")]
+fn page_clipboard() -> Option<web_sys::Clipboard> {
+    let clipboard = web_sys::window()?.navigator().clipboard();
+    let value: &wasm_bindgen::JsValue = clipboard.as_ref();
+    (!value.is_undefined() && !value.is_null()).then_some(clipboard)
 }
 
 #[cfg(test)]

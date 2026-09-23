@@ -25,8 +25,8 @@ pub mod builtins;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext, ScriptError, ScriptFn,
-    ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
+    CallOutcome, Credentials, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext, ScriptError,
+    ScriptFn, ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
 };
 use parking_lot::Mutex;
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Module, Scope};
@@ -1772,12 +1772,12 @@ impl RhaiHost {
             }
         });
 
-        // http(#{ method, url, headers, body, timeout_ms, tag }) - issue
+        // http(#{ method, url, headers, body, timeout_ms, credentials, tag }) - issue
         // a general HTTP request. `on_http(tag, response)` fires once the
         // reply lands, where `response` is
         // `#{ ok, status, headers, body, error }`. Only `url` and `tag`
         // are required; `method` defaults to "GET", `headers` to `#{}`,
-        // `body` / `timeout_ms` are optional. Runs off-thread; the reply
+        // `body` / `timeout_ms` / `credentials` are optional. Runs off-thread; the reply
         // is marshalled onto the world thread before any signal is
         // touched (see script-runtime `fire_fetched_responses`).
         let sink_for_http = sink.clone();
@@ -1828,14 +1828,25 @@ impl RhaiHost {
                         .collect::<Vec<(String, String)>>()
                 })
                 .unwrap_or_default();
+            // `credentials`: one of `fetch`'s three names, or absent for the
+            // browser's own default. Anything else is an error rather than
+            // a silent default.
+            let credentials = match get_str(&req, "credentials") {
+                None => Credentials::default(),
+                Some(value) => value
+                    .parse::<Credentials>()
+                    .map_err(|e| -> Box<EvalAltResult> { format!("http(): {e}").into() })?,
+            };
             sink_for_http.lock().push(ScriptCommand::Http {
                 method,
                 url,
                 headers,
                 body,
                 timeout_ms,
+                credentials,
                 tag,
             });
+            Ok::<(), Box<EvalAltResult>>(())
         });
 
         // derive(name, deps, fn) - register a computed signal. `deps`

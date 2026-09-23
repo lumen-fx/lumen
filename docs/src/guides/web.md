@@ -298,8 +298,12 @@ one it was.
 
 Two things differ from the same call on a desktop. A header the browser reserves
 for itself, such as `Host` or `Content-Length`, is dropped on the way out and
-nothing reports it. And credentials follow the browser's rule rather than the
-app's: cookies ride along to your own origin and not to another one.
+nothing reports it. And the page's cookies go with a request by the browser's
+rule: to your own origin and not to another one. An `http()` request that names
+`"credentials": "include"` sends them to another origin too, which that server
+has to allow with `Access-Control-Allow-Credentials: true`; `"omit"` sends none
+at all. See the `http()` entry in the
+[candela reference](../reference/scripting-candela.md).
 
 ## Browser add-ons
 
@@ -719,6 +723,26 @@ none of them means anything without an absolute address.
   dragged in from the desktop offers `text/uri-list` and nothing else, so a
   target written `accept="text/plain"` stays dark for one. The browser still
   shows its own drop cursor over a target that stays dark.
+- Pointer handlers (`pointerdown`, `pointerup`, `pointermove`,
+  `pointerenter`, `pointerleave`, `wheel`) run on the browser's Pointer
+  Events, so a tap raises the same `pointerdown` and `pointerup` a click
+  does. `event_x` and `event_y` report the same values as `event_client_x`
+  and `event_client_y`: the browser lays out the page, so the app holds no box
+  to measure the target from. Moves between two frames arrive as one, at the
+  last position.
+- A `wheel` handler cannot stop the page scrolling. The browser scrolls as it
+  would without the handler, the same as a desktop app, where a wheel has no
+  default action to prevent.
+- On a touch screen the element a finger went down on keeps receiving its
+  events until the finger lifts, wherever it moves: the browser holds a touch
+  to the element it started on. A mouse dragged off a pressed element stops
+  reaching it, as on the desktop.
+- `clipboard_write` and `clipboard_read` use the page's clipboard, which a
+  browser offers only to a page served over `https` or from `localhost`.
+  Elsewhere a write does nothing and a read answers with empty text. A
+  browser can refuse a write that does not follow something the visitor did,
+  such as a click, and it asks the visitor before a read; a refused read also
+  answers with empty text. `copy_image` and `save_clipboard_image` are desktop only.
 - `on_file_dropped` and the in-app `drag-payload` / `on_drop` pair, which
   read what was dropped, are desktop only: `draggable="true"` has no effect
   in a browser, so an element cannot start a drag there in the first place,

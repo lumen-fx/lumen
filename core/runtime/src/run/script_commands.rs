@@ -1,14 +1,16 @@
 use super::*;
 
 /// Apply the script commands whose effect is on the app's own state: an
-/// asset path resolved against the app dir, the cascade's color scheme, the
-/// clipboard the core's text fields already own.
+/// asset path resolved against the app dir, the cascade's color scheme, and
+/// the clipboard images.
 ///
 /// The commands whose whole effect is on the scene belong to
 /// [`lumen_scene::script_commands::apply_scene_script_commands`], which the
-/// browser and the server register too, and the ones an optional subsystem
-/// answers (a hotkey, a tray icon, a dialog, a notification, the clipboard)
-/// are read by that subsystem's own applier, installed with it. Every
+/// browser and the server register too. Clipboard text is
+/// [`lumen_script::clipboard::apply_clipboard_commands`]'s, which the script
+/// plugin installs on every platform. The ones an optional subsystem answers
+/// (a hotkey, a tray icon, a dialog, a notification) are read by that
+/// subsystem's own applier, installed with it. Every
 /// applier reads the same stream through a cursor of its own and ignores
 /// what the others own.
 pub(crate) fn apply_script_commands(
@@ -16,8 +18,6 @@ pub(crate) fn apply_script_commands(
     mut commands: Commands,
     ids: Query<(Entity, &LumenId)>,
     mut style_manager: ResMut<lumen_core::components::StyleManager>,
-    clipboard: Option<NonSend<ClipboardHost>>,
-    mut clipboard_out: MessageWriter<lumen_core::input::ClipboardRead>,
 ) {
     for ev in events.read() {
         match &ev.0 {
@@ -60,26 +60,6 @@ pub(crate) fn apply_script_commands(
                          \"prefer-light\"/\"prefer-dark\""
                     ),
                 }
-            }
-            ScriptCommand::ClipboardWrite { text } => match clipboard.as_ref() {
-                Some(clip) => {
-                    if !clip.write_text(text) {
-                        eprintln!("lumenc: clipboard_write: backend rejected the text");
-                    }
-                }
-                None => eprintln!("lumenc: clipboard_write: no clipboard backend"),
-            },
-            ScriptCommand::ClipboardRead { tag } => {
-                // Answer every request, even with no backend, so a script
-                // waiting on `on_clipboard(tag, text)` is never left hanging.
-                let text = clipboard
-                    .as_ref()
-                    .map(|clip| clip.read_text())
-                    .unwrap_or_default();
-                clipboard_out.write(lumen_core::input::ClipboardRead {
-                    tag: tag.clone(),
-                    text,
-                });
             }
             ScriptCommand::CopyImageToClipboard { path } => copy_image_to_clipboard(path),
             ScriptCommand::SaveClipboardImage { path } => save_clipboard_image(path),
