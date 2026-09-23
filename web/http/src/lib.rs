@@ -29,6 +29,10 @@
 //! receives says so, because the page's console is the only place the reason
 //! is written.
 //!
+//! Whether a request carries the page's cookies is the script's `credentials`
+//! option, passed to `fetch` as it stands; a request that names none gets the
+//! browser's default, `same-origin`.
+//!
 //! The browser also owns the request headers it reserves for itself. A header
 //! like `Host` or `Content-Length` is dropped on the way out whatever a script
 //! asked for, and no error is raised.
@@ -44,10 +48,13 @@
 #![warn(missing_docs)]
 
 use js_sys::{Array, Reflect, Uint8Array};
-use lumen_script::{HttpDispatch, HttpDone, HttpRequest, HttpResponse};
+use lumen_script::{Credentials, HttpDispatch, HttpDone, HttpRequest, HttpResponse};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{AbortSignal, Headers, ReadableStreamDefaultReader, Request, RequestInit, Response};
+use web_sys::{
+    AbortSignal, Headers, ReadableStreamDefaultReader, Request, RequestCredentials, RequestInit,
+    Response,
+};
 
 /// A browser-`fetch`-backed [`HttpDispatch`].
 ///
@@ -72,8 +79,31 @@ impl HttpDispatch for WebFetchDispatch {
 async fn send(request: &HttpRequest, body_limit: u64) -> Result<HttpResponse, String> {
     let window = web_sys::window().ok_or("there is no page to fetch from")?;
 
+    let js_request = build_request(request)?;
+    let response: Response = JsFuture::from(window.fetch_with_request(&js_request))
+        .await
+        .map_err(|e| refused(&request.url, &e))?
+        .unchecked_into();
+
+    Ok(HttpResponse {
+        status: response.status(),
+        headers: response_headers(&response),
+        body: read_body(&response, body_limit).await?,
+    })
+}
+
+/// The page's own `Request` for what a script asked for.
+fn build_request(request: &HttpRequest) -> Result<Request, String> {
     let init = RequestInit::new();
     init.set_method(&request.method.to_ascii_uppercase());
+    // Whether the page's cookies and HTTP authentication go with the request.
+    // A cross-origin `include` also needs the server to answer with
+    // `Access-Control-Allow-Credentials`, which the browser enforces.
+    init.set_credentials(match request.credentials {
+        Credentials::Omit => RequestCredentials::Omit,
+        Credentials::SameOrigin => RequestCredentials::SameOrigin,
+        Credentials::Include => RequestCredentials::Include,
+    });
     if let Some(body) = &request.body {
         init.set_body(&JsValue::from_str(body));
     }
@@ -92,18 +122,7 @@ async fn send(request: &HttpRequest, body_limit: u64) -> Result<HttpResponse, St
         init.set_signal(Some(&deadline));
     }
 
-    let js_request =
-        Request::new_with_str_and_init(&request.url, &init).map_err(|e| describe(&e))?;
-    let response: Response = JsFuture::from(window.fetch_with_request(&js_request))
-        .await
-        .map_err(|e| refused(&request.url, &e))?
-        .unchecked_into();
-
-    Ok(HttpResponse {
-        status: response.status(),
-        headers: response_headers(&response),
-        body: read_body(&response, body_limit).await?,
-    })
+    Request::new_with_str_and_init(&request.url, &init).map_err(|e| describe(&e))
 }
 
 /// The reply's headers, in the order the browser hands them over. A name it
@@ -185,4 +204,50 @@ fn describe(error: &JsValue) -> String {
         return String::from(error.message());
     }
     error.as_string().unwrap_or_else(|| format!("{error:?}"))
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::build_request;
+    use lumen_script::{Credentials, HttpRequest};
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+    use web_sys::RequestCredentials;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    /// What the page's `Request` says it will do with credentials, for a
+    /// script request that asked for `credentials`.
+    fn sent_with(credentials: Credentials) -> RequestCredentials {
+        build_request(&HttpRequest {
+            method: "GET".to_string(),
+            url: "https://example.test/".to_string(),
+            credentials,
+            ..HttpRequest::default()
+        })
+        .expect("the browser builds the request")
+        .credentials()
+    }
+
+    #[wasm_bindgen_test]
+    fn each_credentials_mode_reaches_the_request_the_page_sends() {
+        assert_eq!(sent_with(Credentials::Include), RequestCredentials::Include);
+        assert_eq!(sent_with(Credentials::Omit), RequestCredentials::Omit);
+        assert_eq!(
+            sent_with(Credentials::SameOrigin),
+            RequestCredentials::SameOrigin
+        );
+    }
+
+    /// A request that names nothing is sent the way a page's own `fetch`
+    /// sends one.
+    #[wasm_bindgen_test]
+    fn a_request_that_names_no_mode_gets_the_browser_default() {
+        let request = build_request(&HttpRequest {
+            method: "GET".to_string(),
+            url: "https://example.test/".to_string(),
+            ..HttpRequest::default()
+        })
+        .expect("the browser builds the request");
+        assert_eq!(request.credentials(), RequestCredentials::SameOrigin);
+    }
 }

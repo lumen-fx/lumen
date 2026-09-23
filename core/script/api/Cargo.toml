@@ -18,6 +18,10 @@ lumen-ir = { workspace = true }
 lumen-input = { workspace = true }
 lumen-primitives = { workspace = true }
 lumen-os-dnd = { workspace = true }
+# The clipboard backend the `clipboard_write` and `clipboard_read` builtins run
+# on. Already in the graph through `lumen-input`, whose text fields copy and
+# paste through the same host.
+lumen-os-clipboard = { workspace = true }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 glam.workspace = true

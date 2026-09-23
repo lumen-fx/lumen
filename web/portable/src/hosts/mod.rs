@@ -125,8 +125,8 @@ pub fn install(
     }
 }
 
-/// Install the two per-host systems the script plugin leaves to whoever
-/// assembles the app.
+/// Install the per-host systems the script plugin leaves to whoever assembles
+/// the app: `on_ready`, the component fill, and the DOM event dispatch.
 ///
 /// `on_ready` is where an app mounts what its script builds: it runs on the
 /// first tick, once the tree is queryable, which is what `on_start` cannot do
@@ -135,7 +135,7 @@ pub fn install(
 /// tree as a marker, and this is what calls the function and puts the node it
 /// returns in the marker's place.
 ///
-/// Both are ordered before the DOM collector, so whatever they build lands on
+/// All three are ordered before the DOM collector, so whatever they build lands on
 /// the tick they ran rather than the one after.
 fn register_host_systems<H>(app: &mut App)
 where
@@ -156,6 +156,10 @@ where
             .after(lumen_scene::dom::build_dom_index)
             .after(ScriptSet::SyncSignals),
     );
+    // The handlers a script binds with `on(type, handler)`. The page writes
+    // the same input messages a window does, so these deliver the same
+    // events.
+    lumen_scene::dom::install_dom_events::<H>(app);
 }
 
 /// Read `name` from the host's signal mirror.

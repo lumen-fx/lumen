@@ -1,0 +1,15 @@
+// Writes the clipboard, then reads it back, and records what the read
+// answered where a test can read it as a signal.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_ready() {
+    lumen::clipboard_write("written by lumen");
+    lumen::clipboard_read("paste");
+}
+
+fn on_clipboard(tag: string, text: string) {
+    lumen::signal_set("clipboard_tag", tag);
+    lumen::signal_set("clipboard_text", text);
+}

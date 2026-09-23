@@ -21,6 +21,13 @@
 //! while reading the body, rather than trusting ureq's own default. A streaming
 //! or open-ended endpoint therefore fails with a clear message instead of
 //! growing until the process dies.
+//!
+//! ## Credentials
+//!
+//! A request's `credentials` mode is ignored. It names what a page sends
+//! alongside a request, and a desktop app has no page: there is no cookie jar
+//! or browser login to share, and every header a script sets is sent as it
+//! stands.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

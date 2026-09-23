@@ -40,6 +40,8 @@ use lumen_html::paths::walk_nodes;
 /// The parsed catalogues [`install_i18n`] takes.
 pub use lumen_i18n::Catalogues;
 use lumen_i18n::{I18nError, SharedI18n, switch_locale};
+#[cfg(target_arch = "wasm32")]
+use lumen_os_clipboard::ClipboardHost;
 use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
@@ -85,10 +87,11 @@ pub fn portable_app() -> App {
     register_script_commands(&mut app.world);
 
     install_http(&mut app);
+    install_clipboard(&mut app);
 
     // Key routing only. The pointer, text-editing, IME and file-drop half of
-    // the input layer is a native window's, and the clipboard it would
-    // install is the one non-send resource this app cannot carry.
+    // the input layer is a native window's; the page's own fields copy and
+    // paste for themselves.
     app.add_plugin(lumen_input::KeyDispatchPlugin);
     // The tree a script reads and the mutations it issues, which is how a
     // fragment reaches the world: `mount()` inserts a node the DOM applier
@@ -122,6 +125,24 @@ fn install_http(app: &mut App) {
     #[cfg(target_arch = "wasm32")]
     app.world
         .insert_resource(FetchRegistry::with_dispatch(Arc::new(WebFetchDispatch)));
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = app;
+}
+
+/// Put the clipboard the scripts' `clipboard_write` and `clipboard_read`
+/// builtins run on into the app, where the platform has one this assembly can
+/// name.
+///
+/// In a browser that is the page's `navigator.clipboard`, which exists only in
+/// a secure context; without it the builtins warn and a read answers with
+/// empty text. Everywhere else it is the embedder's choice: the desktop
+/// runtime installs the OS clipboard, and a server rendering a page has none
+/// to share.
+fn install_clipboard(app: &mut App) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(clipboard) = ClipboardHost::try_new() {
+        app.world.insert_non_send(clipboard);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let _ = app;
 }

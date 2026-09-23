@@ -1,0 +1,27 @@
+// Binds every pointer event, and the click, on one element and records what each handler was
+// told, where a test can read it as signals.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_ready() {
+    let pad = lumen::node_get_by_id("pad");
+    lumen::event_on(pad, "pointerdown", "on_pointer");
+    lumen::event_on(pad, "pointermove", "on_pointer");
+    lumen::event_on(pad, "pointerup", "on_pointer");
+    lumen::event_on(pad, "wheel", "on_pointer");
+    lumen::event_on(pad, "pointerenter", "on_pointer");
+    lumen::event_on(pad, "pointerleave", "on_pointer");
+    lumen::event_on(pad, "click", "on_pointer");
+}
+
+// One handler for every type: `<type>_count` counts the calls, and the rest
+// are what the last call of that type carried.
+fn on_pointer(ev: int) {
+    let kind = lumen::event_type(ev);
+    lumen::signal_set_int(kind + "_count", lumen::signal_get_int(kind + "_count") + 1);
+    lumen::signal_set_float(kind + "_x", lumen::event_client_x(ev));
+    lumen::signal_set_float(kind + "_y", lumen::event_client_y(ev));
+    lumen::signal_set_float(kind + "_delta_y", lumen::event_delta_y(ev));
+    lumen::signal_set_int(kind + "_button", lumen::event_button(ev));
+}
