@@ -138,9 +138,12 @@ The array methods (`arr.map(f)`, `arr.sum()`, and the rest) come from
 The modules are read from disk when the program compiles, out of a `libs/`
 directory beside the running executable. `lumenc package` copies that directory
 into the folder it writes, so a shipped app resolves the same imports. A web
-build compiles ahead of time, so the text modules travel into the browser
-inside the compiled image; `std/math`, `std/random`, and `std/time` bind a C
-library the browser cannot open, and an image naming one is refused whole.
+build compiles ahead of time, so the modules travel into the browser inside the
+compiled image. `std/math`, `std/random`, and `std/time` bind a C library on
+the desktop; the browser runtime carries its own version of each, so they work
+in a browser too, and a seeded `std/random` draws the same sequence there. A
+`dylib` block of the app's own names a library the browser cannot open, and an
+image that carries one does not load there.
 
 ## Lifecycle hooks
 
