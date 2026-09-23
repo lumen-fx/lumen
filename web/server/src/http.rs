@@ -202,6 +202,9 @@ pub(crate) enum Head {
     TooLarge,
     /// The head did not arrive whole before its deadline.
     TimedOut,
+    /// The head is not HTTP/1.x this server reads the same way every proxy in
+    /// front of it would, so it is refused with a 400 rather than guessed at.
+    Malformed(&'static str),
 }
 
 /// Read the request line and the headers, up to [`MAX_HEAD`] bytes of them.
@@ -209,12 +212,28 @@ pub(crate) enum Head {
 /// The cap is what keeps a client from growing the buffer: the reader stops
 /// at it, and a head that has not ended by then is refused rather than
 /// answered from the part that arrived.
+///
+/// The parse is strict where leniency lets two readers of one request
+/// disagree about it: a proxy that reads a header one way and this server
+/// another is how a request gets smuggled past the proxy. RFC 9112 asks for
+/// a 400 in each of those cases, and that is what the head gets.
 pub(crate) fn read_head<R: BufRead>(reader: &mut R) -> Head {
     match read_head_inner(reader) {
         Ok(head) => head,
         Err(error) if error.kind() == io::ErrorKind::TimedOut => Head::TimedOut,
         Err(_) => Head::Closed,
     }
+}
+
+/// Whether `byte` may appear in a method or a header name: RFC 9110's
+/// `tchar`.
+fn is_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+}
+
+/// Whether `text` is an RFC 9110 token: one or more `tchar`.
+fn is_token(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(is_tchar)
 }
 
 fn read_head_inner<R: BufRead>(reader: &mut R) -> io::Result<Head> {
@@ -231,23 +250,63 @@ fn read_head_inner<R: BufRead>(reader: &mut R) -> io::Result<Head> {
             break;
         }
     }
+    if !line.ends_with('\n') {
+        return Ok(if limited.limit() == 0 {
+            Head::TooLarge
+        } else {
+            Head::Closed
+        });
+    }
     let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let target = parts.next().unwrap_or("/").to_string();
-    let version = parts.next().unwrap_or("HTTP/1.0").to_string();
+    let (Some(method), Some(target), Some(version), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Ok(Head::Malformed(
+            "a request line is a method, a target and a version",
+        ));
+    };
+    if !is_token(method) {
+        return Ok(Head::Malformed("the method is not a token"));
+    }
+    if version != "HTTP/1.1" && version != "HTTP/1.0" {
+        return Ok(Head::Malformed("this server reads HTTP/1.1 and HTTP/1.0"));
+    }
+    let (method, target, version) = (method.to_string(), target.to_string(), version.to_string());
     let mut headers = Vec::new();
     let ended = loop {
         let mut header = String::new();
         if limited.read_line(&mut header)? == 0 {
             break false;
         }
+        if !header.ends_with('\n') {
+            // Cut off by the cap, or by the client going away.
+            break false;
+        }
         let header = header.trim_end_matches(['\r', '\n']);
         if header.is_empty() {
             break true;
         }
-        if let Some((name, value)) = header.split_once(':') {
-            headers.push((name.trim().to_string(), value.trim().to_string()));
+        // A line folded onto the one before it is obsolete, and a proxy that
+        // unfolds it reads a different header than one that does not.
+        if header.starts_with([' ', '\t']) {
+            return Ok(Head::Malformed(
+                "a header line is folded onto the one before it",
+            ));
         }
+        let Some((name, value)) = header.split_once(':') else {
+            return Ok(Head::Malformed("a header line has no colon"));
+        };
+        // Whitespace before the colon is the classic smuggling vector: one
+        // reader trims it and sees `Content-Length`, another does not.
+        if !is_token(name) {
+            return Ok(Head::Malformed("a header name is not a token"));
+        }
+        // A bare CR, or any other control but a tab, is read as a line end
+        // by some parsers and as part of the value by others.
+        if value.chars().any(|c| c.is_ascii_control() && c != '\t') {
+            return Ok(Head::Malformed("a header value holds a control character"));
+        }
+        headers.push((name.to_string(), value.trim().to_string()));
     };
     if !ended {
         return Ok(if limited.limit() == 0 {
@@ -276,11 +335,26 @@ pub(crate) fn read_body<R: BufRead>(
             "send a body with a Content-Length; this server does not read a chunked one",
         ));
     }
-    let Some(length) = header(headers, "content-length") else {
+    let mut lengths = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.as_str());
+    let Some(length) = lengths.next() else {
         return Ok(String::new());
     };
-    let Ok(length) = length.trim().parse::<usize>() else {
+    // One length, written as digits and nothing else: a second header, a
+    // list, a sign or a space each let two readers frame the body apart.
+    if lengths.next().is_some() {
+        return Err(Response::text(400, "a request carries one Content-Length"));
+    }
+    if length.is_empty() || !length.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Response::text(400, "Content-Length is not a length"));
+    }
+    let Ok(length) = length.parse::<usize>() else {
+        return Err(Response::text(
+            413,
+            "the request body is larger than this server reads",
+        ));
     };
     if length > MAX_BODY {
         return Err(Response::text(
@@ -452,6 +526,126 @@ mod tests {
         let long = format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "y".repeat(MAX_HEAD));
         assert!(matches!(head(&long), Head::TooLarge));
         assert!(matches!(head(""), Head::Closed));
+    }
+
+    /// The reason a head was refused, or a panic naming what it was read as.
+    fn refused(text: &str) -> &'static str {
+        match head(text) {
+            Head::Malformed(why) => why,
+            other => panic!("{text:?} was read as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_method_that_is_not_a_token_is_refused() {
+        assert_eq!(
+            refused("G(T / HTTP/1.1\r\nHost: x\r\n\r\n"),
+            "the method is not a token"
+        );
+        assert_eq!(
+            refused("GET\u{7f} / HTTP/1.1\r\nHost: x\r\n\r\n"),
+            "the method is not a token"
+        );
+    }
+
+    #[test]
+    fn a_version_other_than_one_point_x_is_refused() {
+        for version in ["HTTP/2.0", "HTTP/1.2", "http/1.1", "HTTP/1", "FOO"] {
+            assert_eq!(
+                refused(&format!("GET / {version}\r\nHost: x\r\n\r\n")),
+                "this server reads HTTP/1.1 and HTTP/1.0",
+                "{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_request_line_missing_a_part_is_refused() {
+        let why = "a request line is a method, a target and a version";
+        // No target, and no version either.
+        assert_eq!(refused("GET HTTP/1.1\r\nHost: x\r\n\r\n"), why);
+        assert_eq!(refused("GET\r\nHost: x\r\n\r\n"), why);
+        // One part too many.
+        assert_eq!(refused("GET / x HTTP/1.1\r\nHost: x\r\n\r\n"), why);
+    }
+
+    #[test]
+    fn whitespace_before_a_headers_colon_is_refused() {
+        assert_eq!(
+            refused("POST / HTTP/1.1\r\nContent-Length : 5\r\n\r\n"),
+            "a header name is not a token"
+        );
+        assert_eq!(
+            refused("POST / HTTP/1.1\r\nContent-Length\t: 5\r\n\r\n"),
+            "a header name is not a token"
+        );
+        assert_eq!(
+            refused("POST / HTTP/1.1\r\n: 5\r\n\r\n"),
+            "a header name is not a token"
+        );
+    }
+
+    #[test]
+    fn a_folded_header_line_is_refused() {
+        let why = "a header line is folded onto the one before it";
+        assert_eq!(refused("GET / HTTP/1.1\r\nX-A: one\r\n two\r\n\r\n"), why);
+        assert_eq!(refused("GET / HTTP/1.1\r\nX-A: one\r\n\ttwo\r\n\r\n"), why);
+    }
+
+    #[test]
+    fn a_header_line_without_a_colon_is_refused() {
+        assert_eq!(
+            refused("GET / HTTP/1.1\r\nHost x\r\n\r\n"),
+            "a header line has no colon"
+        );
+    }
+
+    #[test]
+    fn a_control_character_in_a_header_value_is_refused() {
+        assert_eq!(
+            refused("GET / HTTP/1.1\r\nX-A: one\rX-B: two\r\n\r\n"),
+            "a header value holds a control character"
+        );
+    }
+
+    #[test]
+    fn a_request_line_longer_than_the_cap_is_too_large() {
+        let long = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_HEAD));
+        assert!(matches!(head(&long), Head::TooLarge));
+    }
+
+    /// What reading a body under `lengths`, one Content-Length header each,
+    /// is refused with.
+    fn length_refused(lengths: &[&str]) -> u16 {
+        let headers: Vec<(String, String)> = lengths
+            .iter()
+            .map(|length| ("Content-Length".to_string(), length.to_string()))
+            .collect();
+        read_body(&mut BufReader::new(&b"hello hello"[..]), &headers)
+            .expect_err("the length is refused")
+            .status
+    }
+
+    #[test]
+    fn a_duplicate_or_conflicting_content_length_is_refused() {
+        assert_eq!(length_refused(&["5", "5"]), 400);
+        assert_eq!(length_refused(&["5", "6"]), 400);
+        assert_eq!(length_refused(&["5, 5"]), 400);
+    }
+
+    #[test]
+    fn a_content_length_that_is_not_all_digits_is_refused() {
+        for length in ["+5", "-1", "0x5", "5.0", "5_0", "", "five", "\u{664}"] {
+            assert_eq!(length_refused(&[length]), 400, "{length:?}");
+        }
+        // Digits, but more than any body this server reads.
+        assert_eq!(length_refused(&["99999999999999999999999"]), 413);
+        let body = read_body(
+            &mut BufReader::new(&b"hello"[..]),
+            &[("content-length".to_string(), "5".to_string())],
+        )
+        .expect("a well-formed length");
+        assert_eq!(body, "hello");
     }
 
     #[test]

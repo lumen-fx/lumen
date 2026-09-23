@@ -572,6 +572,18 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
                 respond(&mut writer, site, &refusal, false, Persist::Close);
                 break;
             }
+            // Where a malformed request ends is unknown, so nothing after it
+            // on this connection can be read as a request either.
+            Head::Malformed(why) => {
+                respond(
+                    &mut writer,
+                    site,
+                    &Response::text(400, why),
+                    false,
+                    Persist::Close,
+                );
+                break;
+            }
         };
         let persist = if site.limits.keep_alive.is_zero() || !head.wants_keep_alive() {
             Persist::Close
