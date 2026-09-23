@@ -273,12 +273,14 @@ sitemap; it keeps its canonical, Open Graph and `hreflang` metadata.
 rendered per request. It is the app's policy, so a build writes it into
 `lumen.site.json` and a server built on `lumen-ssr` applies it; where the
 server listens and how many processes it runs are the server's settings.
+Only a build with `render = "ssr"` writes that file, so `lumenc web` warns
+when `[web.ssr]` is set and the pages are rendered any other way.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `allow_hosts` | array of strings | empty | Hosts a render may ask for data, by name, without scheme or port. A render reaches no host that is not listed, which is what keeps a visitor's request from making the server fetch an address of the visitor's choosing. |
+| `allow_hosts` | array of strings | empty | Hosts a render may ask for data, by name, without scheme or port. A render reaches no host that is not listed, which is what keeps a visitor's request from making the server fetch an address of the visitor's choosing. Write an IPv6 address without brackets. An entry carrying a scheme, a port, a path or user information is a parse error, because it would match no request. |
 | `max_requests` | integer | the renderer's default | How many requests one render may make. |
-| `headers` | array of strings | empty | Request headers the app may read beyond the ones every render allows, such as `authorization` or `cookie`. |
+| `headers` | array of strings | empty | Request headers the app may read beyond the ones every render allows, such as `authorization` or `cookie`. A name that is not an HTTP header name is a parse error. |
 
 ```toml
 [web.ssr]

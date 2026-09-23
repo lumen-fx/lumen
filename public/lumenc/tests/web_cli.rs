@@ -780,10 +780,15 @@ fn a_named_fallback_locale_writes_the_pages() {
 fn a_prehydrated_page_carries_what_t_answered_in_its_locale() {
     let scratch = scratch("prehydrate-locales");
     let out = scratch.join("site");
-    web(
+    let said = web(
         "fixtures/ssr-site",
         &out,
         &["--render", "csr", "--prerender", "run"],
+    );
+    // The fixture sets a render policy, which nothing here renders with.
+    assert!(
+        said.contains("[web.ssr] says what a render may reach"),
+        "{said}"
     );
 
     let english = read(&out, "index.html");
@@ -1573,7 +1578,8 @@ fn an_embedder_renders_a_site_from_the_files_the_build_wrote() {
     let _turn = ONE_RENDERER.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = scratch("ssr-spec");
     let out = scratch.join("site");
-    web("fixtures/ssr-site", &out, &[]);
+    let said = web("fixtures/ssr-site", &out, &[]);
+    assert!(!said.contains("[web.ssr] says"), "{said}");
 
     let spec = ServerSpec::from_json(read(&out, SERVER_SPEC_FILE).as_bytes())
         .expect("the build wrote a spec this build reads");
