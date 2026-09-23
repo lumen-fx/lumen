@@ -27,6 +27,8 @@ export const elements = {
     mount(element) {
       element.textContent = "mounted by echo";
       element.setAttribute("data-echo", "mounted");
+      // What the script's on_start wrote, read back through the host.
+      element.setAttribute("data-echo-read", String(host.getSignal("sync_result")));
     },
     update(element, name, value) {
       element.setAttribute("data-echo-" + name, value);

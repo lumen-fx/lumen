@@ -253,8 +253,10 @@ Every page links the stylesheets, runs the head script and preloads the module,
 and holds each of them to a SHA-384 Subresource Integrity hash of the bytes the
 build copied. An import map carries the same hash for the module import. The
 boot script imports every add-on's module and hands them to the runtime in the
-order `lumen.web.json` lists them. A page built without the runtime links the
-stylesheets alone.
+order `lumen.web.json` lists them, so a module that fails its check, or fails
+to load at all, keeps the app from starting: the page reads as it was written,
+and the browser console names the file. A page built without the runtime links
+the stylesheets alone.
 
 ## Candela sugar
 
