@@ -132,14 +132,7 @@ pub fn compile_app_with_skin(
             // An engine with an ahead-of-time form compiles here, so the
             // artifact carries the program a compiler-free runtime can run.
             // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(
-                engine,
-                &source,
-                &uri,
-                &layout.lib_dir,
-                &deps.import_roots,
-                &stubs,
-            )?,
+            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir, deps, &stubs)?,
             source,
         });
     }
@@ -202,35 +195,37 @@ fn compiled_bytecode(
     source: &str,
     uri: &str,
     lib_dir: &Path,
-    import_roots: &[(String, PathBuf)],
+    deps: &CompileDeps,
     fns: &[lumen_script::ScriptFn],
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
-        let host = candela_compiler(lib_dir, import_roots, fns)?;
+        let host = candela_compiler(lib_dir, deps, fns)?;
         return host
             .compile_bytecode(source, uri)
             .map(Some)
             .map_err(|e| RunError::Script(e.to_string()));
     }
     #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri, lib_dir, import_roots, fns);
+    let _ = (engine, source, uri, lib_dir, deps, fns);
     Ok(None)
 }
 
 /// A candela compiler set up the way every compile path sets it up: the
-/// app's library directory, the packages it imports, and `fns` declared.
+/// app's library directory, the packages it imports, the compile-time flags
+/// of the target it compiles for, and `fns` declared.
 #[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
 fn candela_compiler(
     lib_dir: &Path,
-    import_roots: &[(String, PathBuf)],
+    deps: &CompileDeps,
     fns: &[lumen_script::ScriptFn],
 ) -> Result<CandelaHost, RunError> {
     let mut host = CandelaHost::new();
     host.set_library_dir(lib_dir);
-    for (name, dir) in import_roots {
+    for (name, dir) in &deps.import_roots {
         host.add_import_root(name.clone(), dir.clone());
     }
+    host.set_cfg_flags(deps.target.cfg_flags());
     for f in fns {
         host.register_script_fn(f)
             .map_err(|e| RunError::Script(e.to_string()))?;
@@ -282,21 +277,30 @@ pub fn script_exports(
 /// `check` validates AST shape, not style. Run
 /// `lumenc lint --signals <dir>` for the full lint stream.
 ///
+/// `check` is for no one target. `targets` holds what was resolved for each
+/// target the app can be built for: the markup is checked once, accepting the
+/// elements of every target's add-ons, and the scripts are compiled once per
+/// target, each against that target's add-ons, script libraries and
+/// `@cfg(...)` flags, so code written for one target is checked the way that
+/// target's build compiles it.
+///
 /// Requires the source parser (`runtime-parse` feature).
 #[cfg(feature = "runtime-parse")]
-///
-/// `check` is for no one target, so it accepts the markup and the calls of
-/// every target the app declares dependencies for: `deps.addons` should hold
-/// the add-ons of all of them, and `deps.target` is not consulted.
 pub fn check_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
-    deps: &CompileDeps,
+    targets: &[CompileDeps],
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
-    register_declared_tags(&cfg, &lumen_modules::Target::ALL, &deps.addons);
-    let stubs = addon_stubs(&deps.addons)?;
+    let mut every_addon: Vec<lumen_ir::addon::Addon> = Vec::new();
+    for addon in targets.iter().flat_map(|deps| &deps.addons) {
+        if !every_addon.iter().any(|a| a.name == addon.name) {
+            every_addon.push(addon.clone());
+        }
+    }
+    let every_target: Vec<lumen_modules::Target> = targets.iter().map(|deps| deps.target).collect();
+    register_declared_tags(&cfg, &every_target, &every_addon);
     let layout = AppLayout::resolve(dir, &cfg)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +
@@ -338,11 +342,11 @@ pub fn check_app(
     let grouped = super::app_build::remap_trimmed_hosts(grouped_script_sources(&ir, dir, &cfg)?)?;
     for (engine, source) in grouped {
         match engine {
+            // The one host with compile-time conditions, so the one checked
+            // per target.
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
-                candela_compiler(&layout.lib_dir, &deps.import_roots, &stubs)?
-                    .compile_check(&source, &uri)
-                    .map_err(|e| RunError::Script(e.to_string()))?;
+                check_candela_per_target(&source, &uri, &layout.lib_dir, targets)?;
             }
             #[cfg(feature = "host-lua")]
             crate::config::ScriptEngine::Lua => {
@@ -364,12 +368,41 @@ pub fn check_app(
             _ => unreachable!("a trimmed script host is remapped before this match"),
         }
     }
-    // Declared to candela's compiler above; the other hosts check syntax only.
-    let _ = &stubs;
     Ok(CheckReport {
         element_count: count_elements(&ir.root),
         has_script,
     })
+}
+
+/// Compile-check a candela program once for each of `targets`.
+///
+/// Where every target rejects the program the same way, the error is the
+/// compiler's own, as it is for an app with no target-specific code. Where
+/// they disagree, the error names the target whose build it breaks.
+#[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
+fn check_candela_per_target(
+    source: &str,
+    uri: &str,
+    lib_dir: &Path,
+    targets: &[CompileDeps],
+) -> Result<(), RunError> {
+    let mut failures = Vec::new();
+    for deps in targets {
+        let stubs = addon_stubs(&deps.addons)?;
+        let checked = candela_compiler(lib_dir, deps, &stubs)?.compile_check(source, uri);
+        if let Err(e) = checked {
+            failures.push((deps.target, e.to_string()));
+        }
+    }
+    let Some((target, first)) = failures.first() else {
+        return Ok(());
+    };
+    let agree = failures.len() == targets.len() && failures.iter().all(|(_, e)| e == first);
+    Err(RunError::Script(if agree {
+        first.clone()
+    } else {
+        format!("{first} (in the {target} build)")
+    }))
 }
 
 #[cfg(feature = "runtime-parse")]

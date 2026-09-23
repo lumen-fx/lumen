@@ -341,7 +341,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                     ScriptCandelaPlugin::new(combined)
                         .with_uri(html_path.display().to_string())
                         .with_library_dir(lib_dir.clone())
-                        .with_import_roots(import_roots.clone()),
+                        .with_import_roots(import_roots.clone())
+                        // This run loop is the desktop's; the browser runs the
+                        // bytecode `lumenc web` compiled for it.
+                        .with_cfg_flags(lumen_modules::Target::Desktop.cfg_flags()),
                 );
                 register_script_host_systems::<CandelaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<CandelaHost>);

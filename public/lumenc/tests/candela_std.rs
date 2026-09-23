@@ -6,10 +6,11 @@
 
 //! Proof that an app reaches the candela standard library the toolchain ships.
 //!
-//! `fixtures/candela-std` imports `std/time` for the wall clock and calls an
-//! array method the compiler loads from `std/list` on its own. Both read the
-//! library tree beside the running executable, so the two bound labels stay at
-//! their markup text if the tree is missing and the script never compiled.
+//! `fixtures/candela-std` imports `std/time` for the wall clock and `std/math`
+//! for a square root, and calls an array method the compiler loads from
+//! `std/list` on its own. All three read the library tree beside the running
+//! executable, so the bound labels stay at their markup text if the tree is
+//! missing and the script never compiled.
 
 use lumenc::{RunOptions, build_headless_app};
 
@@ -32,7 +33,7 @@ fn label_text(app: &mut lumen_core::prelude::App, id: &str) -> Option<String> {
 }
 
 #[test]
-fn an_app_reads_the_clock_and_the_array_methods() {
+fn an_app_reads_the_clock_the_maths_library_and_the_array_methods() {
     let opts = RunOptions::new(std_dir());
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
@@ -54,5 +55,11 @@ fn an_app_reads_the_clock_and_the_array_methods() {
     assert_eq!(
         total, "6",
         "sum() over [1, 2, 3] must reach the label from std/list"
+    );
+
+    let root = label_text(&mut app, "root-label").expect("root-label present");
+    assert_eq!(
+        root, "4.0",
+        "math::sqrt(16.0) must reach the label from std/math"
     );
 }

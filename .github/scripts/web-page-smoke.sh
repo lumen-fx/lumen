@@ -9,12 +9,15 @@
 # emitter. A page that loads to a console error and sits there reads exactly
 # like a page that works, which is why nothing below settles for "it loaded".
 #
-# Three apps are opened. The first is the app under test, which has a script
+# Five apps are opened. The first is the app under test, which has a script
 # the browser runs. The second is written in a language no browser host
 # answers for: its page has to come up as a page anyway, because an app whose
 # script cannot run is still an app a visitor can read. The third depends on a
 # browser add-on, and every kind of call it offers has to come back into the
-# page.
+# page. The fourth imports the candela standard library's C-backed modules,
+# which the runtime carries itself in a browser. The fifth compiles one side
+# of its script for the web and the other for the desktop, and the page has
+# to show the web side.
 #
 #   $1  directory holding lumen-web.wasm and lumen-web.js
 #   $2  the app to emit (default apps/widget-garden)
@@ -28,6 +31,8 @@ app="${2:-apps/widget-garden}"
 page="${3:-/}"
 scriptless="apps/weather"
 with_addon="web/tests/fixtures/addon-echo"
+with_std="fixtures/candela-std"
+with_cfg="fixtures/cfg-target"
 chrome="${CHROME_BIN:-google-chrome}"
 port=8799
 
@@ -44,16 +49,18 @@ fail() {
 
 # Serve one app and leave the page it rendered in $dom and what it logged in
 # $log. Every console line but the runtime's own boot report is a failure; a
-# warning counts, because the hydration mismatch report is a warning.
+# warning counts, because the hydration mismatch report is a warning. Any
+# argument past the document is passed on to `lumenc web`.
 open_page() {
   local target="$1"
   local document="${2:-/}"
+  shift $(($# < 2 ? $# : 2))
   out=$(mktemp -d)
   log=$(mktemp)
   dom=$(mktemp)
 
   cargo run -p lumenc -- web "$target" --out "$out" --lib-dir "$lib_dir" \
-    --serve --port "$port" &
+    --serve --port "$port" "$@" &
   server=$!
   trap 'kill "$server" 2>/dev/null || true' EXIT
 
@@ -119,4 +126,14 @@ expect 'data-echo="mounted"' "the module was never handed its element"
 expect 'data-echo-read="HELLO!"' "the module could not read a signal the script wrote"
 expect 'data-echo-data-mood="calm"' "an attribute the script set never reached the module"
 
-echo "web page smoke: every page boots clean, the runtime owns it, and the add-on answers"
+# The clock is a number of seconds, and the square root is the maths
+# library's answer. Nothing is run at build time, so the labels are written as
+# the markup has them and only the browser can have filled them in.
+open_page "$with_std" / --prerender none
+grep -qE 'id="clock-label"[^>]*>[0-9]+<' "$dom" || fail "$with_std: std/time never reached the page"
+grep -qE 'id="root-label"[^>]*>4\.0<' "$dom" || fail "$with_std: std/math never reached the page"
+
+open_page "$with_cfg"
+grep -qF '>hello from the browser, web<' "$dom" || fail "$with_cfg: the page did not run the web side"
+
+echo "web page smoke: every page boots clean, the runtime owns it, the add-on answers, and the standard library and the web side of a script run"

@@ -1,0 +1,4 @@
+<root>
+  <label id="side" bind-text="side" text="waiting" />
+  <script src="main.cdl" />
+</root>

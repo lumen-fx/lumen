@@ -950,8 +950,8 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.1.1"
-source = "git+https://github.com/lumen-fx/candela?rev=f20d646fa7fdaeb48ad74c82aa4438c490fce76e#f20d646fa7fdaeb48ad74c82aa4438c490fce76e"
+version = "0.1.4"
+source = "git+https://github.com/lumen-fx/candela?rev=954c919ec342186c887d625805465da3b766adb9#954c919ec342186c887d625805465da3b766adb9"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -970,15 +970,17 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.1.1"
-source = "git+https://github.com/lumen-fx/candela?rev=f20d646fa7fdaeb48ad74c82aa4438c490fce76e#f20d646fa7fdaeb48ad74c82aa4438c490fce76e"
+version = "0.1.4"
+source = "git+https://github.com/lumen-fx/candela?rev=954c919ec342186c887d625805465da3b766adb9#954c919ec342186c887d625805465da3b766adb9"
 dependencies = [
  "ariadne",
  "getrandom 0.3.4",
  "indexmap",
+ "js-sys",
  "lexical-core",
  "libffi",
  "libloading 0.9.0",
+ "libm",
  "memchr",
  "postcard",
  "serde",
@@ -4397,6 +4399,7 @@ dependencies = [
  "lumen-os-dnd",
  "lumen-primitives",
  "lumen-scene",
+ "lumen-script",
  "lumen-web",
  "wasm-bindgen",
  "wasm-bindgen-test",

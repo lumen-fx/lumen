@@ -81,6 +81,10 @@ pub struct CandelaHost {
     /// under and the directory the `.cdl` files sit in. A registry package on
     /// the `candela` platform arrives here.
     import_roots: Vec<(String, PathBuf)>,
+    /// The flags a script's `@cfg(...)` conditions are true for. Every compile
+    /// this host runs reads them: a live load, a check, and a bytecode build.
+    /// Kept as names because candela's `Cfg` is not `Send`.
+    cfg_flags: Vec<String>,
 }
 
 impl Default for CandelaHost {
@@ -95,7 +99,7 @@ impl CandelaHost {
     #[must_use]
     pub fn new() -> Self {
         let registries = Registries::default();
-        let engine = build_engine(&registries, &[]);
+        let engine = build_engine(&registries, &[], candela::Cfg::new());
         Self {
             vm: CandelaVm {
                 engine,
@@ -108,7 +112,27 @@ impl CandelaHost {
             wrappers: Vec::new(),
             library_dir: None,
             import_roots: Vec::new(),
+            cfg_flags: Vec::new(),
         }
+    }
+
+    /// Turn on `flags` for every compile this host runs, so `@cfg(flag)`
+    /// holds for each of them and a condition naming anything else does not.
+    ///
+    /// The host gives no flag a meaning; the embedder names the set for the
+    /// target it compiles for, and passes the same set to every compile of
+    /// that target. A later call replaces the set.
+    pub fn set_cfg_flags<S: AsRef<str>>(&mut self, flags: impl IntoIterator<Item = S>) {
+        self.cfg_flags = flags.into_iter().map(|f| f.as_ref().to_owned()).collect();
+        // `with_cfg` consumes the engine and keeps what was registered on it,
+        // so the host's own functions and an embedder's survive the swap.
+        let engine = std::mem::replace(&mut self.vm.engine, candela::Engine::new());
+        self.vm.engine = engine.with_cfg(self.cfg());
+    }
+
+    /// The flags as the configuration candela reads.
+    fn cfg(&self) -> candela::Cfg {
+        self.cfg_flags.iter().collect()
     }
 
     /// Point every `dylib "..."` import at `dir`, the app's `lib/`.
@@ -129,7 +153,7 @@ impl CandelaHost {
     /// so name every root before reaching for that.
     pub fn add_import_root(&mut self, name: impl Into<String>, dir: impl Into<PathBuf>) {
         self.import_roots.push((name.into(), dir.into()));
-        self.vm.engine = build_engine(&self.registries, &self.import_roots);
+        self.vm.engine = build_engine(&self.registries, &self.import_roots, self.cfg());
     }
 
     /// Name the library directories for the span of a compile.
@@ -295,10 +319,14 @@ impl CandelaHost {
         // sink `collect_diagnostic` installs. Without the sink the same error
         // ends the process, which a build tool must not do to the shell it
         // was run from.
-        macros
+        // No engine carries the flags here either, so the compile runs inside
+        // the host's configuration.
+        self.cfg()
             .scope(|| {
-                candela::collect_diagnostic(|| {
-                    candela::build_bytecode(prepared.text.clone(), uri, &resolver)
+                macros.scope(|| {
+                    candela::collect_diagnostic(|| {
+                        candela::build_bytecode(prepared.text.clone(), uri, &resolver)
+                    })
                 })
             })
             .map_err(|d| self.compile_error(&prepared, &d, uri))?
@@ -384,10 +412,15 @@ fn check_declarable(f: &ScriptFn) -> Result<(), ScriptError> {
         })
 }
 
-/// A fresh engine with the Lumen builtins, the `lmn!` macro, and one import
-/// root per script library the app depends on.
-fn build_engine(r: &Registries, import_roots: &[(String, PathBuf)]) -> candela::Engine {
-    let mut engine = candela::Engine::new();
+/// A fresh engine with the Lumen builtins, the `lmn!` macro, one import root
+/// per script library the app depends on, and the `@cfg(...)` flags `cfg`
+/// turns on.
+fn build_engine(
+    r: &Registries,
+    import_roots: &[(String, PathBuf)],
+    cfg: candela::Cfg,
+) -> candela::Engine {
+    let mut engine = candela::Engine::new().with_cfg(cfg);
     for (name, dir) in import_roots {
         engine = engine.with_import_root(name, dir);
     }
@@ -425,7 +458,8 @@ impl ScriptHost for CandelaHost {
         // The scratch engine carries the same import roots as the live one:
         // what the check accepts has to be what the app compiles, and an app
         // that imports a script library is exactly what would differ.
-        let mut engine = build_engine(&scratch, &self.import_roots);
+        // The same flags too, so the check drops the code the compile drops.
+        let mut engine = build_engine(&scratch, &self.import_roots, self.cfg());
         // Replay the embedder's registrations. candela binds every `host` block
         // while it compiles, so a source that declares `host "native" { .. }`
         // does not check against an engine carrying only Lumen's own builtins:
@@ -717,6 +751,8 @@ pub struct ScriptCandelaPlugin {
     /// Script libraries the app depends on, as the name a script imports
     /// under and the directory holding its `.cdl` files.
     pub import_roots: Vec<(String, PathBuf)>,
+    /// The flags a script's `@cfg(...)` conditions are true for.
+    pub cfg_flags: Vec<String>,
     /// Extension callbacks invoked on the inner `candela::Engine` after Lumen's
     /// built-in `host "lumen" { ... }` registrations but before the script is
     /// compiled. Use this to register app-specific host functions (`page()`,
@@ -733,8 +769,17 @@ impl ScriptCandelaPlugin {
             uri: None,
             library_dir: None,
             import_roots: Vec::new(),
+            cfg_flags: Vec::new(),
             extensions: Vec::new(),
         }
+    }
+
+    /// Compile the app's scripts with `flags` on, so `@cfg(flag)` holds for
+    /// each. See [`CandelaHost::set_cfg_flags`].
+    #[must_use]
+    pub fn with_cfg_flags<S: AsRef<str>>(mut self, flags: impl IntoIterator<Item = S>) -> Self {
+        self.cfg_flags = flags.into_iter().map(|f| f.as_ref().to_owned()).collect();
+        self
     }
 
     /// Let the app's scripts `import` the script libraries in `roots`, each
@@ -785,6 +830,7 @@ impl Plugin for ScriptCandelaPlugin {
         for (name, dir) in self.import_roots {
             host.add_import_root(name, dir);
         }
+        host.set_cfg_flags(&self.cfg_flags);
         for ext in self.extensions {
             ext(host.engine_mut());
         }

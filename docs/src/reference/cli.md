@@ -109,6 +109,11 @@ check instead of waiting for the event that runs it. See
 [handler annotations](scripting-candela.md#event-handlers) for what a bare
 parameter costs.
 
+A candela script is checked once for each target, `web` and `desktop`, against
+that target's dependencies and with that target's
+[`@cfg` flag](scripting-candela.md#code-for-one-target) on. An error only one
+target's build hits ends in `(in the web build)` or `(in the desktop build)`.
+
 Where the app's own script loads a native library with a `dylib "name" { ... }`
 block, the calls are checked against the signatures the block declares and the
 library is not opened. So an app whose library a
