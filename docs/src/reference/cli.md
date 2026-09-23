@@ -897,10 +897,11 @@ a bare number is seconds.
 `--dev` is what `lumenc web --serve` runs. It serves from one process with no
 workers, puts the reason a render failed in the error page rather than only
 in the log, gives a render as long as it takes, lets page requests queue
-without a bound, believes forwarding headers from this machine when it listens
-on a loopback address, and stops when the process that started it exits. It
-warns when `--bind` makes the site reachable from other machines. Every one of
-those defaults gives way to a flag that names the setting.
+without a bound, and believes forwarding headers from this machine when it
+listens on a loopback address. It warns when `--bind` makes the site reachable
+from other machines. Every one of those defaults gives way to a flag that
+names the setting. A server `lumenc web --serve` started stops once lumenc
+exits; one started from a shell keeps running after the shell is gone.
 
 `/_lumen/healthz` answers 200 while the process runs. `/_lumen/readyz` answers
 200, or 503 while the server is stopping or its render queue is full.
@@ -911,7 +912,10 @@ answers 200 and 1 otherwise.
 
 `lumen-server` exits 0 after a stop, 1 when the site will not load or the port
 cannot be taken, and 2 for a flag it cannot read. A worker whose render ran
-past `--render-timeout` exits 70, and the supervisor starts another.
+past `--render-timeout` exits 70, and the supervisor starts another. A server
+running as one process, on Windows or under `--dev`, exits 70 the same way
+with nothing to start another, and says so when it starts; run it under a
+service manager that restarts it.
 
 ## Environment variables
 

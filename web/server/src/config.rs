@@ -35,9 +35,8 @@ variable.
 OPTIONS:
     --dev                   Development mode: an error page says what went
                             wrong, one process, no render time limit, no
-                            render queue bound, forwarding headers believed
-                            from this machine, and the server stops when the
-                            process that started it exits. Never face the
+                            render queue bound, and forwarding headers
+                            believed from this machine. Never face the
                             public with it [LUMEN_DEV=1]
     --bind ADDR             Address to listen on (default: 127.0.0.1)
                             [LUMEN_BIND]
@@ -811,5 +810,30 @@ mod tests {
         assert_eq!(duration("1h"), Ok(Duration::from_secs(3600)));
         assert!(duration("-1s").is_err());
         assert!(duration("s").is_err());
+    }
+
+    /// lumenc keeps these from reaching the server it starts, so a setting
+    /// added here without being added there would leak from the user's shell
+    /// into `lumenc web --serve`.
+    #[test]
+    fn lumenc_strips_every_variable_the_server_reads() {
+        let mut read: Vec<&str> = SETTINGS.iter().map(|setting| setting.var).collect();
+        read.extend([DEV_VAR, SITE_VAR, crate::parent::PARENT_VAR]);
+        #[cfg(unix)]
+        read.push(crate::supervisor::LISTEN_FD);
+        let stripped = lumenc::web::serve::SERVER_ENV;
+        for var in &read {
+            assert!(stripped.contains(var), "lumenc passes {var} through");
+        }
+        for var in stripped {
+            assert!(
+                read.contains(var) || *var == "LUMEN_SERVER_LISTEN_FD",
+                "lumenc strips {var}, which the server does not read"
+            );
+        }
+        assert_eq!(
+            lumenc::web::serve::SERVER_PARENT_VAR,
+            crate::parent::PARENT_VAR
+        );
     }
 }

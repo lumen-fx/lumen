@@ -13,7 +13,7 @@
 //! for them to finish what they are answering, and exits.
 
 use std::net::TcpListener;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,13 +21,17 @@ use std::time::{Duration, Instant};
 
 use lumen_ssr::SERVER_SPEC_FILE;
 
+use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
+use rustix::process::{Pid, Signal, kill_process};
+
 use crate::cli::{EXIT_WEDGED, Site, bind, load_site};
 use crate::config::Config;
 use crate::log::Log;
+use crate::parent::{PARENT_VAR, Parent};
 
 /// The variable a worker finds its listening descriptor in. The supervisor
 /// sets it; nothing else should.
-const LISTEN_FD: &str = "LUMEN_SERVER_LISTEN_FD";
+pub(crate) const LISTEN_FD: &str = "LUMEN_SERVER_LISTEN_FD";
 
 /// A worker that exits sooner than this after it started is restarting too
 /// fast to be doing any good, so the next start waits.
@@ -39,20 +43,40 @@ const MAX_BACKOFF: Duration = Duration::from_secs(10);
 /// The listener a supervisor handed this process, when it is a worker.
 pub(crate) fn inherited_listener() -> Option<TcpListener> {
     let fd: RawFd = std::env::var(LISTEN_FD).ok()?.parse().ok()?;
-    // SAFETY: the supervisor put a listening socket at this descriptor and
-    // cleared its close-on-exec flag for this exec, and nothing else in this
-    // process has taken ownership of it: the variable is read once, here.
-    let listener = unsafe { TcpListener::from_raw_fd(fd) };
-    // Not a socket after all: give the descriptor back rather than closing
-    // something this process does not own.
-    if listener.local_addr().is_err() {
-        std::mem::forget(listener);
+    // SAFETY: the supervisor sets this variable to a descriptor it keeps open
+    // across the exec that started this process, and the borrow ends before
+    // anything here could close it.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    // Not a listening socket after all: leave the descriptor alone rather
+    // than take ownership of something this process was not handed.
+    if !is_listening(borrowed) {
         return None;
     }
+    // SAFETY: the descriptor is an open listening socket, checked above, and
+    // nothing else in this process owns it: the variable is read once, here,
+    // and removed below.
+    let listener = unsafe { TcpListener::from_raw_fd(fd) };
+    // The supervisor cleared close-on-exec for the exec that started this
+    // worker; a process this one starts has no business holding the port.
+    let _ =
+        fcntl_getfd(&listener).and_then(|flags| fcntl_setfd(&listener, flags | FdFlags::CLOEXEC));
     // SAFETY: removing a variable is unsound only while another thread reads
     // the environment, and none has been started yet.
     unsafe { std::env::remove_var(LISTEN_FD) };
     Some(listener)
+}
+
+/// Whether `fd` is a socket listening for connections.
+#[cfg(not(target_vendor = "apple"))]
+fn is_listening(fd: BorrowedFd<'_>) -> bool {
+    rustix::net::sockopt::socket_acceptconn(fd).unwrap_or(false)
+}
+
+/// Whether `fd` is a stream socket. Apple systems do not answer
+/// SO_ACCEPTCONN, so whether it listens is found out on the first accept.
+#[cfg(target_vendor = "apple")]
+fn is_listening(fd: BorrowedFd<'_>) -> bool {
+    rustix::net::sockopt::socket_type(fd).is_ok_and(|kind| kind == rustix::net::SocketType::STREAM)
 }
 
 /// One worker place: the process in it, and when it started.
@@ -64,8 +88,9 @@ struct Place {
     backoff: Duration,
 }
 
-/// Bind, start the workers, keep them running, and stop them on a signal.
-pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
+/// Bind, start the workers, keep them running, and stop them on a signal, or
+/// once `parent` exits when there is one to go with.
+pub(crate) fn run(config: &Config, log: &Arc<Log>, parent: Option<Parent>) -> ExitCode {
     // A site that will not load fails here, once, rather than in every
     // worker in a loop.
     let (files, base) = match config
@@ -91,7 +116,7 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
         }
     };
     let fd = listener.as_raw_fd();
-    if let Err(message) = inheritable(fd) {
+    if let Err(message) = inheritable(&listener) {
         log.error(&message);
         return ExitCode::FAILURE;
     }
@@ -102,6 +127,11 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    if let Some(parent) = parent {
+        let stopping = Arc::clone(&stopping);
+        parent.watch(move || stopping.store(true, Ordering::SeqCst));
+    }
+    let me = std::process::id().to_string();
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => {
@@ -116,6 +146,9 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
         match Command::new(&exe)
             .args(&args)
             .env(LISTEN_FD, fd.to_string())
+            // A worker goes with this supervisor rather than keep answering
+            // on a port nobody will restart it on.
+            .env(PARENT_VAR, &me)
             .spawn()
         {
             Ok(child) => Some(child),
@@ -189,10 +222,15 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
 
     log.info("stopping: letting the workers finish what they are answering");
     for place in &places {
-        if let Some(child) = &place.child {
-            // SAFETY: kill with a pid this process started and has not yet
-            // reaped, so the pid still names that child.
-            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        // The child has not been reaped yet, so its pid still names it and
+        // no process started since.
+        if let Some(pid) = place
+            .child
+            .as_ref()
+            .and_then(|child| i32::try_from(child.id()).ok())
+            .and_then(Pid::from_raw)
+        {
+            let _ = kill_process(pid, Signal::TERM);
         }
     }
     let deadline = Instant::now() + config.limits.shutdown_grace + Duration::from_secs(5);
@@ -226,22 +264,11 @@ pub(crate) fn run(config: &Config, log: &Arc<Log>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Let `fd` survive into the workers this process starts.
-fn inheritable(fd: RawFd) -> Result<(), String> {
-    // SAFETY: fcntl on a descriptor this process owns, reading and then
-    // writing its descriptor flags; no memory is passed.
-    let cleared = unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        flags >= 0 && libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) >= 0
-    };
-    if cleared {
-        Ok(())
-    } else {
-        Err(format!(
-            "cannot hand the listening socket to workers: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
+/// Let `listener` survive into the workers this process starts.
+fn inheritable(listener: &TcpListener) -> Result<(), String> {
+    fcntl_getfd(listener)
+        .and_then(|flags| fcntl_setfd(listener, flags - FdFlags::CLOEXEC))
+        .map_err(|e| format!("cannot hand the listening socket to workers: {e}"))
 }
 
 /// Why a worker exited, in words.
