@@ -9,7 +9,6 @@
 //! killed outright leaves nothing listening.
 
 use std::ffi::OsString;
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 
@@ -49,10 +48,6 @@ pub const SERVER_ENV: &[&str] = &[
     "LUMEN_SERVER_LISTEN_FD",
     SERVER_PARENT_VAR,
 ];
-
-/// The address `--serve` listens on when none is named: this machine, and
-/// nobody else.
-pub const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 /// The file name of the server binary on this OS.
 pub fn server_file_name() -> &'static str {
@@ -122,22 +117,6 @@ fn locate() -> Result<PathBuf, String> {
     )
 }
 
-/// The address to listen on. Nothing named means the loopback address, which
-/// is the machine this runs on and nobody else.
-pub fn host_address(host: Option<&str>) -> Result<IpAddr, String> {
-    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
-        return Ok(LOOPBACK);
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return Ok(LOOPBACK);
-    }
-    host.parse::<IpAddr>().map_err(|_| {
-        format!(
-            "--host takes an address this machine has, such as 127.0.0.1 or 0.0.0.0, got `{host}`"
-        )
-    })
-}
-
 /// What `--serve` was asked for, in lumenc's terms.
 pub struct Serve<'a> {
     /// The directory the build wrote.
@@ -147,8 +126,9 @@ pub struct Serve<'a> {
     /// Whether the pages are rendered per request, so the site carries its
     /// own base path and renders take `allow_hosts`.
     pub per_request: bool,
-    /// `--host`.
-    pub host: IpAddr,
+    /// `--host`, when it was given. The server listens on the loopback
+    /// address otherwise, and it is the one that reads the address.
+    pub host: Option<&'a str>,
     /// `--port`.
     pub port: u16,
     /// `--allow-host`, each one.
@@ -157,13 +137,13 @@ pub struct Serve<'a> {
 
 /// The command line `lumen-server` is started with for `serve`.
 pub fn server_args(serve: &Serve<'_>) -> Vec<OsString> {
-    let mut args: Vec<OsString> = vec![
-        "--dev".into(),
-        "--bind".into(),
-        serve.host.to_string().into(),
-        "--port".into(),
-        serve.port.to_string().into(),
-    ];
+    let mut args: Vec<OsString> = vec!["--dev".into()];
+    if let Some(host) = serve.host {
+        args.push("--bind".into());
+        args.push(host.into());
+    }
+    args.push("--port".into());
+    args.push(serve.port.to_string().into());
     if serve.per_request {
         for host in serve.allow_hosts {
             args.push("--allow-host".into());
@@ -368,7 +348,7 @@ mod tests {
             site: Path::new("dist/web"),
             base: "/docs/",
             per_request: true,
-            host: LOOPBACK,
+            host: None,
             port: 8787,
             allow_hosts: &hosts,
         });
@@ -380,8 +360,6 @@ mod tests {
             args,
             [
                 "--dev",
-                "--bind",
-                "127.0.0.1",
                 "--port",
                 "8787",
                 "--allow-host",
@@ -399,7 +377,7 @@ mod tests {
             site: Path::new("out"),
             base: "/docs/",
             per_request: false,
-            host: "0.0.0.0".parse().expect("an address"),
+            host: Some("0.0.0.0"),
             port: 0,
             allow_hosts: &[],
         });
@@ -420,26 +398,5 @@ mod tests {
                 "out"
             ]
         );
-    }
-
-    #[test]
-    fn nothing_named_means_this_machine_and_nobody_else() {
-        assert_eq!(host_address(None), Ok(LOOPBACK));
-        assert_eq!(host_address(Some("")), Ok(LOOPBACK));
-        assert_eq!(host_address(Some(" localhost ")), Ok(LOOPBACK));
-        assert!(host_address(Some("127.0.0.1")).is_ok_and(|host| host.is_loopback()));
-    }
-
-    #[test]
-    fn an_address_that_reaches_further_is_taken_as_written() {
-        let any = host_address(Some("0.0.0.0")).expect("an address this machine can have");
-        assert!(!any.is_loopback(), "the warning is on this being reachable");
-        assert!(host_address(Some("::1")).is_ok_and(|host| host.is_loopback()));
-    }
-
-    #[test]
-    fn something_that_is_not_an_address_is_named_back() {
-        let error = host_address(Some("my-laptop")).expect_err("that is not an address");
-        assert!(error.contains("my-laptop"), "{error}");
     }
 }

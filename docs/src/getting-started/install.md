@@ -9,8 +9,9 @@ to build apps, or to package one for someone else.
 
 Every install also carries `lumen-server`, the server that runs a
 [server-rendered site](../guides/server-rendering.md#running-in-production) in
-production and the one `lumenc web --serve` starts. It is published as a container image too,
-`ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and aarch64.
+production and the one `lumenc web --serve` starts. It is published as a
+container image too, `ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and
+aarch64.
 
 ## Linux and macOS
 

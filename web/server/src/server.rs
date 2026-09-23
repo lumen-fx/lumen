@@ -27,6 +27,8 @@ use crate::http::{
     self, FileBody, HTML, Head, Persist, Request, RequestHead, Response, TEXT, Timed, read_body,
     read_head, write_response,
 };
+use lumen_web::urls::normalize_base;
+
 use crate::log::{Access, Log};
 use crate::proxy::Trust;
 
@@ -241,23 +243,8 @@ struct Site {
 }
 
 impl Server {
-    /// Take a port on `host` and hold it.
-    ///
-    /// `port` 0 asks the system for a free one, which is what [`Self::addr`]
-    /// then reports. `host` is [`LOOPBACK`] unless the caller has been asked
-    /// for something reachable from elsewhere.
-    pub fn bind(root: &Path, base: &str, host: IpAddr, port: u16) -> Result<Self, String> {
-        let listener = TcpListener::bind((host, port)).map_err(|e| {
-            format!(
-                "cannot listen on {host} port {port}: {e}. Name another port, port 0 for any \
-                 free one, or an address this machine has."
-            )
-        })?;
-        Ok(Self::on(listener, root, base))
-    }
-
-    /// Serve on a listener that is already bound, such as one a supervisor
-    /// hands to its workers.
+    /// Serve on a listener that is already bound: the one the command
+    /// bound, or the one a supervisor hands to its workers.
     pub fn on(listener: TcpListener, root: &Path, base: &str) -> Self {
         #[cfg(not(unix))]
         let wake = listener.local_addr().ok().map(|mut addr| {
@@ -950,16 +937,6 @@ fn decode(path: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// A base path with the slashes it needs: one at each end.
-fn normalize_base(base: &str) -> String {
-    let trimmed = base.trim().trim_matches('/');
-    if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{trimmed}/")
-    }
 }
 
 #[cfg(test)]

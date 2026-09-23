@@ -29,6 +29,7 @@ pub mod server;
 pub mod site;
 pub mod snapshot;
 pub mod spec;
+pub mod time;
 pub mod urls;
 
 pub use css::{RESET_CSS, rewrite_css_urls, rules_css, styles_css, token_warnings};

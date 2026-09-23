@@ -88,11 +88,6 @@ impl Response {
         self.headers.push((name.to_string(), value.to_string()));
         self
     }
-
-    /// The value of a header, by name.
-    pub fn header(&self, name: &str) -> Option<&str> {
-        header(&self.headers, name)
-    }
 }
 
 /// The value of a header, by name.
