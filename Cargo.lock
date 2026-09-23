@@ -3849,6 +3849,7 @@ dependencies = [
  "libloading 0.9.0",
  "lumen-capability",
  "lumen-core",
+ "lumen-ir",
  "lumen-module-registry",
  "lumen-plugin",
  "lumen-plugin-abi",

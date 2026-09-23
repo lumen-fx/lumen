@@ -44,7 +44,12 @@ use crate::urls::{join, normalize_base};
 /// address the site's absolute URLs are built from. A page swapped in place
 /// carries its own head from there instead of keeping the head of the
 /// document the browser loaded.
-pub const LM_CONTRACT_VERSION: u32 = 5;
+///
+/// 6: the manifest names the browser add-ons the site loads, in the order the
+/// boot module hands their modules to the runtime, and the elements they
+/// answer for. An element of one of those is written with [`DATA_LM_FOREIGN`]
+/// and its contents are the add-on's, not nodes the runtime binds.
+pub const LM_CONTRACT_VERSION: u32 = 6;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -71,6 +76,11 @@ pub const DRAWN_BY_CONTROL: &str = "[data-lm]:has(> [data-lm-part])";
 /// runtime drives it through a widget adapter instead of walking the parts
 /// the parser desugared it into.
 pub const DATA_LM_WIDGET: &str = "data-lm-widget";
+
+/// Marks an element an add-on answers for, naming its markup tag. The element
+/// stands for a node like any other, but what is inside it belongs to the
+/// add-on: the runtime binds no node under it and writes no text into it.
+pub const DATA_LM_FOREIGN: &str = "data-lm-foreign";
 
 /// The page key this document was emitted for.
 pub const DATA_LM_PAGE: &str = "data-lm-page";
@@ -430,6 +440,36 @@ pub struct PageInfo {
     pub index: bool,
 }
 
+/// One browser add-on a site loads.
+///
+/// The boot module imports each add-on's module and hands the modules to the
+/// runtime in this order, which is how the runtime pairs a module with the
+/// add-on the compiled app describes under the same name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddonRef {
+    /// The name the app declared it under.
+    pub name: String,
+    /// Its JavaScript module, relative to the site root.
+    pub module: String,
+    /// Its stylesheets, relative to the site root, in the order the pages
+    /// link them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<String>,
+    /// The script the pages run before they paint, relative to the site root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+/// The HTML element an add-on's markup tag is written as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignElement {
+    /// The element name, such as `div` or `canvas`.
+    pub html: String,
+    /// True when the element takes no children and no end tag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub void: bool,
+}
+
 /// `lumen.web.json`: what the runtime needs before it has parsed anything.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -472,6 +512,14 @@ pub struct Manifest {
     pub pages: BTreeMap<String, PageInfo>,
     /// Scripts to load at boot, in order.
     pub scripts: Vec<ScriptRef>,
+    /// Browser add-ons the pages load, in the order their modules reach the
+    /// runtime.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addons: Vec<AddonRef>,
+    /// Markup tag to the element it is written as, for every element an
+    /// add-on answers for.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub foreign: BTreeMap<String, ForeignElement>,
 }
 
 impl Manifest {
@@ -559,6 +607,8 @@ impl Default for Manifest {
             navigation: NavigationMode::Soft,
             pages: BTreeMap::new(),
             scripts: Vec::new(),
+            addons: Vec::new(),
+            foreign: BTreeMap::new(),
         }
     }
 }
@@ -1028,9 +1078,26 @@ mod tests {
                 path: "app.cdlb".into(),
                 format: ScriptFormat::Cdlb,
             }],
+            addons: vec![AddonRef {
+                name: "echo".into(),
+                module: "addons/echo.0123/echo.js".into(),
+                styles: vec!["addons/echo.0123/echo.css".into()],
+                head: None,
+            }],
+            foreign: BTreeMap::from([(
+                "echo-view".to_string(),
+                ForeignElement {
+                    html: "div".into(),
+                    void: false,
+                },
+            )]),
             ..Manifest::default()
         };
         let json = serde_json::to_string(&manifest).expect("serializes");
+        assert!(
+            json.contains(r#""foreign":{"echo-view":{"html":"div"}}"#),
+            "{json}"
+        );
         assert!(json.contains(r#""format":"cdlb""#));
         assert!(json.contains(r#""dir":"ltr""#));
         assert!(json.contains(r#""navigation":"soft""#));

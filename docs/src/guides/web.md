@@ -62,6 +62,7 @@ lumen-web.<hash>.wasm    the runtime
 lumen-web.<hash>.js      the module that loads it
 locale/<tag>.<hash>.ftl  the catalogue for each locale the site is emitted in
 assets/                  every file the markup or the stylesheet points at
+addons/<name>.<hash>/    each browser add-on the app depends on
 LICENSE                  the runtime's licence text, and
 NOTICE                   the attribution that goes with it, and
 THIRD-PARTY-LICENSES     the licences of everything the runtime is built from
@@ -299,6 +300,74 @@ Two things differ from the same call on a desktop. A header the browser reserves
 for itself, such as `Host` or `Content-Length`, is dropped on the way out and
 nothing reports it. And credentials follow the browser's rule rather than the
 app's: cookies ride along to your own origin and not to another one.
+
+## Browser add-ons
+
+A browser add-on reaches what the page has and a Lumen app does not: a
+JavaScript library, a browser API, an element some other code draws. It is a
+directory of files, a JavaScript module plus a `lumen-addon.toml` describing
+what the module offers, and the site loads it beside the runtime. Nothing is
+compiled into the runtime for it.
+
+Declare it like any other dependency. Most add-ons only make sense in a page,
+so declare those for the web build alone:
+
+```toml
+[target.web.dependencies]
+echo = { path = "addons/echo" }
+```
+
+`path` names the directory, a version names a registry package, and
+`bundled = true` names one that ships with the toolchain. See
+[`[target.web]`](../reference/lumen-toml.md#targetweb-and-targetdesktop).
+
+A script calls the add-on's functions in its namespace, with nothing to
+declare, because the build reads the descriptor and declares them itself:
+
+```
+fn on_ready() {
+    let loud = echo::shout("hello");
+    echo::later("world", 500, "greeting");
+}
+
+fn on_echo(tag: string, value: any) {
+    lumen::signal_set("greeting", str(value));
+}
+```
+
+A function answers at once, or, when its descriptor declares it `async`, takes
+a tag after its own arguments, returns nothing, and delivers its answer later
+to the handler the add-on names, with the tag first. A failure arrives at the
+same handler name with `_error` on the end.
+
+An add-on can also answer for an element. You write it in markup like any
+other tag, with what a visitor should see until the add-on takes it over:
+
+```
+<echo-view id="banner" text="Loading" />
+```
+
+The page carries that content, so a reader, a crawler and a browser that has
+not run anything yet all see it. Once the add-on has the element it draws
+into it, and a script still reaches it by `id`: a class, an attribute or text
+a script writes onto it is handed to the add-on.
+
+An add-on runs only in a browser. A build that runs the app
+(`prerender = "run"`) and a server rendering a page have no page to run it in,
+so a call there raises `<namespace>::<function> runs only in a browser` in the
+script that made it, the build warns naming the call, and the page is written
+with what the app had without it; the browser makes the call when the page
+opens. A desktop run of an app that declares an add-on for the desktop too
+says so once at startup and raises the same way. An add-on element shows its
+content everywhere the add-on is not running.
+
+The add-on's files are copied into `addons/<name>.<hash>/`, where the hash
+changes whenever any of its files does, and every page holds its module,
+stylesheets and early script to a Subresource Integrity hash, so a file
+changed after the build does not load.
+
+[Browser add-ons](../reference/web-addons.md) is the reference for writing
+one: the descriptor, the module the page loads, and how values cross.
 
 ## Where a page comes from
 

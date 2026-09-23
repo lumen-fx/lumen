@@ -45,6 +45,6 @@ pub use server::{
 pub use site::{NOT_FOUND_FILE, ROBOTS_FILE, SITEMAP_FILE, document, emit, shell};
 pub use snapshot::{NodeState, State, state_of};
 pub use spec::{
-    AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, RowFills, SignalEnv, Site,
-    SiteSpec, WebSpec, document_key, document_name,
+    AssetRef, CheckedFile, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, RowFills,
+    SignalEnv, Site, SiteSpec, WebAddon, WebSpec, document_key, document_name,
 };

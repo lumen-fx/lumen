@@ -343,6 +343,8 @@ pub fn manifest(spec: &SiteSpec) -> Manifest {
             .map(|page| (page.key.clone(), page_info(page, web)))
             .collect(),
         scripts: web.scripts.clone(),
+        addons: web.addons.iter().map(Into::into).collect(),
+        foreign: web.foreign.clone(),
     }
 }
 

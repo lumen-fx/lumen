@@ -32,7 +32,10 @@ pub const SERVER_SPEC_FILE: &str = "lumen.site.json";
 /// field it does not know, and a missing one, so two shapes under one
 /// number cannot read each other. The golden file in this crate's tests
 /// fails when the shape moves without it.
-pub const SERVER_SPEC_VERSION: u32 = 1;
+///
+/// 2: the site settings name the browser add-ons the documents load and the
+/// elements they answer for.
+pub const SERVER_SPEC_VERSION: u32 = 2;
 
 /// Everything a server needs to render a built site, beyond the compiled app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,6 +270,23 @@ mod tests {
                     "locale/de-DE.0123456789abcdef.ftl".to_string(),
                 )]
                 .into(),
+                addons: vec![crate::spec::WebAddon {
+                    name: "echo".to_string(),
+                    module: crate::spec::CheckedFile {
+                        path: "addons/echo.0123456789abcdef/echo.js".to_string(),
+                        integrity: "sha384-AAAA".to_string(),
+                    },
+                    styles: Vec::new(),
+                    head: None,
+                }],
+                foreign: [(
+                    "echo-view".to_string(),
+                    lumen_html::contract::ForeignElement {
+                        html: "div".to_string(),
+                        void: false,
+                    },
+                )]
+                .into(),
                 ..WebSpec::default()
             })
             .with_images(&[
@@ -350,7 +370,7 @@ mod tests {
     fn a_spec_in_another_version_is_refused() {
         let text = spec()
             .to_json()
-            .replace("\"version\": 1", "\"version\": 999");
+            .replace("\"version\": 2", "\"version\": 999");
         assert_eq!(
             ServerSpec::from_json(text.as_bytes()),
             Err(ServerSpecError::Version {

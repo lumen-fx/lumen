@@ -29,7 +29,7 @@ use lumen_core::components::{
     InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, TextContent,
 };
 use lumen_html::attrs::{class_value, radio_attrs};
-use lumen_html::contract::{DATA_LM, DATA_LM_PART, NodePath, PathStep};
+use lumen_html::contract::{DATA_LM, DATA_LM_FOREIGN, DATA_LM_PART, NodePath, PathStep};
 use lumen_html::paths::walk_nodes;
 use lumen_html::style::style_value;
 use lumen_html::tags::{drawn_by_control, html_tag_for, part_from_class};
@@ -39,6 +39,7 @@ use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, Node};
 
+use crate::foreign::ForeignElements;
 use crate::navigation::Routes;
 
 /// How much of the page the runtime took over rather than rebuilt.
@@ -76,6 +77,8 @@ pub struct NodeTable {
     /// Which entity a node path belongs to, for resolving the element a DOM
     /// event landed on back to the entity that stands for it.
     by_path: HashMap<String, Entity>,
+    /// The markup tag of every bound entity an add-on answers for.
+    foreign: HashMap<Entity, std::sync::Arc<str>>,
     /// Prerendered elements no entity has claimed yet, by node path.
     unclaimed: HashMap<String, Element>,
     /// How many row slots each bound `<for>` block has, by the block's node
@@ -119,6 +122,7 @@ impl NodeTable {
             by_entity: HashMap::new(),
             controls: HashMap::new(),
             by_path: HashMap::new(),
+            foreign: HashMap::new(),
             unclaimed,
             for_rows: HashMap::new(),
             report: HydrationReport::default(),
@@ -135,6 +139,11 @@ impl NodeTable {
     /// `<checkbox>` or a `<radio>`, and nothing for every other tag.
     pub fn control(&self, entity: Entity) -> Option<&Element> {
         self.controls.get(&entity)
+    }
+
+    /// The markup tag of `entity`, when an add-on answers for it.
+    pub fn foreign_tag(&self, entity: Entity) -> Option<&str> {
+        self.foreign.get(&entity).map(|tag| &**tag)
     }
 
     /// The entity the element at `path` stands for.
@@ -168,6 +177,7 @@ type NodeQuery<'w, 's> = Query<
 /// for it, or a new one.
 pub fn bind_new_nodes(
     mut table: NonSendMut<NodeTable>,
+    foreign: Option<NonSend<ForeignElements>>,
     routes: Res<Routes>,
     nodes: NodeQuery<'_, '_>,
     children: Query<&Children>,
@@ -191,8 +201,11 @@ pub fn bind_new_nodes(
         &mut table,
         root_entity,
         root,
-        &routes,
-        &nodes,
+        &Scene {
+            routes: &routes,
+            nodes: &nodes,
+            foreign: foreign.as_deref(),
+        },
         &children,
         &rows,
     );
@@ -264,24 +277,47 @@ fn is_orphan_row(table: &NodeTable, path: &str) -> bool {
     false
 }
 
+/// What the walk reads besides the tree itself.
+struct Scene<'a, 'w, 's> {
+    routes: &'a Routes,
+    nodes: &'a NodeQuery<'w, 's>,
+    foreign: Option<&'a ForeignElements>,
+}
+
+impl Scene<'_, '_, '_> {
+    /// The markup tag of `entity`, when an add-on answers for it.
+    fn foreign_tag(&self, entity: Entity) -> Option<std::sync::Arc<str>> {
+        let foreign = self.foreign?;
+        let (tag, ..) = self.nodes.get(entity).ok()?;
+        foreign.contains(&tag.0).then(|| tag.0.clone())
+    }
+}
+
 /// Bind every node under `root_entity`, depth first, along the walk both
 /// halves of the web target name nodes by.
+///
+/// The walk does not go into an element an add-on answers for: what is inside
+/// is the add-on's, so no node there is bound and none is built.
 fn bind_tree(
     table: &mut NodeTable,
     root_entity: Entity,
     root: Element,
-    routes: &Routes,
-    nodes: &NodeQuery<'_, '_>,
+    scene: &Scene<'_, '_, '_>,
     children: &Query<&Children>,
     rows: &Query<&ForMarker>,
 ) {
-    let kids = |entity: Entity| -> &[Entity] { children.get(entity).map(|c| &**c).unwrap_or(&[]) };
+    let kids = |entity: Entity| -> &[Entity] {
+        if scene.foreign_tag(entity).is_some() {
+            return &[];
+        }
+        children.get(entity).map(|c| &**c).unwrap_or(&[])
+    };
     walk_nodes(
         root_entity,
         root,
         kids,
         |entity| rows.get(entity).is_ok(),
-        |entity| stands_for_element(entity, nodes),
+        |entity| stands_for_element(entity, scene.nodes),
         |visit| {
             let element = bind_one(
                 table,
@@ -289,8 +325,7 @@ fn bind_tree(
                 visit.path,
                 visit.parent,
                 visit.previous,
-                routes,
-                nodes,
+                scene,
             )?;
             if visit.is_for {
                 // Recorded even when the block has no children at all, which
@@ -329,8 +364,7 @@ fn bind_one(
     path: &NodePath,
     parent: &Element,
     previous: Option<&Element>,
-    routes: &Routes,
-    nodes: &NodeQuery<'_, '_>,
+    scene: &Scene<'_, '_, '_>,
 ) -> Option<Element> {
     if let Some(element) = table.by_entity.get(&entity) {
         return Some(element.clone());
@@ -339,6 +373,7 @@ fn bind_one(
     if let Some(element) = table.unclaimed.remove(&text) {
         table.report.adopted += 1;
         bind(table, entity, text, element.clone());
+        mount_foreign(table, scene, entity, &element);
         return Some(element);
     }
 
@@ -351,7 +386,7 @@ fn bind_one(
             "lumen: no prerendered element for node {text}; building it instead"
         )));
     }
-    let element = build(table, entity, &text, routes, nodes)?;
+    let element = build(table, entity, &text, scene)?;
     // An element goes after the last sibling that has one, or ahead of every
     // sibling element. Ahead of, not first: an element's own text is the node
     // before its children, and it stays there. The control the parent is
@@ -365,7 +400,22 @@ fn bind_one(
     }
     table.report.created += 1;
     bind(table, entity, text, element.clone());
+    mount_foreign(table, scene, entity, &element);
     Some(element)
+}
+
+/// Hand an element an add-on answers for to the add-on, once it is bound.
+fn mount_foreign(
+    table: &mut NodeTable,
+    scene: &Scene<'_, '_, '_>,
+    entity: Entity,
+    element: &Element,
+) {
+    let (Some(tag), Some(foreign)) = (scene.foreign_tag(entity), scene.foreign) else {
+        return;
+    };
+    foreign.mount(&tag, element);
+    table.foreign.insert(entity, tag);
 }
 
 /// The native control an element is drawn by: its first child, when that is
@@ -402,14 +452,31 @@ fn build(
     table: &NodeTable,
     entity: Entity,
     path: &str,
-    routes: &Routes,
-    nodes: &NodeQuery<'_, '_>,
+    scene: &Scene<'_, '_, '_>,
 ) -> Option<Element> {
-    let (tag, id, classes, text, attributes, style, anchor, radio) = nodes.get(entity).ok()?;
-    let html = html_tag_for(&tag.0)?;
-    let element = table.document.create_element(html.name).ok()?;
+    let routes = scene.routes;
+    let (tag, id, classes, text, attributes, style, anchor, radio) =
+        scene.nodes.get(entity).ok()?;
+    let foreign = scene.foreign.and_then(|f| f.get(&tag.0));
+    let html = match (html_tag_for(&tag.0), foreign) {
+        (Some(html), _) => html,
+        (None, Some(foreign)) => lumen_html::HtmlTag {
+            name: "",
+            fixed: &[],
+            void: foreign.void,
+            control: None,
+        },
+        (None, None) => return None,
+    };
+    let element = table
+        .document
+        .create_element(foreign.map_or(html.name, |f| f.html.as_str()))
+        .ok()?;
     for (name, value) in html.fixed {
         let _ = element.set_attribute(name, value);
+    }
+    if foreign.is_some() {
+        let _ = element.set_attribute(DATA_LM_FOREIGN, &tag.0);
     }
     let classes = classes.iter().flat_map(|c| c.0.iter()).map(|c| &**c);
     let _ = element.set_attribute("class", &class_value(&tag.0, classes));
@@ -466,15 +533,23 @@ fn build(
 ///
 /// This is what unmounts an `<if mode="render">` branch and a `<for>` row the
 /// reconciler dropped: the entity goes, and the element goes with it.
+///
+/// An element an add-on answers for is handed back to the add-on first, so it
+/// can let go of whatever it built inside.
 pub fn release_dead_nodes(
     mut table: NonSendMut<NodeTable>,
+    foreign: Option<NonSend<ForeignElements>>,
     mut removed: RemovedComponents<LumenTag>,
 ) {
     for entity in removed.read() {
         table.controls.remove(&entity);
+        let tag = table.foreign.remove(&entity);
         let Some(element) = table.by_entity.remove(&entity) else {
             continue;
         };
+        if let (Some(tag), Some(foreign)) = (tag, foreign.as_deref()) {
+            foreign.unmount(&tag, &element);
+        }
         if let Some(path) = element.get_attribute(DATA_LM) {
             table.by_path.remove(&path);
         }

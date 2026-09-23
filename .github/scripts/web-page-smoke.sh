@@ -9,10 +9,12 @@
 # emitter. A page that loads to a console error and sits there reads exactly
 # like a page that works, which is why nothing below settles for "it loaded".
 #
-# Two apps are opened. The first is the app under test, which has a script the
-# browser runs. The second is written in a language no browser host answers
-# for: its page has to come up as a page anyway, because an app whose script
-# cannot run is still an app a visitor can read.
+# Three apps are opened. The first is the app under test, which has a script
+# the browser runs. The second is written in a language no browser host
+# answers for: its page has to come up as a page anyway, because an app whose
+# script cannot run is still an app a visitor can read. The third depends on a
+# browser add-on, and every kind of call it offers has to come back into the
+# page.
 #
 #   $1  directory holding lumen-web.wasm and lumen-web.js
 #   $2  the app to emit (default apps/widget-garden)
@@ -25,6 +27,7 @@ lib_dir=$(realpath "${1:?usage: web-page-smoke.sh LIB_DIR [APP_DIR [PAGE]]}")
 app="${2:-apps/widget-garden}"
 page="${3:-/}"
 scriptless="apps/weather"
+with_addon="web/tests/fixtures/addon-echo"
 chrome="${CHROME_BIN:-google-chrome}"
 port=8799
 
@@ -98,4 +101,21 @@ fi
 # `unreachable`.
 open_page "$scriptless"
 
-echo "web page smoke: both pages boot clean and the runtime owns them"
+# An add-on's module is loaded, checked against the hash the build wrote, and
+# handed to the runtime; each thing the fixture calls writes its answer into a
+# label of its own, so a label still reading `waiting` names the leg that broke.
+# Headless Chrome runs only a few animation frames before it dumps the page,
+# which is why the fixture starts every leg before its first tick.
+open_page "$with_addon"
+expect() {
+  grep -qF "$1" "$dom" || fail "$with_addon: $2"
+}
+expect '>HELLO!<' "a function that answers at once did not answer"
+expect '>first: world later<' "an async function's answer never arrived as its event"
+expect '>second: on purpose<' "an async function's failure never arrived as its error event"
+expect '>install hello<' "an event the module raised never reached the script"
+expect '>set by echo<' "a signal the module wrote never reached the page"
+expect 'data-echo="mounted"' "the module was never handed its element"
+expect 'data-echo-data-mood="calm"' "an attribute the script set never reached the module"
+
+echo "web page smoke: every page boots clean, the runtime owns it, and the add-on answers"

@@ -168,7 +168,10 @@ tools/             the release plumbing and the editor plugins
   real element (adopting the one the prerendered page already has for it, or
   building one where the page has none), projects what the world changes onto
   the document, and turns DOM events into the messages a window backend would
-  have produced. It never lays out or paints: the page does both.
+  have produced. It never lays out or paints: the page does both. An element
+  a browser add-on answers for is bound like any other, but the walk does not
+  descend into it: its content is the add-on's, reached through the add-on's
+  mount, update and unmount hooks.
 
 ### Interaction and content
 
@@ -290,7 +293,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `lumen-portable`; each host is a feature of the crate, and candela is the one
   the default build carries. It runs precompiled bytecode, so no compiler
   reaches the page. `boot()` is the whole entry point: it reads the document,
-  fetches what the manifest names, and starts the app.
+  fetches what the manifest names, binds the site's browser add-ons to the
+  modules the page imported, and starts the app.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
   the shared `liblumen` plus a static library. That shared form is a `cdylib`:

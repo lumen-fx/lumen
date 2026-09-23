@@ -64,6 +64,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+pub mod addon;
 pub mod link_kit;
 
 #[cfg(feature = "loader")]
@@ -199,6 +200,107 @@ impl DependenciesCfg {
     }
 }
 
+impl DependenciesCfg {
+    /// This table with `overlay`'s entries laid over it: an entry `overlay`
+    /// declares replaces the one of the same name here, whole, and the rest
+    /// of both are kept. Sorted by name, which is the load order.
+    ///
+    /// This is how `[target.<name>.dependencies]` combines with
+    /// `[dependencies]`, the same way cargo combines its target tables.
+    #[must_use]
+    pub fn merged(&self, overlay: &DependenciesCfg) -> DependenciesCfg {
+        let mut deps: Vec<DepCfg> = self
+            .0
+            .iter()
+            .filter(|dep| !overlay.0.iter().any(|o| o.name == dep.name))
+            .cloned()
+            .collect();
+        deps.extend(overlay.0.iter().cloned());
+        deps.sort_by(|a, b| a.name.cmp(&b.name));
+        DependenciesCfg(deps)
+    }
+}
+
+/// The kind of platform a build is for.
+///
+/// Every build is for exactly one, and it decides two things: which
+/// `[target.<name>.dependencies]` table is laid over `[dependencies]`, and
+/// which names a script's compile-time conditions are true for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Target {
+    /// A site, run by the browser runtime.
+    Web,
+    /// A desktop app: `lumenc run`, `build`, `bundle` and `package`.
+    Desktop,
+}
+
+impl Target {
+    /// Every target, in the order the tables are documented.
+    pub const ALL: [Target; 2] = [Target::Web, Target::Desktop];
+
+    /// The name `lumen.toml` writes it as: `[target.web]`, `[target.desktop]`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Target::Web => "web",
+            Target::Desktop => "desktop",
+        }
+    }
+
+    /// The names a script's compile-time conditions are true for, when a
+    /// program is compiled for this target.
+    ///
+    /// This is the one place the set is written. The compile that honours a
+    /// condition takes it from here, so a target that gains a name gains it
+    /// everywhere at once.
+    pub fn cfg_flags(self) -> &'static [&'static str] {
+        match self {
+            Target::Web => &["web"],
+            Target::Desktop => &["desktop"],
+        }
+    }
+}
+
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The `[target]` table: what each target adds to the app's configuration.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TargetTables {
+    /// `[target.web]`.
+    pub web: TargetCfg,
+    /// `[target.desktop]`.
+    pub desktop: TargetCfg,
+}
+
+impl TargetTables {
+    /// The table for `target`.
+    pub fn get(&self, target: Target) -> &TargetCfg {
+        match target {
+            Target::Web => &self.web,
+            Target::Desktop => &self.desktop,
+        }
+    }
+
+    /// The dependencies a build for `target` takes: `base` with that
+    /// target's own table laid over it.
+    pub fn dependencies_for(&self, base: &DependenciesCfg, target: Target) -> DependenciesCfg {
+        base.merged(&self.get(target).dependencies)
+    }
+}
+
+/// One `[target.<name>]` table.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TargetCfg {
+    /// `[target.<name>.dependencies]`: entries of the same shape as
+    /// `[dependencies]`, used only by a build for this target.
+    pub dependencies: DependenciesCfg,
+}
+
 /// Publish the tags an app's `[dependencies]` table declares, so the markup
 /// parser accepts them.
 ///
@@ -220,6 +322,16 @@ impl DependenciesCfg {
 pub fn register_declared_tags(deps: &DependenciesCfg) {
     for tag in deps.declared_tags() {
         lumen_widget::register_widget_tag_owned(tag);
+    }
+}
+
+/// Publish the elements the add-ons `addons` answer for, so the markup parser
+/// accepts them. The same registry [`register_declared_tags`] writes to, and
+/// the same reason: a compile opens nothing, so the declaration is what tells
+/// the parser the element exists.
+pub fn register_addon_elements(addons: &[lumen_ir::addon::Addon]) {
+    for element in addons.iter().flat_map(|addon| &addon.elements) {
+        lumen_widget::register_widget_tag_owned(&element.tag);
     }
 }
 
@@ -549,6 +661,57 @@ mod tests {
     fn a_built_in_tag_cannot_be_claimed() {
         let err = parse("x = { bundled = true, tags = [\"button\"] }\n").unwrap_err();
         assert!(err.contains("built-in tag"), "{err}");
+    }
+
+    fn targets(doc: &str) -> Result<(DependenciesCfg, TargetTables), String> {
+        #[derive(Deserialize)]
+        struct Doc {
+            #[serde(default)]
+            dependencies: DependenciesCfg,
+            #[serde(default)]
+            target: TargetTables,
+        }
+        let doc: Doc = toml::from_str(doc).map_err(|e| e.to_string())?;
+        Ok((doc.dependencies, doc.target))
+    }
+
+    #[test]
+    fn a_target_table_is_laid_over_the_shared_one() {
+        let (base, tables) = targets(
+            "[dependencies]\n\
+             shared = { path = \"a\" }\n\
+             both = { path = \"everywhere\" }\n\
+             [target.web.dependencies]\n\
+             both = { path = \"browser\" }\n\
+             page-only = { path = \"p\" }\n\
+             [target.desktop.dependencies]\n\
+             window-only = { path = \"w\" }\n",
+        )
+        .unwrap();
+        let web = tables.dependencies_for(&base, Target::Web);
+        let names: Vec<&str> = web.0.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["both", "page-only", "shared"]);
+        assert_eq!(web.0[0].source, ModuleSource::Path("browser".into()));
+
+        let desktop = tables.dependencies_for(&base, Target::Desktop);
+        let names: Vec<&str> = desktop.0.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["both", "shared", "window-only"]);
+        assert_eq!(desktop.0[0].source, ModuleSource::Path("everywhere".into()));
+    }
+
+    #[test]
+    fn a_target_lumen_does_not_build_for_is_refused() {
+        let err = targets("[target.mobile.dependencies]\nx = \"1\"\n").unwrap_err();
+        assert!(err.contains("unknown field `mobile`"), "{err}");
+    }
+
+    #[test]
+    fn each_target_names_itself_as_its_condition() {
+        assert_eq!(Target::Web.cfg_flags(), ["web"]);
+        assert_eq!(Target::Desktop.cfg_flags(), ["desktop"]);
+        for target in Target::ALL {
+            assert!(target.cfg_flags().contains(&target.name()));
+        }
     }
 
     #[test]
