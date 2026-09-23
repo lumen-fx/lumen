@@ -606,7 +606,9 @@ pub unsafe extern "C" fn lumen_app_new(dir: *const c_char) -> *mut LumenApp {
         // surfacing it after a window opened.
         #[cfg(feature = "embed-parser")]
         let compiler_plugins = {
-            let resolved = lumenc::registry_packages(&path).map_err(|e| e.to_string())?;
+            let resolved =
+                lumenc::registry_packages(&path, lumen_runtime::modules::Target::Desktop)
+                    .map_err(|e| e.to_string())?;
             Some(
                 lumenc::plugin_host::compiler_plugins_for(&path, false, &resolved.compiler_plugins)
                     .map_err(|e| e.to_string())?,

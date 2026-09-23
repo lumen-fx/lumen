@@ -364,6 +364,9 @@ fn compile_dir(
         pages: None,
         fragments,
         i18n,
+        // This path links no runtime and resolves no dependency, so it knows
+        // of no add-on; `lumenc build` is what compiles one in.
+        addons: Vec::new(),
     })
 }
 
@@ -551,7 +554,8 @@ fn fallback_locale(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Publish the markup tags the app's `[dependencies]` table declares.
+/// Publish the markup tags the app's dependencies declare for a desktop build:
+/// `[dependencies]` with `[target.desktop.dependencies]` laid over it.
 ///
 /// This path links no runtime, so it reads the table itself. A file that is
 /// absent or is not TOML at all leaves the parser with its built-in tags,
@@ -565,14 +569,20 @@ fn register_declared_tags(dir: &Path) -> Result<(), CompileError> {
     let Ok(value) = toml::from_str::<toml::Value>(&text) else {
         return Ok(());
     };
-    let Some(table) = value.get("dependencies") else {
-        return Ok(());
-    };
-    let deps: lumen_modules::DependenciesCfg = table
-        .clone()
-        .try_into()
-        .map_err(|e| CompileError::Config(e.to_string()))?;
-    lumen_modules::register_declared_tags(&deps);
+    let read = |key: &str| value.get(key).cloned();
+    let deps: lumen_modules::DependenciesCfg = read("dependencies")
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|e| CompileError::Config(e.to_string()))?
+        .unwrap_or_default();
+    let targets: lumen_modules::TargetTables = read("target")
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|e| CompileError::Config(e.to_string()))?
+        .unwrap_or_default();
+    lumen_modules::register_declared_tags(
+        &targets.dependencies_for(&deps, lumen_modules::Target::Desktop),
+    );
     Ok(())
 }
 

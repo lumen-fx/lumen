@@ -204,6 +204,12 @@ pub struct RunOptions {
     /// [`Self::resolved_modules`] is: the runtime resolves nothing, and
     /// `lumenc` hands in what the registry answered.
     pub import_roots: Vec<(String, std::path::PathBuf)>,
+    /// The browser add-ons the app depends on for a desktop build, read by
+    /// `lumenc` out of each one's descriptor. A desktop run cannot load one,
+    /// so each function is bound to a body that says it runs only in a
+    /// browser and the run starts with a banner naming the add-on. A compiled
+    /// app carries its own list, which is added to this one.
+    pub addons: Vec<lumen_ir::addon::Addon>,
 }
 
 impl RunOptions {
@@ -239,6 +245,7 @@ impl RunOptions {
             compiler_plugins: None,
             resolved_modules: crate::modules::ResolvedModules::default(),
             import_roots: Vec::new(),
+            addons: Vec::new(),
         }
     }
 
@@ -537,16 +544,23 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
     Ok((app, window))
 }
 
-/// Publish the markup tags this app's `[dependencies]` table declares, so the
-/// parser accepts them.
+/// Publish the markup tags this app's dependencies declare for the builds of
+/// `targets`, and the elements of `addons`, so the parser accepts them.
 ///
 /// Called from every path that reads a config and then parses markup: the run
 /// build, `lumenc check`, and the AOT compile. It is deliberately independent
 /// of whether the modules are loadable here - `lumenc check` on a machine with
 /// no module beside it still has to accept the app's markup, because the
 /// declaration is the app's claim about itself.
-pub(crate) fn register_declared_tags(cfg: &crate::config::LumenToml) {
-    lumen_modules::register_declared_tags(&cfg.dependencies);
+pub(crate) fn register_declared_tags(
+    cfg: &crate::config::LumenToml,
+    targets: &[lumen_modules::Target],
+    addons: &[lumen_ir::addon::Addon],
+) {
+    for target in targets {
+        lumen_modules::register_declared_tags(&cfg.dependencies_for(*target));
+    }
+    lumen_modules::register_addon_elements(addons);
 }
 
 #[cfg(test)]
@@ -684,7 +698,7 @@ pub use check::CheckReport;
 // The app's catalogue directory, so a build that resolves translations
 // ahead of time reads them from where the runtime would.
 #[cfg(feature = "runtime-parse")]
-pub use check::{check_app, compile_app, compile_app_with_skin, script_exports};
+pub use check::{CompileDeps, check_app, compile_app, compile_app_with_skin, script_exports};
 #[cfg(feature = "runtime-parse")]
 pub(crate) use hot_reload::HotReloadDriver;
 pub use i18n::locale_dir;

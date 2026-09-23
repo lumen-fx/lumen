@@ -1,0 +1,14 @@
+// Calls a browser add-on's function on start. A render has no browser, so the
+// call raises; the namespace is declared here by hand because the add-on is
+// described to the render, not to the compile that built this fixture.
+import "lumen.cdl";
+
+host "echo" {
+    string shout(string);
+}
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("status", echo::shout("ready"));
+}

@@ -170,6 +170,10 @@ pub struct Resolved {
     /// `candela`-platform packages: the name a script imports under, and the
     /// directory its `.cdl` files sit in.
     pub candela_roots: Vec<(String, PathBuf)>,
+    /// `[dependencies]` entries on the `lumen` platform that are browser
+    /// add-ons (a `lumen-addon.toml` at the package root rather than a
+    /// library): the package root, keyed by the declared name.
+    pub addons: BTreeMap<String, PathBuf>,
     /// The exact version every resolved package settled on, transitive ones
     /// included. `lumenc add` writes the answer back into `lumen.toml` when
     /// the author named no requirement.
@@ -314,6 +318,11 @@ fn sort(reqs: &[Requirement], packages: Vec<Package>) -> Result<Resolved, String
         match package.platform.as_str() {
             "candela" => resolved.candela_roots.push((package.name, package.dir)),
             "lumen" => match declared.map(|r| r.table) {
+                Some(Table::Dependencies) if lumen_modules::addon::is_addon(&package.dir) => {
+                    resolved
+                        .addons
+                        .insert(package.name.clone(), package.dir.clone());
+                }
                 Some(Table::Dependencies) => {
                     resolved
                         .modules
@@ -680,6 +689,25 @@ mod tests {
             files: Vec::new(),
             dependencies: BTreeMap::new(),
         }
+    }
+
+    /// A `lumen` package holding an add-on descriptor rather than a library
+    /// is an add-on: there is nothing to load, and its root is what a build
+    /// reads the add-on from.
+    #[test]
+    fn a_lumen_package_holding_a_descriptor_is_an_addon() {
+        let dir = std::env::temp_dir().join(format!("lumenc-lpm-addon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(lumen_modules::addon::ADDON_MANIFEST), b"").unwrap();
+
+        let resolved = sort(
+            &[req("chart", Table::Dependencies)],
+            vec![package("chart", "lumen", &dir)],
+        )
+        .unwrap();
+        assert_eq!(resolved.addons.get("chart"), Some(&dir));
+        assert!(resolved.modules.is_empty());
     }
 
     /// The table a requirement came from is what tells a module from a

@@ -110,6 +110,77 @@ impl ScriptTy {
     }
 }
 
+/// A type written the way candela writes it: `int`, `float`, `bool`,
+/// `string`, `null`, `any`, `T[]` for an array and `{string: T}` for a map.
+///
+/// This is the spelling a declaration uses wherever a signature is written as
+/// text rather than built in Rust, so a function described in a data file
+/// reads the same as one a candela script declares. [`ScriptTy::Any`] and
+/// [`ScriptTy::Dynamic`] both write as `any`, and `any` reads back as
+/// [`ScriptTy::Dynamic`]: a type someone wrote down is a declared one.
+impl fmt::Display for ScriptTy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Any | Self::Dynamic => f.write_str("any"),
+            Self::Unit => f.write_str("null"),
+            Self::Bool => f.write_str("bool"),
+            Self::Int => f.write_str("int"),
+            Self::Float => f.write_str("float"),
+            Self::Str => f.write_str("string"),
+            Self::Array(inner) => write!(f, "{inner}[]"),
+            Self::Map(value) => write!(f, "{{string: {value}}}"),
+        }
+    }
+}
+
+/// Why a type spelling is not one [`ScriptTy`] reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptTyError(String);
+
+impl fmt::Display for ScriptTyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "`{}` is not a type; write int, float, bool, string, null, any, T[] or \
+             {{string: T}}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ScriptTyError {}
+
+impl std::str::FromStr for ScriptTy {
+    type Err = ScriptTyError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let spelling = text.trim();
+        let refuse = || ScriptTyError(text.to_owned());
+        if let Some(inner) = spelling.strip_suffix("[]") {
+            return Ok(Self::Array(Box::new(inner.parse().map_err(|_| refuse())?)));
+        }
+        if let Some(body) = spelling
+            .strip_prefix('{')
+            .and_then(|rest| rest.strip_suffix('}'))
+        {
+            let (key, value) = body.split_once(':').ok_or_else(refuse)?;
+            if key.trim() != "string" {
+                return Err(refuse());
+            }
+            return Ok(Self::Map(Box::new(value.parse().map_err(|_| refuse())?)));
+        }
+        Ok(match spelling {
+            "int" => Self::Int,
+            "float" => Self::Float,
+            "bool" => Self::Bool,
+            "string" => Self::Str,
+            "null" => Self::Unit,
+            "any" => Self::Dynamic,
+            _ => return Err(refuse()),
+        })
+    }
+}
+
 /// The type name of a value, for the other half of a mismatch message.
 fn value_ty_name(value: &ScriptValue) -> &'static str {
     match value {
@@ -1230,6 +1301,37 @@ fn registry_mut(app: &mut App) -> bevy_ecs::change_detection::Mut<'_, ScriptFnRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type_spelling_reads_back_as_the_type_it_writes() {
+        let types = [
+            ScriptTy::Int,
+            ScriptTy::Float,
+            ScriptTy::Bool,
+            ScriptTy::Str,
+            ScriptTy::Unit,
+            ScriptTy::Dynamic,
+            ScriptTy::Array(Box::new(ScriptTy::Str)),
+            ScriptTy::Map(Box::new(ScriptTy::Array(Box::new(ScriptTy::Int)))),
+        ];
+        for ty in types {
+            let text = ty.to_string();
+            assert_eq!(text.parse::<ScriptTy>(), Ok(ty), "{text}");
+        }
+        assert_eq!(
+            " int[] ".parse::<ScriptTy>(),
+            Ok(ScriptTy::Array(Box::new(ScriptTy::Int)))
+        );
+        assert_eq!(ScriptTy::Any.to_string(), "any");
+    }
+
+    #[test]
+    fn a_spelling_that_names_no_type_is_refused() {
+        for bad in ["", "integer", "{int: string}", "{string int}", "[]", "str"] {
+            let err = bad.parse::<ScriptTy>().expect_err(bad);
+            assert!(err.to_string().contains("is not a type"), "{err}");
+        }
+    }
 
     #[test]
     fn a_typed_signature_rejects_the_wrong_shape_and_accepts_the_right_one() {

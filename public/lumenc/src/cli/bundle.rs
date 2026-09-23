@@ -147,7 +147,15 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
         }
     };
     let caps = BundleCapabilities::resolve(src_path, &cfg);
-    if let Some(warning) = static_module_warning(&cfg.dependencies) {
+    // A browser add-on is a description compiled into the app, not a module
+    // the bundle would have to load.
+    let libraries = crate::addons::libraries_of(
+        src_path,
+        &cfg.dependencies_for(lumen_modules::Target::Desktop),
+        &crate::package::lpm::Resolved::default(),
+        None,
+    );
+    if let Some(warning) = static_module_warning(&libraries) {
         eprintln!("{warning}");
     }
     let features = caps.to_features();

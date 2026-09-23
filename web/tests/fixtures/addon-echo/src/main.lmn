@@ -1,0 +1,9 @@
+<root>
+  <label id="sync" bind-text="sync_result" text="waiting" />
+  <label id="async" bind-text="async_result" text="waiting" />
+  <label id="failed" bind-text="failed_result" text="waiting" />
+  <label id="event" bind-text="event_result" text="waiting" />
+  <label id="from-js" bind-text="from_js" text="waiting" />
+  <echo-view id="view" text="the fallback" />
+  <script src="main.cdl" />
+</root>

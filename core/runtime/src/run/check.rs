@@ -10,6 +10,50 @@ pub struct CheckReport {
     pub has_script: bool,
 }
 
+/// What a compile takes from outside the app directory: the target it builds
+/// for, and what `lumenc` resolved for that target before it started.
+///
+/// The runtime resolves nothing itself, so a caller with no registry and no
+/// add-on in reach passes [`CompileDeps::new`] and the compile reads the app
+/// alone.
+#[derive(Debug, Clone)]
+pub struct CompileDeps {
+    /// The target the program is compiled for: it decides which
+    /// `[target.<name>.dependencies]` table applies, and the names a script's
+    /// compile-time conditions are true for
+    /// ([`lumen_modules::Target::cfg_flags`]).
+    pub target: lumen_modules::Target,
+    /// Script libraries the app imports, as the name a script imports under
+    /// and the directory holding its sources.
+    pub import_roots: Vec<(String, PathBuf)>,
+    /// The browser add-ons the app depends on for [`Self::target`]. Their
+    /// functions are declared to the compile, their elements to the parser,
+    /// and the compiled app carries them.
+    pub addons: Vec<lumen_ir::addon::Addon>,
+}
+
+impl CompileDeps {
+    /// A compile for `target` with nothing resolved from outside the app.
+    pub fn new(target: lumen_modules::Target) -> Self {
+        Self {
+            target,
+            import_roots: Vec::new(),
+            addons: Vec::new(),
+        }
+    }
+}
+
+/// The add-ons' functions, bound to the body every target without a page
+/// binds, for handing to a compiler: it declares them and never calls them.
+#[cfg(feature = "runtime-parse")]
+fn addon_stubs(addons: &[lumen_ir::addon::Addon]) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
+    let mut fns = Vec::new();
+    for addon in addons {
+        fns.extend(lumen_script::addon::browser_only_fns(addon, None).map_err(RunError::Script)?);
+    }
+    Ok(fns)
+}
+
 /// Ahead-of-time compile an app directory into a
 /// [`lumen_ir::artifact::CompiledApp`]: parse markup + CSS once, run the full
 /// cascade, resolve asset / include / import paths, and bake the combined
@@ -26,9 +70,9 @@ pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
-    import_roots: &[(String, PathBuf)],
+    deps: &CompileDeps,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    compile_app_with_skin(dir, parser, plugins, None, import_roots)
+    compile_app_with_skin(dir, parser, plugins, None, deps)
 }
 
 /// [`compile_app`] with the skin named outright instead of read from
@@ -44,10 +88,11 @@ pub fn compile_app_with_skin(
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
     skin: Option<&str>,
-    import_roots: &[(String, PathBuf)],
+    deps: &CompileDeps,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
-    register_declared_tags(&cfg);
+    register_declared_tags(&cfg, &[deps.target], &deps.addons);
+    let stubs = addon_stubs(&deps.addons)?;
     let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
@@ -87,7 +132,14 @@ pub fn compile_app_with_skin(
             // An engine with an ahead-of-time form compiles here, so the
             // artifact carries the program a compiler-free runtime can run.
             // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir, import_roots)?,
+            bytecode: compiled_bytecode(
+                engine,
+                &source,
+                &uri,
+                &layout.lib_dir,
+                &deps.import_roots,
+                &stubs,
+            )?,
             source,
         });
     }
@@ -130,6 +182,7 @@ pub fn compile_app_with_skin(
         // their expansions.
         fragments: loaded.fragments,
         i18n,
+        addons: deps.addons.clone(),
     })
 }
 
@@ -139,6 +192,10 @@ pub fn compile_app_with_skin(
 /// candela is the one that does: its `.cdlb` image is what `candela-vm` runs
 /// where the compiler is absent. A build without the candela host trimmed in
 /// cannot produce one, and writes the source alone.
+///
+/// `fns` are declared to the compile the way a live run declares a module's
+/// functions, so the image names them and a runtime that binds the same
+/// names can load it. Their bodies are never called here.
 #[cfg(feature = "runtime-parse")]
 fn compiled_bytecode(
     engine: crate::config::ScriptEngine,
@@ -146,22 +203,39 @@ fn compiled_bytecode(
     uri: &str,
     lib_dir: &Path,
     import_roots: &[(String, PathBuf)],
+    fns: &[lumen_script::ScriptFn],
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
-        let mut host = CandelaHost::new();
-        host.set_library_dir(lib_dir);
-        for (name, dir) in import_roots {
-            host.add_import_root(name.clone(), dir.clone());
-        }
+        let host = candela_compiler(lib_dir, import_roots, fns)?;
         return host
             .compile_bytecode(source, uri)
             .map(Some)
             .map_err(|e| RunError::Script(e.to_string()));
     }
     #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri, lib_dir, import_roots);
+    let _ = (engine, source, uri, lib_dir, import_roots, fns);
     Ok(None)
+}
+
+/// A candela compiler set up the way every compile path sets it up: the
+/// app's library directory, the packages it imports, and `fns` declared.
+#[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
+fn candela_compiler(
+    lib_dir: &Path,
+    import_roots: &[(String, PathBuf)],
+    fns: &[lumen_script::ScriptFn],
+) -> Result<CandelaHost, RunError> {
+    let mut host = CandelaHost::new();
+    host.set_library_dir(lib_dir);
+    for (name, dir) in import_roots {
+        host.add_import_root(name.clone(), dir.clone());
+    }
+    for f in fns {
+        host.register_script_fn(f)
+            .map_err(|e| RunError::Script(e.to_string()))?;
+    }
+    Ok(host)
 }
 
 /// The names a compiled program can be called by.
@@ -174,19 +248,27 @@ fn compiled_bytecode(
 /// it will only appear to call: candela exports a function only when every
 /// parameter it takes is annotated, and a shipped runtime carries no compiler
 /// to fall back on.
+///
+/// `addons` are the browser add-ons the app was compiled against; their
+/// functions are declared in the program, so reading it back binds them too.
 #[cfg(feature = "runtime-parse")]
 #[must_use]
 pub fn script_exports(
     script: &lumen_ir::artifact::CompiledScript,
+    addons: &[lumen_ir::addon::Addon],
 ) -> Option<Result<Vec<String>, String>> {
     let bytecode = script.bytecode.as_deref()?;
     #[cfg(feature = "host-candela")]
     {
-        Some(lumen_script_candela::image_exports(bytecode).map_err(|e| e.to_string()))
+        let fns = match addon_stubs(addons) {
+            Ok(fns) => fns,
+            Err(e) => return Some(Err(e.to_string())),
+        };
+        Some(lumen_script_candela::image_exports(bytecode, &fns).map_err(|e| e.to_string()))
     }
     #[cfg(not(feature = "host-candela"))]
     {
-        let _ = bytecode;
+        let _ = (bytecode, addons);
         None
     }
 }
@@ -202,14 +284,19 @@ pub fn script_exports(
 ///
 /// Requires the source parser (`runtime-parse` feature).
 #[cfg(feature = "runtime-parse")]
+///
+/// `check` is for no one target, so it accepts the markup and the calls of
+/// every target the app declares dependencies for: `deps.addons` should hold
+/// the add-ons of all of them, and `deps.target` is not consulted.
 pub fn check_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
-    import_roots: &[(String, PathBuf)],
+    deps: &CompileDeps,
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
-    register_declared_tags(&cfg);
+    register_declared_tags(&cfg, &lumen_modules::Target::ALL, &deps.addons);
+    let stubs = addon_stubs(&deps.addons)?;
     let layout = AppLayout::resolve(dir, &cfg)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +
@@ -253,12 +340,8 @@ pub fn check_app(
         match engine {
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
-                let mut host = CandelaHost::new();
-                host.set_library_dir(layout.lib_dir.clone());
-                for (name, root) in import_roots {
-                    host.add_import_root(name.clone(), root.clone());
-                }
-                host.compile_check(&source, &uri)
+                candela_compiler(&layout.lib_dir, &deps.import_roots, &stubs)?
+                    .compile_check(&source, &uri)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
             #[cfg(feature = "host-lua")]
@@ -281,6 +364,8 @@ pub fn check_app(
             _ => unreachable!("a trimmed script host is remapped before this match"),
         }
     }
+    // Declared to candela's compiler above; the other hosts check syntax only.
+    let _ = &stubs;
     Ok(CheckReport {
         element_count: count_elements(&ir.root),
         has_script,

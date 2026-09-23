@@ -14,6 +14,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Binding a browser add-on's described functions into the hosts, on every
+/// target.
+pub mod addon;
 pub mod builtins;
 
 /// Host-neutral read side of the dynamic DOM API: `query` / `get_by_id` /

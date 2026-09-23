@@ -455,7 +455,18 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
         return ExitCode::from(2);
     }
 
-    if want_static && let Some(refusal) = static_refusal(kind, target, &cfg) {
+    // What a desktop build of the app depends on, less its browser add-ons: an
+    // add-on is compiled into the app as a description and has no library to
+    // stage. A registry add-on is only known once resolved, and is taken out
+    // again below.
+    let mut libraries = crate::addons::libraries_of(
+        &src_path,
+        &cfg.dependencies_for(lumen_modules::Target::Desktop),
+        &crate::package::lpm::Resolved::default(),
+        lib_dir.as_deref(),
+    );
+
+    if want_static && let Some(refusal) = static_refusal(kind, target, &libraries) {
         eprintln!("lumenc package: {refusal}");
         return ExitCode::from(2);
     }
@@ -470,7 +481,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     // `path` source names a library that only exists as this machine's build,
     // and a folder that silently shipped without its modules is worse than
     // stopping.
-    if !cfg.dependencies.0.is_empty() && !want_static {
+    if !libraries.0.is_empty() && !want_static {
         if target.os == Os::Windows {
             eprintln!(
                 "lumenc package: this app declares [dependencies], and a Windows package \
@@ -481,7 +492,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             );
             return ExitCode::from(2);
         } else if target != Target::host() {
-            for dep in &cfg.dependencies.0 {
+            for dep in &libraries.0 {
                 let ModuleSource::Path(_) = &dep.source else {
                     continue;
                 };
@@ -506,7 +517,8 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     let resolved = match crate::package::lpm::resolve(
         &src_path,
         target.name,
-        &crate::registry_requirements(&src_path).unwrap_or_default(),
+        &crate::registry_requirements(&src_path, &[lumen_modules::Target::Desktop])
+            .unwrap_or_default(),
         crate::package::lpm::Mode::of_invocation(),
     ) {
         Ok(resolved) => resolved,
@@ -515,8 +527,11 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             return ExitCode::FAILURE;
         }
     };
+    libraries
+        .0
+        .retain(|dep| !resolved.addons.contains_key(&dep.name));
     let declared = Declared {
-        cfg: &cfg.dependencies,
+        cfg: &libraries,
         resolved: &resolved,
     };
 
@@ -553,7 +568,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             &app_name,
             target,
             lib_dir.as_deref(),
-            &cfg.dependencies,
+            &libraries,
             &cfg.capabilities,
         ),
         AppKind::Markup => package(
@@ -602,7 +617,11 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
 /// holding the full engine and the toolchain's own modules. Anything that
 /// needs a different engine, a different platform, or a module that was never
 /// in the kit is a from-source build, which this path is not.
-fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Option<String> {
+fn static_refusal(
+    kind: AppKind,
+    target: Target,
+    libraries: &lumen_modules::DependenciesCfg,
+) -> Option<String> {
     if kind != AppKind::Markup {
         return Some(format!(
             "--static links the app into the launcher, and a {} app brings its own \
@@ -621,7 +640,7 @@ fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Opti
             target.name
         ));
     }
-    for dep in &cfg.dependencies.0 {
+    for dep in &libraries.0 {
         let source = match &dep.source {
             ModuleSource::Bundled => continue,
             ModuleSource::Path(_) => "a path",

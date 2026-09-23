@@ -307,6 +307,11 @@ from the symbols the file exports, never declared:
   preludes, and events.
 - A candela script library: `.cdl` sources the app's own scripts import. It
   is not a library the engine opens; it compiles into the app.
+- A [browser add-on](web-addons.md): a directory holding a
+  `lumen-addon.toml` and the JavaScript module it describes. A site loads it
+  beside the runtime; nothing opens it. Its functions are declared to the
+  app's scripts under its namespace and its elements to the markup parser,
+  from the descriptor, so an add-on needs no `tags` key.
 
 One table entry per library; the key is its name.
 
@@ -380,14 +385,53 @@ points at `lumenc package --static`, which compiles the declared modules in.
 The modules Lumen ships are not in that case: `lumenc run` carries them, so
 an app declaring one runs with it during development on every platform.
 `lumenc bundle --static` says the same thing at build time, naming the
-declared modules. `lumenc web` refuses an app that declares a native library
-here, because a browser cannot load one; a candela package is script source,
-so it travels to the web like the app's own scripts.
+declared modules. `lumenc web` refuses an app whose web build depends on a
+native library, because a browser cannot load one; declare such a library
+under [`[target.desktop.dependencies]`](#targetweb-and-targetdesktop) to keep
+it out of the site. A candela package is script source, so it travels to the
+web like the app's own scripts, and a browser add-on is what the web build is
+for.
+
+A desktop build does not open a browser add-on either. Declared for the
+desktop, its functions are bound to a body that raises
+`<namespace>::<function> runs only in a browser` in the script that calls one,
+the run prints one banner naming the add-on, and its elements show the
+content the markup gives them.
 
 A declared library is native code loaded into the app's process, the same
 trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and
 rejected; capability declarations are not supported yet. `git`, `rev`, and
 `registry` sources are reserved and rejected the same way.
+
+## [target.web] and [target.desktop]
+
+What a build for one target adds. Each may carry a `dependencies` table of
+the same shape as [`[dependencies]`](#dependencies), laid over it for that
+target's builds: an entry of the same name replaces the shared one whole, and
+the rest of both tables apply.
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true }
+
+[target.web.dependencies]
+echo = { path = "addons/echo" }
+
+[target.desktop.dependencies]
+shape-tools = { path = "modules/shape-tools" }
+```
+
+`lumenc web` builds for `web`. `lumenc run`, `build`, `bundle`, `package` and a
+compiled app's runtime build for `desktop`. `lumenc check` is for neither, so
+it accepts the markup and the add-on calls of both, and `lumenc fetch`,
+`update` and `add` resolve the registry packages of both.
+
+Use it to keep a browser add-on out of a desktop build and a native library
+out of a site. A script that calls an add-on declared for the web alone does
+not compile for the desktop, since the desktop build has no such function.
+
+`web` and `desktop` are the targets there are; any other name under
+`[target]` is a parse error.
 
 ## Registry packages
 
@@ -403,7 +447,7 @@ what the app wants it for:
 
 | Platform | Table | What it is |
 |----------|-------|------------|
-| `lumen` | `[dependencies]` | A runtime module or a portable plugin, told apart at load by the symbols it exports. |
+| `lumen` | `[dependencies]` | A runtime module or a portable plugin, told apart at load by the symbols it exports, or a browser add-on when the package root holds a `lumen-addon.toml`. |
 | `lumen` | `[[plugins]]` | A compiler plugin, opened while the app compiles. |
 | `candela` | `[dependencies]` | A script library. Its `.cdl` sources become an import root under the declared name, so `import "shapes";` in the app's script reads the package. |
 

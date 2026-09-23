@@ -32,6 +32,10 @@ use crate::{LumenWebApp, hosts};
 /// result to whatever it resolves into. Anything that is not a string is
 /// what the module initialiser returned, and means "find it yourself".
 ///
+/// `addons` is the site's browser add-ons: an array of the module namespace
+/// objects the document imported, in the order the manifest lists them.
+/// A site with none passes nothing.
+///
 /// # Errors
 ///
 /// The document was not emitted by `lumenc web`, it was emitted against a
@@ -40,9 +44,9 @@ use crate::{LumenWebApp, hosts};
 /// Every one of them is reported to the console as well, because a page that
 /// silently does nothing is the failure this exists to make visible.
 #[wasm_bindgen]
-pub async fn boot(manifest: JsValue) -> Result<(), JsError> {
+pub async fn boot(manifest: JsValue, addons: JsValue) -> Result<(), JsError> {
     report_panics();
-    match start(manifest.as_string()).await {
+    match start(manifest.as_string(), &addons).await {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = error.to_string();
@@ -69,7 +73,7 @@ fn report_panics() {
 }
 
 /// Everything [`boot`] does, in terms that report their own failures.
-async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
+async fn start(manifest_url: Option<String>, addons: &JsValue) -> Result<(), BootError> {
     let page = PageContext::from_document()?;
     install_location();
     let url = manifest_url.unwrap_or_else(|| page.manifest_url());
@@ -89,6 +93,12 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     {
         web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
     }
+    // The add-ons go in before the hosts, which bind every function registered
+    // by the time they load; the elements they answer for go in before the
+    // first tick binds the page.
+    let foreign = crate::addons::install(&mut app, &manifest, &loaded.artifact.addons, addons)
+        .map_err(|e| BootError::Addons(e.to_string()))?;
+    app.world.insert_non_send(foreign);
     // The host goes in before the scene: `on_start` publishes the signals the
     // markup binds to, and the spawner seeds only what nothing has written.
     for script in &loaded.scripts {
@@ -224,6 +234,8 @@ enum BootError {
     NoDocument,
     /// The app declares an engine no host in this build answers for.
     Engine(String),
+    /// The page and the build disagree about the site's add-ons.
+    Addons(String),
     /// The browser refused the event listeners.
     Listeners,
     /// There is no window to request frames from.
@@ -241,7 +253,7 @@ impl std::fmt::Display for BootError {
         match self {
             BootError::Load(error) => error.fmt(f),
             BootError::NoDocument => f.write_str("no document to boot into"),
-            BootError::Engine(message) => f.write_str(message),
+            BootError::Engine(message) | BootError::Addons(message) => f.write_str(message),
             BootError::Listeners => f.write_str("the page refused an event listener"),
             BootError::NoWindow => f.write_str("no window to run frames on"),
         }
