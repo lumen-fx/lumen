@@ -339,7 +339,8 @@ fn an_access_line_is_written_and_carries_no_credentials() {
     let mut server = Running::start(site, &["--log-format", "json"]);
     let answer = ask(
         server.addr,
-        "GET /?from=log HTTP/1.1\r\nHost: test\r\nCookie: session=cookie-secret-value\r\n\
+        "GET /?token=query-secret-value HTTP/1.1\r\nHost: test\r\nCookie: \
+         session=cookie-secret-value\r\n\
          Authorization: Bearer auth-secret-value\r\nProxy-Authorization: Basic \
          proxy-secret-value\r\nConnection: close\r\n\r\n",
     );
@@ -351,15 +352,12 @@ fn an_access_line_is_written_and_carries_no_credentials() {
     #[cfg(unix)]
     let _ = server.wait(Duration::from_secs(30));
 
-    let stdout = server.stdout();
-    let line = stdout
-        .lines()
-        .find(|line| line.contains("from=log"))
-        .unwrap_or_else(|| panic!("no access line for the request:\n{stdout}"));
-    let entry: serde_json::Value = serde_json::from_str(line).expect("a JSON access line");
+    let entry = access_line(&server, "/");
     assert_eq!(entry["status"], 200);
     assert_eq!(entry["method"], "GET");
+    let stdout = server.stdout();
     for secret in [
+        "query-secret-value",
         "cookie-secret-value",
         "auth-secret-value",
         "proxy-secret-value",
@@ -419,6 +417,24 @@ fn a_client_that_trickles_its_headers_is_cut_off() {
     );
     // And the server is still answering everyone else.
     assert_eq!(status(&server.get("/_lumen/healthz")), 200);
+}
+
+/// The JSON access line for a request of `path`, once the server has
+/// written one.
+fn access_line(server: &Running, path: &str) -> serde_json::Value {
+    server.until("the access line", || {
+        server
+            .stdout()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .any(|entry| entry["path"] == path)
+    });
+    server
+        .stdout()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|entry| entry["path"] == path)
+        .expect("the access line")
 }
 
 /// An upstream that takes a request and answers it only when told to.
@@ -563,8 +579,8 @@ fn a_worker_recycles_after_its_renders_and_the_port_keeps_answering() {
     let pids: std::collections::BTreeSet<u64> = server
         .stdout()
         .lines()
-        .filter(|line| line.contains("round="))
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| entry["path"] == "/")
         .filter_map(|entry| entry["pid"].as_u64())
         .collect();
     assert!(pids.len() >= 3, "{pids:?}");
@@ -662,14 +678,8 @@ fn dev_believes_forwarding_headers_from_this_machine_and_production_does_not() {
              Connection: close\r\n\r\n",
         );
         assert_eq!(status(&answer), 200, "{answer}");
-        server.until("the access line", || server.stdout().contains("from=proxy"));
-        let stdout = server.stdout();
-        let line = stdout
-            .lines()
-            .find(|line| line.contains("from=proxy"))
-            .expect("the access line");
-        let entry: serde_json::Value = serde_json::from_str(line).expect("a JSON access line");
-        assert_eq!(entry["client"], client, "{extra:?}: {line}");
+        let entry = access_line(&server, "/");
+        assert_eq!(entry["client"], client, "{extra:?}: {entry}");
     }
 }
 

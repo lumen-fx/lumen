@@ -658,14 +658,14 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
             persist,
         );
         if let Some(log) = &site.log {
-            let target = head.target.split('#').next().unwrap_or_default();
+            let path = access_path(&head.target);
             log.access(&Access {
                 client: request
                     .as_ref()
                     .and_then(|request| request.client)
                     .or(Some(peer.ip())),
                 method: &head.method,
-                target,
+                path,
                 status: response.status,
                 bytes: if head_only { 0 } else { bytes },
                 took: began.elapsed(),
@@ -677,6 +677,12 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
         first = false;
     }
     http::close(&stream);
+}
+
+/// The part of a request target an access line records: the path, with the
+/// query and the fragment left off.
+fn access_path(target: &str) -> &str {
+    target.split(['?', '#']).next().unwrap_or_default()
 }
 
 /// Write a response against the write deadline. `false` when it could not

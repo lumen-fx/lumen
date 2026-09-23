@@ -155,14 +155,15 @@ it answers; that is what the container image checks itself with.
 ### Logging
 
 Every request is one access line on standard output: the time, the visitor's
-address, the method and target, the status, the body size, and how long it
+address, the method and path, the status, the body size, and how long it
 took. The server's own messages, and each warning a render comes back with,
 go to standard error; a warning is written once however many renders repeat
 it. `--log-format json` writes both as one JSON object per line for a log
 collector.
 
-No header value is ever written, so a `Cookie`, `Authorization` or
-`Proxy-Authorization` never reaches a log.
+No header value and no query string is ever written, so a `Cookie`, an
+`Authorization` header, or a token in a sign-in or password-reset link never
+reaches a log.
 
 A render that fails is logged with what went wrong, and the visitor gets the
 status and nothing else. Only `--dev`, which `lumenc web --serve` runs, puts
