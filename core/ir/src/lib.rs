@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod addon;
 pub mod artifact;
 pub mod css;
 pub mod css_vars;

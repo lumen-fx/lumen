@@ -24,6 +24,7 @@ const FIXTURES: &[&str] = &[
     "fixtures/fetches.cdl",
     "fixtures/components.cdl",
     "fixtures/writes_nodes.cdl",
+    "fixtures/calls_addon.cdl",
     "../prerender/fixtures/translates.cdl",
 ];
 

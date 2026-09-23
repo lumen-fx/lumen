@@ -1,0 +1,34 @@
+// Calls into the `echo` add-on, and the handlers its answers arrive at.
+import "lumen.cdl";
+
+// An add-on's functions are bound before the script loads, so on_start can
+// call them, and its answers land in the first ticks the page runs.
+fn on_start() {
+    lumen::signal_set("sync_result", echo::shout("hello"));
+    echo::later("world", 5, "first");
+    echo::fail("on purpose", "second");
+}
+
+// An attribute written onto the element the add-on owns reaches it as an
+// update. The node exists once the tree is up, which is on_ready.
+fn on_ready() {
+    let view = lumen::node_get_by_id("view");
+    lumen::node_set_attr(view, "data-mood", "calm");
+}
+
+// An async function's answer, with the tag the call passed.
+fn on_echo(tag: string, value: any) {
+    lumen::signal_set("async_result", tag + ": " + str(value));
+}
+
+// An async function's failure, with the tag and the reason.
+fn on_echo_error(tag: string, reason: any) {
+    lumen::signal_set("failed_result", tag + ": " + str(reason));
+}
+
+// An event the module raised on its own.
+fn on_echo_hello(key: string, what: any) {
+    lumen::signal_set("event_result", key + " " + str(what));
+}
+
+fn main() {}

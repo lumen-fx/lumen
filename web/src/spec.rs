@@ -8,8 +8,8 @@ use std::time::SystemTime;
 use lumen_core::signals::{ArrayItem, signal_is_truthy};
 use lumen_html::PixelSize;
 use lumen_html::contract::{
-    DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, Dir,
-    NavigationMode, ScriptRef, Seed,
+    AddonRef, DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, Dir,
+    ForeignElement, NavigationMode, ScriptRef, Seed,
 };
 use lumen_i18n::LanguageIdentifier;
 use lumen_ir::interpolate::Globals;
@@ -347,6 +347,50 @@ pub struct WebSpec {
     pub sitemap: bool,
     /// Write `robots.txt`. It names the sitemap when there is one.
     pub robots: bool,
+    /// Browser add-ons the documents load, in the order the boot module
+    /// hands their modules to the runtime.
+    pub addons: Vec<WebAddon>,
+    /// Markup tag to the element it is written as, for every element an
+    /// add-on answers for. A tag with no mapping of its own is written this
+    /// way instead of failing the page.
+    pub foreign: BTreeMap<String, ForeignElement>,
+}
+
+/// One file a document loads with a Subresource Integrity check: the browser
+/// refuses it unless its bytes hash to [`Self::integrity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckedFile {
+    /// Where it is, relative to the site root.
+    pub path: String,
+    /// Its `integrity` value, such as `sha384-...`.
+    pub integrity: String,
+}
+
+/// One browser add-on, as the documents load it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebAddon {
+    /// The name the app declared it under, which is the name the compiled
+    /// app describes it by.
+    pub name: String,
+    /// Its JavaScript module, imported by the boot module.
+    pub module: CheckedFile,
+    /// Its stylesheets, linked in the head in this order.
+    pub styles: Vec<CheckedFile>,
+    /// The classic script the head runs before the page paints.
+    pub head: Option<CheckedFile>,
+}
+
+impl From<&WebAddon> for AddonRef {
+    fn from(addon: &WebAddon) -> Self {
+        AddonRef {
+            name: addon.name.clone(),
+            module: addon.module.path.clone(),
+            styles: addon.styles.iter().map(|s| s.path.clone()).collect(),
+            head: addon.head.as_ref().map(|h| h.path.clone()),
+        }
+    }
 }
 
 impl Default for WebSpec {
@@ -372,6 +416,8 @@ impl Default for WebSpec {
             per_request: false,
             sitemap: false,
             robots: false,
+            addons: Vec::new(),
+            foreign: BTreeMap::new(),
         }
     }
 }

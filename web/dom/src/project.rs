@@ -33,6 +33,7 @@ use lumen_primitives::Indeterminate;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement};
 
+use crate::foreign::ForeignElements;
 use crate::nodes::{NodeTable, control_of};
 
 /// Set an attribute, or take it off, unless the element already says that.
@@ -99,13 +100,23 @@ fn set_text(element: &Element, text: &str) {
 }
 
 /// Project an element's text.
+///
+/// An element an add-on answers for holds what the add-on built, so its text
+/// is not written into it: the add-on hears it as an `update` named `text`
+/// and decides what it means.
 pub fn project_text(
     table: NonSend<NodeTable>,
+    foreign: Option<NonSend<ForeignElements>>,
     changed: Query<(Entity, &TextContent), Changed<TextContent>>,
 ) {
     for (entity, text) in &changed {
-        if let Some(element) = table.element(entity) {
-            set_text(element, &text.0);
+        let Some(element) = table.element(entity) else {
+            continue;
+        };
+        match (table.foreign_tag(entity), foreign.as_deref()) {
+            (Some(tag), Some(foreign)) => foreign.update(tag, element, "text", &text.0),
+            (Some(_), None) => {}
+            (None, _) => set_text(element, &text.0),
         }
     }
 }
@@ -126,16 +137,25 @@ pub fn project_classes(
 
 /// Project the attributes that have no component of their own: `role`,
 /// `aria-*`, `data-*`, and whatever else a script set.
+///
+/// An element an add-on answers for gets the attribute like any other, and
+/// the add-on hears each one that changed as an `update`.
 pub fn project_attributes(
     table: NonSend<NodeTable>,
+    foreign: Option<NonSend<ForeignElements>>,
     changed: Query<(Entity, &LumenAttributes), Changed<LumenAttributes>>,
 ) {
     for (entity, attributes) in &changed {
         let Some(element) = table.element(entity) else {
             continue;
         };
+        let hooks = table.foreign_tag(entity).zip(foreign.as_deref());
         for (name, value) in &attributes.0 {
+            let changed = element.get_attribute(name).as_deref() != Some(value.as_str());
             set_attribute(element, name, Some(value));
+            if changed && let Some((tag, foreign)) = hooks {
+                foreign.update(tag, element, name, value);
+            }
         }
     }
 }

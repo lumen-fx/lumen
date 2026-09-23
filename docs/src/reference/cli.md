@@ -299,7 +299,7 @@ document of its own.
 | `--runtime` / `--no-runtime` | Whether the documents carry the browser runtime. Refused against a `--render` mode that already says the opposite. Default: `[web] runtime`, else what `--render` implies. |
 | `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. `run` with `--render ssr` is refused, because a rendered page settles its own state per request. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
-| `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
+| `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. A `bundled` browser add-on is looked for under `addons/<name>/` here first. |
 | `--strict` | Exit non-zero if the build printed any warning. |
 | `--serve` | Serve the emitted site with `lumen-server --dev` on 127.0.0.1, which prints the address. Ctrl-C stops it. Under `--render ssr` every page comes from a render. |
 | `--port <n>` | Port to serve on. Default 8787; `0` takes any free port and prints which. |
@@ -353,8 +353,9 @@ machine built the site, and when the browser runtime cannot be found. It warns
 when `--allow-host` names a host and nothing here renders a page, and when
 `[web] host` names a rewrite file a rendered site has no use for. Under
 `--prerender run` it also warns when an app is still changing when its budget
-runs out, when it asks for an address the build will not fetch, when the same
-page settles differently on a second run, and when the app changed the shape
+runs out, when it asks for an address the build will not fetch, when it calls
+a [browser add-on](web-addons.md) function, which runs only in a browser, when
+the same page settles differently on a second run, and when the app changed the shape
 of the tree while it ran, which leaves what it wrote onto its nodes out of
 the document.
 
@@ -368,10 +369,17 @@ A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 fails the build: a page is written with the state a run settled into here, or
 with the state the app settles into for the request, and not both. So does a
 runtime setting that contradicts the `--render` mode. Only a markup app can be
-emitted as a site, and not one whose
-[`[dependencies]`](lumen-toml.md#dependencies) name a native library, which a
-browser cannot load. A candela package is script source and compiles into the
-app, so an app that depends on one emits as a site like any other.
+emitted as a site, and not one whose web build depends on a native library,
+which a browser cannot load: its
+[`[dependencies]`](lumen-toml.md#dependencies) with
+[`[target.web.dependencies]`](lumen-toml.md#targetweb-and-targetdesktop) laid
+over them. A candela package is script source and compiles into the app, so an
+app that depends on one emits as a site like any other, and a
+[browser add-on](web-addons.md) is copied into the site under
+`addons/<name>.<hash>/`. A `bundled` add-on is looked for under
+`addons/<name>/` in `--lib-dir`, the directory holding `lumenc`, then
+`$LUMEN_LIB_DIR`. An add-on whose descriptor is refused fails the build,
+naming the add-on.
 
 ## package
 

@@ -1,0 +1,19 @@
+# Proof fixture for browser add-ons. The app depends on the `echo` add-on
+# beside it for its web build only, and calls each kind of thing an add-on
+# offers: a function that answers at once, one whose answer arrives as an
+# event, one that fails, an event the module raises on its own, a signal the
+# module writes, and an element the module takes over. Each lands in a label,
+# so a page loaded in a browser shows whether the round trip worked.
+#
+# It lives here rather than under fixtures/ because it is a web-only app: a
+# desktop run has no browser for the add-on, and every app under fixtures/ is
+# run on the desktop.
+[script]
+engine = "candela"
+
+[target.web.dependencies]
+echo = { path = "echo" }
+
+# No introspection server, so a `--headless` run binds no port.
+[mcp]
+port = 0

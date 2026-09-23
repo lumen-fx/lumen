@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "web": {
     "base_path": "/",
     "url": "https://example.com",
@@ -22,7 +22,23 @@
     "runtime": true,
     "per_request": false,
     "sitemap": false,
-    "robots": false
+    "robots": false,
+    "addons": [
+      {
+        "name": "echo",
+        "module": {
+          "path": "addons/echo.0123456789abcdef/echo.js",
+          "integrity": "sha384-AAAA"
+        },
+        "styles": [],
+        "head": null
+      }
+    ],
+    "foreign": {
+      "echo-view": {
+        "html": "div"
+      }
+    }
   },
   "locales": [
     "en-US",
@@ -47,7 +63,7 @@
     }
   ],
   "seed": {
-    "contract_version": 5,
+    "contract_version": 6,
     "globals": {
       "visitor": {
         "t": "str",

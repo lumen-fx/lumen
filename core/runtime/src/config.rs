@@ -32,6 +32,9 @@
 //! shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
 //! weather-feed = "1.2"             # registry package, fetched by lpm and pinned in lumen.lock
 //!
+//! [target.web.dependencies]        # laid over [dependencies] for a `lumenc web` build
+//! chart = { path = "addons/chart" }  # a browser add-on: a directory holding lumen-addon.toml
+//!
 //! [[hooks]]                        # project build/setup commands; see `crate::hooks`
 //! when    = "prebuild"             # "prebuild" | "prerun"
 //! os      = "linux"                # optional: "linux" | "macos" | "windows"
@@ -107,6 +110,11 @@ pub struct LumenToml {
     /// [`crate::modules`]); `build_app` runs the table through the loader
     /// when the `modules` feature is on.
     pub dependencies: lumen_modules::DependenciesCfg,
+    /// `[target.web]` and `[target.desktop]`: what a build for one target
+    /// adds. Each may carry a `dependencies` table of the same shape as
+    /// `[dependencies]`, laid over it for that target's builds; read the
+    /// combined table through [`Self::dependencies_for`].
+    pub target: lumen_modules::TargetTables,
     /// `[signals]` table - optional typed schema. Each key declares
     /// the expected `SignalType`. Used by `lumenc lint --signals`
     /// to flag untyped writes / schema mismatches. Schema entries
@@ -518,8 +526,12 @@ impl BundleCapabilities {
             .unwrap_or_else(|| hay.contains("fetch("));
 
         // Modules: any declared `[dependencies]` entry keeps the loader in,
-        // so a missing module banners at startup instead of vanishing.
-        let modules = !cfg.dependencies.0.is_empty();
+        // so a missing module banners at startup instead of vanishing. A
+        // bundle is a desktop build, so its own target table counts too.
+        let modules = !cfg
+            .dependencies_for(lumen_modules::Target::Desktop)
+            .0
+            .is_empty();
 
         let hosts = infer_script_hosts(dir, cfg);
 
@@ -1269,6 +1281,15 @@ impl LumenToml {
         }
     }
 
+    /// The dependencies a build for `target` takes: `[dependencies]`, with
+    /// `[target.<name>.dependencies]` laid over it entry by entry.
+    pub fn dependencies_for(
+        &self,
+        target: lumen_modules::Target,
+    ) -> lumen_modules::DependenciesCfg {
+        self.target.dependencies_for(&self.dependencies, target)
+    }
+
     /// Returns `[asset_roots].paths` resolved against `dir`, leaving absolute entries unchanged and joining relative entries onto `dir`.
     pub fn resolved_asset_roots(&self, dir: &Path) -> Vec<PathBuf> {
         self.asset_roots
@@ -1450,6 +1471,38 @@ mod tests {
             vec![ScriptEngine::Candela]
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_target_table_is_laid_over_the_dependencies_for_its_builds() {
+        use lumen_modules::Target;
+        let src = r#"
+            [dependencies]
+            shared = { path = "a" }
+
+            [target.web.dependencies]
+            chart = { path = "addons/chart" }
+
+            [target.desktop.dependencies]
+            shapes = { path = "modules/shapes" }
+        "#;
+        let cfg: LumenToml = toml::from_str(src).unwrap();
+        let names = |target| -> Vec<String> {
+            cfg.dependencies_for(target)
+                .0
+                .into_iter()
+                .map(|dep| dep.name)
+                .collect()
+        };
+        assert_eq!(names(Target::Web), ["chart", "shared"]);
+        assert_eq!(names(Target::Desktop), ["shapes", "shared"]);
+        // A bundle is a desktop build, so the desktop table keeps the loader.
+        let cfg: LumenToml =
+            toml::from_str("[target.desktop.dependencies]\nshapes = { path = \"m\" }\n").unwrap();
+        let dir = std::env::temp_dir().join(format!("lumen-cfg-target-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(BundleCapabilities::resolve(&dir, &cfg).modules);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

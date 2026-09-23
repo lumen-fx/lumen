@@ -30,7 +30,8 @@ lumen-web-dom = { workspace = true }
 # The app a page runs, and the script hosts that run its scripts: everything
 # about a Lumen app that is not about the platform it runs on.
 lumen-portable = { workspace = true }
-lumen-script = { workspace = true }
+# `json`: an add-on's arguments and results cross to JavaScript as JSON.
+lumen-script = { workspace = true, features = ["json"] }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true

@@ -6,15 +6,16 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use lumen_html::PixelSize;
 use lumen_html::contract::{
-    DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
+    DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, ForeignElement, LM_CONTRACT_VERSION, Manifest, Seed,
+    SeedValue,
 };
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
     WidgetPart,
 };
 use lumen_web::{
-    AssetRef, EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec, SignalEnv,
-    Site, SiteSpec, WebSpec, emit,
+    AssetRef, CheckedFile, EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec,
+    SignalEnv, Site, SiteSpec, WebAddon, WebSpec, emit,
 };
 
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
@@ -1254,6 +1255,131 @@ fn a_tag_with_no_html_mapping_is_an_error() {
             tag: "sparkline".into(),
         })
     );
+}
+
+/// A site whose one page holds an add-on's element, with the add-on in the
+/// site settings.
+fn addon_site() -> SiteSpec {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![
+                element(
+                    "echo-view",
+                    Attributes {
+                        id: Some("view".into()),
+                        text: Some("Loading".into()),
+                        ..Attributes::default()
+                    },
+                    vec![element("label", labelled("inside"), Vec::new())],
+                ),
+                element("label", labelled("after"), Vec::new()),
+            ],
+        )),
+    );
+    let mut spec = site(vec![page]);
+    spec.web.foreign.insert(
+        "echo-view".into(),
+        ForeignElement {
+            html: "section".into(),
+            void: false,
+        },
+    );
+    spec.web.addons.push(WebAddon {
+        name: "echo".into(),
+        module: CheckedFile {
+            path: "addons/echo.0123/echo.js".into(),
+            integrity: "sha384-module".into(),
+        },
+        styles: vec![CheckedFile {
+            path: "addons/echo.0123/echo.css".into(),
+            integrity: "sha384-style".into(),
+        }],
+        head: Some(CheckedFile {
+            path: "addons/echo.0123/early.js".into(),
+            integrity: "sha384-head".into(),
+        }),
+    });
+    spec
+}
+
+#[test]
+fn an_addon_element_is_written_as_its_element_with_the_markup_inside() {
+    let html = page_html(&addon_site(), "index.html");
+    assert!(
+        html.contains(
+            r#"<section class="lm-echo-view" id="view" data-lm="0.0" data-lm-foreign="echo-view">Loading<span class="lm-label">inside</span></section>"#
+        ),
+        "{html}"
+    );
+    // The node after it keeps its path: the content inside took none.
+    assert!(
+        html.contains(r#"<span class="lm-label" data-lm="0.1">after</span>"#),
+        "{html}"
+    );
+}
+
+#[test]
+fn an_addon_is_loaded_checked_and_handed_to_the_runtime() {
+    let html = page_html(&addon_site(), "index.html");
+    assert!(
+        html.contains(
+            r#"<link rel="stylesheet" href="/addons/echo.0123/echo.css" integrity="sha384-style">"#
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<script type="importmap">{"integrity":{"/addons/echo.0123/echo.js":"sha384-module"}}</script>"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(
+            r#"<script src="/addons/echo.0123/early.js" integrity="sha384-head"></script>"#
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<link rel="modulepreload" href="/addons/echo.0123/echo.js" integrity="sha384-module">"#),
+        "{html}"
+    );
+    // The import map is in place before any module is fetched.
+    let map = html.find("importmap").expect("an import map");
+    let first_module = html.find("modulepreload").expect("a preload");
+    assert!(map < first_module, "{html}");
+    assert!(
+        html.contains(r#"import * as a0 from "/addons/echo.0123/echo.js";"#),
+        "{html}"
+    );
+    assert!(html.contains(", [a0]));</script>"), "{html}");
+
+    let site = emitted(&addon_site());
+    let manifest: Manifest =
+        serde_json::from_str(&site.file(DEFAULT_MANIFEST_FILE).expect("manifest").contents)
+            .expect("parses");
+    assert_eq!(manifest.addons.len(), 1);
+    assert_eq!(manifest.addons[0].name, "echo");
+    assert_eq!(manifest.addons[0].module, "addons/echo.0123/echo.js");
+    assert_eq!(manifest.foreign["echo-view"].html, "section");
+}
+
+#[test]
+fn a_site_with_no_addon_boots_the_way_it_always_has() {
+    let html = page_html(&site(vec![simple_page()]), "index.html");
+    assert!(!html.contains("importmap"), "{html}");
+    assert!(!html.contains("import * as"), "{html}");
+}
+
+#[test]
+fn an_addon_runs_nothing_on_a_page_that_carries_no_runtime() {
+    let mut spec = addon_site();
+    spec.web.runtime = false;
+    let html = page_html(&spec, "index.html");
+    // What styles the fallback content still arrives.
+    assert!(html.contains("/addons/echo.0123/echo.css"), "{html}");
+    assert!(!html.contains("echo.js"), "{html}");
+    assert!(!html.contains("early.js"), "{html}");
 }
 
 #[test]

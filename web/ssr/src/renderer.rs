@@ -420,6 +420,7 @@ fn render_one(
 
     let Booted {
         mut app,
+        browser_only,
         unsupported_engines,
         language_error,
     } = lumen_prerender::boot(
@@ -488,6 +489,12 @@ fn render_one(
     drop(app);
 
     warnings.extend(response.refused.iter().cloned());
+    for name in browser_only.take() {
+        warnings.push(format!(
+            "the app called `{name}`, which runs only in a browser; the call raised here and the \
+             document shows what the markup gives in its place"
+        ));
+    }
     for skipped in &state.skipped {
         warnings.push(format!("the document is written without {skipped}"));
     }

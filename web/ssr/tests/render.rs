@@ -28,6 +28,9 @@ const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"))
 /// A program holding the component the tree below leaves a marker for.
 const COMPONENTS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/components.cdlb"));
 
+/// A program that calls a browser add-on's function on start.
+const CALLS_ADDON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/calls_addon.cdlb"));
+
 /// A program that publishes what `t()` answers on start.
 const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
 
@@ -900,4 +903,49 @@ fn a_catalogue_that_will_not_load_is_refused_up_front() {
         )
         .expect_err("the catalogue is not Fluent");
     assert!(matches!(error, SsrError::Catalogue(_)), "{error}");
+}
+
+/// A render has no browser: an add-on's function raises in the script that
+/// called it, the render says so, and the document is written with what the
+/// app had without it.
+#[test]
+fn an_addon_call_is_reported_and_the_document_is_still_written() {
+    use lumen_ir::addon::{Addon, AddonFunction, AddonParam};
+
+    let _turn = in_turn();
+    let mut app = app_with(CALLS_ADDON);
+    app.addons = vec![Addon {
+        name: "echo".to_string(),
+        namespace: "echo".to_string(),
+        functions: vec![AddonFunction {
+            name: "shout".to_string(),
+            params: vec![AddonParam {
+                name: "text".to_string(),
+                ty: "string".to_string(),
+            }],
+            returns: "string".to_string(),
+            event: None,
+            doc: String::new(),
+        }],
+        elements: Vec::new(),
+    }];
+    let site = Arc::new(SsrSite::new(app, WebSpec::default()).expect("the entry is a page"));
+    let renderer = Renderer::start(site, options(Arc::new(Silent))).expect("nothing running");
+    let response = renderer
+        .render(SsrRequest::get("/"))
+        .expect("the document is written");
+    assert_eq!(response.status, 200);
+    assert!(
+        !response.body.contains("the data arrived"),
+        "{}",
+        response.body
+    );
+    assert!(
+        response
+            .warnings
+            .iter()
+            .any(|w| w.contains("called `echo::shout`, which runs only in a browser")),
+        "{:?}",
+        response.warnings
+    );
 }

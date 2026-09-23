@@ -1,0 +1,4 @@
+/* What the `echo` test add-on's element looks like, fallback and all. */
+.lm-echo-view {
+  display: block;
+}

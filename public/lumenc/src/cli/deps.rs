@@ -257,7 +257,7 @@ it. <dir> defaults to the current directory.
         },
         None => lpm::host_target(),
     };
-    let reqs = match crate::registry_requirements(&dir) {
+    let reqs = match crate::registry_requirements(&dir, &lumen_modules::Target::ALL) {
         Ok(reqs) => reqs,
         Err(e) => {
             eprintln!("lumenc fetch: {e}");
@@ -324,7 +324,7 @@ as its requirement allows; with names, only those do.
         }
     }
     let dir = PathBuf::from(dir.unwrap_or_else(|| ".".to_string()));
-    let reqs = match crate::registry_requirements(&dir) {
+    let reqs = match crate::registry_requirements(&dir, &lumen_modules::Target::ALL) {
         Ok(reqs) => reqs,
         Err(e) => {
             eprintln!("lumenc update: {e}");
@@ -362,7 +362,7 @@ as its requirement allows; with names, only those do.
 
 /// Resolve the app in `dir` for this machine.
 fn resolve(dir: &Path, mode: lpm::Mode) -> Result<lpm::Resolved, String> {
-    let reqs = crate::registry_requirements(dir)?;
+    let reqs = crate::registry_requirements(dir, &lumen_modules::Target::ALL)?;
     lpm::resolve(dir, lpm::host_target(), &reqs, mode)
 }
 
