@@ -116,6 +116,7 @@ expect '>second: on purpose<' "an async function's failure never arrived as its 
 expect '>install hello<' "an event the module raised never reached the script"
 expect '>set by echo<' "a signal the module wrote never reached the page"
 expect 'data-echo="mounted"' "the module was never handed its element"
+expect 'data-echo-read="HELLO!"' "the module could not read a signal the script wrote"
 expect 'data-echo-data-mood="calm"' "an attribute the script set never reached the module"
 
 echo "web page smoke: every page boots clean, the runtime owns it, and the add-on answers"
