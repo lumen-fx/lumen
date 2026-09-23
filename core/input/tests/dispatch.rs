@@ -30,7 +30,10 @@ fn write_pointer_moved(world: &mut World, p: glam::Vec2) {
     world.resource_mut::<PointerState>().position = Some(p);
     world
         .resource_mut::<Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
 }
 
 fn write_pointer_pressed(world: &mut World, p: glam::Vec2) {
@@ -40,6 +43,7 @@ fn write_pointer_pressed(world: &mut World, p: glam::Vec2) {
         .write(PointerPressed {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
 }
 
@@ -50,6 +54,7 @@ fn write_pointer_released(world: &mut World, p: glam::Vec2) {
         .write(PointerReleased {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
 }
 
@@ -559,6 +564,7 @@ fn same_tick_press_release_emits_exactly_one_click() {
         .write(PointerPressed {
             position: glam::Vec2::new(25.0, 25.0),
             button: PointerButton::Primary,
+            local: None,
         });
     app.world.resource_mut::<PointerState>().primary_down = false;
     app.world
@@ -566,6 +572,7 @@ fn same_tick_press_release_emits_exactly_one_click() {
         .write(PointerReleased {
             position: glam::Vec2::new(25.0, 25.0),
             button: PointerButton::Primary,
+            local: None,
         });
     app.tick();
 
@@ -613,6 +620,7 @@ fn four_same_tick_clicks_deliver_four_times() {
             .write(PointerPressed {
                 position: glam::Vec2::new(25.0, 25.0),
                 button: PointerButton::Primary,
+                local: None,
             });
         app.world.resource_mut::<PointerState>().primary_down = false;
         app.world
@@ -620,6 +628,7 @@ fn four_same_tick_clicks_deliver_four_times() {
             .write(PointerReleased {
                 position: glam::Vec2::new(25.0, 25.0),
                 button: PointerButton::Primary,
+                local: None,
             });
         app.tick();
         // Idle follow-up frames between clicks.

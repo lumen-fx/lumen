@@ -244,6 +244,7 @@ mod tests {
             entity,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     }
 

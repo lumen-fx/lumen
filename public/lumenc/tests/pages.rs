@@ -192,6 +192,7 @@ fn multi_page_navigation_end_to_end() {
             entity: home_anchor,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     tick_n(&mut app, 5);
     assert_eq!(route_signal(&mut app, "route.path"), "index");
@@ -329,6 +330,7 @@ fn auto_discovered_pages_navigate_with_no_config() {
             entity: home,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     tick_n(&mut app, 5);
     assert_eq!(route_signal(&mut app, "route.path"), "index");
@@ -468,6 +470,7 @@ fn multi_page_navigation_from_an_artifact() {
             entity: button,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     tick_n(&mut app, 6);
 
@@ -490,6 +493,7 @@ fn multi_page_navigation_from_an_artifact() {
             entity: home,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     tick_n(&mut app, 6);
     assert_eq!(route_signal(&mut app, "route.path"), "index");

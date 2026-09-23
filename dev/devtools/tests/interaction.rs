@@ -46,6 +46,7 @@ fn click(world: &mut World, entity: Entity) {
             entity,
             position: Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
 }
 

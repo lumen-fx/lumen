@@ -2328,6 +2328,7 @@ fn dropdown_inside_tab_opens_and_commits_on_clicks() {
             entity: header,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     world
         .run_system_once(lumen_primitives::tabs::dispatch_dropdown_clicks)
@@ -2361,6 +2362,7 @@ fn dropdown_inside_tab_opens_and_commits_on_clicks() {
             entity: light,
             position: glam::Vec2::ZERO,
             button: PointerButton::Primary,
+            local: None,
         });
     world
         .run_system_once(lumen_primitives::tabs::dispatch_dropdown_clicks)

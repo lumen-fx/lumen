@@ -360,6 +360,7 @@ mod tests {
             .write(PointerPressed {
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
     }
 

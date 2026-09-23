@@ -20,13 +20,15 @@
 //! tick, so what it records goes on a queue the app drains at the start of
 //! the next one.
 //!
-//! Two things happen synchronously, inside the browser's own dispatch,
+//! Three things happen synchronously, inside the browser's own dispatch,
 //! because by the time a tick drains the queue it is too late to ask for:
 //! whether a click on a same-page `<a href>` should keep the browser from
 //! navigating (soft mode intercepts it; [`should_soft_navigate`] is the
-//! decision), and whether a `dragover` is accepted at all (a target has to
-//! call `preventDefault` or the browser refuses the `drop` that would
-//! follow).
+//! decision), whether a script handler cancels a link the browser would
+//! otherwise follow (the app runs its next tick inside the listener to find
+//! out; see [`set_run_now`]), and whether a `dragover` is accepted at all (a
+//! target has to call `preventDefault` or the browser refuses the `drop` that
+//! would follow).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -41,6 +43,7 @@ use lumen_core::input::{
 };
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
+use lumen_core::text_events::{AppliedKind, TextEditApplied};
 use lumen_html::contract::{DATA_LM, DATA_LM_PART, DRAWN_BY_CONTROL};
 use lumen_os_dnd::DropAccept;
 use lumen_os_dnd::mime::MimeKind;
@@ -58,8 +61,8 @@ use web_sys::{
 enum PendingEvent {
     /// A click landed on the node at this path.
     Click {
-        /// Node path of the element the event landed on.
-        path: String,
+        /// The element the event landed on, and where its box was.
+        hit: Hit,
         /// Client coordinates of the pointer.
         position: (f64, f64),
         /// `MouseEvent.button`.
@@ -140,6 +143,15 @@ thread_local! {
     /// different set of things entirely.
     static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
+    /// Runs the app's next tick at once, answering false when the app is
+    /// already in the middle of one. Installed by whoever drives the app's
+    /// frames, through [`set_run_now`].
+    static RUN_NOW: RefCell<Option<Box<dyn FnMut() -> bool>>> = const { RefCell::new(None) };
+
+    /// The node the last click delivered to the world landed on, as the
+    /// packed handle its handlers saw as the event's target.
+    static LAST_CLICK: Cell<Option<u64>> = const { Cell::new(None) };
+
     /// Whether the document already carries the key and pointer listeners.
     ///
     /// Everything else listens on an app's own root, so a second app in the
@@ -150,16 +162,93 @@ thread_local! {
     static DOCUMENT_BOUND: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The element an event landed on, or the nearest ancestor that stands for a
+/// node.
+fn node_element_of(event: &Event) -> Option<Element> {
+    let target = event.target()?.dyn_into::<Element>().ok()?;
+    Some(
+        target
+            .closest(&format!("[{DATA_LM}]"))
+            .ok()
+            .flatten()
+            .unwrap_or(target),
+    )
+}
+
+/// Let a listener run the app's next tick at once, inside the browser's own
+/// dispatch of an event.
+///
+/// `run` ticks the app and answers true, or answers false without ticking
+/// when the app is mid-tick already (a tick that makes the browser raise an
+/// event synchronously). Whoever drives the app's frames installs it, since
+/// only it holds the app.
+///
+/// One listener needs it: a click on a link the browser is about to follow.
+/// A script handler can cancel that navigation with `prevent_default()`, and
+/// the browser takes the answer only before the listener returns, so the
+/// handler has to have run by then.
+pub fn set_run_now(run: impl FnMut() -> bool + 'static) {
+    RUN_NOW.with_borrow_mut(|slot| *slot = Some(Box::new(run)));
+}
+
+/// Run the app's next tick now, if something installed a way to. False when
+/// nothing did, or the app is busy.
+fn run_now() -> bool {
+    RUN_NOW.with_borrow_mut(|slot| slot.as_mut().is_some_and(|run| run()))
+}
+
+/// Whether a script handler cancelled the click just queued, running the app
+/// now to find out.
+///
+/// Only asked for a click the browser would otherwise act on, and only when
+/// some script has a `click` handler bound at all; every other click waits
+/// for the next frame like any event.
+fn script_cancels_click() -> bool {
+    if !lumen_script::event::has_bindings_for("click") {
+        return false;
+    }
+    LAST_CLICK.set(None);
+    run_now()
+        && LAST_CLICK
+            .take()
+            .is_some_and(lumen_script::event::is_click_default_prevented)
+}
+
 /// The node path of the element an event landed on, or of the nearest
 /// ancestor that stands for a node.
 pub(crate) fn path_of(event: &Event) -> Option<String> {
-    let target = event.target()?.dyn_into::<Element>().ok()?;
-    let element = target
-        .closest(&format!("[{DATA_LM}]"))
-        .ok()
-        .flatten()
-        .unwrap_or(target);
-    element.get_attribute(DATA_LM)
+    node_element_of(event)?.get_attribute(DATA_LM)
+}
+
+/// Where a pointer event landed: the node path of the element under it, as
+/// [`path_of`] finds it, and the top-left corner of that element's border
+/// box in client coordinates.
+///
+/// The box is measured while the event is in hand, because the page can
+/// scroll or reflow before the tick that delivers it, and a handler's
+/// `event_x` is where the pointer was on the element when it happened.
+pub(crate) fn hit_of(event: &Event) -> Option<Hit> {
+    let element = node_element_of(event)?;
+    let path = element.get_attribute(DATA_LM)?;
+    Some(Hit {
+        path,
+        origin: origin_of(&element),
+    })
+}
+
+/// The top-left corner of `element`'s border box, in client coordinates.
+pub(crate) fn origin_of(element: &Element) -> glam::Vec2 {
+    let rect = element.get_bounding_client_rect();
+    glam::Vec2::new(rect.left() as f32, rect.top() as f32)
+}
+
+/// The node a pointer event landed on, and where its box was at the time.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Hit {
+    /// Node path of the element.
+    pub(crate) path: String,
+    /// Top-left corner of its border box, in client coordinates.
+    pub(crate) origin: glam::Vec2,
 }
 
 /// True when a click inside an element the browser draws a control for is
@@ -859,19 +948,27 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                     event.prevent_default();
                 }
             }
-            let Some(path) = path_of(&event) else {
+            let Some(hit) = hit_of(&event) else {
                 return;
             };
             if is_forwarded_click(&event) {
                 return;
             }
             queue(PendingEvent::Click {
-                path,
+                hit,
                 position: mouse.map_or((0.0, 0.0), |m| {
                     (f64::from(m.client_x()), f64::from(m.client_y()))
                 }),
                 button: mouse.map_or(0, MouseEvent::button),
             });
+            // A link the browser is about to follow. On the desktop, link
+            // navigation is the click's default action and runs after the
+            // handlers, which can cancel it; here the browser runs it as soon
+            // as this listener returns, so the handlers run now instead of
+            // on the next frame, and a cancel reaches the browser in time.
+            if anchor_of(&event).is_some() && !event.default_prevented() && script_cancels_click() {
+                event.prevent_default();
+            }
         }) as Box<dyn FnMut(Event)>),
     )?;
     // `dragover` fires continuously while a drag hovers, and the browser
@@ -1059,6 +1156,7 @@ pub fn drain_dom_events(
     mut releases: MessageWriter<KeyReleased>,
     mut modifiers_state: ResMut<ModifiersState>,
     mut texts: Query<&mut TextContent>,
+    mut edits: MessageWriter<TextEditApplied>,
     mut toggles: Query<&mut Toggleable>,
     mut sliders: Query<&mut SliderValue>,
     focus: Option<ResMut<FocusTracker>>,
@@ -1074,22 +1172,25 @@ pub fn drain_dom_events(
     for event in pending {
         match event {
             PendingEvent::Click {
-                path,
+                hit,
                 position,
                 button,
             } => {
-                let Some(entity) = table.entity_at(&path) else {
+                let Some(entity) = table.entity_at(&hit.path) else {
                     continue;
                 };
+                let position = glam::Vec2::new(position.0 as f32, position.1 as f32);
+                LAST_CLICK.set(Some(lumen_core::node::NodeHandle::new(entity).pack()));
                 clicks.write(ClickEvent {
                     entity,
-                    position: glam::Vec2::new(position.0 as f32, position.1 as f32),
+                    position,
                     button: match button {
                         1 => PointerButton::Middle,
                         2 => PointerButton::Secondary,
                         0 => PointerButton::Primary,
                         other => PointerButton::Other(other.unsigned_abs()),
                     },
+                    local: Some(position - hit.origin),
                 });
             }
             PendingEvent::Input { path, value } => {
@@ -1119,7 +1220,21 @@ pub fn drain_dom_events(
                 if let Ok(mut text) = texts.get_mut(entity)
                     && text.0 != value
                 {
+                    // The browser has already applied the edit, so what the
+                    // world hears is the edit's outcome: the field's whole
+                    // value, replaced. That is the message a desktop field
+                    // raises per keystroke, and what `input` is raised from.
+                    // The page keeps no caret for Lumen, so both caret
+                    // positions are the end of the text.
+                    let end = value.len();
                     text.0 = value;
+                    edits.write(TextEditApplied {
+                        entity,
+                        version: 0,
+                        kind: AppliedKind::Replace,
+                        before_byte: end,
+                        after_byte: end,
+                    });
                 }
             }
             PendingEvent::Checked { path, checked } => {

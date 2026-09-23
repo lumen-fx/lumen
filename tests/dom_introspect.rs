@@ -8,6 +8,7 @@ use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_core::prelude::{Entity, World};
 use lumen_script::introspect::{
     FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, PointerSnapshot, publish_introspection,
+    publish_pointer,
 };
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -75,16 +76,16 @@ fn c_abi_introspection_surface() {
             vec![("width".to_string(), "100".to_string())],
         )],
     );
+    publish_pointer(PointerSnapshot {
+        x: 12.0,
+        y: 34.0,
+        inside: true,
+        ..Default::default()
+    });
     publish_introspection(IntrospectSnapshot::new(
         geometry,
         components,
         vec!["LayoutBox".to_string()],
-        PointerSnapshot {
-            x: 12.0,
-            y: 34.0,
-            inside: true,
-            ..Default::default()
-        },
         FrameInfo {
             frame: 9,
             dt_ms: 16.0,

@@ -648,9 +648,10 @@ navigation); `prevent_default` on a click skips it.
 
 In a web build the pointer events come from the browser's Pointer Events, so a
 touch or a pen raises the same `pointerdown` and `pointerup` a mouse does.
-`event_x` and `event_y` equal `event_client_x` and `event_client_y` there,
-because the browser lays out the page and the app holds no box for the
-target. The page scrolls under a `wheel` handler as it does without one.
+`event_x` and `event_y` are measured from the target's box as the browser
+places it when the event happens. The page scrolls under a `wheel` handler as
+it does without one. A `click` handler on a link runs before the browser
+follows the link, so `prevent_default` keeps it on the page there too.
 
 ## Method sugar
 

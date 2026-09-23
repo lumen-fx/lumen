@@ -2039,6 +2039,7 @@ pub fn activate_dialog_default_on_enter(
         entity: target,
         position: glam::Vec2::ZERO,
         button: lumen_core::input::PointerButton::Primary,
+        local: None,
     });
 }
 
@@ -3280,6 +3281,7 @@ mod dialog_contract_tests {
                 entity: text_child,
                 position: glam::Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world
             .run_system_once(mark_dialog_accept_on_default_click)

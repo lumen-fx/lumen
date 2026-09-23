@@ -24,4 +24,11 @@ fn on_pointer(ev: int) {
     lumen::signal_set_float(kind + "_y", lumen::event_client_y(ev));
     lumen::signal_set_float(kind + "_delta_y", lumen::event_delta_y(ev));
     lumen::signal_set_int(kind + "_button", lumen::event_button(ev));
+    // Where the pointer was on the element itself.
+    lumen::signal_set_float(kind + "_local_x", lumen::event_x(ev));
+    lumen::signal_set_float(kind + "_local_y", lumen::event_y(ev));
+    // What `pointer_state()` said while the handler ran.
+    let state = lumen::pointer_state();
+    lumen::signal_set(kind + "_state_x", state.get("x"));
+    lumen::signal_set(kind + "_state_buttons", state.get("buttons"));
 }

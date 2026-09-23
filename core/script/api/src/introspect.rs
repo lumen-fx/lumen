@@ -5,8 +5,9 @@
 //! Like the rest of the DOM read side, every getter reads a process-global
 //! snapshot the runtime publishes each tick, so a `Send + Sync` script host
 //! with no `&World` at call time can inspect the live app. Geometry,
-//! component maps, pointer / frame state, and the signal set are published
-//! by the runtime's introspection system; `computed_style()` and
+//! component maps, frame state, and the signal set are published by the
+//! runtime's introspection system, and the pointer state by
+//! [`publish_pointer_state`], which every platform installs; `computed_style()` and
 //! `matched_rules()` re-run the cascade host-side over the same
 //! stylesheet + tree the phase-2 detail snapshot already carries.
 //!
@@ -137,7 +138,6 @@ pub struct IntrospectSnapshot {
     geometry: HashMap<u64, NodeGeometry>,
     components: ComponentMaps,
     known_components: Vec<String>,
-    pointer: PointerSnapshot,
     frame: FrameInfo,
     signals: Vec<(String, String)>,
 }
@@ -148,7 +148,6 @@ impl IntrospectSnapshot {
         geometry: HashMap<u64, NodeGeometry>,
         components: ComponentMaps,
         known_components: Vec<String>,
-        pointer: PointerSnapshot,
         frame: FrameInfo,
         signals: Vec<(String, String)>,
     ) -> Self {
@@ -156,7 +155,6 @@ impl IntrospectSnapshot {
             geometry,
             components,
             known_components,
-            pointer,
             frame,
             signals,
         }
@@ -481,7 +479,44 @@ fn write_dump(
 
 /// `pointer_state()`: window position, buttons, modifiers.
 pub fn pointer_state() -> PointerSnapshot {
-    snapshot().pointer
+    pointer_cell().read().map(|g| *g).unwrap_or_default()
+}
+
+static POINTER: OnceLock<RwLock<PointerSnapshot>> = OnceLock::new();
+
+fn pointer_cell() -> &'static RwLock<PointerSnapshot> {
+    POINTER.get_or_init(|| RwLock::new(PointerSnapshot::default()))
+}
+
+/// Publish the pointer state `pointer_state()` reads.
+pub fn publish_pointer(pointer: PointerSnapshot) {
+    if let Ok(mut g) = pointer_cell().write() {
+        *g = pointer;
+    }
+}
+
+/// Publish what the input layer knows about the pointer each tick, so a read
+/// from a handler sees this tick's position.
+///
+/// It reads only the pointer and modifier resources every input backend
+/// keeps, a window's or a page's, so every platform publishes through it.
+pub fn publish_pointer_state(
+    state: Option<bevy_ecs::system::Res<lumen_core::input::PointerState>>,
+    modifiers: Option<bevy_ecs::system::Res<lumen_core::input::ModifiersState>>,
+) {
+    let state = state.map(|s| *s).unwrap_or_default();
+    let m = modifiers.map(|m| m.0).unwrap_or_default();
+    let position = state.position.unwrap_or(glam::Vec2::ZERO);
+    publish_pointer(PointerSnapshot {
+        x: position.x,
+        y: position.y,
+        inside: state.position.is_some(),
+        buttons: u32::from(state.primary_down),
+        shift: m.shift,
+        ctrl: m.ctrl,
+        alt: m.alt,
+        super_: m.super_,
+    });
 }
 
 /// `frame_info()`: `{frame, dt_ms, dirty_count}`.

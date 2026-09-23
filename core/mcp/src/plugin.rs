@@ -300,6 +300,7 @@ fn drain_simulate_queue(
                 pointer.position = Some(glam::Vec2::new(x, y));
                 moved.write(PointerMoved {
                     position: glam::Vec2::new(x, y),
+                    local: None,
                 });
             }
             SimulateKind::Click { x, y, button } => {
@@ -313,14 +314,17 @@ fn drain_simulate_queue(
                 }
                 moved.write(PointerMoved {
                     position: glam::Vec2::new(x, y),
+                    local: None,
                 });
                 pressed.write(PointerPressed {
                     position: glam::Vec2::new(x, y),
                     button: b,
+                    local: None,
                 });
                 released.write(PointerReleased {
                     position: glam::Vec2::new(x, y),
                     button: b,
+                    local: None,
                 });
                 if matches!(b, PointerButton::Primary) {
                     pointer.primary_down = false;
@@ -334,10 +338,12 @@ fn drain_simulate_queue(
                 }
                 moved.write(PointerMoved {
                     position: glam::Vec2::new(x, y),
+                    local: None,
                 });
                 pressed.write(PointerPressed {
                     position: glam::Vec2::new(x, y),
                     button: b,
+                    local: None,
                 });
             }
             SimulateKind::PointerUp { x, y, button } => {
@@ -346,6 +352,7 @@ fn drain_simulate_queue(
                 released.write(PointerReleased {
                     position: glam::Vec2::new(x, y),
                     button: b,
+                    local: None,
                 });
                 if matches!(b, PointerButton::Primary) {
                     pointer.primary_down = false;
@@ -383,6 +390,7 @@ fn drain_simulate_queue(
                 wheel.write(MouseWheel {
                     delta: glam::Vec2::new(dx, dy),
                     position: glam::Vec2::new(x, y),
+                    local: None,
                 });
             }
         }

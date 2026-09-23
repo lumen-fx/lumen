@@ -62,12 +62,17 @@ lumen-script-candela = { workspace = true, default-features = true }
 # rather than a fixture string that can drift from it.
 lumen-web = { workspace = true }
 wasm-bindgen-test.workspace = true
-# A test raises the pointer and wheel events a visitor would, which takes
-# dictionaries nothing in the crate itself constructs. Naming them here keeps
-# them out of the module a page loads.
+# A test raises the pointer, wheel, click and input events a visitor would,
+# which takes dictionaries nothing in the crate itself constructs. Naming them
+# here keeps them out of the module a page loads.
 web-sys = { workspace = true, features = [
     "EventTarget",
     "HtmlElement",
+    "HtmlInputElement",
+    "InputEvent",
+    "InputEventInit",
+    "MouseEvent",
+    "MouseEventInit",
     "Navigator",
     "PointerEvent",
     "console",

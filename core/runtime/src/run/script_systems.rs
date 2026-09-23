@@ -54,7 +54,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             .before(lumen_input::dispatch_focused_keys),
     );
     // Phase-5 low-level introspection snapshot: geometry, component field
-    // maps, pointer / frame state, signals. Same ordering discipline as the
+    // maps, frame state, signals. Same ordering discipline as the
     // detail publish so an inspection read from a handler sees this tick.
     // Unconditional (works for a script-less app inspected over the C-ABI).
     app.world
