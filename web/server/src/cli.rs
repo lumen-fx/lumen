@@ -215,7 +215,8 @@ pub(crate) fn serve_on(
         .with_limits(config.limits)
         .with_health_path(&config.health_path)
         .with_trust(config.trust.clone())
-        .with_access_log(Arc::clone(log));
+        .with_access_log(Arc::clone(log))
+        .with_siblings(worker && config.workers > 1);
     let rendered = matches!(site, Site::Rendered(_));
     if let Site::Rendered(site) = site {
         let options = render_options(&site, config);
