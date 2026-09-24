@@ -310,11 +310,19 @@ from the symbols the file exports, never declared:
 A module may also have a [web half](web-addons.md): a `web/` directory under
 its root holding a `lumen-addon.toml` and the JavaScript module it describes.
 A web build takes the web half in place of the library, since a browser
-cannot open one: a site loads it beside the runtime, its functions are
-declared to the app's scripts under its namespace, and its elements to the
-markup parser. Every other build loads the library and never reads `web/`.
+cannot open one: a site loads it beside the runtime. The descriptor is the
+module's script surface on every target, so every compile, `lumenc check` and
+the desktop builds included, declares its functions to the app's scripts
+under its namespace and its elements to the markup parser. A desktop run
+binds those functions to the ones the loaded library registers.
 A module's root is the directory a `path` source names, the package a
 `version` source resolved to, or the toolchain's copy of a `bundled` one.
+
+A module without a web half declares nothing to a compile, because a compile
+opens no library. Of the first-party modules that is `lumen-archive`,
+`lumen-audio`, `lumen-download`, `lumen-fs` and `lumen-process`: `lumenc run`
+runs a script that calls one, and `lumenc check`, `lumenc build` and
+`lumenc package` fail on it, naming the call.
 
 One table entry per module; the key is its name.
 
@@ -322,7 +330,7 @@ One table entry per module; the key is its name.
 [dependencies]
 lumen-archive = { bundled = true }
 lumen-audio = { bundled = true }
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 lumen-fs = { bundled = true }
 markdown-widgets = "1.2"
 shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
@@ -337,14 +345,14 @@ for getting them onto a machine:
 | `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
 | `lumen-browser` | The [`browser` namespace](scripting-candela.md#browser): popups and their messages, sharing, downloads, the leave-page prompt, media queries, a file picker, fullscreen. Browser only: on the desktop each call raises. | |
-| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the [`canvas` namespace](scripting-candela.md#canvas) that draws on it, with vello on the desktop and Canvas 2D in a page. Declare `tags = ["canvas"]` alongside it. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
+| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the [`canvas` namespace](scripting-candela.md#canvas) that draws on it, with vello on the desktop and Canvas 2D in a page. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
 | `lumen-cookie` | The [`cookie` namespace](scripting-candela.md#cookies): the page's cookies in a web build, and on the desktop a cookie jar that `http()` and `fetch()` requests carry and fill. | |
 | `lumen-download` | The `download` script namespace: fetch a URL to a file off the tick loop, reporting progress, completion, and failure as events. | `timeout_ms`, `max_bytes`, `max_concurrent` |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
 | `lumen-js` | The [`js` namespace](scripting-candela.md#javascript): the page's own JavaScript, modules loaded at run time, DOM events. Browser only: on the desktop each call raises. | `allow` |
 | `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
 | `lumen-storage` | The [`storage` namespace](scripting-candela.md#storage): text under text keys that lasts across runs, and a set that lasts one run. Local and session storage in a page, a file in the app's data directory on the desktop. | |
-| `lumen-svg` | The `<svg-view>` element and the [`svg` namespace](scripting-candela.md#svg) that draws SVG markup into it. Declare `tags = ["svg-view"]` alongside it. Browser only: on the desktop the element shows its fallback content and each call raises. | |
+| `lumen-svg` | The `<svg-view>` element and the [`svg` namespace](scripting-candela.md#svg) that draws SVG markup into it. Browser only: on the desktop the element shows its fallback content and each call raises. | |
 | `lumen-websocket` | The [`ws` namespace](scripting-candela.md#websockets): WebSocket connections named by key, text frames, events for open, message, close and error. | |
 
 A module with a web half ships it with the toolchain too, so `bundled = true`
@@ -370,10 +378,10 @@ A module that brings a markup element declares it too:
 | `tags` | array of strings | Markup tags this module answers for, so the parser accepts them. Lowercase letters, digits, and dashes; a tag the language already owns is refused. |
 
 A compile loads nothing, so `lumenc build`, `lumenc check`, and
-`lumenc package` know an element exists only because the app said so. A run
-also learns it from the module itself, which registers its tags as it
-installs - so an app missing the key runs and fails to build. Declare it
-either way and both paths agree.
+`lumenc package` know an element exists only because the app said so or
+because the module's web half declares it. A run also learns it from the
+module itself, which registers its tags as it installs, so an app missing
+the key for an element no web half declares runs and fails to build.
 
 The table is unordered, so entries load in sorted-name order; where an entry
 sits in the file carries no meaning.
@@ -404,9 +412,11 @@ such a module under
 out of the site. A candela package is script source, so it travels to the web
 like the app's own scripts.
 
-A desktop build never reads a web half. A module that has a web half and no
-library is for pages alone: declared for the desktop, it fails to load with a
-banner that says so, and the script's calls into it have nothing to bind to.
+A desktop build reads only a web half's descriptor, for the functions and
+elements it declares; the library is what runs. A module that has a web half
+and no library is for pages alone: declared for the desktop, the app compiles
+against its descriptor, then the module fails to load with a banner that says
+so, and the script's calls into it have nothing to bind to.
 Declare it under `[target.web.dependencies]`. The first-party modules that
 reach only what a browser has (`lumen-js`, `lumen-browser`, `lumen-svg`) ship
 a desktop library whose functions raise

@@ -17,12 +17,12 @@
 //!
 //!   ```toml
 //!   [dependencies]
-//!   lumen-canvas = { bundled = true, tags = ["canvas"] }
+//!   lumen-canvas = { bundled = true }
 //!   ```
 //!
-//!   The `tags` key is what lets `lumenc build` parse `<canvas>` markup: a
-//!   compile loads no module, so the declaration is the app's claim that the
-//!   element exists.
+//!   A compile loads no module, so what lets `lumenc build` parse `<canvas>`
+//!   markup and compile `canvas::` calls is the module's web half,
+//!   `web/lumen-addon.toml`, which declares the element and every function.
 //!
 //! - **Compiled in.** A statically linked app (or a test) adds this crate as
 //!   an ordinary dependency and installs [`CanvasPlugin`] itself.
@@ -69,7 +69,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! lumen-canvas = { bundled = true, tags = ["canvas"], config = {
+//! lumen-canvas = { bundled = true, config = {
 //!     region_cap = 1048576,
 //!     buffer_pixel_cap = 16777216,
 //!     buffer_count_cap = 256,

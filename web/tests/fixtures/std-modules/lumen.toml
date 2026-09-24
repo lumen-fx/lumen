@@ -8,11 +8,11 @@ engine = "candela"
 
 [dependencies]
 lumen-browser = { bundled = true }
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 lumen-cookie = { bundled = true }
 lumen-js = { bundled = true, config = { allow = ["data:"] } }
 lumen-storage = { bundled = true }
-lumen-svg = { bundled = true, tags = ["svg-view"] }
+lumen-svg = { bundled = true }
 lumen-websocket = { bundled = true }
 
 # No introspection server, so a `--headless` run binds no port.

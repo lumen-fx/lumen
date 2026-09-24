@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lumen_ir::layout_ir::relativize_asset_paths;
+use lumen_modules::Target as BuildTarget;
 use lumen_runtime::modules::{DependenciesCfg, ModuleSource, library_spellings};
 
 use crate::app_kind::AppKind;
@@ -667,7 +668,7 @@ fn package_static(
     deps: &DependenciesCfg,
     capabilities: &crate::config::CapabilitiesCfg,
 ) -> Result<String, String> {
-    let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
+    let compiled = compile_for_desktop(src, lib_dir)?;
     let artifact = build_artifact(compiled, src)?;
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
@@ -1597,6 +1598,17 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
+/// AOT-compile the app at `src` for the desktop, with bundled modules' web
+/// halves looked up under `lib_dir` first, the way the rest of the package
+/// finds its files.
+fn compile_for_desktop(
+    src: &Path,
+    lib_dir: Option<&Path>,
+) -> Result<lumen_ir::artifact::CompiledApp, String> {
+    let deps = crate::addons::target_deps(src, BuildTarget::Desktop, lib_dir)?;
+    crate::compile_app_with(src, None, &deps).map_err(|e| e.to_string())
+}
+
 /// Compile the app, gather the toolchain files, and write the folder.
 /// Returns the one-line summary to print.
 fn package(
@@ -1607,7 +1619,7 @@ fn package(
     lib_dir: Option<&Path>,
     declared: &Declared<'_>,
 ) -> Result<String, String> {
-    let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
+    let compiled = compile_for_desktop(src, lib_dir)?;
     let artifact = build_artifact(compiled, src)?;
 
     let toolchain = locate_toolchain(target, lib_dir)?;

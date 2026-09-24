@@ -371,7 +371,7 @@ it can write one:
 
 ```toml
 [dependencies]
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 ```
 
 In a page, the same declaration brings the module's

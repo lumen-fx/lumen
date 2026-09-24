@@ -317,7 +317,7 @@ declaration serves both:
 ```toml
 [dependencies]
 lumen-storage = { bundled = true }
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 ```
 
 The modules that ship with the toolchain cover what most sites reach for: the
