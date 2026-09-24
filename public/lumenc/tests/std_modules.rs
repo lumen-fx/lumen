@@ -222,8 +222,11 @@ fn lumenc(dir: &Path, data: &Path, args: &[&str]) -> (bool, String) {
         .env("APPDATA", data)
         .output()
         .expect("running lumenc");
+    // The exit status leads, so a run that fails without a word on stderr
+    // (a crash or an abort) still says how it ended.
     let text = format!(
-        "{}{}",
+        "{}\n{}{}",
+        output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
