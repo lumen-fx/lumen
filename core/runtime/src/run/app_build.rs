@@ -30,15 +30,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // parsed. A module registers its own tag when it installs, which covers
     // the run path; the declaration is what covers a compile, where nothing
     // is loaded at all.
-    let addon_names: Vec<String> = opts.addons.iter().map(|a| a.name.clone()).collect();
-    register_declared_tags(&cfg, &[lumen_modules::Target::Desktop], &opts.addons);
+    register_declared_tags(&cfg, &[lumen_modules::Target::Desktop], &[]);
     // The dependencies this desktop run loads: its own target table laid over
-    // the shared one, less the browser add-ons, which are bound below rather
-    // than opened.
-    let mut dependencies = cfg.dependencies_for(lumen_modules::Target::Desktop);
-    dependencies
-        .0
-        .retain(|dep| !addon_names.contains(&dep.name) && !is_addon_dependency(&dir, dep));
+    // the shared one. Each is a library; a module's web half is a web
+    // build's business.
+    let dependencies = cfg.dependencies_for(lumen_modules::Target::Desktop);
     // Where this app lives and what it is called, published before anything
     // that resolves a path runs: every path a script names is resolved
     // against these, and a script's `on_start` fires on the first tick.
@@ -158,9 +154,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // moment a module can be installed and still be ahead of it.
     //
     // A compiled app is read before them instead: its tree was parsed when it
-    // was compiled, so no module's tag waits on this order, and it names the
-    // browser add-ons it was compiled against, which are not libraries to
-    // open even though `lumen.toml` declares them.
+    // was compiled, so no module's tag waits on this order.
     let compiled_first = if opts.artifact_bytes.is_some() || opts.artifact.is_some() {
         Some(load_inputs(
             &opts,
@@ -176,11 +170,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     } else {
         None
     };
-    if let Some(compiled) = &compiled_first {
-        dependencies
-            .0
-            .retain(|dep| !compiled.addons.iter().any(|addon| addon.name == dep.name));
-    }
     #[cfg(feature = "modules")]
     {
         let env = crate::modules::InitEnv {
@@ -242,7 +231,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         pages: compiled_pages,
         fragments,
         i18n: compiled_i18n,
-        addons: compiled_addons,
     } = loaded;
     // The catalogues a compiled app carries fill in every locale the app
     // directory has no loose file for, before the tree spawns and before a
@@ -296,9 +284,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // The host-neutral half of the script wiring. It needs the parse: whether
     // the app ships a script at all is read out of the document.
     register_script_common(&mut app, has_script);
-    // The browser add-ons the app depends on, bound first so any other
-    // registration of the same name shadows them.
-    bind_browser_only_addons(&mut app, &opts.addons, &compiled_addons);
     for install in std::mem::take(&mut opts.plugins) {
         install(&mut app);
     }
@@ -660,58 +645,4 @@ pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScri
         }
     }
     Ok(kept)
-}
-
-/// True when `dep` names a browser add-on on disk that a desktop run takes as
-/// one: a `path` source whose directory holds a descriptor without
-/// `native = true`. The compiler hands the rest in as
-/// [`RunOptions::addons`], and a compiled app carries its own.
-fn is_addon_dependency(dir: &Path, dep: &lumen_modules::DepCfg) -> bool {
-    let lumen_modules::ModuleSource::Path(path) = &dep.source else {
-        return false;
-    };
-    lumen_modules::addon::serves(&dir.join(path), lumen_modules::Target::Desktop)
-}
-
-/// Bind every function of the add-ons in `declared` and `compiled` to a body
-/// that says it runs only in a browser, and say so once per add-on.
-///
-/// A desktop run cannot load an add-on: it is a module for a page. The
-/// program was compiled against its functions, so they have to resolve, and
-/// a call to one raises in the script that made it instead of the whole
-/// program failing to load.
-fn bind_browser_only_addons(
-    app: &mut App,
-    declared: &[lumen_ir::addon::Addon],
-    compiled: &[lumen_ir::addon::Addon],
-) {
-    let mut seen: Vec<&str> = Vec::new();
-    for addon in declared.iter().chain(compiled) {
-        if seen.contains(&addon.name.as_str()) {
-            continue;
-        }
-        seen.push(&addon.name);
-        match lumen_script::addon::browser_only_fns(addon, None) {
-            Ok(fns) => {
-                app.add_script_fns(fns);
-                eprintln!(
-                    "\n\
-                     ================================================================\n\
-                     lumen-runtime: BROWSER ADD-ON: {name}\n\
-                     \n\
-                     '{name}' is a browser add-on, and this is a desktop run. A call\n\
-                     to one of its functions raises `{ns}::<function> runs only in\n\
-                     a browser`, and its elements show the content the markup gives\n\
-                     them. Declare it under [target.web.dependencies] to keep it out\n\
-                     of desktop builds.\n\
-                     \n\
-                     The app keeps running.\n\
-                     ================================================================\n",
-                    name = addon.name,
-                    ns = addon.namespace,
-                );
-            }
-            Err(reason) => eprintln!("lumen-runtime: {reason}"),
-        }
-    }
 }

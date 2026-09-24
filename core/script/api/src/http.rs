@@ -19,6 +19,12 @@
 //! in a browser that is `lumen-web-http`, which runs the request on the page's
 //! own `fetch` and needs no client behind it.
 //!
+//! [`HttpHook`] is how a plugin takes part in every request without replacing
+//! either: it adjusts a request just before it is dispatched and reads each
+//! reply before the script does. The hooks live in
+//! [`HttpHooks`](crate::runtime::HttpHooks), apart from the registry, so they
+//! survive a client being swapped.
+//!
 //! The types are transport-only on purpose: the delivery tag, the
 //! `fetch()`-versus-`http()` reply style, and the retry or logging policy all
 //! stay on the runtime side of the seam, so a client implementation never has
@@ -47,8 +53,9 @@ pub struct HttpRequest {
     /// place.
     pub timeout_ms: Option<u64>,
     /// Whether the request carries the page's cookies and HTTP
-    /// authentication. A browser transport acts on it; a desktop client has
-    /// no page and ignores it.
+    /// authentication. A browser transport acts on it. A desktop client has
+    /// no page and ignores it; an [`HttpHook`] that keeps credentials of its
+    /// own, such as a cookie jar, reads it.
     pub credentials: Credentials,
 }
 
@@ -56,9 +63,9 @@ pub struct HttpRequest {
 /// certificates), with the meaning web `fetch` gives its `credentials`
 /// option.
 ///
-/// Only a transport that runs inside a page has credentials to send, so the
-/// desktop client ignores this and a browser transport passes it to `fetch`.
-/// The default is the browser's own.
+/// A browser transport passes this to `fetch`. The desktop client has no page
+/// and ignores it, and an [`HttpHook`] that keeps credentials of its own reads
+/// it: `Omit` keeps a request out of it. The default is the browser's own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Credentials {
     /// Never send credentials, and ignore any a reply sets.
@@ -143,6 +150,28 @@ pub trait HttpClient: Send + Sync + 'static {
     /// open-ended or streaming endpoint must not be able to exhaust memory on
     /// the worker thread.
     fn send(&self, request: &HttpRequest, body_limit: u64) -> Result<HttpResponse, String>;
+}
+
+/// Something that takes part in every HTTP exchange a script starts, whichever
+/// client and dispatcher carry it.
+///
+/// A plugin registers one on [`HttpHooks`](crate::runtime::HttpHooks) to add
+/// what a request should carry and to read what a reply says, without the
+/// runtime knowing what it is for: a cookie jar reads `Set-Cookie` and sends
+/// `Cookie`, and a signing hook adds an authorization header. Hooks run in the
+/// order they were registered.
+pub trait HttpHook: Send + Sync + 'static {
+    /// Called on the world thread just before `request` is dispatched. The
+    /// request goes out as this leaves it.
+    fn before_send(&self, request: &mut HttpRequest) {
+        let _ = request;
+    }
+
+    /// Called with the reply to `request`, on whichever thread completed it,
+    /// before the script sees it. Not called for a transport failure.
+    fn on_reply(&self, request: &HttpRequest, response: &HttpResponse) {
+        let _ = (request, response);
+    }
 }
 
 /// The completion callback a dispatcher owns for the life of one request. It

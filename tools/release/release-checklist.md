@@ -132,8 +132,8 @@ binary the two Linux archives do, copied in rather than rebuilt.
      library, `bin/lumen-launcher`, and `bin/lumen-server` into one archive,
      all in the *same* `bin/` directory, along with the three trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs`, the templates in
-     `bin/templates`, and the first-party browser add-ons, copied from
-     `std/addons`, in `bin/addons`. See the note on `public/lumenc/src/link/loader.rs` below;
+     `bin/templates`, and the web halves of the first-party modules, copied
+     from each `std/<module>/web`, in `bin/modules/<name>/web`. See the note on `public/lumenc/src/link/loader.rs` below;
    - on macOS, rewrites the install name of every shared library it packaged,
      and every reference to one, to `@rpath/<file name>`, then re-signs what
      it touched. `ld64` writes the path a library was built at into the

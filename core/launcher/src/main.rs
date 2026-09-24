@@ -32,13 +32,25 @@ use lumen_archive as _;
 #[cfg(feature = "static-run")]
 use lumen_audio as _;
 #[cfg(feature = "static-run")]
+use lumen_browser as _;
+#[cfg(feature = "static-run")]
 use lumen_canvas as _;
+#[cfg(feature = "static-run")]
+use lumen_cookie as _;
 #[cfg(feature = "static-run")]
 use lumen_download as _;
 #[cfg(feature = "static-run")]
 use lumen_fs as _;
 #[cfg(feature = "static-run")]
+use lumen_js as _;
+#[cfg(feature = "static-run")]
 use lumen_process as _;
+#[cfg(feature = "static-run")]
+use lumen_storage as _;
+#[cfg(feature = "static-run")]
+use lumen_svg as _;
+#[cfg(feature = "static-run")]
+use lumen_websocket as _;
 
 /// Marks an appended artifact. The last bytes of a packaged executable are
 /// this magic followed by the payload length, and the payload sits directly

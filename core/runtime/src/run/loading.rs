@@ -35,9 +35,6 @@ pub(crate) struct LoadResult {
     /// The catalogues a compiled app carries. Empty on the from-source path,
     /// which reads `locale/` itself.
     pub(crate) i18n: lumen_ir::artifact::CompiledI18n,
-    /// The browser add-ons a compiled app carries. Empty on the from-source
-    /// path, where the compiler hands them in as [`RunOptions::addons`].
-    pub(crate) addons: Vec<lumen_ir::addon::Addon>,
 }
 
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
@@ -154,7 +151,6 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Pa
         scripts,
         pages,
         i18n: compiled.i18n,
-        addons: compiled.addons,
     }
 }
 
@@ -538,7 +534,6 @@ pub(crate) fn load_ir(
         pages: None,
         fragments: declared,
         i18n: lumen_ir::artifact::CompiledI18n::default(),
-        addons: Vec::new(),
     })
 }
 

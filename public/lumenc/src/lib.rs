@@ -20,7 +20,8 @@
 #[cfg(all(feature = "dynamic-engine", not(windows)))]
 use lumen_engine as _;
 
-/// Browser add-ons an app depends on, found for the target a build is for.
+/// The web halves of the modules an app depends on, found for the target a
+/// build is for.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod addons;
 /// CLI subcommand handlers: `build`, `bundle`, `add`/`remove`/`fetch`/`update`,
@@ -138,7 +139,6 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
             .collect(),
     );
     opts.import_roots = deps.compile.import_roots.clone();
-    opts.addons = deps.compile.addons.clone();
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
         let chain = plugin_host::compiler_plugins_for(&opts.dir, false, &resolved.compiler_plugins)
             .map_err(RunError::Plugin)?;

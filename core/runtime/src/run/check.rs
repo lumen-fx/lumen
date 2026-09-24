@@ -26,9 +26,10 @@ pub struct CompileDeps {
     /// Script libraries the app imports, as the name a script imports under
     /// and the directory holding its sources.
     pub import_roots: Vec<(String, PathBuf)>,
-    /// The browser add-ons the app depends on for [`Self::target`]. Their
-    /// functions are declared to the compile, their elements to the parser,
-    /// and the compiled app carries them.
+    /// The web halves of the modules the app depends on, for a web build;
+    /// every other target takes none. Their functions are declared to the
+    /// compile, their elements to the parser, and the compiled app carries
+    /// them.
     pub addons: Vec<lumen_ir::addon::Addon>,
 }
 

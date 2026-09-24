@@ -1,31 +1,37 @@
-# Browser add-ons
+# Web halves of modules
 
-A browser add-on is a package of files a site loads beside the Lumen runtime:
-a JavaScript module, and optionally stylesheets, a script that runs before the
-page paints, and files the module reads. It gives an app's scripts functions
-backed by that module, and markup elements the module draws. An app depends
-on one in `lumen.toml`; [the web guide](../guides/web.md#browser-add-ons) shows
-the app's side. This page is the format an add-on is written in.
+A module an app depends on can carry a web half: files a site loads beside the
+Lumen runtime in place of the module's library, which a browser cannot open.
+A web half is a JavaScript module, and optionally stylesheets, a script that
+runs before the page paints, and files the module reads. It gives an app's
+scripts functions backed by that JavaScript, and markup elements it draws. An
+app depends on the module in `lumen.toml`; [the web guide](../guides/web.md#modules-in-a-page)
+shows the app's side. This page is the format a web half is written in.
 
-## The package
+## Layout
 
 ```
 echo/
-  lumen-addon.toml   what the add-on offers
-  echo.js            the module
-  echo.css           stylesheets, if any
+  web/
+    lumen-addon.toml   what the web half offers
+    echo.js            the JavaScript module
+    echo.css           stylesheets, if any
 ```
 
-The descriptor sits at the package root. Every path it names is relative to
-that root and inside it.
+A module's web half is the `web/` directory under its root, and the
+descriptor sits at the root of `web/`. Every path it names is relative to
+`web/` and inside it. The module's root is found through the app's
+dependencies: a `path` source names it, a `version` source names a registry
+package on the `lumen` platform, and `bundled = true` names the toolchain's
+own copy, `modules/<name>/`, looked for under `--lib-dir`, beside `lumenc`,
+then under `LUMEN_LIB_DIR`. A `lumenc` built from a checkout also finds the
+crate under its `std/` whose package is `<name>`.
 
-An add-on is found through the app's dependencies: a `path` source names the
-package directory, a `version` source names a registry package on the `lumen`
-platform whose root holds the descriptor, and `bundled = true` names the
-toolchain's own copy under `addons/<name>/`, looked for under `--lib-dir`,
-beside `lumenc`, then under `LUMEN_LIB_DIR`. A `lumenc` built from a checkout
-also finds the ones in its `std/addons/`. The add-ons the toolchain ships are
-listed in [Standard browser add-ons](std-addons.md).
+A module with a library too keeps its sources beside `web/`, as the ones under
+`std/` do: `Cargo.toml` and `src/` build the library a desktop app loads, and
+the two halves offer the same functions. A module with a web half alone is for
+pages only. The first-party modules and what each offers are listed under
+[`[dependencies]`](lumen-toml.md#dependencies).
 
 ## lumen-addon.toml
 
@@ -51,7 +57,7 @@ tag = "echo-view"
 html = "div"
 ```
 
-An unknown key is an error, and every error names the add-on.
+An unknown key is an error, and every error names the module.
 
 ### [addon]
 
@@ -62,7 +68,6 @@ An unknown key is an error, and every error names the add-on.
 | `styles` | array of strings | Stylesheets every page links, in this order, after the app's own. |
 | `head` | string | A classic script every page runs in its head, before it paints. It blocks the page while it runs, so keep it to what has to happen first, such as applying a stored theme. |
 | `files` | array of strings | Other files the module reads at run time. A directory stands for everything under it. |
-| `native` | boolean | True when the package is the page implementation of a runtime module of the same name. A web build takes the add-on; every other build loads the module and does not see the add-on, so one dependency entry serves both. The functions and elements it declares have to be the module's. Default false. |
 
 ### [[function]]
 
@@ -131,7 +136,7 @@ export const elements = {
 
 | Export | Called |
 |--------|--------|
-| `install(host, config)` | Once, when the app starts, before its scripts run, with the `config` table the app's dependency entry gave the add-on as an object (empty when it gave none). Optional. |
+| `install(host, config)` | Once, when the app starts, before its scripts run, with the `config` table the app's dependency entry gave the module as an object (empty when it gave none). Optional. |
 | one function per `[[function]]` | When a script calls that function, with the script's arguments. |
 | `elements` | An object keyed by tag, holding each element's hooks. Optional. |
 
@@ -212,12 +217,13 @@ fn on_echo_error(tag: string, reason: any) {
 
 ## Elements
 
-An element the add-on declares is written in markup like any other tag, with
-the text and children a visitor should see until the add-on takes it over. The
+An element the web half declares is written in markup like any other tag,
+with the text and children a visitor should see until the web half takes it
+over. The
 page writes it as the `html` element, carrying `data-lm-foreign` with its tag,
 and puts that content inside.
 
-From there the element is the add-on's. The runtime binds it to its node, so a
+From there the element is the web half's. The runtime binds it to its node, so a
 script reaches it by `id` and its classes, attributes and inline style are
 written onto it, but nothing inside it is a node the runtime keeps, and no text
 is written into it. The hooks under `elements[tag]`, each optional, hear the
@@ -231,20 +237,26 @@ rest:
 
 A hook that throws is written to the console and the app carries on.
 
-## Where an add-on runs
+## Where a web half runs
 
-Only in a page. Everywhere else the app still has to compile and run, so each
-function is bound to a body that raises
-`<namespace>::<function> runs only in a browser` in the script that calls it:
+Only in a page. A build that runs the app on the machine that builds it still
+has to compile and run the app, so there each function is bound to a body
+that raises `<namespace>::<function> runs only in a browser` in the script
+that calls it:
 
 - A build that runs the app, `prerender = "run"`, warns naming each function
   called, and writes the page with the state the app had without it.
 - A server rendering a page puts the same warning in the render's warnings.
-- A desktop run prints one banner naming each add-on at startup.
 
-An element shows the content the markup gives it wherever the add-on is not
-running. An add-on meant for pages alone belongs under
-[`[target.web.dependencies]`](lumen-toml.md#targetweb-and-targetdesktop).
+An element shows the content the markup gives it wherever the web half is not
+running.
+
+A desktop build never reads a web half: it loads the module's library. A
+module whose desktop half has nothing to do but say "runs only in a browser"
+still ships a library that says it, so a script calling it runs on every
+target; `lumen_module::BrowserOnly` builds that library's functions from the
+module's own descriptor. A module with a web half and no library belongs
+under [`[target.web.dependencies]`](lumen-toml.md#targetweb-and-targetdesktop).
 
 ## In the site
 
@@ -256,19 +268,19 @@ every file in it, so changing any file is a new address.
 Every page links the stylesheets, runs the head script and preloads the module,
 and holds each of them to a SHA-384 Subresource Integrity hash of the bytes the
 build copied. An import map carries the same hash for the module import. The
-boot script imports every add-on's module and hands them to the runtime in the
+boot script imports every web half's module and hands them to the runtime in the
 order `lumen.web.json` lists them, so a module that fails its check, or fails
 to load at all, keeps the app from starting: the page reads as it was written,
 and the browser console names the file. A page built without the runtime links
 the stylesheets alone.
 
-The `config` table an add-on is given travels in `lumen.web.json`, where any
+The `config` table a web half is given travels in `lumen.web.json`, where any
 visitor can read it, so it is no place for a secret.
 
 ## Candela sugar
 
-A package that is also a candela package, with a `candela.toml` or a
-`src/main.cdl`, is an import root under the add-on's dependency name too, so
+A web half that is also a candela package, with a `candela.toml` or a
+`src/main.cdl` inside `web/`, is an import root under the module's dependency name too, so
 it can ship candela wrappers over its functions:
 
 ```

@@ -170,10 +170,10 @@ pub struct Resolved {
     /// `candela`-platform packages: the name a script imports under, and the
     /// directory its `.cdl` files sit in.
     pub candela_roots: Vec<(String, PathBuf)>,
-    /// `[dependencies]` entries on the `lumen` platform that are browser
-    /// add-ons (a `lumen-addon.toml` at the package root rather than a
-    /// library): the package root, keyed by the declared name.
-    pub addons: BTreeMap<String, PathBuf>,
+    /// `[dependencies]` entries on the `lumen` platform: the module's root,
+    /// which a web build reads the module's web half from, keyed by the
+    /// declared name.
+    pub roots: BTreeMap<String, PathBuf>,
     /// The exact version every resolved package settled on, transitive ones
     /// included. `lumenc add` writes the answer back into `lumen.toml` when
     /// the author named no requirement.
@@ -318,15 +318,19 @@ fn sort(reqs: &[Requirement], packages: Vec<Package>) -> Result<Resolved, String
         match package.platform.as_str() {
             "candela" => resolved.candela_roots.push((package.name, package.dir)),
             "lumen" => match declared.map(|r| r.table) {
-                Some(Table::Dependencies) if lumen_modules::addon::is_addon(&package.dir) => {
-                    resolved
-                        .addons
-                        .insert(package.name.clone(), package.dir.clone());
-                }
+                // A module with a web half and no library is for pages alone;
+                // one with neither is a package that cannot have been meant.
                 Some(Table::Dependencies) => {
+                    match package.library() {
+                        Ok(library) => {
+                            resolved.modules.insert(package.name.clone(), library);
+                        }
+                        Err(_) if lumen_modules::addon::web_half(&package.dir).is_some() => {}
+                        Err(e) => return Err(e),
+                    }
                     resolved
-                        .modules
-                        .insert(package.name.clone(), package.library()?);
+                        .roots
+                        .insert(package.name.clone(), package.dir.clone());
                 }
                 Some(Table::Plugins) => {
                     resolved
@@ -691,23 +695,35 @@ mod tests {
         }
     }
 
-    /// A `lumen` package holding an add-on descriptor rather than a library
-    /// is an add-on: there is nothing to load, and its root is what a build
-    /// reads the add-on from.
+    /// A `lumen` package holding a web half and no library is a module for
+    /// pages alone: nothing to load, and its root is what a web build reads
+    /// the web half from.
     #[test]
-    fn a_lumen_package_holding_a_descriptor_is_an_addon() {
-        let dir = std::env::temp_dir().join(format!("lumenc-lpm-addon-{}", std::process::id()));
+    fn a_lumen_package_with_only_a_web_half_has_a_root_and_no_library() {
+        let dir = std::env::temp_dir().join(format!("lumenc-lpm-web-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(lumen_modules::addon::ADDON_MANIFEST), b"").unwrap();
+        let web = dir.join(lumen_modules::addon::WEB_DIR);
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::write(web.join(lumen_modules::addon::ADDON_MANIFEST), b"").unwrap();
 
         let resolved = sort(
             &[req("chart", Table::Dependencies)],
             vec![package("chart", "lumen", &dir)],
         )
         .unwrap();
-        assert_eq!(resolved.addons.get("chart"), Some(&dir));
+        assert_eq!(resolved.roots.get("chart"), Some(&dir));
         assert!(resolved.modules.is_empty());
+
+        // Neither a library nor a web half: nothing a build could use.
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let err = sort(
+            &[req("none", Table::Dependencies)],
+            vec![package("none", "lumen", &empty)],
+        )
+        .unwrap_err();
+        assert!(err.contains("holds no library"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The table a requirement came from is what tells a module from a
@@ -733,6 +749,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.modules.get("shape"), Some(&lib));
+        assert_eq!(resolved.roots.get("shape"), Some(&dir));
         assert_eq!(resolved.compiler_plugins.get("md"), Some(&plugin));
         assert_eq!(
             resolved.candela_roots,

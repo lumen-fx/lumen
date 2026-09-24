@@ -55,8 +55,8 @@ use std::sync::Arc;
 use crate::PluginEvent;
 use crate::dnd;
 use crate::http::{
-    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
-    ThreadDispatch,
+    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpHook, HttpRequest,
+    HttpResponse, ThreadDispatch,
 };
 use crate::script_fn::ScriptFnRegistry;
 use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
@@ -1176,6 +1176,27 @@ impl FetchRegistry {
     }
 }
 
+/// The [`HttpHook`]s every script request passes through, in the order they
+/// were added.
+///
+/// Separate from [`FetchRegistry`] so that swapping the client leaves the
+/// hooks in place: a plugin adds its hook here from `Plugin::build`, before or
+/// after whichever registry the app ends up with.
+#[derive(Resource, Default, Clone)]
+pub struct HttpHooks(Vec<Arc<dyn HttpHook>>);
+
+impl HttpHooks {
+    /// Run `hook` on every request from now on, after the hooks already here.
+    pub fn add(&mut self, hook: Arc<dyn HttpHook>) {
+        self.0.push(hook);
+    }
+
+    /// True when no hook is registered.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// How a completed request should be delivered back to the script.
 #[derive(Clone, Copy)]
 enum DeliveryStyle {
@@ -1202,9 +1223,10 @@ struct HttpOutcome {
 pub fn drain_fetch_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     fetcher: Res<FetchRegistry>,
+    hooks: Option<Res<HttpHooks>>,
 ) {
     for ev in events.read() {
-        let (req, tag, style) = match &ev.0 {
+        let (mut req, tag, style) = match &ev.0 {
             ScriptCommand::Fetch { url, tag } => (
                 HttpRequest {
                     method: "GET".to_string(),
@@ -1247,9 +1269,21 @@ pub fn drain_fetch_commands(
             method: req.method.clone(),
             url: req.url.clone(),
         });
+        let hooks = hooks.as_deref().filter(|h| !h.is_empty()).cloned();
+        if let Some(hooks) = &hooks {
+            for hook in &hooks.0 {
+                hook.before_send(&mut req);
+            }
+        }
         let tx = fetcher.sender.clone();
         let label = tag.clone();
+        let sent = hooks.map(|hooks| (hooks, req.clone()));
         let done: HttpDone = Box::new(move |result| {
+            if let (Some((hooks, sent)), Ok(response)) = (&sent, &result) {
+                for hook in &hooks.0 {
+                    hook.on_reply(sent, response);
+                }
+            }
             let _ = tx.send(HttpOutcome { tag, style, result });
         });
         fetcher

@@ -137,6 +137,140 @@ pub use lumen_engine as lumen_dylib;
 #[cfg(all(feature = "engine-dylib", not(windows)))]
 pub use lumen_engine::{BUILD_ID, BUILD_ID_C};
 
+/// The functions and elements a module's web half declares, read from the
+/// text of its `web/lumen-addon.toml`, for the module `name`.
+///
+/// # Errors
+///
+/// The descriptor does not parse, or declares something the format refuses.
+pub fn describe_web_half(name: &str, descriptor: &str) -> Result<lumen_ir::addon::Addon, String> {
+    lumen_modules::addon::describe(name, descriptor)
+}
+
+/// The functions a module's web half declares, bound to the bodies its
+/// desktop half gives them.
+///
+/// A module with both halves declares its script surface once, in
+/// `web/lumen-addon.toml`, and takes the desktop signatures from there, so a
+/// script sees the same names, parameters and results on every target. Read
+/// the descriptor at the module's compile time:
+///
+/// ```ignore
+/// const DESCRIPTOR: &str = include_str!("../web/lumen-addon.toml");
+/// let shout: ScriptFnBody = Arc::new(|cx| Ok(ScriptValue::Str(cx.str_arg(0).to_uppercase())));
+/// let fns = lumen_module::web_half_fns("lumen-echo", DESCRIPTOR, vec![("shout".into(), shout)])?;
+/// ```
+///
+/// # Errors
+///
+/// The descriptor does not parse, a function it declares has no body here, or
+/// a body is given for a function it does not declare.
+pub fn web_half_fns(
+    name: &str,
+    descriptor: &str,
+    bodies: Vec<(String, lumen_script::ScriptFnBody)>,
+) -> Result<Vec<lumen_script::ScriptFn>, String> {
+    let addon = describe_web_half(name, descriptor)?;
+    if let Some((stray, _)) = bodies
+        .iter()
+        .find(|(f, _)| !addon.functions.iter().any(|d| d.name == *f))
+    {
+        return Err(format!(
+            "module '{name}': `{stray}` has a desktop body and no declaration in its web half"
+        ));
+    }
+    let mut missing = Vec::new();
+    let fns = lumen_script::addon::script_fns(&addon, |_, function| {
+        match bodies.iter().find(|(f, _)| *f == function.name) {
+            Some((_, body)) => std::sync::Arc::clone(body),
+            None => {
+                missing.push(function.name.clone());
+                std::sync::Arc::new(|_| Err(String::new()))
+            }
+        }
+    })?;
+    if !missing.is_empty() {
+        return Err(format!(
+            "module '{name}': no desktop body for {}",
+            missing
+                .iter()
+                .map(|f| format!("{}::{f}", addon.namespace))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(fns)
+}
+
+/// The desktop half of a module that runs only in a browser, taken from its
+/// own web half.
+///
+/// A module whose web half reaches something only a page has (the page's
+/// JavaScript, its popups, an element the browser draws) still has a desktop
+/// half, so that a script calling it compiles and runs on every target. That
+/// half is this plugin: every function the descriptor declares, bound to a
+/// body that raises `<namespace>::<function> runs only in a browser` in the
+/// script that called it, and every element it declares registered as a tag,
+/// so the markup parses and shows the content it gives the element.
+///
+/// Hand it the descriptor's text at the module's compile time, which keeps the
+/// two halves' signatures one and the same:
+///
+/// ```ignore
+/// lumen_module::lumen_module!("lumen-echo", |_config: lumen_module::ModuleConfig| {
+///     lumen_module::BrowserOnly::new("lumen-echo", include_str!("../web/lumen-addon.toml"))
+/// });
+/// ```
+pub struct BrowserOnly {
+    name: &'static str,
+    descriptor: &'static str,
+}
+
+impl BrowserOnly {
+    /// The desktop half of the module `name`, whose web half's descriptor
+    /// reads `descriptor`.
+    #[must_use]
+    pub const fn new(name: &'static str, descriptor: &'static str) -> Self {
+        Self { name, descriptor }
+    }
+
+    /// The functions and elements the web half declares.
+    ///
+    /// # Errors
+    ///
+    /// The descriptor does not parse.
+    pub fn describe(&self) -> Result<lumen_ir::addon::Addon, String> {
+        describe_web_half(self.name, self.descriptor)
+    }
+
+    /// The functions this plugin registers.
+    ///
+    /// # Errors
+    ///
+    /// The descriptor does not parse, or a function's types name no type.
+    pub fn script_fns(&self) -> Result<Vec<lumen_script::ScriptFn>, String> {
+        lumen_script::addon::browser_only_fns(&self.describe()?, None)
+    }
+}
+
+impl Plugin for BrowserOnly {
+    fn build(self, app: &mut App) {
+        use lumen_script::ScriptFnAppExt as _;
+        let described = self.describe().and_then(|addon| {
+            lumen_script::addon::browser_only_fns(&addon, None).map(|fns| (addon, fns))
+        });
+        match described {
+            Ok((addon, fns)) => {
+                for element in &addon.elements {
+                    lumen_widget::register_widget_tag_owned(&element.tag);
+                }
+                app.add_script_fns(fns);
+            }
+            Err(reason) => eprintln!("lumen-runtime: {reason}"),
+        }
+    }
+}
+
 /// Install returned cleanly.
 pub const INSTALL_OK: u32 = 0;
 /// The constructor or `Plugin::build` panicked. [`install_with`] prints the

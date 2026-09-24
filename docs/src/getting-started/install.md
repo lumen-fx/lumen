@@ -45,7 +45,9 @@ See [shell completions](../reference/cli.md#completions).
 ### Runtime modules
 
 Some capabilities live outside the engine, in libraries the runtime loads at
-startup: files, audio, canvas, downloads, processes, archives. An app asks for
+startup: files, audio, canvas, downloads, processes, archives, stored values,
+cookies, WebSockets, and the browser-only ones a web build uses (the page's
+JavaScript, the browser around it, SVG drawings). An app asks for
 one by name under [`[dependencies]`](../reference/lumen-toml.md#dependencies)
 in `lumen.toml`, which lists the modules and their config keys;
 [scripting](../guides/scripting.md) covers the calls each one adds.
@@ -53,7 +55,10 @@ in `lumen.toml`, which lists the modules and their config keys;
 The installer downloads them with the toolchain, from the module archive
 published with the same release, and unpacks them into the same tree, so the
 libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
-looks for them. `--no-modules` installs the toolchain without them. The
+looks for them. `--no-modules` installs the toolchain without them. The web halves of the
+modules, which `lumenc web` puts into a site, come with the toolchain itself
+under `~/.lumen/bin/modules`, so a web build does not need the module
+archive. The
 setup-lumen action installs them the same way on Linux and macOS runners; see
 [Continuous integration](#continuous-integration).
 
@@ -122,8 +127,8 @@ brew install lumen
 
 The formula unpacks the same release archive the script installs, so `lumenc`,
 the runtime library, the launcher, `lumen-server`, the candela standard
-library, the app templates, and the
-[browser add-ons](../reference/std-addons.md) all come with it. `brew upgrade lumen` moves you
+library, the app templates, and the web halves of the first-party
+[modules](../reference/lumen-toml.md#dependencies) all come with it. `brew upgrade lumen` moves you
 to a newer release.
 
 A Homebrew install carries no [runtime modules](#runtime-modules) and no shell
@@ -186,9 +191,10 @@ to take a while: it is compiling the engine.
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
 [template repository](templates.md) you were going to scaffold from. The same
-goes for the [browser add-ons](../reference/std-addons.md): a `lumenc web` build
-of an app declaring one wants a release install, or `--lib-dir` naming a
-directory whose `addons/` holds it.
+goes for the web halves of the first-party
+[modules](../reference/lumen-toml.md#dependencies): a `lumenc web` build of an
+app declaring one wants a release install, or `--lib-dir` naming a directory
+whose `modules/<name>/web/` holds it.
 
 It does not build the [runtime modules](#runtime-modules) either, so the
 capabilities behind [`[dependencies]`](../reference/lumen-toml.md#dependencies)

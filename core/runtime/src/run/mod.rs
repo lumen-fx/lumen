@@ -204,12 +204,6 @@ pub struct RunOptions {
     /// [`Self::resolved_modules`] is: the runtime resolves nothing, and
     /// `lumenc` hands in what the registry answered.
     pub import_roots: Vec<(String, std::path::PathBuf)>,
-    /// The browser add-ons the app depends on for a desktop build, read by
-    /// `lumenc` out of each one's descriptor. A desktop run cannot load one,
-    /// so each function is bound to a body that says it runs only in a
-    /// browser and the run starts with a banner naming the add-on. A compiled
-    /// app carries its own list, which is added to this one.
-    pub addons: Vec<lumen_ir::addon::Addon>,
 }
 
 impl RunOptions {
@@ -245,7 +239,6 @@ impl RunOptions {
             compiler_plugins: None,
             resolved_modules: crate::modules::ResolvedModules::default(),
             import_roots: Vec::new(),
-            addons: Vec::new(),
         }
     }
 

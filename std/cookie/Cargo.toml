@@ -1,0 +1,48 @@
+# The `cookie` module: cookies a script reads and writes, and that ride along
+# with the app's HTTP requests. Its web half in web/ is the page's
+# `document.cookie`; this crate is its desktop half, a cookie jar kept in the
+# app's data directory that every `http()` and `fetch()` request consults
+# through the engine's generic HTTP hook. Two link shapes from one crate, like
+# every std module: the `cdylib` target is the bundled `lumen-cookie` module an
+# app declares in `lumen.toml`, and the `lib` target is the same plugin
+# compiled into a static build.
+[package]
+name = "lumen-cookie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's cookie module: script access to cookies, as document.cookie in a web build and a persistent cookie jar the app's HTTP requests use on the desktop."
+keywords = ["ui", "gui", "cookie", "http", "scripting"]
+categories = ["gui", "web-programming::http-client"]
+publish = false
+
+[lib]
+# `lumen_cookie` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-cookie = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_cookie.so`.
+name = "lumen_cookie"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-module = { workspace = true }
+# The jar's file: the cookies that outlast the run, as JSON.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+# A binary that links the `lib` target in drops the feature and links no
+# engine dylib; what the module registers before `main` is unaffected.
+engine-dylib = ["lumen-module/engine-dylib"]
+
+# Tests only: the compiled-in-shape test builds a headless app around the
+# plugin, with the engine's HTTP client, against a server in the test.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
