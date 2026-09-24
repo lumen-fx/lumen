@@ -1301,6 +1301,7 @@ fn addon_site() -> SiteSpec {
             path: "addons/echo.0123/early.js".into(),
             integrity: "sha384-head".into(),
         }),
+        config: None,
     });
     spec
 }

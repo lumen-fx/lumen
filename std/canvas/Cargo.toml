@@ -68,3 +68,6 @@ lumen-text = { workspace = true }
 lumen-text-cosmic = { workspace = true }
 lumen-script = { workspace = true }
 serde_json = { workspace = true }
+# The descriptor of this module's page implementation under std/addons, read
+# by the test that holds its functions equal to the ones registered here.
+lumen-modules = { workspace = true }

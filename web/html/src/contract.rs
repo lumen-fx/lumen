@@ -458,6 +458,11 @@ pub struct AddonRef {
     /// The script the pages run before they paint, relative to the site root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<String>,
+    /// The `config` table the app's dependency entry gave the add-on, as JSON
+    /// text, which the runtime hands the module's `install` as an object.
+    /// `None` when the entry gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }
 
 /// The HTML element an add-on's markup tag is written as.
@@ -1083,6 +1088,7 @@ mod tests {
                 module: "addons/echo.0123/echo.js".into(),
                 styles: vec!["addons/echo.0123/echo.css".into()],
                 head: None,
+                config: Some(r#"{"loud":true}"#.into()),
             }],
             foreign: BTreeMap::from([(
                 "echo-view".to_string(),

@@ -36,6 +36,8 @@ use std::path::{Component, Path, PathBuf};
 use lumen_ir::addon::{Addon, AddonElement, AddonFunction, AddonParam};
 use serde::Deserialize;
 
+use crate::Target;
+
 /// The descriptor's file name, at the package root.
 pub const ADDON_MANIFEST: &str = "lumen-addon.toml";
 
@@ -65,11 +67,48 @@ pub struct AddonPackage {
     /// Other files the module reads at run time, relative to [`Self::dir`]. A
     /// directory stands for everything under it.
     pub files: Vec<String>,
+    /// True when the dependency is a runtime module on every target but the
+    /// web, and this add-on is that module's page implementation.
+    pub native: bool,
+    /// The `config` table the app's dependency entry gave it, which a page
+    /// hands the module at install. Empty until the dependency is known:
+    /// [`read_addon`] reads the package alone.
+    pub config: toml::Table,
 }
 
 /// True when `dir` is an add-on package.
 pub fn is_addon(dir: &Path) -> bool {
     dir.join(ADDON_MANIFEST).is_file()
+}
+
+/// True when `dir` is an add-on a build for `target` takes as one.
+///
+/// A web build takes every add-on. Any other build takes one unless its
+/// descriptor says `native = true`: that package is a runtime module there,
+/// and the dependency is the module's business, not the add-on's. A
+/// descriptor that does not parse counts as an add-on on every target, so the
+/// build that reads it in full is the one that reports it.
+pub fn serves(dir: &Path, target: Target) -> bool {
+    if !is_addon(dir) {
+        return false;
+    }
+    if target == Target::Web {
+        return true;
+    }
+    #[derive(Deserialize)]
+    struct Probe {
+        addon: ProbeHeader,
+    }
+    #[derive(Deserialize)]
+    struct ProbeHeader {
+        #[serde(default)]
+        native: bool,
+    }
+    let native = std::fs::read_to_string(dir.join(ADDON_MANIFEST))
+        .ok()
+        .and_then(|text| toml::from_str::<Probe>(&text).ok())
+        .is_some_and(|probe| probe.addon.native);
+    !native
 }
 
 /// Read the add-on at `dir`, declared in `[dependencies]` as `name`.
@@ -108,6 +147,8 @@ struct Header {
     head: Option<String>,
     #[serde(default)]
     files: Vec<String>,
+    #[serde(default)]
+    native: bool,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +311,8 @@ fn parse_addon(name: &str, dir: &Path, text: &str) -> Result<AddonPackage, Strin
         styles,
         head,
         files,
+        native: header.native,
+        config: toml::Table::new(),
     })
 }
 
@@ -451,6 +494,31 @@ html = "div"
              \"button\"\nhtml = \"div\"\n",
         );
         assert!(err.contains("built-in tag"), "{err}");
+    }
+
+    #[test]
+    fn a_native_addon_serves_the_web_build_alone() {
+        let dir = package("native", &["echo.js"]);
+        std::fs::write(
+            dir.join(ADDON_MANIFEST),
+            "[addon]\nnamespace = \"echo\"\nmodule = \"echo.js\"\nnative = true\n",
+        )
+        .unwrap();
+        assert!(read_addon("echo", &dir).unwrap().native);
+        assert!(serves(&dir, Target::Web));
+        assert!(!serves(&dir, Target::Desktop));
+
+        let plain = package("plain", &["echo.js"]);
+        std::fs::write(
+            plain.join(ADDON_MANIFEST),
+            "[addon]\nnamespace = \"echo\"\nmodule = \"echo.js\"\n",
+        )
+        .unwrap();
+        assert!(!read_addon("echo", &plain).unwrap().native);
+        for target in Target::ALL {
+            assert!(serves(&plain, target));
+        }
+        assert!(!serves(&plain.join("nowhere"), Target::Web));
     }
 
     #[test]

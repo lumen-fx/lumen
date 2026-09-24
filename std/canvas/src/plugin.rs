@@ -409,11 +409,16 @@ fn pixel_of(value: i64) -> u32 {
 
 /// The `canvas` surface, described once for every host. Names, parameters,
 /// and docs are the contract a script writes against.
+///
+/// A function returns nothing unless its description says otherwise, which
+/// is also what the page implementation under `std/addons/lumen-canvas`
+/// declares for it.
 fn script_fns() -> Vec<ScriptFn> {
     let f = |name: &str, doc: &str| {
         ScriptFn::new(name)
             .ns(ScriptNs::Named(NAMESPACE.to_string()))
             .doc(doc)
+            .ret(T::Unit)
     };
     let mut fns = Vec::new();
     fns.extend(surface_fns(&f));
@@ -1114,4 +1119,68 @@ fn check_region(width: u32, height: u32) -> Option<()> {
         return None;
     }
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The canvas module's page implementation: the browser add-on a web
+    /// build takes in place of this module.
+    fn page_implementation() -> lumen_modules::addon::AddonPackage {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../addons/lumen-canvas");
+        lumen_modules::addon::read_addon("lumen-canvas", &dir).expect("the add-on reads")
+    }
+
+    #[test]
+    fn the_page_implementation_offers_the_same_functions() {
+        // One API on every target: a script compiled against the module has
+        // to bind against the add-on, so each function has the same name, the
+        // same parameters, the same result and the same doc on both.
+        let package = page_implementation();
+        let addon = &package.addon;
+        assert!(package.native, "a web build alone takes the add-on");
+        assert_eq!(addon.namespace, NAMESPACE);
+
+        let module = script_fns();
+        let mut native_names: Vec<&str> = module.iter().map(|f| f.name.as_str()).collect();
+        let mut page_names: Vec<&str> = addon.functions.iter().map(|f| f.name.as_str()).collect();
+        native_names.sort_unstable();
+        page_names.sort_unstable();
+        assert_eq!(native_names, page_names);
+        for function in &addon.functions {
+            let native = module
+                .iter()
+                .find(|f| f.name == function.name)
+                .expect("named by both");
+            assert!(
+                function.event.is_none(),
+                "{} answers at once",
+                function.name
+            );
+            let sig = lumen_module::lumen_script::addon::signature(addon, function)
+                .expect("the add-on's types parse");
+            let params = |sig: &lumen_module::lumen_script::ScriptSig| {
+                sig.params
+                    .iter()
+                    .map(|p| (p.name.clone(), p.ty.clone()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(params(&sig), params(&native.sig), "{}", function.name);
+            assert_eq!(sig.ret, native.sig.ret, "{}", function.name);
+            assert_eq!(sig.doc, native.sig.doc, "{}", function.name);
+        }
+    }
+
+    #[test]
+    fn the_page_implementation_answers_for_the_same_tag() {
+        let package = page_implementation();
+        let element = package
+            .addon
+            .elements
+            .iter()
+            .find(|e| e.tag == TAG)
+            .expect("the add-on answers for <canvas>");
+        assert_eq!(element.html, "canvas");
+    }
 }

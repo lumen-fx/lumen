@@ -122,7 +122,8 @@ brew install lumen
 
 The formula unpacks the same release archive the script installs, so `lumenc`,
 the runtime library, the launcher, `lumen-server`, the candela standard
-library, and the app templates all come with it. `brew upgrade lumen` moves you
+library, the app templates, and the
+[browser add-ons](../reference/std-addons.md) all come with it. `brew upgrade lumen` moves you
 to a newer release.
 
 A Homebrew install carries no [runtime modules](#runtime-modules) and no shell
@@ -184,7 +185,10 @@ to take a while: it is compiling the engine.
 
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
-[template repository](templates.md) you were going to scaffold from.
+[template repository](templates.md) you were going to scaffold from. The same
+goes for the [browser add-ons](../reference/std-addons.md): a `lumenc web` build
+of an app declaring one wants a release install, or `--lib-dir` naming a
+directory whose `addons/` holds it.
 
 It does not build the [runtime modules](#runtime-modules) either, so the
 capabilities behind [`[dependencies]`](../reference/lumen-toml.md#dependencies)

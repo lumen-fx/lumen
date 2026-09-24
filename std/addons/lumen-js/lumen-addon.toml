@@ -1,0 +1,65 @@
+# The page's own JavaScript, reached from a script: global functions and
+# values by dotted path, modules loaded at run time and held by handle, and
+# DOM events turned into script events.
+[addon]
+namespace = "js"
+module = "js.js"
+
+[[function]]
+name = "call"
+params = ["path: string", "args: any[]"]
+returns = "any"
+doc = "Call the global function at a dotted path, such as `Math.max`, and return what it returns."
+
+[[function]]
+name = "call_async"
+params = ["path: string", "args: any[]"]
+async = "on_js_call_async"
+doc = "Call the global function at a dotted path and answer with what its promise resolves to."
+
+[[function]]
+name = "get"
+params = ["path: string"]
+returns = "any"
+doc = "The global value at a dotted path, such as `navigator.language`."
+
+[[function]]
+name = "set"
+params = ["path: string", "value: any"]
+doc = "Set the global value at a dotted path."
+
+[[function]]
+name = "load"
+params = ["url: string"]
+async = "on_js_load"
+doc = "Import a JavaScript module from the site's own origin or an allowed URL, and answer with a handle to it."
+
+[[function]]
+name = "invoke"
+params = ["handle: int", "method: string", "args: any[]"]
+returns = "any"
+doc = "Call a method on what a handle holds, and return what it returns."
+
+[[function]]
+name = "invoke_async"
+params = ["handle: int", "method: string", "args: any[]"]
+async = "on_js_invoke_async"
+doc = "Call a method on what a handle holds, and answer with what its promise resolves to."
+
+[[function]]
+name = "release"
+params = ["handle: int"]
+returns = "bool"
+doc = "Let go of a handle; false when it held nothing."
+
+[[function]]
+name = "listen"
+params = ["target: string", "event: string", "key: string"]
+returns = "bool"
+doc = "Turn a DOM event on `window`, `document` or the element with an id into `on_js_event(key, event)`; false when there is no such element."
+
+[[function]]
+name = "unlisten"
+params = ["key: string"]
+returns = "bool"
+doc = "Stop the listener `listen` started under `key`; false when there was none."

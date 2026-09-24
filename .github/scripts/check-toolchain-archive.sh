@@ -73,6 +73,16 @@ if [ ! -f "$dest/bin/lumen-server" ] && [ ! -f "$dest/bin/lumen-server.exe" ]; t
   exit 1
 fi
 
+# So do the first-party browser add-ons, every one the tree has, each where
+# `lumenc web` looks for a `bundled = true` add-on.
+for addon in "$(dirname "$0")"/../../std/addons/*/; do
+  name="$(basename "$addon")"
+  if [ ! -f "$dest/bin/addons/$name/lumen-addon.toml" ]; then
+    echo "the unpacked archive carries no bin/addons/$name" >&2
+    exit 1
+  fi
+done
+
 bad=0
 
 audit_macho() {

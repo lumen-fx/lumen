@@ -1,0 +1,28 @@
+# WebSocket connections, named by a key the script picks. Text frames only.
+[addon]
+namespace = "ws"
+module = "websocket.js"
+
+[[function]]
+name = "open"
+params = ["key: string", "url: string"]
+returns = "bool"
+doc = "Open a connection under `key`; false when one under that key is still open. `on_ws_open(key)` follows."
+
+[[function]]
+name = "send"
+params = ["key: string", "text: string"]
+returns = "bool"
+doc = "Send a text frame; false when the connection under `key` is not open."
+
+[[function]]
+name = "close"
+params = ["key: string", "code: int", "reason: string"]
+returns = "bool"
+doc = "Close the connection under `key` with a close code, 1000 for a normal close; false when there is none."
+
+[[function]]
+name = "state"
+params = ["key: string"]
+returns = "string"
+doc = "`connecting`, `open`, `closing` or `closed`, which is also the answer for a key with no connection."

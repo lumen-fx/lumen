@@ -278,6 +278,7 @@ mod tests {
                     },
                     styles: Vec::new(),
                     head: None,
+                    config: None,
                 }],
                 foreign: [(
                     "echo-view".to_string(),

@@ -22,7 +22,10 @@ that root and inside it.
 An add-on is found through the app's dependencies: a `path` source names the
 package directory, a `version` source names a registry package on the `lumen`
 platform whose root holds the descriptor, and `bundled = true` names the
-toolchain's own copy under `addons/<name>/`.
+toolchain's own copy under `addons/<name>/`, looked for under `--lib-dir`,
+beside `lumenc`, then under `LUMEN_LIB_DIR`. A `lumenc` built from a checkout
+also finds the ones in its `std/addons/`. The add-ons the toolchain ships are
+listed in [Standard browser add-ons](std-addons.md).
 
 ## lumen-addon.toml
 
@@ -59,6 +62,7 @@ An unknown key is an error, and every error names the add-on.
 | `styles` | array of strings | Stylesheets every page links, in this order, after the app's own. |
 | `head` | string | A classic script every page runs in its head, before it paints. It blocks the page while it runs, so keep it to what has to happen first, such as applying a stored theme. |
 | `files` | array of strings | Other files the module reads at run time. A directory stands for everything under it. |
+| `native` | boolean | True when the package is the page implementation of a runtime module of the same name. A web build takes the add-on; every other build loads the module and does not see the add-on, so one dependency entry serves both. The functions and elements it declares have to be the module's. Default false. |
 
 ### [[function]]
 
@@ -104,7 +108,7 @@ runtime reads from it is a named export:
 ```js
 let host;
 
-export function install(given) {
+export function install(given, config) {
   host = given;
 }
 
@@ -127,7 +131,7 @@ export const elements = {
 
 | Export | Called |
 |--------|--------|
-| `install(host)` | Once, when the app starts, before its scripts run. Optional. |
+| `install(host, config)` | Once, when the app starts, before its scripts run, with the `config` table the app's dependency entry gave the add-on as an object (empty when it gave none). Optional. |
 | one function per `[[function]]` | When a script calls that function, with the script's arguments. |
 | `elements` | An object keyed by tag, holding each element's hooks. Optional. |
 
@@ -137,8 +141,8 @@ console and the app starts anyway.
 
 ### The host
 
-`install` receives the object the module reaches the app through, outside a
-call:
+`install` receives, first, the object the module reaches the app through,
+outside a call:
 
 | Member | Does |
 |--------|------|
@@ -257,6 +261,9 @@ order `lumen.web.json` lists them, so a module that fails its check, or fails
 to load at all, keeps the app from starting: the page reads as it was written,
 and the browser console names the file. A page built without the runtime links
 the stylesheets alone.
+
+The `config` table an add-on is given travels in `lumen.web.json`, where any
+visitor can read it, so it is no place for a secret.
 
 ## Candela sugar
 

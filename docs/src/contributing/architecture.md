@@ -44,7 +44,8 @@ dev/               tools that never ship inside an app
 web/               the web target: emitter, browser runtime, SSR, prerender,
                    the web-only backends
 public/            author-facing crates: lumenc, the plugin and module SDKs
-std/               first-party runtime modules, shipped beside the engine
+std/               first-party runtime modules, shipped beside the engine,
+                   and in std/addons the first-party browser add-ons
 sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
@@ -126,7 +127,10 @@ tools/             the release plumbing and the editor plugins
   replays the journal into a retained vello scene, which the extract hands the
   render world. One crate builds both link shapes: the cdylib is the bundled
   `lumen-canvas` runtime module an app declares in `lumen.toml`, and a static
-  build compiles the same plugin in.
+  build compiles the same plugin in. Its page implementation is the browser
+  add-on in `std/addons/lumen-canvas`, whose descriptor says `native = true`;
+  a unit test in this crate holds the add-on's functions equal to the ones it
+  registers.
 - **lumen-download** (`std/download`): file downloads, as a self-contained
   module the engine knows nothing about. It registers the `download` script
   namespace through the generic registry and streams each transfer to disk on
@@ -151,6 +155,13 @@ tools/             the release plumbing and the editor plugins
   the plugin-event bus. One crate builds both link shapes: the cdylib is the
   bundled `lumen-process` runtime module an app declares in `lumen.toml`, and
   a static build compiles the same plugin in.
+- **std/addons**: the first-party browser add-ons, one directory each, named
+  by the dependency an app declares. They are data and JavaScript, not
+  crates, so the workspace leaves the directory out. The toolchain archive
+  carries them as `bin/addons`, and a `lumenc` built from a checkout reads
+  them in place. `public/lumenc/tests/std_addons.rs` reads every descriptor,
+  and `.github/scripts/web-addons-smoke.py` drives each one in headless
+  Chrome.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.

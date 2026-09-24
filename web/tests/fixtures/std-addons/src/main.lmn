@@ -1,0 +1,25 @@
+<root>
+  <label id="js-call" bind-text="js_call" text="waiting" />
+  <label id="js-async" bind-text="js_async" text="waiting" />
+  <label id="js-get" bind-text="js_get" text="waiting" />
+  <label id="js-import" bind-text="js_import" text="waiting" />
+  <label id="js-denied" bind-text="js_denied" text="waiting" />
+  <label id="js-event" bind-text="js_event" text="waiting" />
+  <label id="ws-state" bind-text="ws_state" text="waiting" />
+  <label id="ws-message" bind-text="ws_message" text="waiting" />
+  <label id="ws-close" bind-text="ws_close" text="waiting" />
+  <label id="storage-local" bind-text="storage_local" text="waiting" />
+  <label id="storage-session" bind-text="storage_session" text="waiting" />
+  <label id="storage-event" bind-text="storage_event" text="waiting" />
+  <label id="cookie-read" bind-text="cookie_read" text="waiting" />
+  <label id="cookie-gone" bind-text="cookie_gone" text="waiting" />
+  <label id="browser-media" bind-text="browser_media" text="waiting" />
+  <label id="browser-message" bind-text="browser_message" text="waiting" />
+  <label id="browser-fullscreen" bind-text="browser_fullscreen" text="waiting" />
+  <label id="browser-file" bind-text="browser_file" text="waiting" />
+  <label id="svg-count" bind-text="svg_count" text="waiting" />
+  <label id="canvas-size" bind-text="canvas_size" text="waiting" />
+  <svg-view id="art" text="no drawing yet" />
+  <canvas id="paint" width="40" height="20" />
+  <script src="main.cdl" />
+</root>
