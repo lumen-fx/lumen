@@ -73,3 +73,36 @@ pub fn apply_clipboard_commands(
         out.write(ClipboardRead { tag, text });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bevy_ecs::message::{MessageRegistry, Messages};
+
+    use super::*;
+
+    /// An app with no clipboard in the world still answers a read, with empty
+    /// text, and a write goes nowhere without taking the tick down.
+    #[test]
+    fn with_no_clipboard_a_read_answers_empty_and_a_write_is_dropped() {
+        let mut world = World::new();
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        MessageRegistry::register_message::<ClipboardRead>(&mut world);
+        world.write_message(ScriptCommandEvent(ScriptCommand::ClipboardWrite {
+            text: "copied".to_string(),
+        }));
+        world.write_message(ScriptCommandEvent(ScriptCommand::ClipboardRead {
+            tag: "paste".to_string(),
+        }));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(apply_clipboard_commands);
+        schedule.run(&mut world);
+
+        let reads = world.resource::<Messages<ClipboardRead>>();
+        let delivered: Vec<(String, String)> = reads
+            .iter_current_update_messages()
+            .map(|read| (read.tag.clone(), read.text.clone()))
+            .collect();
+        assert_eq!(delivered, [("paste".to_string(), String::new())]);
+    }
+}

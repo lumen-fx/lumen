@@ -170,6 +170,16 @@ mod tests {
     }
 
     #[test]
+    fn an_event_says_which_form_it_travels_in() {
+        let bytes = QueuedEvent::Bytes(vec![7, 8]);
+        let value = QueuedEvent::Value(Box::new(3_u32));
+        assert_eq!(bytes.bytes(), Some(&[7, 8][..]));
+        assert_eq!(value.bytes(), None);
+        assert_eq!(format!("{bytes:?}"), "Bytes([7, 8])");
+        assert_eq!(format!("{value:?}"), "Value(..)");
+    }
+
+    #[test]
     fn a_value_travels_as_itself_beside_the_bytes() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         discard_plugin_events();
