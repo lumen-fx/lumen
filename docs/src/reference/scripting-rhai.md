@@ -589,12 +589,11 @@ that formats an element's text.
 ## Canvas
 
 These functions come from the `lumen-canvas` runtime module and exist only
-when the app declares it under `[dependencies]` in `lumen.toml`, along with
-the tag it brings:
+when the app declares it under `[dependencies]` in `lumen.toml`:
 
 ```toml
 [dependencies]
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 ```
 
 Every call names a canvas by the `id` on its [`<canvas>`](tags.md#canvas)

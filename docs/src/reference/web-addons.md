@@ -251,7 +251,10 @@ that calls it:
 An element shows the content the markup gives it wherever the web half is not
 running.
 
-A desktop build never reads a web half: it loads the module's library. A
+A desktop build does not run a web half: it loads the module's library. It
+reads the descriptor, as every compile does, so the app's scripts compile
+against the functions it declares and its markup against the elements; at run
+time those calls bind to the functions the library registers. A
 module whose desktop half has nothing to do but say "runs only in a browser"
 still ships a library that says it, so a script calling it runs on every
 target; `lumen_module::BrowserOnly` builds that library's functions from the

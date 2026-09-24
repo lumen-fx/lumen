@@ -403,7 +403,8 @@ native::now_ms()
 One that chose a namespace is reached through it: `gpio::level(21)` in Rhai and
 candela, `gpio.level(21)` in Lua. candela needs no `host` block for either; the
 declarations are written for you from what was registered. A script you compile
-ahead of time to an artifact is the exception, and declares the namespace itself.
+ahead of time to an artifact is the exception, and declares the namespace itself,
+unless the function comes from a module whose web half declares it.
 
 Such a function can fail. It raises where the script called it, carrying the
 message the Rust side gave and naming the function, so you catch it the way the

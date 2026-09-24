@@ -175,7 +175,11 @@ tools/             the release plumbing and the editor plugins
   The toolchain archive carries the first-party ones as
   `bin/modules/<name>/web` (`.github/scripts/stage-web-halves.sh` stages
   them), and a `lumenc` built from a checkout reads them from `std/` in
-  place. `public/lumenc/tests/std_modules.rs` reads every descriptor, and
+  place. A compile opens no library, so every compile, the desktop's
+  included, declares the descriptor's functions and elements to the app
+  (`lumenc::addons::target_deps`); a desktop run then binds those calls to
+  the functions the loaded library registers.
+  `public/lumenc/tests/std_modules.rs` reads every descriptor, and
   `.github/scripts/web-addons-smoke.py` drives each web half in headless
   Chrome.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and

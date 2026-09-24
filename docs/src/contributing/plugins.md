@@ -498,8 +498,9 @@ yourself.
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
 and `lumenc package` run the parser on a machine where nothing was opened, so
-the element would be refused however diligently the module registers it. The
-app states the claim instead:
+the element would be refused however diligently the module registers it. A
+module with a [web half](#a-web-half) declares its elements in the
+descriptor, which every compile reads. Otherwise the app states the claim:
 
 ```toml
 [dependencies]
@@ -687,11 +688,14 @@ A precompiled `.cdlb` gets the same declarations a live compile gets, folded
 in from whatever was registered on the host before it compiled;
 `CandelaHost::compile_bytecode` folds a registered function into its
 namespace's block exactly as `lumenc check` and `lumenc run` do. `lumenc build`
-does not register a plugin before it compiles your script's `.cdlb`, though, so
-a script that will be compiled ahead of time still writes the
-`host "<ns>" { .. }` block itself. The build does not object when it is missing;
-the call compiles, the function holding it is left out of the image, and the
-app starts without it. For the same reason a `.cdl` wrapper cannot reach an
+opens no plugin or module before it compiles your script's `.cdlb`: it
+declares the functions each module's [web half](#a-web-half) describes, and
+nothing else. A script that calls any other plugin and will be compiled ahead
+of time writes the `host "<ns>" { .. }` block itself. Without it, a call in a
+function the compiler checks (one `main` reaches, or one that annotates every
+parameter) fails the build naming the call; in any other function the call
+compiles, the function holding it is left out of the image, and the app
+starts without it. For the same reason a `.cdl` wrapper cannot reach an
 artifact, and the artifact host says so when it is handed one. An artifact whose
 block names a function no plugin registered fails its load, naming the
 function.
@@ -888,7 +892,11 @@ carries a web half too: a `web/` directory beside its sources, holding a
 `lumen-addon.toml` and the JavaScript a page loads in place of the library.
 [Web halves of modules](../reference/web-addons.md) is the format. A web
 build takes the web half of every module the app declares; every other build
-loads the library and never reads `web/`.
+loads the library. Every compile, the desktop's and `lumenc check` included,
+reads the descriptor: it declares the module's functions and elements to the
+app's scripts and markup, since a compile opens no library. At run time the
+script binds to the functions the loaded library registers, so the two halves
+have to declare the same surface.
 
 The two halves offer one script surface, and the descriptor is where it is
 declared. Take the desktop signatures from it at compile time, so the halves
@@ -951,8 +959,8 @@ travels beside the executable instead.
 
 `std/canvas` is the same shape with pixels in it. It brings a markup element
 rather than only functions, so it registers the `canvas` tag from
-`Plugin::build` and the app declares the same tag under `[dependencies]` for
-the compile. It adopts each element it answers for by watching for the tag,
+`Plugin::build`, and its web half declares the same element, which is what a
+compile reads. It adopts each element it answers for by watching for the tag,
 and gives it a box by inserting an `ImageComponent` with a natural size, which
 is the leaf shape the layout engine already sizes the way a canvas needs;
 nothing loads, because the asset pipeline keys off a source component a canvas

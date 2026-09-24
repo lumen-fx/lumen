@@ -255,9 +255,8 @@ fn the_bundled_module_supplies_the_canvas_element_and_its_functions() {
 /// The module installs before the app's markup is parsed, so the tag it
 /// registers is accepted even when the app never declared it.
 ///
-/// `lumenc build` has no module to ask and does need the declaration, which
-/// is why the documentation says to write it either way. This is what the run
-/// path does on its own.
+/// `lumenc build` has no module to ask, and takes the element from the
+/// module's web half instead. This is what the run path does on its own.
 #[test]
 fn the_run_path_accepts_the_tag_the_module_registers() {
     let f = fixtures();

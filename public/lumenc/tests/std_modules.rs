@@ -4,8 +4,9 @@
 //! subject, run against `web/tests/fixtures/std-modules`; what the desktop
 //! halves do is each crate's own tests. This checks what a build reads off
 //! disk: every web half's descriptor, where `bundled = true` finds a module's
-//! root, and that a web build takes web halves where every other build takes
-//! none.
+//! root, that a web build takes web halves where every other build reads only
+//! their descriptors, and that a desktop compile declares what the
+//! descriptors declare and binds against the real modules.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -115,7 +116,7 @@ fn an_installed_toolchain_s_modules_directory_answers_first() {
 }
 
 #[test]
-fn a_web_build_takes_every_web_half_and_a_desktop_build_none() {
+fn a_web_build_takes_every_web_half_and_a_desktop_build_their_descriptors() {
     let app = repo().join(APP);
 
     let web = target_deps(&app, Target::Web, None).expect("the web build resolves");
@@ -148,8 +149,12 @@ fn a_web_build_takes_every_web_half_and_a_desktop_build_none() {
 
     let desktop = target_deps(&app, Target::Desktop, None).expect("the desktop build resolves");
     assert!(
-        desktop.packages.is_empty() && desktop.compile.addons.is_empty(),
-        "a desktop build loads libraries and reads no web half"
+        desktop.packages.is_empty(),
+        "a desktop build ships no web half's files"
+    );
+    assert_eq!(
+        desktop.compile.addons, web.compile.addons,
+        "a desktop compile declares what the descriptors declare, as a web compile does"
     );
 }
 
@@ -204,4 +209,184 @@ fn a_site_carries_the_config_and_writes_the_canvas_as_a_canvas() {
         "{page}"
     );
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// `lumenc` with `args`, run in `dir`, with the per-user data root every
+/// platform reads pointed under `data`.
+fn lumenc(dir: &Path, data: &Path, args: &[&str]) -> (bool, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .args(args)
+        .current_dir(dir)
+        .env("XDG_DATA_HOME", data)
+        .env("HOME", data)
+        .env("APPDATA", data)
+        .output()
+        .expect("running lumenc");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (output.status.success(), text)
+}
+
+/// An app in `scratch` that depends on the storage and canvas modules and
+/// runs `script` as its `main.cdl`.
+fn module_app(scratch: &Path, script: &str) -> PathBuf {
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"dev.lumen.test.std-modules-aot\"\n\n[script]\nengine = \"candela\"\n\n\
+         [dependencies]\nlumen-storage = { bundled = true }\n\
+         lumen-canvas = { bundled = true }\n\n[mcp]\nport = 0\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        app.join("src/main.lmn"),
+        "<root>\n  <canvas id=\"paint\" width=\"4\" height=\"2\" />\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(app.join("src/main.cdl"), script).expect("write the script");
+    app
+}
+
+/// Calls into two modules, each answer printed and the storage one read
+/// back from the module's file.
+const ROUND_TRIP: &str = r#"import "lumen.cdl";
+
+fn stored() -> string {
+    storage::set_item("greeting", "kept by the module");
+    return str(storage::get_item("greeting"));
+}
+
+fn buffer_width() -> int {
+    return canvas::buffer_width(canvas::buffer_new(3, 2));
+}
+
+fn on_start() {
+    print("storage: " + stored());
+    print("canvas: " + str(buffer_width()));
+}
+
+fn main() {}
+"#;
+
+#[test]
+fn a_desktop_artifact_calls_the_modules_it_was_compiled_against() {
+    let scratch =
+        std::env::temp_dir().join(format!("lumen-std-modules-aot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let app = module_app(&scratch, ROUND_TRIP);
+    let data = scratch.join("data");
+
+    let (ok, text) = lumenc(&app, &data, &["check", "."]);
+    assert!(ok, "{text}");
+    let (ok, text) = lumenc(&app, &data, &["build", ".", "app.lmna"]);
+    assert!(ok, "{text}");
+    let (ok, text) = lumenc(
+        &app,
+        &data,
+        &[
+            "run",
+            ".",
+            "--artifact",
+            "app.lmna",
+            "--headless",
+            "--ticks",
+            "2",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("storage: kept by the module"), "{text}");
+    assert!(text.contains("canvas: 3"), "{text}");
+    let file = find(&data, lumen_storage::FILE_NAME)
+        .unwrap_or_else(|| panic!("no {} under {}", lumen_storage::FILE_NAME, data.display()));
+    let kept = std::fs::read_to_string(&file).expect("the module's file reads");
+    assert!(kept.contains("kept by the module"), "{kept}");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// The first file called `name` under `dir`.
+fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_desktop_image_binds_against_the_real_modules() {
+    use lumen_core::app::App;
+    use lumen_script::{ScriptFnRegistry, ScriptHost, ScriptValue};
+    use lumen_script_candela::CandelaVmHost;
+
+    let scratch =
+        std::env::temp_dir().join(format!("lumen-std-modules-image-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let app_dir = module_app(&scratch, ROUND_TRIP);
+    let compiled = lumenc::compile_app(&app_dir).expect("the app compiles for the desktop");
+    let image = compiled.scripts[0]
+        .bytecode
+        .clone()
+        .expect("a candela program compiles to an image");
+
+    // The functions the modules themselves register, with nothing the
+    // compile declared standing in for them.
+    let mut app = App::new();
+    app.add_plugin(lumen_storage::StoragePlugin::at(
+        scratch.join("storage.json"),
+    ));
+    app.add_plugin(lumen_canvas::CanvasPlugin::with_caps(1 << 20, 1 << 20, 16));
+    let fns = app.world.resource::<ScriptFnRegistry>().fns().to_vec();
+
+    let mut host = CandelaVmHost::new(image);
+    for f in &fns {
+        host.register_script_fn(f).expect("a module function binds");
+    }
+    host.load("", "app.lmna")
+        .expect("the image loads against the modules");
+    let stored = host.call("stored", &[]).expect("stored is callable");
+    assert_eq!(
+        stored.ret,
+        Some(ScriptValue::Str("kept by the module".into()))
+    );
+    let width = host
+        .call("buffer_width", &[])
+        .expect("buffer_width is callable");
+    assert_eq!(width.ret, Some(ScriptValue::I64(3)));
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn check_refuses_a_call_the_descriptor_does_not_declare() {
+    let scratch = std::env::temp_dir().join(format!(
+        "lumen-std-modules-undeclared-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let app = module_app(
+        &scratch,
+        "import \"lumen.cdl\";\nfn on_start() { storage::get_everything(); }\nfn main() {}\n",
+    );
+    let (ok, text) = lumenc(&app, &scratch.join("data"), &["check", "."]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("the `storage` namespace has no `get_everything`"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn check_passes_the_std_modules_fixture_for_every_target() {
+    let (ok, text) = lumenc(&repo(), &std::env::temp_dir(), &["check", APP]);
+    assert!(ok, "{text}");
 }
