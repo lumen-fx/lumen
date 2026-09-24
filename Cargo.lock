@@ -3528,6 +3528,7 @@ dependencies = [
  "lumen-core",
  "lumen-ir",
  "lumen-module",
+ "lumen-modules",
  "lumen-render-wgpu",
  "lumen-runtime",
  "lumen-script",

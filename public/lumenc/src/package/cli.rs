@@ -462,6 +462,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     let mut libraries = crate::addons::libraries_of(
         &src_path,
         &cfg.dependencies_for(lumen_modules::Target::Desktop),
+        lumen_modules::Target::Desktop,
         &crate::package::lpm::Resolved::default(),
         lib_dir.as_deref(),
     );

@@ -6,8 +6,9 @@ name: build-toolchain
 # lumen-<target>.msi as the install channel. Every one of them holds
 # bin/lumenc, the liblumen shared library, bin/lumen-launcher,
 # bin/lumen-server (the production server for server-rendered sites), and
-# the two trees lumenc reads from beside itself: the candela standard library
-# in bin/libs and the `lumenc new` templates in bin/templates. The Unix
+# the three trees lumenc reads from beside itself: the candela standard
+# library in bin/libs, the `lumenc new` templates in bin/templates, and the
+# first-party browser add-ons in bin/addons. The Unix
 # archives also carry the shared engine (liblumen_engine + the Rust libstd
 # it was built against - see the dynamic-engine build step) and the shell
 # completions under share/. That layout comes from four places, not from
@@ -386,6 +387,10 @@ jobs:
           # (public/lumenc/src/cli/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
+          # The first-party browser add-ons, which are text files and the same
+          # on every platform. `lumenc web` reads a `bundled = true` add-on
+          # from addons/<name>/ beside its own executable.
+          cp -R std/addons dist/bin/addons
           # macOS records the path a dylib was written to, in the dylib and in
           # everything that links it, and an rpath cannot redirect an absolute
           # name. So each Mach-O here is given an @rpath install name before
@@ -470,6 +475,7 @@ jobs:
           Copy-Item target\release\lumen-server.exe dist\bin\
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
+          Copy-Item -Recurse std\addons dist\bin\addons
           Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES dist\
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 

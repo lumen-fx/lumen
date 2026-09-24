@@ -1,0 +1,27 @@
+# The page's cookies. A cookie the server set HttpOnly is invisible here, by
+# the browser's design.
+[addon]
+namespace = "cookie"
+module = "cookie.js"
+
+[[function]]
+name = "get"
+params = ["name: string"]
+returns = "any"
+doc = "The value of the cookie `name`, or null when the page cannot see one."
+
+[[function]]
+name = "set"
+params = ["name: string", "value: string", "options: {string: any}"]
+returns = "bool"
+doc = "Set a cookie. Options: max_age (seconds), path (default \"/\"), domain, same_site (lax, strict, none), secure, partitioned. False when the browser did not keep it."
+
+[[function]]
+name = "remove"
+params = ["name: string", "options: {string: any}"]
+doc = "Remove a cookie. The path and domain options have to match the ones it was set with."
+
+[[function]]
+name = "keys"
+returns = "string[]"
+doc = "The name of every cookie the page can see."

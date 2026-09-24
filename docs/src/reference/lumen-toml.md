@@ -333,10 +333,15 @@ for getting them onto a machine:
 |--------|--------------|--------|
 | `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
-| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the `canvas` script namespace that draws on it. Declare `tags = ["canvas"]` alongside it. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
+| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the `canvas` script namespace that draws on it. Declare `tags = ["canvas"]` alongside it. A web build takes its [page implementation](std-addons.md#canvas) instead, with the same functions and element. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
 | `lumen-download` | The `download` script namespace: fetch a URL to a file off the tick loop, reporting progress, completion, and failure as events. | `timeout_ms`, `max_bytes`, `max_concurrent` |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
 | `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
+
+The toolchain also ships browser add-ons, declared the same way:
+`lumen-js`, `lumen-websocket`, `lumen-storage`, `lumen-cookie`,
+`lumen-browser` and `lumen-svg`. [Standard browser add-ons](std-addons.md)
+lists what each adds.
 
 A build that compiles a declared module in answers the name from that copy
 and opens nothing. A name it neither compiles in nor can open beside a shared
@@ -349,7 +354,7 @@ Each entry declares exactly one source:
 | `bundled` | `true` | The library ships with the toolchain; the runtime looks beside the running engine (the executable's directory, then `LUMEN_LIB_DIR`, then a `modules/` directory beside either). |
 | `version` | string | A requirement on a [registry package](#registry-packages), in cargo semantics (`"1.2"` means `^1.2`). Every compile path resolves it and downloads what it resolves to; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
 | `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). |
-| `config` | table | Handed to the library verbatim at install. |
+| `config` | table | Handed to the library verbatim at install. A browser add-on's module receives it as an object, the second argument of its `install`. |
 
 A module that brings a markup element declares it too:
 
@@ -396,7 +401,11 @@ A desktop build does not open a browser add-on either. Declared for the
 desktop, its functions are bound to a body that raises
 `<namespace>::<function> runs only in a browser` in the script that calls one,
 the run prints one banner naming the add-on, and its elements show the
-content the markup gives them.
+content the markup gives them. An add-on whose descriptor says
+[`native = true`](web-addons.md#addon) is the page implementation of a
+runtime module of the same name instead: a web build takes the add-on and
+every other build loads the module, so one entry serves both. `lumen-canvas`
+is one.
 
 A declared library is native code loaded into the app's process, the same
 trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and

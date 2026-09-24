@@ -1,0 +1,6 @@
+/* The <svg-view> element: its drawing fills the box the app's CSS gives it. */
+.lm-svg-view > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

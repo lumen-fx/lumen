@@ -1,0 +1,20 @@
+# An element that shows SVG markup a script hands it, and edits it in place.
+[addon]
+namespace = "svg"
+module = "svg.js"
+styles = ["svg.css"]
+
+[[function]]
+name = "set_markup"
+params = ["id: string", "markup: string"]
+doc = "Show this SVG document in the <svg-view> with the id, in place of what it showed. Scripts, event attributes and javascript: URLs are taken out first."
+
+[[function]]
+name = "set_attribute"
+params = ["id: string", "selector: string", "name: string", "value: string"]
+returns = "int"
+doc = "Set an attribute on every element the CSS selector matches inside the <svg-view> with the id; how many it matched, 0 when the element is not in the page yet."
+
+[[element]]
+tag = "svg-view"
+html = "div"

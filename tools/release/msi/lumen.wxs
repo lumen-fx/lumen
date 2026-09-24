@@ -2,8 +2,8 @@
 <!--
   The Lumen Windows installer: lumenc, the liblumen runtime library, the app
   launcher stub, the lumen-server production server, the candela standard
-  library, the `lumenc new` templates, and an install receipt, installed for
-  the current user.
+  library, the `lumenc new` templates, the first-party browser add-ons, and
+  an install receipt, installed for the current user.
 
   It installs into the user profile so it never asks for administrator
   rights, which is the same shape VS Code's user installer uses. The payload
@@ -116,6 +116,14 @@
         than to this package.
       -->
       <Files Include="$(var.StageDir)\bin\templates\**" Directory="BINFOLDER" Subdirectory="templates" />
+
+      <!--
+        The first-party browser add-ons, under bin\addons. `lumenc web` reads
+        an add-on an app declares with `bundled = true` from addons\<name>\
+        beside its own executable. Harvested like the two trees above: the
+        list of add-ons belongs to std/addons in the source tree.
+      -->
+      <Files Include="$(var.StageDir)\bin\addons\**" Directory="BINFOLDER" Subdirectory="addons" />
 
       <!--
         The engine in this payload links candela, which is Apache-2.0. That
