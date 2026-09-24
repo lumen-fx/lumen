@@ -66,8 +66,7 @@ pub struct Canvas {
 /// exist, along with the `canvas` functions that draw on them.
 ///
 /// Ships as the bundled `lumen-canvas` runtime module (an app declares
-/// `lumen-canvas = { bundled = true, tags = ["canvas"] }` under
-/// `[dependencies]`), and works the same added as an ordinary plugin in a
+/// `lumen-canvas = { bundled = true }` under `[dependencies]`), and works the same added as an ordinary plugin in a
 /// static build. Without it there is no `<canvas>` tag and no `canvas`
 /// namespace.
 #[derive(Default)]

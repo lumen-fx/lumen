@@ -26,10 +26,12 @@ pub struct CompileDeps {
     /// Script libraries the app imports, as the name a script imports under
     /// and the directory holding its sources.
     pub import_roots: Vec<(String, PathBuf)>,
-    /// The web halves of the modules the app depends on, for a web build;
-    /// every other target takes none. Their functions are declared to the
-    /// compile, their elements to the parser, and the compiled app carries
-    /// them.
+    /// What the web halves of the modules the app depends on declare. A
+    /// module's descriptor is its script surface on every target, so their
+    /// functions are declared to the compile and their elements to the
+    /// parser whatever the target, and the compiled app carries them. A
+    /// compile opens no module's library: the functions are declared here
+    /// and bound, at run time, to whatever the loaded module registers.
     pub addons: Vec<lumen_ir::addon::Addon>,
 }
 
@@ -46,6 +48,7 @@ impl CompileDeps {
 
 /// The add-ons' functions, bound to the body every target without a page
 /// binds, for handing to a compiler: it declares them and never calls them.
+/// Nothing a run registers comes from here; a run binds the module's own.
 #[cfg(feature = "runtime-parse")]
 fn addon_stubs(addons: &[lumen_ir::addon::Addon]) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
     let mut fns = Vec::new();

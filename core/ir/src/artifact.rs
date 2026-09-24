@@ -223,10 +223,13 @@ pub struct CompiledApp {
     /// The app's translation catalogues and fallback chain. Empty for an app
     /// with no `locale/` directory.
     pub i18n: CompiledI18n,
-    /// The browser add-ons the app depends on for the target it was compiled
-    /// for, in the order its dependencies sort. A page binds their functions
-    /// to the modules it loads; everywhere else they are bound to a body that
-    /// says they run only in a browser. Empty for an app that declares none.
+    /// What the web halves of the modules the app depends on for the target
+    /// it was compiled for declare, in the order its dependencies sort: the
+    /// functions its program was compiled against. A page binds them to the
+    /// modules it loads, and a build-time render or a server to a body that
+    /// says they run only in a browser. A desktop run reads none of it: the
+    /// module libraries it loads register the same functions. Empty for an
+    /// app that declares none.
     pub addons: Vec<crate::addon::Addon>,
 }
 

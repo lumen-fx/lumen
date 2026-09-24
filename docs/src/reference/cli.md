@@ -113,6 +113,9 @@ A candela script is checked once for each target, `web` and `desktop`, against
 that target's dependencies and with that target's
 [`@cfg` flag](scripting-candela.md#code-for-one-target) on. An error only one
 target's build hits ends in `(in the web build)` or `(in the desktop build)`.
+A check opens no module, so both targets compile against the functions each
+module's [web half](web-addons.md) declares; a module without one declares
+nothing, as [`[dependencies]`](lumen-toml.md#dependencies) describes.
 
 Where the app's own script loads a native library with a `dylib "name" { ... }`
 block, the calls are checked against the signatures the block declares and the

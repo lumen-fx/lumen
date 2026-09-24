@@ -967,16 +967,16 @@ that formats an element's text.
 ## Canvas
 
 These functions come from the `lumen-canvas` runtime module and exist only
-when the app declares it under `[dependencies]` in `lumen.toml`, along with
-the tag it brings:
+when the app declares it under `[dependencies]` in `lumen.toml`:
 
 ```toml
 [dependencies]
-lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-canvas = { bundled = true }
 ```
 
 They live in their own `canvas` namespace, so no `import` line reaches
-them: the host declares the namespace from what the module registered.
+them: a compile declares the namespace from the module's web half, and a run
+binds it to what the module registered.
 
 A web build answers the same declaration with the module's web half, which
 offers every function below with the same signature and draws with the
@@ -1617,11 +1617,11 @@ fn on_browser_message(origin: string, data: {string: any}, source: string) {
 ## SVG
 
 These functions come from the `lumen-svg` runtime module, declared under
-`[dependencies]` in `lumen.toml` with the tag it brings:
+`[dependencies]` in `lumen.toml`:
 
 ```toml
 [dependencies]
-lumen-svg = { bundled = true, tags = ["svg-view"] }
+lumen-svg = { bundled = true }
 ```
 
 The `<svg-view>` element shows an SVG drawing a script sets as markup. Until
@@ -1735,9 +1735,11 @@ Two things follow from where the declarations come from. An app calling a
 function nothing registered fails the compile, naming it, so `lumenc check` and
 `lumenc run` reject a call meant for an embedder they do not carry. And a
 `.cdlb` build gets the same synthesized declarations a live compile gets, from
-whatever was registered on the host before it compiled; `lumenc build` does
-not register a plugin or a runtime module before it compiles your script's
-`.cdlb`, so write the `host` block by hand in a script you will build to an
+whatever was registered on the host before it compiled. `lumenc build` opens
+no plugin or runtime module before it compiles your script's `.cdlb`; it
+declares the functions each module's [web half](web-addons.md) describes.
+For any other plugin or
+module, write the `host` block by hand in a script you will build to an
 artifact, exactly as you would for an embedder `lumenc` does not carry.
 
 At the artifact's own load, a declaration with no closure behind it fails the

@@ -9,9 +9,15 @@
 //! A module's web half is the `web/` directory under its root, holding a
 //! `lumen-addon.toml`.
 //!
-//! A web build takes the web half of each module, and `lumenc web` refuses a
-//! module that has none. Every other build takes no web half at all: the
-//! table goes to the loader, which opens each module's library.
+//! The descriptor is where a module declares its script surface, and both of
+//! its halves offer that surface, so every compile reads it: the functions it
+//! declares are what the app's scripts compile against, for every target. A
+//! compile opens no library, so a module without a web half declares nothing
+//! to it.
+//!
+//! Only a web build takes the rest of a web half, and `lumenc web` refuses a
+//! module that has none. Every other build hands the table to the loader,
+//! which opens each module's library when the app runs.
 //!
 //! What comes back is what the rest of a build needs from a web half: the
 //! description the compiled app carries, the files a site ships, and, for one
@@ -32,17 +38,18 @@ pub const BUNDLED_MODULE_DIR: &str = "modules";
 /// What a build for one target took from outside the app directory.
 #[derive(Debug, Clone)]
 pub struct TargetDeps {
-    /// What the compile reads: the target, the import roots, the web halves.
+    /// What the compile reads: the target, the import roots, and the
+    /// descriptors of the modules' web halves.
     pub compile: CompileDeps,
     /// The web halves, with the files a site ships for each. Empty for every
-    /// target but the web.
+    /// target but the web: the others read only the descriptors.
     pub packages: Vec<AddonPackage>,
     /// Everything `lpm` resolved for the target.
     pub resolved: Resolved,
 }
 
 /// Resolve what the app at `dir` depends on for a build for `target`: its
-/// registry packages and, for the web, its modules' web halves.
+/// registry packages and its modules' web halves.
 ///
 /// `lib_dir` is the `--lib-dir` a build was given, which is searched for
 /// bundled modules before the toolchain's own directories.
@@ -59,8 +66,10 @@ pub fn target_deps(
     let cfg =
         lumen_runtime::LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let resolved = crate::registry_packages(dir, target)?;
+    let halves = web_halves(dir, &cfg.dependencies_for(target), &resolved, lib_dir)?;
+    let addons = halves.iter().map(|p| p.addon.clone()).collect();
     let packages = if target == Target::Web {
-        web_halves(dir, &cfg.dependencies_for(target), &resolved, lib_dir)?
+        halves
     } else {
         Vec::new()
     };
@@ -69,7 +78,7 @@ pub fn target_deps(
     let compile = CompileDeps {
         target,
         import_roots,
-        addons: packages.iter().map(|p| p.addon.clone()).collect(),
+        addons,
     };
     Ok(TargetDeps {
         compile,
