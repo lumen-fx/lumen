@@ -118,12 +118,13 @@
       <Files Include="$(var.StageDir)\bin\templates\**" Directory="BINFOLDER" Subdirectory="templates" />
 
       <!--
-        The first-party browser add-ons, under bin\addons. `lumenc web` reads
-        an add-on an app declares with `bundled = true` from addons\<name>\
-        beside its own executable. Harvested like the two trees above: the
-        list of add-ons belongs to std/addons in the source tree.
+        The web halves of the first-party modules, under bin\modules.
+        `lumenc web` reads the web half of a module an app declares with
+        `bundled = true` from modules\<name>\web\ beside its own executable.
+        Harvested like the two trees above: which modules have a web half
+        belongs to std/ in the source tree.
       -->
-      <Files Include="$(var.StageDir)\bin\addons\**" Directory="BINFOLDER" Subdirectory="addons" />
+      <Files Include="$(var.StageDir)\bin\modules\**" Directory="BINFOLDER" Subdirectory="modules" />
 
       <!--
         The engine in this payload links candela, which is Apache-2.0. That

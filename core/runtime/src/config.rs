@@ -33,7 +33,7 @@
 //! weather-feed = "1.2"             # registry package, fetched by lpm and pinned in lumen.lock
 //!
 //! [target.web.dependencies]        # laid over [dependencies] for a `lumenc web` build
-//! chart = { path = "addons/chart" }  # a browser add-on: a directory holding lumen-addon.toml
+//! chart = { path = "modules/chart" }  # a module with only a web half: chart/web/lumen-addon.toml
 //!
 //! [[hooks]]                        # project build/setup commands; see `crate::hooks`
 //! when    = "prebuild"             # "prebuild" | "prerun"

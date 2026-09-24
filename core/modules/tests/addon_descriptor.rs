@@ -1,33 +1,34 @@
-//! Reading a browser add-on's descriptor: every shape `lumen-addon.toml` can
-//! take that the reader refuses, and the one path spelling it tidies.
+//! Reading a module's web half: every shape `lumen-addon.toml` can take that
+//! the reader refuses, and the one path spelling it tidies.
 
 use std::path::PathBuf;
 
-use lumen_modules::addon::{ADDON_MANIFEST, read_addon};
+use lumen_modules::addon::{ADDON_MANIFEST, WEB_DIR, read_web_half};
 
-/// A package directory holding `files` and a descriptor reading `text`, for
-/// one test.
+/// A module root whose web half holds `files` and a descriptor reading
+/// `text`, for one test.
 fn package(test: &str, files: &[&str], text: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "lumen-modules-addon-descriptor-{}-{test}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
+    let web = dir.join(WEB_DIR);
     for file in files {
-        let path = dir.join(file);
+        let path = web.join(file);
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
         std::fs::write(&path, "").expect("write");
     }
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    std::fs::write(dir.join(ADDON_MANIFEST), text).expect("write the descriptor");
+    std::fs::create_dir_all(&web).expect("mkdir");
+    std::fs::write(web.join(ADDON_MANIFEST), text).expect("write the descriptor");
     dir
 }
 
-/// What reading a package with `echo.js` and `echo.css` beside a descriptor
+/// What reading a web half with `echo.js` and `echo.css` beside a descriptor
 /// reading `text` says.
 fn refusal(test: &str, text: &str) -> String {
     let dir = package(test, &["echo.js", "echo.css"], text);
-    let Err(err) = read_addon("echo", &dir) else {
+    let Err(err) = read_web_half("echo", &dir) else {
         panic!("the descriptor is refused");
     };
     let _ = std::fs::remove_dir_all(&dir);
@@ -62,7 +63,7 @@ fn a_module_path_through_the_current_directory_is_written_without_it() {
         &["lib/echo.mjs"],
         "[addon]\nnamespace = \"echo\"\nmodule = \"./lib/./echo.mjs\"\n",
     );
-    let package = read_addon("echo", &dir).unwrap();
+    let package = read_web_half("echo", &dir).unwrap();
     assert_eq!(package.module, "lib/echo.mjs");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -36,10 +36,16 @@ lumen = { workspace = true, optional = true }
 # them anchors the engine dylib; each still registers itself before `main`.
 lumen-archive = { workspace = true, optional = true }
 lumen-audio = { workspace = true, optional = true }
+lumen-browser = { workspace = true, optional = true }
 lumen-canvas = { workspace = true, optional = true }
+lumen-cookie = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
 lumen-fs = { workspace = true, optional = true }
+lumen-js = { workspace = true, optional = true }
 lumen-process = { workspace = true, optional = true }
+lumen-storage = { workspace = true, optional = true }
+lumen-svg = { workspace = true, optional = true }
+lumen-websocket = { workspace = true, optional = true }
 
 [features]
 # One self-contained executable: the engine and the first-party modules
@@ -49,8 +55,14 @@ static-run = [
     "dep:lumen",
     "dep:lumen-archive",
     "dep:lumen-audio",
+    "dep:lumen-browser",
     "dep:lumen-canvas",
+    "dep:lumen-cookie",
     "dep:lumen-download",
     "dep:lumen-fs",
+    "dep:lumen-js",
     "dep:lumen-process",
+    "dep:lumen-storage",
+    "dep:lumen-svg",
+    "dep:lumen-websocket",
 ]

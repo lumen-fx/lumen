@@ -1,0 +1,256 @@
+# The web half of the canvas module: the same `canvas` functions and the same
+# <canvas> element as the desktop half in src/, drawn with the browser's
+# Canvas 2D. A web build takes this directory, every other build loads the
+# module's library. std/canvas's tests hold the two surfaces equal.
+[addon]
+namespace = "canvas"
+module = "canvas.js"
+
+[[function]]
+name = "width"
+params = ["id: string"]
+returns = "int"
+doc = "The canvas's drawing width, in canvas units."
+
+[[function]]
+name = "height"
+params = ["id: string"]
+returns = "int"
+doc = "The canvas's drawing height, in canvas units."
+
+[[function]]
+name = "resize"
+params = ["id: string", "width: float", "height: float"]
+doc = "Set the drawing space, in canvas units. This empties the canvas."
+
+[[function]]
+name = "clear"
+params = ["id: string"]
+doc = "Erase everything the canvas holds."
+
+[[function]]
+name = "begin_path"
+params = ["id: string"]
+doc = "Start a new path."
+
+[[function]]
+name = "move_to"
+params = ["id: string", "x: float", "y: float"]
+doc = "Start a subpath at a point."
+
+[[function]]
+name = "line_to"
+params = ["id: string", "x: float", "y: float"]
+doc = "Straight segment to a point."
+
+[[function]]
+name = "quad_to"
+params = ["id: string", "cx: float", "cy: float", "x: float", "y: float"]
+doc = "Quadratic segment through a control point."
+
+[[function]]
+name = "bezier_to"
+params = ["id: string", "c1x: float", "c1y: float", "c2x: float", "c2y: float", "x: float", "y: float"]
+doc = "Cubic segment through two control points."
+
+[[function]]
+name = "arc"
+params = ["id: string", "x: float", "y: float", "radius: float", "start: float", "end: float"]
+doc = "Circular arc, angles in radians."
+
+[[function]]
+name = "rect"
+params = ["id: string", "x: float", "y: float", "width: float", "height: float"]
+doc = "Add a closed rectangle to the path."
+
+[[function]]
+name = "close_path"
+params = ["id: string"]
+doc = "Close the current subpath back to its start."
+
+[[function]]
+name = "fill"
+params = ["id: string"]
+doc = "Fill the current path."
+
+[[function]]
+name = "stroke"
+params = ["id: string"]
+doc = "Stroke the current path."
+
+[[function]]
+name = "fill_rect"
+params = ["id: string", "x: float", "y: float", "width: float", "height: float"]
+doc = "Fill one rectangle, leaving the path alone."
+
+[[function]]
+name = "stroke_rect"
+params = ["id: string", "x: float", "y: float", "width: float", "height: float"]
+doc = "Stroke one rectangle, leaving the path alone."
+
+[[function]]
+name = "set_fill_rgba"
+params = ["id: string", "r: float", "g: float", "b: float", "a: float"]
+doc = "Set the fill color from four components, each 0..1."
+
+[[function]]
+name = "set_fill_style"
+params = ["id: string", "color: string"]
+returns = "bool"
+doc = "Set the fill color from CSS text; false when it is not understood."
+
+[[function]]
+name = "set_stroke_rgba"
+params = ["id: string", "r: float", "g: float", "b: float", "a: float"]
+doc = "Set the stroke color from four components, each 0..1."
+
+[[function]]
+name = "set_stroke_style"
+params = ["id: string", "color: string"]
+returns = "bool"
+doc = "Set the stroke color from CSS text; false when it is not understood."
+
+[[function]]
+name = "set_line_width"
+params = ["id: string", "width: float"]
+doc = "Set the stroke width, in canvas units."
+
+[[function]]
+name = "set_line_cap"
+params = ["id: string", "cap: string"]
+returns = "bool"
+doc = "Set the stroke's ends: butt, round, square."
+
+[[function]]
+name = "set_line_join"
+params = ["id: string", "join: string"]
+returns = "bool"
+doc = "Set the stroke's corners: miter, round, bevel."
+
+[[function]]
+name = "set_global_alpha"
+params = ["id: string", "alpha: float"]
+doc = "Multiply every later draw by this alpha, 0..1."
+
+[[function]]
+name = "save"
+params = ["id: string"]
+doc = "Push the drawing state."
+
+[[function]]
+name = "restore"
+params = ["id: string"]
+doc = "Pop the drawing state."
+
+[[function]]
+name = "translate"
+params = ["id: string", "x: float", "y: float"]
+doc = "Move the origin."
+
+[[function]]
+name = "rotate"
+params = ["id: string", "radians: float"]
+doc = "Rotate the transform, in radians."
+
+[[function]]
+name = "scale"
+params = ["id: string", "x: float", "y: float"]
+doc = "Scale the transform."
+
+[[function]]
+name = "reset_transform"
+params = ["id: string"]
+doc = "Drop back to the identity transform."
+
+[[function]]
+name = "set_transform"
+params = ["id: string", "a: float", "b: float", "c: float", "d: float", "e: float", "f: float"]
+doc = "Replace the transform with a b c d e f."
+
+[[function]]
+name = "set_font"
+params = ["id: string", "font: string"]
+returns = "bool"
+doc = "Set the font as '[weight] <size>px [family]'; false when it is not understood."
+
+[[function]]
+name = "fill_text"
+params = ["id: string", "text: string", "x: float", "y: float"]
+doc = "Draw text in the fill color, with (x, y) on the baseline."
+
+[[function]]
+name = "buffer_new"
+params = ["width: int", "height: int"]
+returns = "int"
+doc = "Create a transparent pixel buffer; 0 when it was refused."
+
+[[function]]
+name = "buffer_free"
+params = ["buffer: int"]
+returns = "bool"
+doc = "Release a buffer; false when it was unknown."
+
+[[function]]
+name = "buffer_width"
+params = ["buffer: int"]
+returns = "int"
+doc = "A buffer's width; 0 when it is unknown."
+
+[[function]]
+name = "buffer_height"
+params = ["buffer: int"]
+returns = "int"
+doc = "A buffer's height; 0 when it is unknown."
+
+[[function]]
+name = "buffer_get_pixel"
+params = ["buffer: int", "x: int", "y: int"]
+returns = "int"
+doc = "One pixel as 0xRRGGBBAA; 0 outside the buffer."
+
+[[function]]
+name = "buffer_set_pixel"
+params = ["buffer: int", "x: int", "y: int", "rgba: int"]
+doc = "Write one pixel as 0xRRGGBBAA."
+
+[[function]]
+name = "buffer_get_region"
+params = ["buffer: int", "x: int", "y: int", "width: int", "height: int"]
+returns = "int[]"
+doc = "A rectangle of pixels, row-major, as 0xRRGGBBAA integers."
+
+[[function]]
+name = "buffer_put_region"
+params = ["buffer: int", "x: int", "y: int", "width: int", "height: int", "pixels: int[]"]
+doc = "Write a rectangle of pixels back."
+
+[[function]]
+name = "buffer_fill_rect"
+params = ["buffer: int", "x: int", "y: int", "width: int", "height: int", "rgba: int"]
+doc = "Fill a rectangle of a buffer with one color."
+
+[[function]]
+name = "buffer_load_png"
+params = ["path: string"]
+returns = "int"
+doc = "Read a PNG into a fresh buffer; 0 when it could not be read."
+
+[[function]]
+name = "buffer_save_png"
+params = ["buffer: int", "path: string"]
+returns = "bool"
+doc = "Write a buffer out as a PNG."
+
+[[function]]
+name = "draw_buffer"
+params = ["id: string", "buffer: int", "x: float", "y: float"]
+doc = "Draw a buffer onto the canvas at its own size."
+
+[[function]]
+name = "draw_buffer_scaled"
+params = ["id: string", "buffer: int", "x: float", "y: float", "width: float", "height: float"]
+doc = "Draw a buffer onto the canvas stretched into a box."
+
+[[element]]
+tag = "canvas"
+html = "canvas"

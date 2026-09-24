@@ -1,0 +1,39 @@
+# The `svg` module: an <svg-view> element that shows SVG markup a script hands it. It reaches
+# something only a page has, so its implementation is its web half in web/, a
+# descriptor and an ES module a web build ships beside the page. Its desktop
+# half is this crate: the same functions, taken from that descriptor at compile
+# time, each raising "runs only in a browser", so a script calling one compiles
+# and runs on every target. Two link shapes from one crate, like every std
+# module: the `cdylib` target is the bundled `lumen-svg` module an app declares in
+# `lumen.toml`, and the `lib` target is the same plugin compiled into a static
+# build.
+[package]
+name = "lumen-svg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's svg module: an <svg-view> element a script draws into with SVG markup in a web build; on the desktop the element shows its fallback content and every call raises \"runs only in a browser\"."
+keywords = ["ui", "gui", "svg", "web", "scripting"]
+categories = ["gui", "web-programming"]
+publish = false
+
+[lib]
+# `lumen_svg` is the spelling the module loader's bundled probe derives from the
+# app's `lumen-svg = { bundled = true }` declaration: the cdylib builds to
+# `liblumen_svg.so`.
+name = "lumen_svg"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-module = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+# A binary that links the `lib` target in drops the feature and links no
+# engine dylib; what the module registers before `main` is unaffected.
+engine-dylib = ["lumen-module/engine-dylib"]

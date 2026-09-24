@@ -96,8 +96,8 @@ a page loads them.
     --no-hooks        Skip the app's prebuild [[hooks]].
     --lib-dir DIR     Directory holding lumen-web.wasm and lumen-web.js,
                       instead of the ones shipped with lumenc. A bundled
-                      browser add-on is looked for under addons/<name>/
-                      here first.
+                      module's web half is looked for under
+                      modules/<name>/web/ here first.
     --strict          Fail the build on any warning it prints.
     --offline         Resolve the app's registry packages from what is
                       already downloaded, and never reach the network.
@@ -361,25 +361,23 @@ fn build(options: &Options) -> Result<Report, String> {
             "only a markup app is emitted as a site; this one is a {kind:?} app"
         ));
     }
-    // Runtime modules are native shared libraries the engine dlopens, and a
-    // browser has no dynamic loader to hand one to. A candela package is
-    // script source, so it compiles into the app like the app's own scripts
-    // and travels wherever the app does, the web included, and a browser
-    // add-on is a module the page loads beside the runtime.
+    // A page takes each module's web half, the files it loads beside the
+    // runtime; a browser cannot open the library a desktop build loads. A
+    // candela package is script source, so it compiles into the app like the
+    // app's own scripts and travels wherever the app does, the web included.
     let deps = crate::addons::target_deps(dir, Target::Web, options.lib_dir.as_deref())?;
-    let native = cfg.dependencies_for(Target::Web).0.into_iter().find(|dep| {
-        let addon = deps.packages.iter().any(|p| p.addon.name == dep.name);
-        !addon
-            && (!matches!(dep.source, lumen_modules::ModuleSource::Version(_))
-                || deps.resolved.modules.contains_key(&dep.name))
-    });
-    if let Some(dep) = native {
+    let desktop_only = cfg
+        .dependencies_for(Target::Web)
+        .0
+        .into_iter()
+        .find(|dep| !deps.packages.iter().any(|p| p.addon.name == dep.name));
+    if let Some(dep) = desktop_only {
         return Err(format!(
-            "this app declares '{}' as a dependency of its web build, and it is a native \
-             library: the engine loads one by opening it, which a browser cannot do. Declare \
-             it under [target.desktop.dependencies] to keep it out of the site, or ship the \
-             app as a desktop package. A browser add-on is a directory holding \
-             lumen-addon.toml.",
+            "this app declares '{}' as a dependency of its web build, and the module has no \
+             web half (a web/lumen-addon.toml under its root): its library is loaded by \
+             opening it, which a browser cannot do. Declare it under \
+             [target.desktop.dependencies] to keep it out of the site, or ship the app as a \
+             desktop package.",
             dep.name
         ));
     }

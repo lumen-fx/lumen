@@ -90,8 +90,8 @@ pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
 pub use dom_events::{dispatch_pointer_and_key_events, dispatch_state_events};
 pub use http::{
-    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
-    ThreadDispatch, UnknownCredentials,
+    Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpHook, HttpRequest,
+    HttpResponse, ThreadDispatch, UnknownCredentials,
 };
 pub use runtime::*;
 pub use script_fn::{

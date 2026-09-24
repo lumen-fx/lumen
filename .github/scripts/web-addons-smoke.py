@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Open the first-party add-on fixture in headless Chrome and check each leg.
+"""Open the first-party modules fixture in headless Chrome and check each leg.
 
-web-page-smoke.sh serves web/tests/fixtures/std-addons and runs this against
-it. The fixture calls into every add-on under std/addons and writes each
-answer into a label; this drives the page over WebDriver, does what only a
+web-page-smoke.sh serves web/tests/fixtures/std-modules and runs this against
+it. The fixture calls into the web half of every module under std/ and writes
+each answer into a label; this drives the page over WebDriver, does what only a
 visitor or a second tab can do (dispatch an event, post a message, change
 local storage from elsewhere), and waits for every label to read what it
 should.
@@ -64,7 +64,7 @@ EXPECTED = {
 
 
 def fail(message):
-    print(f"web add-ons smoke: {message}", file=sys.stderr)
+    print(f"web modules smoke: {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -284,7 +284,7 @@ def run(url, chrome):
         for label, got in wrong.items():
             print(f"  {label}: read {got!r}, wanted {EXPECTED[label]!r}", file=sys.stderr)
         if wrong:
-            fail(f"{len(wrong)} add-on legs never answered as they should")
+            fail(f"{len(wrong)} module legs never answered as they should")
 
         # The drawing: what the canvas holds, read back from its pixels.
         pixels = script(
@@ -323,7 +323,7 @@ def run(url, chrome):
     finally:
         request("DELETE", base)
 
-    print("web add-ons smoke: every first-party add-on answered")
+    print("web modules smoke: every first-party module's web half answered")
 
 
 if __name__ == "__main__":

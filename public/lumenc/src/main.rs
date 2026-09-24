@@ -20,13 +20,25 @@ use lumen_archive as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_audio as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_browser as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_canvas as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_cookie as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_download as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_fs as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_js as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_process as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_storage as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_svg as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_websocket as _;
 
 fn main() -> ExitCode {
     // Earliest reachable instant, used only when `LUMEN_BOOT_TRACE` is set:

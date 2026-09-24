@@ -1,0 +1,51 @@
+# The `ws` module: WebSocket connections a script names by key, text frames
+# only. Its web half in web/ is the browser's WebSocket; this crate is its
+# desktop half, a client on a thread per connection that delivers the same
+# events through the plugin-event bus. Two link shapes from one crate, like
+# every std module: the `cdylib` target is the bundled `lumen-websocket`
+# module an app declares in `lumen.toml`, and the `lib` target is the same
+# plugin compiled into a static build.
+[package]
+name = "lumen-websocket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's websocket module: WebSocket connections named by key, as the browser's WebSocket in a web build and a rustls-backed client on the desktop."
+keywords = ["ui", "gui", "websocket", "network", "scripting"]
+categories = ["gui", "network-programming"]
+publish = false
+
+[lib]
+# `lumen_websocket` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-websocket = { bundled = true }` declaration: the
+# cdylib builds to `liblumen_websocket.so`.
+name = "lumen_websocket"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-module = { workspace = true }
+# The protocol: the handshake and the frames, over a stream this crate opens.
+tungstenite = { workspace = true }
+# `wss://`: the rustls and the root certificates the engine's HTTP client
+# already carries, handed to tungstenite as its connector.
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+# A binary that links the `lib` target in drops the feature and links no
+# engine dylib; what the module registers before `main` is unaffected.
+engine-dylib = ["lumen-module/engine-dylib"]
+
+# Tests only: the compiled-in-shape test builds a headless app around the
+# plugin the way `lumenc run` would, against an echo server in the test.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+tungstenite = { workspace = true }

@@ -13,13 +13,13 @@
 # the browser runs. The second is written in a language no browser host
 # answers for: its page has to come up as a page anyway, because an app whose
 # script cannot run is still an app a visitor can read. The third depends on a
-# browser add-on, and every kind of call it offers has to come back into the
-# page. The fourth imports the candela standard library's C-backed modules,
+# module with a web half, and every kind of call it offers has to come back
+# into the page. The fourth imports the candela standard library's C-backed modules,
 # which the runtime carries itself in a browser. The fifth compiles one side
 # of its script for the web and the other for the desktop, and the page has
-# to show the web side. The sixth uses every first-party add-on under
-# std/addons, and is driven over WebDriver by web-addons-smoke.py, because its
-# answers arrive after the few frames a dumped page gets.
+# to show the web side. The sixth uses the web half of every first-party
+# module under std/, and is driven over WebDriver by web-addons-smoke.py,
+# because its answers arrive after the few frames a dumped page gets.
 #
 #   $1  directory holding lumen-web.wasm and lumen-web.js
 #   $2  the app to emit (default apps/widget-garden)
@@ -35,7 +35,7 @@ scriptless="apps/weather"
 with_addon="web/tests/fixtures/addon-echo"
 with_std="fixtures/candela-std"
 with_cfg="fixtures/cfg-target"
-with_std_addons="web/tests/fixtures/std-addons"
+with_std_modules="web/tests/fixtures/std-modules"
 chrome="${CHROME_BIN:-google-chrome}"
 # The chromedriver matching that Chrome: CHROMEDRIVER, else the one a GitHub
 # runner image ships under CHROMEWEBDRIVER, else whichever is on PATH.
@@ -143,10 +143,10 @@ grep -qE 'id="root-label"[^>]*>4\.0<' "$dom" || fail "$with_std: std/math never 
 open_page "$with_cfg"
 grep -qF '>hello from the browser, web<' "$dom" || fail "$with_cfg: the page did not run the web side"
 
-# The first-party add-ons, found in this checkout's std/addons the way an
-# installed toolchain finds its own addons/ directory.
+# The first-party modules' web halves, found in this checkout's std/ the way
+# an installed toolchain finds its own modules/ directory.
 out=$(mktemp -d)
-cargo run -p lumenc -- web "$with_std_addons" --out "$out" --lib-dir "$lib_dir" \
+cargo run -p lumenc -- web "$with_std_modules" --out "$out" --lib-dir "$lib_dir" \
   --serve --port "$port" &
 server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT
@@ -160,6 +160,6 @@ CHROME_BIN="$(command -v "$chrome" || echo "$chrome")" CHROMEDRIVER="$driver" \
   python3 .github/scripts/web-addons-smoke.py "http://127.0.0.1:$port/" || status=$?
 kill "$server" 2>/dev/null || true
 wait "$server" 2>/dev/null || true
-[ "$status" -eq 0 ] || fail "$with_std_addons: a first-party add-on did not answer"
+[ "$status" -eq 0 ] || fail "$with_std_modules: a first-party module's web half did not answer"
 
-echo "web page smoke: every page boots clean, the runtime owns it, the add-ons answer, and the standard library and the web side of a script run"
+echo "web page smoke: every page boots clean, the runtime owns it, the web halves answer, and the standard library and the web side of a script run"

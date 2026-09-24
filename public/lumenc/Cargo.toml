@@ -148,10 +148,16 @@ image.workspace = true
 # list in step with `std/`.
 lumen-archive = { workspace = true, optional = true }
 lumen-audio = { workspace = true, optional = true }
+lumen-browser = { workspace = true, optional = true }
 lumen-canvas = { workspace = true, optional = true }
+lumen-cookie = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
 lumen-fs = { workspace = true, optional = true }
+lumen-js = { workspace = true, optional = true }
 lumen-process = { workspace = true, optional = true }
+lumen-storage = { workspace = true, optional = true }
+lumen-svg = { workspace = true, optional = true }
+lumen-websocket = { workspace = true, optional = true }
 
 # The engine as a shared library, for the `dynamic-engine` release shape (see
 # [features]). Only off Windows - no linkable engine exists there. The target
@@ -285,10 +291,16 @@ dev-run = [
     "lumen-runtime/host-candela",
     "dep:lumen-archive",
     "dep:lumen-audio",
+    "dep:lumen-browser",
     "dep:lumen-canvas",
+    "dep:lumen-cookie",
     "dep:lumen-download",
     "dep:lumen-fs",
+    "dep:lumen-js",
     "dep:lumen-process",
+    "dep:lumen-storage",
+    "dep:lumen-svg",
+    "dep:lumen-websocket",
 ]
 # Link the engine as the shared `liblumen_engine` library instead of compiling
 # it into this binary. The release shape on Linux and macOS: built together

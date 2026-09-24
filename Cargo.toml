@@ -172,9 +172,7 @@ members = [
 # The linkable engine is built through the Rust SDK's own dependency on it, on
 # the platforms whose linker can produce one. Listing it here would build it on
 # Windows too, where it cannot link. See public/lumen-dylib/Cargo.toml.
-# std/addons holds the first-party browser add-ons, which are data files and
-# JavaScript rather than crates, so the `std/*` glob above must pass it over.
-exclude = ["public/lumen-dylib", "std/addons"]
+exclude = ["public/lumen-dylib"]
 
 [workspace.package]
 version = "0.0.8"
@@ -222,7 +220,9 @@ lumen-archive = { path = "std/archive", default-features = false }
 lumen-assets = { path = "core/assets" }
 lumen-async-tokio = { path = "backends/async-tokio" }
 lumen-audio = { path = "std/audio", default-features = false }
+lumen-browser = { path = "std/browser", default-features = false }
 lumen-canvas = { path = "std/canvas", default-features = false }
+lumen-cookie = { path = "std/cookie", default-features = false }
 lumen-core = { path = "core" }
 lumen-devtools = { path = "dev/devtools" }
 lumen-download = { path = "std/download", default-features = false }
@@ -236,6 +236,7 @@ lumen-http-ureq = { path = "backends/http-ureq" }
 lumen-i18n = { path = "core/i18n" }
 lumen-input = { path = "core/input" }
 lumen-ir = { path = "core/ir" }
+lumen-js = { path = "std/js", default-features = false }
 lumen-layout-taffy = { path = "backends/layout-taffy" }
 lumen-mcp = { path = "core/mcp" }
 # The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
@@ -297,11 +298,14 @@ lumen-script-lua = { path = "core/script/lua", default-features = false }
 lumen-script-rhai = { path = "core/script/rhai", default-features = false }
 lumen-server = { path = "web/server" }
 lumen-ssr = { path = "web/ssr" }
+lumen-storage = { path = "std/storage", default-features = false }
+lumen-svg = { path = "std/svg", default-features = false }
 lumen-text = { path = "core/text" }
 lumen-text-cosmic = { path = "backends/text-cosmic" }
 lumen-web = { path = "web" }
 lumen-web-dom = { path = "web/dom" }
 lumen-web-http = { path = "web/http" }
+lumen-websocket = { path = "std/websocket", default-features = false }
 lumen-widget = { path = "core/widget" }
 lumen-widget-macros = { path = "core/widget-macros" }
 lumen-window-winit = { path = "backends/window-winit" }
@@ -479,6 +483,21 @@ base64 = "0.23"
 # dedicated thread per request, so the main loop stays unblocked. Also how
 # `lumenc package --target` fetches another platform's toolchain files.
 ureq = { version = "3", features = ["json"] }
+
+# The `lumen-websocket` module's desktop client: blocking WebSocket frames on
+# a thread per connection. TLS through the same rustls (ring provider) and the
+# same Mozilla root set ureq already brings, handed over as a connector, so no
+# second TLS stack or root list enters the tree.
+tungstenite = { version = "0.29", default-features = false, features = [
+    "handshake",
+    "__rustls-tls",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "ring",
+] }
+webpki-roots = "1"
 
 # Release-archive handling for `lumenc package --target`: verify a download
 # against the release's published checksums, then read the two files needed

@@ -881,6 +881,52 @@ Declare the result in the app:
 shape-tools = { path = "modules/shape-tools/target/x86_64-unknown-linux-gnu/release/shape_tools", config = { units = "mm" } }
 ```
 
+### A web half
+
+A browser cannot open a library, so a module that should work in a site
+carries a web half too: a `web/` directory beside its sources, holding a
+`lumen-addon.toml` and the JavaScript a page loads in place of the library.
+[Web halves of modules](../reference/web-addons.md) is the format. A web
+build takes the web half of every module the app declares; every other build
+loads the library and never reads `web/`.
+
+The two halves offer one script surface, and the descriptor is where it is
+declared. Take the desktop signatures from it at compile time, so the halves
+cannot drift, and give each function its desktop body:
+
+```rust
+use std::sync::Arc;
+
+use lumen_module::lumen_script::{ScriptFnAppExt, ScriptFnBody, ScriptValue};
+
+const DESCRIPTOR: &str = include_str!("../web/lumen-addon.toml");
+
+fn build(app: &mut lumen_module::App) {
+    let shout: ScriptFnBody =
+        Arc::new(|cx| Ok(ScriptValue::Str(cx.str_arg(0).to_uppercase())));
+    match lumen_module::web_half_fns("echo", DESCRIPTOR, vec![("shout".into(), shout)]) {
+        Ok(fns) => {
+            app.add_script_fns(fns);
+        }
+        Err(reason) => eprintln!("lumen-runtime: {reason}"),
+    }
+}
+```
+
+`web_half_fns` refuses a descriptor function with no body and a body with no
+descriptor function. A module whose work only a page can do still ships a
+library, so a script calling it runs on every target: export
+`lumen_module::BrowserOnly::new(name, DESCRIPTOR)` as the plugin, and every
+function it declares raises `<namespace>::<function> runs only in a browser`
+while every element it declares parses and shows its fallback content.
+`std/storage`, `std/cookie` and `std/websocket` are modules of the first kind,
+`std/js`, `std/browser` and `std/svg` of the second.
+
+A module that takes part in the app's own HTTP requests registers an
+`HttpHook` on the `HttpHooks` resource from `Plugin::build`. The hook adjusts
+each request just before it is dispatched and reads each reply before the
+script does; the cookie module's jar is one.
+
 ### A worked example: the audio module
 
 `std/audio` in the tree is the shape above in production, and the engine

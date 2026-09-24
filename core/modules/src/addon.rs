@@ -1,10 +1,12 @@
-//! Browser add-ons: a `[dependencies]` entry whose directory holds a
-//! `lumen-addon.toml`.
+//! A module's web half: the `web/` directory of a `[dependencies]` entry,
+//! holding a `lumen-addon.toml`.
 //!
-//! An add-on is data, not a library. It is a JavaScript module a page loads
-//! beside the runtime, with optional stylesheets, a script that runs before
-//! the page paints, and files the module reads, all described by the
-//! descriptor at the package root:
+//! Every dependency is a module, and a module has up to two halves. Its
+//! desktop half is the library the loader opens (or finds compiled in). Its
+//! web half is data, not a library: a JavaScript module a page loads beside
+//! the runtime, with optional stylesheets, a script that runs before the page
+//! paints, and files the module reads, all described by the descriptor at the
+//! root of `web/`:
 //!
 //! ```toml
 //! [addon]
@@ -27,6 +29,12 @@
 //! html = "div"
 //! ```
 //!
+//! A web build takes the web half of every dependency and refuses one that
+//! has none; every other build loads the library and never reads `web/`. The
+//! directory is found the same way for every source: under the module's root,
+//! which is the directory a `path` source names, the package a `version`
+//! source unpacked to, or the toolchain's copy of a `bundled` module.
+//!
 //! Reading one is a compile's job: the descriptor becomes the
 //! [`lumen_ir::addon::Addon`] the compiled app carries, and the files become
 //! the site's. No engine opens anything here.
@@ -36,9 +44,10 @@ use std::path::{Component, Path, PathBuf};
 use lumen_ir::addon::{Addon, AddonElement, AddonFunction, AddonParam};
 use serde::Deserialize;
 
-use crate::Target;
+/// The directory a module keeps its web half in, under its root.
+pub const WEB_DIR: &str = "web";
 
-/// The descriptor's file name, at the package root.
+/// The descriptor's file name, at the root of a module's web half.
 pub const ADDON_MANIFEST: &str = "lumen-addon.toml";
 
 /// Module exports an add-on cannot name a function after, because the page
@@ -67,62 +76,47 @@ pub struct AddonPackage {
     /// Other files the module reads at run time, relative to [`Self::dir`]. A
     /// directory stands for everything under it.
     pub files: Vec<String>,
-    /// True when the dependency is a runtime module on every target but the
-    /// web, and this add-on is that module's page implementation.
-    pub native: bool,
     /// The `config` table the app's dependency entry gave it, which a page
     /// hands the module at install. Empty until the dependency is known:
-    /// [`read_addon`] reads the package alone.
+    /// [`read_web_half`] reads the module alone.
     pub config: toml::Table,
 }
 
-/// True when `dir` is an add-on package.
-pub fn is_addon(dir: &Path) -> bool {
-    dir.join(ADDON_MANIFEST).is_file()
+/// The web half of the module rooted at `root`: its `web/` directory, when
+/// that holds a descriptor.
+pub fn web_half(root: &Path) -> Option<PathBuf> {
+    let dir = root.join(WEB_DIR);
+    dir.join(ADDON_MANIFEST).is_file().then_some(dir)
 }
 
-/// True when `dir` is an add-on a build for `target` takes as one.
-///
-/// A web build takes every add-on. Any other build takes one unless its
-/// descriptor says `native = true`: that package is a runtime module there,
-/// and the dependency is the module's business, not the add-on's. A
-/// descriptor that does not parse counts as an add-on on every target, so the
-/// build that reads it in full is the one that reports it.
-pub fn serves(dir: &Path, target: Target) -> bool {
-    if !is_addon(dir) {
-        return false;
-    }
-    if target == Target::Web {
-        return true;
-    }
-    #[derive(Deserialize)]
-    struct Probe {
-        addon: ProbeHeader,
-    }
-    #[derive(Deserialize)]
-    struct ProbeHeader {
-        #[serde(default)]
-        native: bool,
-    }
-    let native = std::fs::read_to_string(dir.join(ADDON_MANIFEST))
-        .ok()
-        .and_then(|text| toml::from_str::<Probe>(&text).ok())
-        .is_some_and(|probe| probe.addon.native);
-    !native
-}
-
-/// Read the add-on at `dir`, declared in `[dependencies]` as `name`.
+/// Read the web half of the module rooted at `root`, declared in
+/// `[dependencies]` as `name`.
 ///
 /// # Errors
 ///
-/// The descriptor is missing or does not parse, names a file the package does
-/// not hold or one outside it, or declares a function, a namespace or an
-/// element this format refuses. Every message names the add-on.
-pub fn read_addon(name: &str, dir: &Path) -> Result<AddonPackage, String> {
+/// The descriptor is missing or does not parse, names a file the web half
+/// does not hold or one outside it, or declares a function, a namespace or an
+/// element this format refuses. Every message names the module.
+pub fn read_web_half(name: &str, root: &Path) -> Result<AddonPackage, String> {
+    let dir = root.join(WEB_DIR);
     let path = dir.join(ADDON_MANIFEST);
     let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("add-on '{name}': read {}: {e}", path.display()))?;
-    parse_addon(name, dir, &text)
+        .map_err(|e| format!("the web half of '{name}': read {}: {e}", path.display()))?;
+    parse_addon(name, &dir, &text)
+}
+
+/// The script surface and the elements a descriptor's `text` declares, for
+/// the module `name`, without looking at any file it names.
+///
+/// This is how a module whose desktop half has nothing to offer but the
+/// answer "runs only in a browser" takes its functions from its own web half,
+/// read at the module's compile time, so the two halves cannot drift.
+///
+/// # Errors
+///
+/// As [`read_web_half`], less the checks on files.
+pub fn describe(name: &str, text: &str) -> Result<Addon, String> {
+    parse_descriptor(name, text).map(|(_, addon)| addon)
 }
 
 /// The descriptor as it is written.
@@ -147,8 +141,6 @@ struct Header {
     head: Option<String>,
     #[serde(default)]
     files: Vec<String>,
-    #[serde(default)]
-    native: bool,
 }
 
 #[derive(Deserialize)]
@@ -176,25 +168,8 @@ struct ElementDecl {
 
 /// Parse a descriptor's text, checking the files it names against `dir`.
 fn parse_addon(name: &str, dir: &Path, text: &str) -> Result<AddonPackage, String> {
-    let fail = |message: String| format!("add-on '{name}': {message}");
-    let descriptor: Descriptor =
-        toml::from_str(text).map_err(|e| fail(format!("{ADDON_MANIFEST}: {e}")))?;
-    let header = descriptor.addon;
-
-    if !is_identifier(&header.namespace) {
-        return Err(fail(format!(
-            "namespace `{}` must be lowercase letters, digits and underscores, starting with a \
-             letter",
-            header.namespace
-        )));
-    }
-    if RESERVED_NAMESPACES.contains(&header.namespace.as_str()) {
-        return Err(fail(format!(
-            "namespace `{}` is taken by the runtime; pick another",
-            header.namespace
-        )));
-    }
-
+    let fail = |message: String| format!("the web half of '{name}': {message}");
+    let (header, addon) = parse_descriptor(name, text)?;
     let file = |path: &str, what: &str| -> Result<String, String> {
         package_file(dir, path).map_err(|why| fail(format!("{what} `{path}` {why}")))
     };
@@ -219,6 +194,38 @@ fn parse_addon(name: &str, dir: &Path, text: &str) -> Result<AddonPackage, Strin
         .iter()
         .map(|f| file(f, "file"))
         .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(AddonPackage {
+        addon,
+        dir: dir.to_path_buf(),
+        module,
+        styles,
+        head,
+        files,
+        config: toml::Table::new(),
+    })
+}
+
+/// Parse a descriptor's text into its header and the surface it declares.
+fn parse_descriptor(name: &str, text: &str) -> Result<(Header, Addon), String> {
+    let fail = |message: String| format!("the web half of '{name}': {message}");
+    let descriptor: Descriptor =
+        toml::from_str(text).map_err(|e| fail(format!("{ADDON_MANIFEST}: {e}")))?;
+    let header = descriptor.addon;
+
+    if !is_identifier(&header.namespace) {
+        return Err(fail(format!(
+            "namespace `{}` must be lowercase letters, digits and underscores, starting with a \
+             letter",
+            header.namespace
+        )));
+    }
+    if RESERVED_NAMESPACES.contains(&header.namespace.as_str()) {
+        return Err(fail(format!(
+            "namespace `{}` is taken by the runtime; pick another",
+            header.namespace
+        )));
+    }
 
     let mut functions: Vec<AddonFunction> = Vec::with_capacity(descriptor.function.len());
     for decl in descriptor.function {
@@ -299,21 +306,13 @@ fn parse_addon(name: &str, dir: &Path, text: &str) -> Result<AddonPackage, Strin
         });
     }
 
-    Ok(AddonPackage {
-        addon: Addon {
-            name: name.to_owned(),
-            namespace: header.namespace,
-            functions,
-            elements,
-        },
-        dir: dir.to_path_buf(),
-        module,
-        styles,
-        head,
-        files,
-        native: header.native,
-        config: toml::Table::new(),
-    })
+    let addon = Addon {
+        name: name.to_owned(),
+        namespace: header.namespace.clone(),
+        functions,
+        elements,
+    };
+    Ok((header, addon))
 }
 
 /// A path the package holds, relative to its root and inside it, written with
@@ -404,9 +403,16 @@ html = "div"
             "reads",
             &["echo.js", "echo.css", "early.js", "assets/logo.svg"],
         );
-        std::fs::write(dir.join(ADDON_MANIFEST), ECHO).unwrap();
-        assert!(is_addon(&dir));
-        let package = read_addon("echo", &dir).unwrap();
+        let web = dir.join(WEB_DIR);
+        std::fs::create_dir_all(&web).unwrap();
+        for file in ["echo.js", "echo.css", "early.js", "assets/logo.svg"] {
+            std::fs::create_dir_all(web.join(file).parent().unwrap()).unwrap();
+            std::fs::rename(dir.join(file), web.join(file)).unwrap();
+        }
+        std::fs::write(web.join(ADDON_MANIFEST), ECHO).unwrap();
+        assert_eq!(web_half(&dir), Some(web.clone()));
+        let package = read_web_half("echo", &dir).unwrap();
+        assert_eq!(package.dir, web);
         assert_eq!(package.module, "echo.js");
         assert_eq!(package.styles, ["echo.css"]);
         assert_eq!(package.head.as_deref(), Some("early.js"));
@@ -497,28 +503,30 @@ html = "div"
     }
 
     #[test]
-    fn a_native_addon_serves_the_web_build_alone() {
-        let dir = package("native", &["echo.js"]);
-        std::fs::write(
-            dir.join(ADDON_MANIFEST),
-            "[addon]\nnamespace = \"echo\"\nmodule = \"echo.js\"\nnative = true\n",
-        )
-        .unwrap();
-        assert!(read_addon("echo", &dir).unwrap().native);
-        assert!(serves(&dir, Target::Web));
-        assert!(!serves(&dir, Target::Desktop));
+    fn a_module_without_a_web_directory_has_no_web_half() {
+        let dir = package("no-web", &["echo.js", "lumen-addon.toml"]);
+        // A descriptor at the module's root is not its web half.
+        assert_eq!(web_half(&dir), None);
+        assert_eq!(web_half(&dir.join("nowhere")), None);
+        let err = read_web_half("echo", &dir).unwrap_err();
+        assert!(err.contains("the web half of 'echo': read"), "{err}");
+    }
 
-        let plain = package("plain", &["echo.js"]);
-        std::fs::write(
-            plain.join(ADDON_MANIFEST),
-            "[addon]\nnamespace = \"echo\"\nmodule = \"echo.js\"\n",
+    #[test]
+    fn a_descriptor_describes_its_surface_without_its_files() {
+        // No file on disk: the surface alone is read.
+        let addon = describe("echo", ECHO).unwrap();
+        assert_eq!(addon.name, "echo");
+        assert_eq!(addon.namespace, "echo");
+        let names: Vec<&str> = addon.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["shout", "later"]);
+        assert_eq!(addon.elements[0].tag, "echo-view");
+        let err = describe(
+            "echo",
+            "[addon]\nnamespace = \"lumen\"\nmodule = \"x.js\"\n",
         )
-        .unwrap();
-        assert!(!read_addon("echo", &plain).unwrap().native);
-        for target in Target::ALL {
-            assert!(serves(&plain, target));
-        }
-        assert!(!serves(&plain.join("nowhere"), Target::Web));
+        .unwrap_err();
+        assert!(err.contains("taken by the runtime"), "{err}");
     }
 
     #[test]

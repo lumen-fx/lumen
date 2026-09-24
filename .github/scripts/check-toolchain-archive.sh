@@ -73,12 +73,13 @@ if [ ! -f "$dest/bin/lumen-server" ] && [ ! -f "$dest/bin/lumen-server.exe" ]; t
   exit 1
 fi
 
-# So do the first-party browser add-ons, every one the tree has, each where
-# `lumenc web` looks for a `bundled = true` add-on.
-for addon in "$(dirname "$0")"/../../std/addons/*/; do
-  name="$(basename "$addon")"
-  if [ ! -f "$dest/bin/addons/$name/lumen-addon.toml" ]; then
-    echo "the unpacked archive carries no bin/addons/$name" >&2
+# So do the web halves of the first-party modules, every one the tree has,
+# each where `lumenc web` looks for the web half of a `bundled = true` module.
+for web in "$(dirname "$0")"/../../std/*/web; do
+  [ -f "$web/lumen-addon.toml" ] || continue
+  name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$(dirname "$web")/Cargo.toml" | head -1)"
+  if [ ! -f "$dest/bin/modules/$name/web/lumen-addon.toml" ]; then
+    echo "the unpacked archive carries no bin/modules/$name/web" >&2
     exit 1
   fi
 done

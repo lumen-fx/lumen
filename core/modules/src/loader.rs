@@ -715,6 +715,18 @@ fn resolve(dir: &Path, dep: &DepCfg, resolved: &ResolvedModules) -> Result<PathB
     if let Some(hit) = probed.iter().find(|c| c.is_file()) {
         return Ok(hit.clone());
     }
+    // A directory holding a web half and no library is a module for pages
+    // alone, which is worth saying in place of a bare "not found".
+    if let ModuleSource::Path(p) = &dep.source
+        && crate::addon::web_half(&dir.join(p)).is_some()
+    {
+        return Err(format!(
+            "'{}' has a web half and no library, so it runs only in a browser. Declare it \
+             under [target.web.dependencies] to keep it out of desktop builds.\nProbed:\n{}",
+            dep.name,
+            list(&probed)
+        ));
+    }
     Err(format!(
         "no module library found.\nProbed:\n{}",
         list(&probed)
@@ -789,5 +801,26 @@ mod tests {
         // `lumen_engine_build_id` in the dynamic symbol table, and no
         // `liblumen_engine` mapped for RTLD_NOLOAD to find.
         assert_eq!(engine_build_id(), None);
+    }
+
+    #[test]
+    fn a_path_holding_only_a_web_half_says_so() {
+        let dir =
+            std::env::temp_dir().join(format!("lumen-loader-web-half-{}", std::process::id()));
+        let web = dir.join("echo").join(crate::addon::WEB_DIR);
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::write(web.join(crate::addon::ADDON_MANIFEST), "").unwrap();
+        let dep = |path: &str| DepCfg {
+            name: "echo".to_string(),
+            source: ModuleSource::Path(path.to_string()),
+            config: toml::Table::new(),
+            tags: Vec::new(),
+        };
+        let err = resolve(&dir, &dep("echo"), &ResolvedModules::default()).unwrap_err();
+        assert!(err.contains("runs only in a browser"), "{err}");
+        assert!(err.contains("[target.web.dependencies]"), "{err}");
+        let err = resolve(&dir, &dep("other"), &ResolvedModules::default()).unwrap_err();
+        assert!(err.starts_with("no module library found"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

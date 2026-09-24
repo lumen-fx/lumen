@@ -59,7 +59,6 @@ nav = [
      "reference/scripting-lua.md",
      "reference/ffi.md",
      "reference/web-addons.md",
-     "reference/std-addons.md",
      "reference/tooling.md",
   ]},
   {"Candela language" = "/candela/"},

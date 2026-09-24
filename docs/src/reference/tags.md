@@ -375,8 +375,8 @@ lumen-canvas = { bundled = true, tags = ["canvas"] }
 ```
 
 In a page, the same declaration brings the module's
-[browser add-on](std-addons.md#canvas), which draws the element with the
-browser's own canvas.
+[web half](web-addons.md), which draws the element with the browser's own
+canvas.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
