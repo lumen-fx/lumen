@@ -659,14 +659,15 @@ pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScri
     Ok(kept)
 }
 
-/// True when `dep` names a browser add-on on disk: a `path` source whose
-/// directory holds a descriptor. The compiler hands the rest in as
+/// True when `dep` names a browser add-on on disk that a desktop run takes as
+/// one: a `path` source whose directory holds a descriptor without
+/// `native = true`. The compiler hands the rest in as
 /// [`RunOptions::addons`], and a compiled app carries its own.
 fn is_addon_dependency(dir: &Path, dep: &lumen_modules::DepCfg) -> bool {
     let lumen_modules::ModuleSource::Path(path) = &dep.source else {
         return false;
     };
-    lumen_modules::addon::is_addon(&dir.join(path))
+    lumen_modules::addon::serves(&dir.join(path), lumen_modules::Target::Desktop)
 }
 
 /// Bind every function of the add-ons in `declared` and `compiled` to a body

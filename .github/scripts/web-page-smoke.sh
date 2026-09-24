@@ -9,12 +9,14 @@
 # emitter. A page that loads to a console error and sits there reads exactly
 # like a page that works, which is why nothing below settles for "it loaded".
 #
-# Three apps are opened. The first is the app under test, which has a script
+# Four apps are opened. The first is the app under test, which has a script
 # the browser runs. The second is written in a language no browser host
 # answers for: its page has to come up as a page anyway, because an app whose
 # script cannot run is still an app a visitor can read. The third depends on a
 # browser add-on, and every kind of call it offers has to come back into the
-# page.
+# page. The fourth uses every first-party add-on under std/addons, and is
+# driven over WebDriver by web-addons-smoke.py, because its answers arrive
+# after the few frames a dumped page gets.
 #
 #   $1  directory holding lumen-web.wasm and lumen-web.js
 #   $2  the app to emit (default apps/widget-garden)
@@ -28,7 +30,12 @@ app="${2:-apps/widget-garden}"
 page="${3:-/}"
 scriptless="apps/weather"
 with_addon="web/tests/fixtures/addon-echo"
+with_std_addons="web/tests/fixtures/std-addons"
 chrome="${CHROME_BIN:-google-chrome}"
+# The chromedriver matching that Chrome: CHROMEDRIVER, else the one a GitHub
+# runner image ships under CHROMEWEBDRIVER, else whichever is on PATH.
+driver="${CHROMEDRIVER:-${CHROMEWEBDRIVER:+$CHROMEWEBDRIVER/chromedriver}}"
+driver="${driver:-chromedriver}"
 port=8799
 
 # Build before serving. Backgrounding `cargo run` backgrounds the compile
@@ -119,4 +126,23 @@ expect 'data-echo="mounted"' "the module was never handed its element"
 expect 'data-echo-read="HELLO!"' "the module could not read a signal the script wrote"
 expect 'data-echo-data-mood="calm"' "an attribute the script set never reached the module"
 
-echo "web page smoke: every page boots clean, the runtime owns it, and the add-on answers"
+# The first-party add-ons, found in this checkout's std/addons the way an
+# installed toolchain finds its own addons/ directory.
+out=$(mktemp -d)
+cargo run -p lumenc -- web "$with_std_addons" --out "$out" --lib-dir "$lib_dir" \
+  --serve --port "$port" &
+server=$!
+trap 'kill "$server" 2>/dev/null || true' EXIT
+for _ in $(seq 60); do
+  curl -sf -o /dev/null "http://127.0.0.1:$port/" && break
+  sleep 1
+done
+curl -sf -o /dev/null "http://127.0.0.1:$port/"
+status=0
+CHROME_BIN="$(command -v "$chrome" || echo "$chrome")" CHROMEDRIVER="$driver" \
+  python3 .github/scripts/web-addons-smoke.py "http://127.0.0.1:$port/" || status=$?
+kill "$server" 2>/dev/null || true
+wait "$server" 2>/dev/null || true
+[ "$status" -eq 0 ] || fail "$with_std_addons: a first-party add-on did not answer"
+
+echo "web page smoke: every page boots clean, the runtime owns it, and the add-ons answer"

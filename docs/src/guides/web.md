@@ -370,6 +370,13 @@ changes whenever any of its files does, and every page holds its module,
 stylesheets and early script to a Subresource Integrity hash, so a file
 changed after the build does not load.
 
+The toolchain ships add-ons for what most sites reach for: the page's own
+JavaScript, WebSockets, local storage, cookies, popups and the rest of the
+browser around the page, and SVG drawings. The `lumen-canvas` module has one
+too, so an app that declares it once draws on a `<canvas>` on the desktop and
+in a page alike. [Standard browser add-ons](../reference/std-addons.md) lists
+them and every function they offer.
+
 [Browser add-ons](../reference/web-addons.md) is the reference for writing
 one: the descriptor, the module the page loads, and how values cross.
 

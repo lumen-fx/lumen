@@ -1,0 +1,78 @@
+# What the browser offers a page outside its own document: popup windows and
+# the messages they send back, sharing, downloads, the leave-page prompt,
+# media queries, a file picker and fullscreen. Navigation is not here; pages
+# and links own it.
+[addon]
+namespace = "browser"
+module = "browser.js"
+
+[[function]]
+name = "open_popup"
+params = ["url: string", "name: string", "features: string"]
+returns = "bool"
+doc = "Open a popup window under `name`, with window.open features such as \"width=500,height=600\"; false when the browser blocked it."
+
+[[function]]
+name = "close_popup"
+params = ["name: string"]
+returns = "bool"
+doc = "Close the popup opened under `name`; false when there is none."
+
+[[function]]
+name = "post_message"
+params = ["target: string", "data: any", "origin: string"]
+returns = "bool"
+doc = "Send `data` to `opener`, `parent` or a popup by name, for a window at `origin` (\"*\" for any); false when there is no such window."
+
+[[function]]
+name = "close_window"
+doc = "Close this window, which the browser allows for a window a script opened."
+
+[[function]]
+name = "share"
+params = ["data: {string: any}"]
+async = "on_browser_share"
+doc = "Open the system share sheet for a title, text and url; answers with true once shared."
+
+[[function]]
+name = "can_share"
+params = ["data: {string: any}"]
+returns = "bool"
+doc = "True when the browser can share this title, text and url."
+
+[[function]]
+name = "download_text"
+params = ["filename: string", "mime: string", "text: string"]
+doc = "Save text as a file through the browser's download."
+
+[[function]]
+name = "guard_unload"
+params = ["on: bool"]
+doc = "While on, leaving or reloading the page asks the visitor to confirm."
+
+[[function]]
+name = "match_media"
+params = ["query: string"]
+returns = "bool"
+doc = "Whether a media query matches, such as \"(prefers-color-scheme: dark)\"; changes after this arrive as on_browser_media_change(query, matches)."
+
+[[function]]
+name = "pick_file"
+params = ["accept: string"]
+async = "on_browser_pick_file"
+doc = "Ask the visitor for a text file, `accept` as in <input accept>; answers with its name, type, size and text. Needs a click or key press just before."
+
+[[function]]
+name = "request_fullscreen"
+params = ["id: string"]
+async = "on_browser_request_fullscreen"
+doc = "Show the element with this id fullscreen, or the whole page for \"\"; answers with true. Needs a click or key press just before."
+
+[[function]]
+name = "exit_fullscreen"
+doc = "Leave fullscreen."
+
+[[function]]
+name = "is_fullscreen"
+returns = "bool"
+doc = "True while something is fullscreen."

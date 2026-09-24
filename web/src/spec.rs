@@ -380,6 +380,10 @@ pub struct WebAddon {
     pub styles: Vec<CheckedFile>,
     /// The classic script the head runs before the page paints.
     pub head: Option<CheckedFile>,
+    /// The `config` table the app's dependency entry gave it, as JSON text,
+    /// or `None` when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }
 
 impl From<&WebAddon> for AddonRef {
@@ -389,6 +393,7 @@ impl From<&WebAddon> for AddonRef {
             module: addon.module.path.clone(),
             styles: addon.styles.iter().map(|s| s.path.clone()).collect(),
             head: addon.head.as_ref().map(|h| h.path.clone()),
+            config: addon.config.clone(),
         }
     }
 }

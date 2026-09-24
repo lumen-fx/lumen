@@ -1,0 +1,56 @@
+# The browser's local and session storage: text values under text keys.
+[addon]
+namespace = "storage"
+module = "storage.js"
+
+[[function]]
+name = "get_item"
+params = ["key: string"]
+returns = "any"
+doc = "The text stored under `key` in local storage, or null."
+
+[[function]]
+name = "set_item"
+params = ["key: string", "value: string"]
+returns = "bool"
+doc = "Store text under `key` in local storage; false when the browser refused it, such as over its quota."
+
+[[function]]
+name = "remove_item"
+params = ["key: string"]
+doc = "Remove `key` from local storage."
+
+[[function]]
+name = "keys"
+returns = "string[]"
+doc = "Every key in local storage."
+
+[[function]]
+name = "clear"
+doc = "Remove everything from local storage."
+
+[[function]]
+name = "session_get_item"
+params = ["key: string"]
+returns = "any"
+doc = "The text stored under `key` in session storage, or null."
+
+[[function]]
+name = "session_set_item"
+params = ["key: string", "value: string"]
+returns = "bool"
+doc = "Store text under `key` in session storage; false when the browser refused it."
+
+[[function]]
+name = "session_remove_item"
+params = ["key: string"]
+doc = "Remove `key` from session storage."
+
+[[function]]
+name = "session_keys"
+returns = "string[]"
+doc = "Every key in session storage."
+
+[[function]]
+name = "session_clear"
+doc = "Remove everything from session storage."
