@@ -15,6 +15,11 @@ reload works, and screenshots come out pixel-identical to the windowed path.
 The only thing missing is the window: no compositor is touched, so this is
 safe on a build machine and safe to run while you are working.
 
+A machine with no GPU still renders when it has a software rasterizer: Mesa's
+lavapipe on Linux, or Direct3D's WARP on Windows, which is what hosted Windows
+CI runners offer. Screenshots from a software rasterizer are close to a GPU's
+but not pixel-identical.
+
 Hardware nobody is there to use is left alone too: an app that declares the
 audio module still gets the `audio_*` functions, the playback state, and the
 position signals, but no output device is opened, so a headless run never
