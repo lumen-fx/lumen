@@ -152,6 +152,7 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
     let libraries = crate::addons::libraries_of(
         src_path,
         &cfg.dependencies_for(lumen_modules::Target::Desktop),
+        lumen_modules::Target::Desktop,
         &crate::package::lpm::Resolved::default(),
         None,
     );

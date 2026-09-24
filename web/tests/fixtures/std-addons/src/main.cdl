@@ -1,0 +1,109 @@
+// Calls into every first-party browser add-on, and the handlers their
+// answers arrive at. Each answer lands in a signal a label shows.
+import "lumen.cdl";
+
+fn on_start() {
+    // js: a global function, a promise, a value set and read back, a module
+    // imported from an allowed URL, one from a URL that is not allowed, and a
+    // DOM event turned into a script event.
+    lumen::signal_set("js_call", str(js::call("Math.max", [3, 9, 4])));
+    js::call_async("Promise.resolve", ["resolved"], "promise");
+    js::set("lumenProbe", {"n": 41});
+    lumen::signal_set("js_get", str(js::get("lumenProbe.n")));
+    js::load("data:text/javascript,export function double(x) { return x * 2; }", "allowed");
+    js::load("https://example.invalid/module.js", "denied");
+    js::listen("window", "lumen-ping", "ping");
+
+    // websocket: the smoke runs an echo server on this port.
+    ws::open("echo", "ws://127.0.0.1:8798/");
+
+    // storage: written and read back in both areas.
+    storage::set_item("greeting", "hi");
+    storage::session_set_item("visit", "first");
+    lumen::signal_set("storage_local", str(storage::get_item("greeting")));
+    lumen::signal_set("storage_session", str(storage::session_get_item("visit")));
+
+    // cookie: set with options, read back, removed.
+    cookie::set("flavour", "oat; meal", {"max_age": "60", "same_site": "lax"});
+    lumen::signal_set("cookie_read", str(cookie::get("flavour")));
+    cookie::remove("flavour", {});
+    if is_null(cookie::get("flavour")) {
+        lumen::signal_set("cookie_gone", "gone");
+    }
+
+    // browser: a media query, and two requests a page makes only after a
+    // click, which have to come back refused rather than never.
+    lumen::signal_set("browser_media", str(browser::match_media("(min-width: 1px)")));
+    browser::request_fullscreen("", "fullscreen");
+    browser::pick_file(".txt", "file");
+
+    // svg: markup with a script, an event handler and a javascript: link in
+    // it, all taken out.
+    svg::set_markup("art", "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><circle id='dot' cx='5' cy='5' r='4' fill='red' onclick='alert(1)'/><script>alert(2)</script><a href='javascript:alert(3)'><animate attributeName='href' values='java script:alert(4)'/></a></svg>");
+
+    // canvas: red on the left half, blue on the right, and a green buffer
+    // pixel in the bottom right corner.
+    canvas::set_fill_style("paint", "#ff0000");
+    canvas::fill_rect("paint", 0.0, 0.0, 20.0, 20.0);
+    canvas::set_fill_rgba("paint", 0.0, 0.0, 1.0, 1.0);
+    canvas::fill_rect("paint", 20.0, 0.0, 20.0, 20.0);
+    let pixels = canvas::buffer_new(2, 2);
+    canvas::buffer_fill_rect(pixels, 0, 0, 2, 2, 16711935);
+    canvas::draw_buffer("paint", pixels, 38.0, 18.0);
+}
+
+fn on_ready() {
+    lumen::signal_set("svg_count", str(svg::set_attribute("art", "#dot", "fill", "blue")));
+    lumen::signal_set("canvas_size", str(canvas::width("paint")) + "x" + str(canvas::height("paint")));
+}
+
+fn on_js_call_async(tag: string, value: any) {
+    lumen::signal_set("js_async", tag + ": " + str(value));
+}
+
+fn on_js_load(tag: string, handle: int) {
+    let doubled = js::invoke(handle, "double", [21]);
+    js::release(handle);
+    lumen::signal_set("js_import", tag + ": " + str(doubled));
+}
+
+fn on_js_load_error(tag: string, reason: any) {
+    lumen::signal_set("js_denied", tag);
+}
+
+fn on_js_event(key: string, event: {string: any}) {
+    // Heard once: the listener is dropped on the first event.
+    lumen::signal_set("js_event", key + ": " + str(event.get("detail")) + " " + str(js::unlisten(key)));
+}
+
+fn on_ws_open(key: string) {
+    lumen::signal_set("ws_state", ws::state(key));
+    ws::send(key, "hello over ws");
+}
+
+fn on_ws_message(key: string, text: any) {
+    lumen::signal_set("ws_message", key + ": " + str(text));
+    ws::close(key, 1000, "done");
+}
+
+fn on_ws_close(key: string, code: any, reason: any, clean: any) {
+    lumen::signal_set("ws_close", key + ": " + str(code) + " " + str(reason));
+}
+
+fn on_storage_change(key: string, new_value: any, old_value: any) {
+    lumen::signal_set("storage_event", key + "=" + str(new_value));
+}
+
+fn on_browser_message(origin: string, data: {string: any}, source: any) {
+    lumen::signal_set("browser_message", str(data.get("hello")));
+}
+
+fn on_browser_request_fullscreen_error(tag: string, reason: any) {
+    lumen::signal_set("browser_fullscreen", tag + " refused");
+}
+
+fn on_browser_pick_file_error(tag: string, reason: any) {
+    lumen::signal_set("browser_file", tag + " refused");
+}
+
+fn main() {}

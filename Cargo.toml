@@ -172,7 +172,9 @@ members = [
 # The linkable engine is built through the Rust SDK's own dependency on it, on
 # the platforms whose linker can produce one. Listing it here would build it on
 # Windows too, where it cannot link. See public/lumen-dylib/Cargo.toml.
-exclude = ["public/lumen-dylib"]
+# std/addons holds the first-party browser add-ons, which are data files and
+# JavaScript rather than crates, so the `std/*` glob above must pass it over.
+exclude = ["public/lumen-dylib", "std/addons"]
 
 [workspace.package]
 version = "0.0.8"

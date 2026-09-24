@@ -4,7 +4,9 @@
 //! holds a `lumen-addon.toml`: a `path` source names that directory, a
 //! `version` source is the package `lpm` unpacked, and a `bundled` one is the
 //! toolchain's own copy under `addons/<name>/`. Everything else in the table
-//! is a runtime library, and stays the loader's business.
+//! is a runtime library, and stays the loader's business. So is an add-on
+//! whose descriptor says `native = true`, in a build for any target but the
+//! web: there the dependency is the runtime module the add-on stands in for.
 //!
 //! What comes back is what the rest of a build needs from an add-on: the
 //! description the compiled app carries, the files a site ships, and, for one
@@ -12,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lumen_modules::addon::{AddonPackage, is_addon, read_addon};
+use lumen_modules::addon::{AddonPackage, is_addon, read_addon, serves};
 use lumen_modules::{DependenciesCfg, ModuleSource, Target};
 use lumen_runtime::CompileDeps;
 
@@ -51,7 +53,13 @@ pub fn target_deps(
     let cfg =
         lumen_runtime::LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let resolved = crate::registry_packages(dir, target)?;
-    let packages = addons_of(dir, &cfg.dependencies_for(target), &resolved, lib_dir)?;
+    let packages = addons_of(
+        dir,
+        &cfg.dependencies_for(target),
+        target,
+        &resolved,
+        lib_dir,
+    )?;
     let mut import_roots = resolved.candela_roots.clone();
     import_roots.extend(packages.iter().filter_map(candela_root));
     let compile = CompileDeps {
@@ -66,7 +74,8 @@ pub fn target_deps(
     })
 }
 
-/// The add-ons among `deps`, read in table order.
+/// The add-ons a build for `target` takes from `deps`, read in table order,
+/// each carrying the `config` table its entry gave it.
 ///
 /// # Errors
 ///
@@ -74,58 +83,83 @@ pub fn target_deps(
 pub fn addons_of(
     dir: &Path,
     deps: &DependenciesCfg,
+    target: Target,
     resolved: &Resolved,
     lib_dir: Option<&Path>,
 ) -> Result<Vec<AddonPackage>, String> {
     let mut packages = Vec::new();
     for dep in &deps.0 {
-        let Some(root) = addon_dir(dir, &dep.name, &dep.source, resolved, lib_dir) else {
+        let Some(root) = addon_dir(dir, &dep.name, &dep.source, target, resolved, lib_dir) else {
             continue;
         };
-        packages.push(read_addon(&dep.name, &root)?);
+        let mut package = read_addon(&dep.name, &root)?;
+        package.config = dep.config.clone();
+        packages.push(package);
     }
     Ok(packages)
 }
 
-/// `deps` without the add-ons among them: the runtime libraries a desktop
-/// build stages and its loader opens.
+/// `deps` without the add-ons a build for `target` takes: the runtime
+/// libraries that build stages and its loader opens.
 pub fn libraries_of(
     dir: &Path,
     deps: &DependenciesCfg,
+    target: Target,
     resolved: &Resolved,
     lib_dir: Option<&Path>,
 ) -> DependenciesCfg {
     DependenciesCfg(
         deps.0
             .iter()
-            .filter(|dep| addon_dir(dir, &dep.name, &dep.source, resolved, lib_dir).is_none())
+            .filter(|dep| {
+                addon_dir(dir, &dep.name, &dep.source, target, resolved, lib_dir).is_none()
+            })
             .cloned()
             .collect(),
     )
 }
 
-/// The directory the dependency `name` resolves to, when that is an add-on.
+/// The directory the dependency `name` resolves to, when that is an add-on a
+/// build for `target` takes.
 fn addon_dir(
     dir: &Path,
     name: &str,
     source: &ModuleSource,
+    target: Target,
     resolved: &Resolved,
     lib_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    match source {
-        ModuleSource::Path(path) => Some(dir.join(path)).filter(|root| is_addon(root)),
+    let root = match source {
+        ModuleSource::Path(path) => Some(dir.join(path)),
         ModuleSource::Version(_) => resolved.addons.get(name).cloned(),
         ModuleSource::Bundled => bundled_addon(name, lib_dir),
-    }
+    }?;
+    serves(&root, target).then_some(root)
 }
 
 /// The toolchain's own copy of the add-on `name`: `addons/<name>/` under the
-/// `--lib-dir`, the directory holding `lumenc`, then `LUMEN_LIB_DIR`.
+/// `--lib-dir`, the directory holding `lumenc`, then `LUMEN_LIB_DIR`, and
+/// last the `std/addons/` directory of the source tree this `lumenc` was
+/// built from, when that tree is still on disk.
 pub fn bundled_addon(name: &str, lib_dir: Option<&Path>) -> Option<PathBuf> {
     crate::package::cli::search_dirs(lib_dir, true)
         .into_iter()
-        .map(|root| root.join(BUNDLED_ADDON_DIR).join(name))
+        .map(|root| root.join(BUNDLED_ADDON_DIR))
+        .chain(source_tree_addons())
+        .map(|root| root.join(name))
         .find(|root| is_addon(root))
+}
+
+/// Where the first-party add-ons live in the source tree: `std/addons/`
+/// under the workspace this crate was compiled in. A release build's tree is
+/// gone by the time anyone runs it, so there this finds nothing and the
+/// toolchain's own `addons/` directory is what answers; a checkout's build
+/// finds the add-ons it was built beside, edits included.
+fn source_tree_addons() -> Option<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .map(|dir| dir.join("std").join(BUNDLED_ADDON_DIR))
+        .find(|dir| dir.is_dir())
 }
 
 /// The import root an add-on's candela sugar is compiled from, when it
@@ -222,6 +256,7 @@ pub mod site {
             module: checked(&package.module),
             styles: package.styles.iter().map(|s| checked(s)).collect(),
             head: package.head.as_deref().map(checked),
+            config: config_json(&package.config)?,
         };
         let files = files
             .into_iter()
@@ -231,6 +266,21 @@ pub mod site {
             })
             .collect();
         Ok((addon, files))
+    }
+
+    /// The `config` table an app gave an add-on, as the JSON text a page
+    /// hands its module, or `None` for an empty one.
+    ///
+    /// # Errors
+    ///
+    /// The table holds a value JSON has no spelling for.
+    fn config_json(config: &toml::Table) -> Result<Option<String>, String> {
+        if config.is_empty() {
+            return Ok(None);
+        }
+        serde_json::to_string(config)
+            .map(Some)
+            .map_err(|e| format!("the add-on's config table: {e}"))
     }
 
     /// The Subresource Integrity value for `bytes`: SHA-384, base64.
@@ -270,6 +320,17 @@ pub mod site {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn a_config_table_travels_as_json_text() {
+            assert_eq!(config_json(&toml::Table::new()).unwrap(), None);
+            let table: toml::Table =
+                toml::from_str("allow = [\"https://cdn.example/\"]\ncap = 3\n").unwrap();
+            assert_eq!(
+                config_json(&table).unwrap().as_deref(),
+                Some(r#"{"allow":["https://cdn.example/"],"cap":3}"#)
+            );
+        }
 
         #[test]
         fn integrity_is_the_sha384_the_browser_checks() {

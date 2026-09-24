@@ -976,6 +976,11 @@ lumen-canvas = { bundled = true, tags = ["canvas"] }
 They live in their own `canvas` namespace, so no `import` line reaches
 them: the host declares the namespace from what the module registered.
 
+A web build answers the same declaration with the module's
+[browser add-on](std-addons.md#canvas), which offers every function below
+with the same signature. `buffer_load_png` and `buffer_save_png` name files,
+which a page does not have, so there they answer 0 and false.
+
 Every call names a canvas by the `id` on its [`<canvas>`](tags.md#canvas)
 element. Colours are components in 0..1, angles are radians, and coordinates
 are canvas units, which are scaled onto the element's box whenever layout

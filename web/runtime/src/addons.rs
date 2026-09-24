@@ -12,8 +12,9 @@
 //! declared `async` returns a promise; the script's call returns at once, and
 //! the settled value arrives as the event the add-on names.
 //!
-//! The `host` object an add-on is installed with is how it reaches the app
-//! outside a call: `emit(event, key, ...values)` calls a script handler with
+//! `install` is called with two arguments: the `host` object, and the
+//! `config` table the app's dependency entry gave the add-on, as an object.
+//! The `host` is how the module reaches the app outside a call: `emit(event, key, ...values)` calls a script handler with
 //! up to six values after the key, `setSignal(name, value)` writes a signal,
 //! and `getSignal(name)` reads one.
 
@@ -130,7 +131,14 @@ pub(crate) fn install(
                 ))
             })?;
         if let Some(install) = export(&module, "install") {
-            if let Err(error) = install.call1(&JsValue::NULL, &host) {
+            // The `config` table the app's dependency entry gave the add-on,
+            // as an object; an empty one when it gave none.
+            let config = entry
+                .config
+                .as_deref()
+                .and_then(|text| js_sys::JSON::parse(text).ok())
+                .unwrap_or_else(|| Object::new().into());
+            if let Err(error) = install.call2(&JsValue::NULL, &host, &config) {
                 report(
                     &format!("the '{}' add-on's install threw", addon.name),
                     &error,
