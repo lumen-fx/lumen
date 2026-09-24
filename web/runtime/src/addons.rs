@@ -443,3 +443,6 @@ fn mirror_signals(store: Res<PropertyStore>, mut filled: Local<bool>) {
         }
     });
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests;

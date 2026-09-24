@@ -193,6 +193,20 @@ mod tests {
     }
 
     #[test]
+    fn a_function_that_declares_no_return_returns_nothing() {
+        let mut addon = echo();
+        addon.functions[0].returns = String::new();
+        let fns = script_fns(&addon, |_, _| Arc::new(|_| Ok(ScriptValue::Unit))).unwrap();
+        assert_eq!(fns[0].sig.ret, ScriptTy::Unit);
+        assert_eq!(fns[0].sig.min_arity, 1);
+    }
+
+    #[test]
+    fn an_asynchronous_failure_arrives_as_the_error_event() {
+        assert_eq!(error_event("on_echo"), "on_echo_error");
+    }
+
+    #[test]
     fn a_type_no_host_reads_names_the_function() {
         let mut addon = echo();
         addon.functions[0].params[0].ty = "text".into();

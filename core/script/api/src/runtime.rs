@@ -2291,6 +2291,73 @@ mod http_tests {
         );
     }
 
+    /// An `http()` call's whole request, the credentials mode included,
+    /// reaches the dispatcher as the script wrote it.
+    #[test]
+    fn an_http_request_reaches_the_dispatcher_whole() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct RecordingDispatch {
+            seen: Mutex<Vec<HttpRequest>>,
+        }
+
+        impl HttpDispatch for RecordingDispatch {
+            fn dispatch(&self, _label: &str, request: HttpRequest, _limit: u64, done: HttpDone) {
+                self.seen.lock().unwrap().push(request);
+                done(Err("recorded".to_string()));
+            }
+        }
+
+        let dispatch = Arc::new(RecordingDispatch::default());
+        let mut world = World::new();
+        world.insert_resource(FetchRegistry::with_dispatch(dispatch.clone()));
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        world.write_message(ScriptCommandEvent(ScriptCommand::Http {
+            method: "POST".to_string(),
+            url: "https://example.invalid/api".to_string(),
+            headers: vec![("x-token".to_string(), "t".to_string())],
+            body: Some("{}".to_string()),
+            timeout_ms: Some(250),
+            credentials: Credentials::Include,
+            tag: "save".to_string(),
+        }));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(drain_fetch_commands);
+        schedule.run(&mut world);
+
+        let seen = dispatch.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let request = &seen[0];
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.url, "https://example.invalid/api");
+        assert_eq!(request.headers, [("x-token".to_string(), "t".to_string())]);
+        assert_eq!(request.body.as_deref(), Some("{}"));
+        assert_eq!(request.timeout_ms, Some(250));
+        assert_eq!(request.credentials, Credentials::Include);
+    }
+
+    /// Something on the plugin bus that is not a script event, or bytes that
+    /// do not decode as one, is dropped with a warning rather than taking the
+    /// tick down.
+    #[test]
+    fn an_event_the_script_layer_cannot_read_is_dropped() {
+        assert!(lumen_core::plugin_events::push_plugin_value(Box::new(7_u8)));
+        assert!(lumen_core::plugin_events::push_plugin_event(vec![0xff; 3]));
+
+        let mut world = World::new();
+        world.insert_resource(PendingPluginEvents::default());
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(collect_plugin_events);
+        schedule.run(&mut world);
+
+        assert!(world.resource::<PendingPluginEvents>().0.is_empty());
+        let written = world.resource::<Messages<ScriptCommandEvent>>();
+        assert!(written.is_empty(), "nothing reached the command bus");
+    }
+
     /// A build with no client installed answers every request with the
     /// rebuild hint, so `fetch()` never silently does nothing.
     #[test]
