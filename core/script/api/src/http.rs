@@ -230,3 +230,29 @@ impl HttpClient for DisabledHttpClient {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Credentials, UnknownCredentials};
+
+    #[test]
+    fn credentials_read_back_as_the_spelling_they_print_as() {
+        for credentials in [
+            Credentials::Omit,
+            Credentials::SameOrigin,
+            Credentials::Include,
+        ] {
+            let spelled = credentials.to_string();
+            assert_eq!(spelled, credentials.as_str());
+            assert_eq!(spelled.parse::<Credentials>(), Ok(credentials));
+        }
+        assert_eq!(Credentials::default().as_str(), "same-origin");
+    }
+
+    #[test]
+    fn a_misspelled_credentials_value_is_refused_by_name() {
+        let refused = "Include".parse::<Credentials>().unwrap_err();
+        assert_eq!(refused, UnknownCredentials("Include".to_string()));
+        assert!(refused.to_string().contains("\"Include\""), "{refused}");
+    }
+}

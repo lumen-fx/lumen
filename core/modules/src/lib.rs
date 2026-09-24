@@ -552,6 +552,14 @@ mod tests {
     }
 
     #[test]
+    fn a_target_prints_as_the_name_lumen_toml_writes() {
+        for target in Target::ALL {
+            assert_eq!(target.to_string(), target.name());
+            assert_eq!(target.cfg_flags(), [target.name()]);
+        }
+    }
+
+    #[test]
     fn a_bare_string_is_a_version() {
         let deps = parse("md = \"1.2\"\n").unwrap();
         assert_eq!(deps.0.len(), 1);
