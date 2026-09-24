@@ -15,9 +15,12 @@ name: coverage
 # those child processes write. The fixture cdylibs the plugin and module
 # suites build with a nested cargo are instrumented the same way (the
 # nested build inherits the rustc wrapper and builds into the measured
-# target tree), so their lines grade too. Code the runner cannot execute -
-# the device-bound half of the wgpu surface, the wasm32-only browser crates
-# - grades at whatever the suite actually reaches.
+# target tree), so their lines grade too. The browser crates run as wasm32
+# in a browser, where the host run cannot reach them, so their suites run a
+# second time instrumented for wasm32 and upload beside the host report;
+# Codecov merges the two, and a line either run reaches counts as covered.
+# Code the runner cannot execute - the device-bound half of the wgpu surface -
+# grades at whatever the suite reaches.
 #
 # Doctests are not measured. Collecting coverage from them needs nightly, and
 # the pinned toolchain is stable; ci.yml still runs them.
@@ -87,6 +90,19 @@ jobs:
       - name: Collect coverage
         run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
 
+      # The browser suites, as the `web` job in ci.yml runs them, instrumented
+      # for wasm32. The runner ships Chrome and a matching chromedriver; the
+      # command-line tool has to match the workspace's `wasm-bindgen`, and
+      # minicov compiles its profiling runtime with the runner's clang.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.127
+
+      - name: Collect browser coverage
+        run: |
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
+          .github/scripts/wasm-coverage.sh lcov-wasm.info
+
       # The upload is unconditional. codecov/patch is a required check, so a
       # run that uploads nothing leaves the check pending and the pull request
       # unmergeable with nothing the author can do about it. A pull request
@@ -96,7 +112,7 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
         with:
-          files: lcov.info
+          files: lcov.info,lcov-wasm.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
 
@@ -104,5 +120,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lcov
-          path: lcov.info
+          path: |
+            lcov.info
+            lcov-wasm.info
           if-no-files-found: error
