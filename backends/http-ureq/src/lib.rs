@@ -24,10 +24,10 @@
 //!
 //! ## Credentials
 //!
-//! A request's `credentials` mode is ignored. It names what a page sends
-//! alongside a request, and a desktop app has no page: there is no cookie jar
-//! or browser login to share, and every header a script sets is sent as it
-//! stands.
+//! A request's `credentials` mode is ignored here. It names what a page sends
+//! alongside a request, and a desktop app has no page; every header the
+//! request holds is sent as it stands. A plugin that keeps cookies adds them
+//! through an `HttpHook` before the request reaches this client.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

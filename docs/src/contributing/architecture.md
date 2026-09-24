@@ -44,8 +44,8 @@ dev/               tools that never ship inside an app
 web/               the web target: emitter, browser runtime, SSR, prerender,
                    the web-only backends
 public/            author-facing crates: lumenc, the plugin and module SDKs
-std/               first-party runtime modules, shipped beside the engine,
-                   and in std/addons the first-party browser add-ons
+std/               first-party runtime modules: each a crate for the desktop
+                   and, where it has one, a web/ half for pages
 sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
@@ -127,10 +127,9 @@ tools/             the release plumbing and the editor plugins
   replays the journal into a retained vello scene, which the extract hands the
   render world. One crate builds both link shapes: the cdylib is the bundled
   `lumen-canvas` runtime module an app declares in `lumen.toml`, and a static
-  build compiles the same plugin in. Its page implementation is the browser
-  add-on in `std/addons/lumen-canvas`, whose descriptor says `native = true`;
-  a unit test in this crate holds the add-on's functions equal to the ones it
-  registers.
+  build compiles the same plugin in. Its web half in `std/canvas/web` draws
+  the same calls with Canvas 2D; a unit test in this crate holds the web
+  half's functions equal to the ones it registers.
 - **lumen-download** (`std/download`): file downloads, as a self-contained
   module the engine knows nothing about. It registers the `download` script
   namespace through the generic registry and streams each transfer to disk on
@@ -155,12 +154,29 @@ tools/             the release plumbing and the editor plugins
   the plugin-event bus. One crate builds both link shapes: the cdylib is the
   bundled `lumen-process` runtime module an app declares in `lumen.toml`, and
   a static build compiles the same plugin in.
-- **std/addons**: the first-party browser add-ons, one directory each, named
-  by the dependency an app declares. They are data and JavaScript, not
-  crates, so the workspace leaves the directory out. The toolchain archive
-  carries them as `bin/addons`, and a `lumenc` built from a checkout reads
-  them in place. `public/lumenc/tests/std_addons.rs` reads every descriptor,
-  and `.github/scripts/web-addons-smoke.py` drives each one in headless
+- **lumen-storage**, **lumen-cookie**, **lumen-websocket** (`std/storage`,
+  `std/cookie`, `std/websocket`): modules with both halves. The web half in
+  `web/` is the browser's storage, `document.cookie` and WebSocket; the crate
+  is the desktop half with the same functions, taken from the web half's
+  descriptor at compile time through `lumen_module::web_half_fns`. Storage
+  keeps a JSON file in the app's data directory. The cookie jar reaches the
+  scripts' HTTP requests through the generic `HttpHook` seam in lumen-script,
+  which the core offers to any plugin and which names no cookie. The
+  WebSocket client runs a thread per connection and delivers events over the
+  plugin-event bus.
+- **lumen-js**, **lumen-browser**, **lumen-svg** (`std/js`, `std/browser`,
+  `std/svg`): modules whose work is all in the web half. The crate is a
+  desktop half built by `lumen_module::BrowserOnly` from the web half's
+  descriptor: every function raises "runs only in a browser" and every
+  element is registered as a tag, so a script and its markup run on every
+  target.
+
+  Every web half is found at `web/` under the module's root, for any source.
+  The toolchain archive carries the first-party ones as
+  `bin/modules/<name>/web` (`.github/scripts/stage-web-halves.sh` stages
+  them), and a `lumenc` built from a checkout reads them from `std/` in
+  place. `public/lumenc/tests/std_modules.rs` reads every descriptor, and
+  `.github/scripts/web-addons-smoke.py` drives each web half in headless
   Chrome.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
@@ -180,8 +196,8 @@ tools/             the release plumbing and the editor plugins
   building one where the page has none), projects what the world changes onto
   the document, and turns DOM events into the messages a window backend would
   have produced. It never lays out or paints: the page does both. An element
-  a browser add-on answers for is bound like any other, but the walk does not
-  descend into it: its content is the add-on's, reached through the add-on's
+  a module's web half answers for is bound like any other, but the walk does
+  not descend into it: its content is the web half's, reached through its
   mount, update and unmount hooks.
 
 ### Interaction and content
@@ -307,7 +323,7 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `lumen-portable`; each host is a feature of the crate, and candela is the one
   the default build carries. It runs precompiled bytecode, so no compiler
   reaches the page. `boot()` is the whole entry point: it reads the document,
-  fetches what the manifest names, binds the site's browser add-ons to the
+  fetches what the manifest names, binds the web halves of the site's modules to the
   modules the page imported, and starts the app.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as

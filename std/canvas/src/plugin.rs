@@ -411,8 +411,8 @@ fn pixel_of(value: i64) -> u32 {
 /// and docs are the contract a script writes against.
 ///
 /// A function returns nothing unless its description says otherwise, which
-/// is also what the page implementation under `std/addons/lumen-canvas`
-/// declares for it.
+/// is also what the module's web half in `web/lumen-addon.toml` declares for
+/// it.
 fn script_fns() -> Vec<ScriptFn> {
     let f = |name: &str, doc: &str| {
         ScriptFn::new(name)
@@ -1125,21 +1125,20 @@ fn check_region(width: u32, height: u32) -> Option<()> {
 mod tests {
     use super::*;
 
-    /// The canvas module's page implementation: the browser add-on a web
-    /// build takes in place of this module.
-    fn page_implementation() -> lumen_modules::addon::AddonPackage {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../addons/lumen-canvas");
-        lumen_modules::addon::read_addon("lumen-canvas", &dir).expect("the add-on reads")
+    /// The module's web half: what a web build takes in place of this
+    /// crate's library.
+    fn web_half() -> lumen_ir::addon::Addon {
+        lumen_module::describe_web_half("lumen-canvas", include_str!("../web/lumen-addon.toml"))
+            .expect("the web half reads")
     }
 
     #[test]
-    fn the_page_implementation_offers_the_same_functions() {
+    fn the_web_half_offers_the_same_functions() {
         // One API on every target: a script compiled against the module has
-        // to bind against the add-on, so each function has the same name, the
-        // same parameters, the same result and the same doc on both.
-        let package = page_implementation();
-        let addon = &package.addon;
-        assert!(package.native, "a web build alone takes the add-on");
+        // to bind against the web half, so each function has the same name,
+        // the same parameters, the same result and the same doc on both.
+        let web = web_half();
+        let addon = &web;
         assert_eq!(addon.namespace, NAMESPACE);
 
         let module = script_fns();
@@ -1159,7 +1158,7 @@ mod tests {
                 function.name
             );
             let sig = lumen_module::lumen_script::addon::signature(addon, function)
-                .expect("the add-on's types parse");
+                .expect("the web half's types parse");
             let params = |sig: &lumen_module::lumen_script::ScriptSig| {
                 sig.params
                     .iter()
@@ -1173,14 +1172,13 @@ mod tests {
     }
 
     #[test]
-    fn the_page_implementation_answers_for_the_same_tag() {
-        let package = page_implementation();
-        let element = package
-            .addon
+    fn the_web_half_answers_for_the_same_tag() {
+        let web = web_half();
+        let element = web
             .elements
             .iter()
             .find(|e| e.tag == TAG)
-            .expect("the add-on answers for <canvas>");
+            .expect("the web half answers for <canvas>");
         assert_eq!(element.html, "canvas");
     }
 }

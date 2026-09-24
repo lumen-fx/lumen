@@ -1,9 +1,10 @@
-//! Browser add-ons through `lumenc web`, `lumenc check` and a build-time run,
-//! and script code compiled for one target only.
+//! Modules' web halves through `lumenc web`, `lumenc check` and a build-time
+//! run, and script code compiled for one target only.
 //!
 //! The app under test is `web/tests/fixtures/addon-echo`, which depends on the
-//! `echo` add-on beside it for its web build. `fixtures/cfg-target` reaches its
-//! own web-only add-on from `@cfg(web)` code. A browser loading the site is
+//! `echo` module beside it, a web half with no library, for its web build.
+//! `fixtures/cfg-target` reaches its own web-only module from `@cfg(web)`
+//! code. A browser loading the site is
 //! `.github/scripts/web-page-smoke.sh`'s subject; this reads what a build put
 //! on disk and what it said.
 
@@ -191,8 +192,8 @@ fn check_names_the_target_a_web_only_call_breaks() {
     for file in [
         "lumen.toml",
         "src/main.lmn",
-        "greet/lumen-addon.toml",
-        "greet/greet.js",
+        "greet/web/lumen-addon.toml",
+        "greet/web/greet.js",
     ] {
         let to = app.join(file);
         std::fs::create_dir_all(to.parent().expect("a parent")).expect("create the directory");
@@ -229,7 +230,7 @@ fn app_with(scratch: &Path, toml: &str) -> PathBuf {
 }
 
 #[test]
-fn a_native_library_in_the_web_build_is_refused_and_a_desktop_one_is_not() {
+fn a_module_without_a_web_half_is_refused_by_the_web_build_alone() {
     let scratch = scratch("native");
     let app = app_with(
         &scratch,
@@ -253,16 +254,16 @@ fn a_native_library_in_the_web_build_is_refused_and_a_desktop_one_is_not() {
 fn a_broken_descriptor_fails_the_build_naming_the_addon() {
     let scratch = scratch("broken");
     let app = app_with(&scratch, "[dependencies]\nbad = { path = \"bad\" }\n");
-    std::fs::create_dir_all(app.join("bad")).expect("create the add-on");
+    std::fs::create_dir_all(app.join("bad/web")).expect("create the web half");
     std::fs::write(
-        app.join("bad/lumen-addon.toml"),
+        app.join("bad/web/lumen-addon.toml"),
         "[addon]\nnamespace = \"bad\"\nmodule = \"missing.js\"\n",
     )
     .expect("write the descriptor");
     let (output, text) = web(&app, &scratch, &[]);
     assert!(!output.status.success(), "{text}");
     assert!(
-        text.contains("add-on 'bad': module `missing.js` is not in the package"),
+        text.contains("the web half of 'bad': module `missing.js` is not in the package"),
         "{text}"
     );
 }

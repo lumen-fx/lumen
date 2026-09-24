@@ -1449,6 +1449,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
 name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2095,7 +2101,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.3",
+ "windows-link 0.2.1",
  "windows-result 0.4.1",
 ]
 
@@ -3519,6 +3525,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-browser"
+version = "0.0.8"
+dependencies = [
+ "lumen-module",
+]
+
+[[package]]
 name = "lumen-canvas"
 version = "0.0.8"
 dependencies = [
@@ -3528,7 +3541,6 @@ dependencies = [
  "lumen-core",
  "lumen-ir",
  "lumen-module",
- "lumen-modules",
  "lumen-render-wgpu",
  "lumen-runtime",
  "lumen-script",
@@ -3555,6 +3567,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "lumen-cookie"
+version = "0.0.8"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3712,16 +3736,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-js"
+version = "0.0.8"
+dependencies = [
+ "lumen-module",
+]
+
+[[package]]
 name = "lumen-launcher"
 version = "0.0.8"
 dependencies = [
  "lumen",
  "lumen-archive",
  "lumen-audio",
+ "lumen-browser",
  "lumen-canvas",
+ "lumen-cookie",
  "lumen-download",
  "lumen-fs",
+ "lumen-js",
  "lumen-process",
+ "lumen-storage",
+ "lumen-svg",
+ "lumen-websocket",
  "lumenc",
 ]
 
@@ -3796,8 +3833,10 @@ dependencies = [
  "lumen-assets",
  "lumen-core",
  "lumen-dylib",
+ "lumen-ir",
  "lumen-module-macros",
  "lumen-module-registry",
+ "lumen-modules",
  "lumen-render-wgpu",
  "lumen-script",
  "lumen-text",
@@ -4347,6 +4386,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-storage"
+version = "0.0.8"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "lumen-svg"
+version = "0.0.8"
+dependencies = [
+ "lumen-module",
+]
+
+[[package]]
 name = "lumen-text"
 version = "0.0.8"
 dependencies = [
@@ -4442,6 +4499,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-websocket"
+version = "0.0.8"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "rustls",
+ "tungstenite",
+ "webpki-roots",
+]
+
+[[package]]
 name = "lumen-widget"
 version = "0.0.8"
 dependencies = [
@@ -4497,8 +4567,10 @@ dependencies = [
  "lumen-archive",
  "lumen-assets",
  "lumen-audio",
+ "lumen-browser",
  "lumen-canvas",
  "lumen-capability",
+ "lumen-cookie",
  "lumen-core",
  "lumen-devtools",
  "lumen-download",
@@ -4507,6 +4579,7 @@ dependencies = [
  "lumen-html",
  "lumen-i18n",
  "lumen-ir",
+ "lumen-js",
  "lumen-mcp",
  "lumen-module-registry",
  "lumen-modules",
@@ -4523,9 +4596,12 @@ dependencies = [
  "lumen-script-lua",
  "lumen-script-rhai",
  "lumen-ssr",
+ "lumen-storage",
+ "lumen-svg",
  "lumen-text",
  "lumen-text-cosmic",
  "lumen-web",
+ "lumen-websocket",
  "lumen-widget",
  "lumenc-plugin",
  "rhai",
@@ -7287,6 +7363,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand",
+ "rustls",
+ "rustls-pki-types",
+ "sha1",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

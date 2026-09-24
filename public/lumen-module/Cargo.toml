@@ -39,6 +39,10 @@ lumen-script = { workspace = true }
 # `tags` key in `lumen.toml` is the same claim for a compile, where nothing is
 # loaded.
 lumen-widget = { workspace = true }
+# The web-half descriptor reader, for [`BrowserOnly`]: a module that runs only
+# in a browser takes its desktop functions from its own `web/lumen-addon.toml`.
+lumen-modules = { workspace = true }
+lumen-ir = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

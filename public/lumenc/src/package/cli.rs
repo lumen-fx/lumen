@@ -455,17 +455,8 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
         return ExitCode::from(2);
     }
 
-    // What a desktop build of the app depends on, less its browser add-ons: an
-    // add-on is compiled into the app as a description and has no library to
-    // stage. A registry add-on is only known once resolved, and is taken out
-    // again below.
-    let mut libraries = crate::addons::libraries_of(
-        &src_path,
-        &cfg.dependencies_for(lumen_modules::Target::Desktop),
-        lumen_modules::Target::Desktop,
-        &crate::package::lpm::Resolved::default(),
-        lib_dir.as_deref(),
-    );
+    // What a desktop build of the app depends on: a library per module.
+    let libraries = cfg.dependencies_for(lumen_modules::Target::Desktop);
 
     if want_static && let Some(refusal) = static_refusal(kind, target, &libraries) {
         eprintln!("lumenc package: {refusal}");
@@ -528,9 +519,6 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             return ExitCode::FAILURE;
         }
     };
-    libraries
-        .0
-        .retain(|dep| !resolved.addons.contains_key(&dep.name));
     let declared = Declared {
         cfg: &libraries,
         resolved: &resolved,

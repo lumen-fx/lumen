@@ -81,8 +81,8 @@
 # then an LUMEN_LIB_DIR override, then the platform loader's default search
 # path, and never in a sibling lib/ directory), plus the three trees lumenc
 # reads from beside itself - the candela standard library in bin/libs, the
-# `lumenc new` templates in bin/templates, and the first-party browser add-ons
-# in bin/addons - and a shell completion script
+# `lumenc new` templates in bin/templates, and the web halves of the
+# first-party modules in bin/modules - and a shell completion script
 # per shell under share/. Every installed path is recorded in a
 # receipt under <prefix>/share/lumen, so a later run can replace an old version
 # exactly and --uninstall can undo it.

@@ -523,7 +523,9 @@ authentication, with the values the browser's `fetch` takes: `"same-origin"`
 (the default), `"include"`, or `"omit"`. It matters in a web build, where the
 request is the page's own `fetch`; a cross-origin `"include"` also needs the
 server to answer with `Access-Control-Allow-Credentials: true`. A desktop app
-has no page and ignores it. Any other value is a script error.
+has no page cookies; with the [`lumen-cookie`](#cookies) module declared,
+`"omit"` keeps a request out of its cookie jar, and the other two values let
+it in. Any other value is a script error.
 
 `response` is a map of `ok` (true for a 2xx status), `status` (`0` on a
 transport failure), `headers` (names lowercased), `body`, and `error` (empty on
@@ -942,6 +944,103 @@ On Windows nothing loads a module beside the executable, so this surface
 exists only in a
 [`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
 build, which compiles the declared modules in.
+
+## Storage
+
+These functions come from the `lumen-storage` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-storage = { bundled = true }
+```
+
+Text values under text keys: a local set, kept in `storage.json` under the
+app's data directory and written on every change, and a session set that
+lasts as long as the run. The same functions are the browser's local and
+session storage in a web build; see the
+[candela reference](scripting-candela.md#storage).
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `storage::get_item(key)` | `string` or `()` | The stored text, or `()`. |
+| `storage::set_item(key, value)` | `bool` | Store text; false when the data directory cannot be written. |
+| `storage::remove_item(key)` |  | Remove a key. |
+| `storage::keys()` | `array` | Every key. |
+| `storage::clear()` |  | Remove everything. |
+| `storage::session_get_item(key)` | `string` or `()` | As `get_item`, in the session set. |
+| `storage::session_set_item(key, value)` | `bool` | As `set_item`, in the session set. |
+| `storage::session_remove_item(key)` |  | As `remove_item`, in the session set. |
+| `storage::session_keys()` | `array` | As `keys`, in the session set. |
+| `storage::session_clear()` |  | As `clear`, in the session set. |
+
+## Cookies
+
+These functions come from the `lumen-cookie` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-cookie = { bundled = true }
+```
+
+A cookie jar that the app's own [`http` and `fetch`](#networking) requests
+use: a request carries the cookies whose domain, path and `secure` flag match
+its URL, and a `Set-Cookie` in the reply goes into the jar, with the rules a
+browser applies. A request with `credentials` set to `"omit"` neither sends
+nor keeps any. Cookies with an expiry are kept in `cookies.json` under the
+app's data directory; the rest last as long as the run. The options and what
+they mean are in the [candela reference](scripting-candela.md#cookies).
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `cookie::get(name)` | `string` or `()` | The cookie's value, or `()`. A cookie a server set `HttpOnly` is not found. |
+| `cookie::set(name, value, options)` | `bool` | Set a cookie. Without a `domain` option it stays in the jar for the script alone. |
+| `cookie::remove(name, options)` |  | Remove a cookie. `path` and `domain` have to be the ones it was set with. |
+| `cookie::keys()` | `array` | The name of every cookie the script can see. |
+
+## WebSockets
+
+These functions come from the `lumen-websocket` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-websocket = { bundled = true }
+```
+
+A connection is named by a key the script picks, and every call and event
+takes it first. Each connection runs on a thread of its own, `wss` is TLS
+against the Mozilla root certificates, and an `http` or `https` URL connects
+to the same place over `ws` or `wss`.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `ws::open(key, url)` | `bool` | Open a connection; false when one under `key` is still connecting or open. |
+| `ws::send(key, text)` | `bool` | Send a text frame; false when the connection is not open. |
+| `ws::close(key, code, reason)` | `bool` | Close the connection with code 1000, or 3000 to 4999; false when there is none. Another code raises. |
+| `ws::state(key)` | `string` | `connecting`, `open`, `closing` or `closed`, which is also the answer for a key with no connection. |
+
+| Event | Arguments |
+| --- | --- |
+| `on_ws_open` | `key` |
+| `on_ws_message` | `key`, `text` |
+| `on_ws_close` | `key`, `code`, `reason`, `clean` |
+| `on_ws_error` | `key`, `message` |
+
+Binary frames are not delivered; one arriving raises `on_ws_error`. A
+connection that fails raises `on_ws_error`, then `on_ws_close` with code 1006
+and `clean` false.
+
+## Browser-only modules
+
+`lumen-js`, `lumen-browser` and `lumen-svg` reach the page's JavaScript, the
+browser's windows, and an `<svg-view>` element a browser draws. They do
+something only in a web build, which runs candela; see the
+[candela reference](scripting-candela.md#javascript). Declared for a
+desktop app, their functions exist under this host too, with the same names
+and parameters, and each raises `<namespace>::<function> runs only in a
+browser`. An `<svg-view>` shows the content its markup gives it.
 
 ## Embedder commands
 

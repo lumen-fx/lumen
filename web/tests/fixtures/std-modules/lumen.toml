@@ -1,0 +1,20 @@
+# Proof fixture for the web halves of the first-party modules. The app
+# declares each module the way any app does, calls into all of them, and
+# writes every answer into a label of its own, so a page opened in a browser
+# shows which leg worked. .github/scripts/web-addons-smoke.py opens it and
+# checks them.
+[script]
+engine = "candela"
+
+[dependencies]
+lumen-browser = { bundled = true }
+lumen-canvas = { bundled = true, tags = ["canvas"] }
+lumen-cookie = { bundled = true }
+lumen-js = { bundled = true, config = { allow = ["data:"] } }
+lumen-storage = { bundled = true }
+lumen-svg = { bundled = true, tags = ["svg-view"] }
+lumen-websocket = { bundled = true }
+
+# No introspection server, so a `--headless` run binds no port.
+[mcp]
+port = 0

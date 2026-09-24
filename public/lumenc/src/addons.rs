@@ -1,50 +1,56 @@
-//! Browser add-ons an app depends on, found for the target a build is for.
+//! The web halves of the modules an app depends on, found for the target a
+//! build is for.
 //!
-//! A `[dependencies]` entry is an add-on when the directory it resolves to
-//! holds a `lumen-addon.toml`: a `path` source names that directory, a
-//! `version` source is the package `lpm` unpacked, and a `bundled` one is the
-//! toolchain's own copy under `addons/<name>/`. Everything else in the table
-//! is a runtime library, and stays the loader's business. So is an add-on
-//! whose descriptor says `native = true`, in a build for any target but the
-//! web: there the dependency is the runtime module the add-on stands in for.
+//! Every `[dependencies]` entry is a module, and every module is found at a
+//! root directory the same way whatever uses it: a `path` source names the
+//! directory, a `version` source is the package `lpm` unpacked, and a
+//! `bundled` one is the toolchain's copy, `modules/<name>/` beside `lumenc`
+//! (or, in a checkout, the crate under `std/` whose package is `<name>`).
+//! A module's web half is the `web/` directory under its root, holding a
+//! `lumen-addon.toml`.
 //!
-//! What comes back is what the rest of a build needs from an add-on: the
+//! A web build takes the web half of each module, and `lumenc web` refuses a
+//! module that has none. Every other build takes no web half at all: the
+//! table goes to the loader, which opens each module's library.
+//!
+//! What comes back is what the rest of a build needs from a web half: the
 //! description the compiled app carries, the files a site ships, and, for one
 //! that carries candela sugar, the import root its script is compiled from.
 
 use std::path::{Path, PathBuf};
 
-use lumen_modules::addon::{AddonPackage, is_addon, read_addon, serves};
+use lumen_modules::addon::{AddonPackage, read_web_half, web_half};
 use lumen_modules::{DependenciesCfg, ModuleSource, Target};
 use lumen_runtime::CompileDeps;
 
 use crate::package::lpm::Resolved;
 
-/// The directory a bundled add-on is looked for under, inside each place the
-/// toolchain keeps its files.
-pub const BUNDLED_ADDON_DIR: &str = "addons";
+/// The directory the toolchain keeps its bundled modules' roots in, inside
+/// each place it keeps its files.
+pub const BUNDLED_MODULE_DIR: &str = "modules";
 
 /// What a build for one target took from outside the app directory.
 #[derive(Debug, Clone)]
 pub struct TargetDeps {
-    /// What the compile reads: the target, the import roots, the add-ons.
+    /// What the compile reads: the target, the import roots, the web halves.
     pub compile: CompileDeps,
-    /// The add-ons, with the files a site ships for each.
+    /// The web halves, with the files a site ships for each. Empty for every
+    /// target but the web.
     pub packages: Vec<AddonPackage>,
     /// Everything `lpm` resolved for the target.
     pub resolved: Resolved,
 }
 
 /// Resolve what the app at `dir` depends on for a build for `target`: its
-/// registry packages and its add-ons.
+/// registry packages and, for the web, its modules' web halves.
 ///
 /// `lib_dir` is the `--lib-dir` a build was given, which is searched for
-/// bundled add-ons before the toolchain's own directories.
+/// bundled modules before the toolchain's own directories.
 ///
 /// # Errors
 ///
-/// `lumen.toml` does not parse, a registry requirement does not resolve, or an
-/// add-on's descriptor is refused.
+/// `lumen.toml` does not parse, a registry requirement does not resolve, or a
+/// web half's descriptor is refused.
 pub fn target_deps(
     dir: &Path,
     target: Target,
@@ -53,13 +59,11 @@ pub fn target_deps(
     let cfg =
         lumen_runtime::LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let resolved = crate::registry_packages(dir, target)?;
-    let packages = addons_of(
-        dir,
-        &cfg.dependencies_for(target),
-        target,
-        &resolved,
-        lib_dir,
-    )?;
+    let packages = if target == Target::Web {
+        web_halves(dir, &cfg.dependencies_for(target), &resolved, lib_dir)?
+    } else {
+        Vec::new()
+    };
     let mut import_roots = resolved.candela_roots.clone();
     import_roots.extend(packages.iter().filter_map(candela_root));
     let compile = CompileDeps {
@@ -74,97 +78,99 @@ pub fn target_deps(
     })
 }
 
-/// The add-ons a build for `target` takes from `deps`, read in table order,
-/// each carrying the `config` table its entry gave it.
+/// The web half of each module in `deps` that has one, read in table order,
+/// each carrying the `config` table its entry gave it. A module without one
+/// is passed over; saying that a web build cannot take it is `lumenc web`'s
+/// business, and a check of the app for the web still reads the rest.
 ///
 /// # Errors
 ///
-/// An add-on's descriptor is refused.
-pub fn addons_of(
+/// A web half's descriptor is refused.
+pub fn web_halves(
     dir: &Path,
     deps: &DependenciesCfg,
-    target: Target,
     resolved: &Resolved,
     lib_dir: Option<&Path>,
 ) -> Result<Vec<AddonPackage>, String> {
     let mut packages = Vec::new();
     for dep in &deps.0 {
-        let Some(root) = addon_dir(dir, &dep.name, &dep.source, target, resolved, lib_dir) else {
+        let Some(root) = module_root(dir, &dep.name, &dep.source, resolved, lib_dir) else {
             continue;
         };
-        let mut package = read_addon(&dep.name, &root)?;
+        if web_half(&root).is_none() {
+            continue;
+        }
+        let mut package = read_web_half(&dep.name, &root)?;
         package.config = dep.config.clone();
         packages.push(package);
     }
     Ok(packages)
 }
 
-/// `deps` without the add-ons a build for `target` takes: the runtime
-/// libraries that build stages and its loader opens.
-pub fn libraries_of(
-    dir: &Path,
-    deps: &DependenciesCfg,
-    target: Target,
-    resolved: &Resolved,
-    lib_dir: Option<&Path>,
-) -> DependenciesCfg {
-    DependenciesCfg(
-        deps.0
-            .iter()
-            .filter(|dep| {
-                addon_dir(dir, &dep.name, &dep.source, target, resolved, lib_dir).is_none()
-            })
-            .cloned()
-            .collect(),
-    )
-}
-
-/// The directory the dependency `name` resolves to, when that is an add-on a
-/// build for `target` takes.
-fn addon_dir(
+/// The root directory of the module `name`, declared with `source`, when it
+/// is on disk.
+pub fn module_root(
     dir: &Path,
     name: &str,
     source: &ModuleSource,
-    target: Target,
     resolved: &Resolved,
     lib_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    let root = match source {
+    match source {
         ModuleSource::Path(path) => Some(dir.join(path)),
-        ModuleSource::Version(_) => resolved.addons.get(name).cloned(),
-        ModuleSource::Bundled => bundled_addon(name, lib_dir),
-    }?;
-    serves(&root, target).then_some(root)
+        ModuleSource::Version(_) => resolved.roots.get(name).cloned(),
+        ModuleSource::Bundled => bundled_module(name, lib_dir),
+    }
 }
 
-/// The toolchain's own copy of the add-on `name`: `addons/<name>/` under the
-/// `--lib-dir`, the directory holding `lumenc`, then `LUMEN_LIB_DIR`, and
-/// last the `std/addons/` directory of the source tree this `lumenc` was
-/// built from, when that tree is still on disk.
-pub fn bundled_addon(name: &str, lib_dir: Option<&Path>) -> Option<PathBuf> {
+/// The toolchain's own root of the bundled module `name`: `modules/<name>/`
+/// under the `--lib-dir`, the directory holding `lumenc`, then
+/// `LUMEN_LIB_DIR`, and last the crate under `std/` of the source tree this
+/// `lumenc` was built from whose package is `name`, when that tree is still
+/// on disk.
+pub fn bundled_module(name: &str, lib_dir: Option<&Path>) -> Option<PathBuf> {
     crate::package::cli::search_dirs(lib_dir, true)
         .into_iter()
-        .map(|root| root.join(BUNDLED_ADDON_DIR))
-        .chain(source_tree_addons())
-        .map(|root| root.join(name))
-        .find(|root| is_addon(root))
+        .map(|root| root.join(BUNDLED_MODULE_DIR).join(name))
+        .find(|root| root.is_dir())
+        .or_else(|| source_tree_module(name))
 }
 
-/// Where the first-party add-ons live in the source tree: `std/addons/`
-/// under the workspace this crate was compiled in. A release build's tree is
-/// gone by the time anyone runs it, so there this finds nothing and the
-/// toolchain's own `addons/` directory is what answers; a checkout's build
-/// finds the add-ons it was built beside, edits included.
-fn source_tree_addons() -> Option<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+/// The crate under `std/` whose package is `name`, in the workspace this
+/// crate was compiled in. A release build's tree is gone by the time anyone
+/// runs it, so there this finds nothing and the toolchain's own `modules/`
+/// directory is what answers; a checkout's build finds the modules it was
+/// built beside, edits included.
+fn source_tree_module(name: &str) -> Option<PathBuf> {
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .map(|dir| dir.join("std").join(BUNDLED_ADDON_DIR))
-        .find(|dir| dir.is_dir())
+        .map(|dir| dir.join("std"))
+        .find(|dir| dir.is_dir())?;
+    let mut crates: Vec<PathBuf> = std::fs::read_dir(&std_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    crates.sort();
+    crates
+        .into_iter()
+        .find(|root| package_name(root).as_deref() == Some(name))
 }
 
-/// The import root an add-on's candela sugar is compiled from, when it
-/// carries some: the package is a candela package too, entered the way any
-/// is, through its `candela.toml` or `src/main.cdl`.
+/// The package name in the `Cargo.toml` at `root`.
+fn package_name(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
+    let manifest: toml::Table = toml::from_str(&text).ok()?;
+    manifest
+        .get("package")?
+        .get("name")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// The import root a web half's candela sugar is compiled from, when it
+/// carries some: the `web/` directory is a candela package too, entered the
+/// way any is, through its `candela.toml` or `src/main.cdl`.
 fn candela_root(package: &AddonPackage) -> Option<(String, PathBuf)> {
     let is_package =
         package.dir.join("candela.toml").is_file() || package.dir.join("src/main.cdl").is_file();
@@ -185,8 +191,8 @@ pub fn every_target(dir: &Path) -> Result<Vec<CompileDeps>, String> {
         .collect()
 }
 
-/// An add-on's files, as a site ships them: the whole package under one
-/// directory named for its contents, so a module's relative imports and the
+/// A web half's files, as a site ships them: the whole `web/` directory under
+/// one directory named for its contents, so a module's relative imports and the
 /// files it fetches keep working and a changed add-on is a new URL.
 #[cfg(feature = "web")]
 pub mod site {
