@@ -157,7 +157,8 @@ fn the_desktop_run_compiles_the_desktop_side() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "{stdout}{}",
+        "{}\n{stdout}{}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(stdout.contains("compiled for the desktop side"), "{stdout}");
