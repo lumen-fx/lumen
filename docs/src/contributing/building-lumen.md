@@ -431,8 +431,8 @@ support them, printing the reason:
 - Every case that scaffolds an app, when the templates have not been
   downloaded. `tools/fetch-templates.sh` is what they want; CI runs it before
   the suite.
-- Framebuffer readback on a software adapter. Direct3D's WARP rasterizer faults
-  the test process when a texture is read back, so those cases want a real GPU.
+- Pixel checks on a software adapter. Direct3D's WARP and Mesa's lavapipe draw
+  close to a GPU but not the same pixels, so those cases want a real GPU.
 - The screenshot goldens in `public/lumenc/tests/golden.rs`. Baselines carry
   the font set of the machine that captured them, and a machine that resolves a
   different default sans-serif redraws every case containing text. They run

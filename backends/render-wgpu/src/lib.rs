@@ -87,10 +87,9 @@ pub enum WgpuRendererError {
 ///
 /// Probes for an adapter and reports back: no adapter at all, or one that is a
 /// software rasterizer. Callers that render and inspect pixels use it to bail
-/// out with a reason instead of running. Direct3D's WARP rasterizer faults the
-/// process partway through offscreen rendering, and lavapipe's output is close
-/// to but not interchangeable with a GPU's, so neither is a substrate for
-/// pixel-level checks.
+/// out with a reason instead of running. A software rasterizer's output (WARP,
+/// lavapipe) is close to but not interchangeable with a GPU's, so it is not a
+/// substrate for pixel-level checks.
 pub fn gpu_unavailable_reason() -> Option<String> {
     match WgpuRenderer::new_offscreen(4, 4) {
         Ok(r) if r.is_software_adapter() => Some(format!(
@@ -100,6 +99,25 @@ pub fn gpu_unavailable_reason() -> Option<String> {
         Ok(_) => None,
         Err(e) => Some(format!("no wgpu adapter available ({e})")),
     }
+}
+
+/// The vello options for a renderer bound to `adapter`.
+///
+/// Direct3D's WARP rasterizer, the adapter Windows offers when there is no
+/// GPU, faults the process the first time it executes vello's GPU coarse
+/// stages, even for an empty scene. vello can run those stages on the CPU and
+/// hand the device only fine rasterization, which WARP runs correctly, so a
+/// WARP adapter gets that split. Every other adapter keeps vello's defaults.
+pub(crate) fn vello_options(adapter: &wgpu::AdapterInfo) -> RendererOptions {
+    RendererOptions {
+        use_cpu: is_warp(adapter),
+        ..RendererOptions::default()
+    }
+}
+
+/// Whether `adapter` is Direct3D's WARP software rasterizer.
+fn is_warp(adapter: &wgpu::AdapterInfo) -> bool {
+    adapter.backend == wgpu::Backend::Dx12 && adapter.device_type == wgpu::DeviceType::Cpu
 }
 
 /// Offscreen WGPU + vello renderer.
@@ -194,7 +212,7 @@ impl WgpuRenderer {
             })
             .await?;
 
-        let vello = vello::Renderer::new(&device, RendererOptions::default())
+        let vello = vello::Renderer::new(&device, vello_options(&adapter_info))
             .map_err(|e| WgpuRendererError::Vello(format!("{e:?}")))?;
 
         let (texture, texture_view) = make_target(&device, width, height);
@@ -1392,6 +1410,41 @@ pub(crate) fn folded(mut c: LumenColor, opacity: f32) -> LumenColor {
 mod tests {
     use super::*;
     use lumen_text::NullShaper;
+
+    fn adapter(backend: wgpu::Backend, device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: "test adapter".into(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend,
+            subgroup_min_size: 4,
+            subgroup_max_size: 4,
+            transient_saves_memory: false,
+        }
+    }
+
+    /// WARP runs vello's coarse stages on the CPU; a GPU, and a software
+    /// rasterizer on any other backend, keep vello's defaults.
+    #[test]
+    fn only_warp_moves_the_coarse_stages_to_the_cpu() {
+        use wgpu::{Backend, DeviceType};
+        assert!(vello_options(&adapter(Backend::Dx12, DeviceType::Cpu)).use_cpu);
+        for (backend, device_type) in [
+            (Backend::Dx12, DeviceType::DiscreteGpu),
+            (Backend::Dx12, DeviceType::IntegratedGpu),
+            (Backend::Vulkan, DeviceType::Cpu),
+            (Backend::Metal, DeviceType::IntegratedGpu),
+        ] {
+            assert!(
+                !vello_options(&adapter(backend, device_type)).use_cpu,
+                "{backend:?} {device_type:?}"
+            );
+        }
+    }
 
     /// The plugin's builders are the composition point's only say over
     /// text: a plugin built without a shaper renders none, and either

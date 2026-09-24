@@ -180,9 +180,8 @@ jobs:
       # Two things do not survive a runner and skip themselves with a printed
       # reason rather than failing:
       #
-      #   - Framebuffer readback on a software adapter. Direct3D's WARP
-      #     rasterizer faults the test process outright when a texture is read
-      #     back, so those tests want a real GPU.
+      #   - Pixel checks on a software adapter. WARP and lavapipe draw close
+      #     to a GPU but not the same pixels, so those tests want a real GPU.
       #   - The screenshot goldens. They carry the font set of the machine that
       #     captured them; a runner resolves a different default sans-serif and
       #     every case containing text redraws with different glyphs. Linux and

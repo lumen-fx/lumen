@@ -13,7 +13,7 @@
 //! wgpu type: it attaches a window, reports resizes, and asks for frames.
 
 use crate::walker::{WalkContext, diff_retained_scenes, walk_node};
-use crate::{NATIVE_BACKENDS, SceneFragmentCache};
+use crate::{NATIVE_BACKENDS, SceneFragmentCache, vello_options};
 use bevy_ecs::world::World;
 use lumen_core::node_ir::{PreviousScene, RetainedScene};
 use lumen_core::render_world::{
@@ -29,7 +29,7 @@ use vello::wgpu;
 // cannot drift from it.
 use vello::wgpu::rwh::{DisplayHandle, HandleError, HasDisplayHandle};
 use vello::wgpu::util::TextureBlitter;
-use vello::{AaConfig, RenderParams, RendererOptions};
+use vello::{AaConfig, RenderParams};
 
 /// Environment variable controlling the GPU adapter / device init
 /// deadline, in milliseconds. Defaults to
@@ -388,7 +388,7 @@ impl GpuState {
         };
         surface.configure(&device, &surface_config);
 
-        let vello = vello::Renderer::new(&device, RendererOptions::default())
+        let vello = vello::Renderer::new(&device, vello_options(&adapter.get_info()))
             .map_err(|e| SurfaceError::Init(format!("vello renderer init: {e:?}")))?;
 
         let (intermediate, intermediate_view_linear, intermediate_view_srgb) =

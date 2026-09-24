@@ -93,8 +93,8 @@ const SETTLE_AFTER_BUILD_MS: u64 = 250;
 // --- GPU probe / paths ------------------------------------------------------
 
 /// Probe the adapter once per test binary; `Some(reason)` means no pixel work
-/// here. The baselines are hardware renders, and Direct3D's WARP rasterizer
-/// faults the process partway through offscreen rendering.
+/// here. The baselines are hardware renders, which a software rasterizer does
+/// not reproduce.
 fn gpu_blocker() -> Option<&'static str> {
     static PROBE: OnceLock<Option<String>> = OnceLock::new();
     PROBE.get_or_init(gpu_unavailable_reason).as_deref()
