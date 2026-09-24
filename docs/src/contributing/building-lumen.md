@@ -460,13 +460,26 @@ browser suite; see [Building for the browser](#building-for-the-browser).
 
 Coverage is measured on top of the same suite, with `cargo llvm-cov`, on every
 push to `main` and every pull request, and reported to Codecov. It is a report
-rather than a gate: what decides a pull request is the suite itself, and the project-wide Codecov status is informational, while the patch status
-is a required check that fails when the diff drops meaningfully below the
-baseline coverage. Doctests are outside the measurement, since collecting coverage
-from them needs a nightly toolchain. The on-screen presentation path
-(`lumen-render-wgpu`'s `surface.rs`) is left out of the report as well: it only
-runs against a real GPU, and the tests that reach it skip themselves on a
-runner. `codecov.yml` holds that exclusion.
+rather than a gate: what decides a pull request is the suite itself. The
+project-wide Codecov status is informational, while the patch status is a
+required check that fails when too few of a change's new lines are covered
+(`codecov.yml` sets the target). Nothing is excluded from the report. Doctests are outside the
+measurement, since collecting coverage from them needs a nightly toolchain, and
+the on-screen presentation path (`lumen-render-wgpu`'s `surface.rs`) grades at
+whatever the suite reaches: it only runs against a real GPU, and the tests that
+reach it skip themselves on a runner.
+
+The browser suites run a second time for coverage, instrumented for wasm32, and
+their report is uploaded beside the host one; a line either run reaches counts
+as covered. To measure them locally, with the tools the browser suite needs plus
+`jq`, `node` and a `clang` that targets wasm32:
+
+```sh
+CHROMEDRIVER=/path/to/chromedriver .github/scripts/wasm-coverage.sh lcov-wasm.info
+```
+
+The script names the compiler flags and the test runner it uses, and why each
+is needed.
 
 The editor integrations under `tools/`, the release scripts, and the SDKs
 build in a separate workflow, `tools.yml`, gated per directory so a change to
