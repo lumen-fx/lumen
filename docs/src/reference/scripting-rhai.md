@@ -906,12 +906,27 @@ lumen-process = { bundled = true }
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `process::start(cmd, args, tag)` | `bool` | Start `cmd` with the argument list `args`, reporting under `tag`. `true` once the program is running. |
+| `process::start(cmd, args, tag, opts)` | `bool` | Start `cmd` with the argument list `args`, reporting under `tag`. `true` once the program is running. |
+| `process::stop(tag)` | `bool` | End the program running under `tag`. `false` when nothing runs under it. |
 
-A `cmd` with a path separator in it names a program the app ships and resolves
-against the app directory; a bare `cmd` is looked up on `PATH`. The child runs
-in the app directory, reads end of file from its input, and has both its
-output streams captured.
+A `cmd` with a path separator in it names a program the app
+ships and resolves against the app directory; a bare `cmd` is looked up on
+`PATH`. The child reads end of file from its input and has both its output
+streams captured.
+
+`opts` is a map of the options below; a key left out takes its default, so
+`#{}` is every default. A key the options do not have, or a value of the
+wrong type, raises before anything starts:
+
+```rhai
+process::start("java", ["-jar", "game.jar"], "game", #{ cwd: "instances/a" });
+```
+
+| Field | Type | Default | Behaviour |
+| --- | --- | --- | --- |
+| `cwd` | string | `""` | The directory the child starts in, relative to the app directory. Empty is the app directory. |
+| `env` | map of strings | empty | Variables laid over the environment the child inherits. |
+| `end_at_exit` | bool | `false` | End the child when the app exits. |
 
 The call answers as soon as the program is running. Everything after that
 arrives as an event carrying the tag, so one handler serves several children:
@@ -940,10 +955,15 @@ line on stderr. It fires no event at all, because the tag never named a running
 program, so branch on the value the call gave back rather than waiting for an
 exit that never comes.
 
-There is no way to write to a child's input, no way to end a child from a
-script, and no per-child environment or working directory. A child is not
-ended when the app exits: a program still running outlives the app that
-started it.
+`process::stop(tag)` ends the program running under `tag`: `SIGTERM` first on
+Linux and macOS, then a kill if it is still running two seconds later, and an
+immediate end on Windows. It answers `false` when nothing runs under the tag, ends every
+child when several share it, and the child's `process_exit` still arrives as
+the last event. A child started with `end_at_exit` is ended the same way when
+the app closes; the app waits for it before it exits. An app that is killed
+rather than closed leaves its children running.
+
+There is no way to write to a child's input.
 
 On Windows nothing loads a module beside the executable, so this surface
 exists only in a

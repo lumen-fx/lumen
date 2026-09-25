@@ -326,6 +326,7 @@ fn a_candela_row_spells_the_types_the_declaration_names() {
             T::Any | T::Dynamic => "any".to_string(),
             T::Array(inner) => format!("{}[]", spelling(inner)),
             T::Map(value) => format!("{{string: {}}}", spelling(value)),
+            T::Struct(shape) => shape.name.clone(),
         }
     }
 

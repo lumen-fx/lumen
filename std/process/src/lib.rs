@@ -1,13 +1,30 @@
 //! Running another program from a Lumen app, as a self-contained module.
 //!
 //! The engine has no process code; this crate is the whole capability.
-//! Install [`ProcessPlugin`] and the app gains one function, in every host:
-//! `process::start(cmd, args, tag)` in Rhai and candela, `process.start(..)`
-//! in Lua. It starts `cmd` in the app directory and answers whether the
-//! program is running.
+//! Install [`ProcessPlugin`] and the app gains two functions, in every host:
+//!
+//! - `process::start(cmd, args, tag, opts)` (`process.start(..)` in Lua)
+//!   starts `cmd` and answers whether the program is running;
+//! - `process::stop(tag)` ends the program running under `tag` and answers
+//!   whether there was one.
 //!
 //! Without the module none of that exists: a script calling `process::start`
 //! gets its host's ordinary unknown-function error.
+//!
+//! # Options
+//!
+//! `opts` is required and every field has a default:
+//!
+//! | Field | Type | Default | Meaning |
+//! | --- | --- | --- | --- |
+//! | `cwd` | string | `""` | The child's directory, relative to the app directory; empty is the app directory. |
+//! | `env` | map of strings | empty | Variables laid over the inherited environment. |
+//! | `end_at_exit` | bool | `false` | End the child when the app exits. |
+//!
+//! candela takes them as the `process::StartOptions` struct the module
+//! declares, built with `..Default::default()` or passed as
+//! `Default::default()`; Rhai and Lua pass a map and leave out what they do
+//! not set.
 //!
 //! The function is `start` rather than `spawn` because Rhai reserves `spawn`
 //! as a keyword: a script naming it fails to lex, so no host could see it.
@@ -55,12 +72,16 @@
 //! child, so a child's output is complete before its exit is reported, and
 //! the wait is what keeps a finished child from lingering as a zombie.
 //!
-//! # What this version does not do
+//! # Ending a child
 //!
-//! There is no way to write to a child's stdin, no way to end a child from a
-//! script, and no per-child environment or working directory. Children are
-//! not ended when the app exits: a program still running outlives the app
-//! that started it.
+//! `process::stop` sends `SIGTERM` on Unix and kills the child if it is still
+//! running after [`child::GRACE`]; on Windows it ends the child at once. The
+//! exit event still arrives, last as always. A tag several children share
+//! stops all of them. A child started with `end_at_exit` is ended the same
+//! way when the app's world is dropped, and the drop waits for it; an app
+//! killed outright never drops its world, so its children keep running.
+//!
+//! There is no way to write to a child's stdin.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

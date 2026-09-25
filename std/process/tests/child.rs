@@ -11,12 +11,16 @@
 //! - a supervised child delivers every line before its exit, and is waited on
 //!   rather than left as a zombie;
 //! - a program that cannot start is a refusal with the reason in it, and no
-//!   events at all.
+//!   events at all;
+//! - a child starts in the directory and with the variables it was given;
+//! - a stop ends a running child, whose exit still arrives last, and a stop
+//!   of a child that has ended answers false;
+//! - stopping several children at once returns only once all have ended.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use lumen_process::child::{self, Event, LINE_CAP};
+use lumen_process::child::{self, Event, LINE_CAP, Options};
 
 /// Every line `read_lines` produced from `input`.
 fn lines(input: &[u8]) -> Vec<String> {
@@ -73,9 +77,16 @@ fn test_child() -> String {
 fn run(args: &[&str]) -> Vec<String> {
     let log = Log::new();
     let args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
-    let pid = child::start(&test_child(), &args, "case", log.sink()).expect("the child starts");
+    let running = child::start(
+        &test_child(),
+        &args,
+        "case",
+        &Options::default(),
+        log.sink(),
+    )
+    .expect("the child starts");
     let entries = log.drained();
-    assert_reaped(pid);
+    assert_reaped(running.pid());
     entries
 }
 
@@ -211,7 +222,13 @@ fn every_line_arrives_before_the_exit() {
 #[test]
 fn a_program_that_cannot_start_is_a_refusal() {
     let log = Log::new();
-    let outcome = child::start("no-such-program-8f2c", &[], "case", log.sink());
+    let outcome = child::start(
+        "no-such-program-8f2c",
+        &[],
+        "case",
+        &Options::default(),
+        log.sink(),
+    );
 
     let message = outcome.expect_err("a missing program cannot start");
     assert!(
@@ -223,4 +240,115 @@ fn a_program_that_cannot_start_is_a_refusal() {
         log.0.lock().expect("log").is_empty(),
         "a start that failed reports no events"
     );
+}
+
+/// Start the test program with `args` and `options`, answering the handle
+/// and the log its events land in.
+fn start_with(args: &[&str], options: &Options) -> (child::Running, Log) {
+    let log = Log::new();
+    let args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+    let running =
+        child::start(&test_child(), &args, "case", options, log.sink()).expect("the child starts");
+    (running, log)
+}
+
+/// The value of the first `out:<prefix>` line.
+fn reported<'a>(entries: &'a [String], prefix: &str) -> Option<&'a str> {
+    let prefix = format!("out:{prefix}");
+    entries.iter().find_map(|e| e.strip_prefix(prefix.as_str()))
+}
+
+/// Wait until the child has written its first line, which is when it is
+/// known to be running.
+fn wait_for_output(log: &Log) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !log
+        .0
+        .lock()
+        .expect("log")
+        .iter()
+        .any(|e| e.starts_with("out:"))
+    {
+        assert!(Instant::now() < deadline, "the child never wrote a line");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The directory a child was given is where it runs.
+#[test]
+fn a_child_runs_in_the_directory_it_was_given() {
+    let dir = std::env::temp_dir().join(format!("lumen-process-cwd-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let options = Options {
+        cwd: Some(dir.to_string_lossy().into_owned()),
+        ..Options::default()
+    };
+    let (_running, log) = start_with(&["0", "--cwd"], &options);
+    let entries = log.drained();
+
+    let cwd = reported(&entries, "cwd=").expect("the child reported its directory");
+    assert_eq!(
+        std::fs::canonicalize(cwd).expect("the reported directory exists"),
+        std::fs::canonicalize(&dir).expect("the temp dir exists"),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A variable the child was given is in its environment, on top of what it
+/// inherits.
+#[test]
+fn a_child_sees_the_variables_it_was_given() {
+    let options = Options {
+        env: vec![(
+            "LUMEN_PROCESS_TEST_VAR".to_string(),
+            "given value".to_string(),
+        )],
+        ..Options::default()
+    };
+    let (_running, log) = start_with(&["0", "--env", "LUMEN_PROCESS_TEST_VAR"], &options);
+    let entries = log.drained();
+    assert_eq!(reported(&entries, "env="), Some("given value"));
+}
+
+/// A stop ends a child that would otherwise run for a minute, and its exit
+/// still arrives, last, with a code that says it did not finish on its own.
+#[test]
+fn a_stop_ends_a_running_child_and_its_exit_arrives() {
+    let (running, log) = start_with(&["0", "--sleep", "60000"], &Options::default());
+    wait_for_output(&log);
+    assert!(running.is_running());
+
+    let asked = Instant::now();
+    assert!(running.stop(), "a running child can be stopped");
+    let entries = log.drained();
+    assert!(
+        asked.elapsed() < Duration::from_secs(10),
+        "the stop ended the child rather than its sleep"
+    );
+    let last = entries.last().expect("events arrived");
+    assert!(last.starts_with("exit:"), "the exit is last: {entries:?}");
+    assert_ne!(last, "exit:0", "a stopped child did not exit on its own");
+    #[cfg(unix)]
+    assert_eq!(last, "exit:143", "128 plus SIGTERM");
+    assert!(!running.is_running());
+    assert!(!running.stop(), "a child that has ended cannot be stopped");
+    assert_reaped(running.pid());
+}
+
+/// Stopping several children at once returns only once every one of them
+/// has ended.
+#[test]
+fn stopping_all_returns_once_every_child_has_ended() {
+    let first = start_with(&["0", "--sleep", "60000"], &Options::default());
+    let second = start_with(&["0", "--sleep", "60000"], &Options::default());
+    wait_for_output(&first.1);
+    wait_for_output(&second.1);
+
+    child::stop_all(&[first.0.clone(), second.0.clone()]);
+    assert!(!first.0.is_running());
+    assert!(!second.0.is_running());
+    for (_, log) in [first, second] {
+        let entries = log.drained();
+        assert!(entries.last().is_some_and(|e| e.starts_with("exit:")));
+    }
 }

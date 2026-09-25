@@ -649,6 +649,50 @@ instance, declares `.ret(ScriptTy::Dynamic)`. Every host binds and declares it
 the same way it binds `ScriptTy::Any`; what it adds is that the open return was
 the intent, rather than a `ret` the author never called.
 
+### Options as a struct
+
+A function that takes a set of options takes them as one struct parameter,
+with a default for every field. The script sets the fields it cares about and
+the rest take their defaults:
+
+```rust
+use lumen_script::{ScriptFn, ScriptNs, ScriptStruct, ScriptTy, ScriptValue};
+
+let options = ScriptStruct::new("ReadOptions")
+    .field_default("retries", ScriptTy::Int, 3_i64)
+    .field("verbose", ScriptTy::Bool);
+
+ScriptFn::new("read")
+    .ns(ScriptNs::Named("gpio".to_string()))
+    .param("pin", ScriptTy::Int)
+    .param("opts", ScriptTy::Struct(options))
+    .ret(ScriptTy::Int)
+    .build(|cx| {
+        let ScriptValue::Map(opts) = cx.arg_ref(1) else {
+            return Err("options must be a map".to_string());
+        };
+        Ok(ScriptValue::I64(read_pin(cx.int_arg(0), &opts["retries"])))
+    });
+```
+
+`field` starts a field at its type's empty value (`0`, `0.0`, `false`, `""`,
+an empty list or map, a nested struct's own defaults); `field_default` names
+the value. Each host renders the struct in its own terms:
+
+| Language | The script writes |
+| --- | --- |
+| candela | `gpio::read(21, gpio::ReadOptions { verbose: true, ..Default::default() })`, or `Default::default()` for every default |
+| Rhai | `gpio::read(21, #{ verbose: true })` |
+| Lua | `gpio.read(21, { verbose = true })` |
+
+candela declares the struct in the namespace's `host` block, so a script names
+it behind the namespace. On Rhai and Lua a key the struct does not declare, or
+a value of the wrong type, raises before the body runs, naming the field;
+candela refuses the same at compile time. The body always reads one map with
+every field present, whatever the script left out.
+
+A struct is a parameter type only. A function returns a map instead.
+
 ### Shipping candela sugar
 
 A plugin can ship candela source of its own, compiled ahead of the app's

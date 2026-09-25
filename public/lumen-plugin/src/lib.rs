@@ -49,8 +49,8 @@ pub use lumen_plugin_abi::codec;
 /// with. Data types, from the engine's own crate, so a value a plugin builds
 /// decodes into the one the script layer routes.
 pub use lumen_script::{
-    HostSet, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptNs, ScriptParam, ScriptPrelude, ScriptSig,
-    ScriptTy, ScriptValue,
+    HostSet, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptField, ScriptNs, ScriptParam, ScriptPrelude,
+    ScriptSig, ScriptStruct, ScriptTy, ScriptValue,
 };
 
 /// What a runtime plugin does.

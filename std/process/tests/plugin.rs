@@ -4,20 +4,31 @@
 //! What these prove, once per concern:
 //!
 //! - `process::start` reaches a script through the generic `ScriptFnRegistry`,
-//!   in Rhai and in candela;
+//!   in Rhai, Lua, and candela, with its options as a map on Rhai and Lua and
+//!   as `process::StartOptions` on candela;
 //! - a child runs in the app directory, and a `cmd` carrying a separator names
 //!   a program the app ships;
 //! - output and exit arrive over the generic plugin-event bus, with the exit
 //!   last, and a per-tag `on("process_exit", tag, fn)` registration winning
 //!   over the `on_process_exit` fallback;
-//! - a program that cannot start answers false and fires nothing at all;
+//! - a program that cannot start answers false and fires nothing at all, and
+//!   a start with an option the struct does not declare is a script error that
+//!   starts nothing;
+//! - the options set the child's directory, relative to the app, and its
+//!   environment;
+//! - `process::stop` ends a running child, whose exit still arrives, and
+//!   answers false once nothing runs under the tag;
+//! - dropping the app ends the children started with `end_at_exit: true` and
+//!   leaves the others running;
 //! - without the plugin the function does not exist, and the app keeps running
 //!   after the script's own unknown-function error.
 
 use lumen_core::app::App as EcsApp;
+use lumen_core::plugin_events::{QueuedEvent, drain_plugin_events};
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
+use lumen_module::lumen_script::{PluginEvent, ScriptValue};
 use lumen_process::ProcessPlugin;
 use lumen_runtime::{RunOptions, build_headless_app};
 
@@ -134,7 +145,7 @@ fn rhai_runs_a_program_the_app_ships() {
         "rhai",
         r#"
 fn on_start() {
-    signal("started", "").set(process::start("<child>", ["0", "one", "two"], "job"));
+    signal("started", "").set(process::start("<child>", ["0", "one", "two"], "job", #{}));
 }
 fn on_process_stdout(tag, line) {
     let s = signal("out", "");
@@ -175,7 +186,7 @@ fn the_exit_is_the_last_event_for_a_tag() {
         "rhai",
         r#"
 fn on_start() {
-    process::start("<child>", ["4", "--lines", "40"], "flood");
+    process::start("<child>", ["4", "--lines", "40"], "flood", #{});
 }
 fn on_process_stdout(tag, line) {
     let seen = signal("lines", 0);
@@ -220,7 +231,7 @@ fn a_per_tag_handler_wins_over_the_fallback() {
         r#"
 fn on_start() {
     on("process_exit", "job", "job_ended");
-    process::start("<child>", ["7"], "job");
+    process::start("<child>", ["7"], "job", #{});
 }
 fn job_ended(tag, code) { signal("special", "").set(tag + "/" + code); }
 fn on_process_exit(tag, code) { signal("fallback", "").set(tag + "/" + code); }
@@ -249,7 +260,7 @@ fn a_bare_command_is_looked_up_on_the_path() {
         "rhai",
         r#"
 fn on_start() {
-    signal("started", "").set(process::start("sh", ["-c", "echo found"], "sh"));
+    signal("started", "").set(process::start("sh", ["-c", "echo found"], "sh", #{}));
 }
 fn on_process_stdout(tag, line) { signal("out", "").set(line); }
 fn on_process_exit(tag, code) { signal("exit", "").set(code); }
@@ -278,7 +289,7 @@ fn a_program_that_cannot_start_answers_false_and_fires_nothing() {
         "rhai",
         r#"
 fn on_start() {
-    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone"));
+    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone", #{}));
 }
 fn on_process_stdout(tag, line) { signal("out", "").set(line); }
 fn on_process_stderr(tag, line) { signal("err", "").set(line); }
@@ -304,8 +315,9 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
 }
 
 /// candela reaches the same function through the `host "process"` block the
-/// host synthesizes from what the plugin registered, and its handlers take the
-/// tag and the value the event carries.
+/// host synthesizes from what the plugin registered, `Default::default()`
+/// builds the options, and its handlers take the tag and the value the event
+/// carries.
 #[test]
 fn candela_reaches_the_module_surface_through_its_namespace() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -316,7 +328,7 @@ fn candela_reaches_the_module_surface_through_its_namespace() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("started", process::start("<child>", ["5", "hi"], "job"));
+    lumen::signal_set_bool("started", process::start("<child>", ["5", "hi"], "job", Default::default()));
 }
 
 fn on_process_stdout(tag: string, line: string) {
@@ -356,7 +368,7 @@ fn without_the_plugin_the_function_does_not_exist() {
         &dir,
         "rhai",
         r#"
-fn on_start() { signal("started", "").set(process::start("<child>", [], "job")); }
+fn on_start() { signal("started", "").set(process::start("<child>", [], "job", #{})); }
 fn on_ready() { signal("alive", "").set("yes"); }
 fn on_process_exit(tag, code) { signal("exit", "").set(code); }
 "#,
@@ -378,6 +390,308 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
         "no module, no `process` namespace, no value"
     );
     assert_eq!(signal(&app, "exit"), None, "nothing ran");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The options map reaches the child: a relative `cwd` is a directory inside
+/// the app, and `env` is laid over the inherited environment.
+#[test]
+fn the_options_set_the_directory_and_the_environment() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("options");
+    std::fs::create_dir_all(dir.join("instances/a")).expect("instance dir");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"
+fn on_start() {
+    signal("started", "").set(process::start(
+        "<child>",
+        ["0", "--cwd", "--env", "LUMEN_PROCESS_INSTANCE"],
+        "job",
+        #{ cwd: "instances/a", env: #{ LUMEN_PROCESS_INSTANCE: "a" } },
+    ));
+}
+fn on_process_stdout(tag, line) {
+    if line.starts_with("cwd=") { signal("cwd", "").set(line.sub_string(4)); }
+    if line.starts_with("env=") { signal("env", "").set(line.sub_string(4)); }
+}
+fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+"#,
+        Some(ProcessPlugin),
+    );
+
+    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
+    assert!(
+        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
+        "the exit must arrive"
+    );
+    let cwd = signal(&app, "cwd").expect("the child reported its directory");
+    assert_eq!(
+        std::fs::canonicalize(cwd).expect("reported dir"),
+        std::fs::canonicalize(dir.join("instances/a")).expect("instance dir"),
+    );
+    assert_eq!(signal(&app, "env").as_deref(), Some("a"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same options from candela, written as the struct the module declares:
+/// the fields the script names, the rest from `..Default::default()`, and an
+/// `end_at_exit` left at its default so the child outlives nothing here.
+#[test]
+fn candela_sets_the_options_through_the_struct() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("candela-options");
+    std::fs::create_dir_all(dir.join("instances/a")).expect("instance dir");
+    let mut app = build_app(
+        &dir,
+        "candela",
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    let opts = process::StartOptions {
+        cwd: "instances/a",
+        env: {"LUMEN_PROCESS_INSTANCE": "a"},
+        ..Default::default()
+    };
+    lumen::signal_set_bool("started", process::start(
+        "<child>", ["0", "--cwd", "--env", "LUMEN_PROCESS_INSTANCE"], "job", opts));
+}
+
+fn on_process_stdout(tag: string, line: string) {
+    if line.len() < 4 { return; }
+    let key = line[0..4];
+    let rest = line[4..line.len()];
+    if key == "cwd=" { lumen::signal_set("cwd", rest); }
+    if key == "env=" { lumen::signal_set("env", rest); }
+}
+
+fn on_process_exit(tag: string, code: int) {
+    lumen::signal_set_int("exit", code);
+}
+
+fn main() {}
+"#,
+        Some(ProcessPlugin),
+    );
+
+    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
+    assert!(
+        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
+        "the exit must arrive"
+    );
+    let cwd = signal(&app, "cwd").expect("the child reported its directory");
+    assert_eq!(
+        std::fs::canonicalize(cwd).expect("reported dir"),
+        std::fs::canonicalize(dir.join("instances/a")).expect("instance dir"),
+    );
+    assert_eq!(signal(&app, "env").as_deref(), Some("a"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Lua passes the options as a table and leaves out what it does not set.
+#[test]
+fn lua_sets_the_options_through_a_table() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("lua-options");
+    std::fs::create_dir_all(dir.join("instances/b")).expect("instance dir");
+    let mut app = build_app(
+        &dir,
+        "lua",
+        r#"
+function on_start()
+    signal("started", ""):set(process.start(
+        "<child>", {"0", "--cwd"}, "job", { cwd = "instances/b" }))
+end
+function on_process_stdout(tag, line)
+    if line:sub(1, 4) == "cwd=" then signal("cwd", ""):set(line:sub(5)) end
+end
+function on_process_exit(tag, code) signal("exit", ""):set(code) end
+"#,
+        Some(ProcessPlugin),
+    );
+
+    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
+    assert!(
+        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
+        "the exit must arrive"
+    );
+    let cwd = signal(&app, "cwd").expect("the child reported its directory");
+    assert_eq!(
+        std::fs::canonicalize(cwd).expect("reported dir"),
+        std::fs::canonicalize(dir.join("instances/b")).expect("instance dir"),
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An option the struct does not declare, or one of the wrong kind, is a
+/// script error before anything starts: the call raises, no child runs, and no
+/// event fires.
+#[test]
+fn a_bad_option_is_a_script_error_and_starts_nothing() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("bad-option");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"
+fn on_start() {
+    signal("started", "").set(process::start("<child>", ["0"], "job", #{ cdw: "x" }));
+}
+fn on_ready() {
+    signal("bad_value", "").set(process::start("<child>", ["0"], "job", #{ end_at_exit: "never" }));
+}
+fn on_process_stdout(tag, line) { signal("out", "").set(line); }
+fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+"#,
+        Some(ProcessPlugin),
+    );
+
+    for _ in 0..20 {
+        app.tick();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(signal(&app, "started"), None, "the call raised");
+    assert_eq!(signal(&app, "bad_value"), None, "the call raised");
+    assert_eq!(signal(&app, "out"), None);
+    assert_eq!(signal(&app, "exit"), None, "nothing started, nothing ended");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `process::stop` ends a child mid-sleep; its exit still arrives, and once it
+/// has, the tag names nothing to stop.
+#[test]
+fn stop_ends_a_running_child_and_its_exit_still_arrives() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("stop");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"
+fn on_start() {
+    signal("unknown", "").set(process::stop("sleeper"));
+    process::start("<child>", ["0", "--sleep", "60000"], "sleeper", #{});
+}
+fn on_process_stdout(tag, line) {
+    if line == "0" { signal("stopped", "").set(process::stop(tag)); }
+}
+fn on_process_exit(tag, code) {
+    signal("code", "").set(code);
+    signal("again", "").set(process::stop(tag));
+}
+"#,
+        Some(ProcessPlugin),
+    );
+
+    assert_eq!(
+        signal(&app, "unknown").as_deref(),
+        Some("false"),
+        "no child runs under the tag yet"
+    );
+    assert!(
+        tick_until(&mut app, 10.0, |app| signal(app, "code").is_some()),
+        "the stopped child's exit must arrive; stopped={:?}",
+        signal(&app, "stopped")
+    );
+    assert_eq!(signal(&app, "stopped").as_deref(), Some("true"));
+    assert_ne!(signal(&app, "code").as_deref(), Some("0"));
+    #[cfg(unix)]
+    assert_eq!(
+        signal(&app, "code").as_deref(),
+        Some("143"),
+        "128 plus SIGTERM"
+    );
+    assert_eq!(
+        signal(&app, "again").as_deref(),
+        Some("false"),
+        "an ended child is no longer running under its tag"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The exit codes the bus carries for `process_exit`, by tag, from the events
+/// pushed since the last drain.
+fn exits_on_the_bus(into: &mut Vec<(String, i64)>) {
+    for event in drain_plugin_events() {
+        let QueuedEvent::Value(value) = event else {
+            continue;
+        };
+        let Ok(event) = value.downcast::<PluginEvent>() else {
+            continue;
+        };
+        if let PluginEvent::Call {
+            event, key, args, ..
+        } = *event
+            && event == "process_exit"
+            && let Some(ScriptValue::I64(code)) = args.first()
+        {
+            into.push((key, *code));
+        }
+    }
+}
+
+/// Dropping the app ends a child started with `end_at_exit: true` before the
+/// drop returns, and leaves a child started with the default to finish on
+/// its own.
+#[test]
+fn the_app_exit_ends_the_children_that_asked_for_it() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("on-exit");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"
+fn on_start() {
+    process::start("<child>", ["0", "--sleep", "60000"], "helper", #{ end_at_exit: true });
+    process::start("<child>", ["0", "--sleep", "1500"], "keeper", #{});
+}
+fn on_process_stdout(tag, line) { signal(tag, "").set("running"); }
+"#,
+        Some(ProcessPlugin),
+    );
+
+    assert!(
+        tick_until(&mut app, 10.0, |app| {
+            signal(app, "helper").is_some() && signal(app, "keeper").is_some()
+        }),
+        "both children must be running before the app exits"
+    );
+    exits_on_the_bus(&mut Vec::new());
+
+    let dropped = std::time::Instant::now();
+    drop(app);
+    assert!(
+        dropped.elapsed() < std::time::Duration::from_secs(10),
+        "the drop ended the helper rather than waiting out its sleep"
+    );
+
+    let mut exits = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while exits.len() < 2 && std::time::Instant::now() < deadline {
+        exits_on_the_bus(&mut exits);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let code = |tag: &str| exits.iter().find(|(t, _)| t == tag).map(|(_, c)| *c);
+    assert!(
+        code("helper").is_some_and(|c| c != 0),
+        "the helper was ended with the app: {exits:?}"
+    );
+    assert_eq!(
+        code("keeper"),
+        Some(0),
+        "the keeper outlived the app and finished its own sleep: {exits:?}"
+    );
+    assert_eq!(
+        exits.first().map(|(t, _)| t.as_str()),
+        Some("helper"),
+        "the helper ended first, with the app"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

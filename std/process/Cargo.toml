@@ -32,10 +32,17 @@ name = "lumen-process-test-child"
 path = "src/bin/test_child.rs"
 
 [dependencies]
-# The one dependency: the Plugin trait, the script-fn registry, the app's path
-# resolution, and the plugin-event bus all arrive through the module SDK's
-# re-exports. Everything else is `std::process`.
+# The Plugin trait, the script-fn registry, the app's path resolution, and the
+# plugin-event bus all arrive through the module SDK's re-exports. Everything
+# else is `std::process`, apart from the one call std does not offer.
 lumen-module = { workspace = true }
+# The resource that holds the children an app's exit ends.
+bevy_ecs = { workspace = true }
+
+# Sending SIGTERM without unsafe code: `process::stop` asks a child to end
+# before it kills it. Windows ends a child through std alone.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
 
 [features]
 default = ["engine-dylib"]

@@ -22,7 +22,7 @@ use lumen_script_candela::CandelaHost;
 const AFTER_2020: i64 = 1_577_836_800;
 
 /// The C-backed modules, each built into `std_src/<name>/<name>.<ext>`.
-const NATIVE_MODULES: [&str; 3] = ["math", "random", "time"];
+const NATIVE_MODULES: [&str; 4] = ["hash", "math", "random", "time"];
 
 /// The tree the build script assembled in its own output directory, which it
 /// installs from.

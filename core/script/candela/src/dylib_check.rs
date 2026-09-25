@@ -261,7 +261,7 @@ fn zero_value(ty: &HostType) -> Value {
         HostType::Bool => Value::Bool(false),
         HostType::String => Value::String(String::new()),
         // `host_type` names no other type, so nothing else is declared here.
-        HostType::Unit | HostType::Array(_) | HostType::Map(_) => Value::Null,
+        HostType::Unit | HostType::Array(_) | HostType::Map(_) | HostType::Struct(_) => Value::Null,
     }
 }
 

@@ -950,8 +950,8 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.1.4"
-source = "git+https://github.com/lumen-fx/candela?rev=954c919ec342186c887d625805465da3b766adb9#954c919ec342186c887d625805465da3b766adb9"
+version = "0.1.5"
+source = "git+https://github.com/lumen-fx/candela?rev=c45399b82efc23d3f355192c02f09482815a839f#c45399b82efc23d3f355192c02f09482815a839f"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -970,8 +970,8 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.1.4"
-source = "git+https://github.com/lumen-fx/candela?rev=954c919ec342186c887d625805465da3b766adb9#954c919ec342186c887d625805465da3b766adb9"
+version = "0.1.5"
+source = "git+https://github.com/lumen-fx/candela?rev=c45399b82efc23d3f355192c02f09482815a839f#c45399b82efc23d3f355192c02f09482815a839f"
 dependencies = [
  "ariadne",
  "getrandom 0.3.4",
@@ -4180,10 +4180,12 @@ dependencies = [
 name = "lumen-process"
 version = "0.0.8"
 dependencies = [
+ "bevy_ecs",
  "lumen-core",
  "lumen-ir",
  "lumen-module",
  "lumen-runtime",
+ "rustix 1.1.4",
  "serde_json",
 ]
 

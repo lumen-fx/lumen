@@ -230,7 +230,7 @@ fn the_bundled_module_runs_a_child_end_to_end() {
         &format!(
             r#"
 fn on_start() {{
-    signal("started", "").set(process::start("{CHILD}", ["6", "hello"], "job"));
+    signal("started", "").set(process::start("{CHILD}", ["6", "hello"], "job", #{{}}));
 }}
 fn on_process_stdout(tag, line) {{
     let s = signal("out", "");
@@ -274,7 +274,7 @@ fn a_program_that_cannot_start_reports_and_leaves_the_app_running() {
         "lumen-process = { bundled = true }\n",
         r#"
 fn on_start() {
-    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone"));
+    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone", #{}));
 }
 fn on_process_exit(tag, code) { signal("exit", "").set(code); }
 "#,
@@ -301,7 +301,7 @@ fn without_the_module_the_function_does_not_exist() {
         "process-absent",
         "",
         &format!(
-            r#"fn on_start() {{ signal("started", "").set(process::start("{CHILD}", [], "job")); }}"#
+            r#"fn on_start() {{ signal("started", "").set(process::start("{CHILD}", [], "job", #{{}})); }}"#
         ),
     );
     let (stdout, stderr) = run_host(f, &dir, 40, "started");

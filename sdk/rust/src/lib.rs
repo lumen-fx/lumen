@@ -205,7 +205,8 @@ pub use lumen_core::property_store::{Property, PropertyStore};
 /// it also wants a doc line or a namespace, or with
 /// [`simple::AppBuilder::native_fn`] for the untyped shape.
 pub use lumen_script::{
-    ScriptFn, ScriptFnCx, ScriptNs, ScriptSig, ScriptTy, ScriptType, ScriptValue,
+    ScriptField, ScriptFn, ScriptFnCx, ScriptNs, ScriptSig, ScriptStruct, ScriptTy, ScriptType,
+    ScriptValue,
 };
 
 /// One-stop import: `use lumenui::prelude::*;`.

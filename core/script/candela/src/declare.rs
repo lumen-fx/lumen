@@ -7,7 +7,7 @@
 //! and the blocks the host synthesizes for a plugin's namespace so an app can
 //! call a plugin function without declaring it by hand.
 
-use lumen_script::{ScriptFn, ScriptNs, ScriptTy};
+use lumen_script::{ScriptFn, ScriptNs, ScriptStruct, ScriptTy, ScriptValue};
 
 /// How candela spells a type in a declaration: [`ScriptTy`]'s own spelling,
 /// which is candela's.
@@ -36,6 +36,101 @@ pub(crate) fn declaration(f: &ScriptFn) -> String {
         ScriptTy::Unit => format!("{}({args});", f.name),
         ref ret => format!("{} {}({args});", ty_name(ret), f.name),
     }
+}
+
+/// The `struct` declarations the functions in `fns` take, one line each, in
+/// the order they are first named and each once. A struct nested in another
+/// is declared before the struct that holds it.
+///
+/// ```text
+/// struct Options { dir: string = "out", verbose: bool }
+/// ```
+///
+/// candela declares the struct inside the host block, so a script names it
+/// behind the namespace (`ns::Options { .. }`) and builds it with the defaults
+/// written here.
+pub(crate) fn struct_declarations(fns: &[ScriptFn]) -> Vec<String> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut lines = Vec::new();
+    for f in fns.iter().filter(|f| crate::host_fns::binds_typed(f)) {
+        for param in &f.sig.params {
+            declare_struct(&param.ty, &mut seen, &mut lines);
+        }
+    }
+    lines
+}
+
+/// Push the declaration of every struct `ty` names, innermost first.
+fn declare_struct<'a>(ty: &'a ScriptTy, seen: &mut Vec<&'a str>, lines: &mut Vec<String>) {
+    match ty {
+        ScriptTy::Array(inner) | ScriptTy::Map(inner) => declare_struct(inner, seen, lines),
+        ScriptTy::Struct(shape) if !seen.contains(&shape.name.as_str()) => {
+            seen.push(&shape.name);
+            for field in &shape.fields {
+                declare_struct(&field.ty, seen, lines);
+            }
+            lines.push(struct_line(shape));
+        }
+        _ => {}
+    }
+}
+
+/// One struct on one line.
+fn struct_line(shape: &ScriptStruct) -> String {
+    let fields: Vec<String> = shape
+        .fields
+        .iter()
+        .map(|field| match &field.default {
+            Some(value) => format!("{}: {} = {}", field.name, field.ty, literal(value)),
+            None => format!("{}: {}", field.name, field.ty),
+        })
+        .collect();
+    format!("struct {} {{ {} }}", shape.name, fields.join(", "))
+}
+
+/// A value written as a candela literal.
+fn literal(value: &ScriptValue) -> String {
+    match value {
+        ScriptValue::Unit => "null".to_string(),
+        ScriptValue::Bool(b) => b.to_string(),
+        ScriptValue::I64(n) => n.to_string(),
+        // `{:?}` keeps the fraction on a whole number, so `1.0` stays a float.
+        ScriptValue::F64(n) => format!("{n:?}"),
+        ScriptValue::Str(text) => string_literal(text),
+        ScriptValue::Array(items) => {
+            let items: Vec<String> = items.iter().map(literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        ScriptValue::Map(map) => {
+            // Sorted, so the generated source is the same every run.
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let entries: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}: {}", string_literal(key), literal(&map[key])))
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
+    }
+}
+
+/// A string in double quotes, with the escapes candela reads.
+fn string_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The namespace `f` is declared under, or `None` when it is not a host
@@ -69,7 +164,8 @@ pub(crate) fn host_block(ns: &str, lines: impl IntoIterator<Item = String>) -> S
 /// [`crate::prelude::PreparedSource`] carries so an error still points at the
 /// author's line.
 pub(crate) fn one_line_block(ns: &str, fns: &[ScriptFn]) -> String {
-    let decls: Vec<String> = fns.iter().map(declaration).collect();
+    let mut decls = struct_declarations(fns);
+    decls.extend(fns.iter().map(declaration));
     format!("host \"{ns}\" {{ {} }}", decls.join(" "))
 }
 
@@ -97,11 +193,13 @@ pub(crate) fn generated_prelude() -> String {
 
     for ns in namespaces {
         let mut lines: Vec<String> = Vec::new();
-        let shared: Vec<String> = table
+        let in_ns: Vec<ScriptFn> = table
             .iter()
             .filter(|f| f.visible_to("candela") && namespace(f) == ns)
-            .map(declaration)
+            .cloned()
             .collect();
+        let mut shared = struct_declarations(&in_ns);
+        shared.extend(in_ns.iter().map(declaration));
         if !shared.is_empty() {
             lines.push("// Shared with the other hosts.".to_string());
             lines.extend(shared);
@@ -211,6 +309,47 @@ mod tests {
             .build(|_| Ok(ScriptValue::Unit));
         assert!(crate::host_fns::binds_typed(&f));
         assert_eq!(declaration(&f), "float mix(float, float);");
+    }
+
+    /// A struct parameter is declared by name in the function's line and as a
+    /// `struct` of its own in the same block, nested structs first, each once,
+    /// with its defaults written as candela literals.
+    #[test]
+    fn a_struct_parameter_declares_its_struct() {
+        use lumen_script::ScriptStruct;
+
+        let retry = ScriptStruct::new("Retry").field_default("times", T::Int, 3_i64);
+        let opts = ScriptStruct::new("Options")
+            .field_default("dir", T::Str, "a \"b\"\n")
+            .field("env", T::Map(Box::new(T::Str)))
+            .field_default("ratio", T::Float, 1.0)
+            .field("retry", T::Struct(retry));
+        let f = ScriptFn::new("run")
+            .ns(ScriptNs::Named("tool".into()))
+            .param("opts", T::Struct(opts.clone()))
+            .ret(T::Bool)
+            .build(|_| Ok(ScriptValue::Bool(true)));
+        let g = ScriptFn::new("again")
+            .ns(ScriptNs::Named("tool".into()))
+            .param("opts", T::Struct(opts))
+            .ret(T::Unit)
+            .build(|_| Ok(ScriptValue::Unit));
+        assert_eq!(declaration(&f), "bool run(Options);");
+        let fns = [f, g];
+        assert_eq!(
+            struct_declarations(&fns),
+            vec![
+                "struct Retry { times: int = 3 }".to_string(),
+                "struct Options { dir: string = \"a \\\"b\\\"\\n\", env: {string: string}, \
+                 ratio: float = 1.0, retry: Retry }"
+                    .to_string(),
+            ]
+        );
+        let block = one_line_block("tool", &fns);
+        assert!(
+            block.starts_with("host \"tool\" { struct Retry"),
+            "structs lead the block: {block}"
+        );
     }
 
     /// A sink that binds nothing and remembers every name offered to it.
