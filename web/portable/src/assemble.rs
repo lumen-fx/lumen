@@ -267,7 +267,8 @@ fn install_bindings(app: &mut App) {
 ///
 /// No formatter is installed: nothing in this assembly links one, so a
 /// `format` spec leaves its text as it stands, before a locale switch and
-/// after it.
+/// after it. A browser page stays that way. A build or a server running the
+/// same app links the formatter the emitter uses and puts it in after this.
 ///
 /// A script's `set_locale` works here, and switches to any locale whose
 /// catalogue was handed in. A third locale resolves to nothing and every

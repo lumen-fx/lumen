@@ -366,6 +366,11 @@ from them, so a `set_locale` in one request never reaches the next. A site
 with no catalogues renders with no translator, and `t()`
 answers with its key.
 
+A script's `format_*` calls answer for the same locale, with or without
+catalogues: `format_currency(1234.5, "EUR")` writes `1.234,50` with a trailing
+euro sign in the German tree and `1,234.50` with a leading one in the English
+tree, the way markup `format` is written.
+
 Which tree answers is decided in this order:
 
 1. `SsrRequest::with_locale("de-DE")`, for a proxy or a language cookie that
@@ -603,10 +608,6 @@ those reach the document as empty elements for the browser to fill.
 A component written inside a `<for>` is rendered per row from the state that
 request settled into, so the rows and their bodies come from one run, and a
 body reads in the language of the tree the request resolved to.
-
-A script's `format_*` calls return their argument: a render installs no
-formatter. Markup `format` is unaffected, because it is resolved as the
-document is written.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.

@@ -8,7 +8,7 @@ use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::render_world::AnimationsActive;
 use lumen_core::tick::{TickStage, work_pending};
 use lumen_html::contract::{Seed, SeedValue};
-use lumen_i18n::Catalogues;
+use lumen_i18n::{Catalogues, LocaleFormatter};
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{BindKind, BindSpec, Element, LayoutIR};
 use lumen_portable::portable_app;
@@ -34,6 +34,20 @@ fn catalogues() -> Catalogues {
         &[],
     )
     .expect("the catalogues parse")
+}
+
+/// A program that publishes what `format_number` and `format_currency`
+/// answer on start.
+const FORMATS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/formats.cdlb"));
+
+/// What the emitter's formatter writes for `locale`, which is what a script's
+/// `format_*` builtins must answer with in a run in that locale.
+fn formatted_in(locale: &str) -> (String, String) {
+    let fmt = LocaleFormatter::new(locale.parse().expect("the test tag parses"));
+    (
+        fmt.format_number(1234567.5),
+        fmt.format_currency(1234.5, "EUR"),
+    )
 }
 
 /// A program that writes onto nodes rather than onto signals.
@@ -439,4 +453,49 @@ fn a_locale_that_is_no_tag_is_reported_and_the_run_goes_ahead() {
     );
     assert!(run.language_error.is_some());
     assert_eq!(run.state.signals.global("greeting"), Some("greeting"));
+}
+
+/// A script's `format_*` builtins answer for the locale the run is in, the
+/// way the emitter writes a markup `format`, with or without a catalogue, and
+/// the formatter one run installs is gone by the next.
+#[test]
+fn a_run_formats_what_its_scripts_write_for_its_locale() {
+    let _turn = in_turn();
+    let catalogues = catalogues();
+    let app = app_with(FORMATS);
+    let runs = [
+        Language::untranslated("de-DE"),
+        Language {
+            locale: "de-DE",
+            catalogues: &catalogues,
+        },
+        Language::untranslated("en-US"),
+    ];
+    for language in runs {
+        let run = page(&app, "index", language, &Seed::new(), Budget::default());
+        let (amount, price) = formatted_in(language.locale);
+        assert_eq!(run.state.signals.global("amount"), Some(amount.as_str()));
+        assert_eq!(run.state.signals.global("price"), Some(price.as_str()));
+    }
+    // Neither answer is the argument, and the two locales write it apart.
+    let (german, _) = formatted_in("de-DE");
+    let (english, _) = formatted_in("en-US");
+    assert_ne!(german, "1234567.5");
+    assert_ne!(german, english);
+}
+
+/// A locale that is no tag formats nothing: the script gets its argument
+/// back, which is what it gets anywhere no formatter is installed.
+#[test]
+fn a_run_in_no_locale_writes_values_as_they_stand() {
+    let _turn = in_turn();
+    let run = page(
+        &app_with(FORMATS),
+        "index",
+        Language::untranslated("not a tag"),
+        &Seed::new(),
+        Budget::default(),
+    );
+    assert_eq!(run.state.signals.global("amount"), Some("1234567.5"));
+    assert_eq!(run.state.signals.global("price"), Some("1234.5"));
 }

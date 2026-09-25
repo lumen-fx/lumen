@@ -26,6 +26,7 @@ const FIXTURES: &[&str] = &[
     "fixtures/writes_nodes.cdl",
     "fixtures/calls_addon.cdl",
     "../prerender/fixtures/translates.cdl",
+    "../prerender/fixtures/formats.cdl",
 ];
 
 fn main() {
