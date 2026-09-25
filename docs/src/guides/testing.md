@@ -10,10 +10,14 @@ machine with no display, and a way to click through it from a script.
 lumenc run myapp --headless
 ```
 
-This is not a reduced mode. Layout runs, the GPU renders, scripts execute, hot
-reload works, and screenshots come out pixel-identical to the windowed path.
-The only thing missing is the window: no compositor is touched, so this is
-safe on a build machine and safe to run while you are working.
+This is not a reduced mode. Layout runs, the GPU renders, scripts execute, and
+screenshots come out pixel-identical to the windowed path. The window is
+missing, so no compositor is touched and this is safe on a build machine and
+safe to run while you are working.
+
+Hot reload is off: a headless run watches no files, so an edit shows up only
+after a restart. Set `hot_reload = true` under `[runtime]` in `lumen.toml` to
+turn it on for a headless run.
 
 A machine with no GPU still renders when it has a software rasterizer: Mesa's
 lavapipe on Linux, or Direct3D's WARP on Windows, which is what hosted Windows
