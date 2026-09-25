@@ -275,7 +275,9 @@ position.
 `bg` also takes an image, named with `url()`. The path may be
 double-quoted, single-quoted, or bare, and it resolves against the app
 directory the same way an `<image src>` does, and loads and caches the
-same way.
+same way. Under `lumenc run`, saving the image file shows the new picture
+without a restart, as it does for an `<image>`; see
+[hot reload](../guides/scripting.md#hot-reload).
 
 ```css
 :root { --hero: url("art/day.png"); }
