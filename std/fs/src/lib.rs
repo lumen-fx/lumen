@@ -3,7 +3,7 @@
 //! The engine has no file code; this crate is the whole capability. Install
 //! [`FsPlugin`] and the app gains the `files` namespace, in every host:
 //! `exists`, `is_dir`, `list`, `mkdir`, `remove`, `copy`, `read`, `write`,
-//! `read_bytes`, `write_bytes`, and `data_dir`. Rhai and candela spell a call
+//! `read_bytes`, `write_bytes`, `digest`, and `data_dir`. Rhai and candela spell a call
 //! `files::read(..)`; Lua spells it `files.read(..)`.
 //!
 //! The namespace is `files` rather than `fs` because candela reserves `fs`

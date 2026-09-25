@@ -316,8 +316,9 @@ app's own, under the platform's user-data location and named by
 returns.
 
 Beyond reading and writing text there are `files::exists`, `files::is_dir`,
-`files::list`, `files::mkdir`, `files::remove`, `files::copy`, and byte-level
-`files::read_bytes` and `files::write_bytes`. A call that cannot do what it
+`files::list`, `files::mkdir`, `files::remove`, `files::copy`, byte-level
+`files::read_bytes` and `files::write_bytes`, and `files::digest`, which
+answers a file's md5, sha1 or sha256 digest. A call that cannot do what it
 was asked answers `false` or an empty value and explains itself on stderr, so
 a script branches on what it got back. The full surface is in the scripting
 reference for each host ([candela](../reference/scripting-candela.md#filesystem),

@@ -231,3 +231,65 @@ fn a_value_that_is_not_a_byte_refuses_the_whole_write() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A digest reads the file through in pieces, so a file several buffers long
+/// hashes the same as the whole of it would; each algorithm answers lowercase
+/// hex of its own width.
+#[test]
+fn a_digest_streams_the_file_and_answers_lowercase_hex() {
+    let dir = scratch("digest");
+    let target = dir.join("artifact.bin");
+    let bytes: Vec<u8> = (0..200_003u32).map(|i| ((i * 7 + 3) % 256) as u8).collect();
+    std::fs::write(&target, &bytes).expect("file");
+
+    assert_eq!(
+        ops::digest(&target, "md5").as_deref(),
+        Ok("71ea1a2345bc501090ed0f67ced13f5e")
+    );
+    assert_eq!(
+        ops::digest(&target, "sha1").as_deref(),
+        Ok("6c230f475fe8f1a43020fea87ddab2933a0f83f9")
+    );
+    assert_eq!(
+        ops::digest(&target, "sha256").as_deref(),
+        Ok("aaa1137a572394ab285096ae86aa5e48fac554adfe277fe868729e38f469329d")
+    );
+
+    let empty = dir.join("empty.bin");
+    std::fs::write(&empty, b"").expect("file");
+    assert_eq!(
+        ops::digest(&empty, "md5").as_deref(),
+        Ok("d41d8cd98f00b204e9800998ecf8427e")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A missing file answers empty without a word, like `read`; an unknown
+/// algorithm and a directory each refuse with the reason.
+#[test]
+fn a_digest_refuses_what_it_cannot_hash() {
+    let dir = scratch("digest-refusals");
+    let target = dir.join("file.txt");
+    std::fs::write(&target, "x").expect("file");
+
+    assert_eq!(
+        ops::digest(&dir.join("absent.bin"), "sha1"),
+        Ok(String::new())
+    );
+
+    let refusal = ops::digest(&target, "crc32").expect_err("crc32 is not offered");
+    assert!(refusal.contains("crc32"), "{refusal}");
+    assert!(
+        refusal.contains("sha256"),
+        "names what is offered: {refusal}"
+    );
+
+    let refusal = ops::digest(&target, "SHA256").expect_err("the names are lowercase");
+    assert!(refusal.contains("SHA256"), "{refusal}");
+
+    let refusal = ops::digest(&dir, "md5").expect_err("a directory has no digest");
+    assert!(refusal.contains("directory"), "{refusal}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

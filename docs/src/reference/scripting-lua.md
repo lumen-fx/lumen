@@ -699,6 +699,7 @@ lumen-fs = { bundled = true }
 | `files.write(path, contents)` | boolean | Write `contents` to `path`. The write is atomic (temp file + rename), so a reader never sees a truncated file. |
 | `files.read_bytes(path)` | table | The bytes of `path` as numbers of 0 to 255. A missing file, or one past the cap, gives an empty list. |
 | `files.write_bytes(path, bytes)` | boolean | Write a list of 0-to-255 numbers as raw bytes, atomically. A value outside that range refuses the whole write. |
+| `files.digest(path, algo)` | string | The digest of the file at `path` as lowercase hex, where `algo` is `"md5"`, `"sha1"` or `"sha256"`. A missing file gives an empty string; any other `algo` is refused. |
 | `files.data_dir()` | string | The directory this app saves data in, created when missing. |
 
 A relative path names a file the app ships, so it reads the same wherever the
@@ -719,6 +720,11 @@ A call that cannot do what it was asked answers `false` or an empty value and
 prints one `lumen-fs:` line on stderr, so a script branches on the value it
 got back. Two cases stay silent, because probing for state that has not been
 saved yet is ordinary: reading a file that is not there, and removing one.
+
+`files.digest` reads the file through in pieces on the calling thread, so
+its size is not capped but the script waits while a large file hashes. md5
+and sha1 are for ids and checksums, such as checking a download against a
+published sum, not for security.
 
 `files.read_bytes` reads up to 8 MiB by default. Raise or lower it with the
 module's `read_bytes_cap` setting, in bytes, between 1 KiB and 256 MiB:

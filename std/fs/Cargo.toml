@@ -12,7 +12,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Lumen's filesystem module: registers the files script namespace (read, write, list, copy, remove, binary access) as a runtime module or a compiled-in plugin."
+description = "Lumen's filesystem module: registers the files script namespace (read, write, list, copy, remove, binary access, digests) as a runtime module or a compiled-in plugin."
 keywords = ["ui", "gui", "filesystem", "scripting"]
 categories = ["filesystem", "gui"]
 publish = false
@@ -25,10 +25,13 @@ name = "lumen_fs"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
-# The one dependency: the Plugin trait, the script-fn registry, and the app's
-# path resolution all arrive through the module SDK's re-exports. Everything
-# else is `std::fs`.
+# The Plugin trait, the script-fn registry, and the app's path resolution all
+# arrive through the module SDK's re-exports. Everything else is `std::fs`,
+# apart from the three digests `files::digest` streams a file through.
 lumen-module = { workspace = true }
+md-5.workspace = true
+sha1.workspace = true
+sha2.workspace = true
 
 [features]
 default = ["engine-dylib"]
