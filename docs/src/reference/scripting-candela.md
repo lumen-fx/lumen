@@ -64,8 +64,9 @@ the `lumen` namespace has no `data_dir` (called as `lumen::data_dir`); `files::d
 
 Both surface at load for any function candela can type from that function's
 own declaration, which is every handler whose parameters are annotated and
-every function that takes none. A handler with a bare parameter is compiled by
-the first call that reaches it, and reports there instead.
+every function that takes none. A handler with a bare parameter is tried with
+that parameter typed `any`; where its body does not compile that way, the build
+warns, and the error itself surfaces at the first call that reaches it.
 
 Write the import in every `.cdl` file that uses the surface. An app's candela
 files join into one program and the declarations land once for the whole
@@ -210,19 +211,22 @@ fn on_toggle(id: string, checked: bool) { }
 
 Running from source works either way, because the compiler takes a bare
 parameter's type from the first call. A compiled app has no compiler to do
-that, so it records a call trampoline for each handler at build time and only
-records one for a handler in the app's own script file whose parameters are all
-annotated. A handler left bare compiles, ships, and is then never called, and so
-is one an imported script library declares, whatever it annotates: write the
-handlers in the app's own file.
+that, so it records a call trampoline for each handler in the app's own script
+file at build time, at the types its parameters declare. A bare parameter is
+recorded as `any`, and `lumenc build`, `lumenc web` and `lumenc package` warn
+once per function, naming every bare parameter it takes; `lumenc web --strict`
+fails on that warning. A handler an imported script library declares gets no
+trampoline, whatever it annotates, and is never called in a compiled app: write
+the handlers in the app's own file.
 
 Annotation is also what puts the handler's body in front of `lumenc check`.
 Nothing in the script calls a handler, so the declared types are the only ones
 its body can be compiled at ahead of the event: `check` and `build` compile the
 body of every handler that annotates its parameters and report a mistake in it
-the way they report one in `main`. A bare parameter defers that to the first
-event, which is where the error then appears, as a runtime failure of the
-handler.
+the way they report one in `main`. A handler with a bare parameter is compiled
+with it typed `any` instead; a mistake that shows at that type is a build
+warning rather than an error, and the error itself appears at the first event,
+as a runtime failure of the handler.
 
 | Handler | Arguments |
 | --- | --- |

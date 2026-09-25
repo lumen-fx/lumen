@@ -124,11 +124,12 @@ file drops and picks, in-app drag and drop, hotkeys, menus, the tray, dialog
 results, HTTP replies, and window close.
 
 In candela, annotate the parameters. Nothing in the script calls a handler, so
-its declared types are all the compiler has to work from: `lumenc check`
-compiles the body of a handler whose parameters are annotated, and a handler
-left bare waits for the first event that reaches it, which is where a mistake
-in it surfaces. A packaged app carries no compiler at all, so a bare handler
-there ships and never fires. `any` counts as an annotation, and
+its declared types are all the compiler has to work from. A bare parameter is
+taken as `any`, and `lumenc build` warns about each function that has one. A
+body that needs a known type, doing arithmetic on the value or joining it to a
+string, does not compile as `any`: run from source, it compiles at the first
+event instead, and a packaged app, which carries no compiler, cannot call it at
+all, which the build also warns about. `any` counts as an annotation, and
 [the handler table](../reference/scripting-candela.md#event-handlers) gives the
 type of every argument a named callback takes. Rhai and Lua have no
 annotations, so their handlers stay bare.

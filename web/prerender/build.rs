@@ -39,7 +39,8 @@ fn main() {
         // plugin function, so a bare host with nothing folded in is enough.
         let image = lumen_script_candela::CandelaHost::new()
             .compile_bytecode(&source, &source_path.to_string_lossy())
-            .unwrap_or_else(|e| panic!("compiling {}: {e}", source_path.display()));
+            .unwrap_or_else(|e| panic!("compiling {}: {e}", source_path.display()))
+            .0;
         let out_path = Path::new(&out_dir).join(format!("{stem}.cdlb"));
         fs::write(&out_path, image)
             .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));

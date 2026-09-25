@@ -339,20 +339,19 @@ component, rather than leaving an empty element behind.
 
 Note the `: string` on `Greet` and `Pick`. A component that has to run is
 called by name, and both the build and a shipped app call it through compiled
-bytecode: candela makes a function callable by name only where it says what its
-arguments are. A component written with a bare parameter compiles and ships,
-and the call to it finds nothing, which leaves an empty element where its body
-belongs.
+bytecode, which has no compiler to work out a parameter's type from the call. A
+component written with a bare parameter still runs: its parameter is taken as
+`any`, and `lumenc build`, `lumenc web` and `lumenc package` warn once per
+component, naming every bare parameter it takes. Pass `--strict` to `lumenc
+web` and that warning ends the build instead.
 
-Props arrive as text, so `string` fits every one of them; `any` works too.
+Props arrive as text, so `string` fits every one of them; `any` works too and
+silences the warning the same way.
 
 A component the build stands in for is never called, so its parameters need no
 annotation. Annotating them all is the simpler rule, and it is what keeps a
-component usable after an edit turns it into one that has to run.
-
-`lumenc web` names the ones that would come out empty, and prints the
-component's own parameter list annotated, to write in place of what is there.
-Pass `--strict` and the same warning ends the build instead.
+component checked at its declared types after an edit turns it into one that
+has to run.
 
 ### A component on the web
 

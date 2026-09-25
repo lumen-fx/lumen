@@ -218,8 +218,8 @@ A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
 clicked, and a `derive()` recomputes when one of its dependencies changes.
 The one thing to know is that the browser runs your script as bytecode, with
-no compiler behind it, so a function the runtime calls by name has to declare
-its parameters and their types:
+no compiler behind it, so a function the runtime calls by name declares its
+parameters and their types:
 
 ```
 fn calc_greeting(who: string) {
@@ -227,14 +227,14 @@ fn calc_greeting(who: string) {
 }
 ```
 
-That covers handlers, `derive()` bodies and lifecycle functions. Annotate a
-parameter with the type it arrives as rather than `any` where the body does
-arithmetic on it or joins it to a string; a value typed `any` cannot do
-either, and `str(n)` is how a number joins a string in any case.
-
-`lumenc web` names every function the app calls by name that the compiled
-program does not export, so a handler that would have done nothing is a
-warning at build time rather than a blank in the page.
+That covers handlers, `derive()` bodies and lifecycle functions. A parameter
+left bare is taken as `any`, and the build warns once per function, naming
+every bare parameter it takes; `--strict` makes that warning a failed build.
+Annotate a parameter with the type it arrives as rather than `any` where the
+body does arithmetic on it or joins it to a string; a value typed `any` cannot
+do either, and `str(n)` is how a number joins a string in any case. A bare
+parameter's body that does either does not compile as `any`, so the function
+cannot be called by name, and the build warns about that too.
 
 The runtime is published with every Lumen release. A build uses the copy next
 to `lumenc` when there is one, and otherwise downloads the pair from a
@@ -672,10 +672,6 @@ none of them means anything without an absolute address.
   build runs a component that has to run and writes its body into the HTML, so
   the document carries the whole markup tree. See
   [Composition](composition.md#a-component-on-the-web).
-- A component that has to run must annotate its parameters, or the compiled
-  program has no name to call it by, and it is emitted as an empty element. The
-  build warns, naming the component and the annotated signature to write in its
-  place; `--strict` makes that warning a failed build.
 - A component written inside a `<for>` is called once per row while the site is
   built, and each body is written into the row it belongs to, wherever the rows
   are known: a list `[web.seed]` declares, or one a `prerender = "run"` capture

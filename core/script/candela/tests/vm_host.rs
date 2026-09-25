@@ -190,7 +190,8 @@ fn main() {}
 fn host_for(source: &str, uri: &str) -> CandelaVmHost {
     let image = CandelaHost::new()
         .compile_bytecode(source, uri)
-        .expect("the fixture compiles");
+        .expect("the fixture compiles")
+        .0;
     CandelaVmHost::new(image)
 }
 
@@ -818,7 +819,8 @@ fn an_app_outlives_a_panic_out_of_its_image() {
     event::clear_all_bindings();
     let image = CandelaHost::new()
         .compile_bytecode(EXPLODES, "explodes.cdl")
-        .expect("the fixture compiles");
+        .expect("the fixture compiles")
+        .0;
     let mut app = App::new();
     app.add_script_fn(exploding_script_fn());
     app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("explodes.cdlb"));
@@ -857,7 +859,8 @@ fn a_click_whose_handler_panics_the_vm_leaves_the_app_ticking() {
     let btn = publish_button();
     let image = CandelaHost::new()
         .compile_bytecode(EXPLODES_ON_CLICK, "explodes-on-click.cdl")
-        .expect("the fixture compiles");
+        .expect("the fixture compiles")
+        .0;
     let mut app = App::new();
     app.add_script_fn(exploding_script_fn());
     app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("explodes-on-click.cdlb"));
@@ -934,7 +937,8 @@ fn the_artifact_host_offers_the_compiler_host_s_builtin_surface() {
 fn the_plugin_boots_an_image_and_a_tick_runs_its_derivation() {
     let image = CandelaHost::new()
         .compile_bytecode(DERIVED, "derived.cdl")
-        .expect("the fixture compiles");
+        .expect("the fixture compiles")
+        .0;
     let mut app = App::new();
     app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("derived.cdlb"));
     assert!(

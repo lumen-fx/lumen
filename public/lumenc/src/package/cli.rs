@@ -1755,13 +1755,20 @@ fn is_executable_file(path: &Path) -> bool {
 
 /// AOT-compile the app at `src` for the desktop, with bundled modules' web
 /// halves looked up under `lib_dir` first, the way the rest of the package
-/// finds its files.
+/// finds its files. What the script compiler warned about is printed to
+/// stderr, one line each.
 fn compile_for_desktop(
     src: &Path,
     lib_dir: Option<&Path>,
 ) -> Result<lumen_ir::artifact::CompiledApp, String> {
     let deps = crate::addons::target_deps(src, BuildTarget::Desktop, lib_dir)?;
-    crate::compile_app_with(src, None, &deps).map_err(|e| e.to_string())
+    let mut warnings = Vec::new();
+    let compiled =
+        crate::compile_app_with(src, None, &deps, &mut warnings).map_err(|e| e.to_string())?;
+    for warning in &warnings {
+        eprintln!("lumenc package: warning: {warning}");
+    }
+    Ok(compiled)
 }
 
 /// Compile the app, gather the toolchain files, and write the folder.

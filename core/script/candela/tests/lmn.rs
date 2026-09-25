@@ -103,7 +103,8 @@ fn a_block_compiles_to_bytecode() {
              fn main() {}\n",
             "app.cdl",
         )
-        .expect("the program compiles");
+        .expect("the program compiles")
+        .0;
     assert!(!bytes.is_empty());
 }
 

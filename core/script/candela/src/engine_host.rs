@@ -18,6 +18,7 @@ use lumen_script::{
     ScriptPlugin, ScriptValue,
 };
 
+use crate::compile_warnings;
 use crate::declare;
 use crate::diagnose;
 use crate::dylib_check;
@@ -298,13 +299,23 @@ impl CandelaHost {
     /// load, so the runtime that loads it registers the same closures this
     /// host does or the load fails naming what is missing.
     ///
+    /// What comes back beside the image is every warning the compile raised,
+    /// one line each, for the caller to print on its own channel; candela
+    /// prints none of them itself. A function with a bare parameter is one
+    /// line naming every such parameter, however many warnings candela raised
+    /// for it.
+    ///
     /// # Errors
     ///
     /// [`ScriptError::Compile`] when the program does not compile, carrying
     /// the line and column in the user's own source, and
     /// [`ScriptError::Runtime`] when a compiled program cannot be
     /// serialized.
-    pub fn compile_bytecode(&self, source: &str, uri: &str) -> Result<Vec<u8>, ScriptError> {
+    pub fn compile_bytecode(
+        &self,
+        source: &str,
+        uri: &str,
+    ) -> Result<(Vec<u8>, Vec<String>), ScriptError> {
         let prepared = self.prepare(source);
         // `build_bytecode` is a free function with no engine behind it, so the
         // `lmn!` expander comes from an environment installed for this compile.
@@ -325,16 +336,20 @@ impl CandelaHost {
         // was run from.
         // No engine carries the flags here either, so the compile runs inside
         // the host's configuration.
-        self.cfg()
+        let (image, warnings) = self
+            .cfg()
             .scope(|| {
                 macros.scope(|| {
                     candela::collect_diagnostic(|| {
-                        candela::build_bytecode(prepared.text.clone(), uri, &resolver)
+                        candela::collect_warnings(|| {
+                            candela::build_bytecode(prepared.text.clone(), uri, &resolver)
+                        })
                     })
                 })
             })
-            .map_err(|d| self.compile_error(&prepared, &d, uri))?
-            .map_err(ScriptError::Runtime)
+            .map_err(|d| self.compile_error(&prepared, &d, uri))?;
+        let image = image.map_err(ScriptError::Runtime)?;
+        Ok((image, compile_warnings::relay(&prepared, uri, &warnings)))
     }
 
     /// What a diagnostic raised by the running program should say.
