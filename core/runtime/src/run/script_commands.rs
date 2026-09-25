@@ -27,7 +27,7 @@ pub(crate) fn apply_script_commands(
                 // dir-relative resolution as parser-time paths, so authors
                 // can write `set_src("hero-icon", "icons/sun.png")`
                 // regardless of cwd.
-                let resolved = resolve_asset_src(path);
+                let resolved = lumen_assets::resolve_source_path(path);
                 for (e, id) in &ids {
                     if id.0 == *target_id {
                         // A decode still in flight for the old source
@@ -121,25 +121,9 @@ fn save_clipboard_image(path: &str) {
     }
 }
 
-/// Resolve a `set_src` path the way every asset path resolves: a
-/// `lumen://app/...` URI passes through verbatim (the bundle source claims
-/// the scheme itself; joining it against the app dir would mangle it), and
-/// everything else resolves app-relative. The app directory comes from the
-/// published process-global cache ([`lumen_core::app_paths`]), which the
-/// runtime fills for every run; reading the hot-reload state here would fall
-/// back to the process cwd in packaged, artifact and headless runs, where no
-/// watcher exists. The same rule the audio module's `audio_play` applies.
-fn resolve_asset_src(path: &str) -> PathBuf {
-    if path.starts_with("lumen://") {
-        PathBuf::from(path)
-    } else {
-        lumen_core::app_paths::resolve(path)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::resolve_asset_src;
+    use lumen_assets::resolve_source_path;
     use std::path::{Path, PathBuf};
 
     /// The `set_src` resolution rule, mirroring the audio module's: the app
@@ -153,20 +137,20 @@ mod tests {
         lumen_core::app_paths::set_app(&dir, "lumen-set-src-test");
 
         assert_eq!(
-            resolve_asset_src("icons/sun.png"),
+            resolve_source_path("icons/sun.png"),
             dir.join("icons/sun.png")
         );
         let absolute = dir.join("elsewhere.png");
         assert_eq!(
-            resolve_asset_src(absolute.to_str().expect("utf8 path")),
+            resolve_source_path(absolute.to_str().expect("utf8 path")),
             absolute
         );
         assert_eq!(
-            resolve_asset_src("lumen://app/icons/sun.png"),
+            resolve_source_path("lumen://app/icons/sun.png"),
             PathBuf::from("lumen://app/icons/sun.png"),
             "a bundle URI must reach the source chain unresolved"
         );
-        assert!(!resolve_asset_src("lumen://app/x").starts_with(Path::new(&dir)));
+        assert!(!resolve_source_path("lumen://app/x").starts_with(Path::new(&dir)));
     }
 
     /// A load the test releases by hand, so a decode can be held in flight

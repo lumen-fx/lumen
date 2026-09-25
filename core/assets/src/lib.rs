@@ -122,6 +122,14 @@ pub struct BackgroundImage {
 
 /// The path an authored asset reference loads from: a `lumen://` URI as
 /// written, anything else resolved against the app directory.
+///
+/// Markup `src`, `bg: url(...)` and a script's `set_src` all resolve through
+/// this. The bundle
+/// source claims the `lumen://` scheme itself, so joining such a URI to the
+/// app directory would mangle it. The app directory comes from the
+/// process-global cache in [`lumen_core::app_paths`], which the runtime fills
+/// for every run, so a packaged, artifact or headless run resolves like a
+/// dev run rather than against the process's working directory.
 pub fn resolve_source_path(path: &str) -> PathBuf {
     if path.starts_with("lumen://") {
         PathBuf::from(path)
