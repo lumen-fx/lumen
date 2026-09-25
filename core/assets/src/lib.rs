@@ -649,7 +649,7 @@ impl AssetServer {
 
     /// Bumps the per-entity monotonic request id and returns the new value.
     ///
-    /// Call this from the runtime's `ScriptCommand::SetSrc` handler (today in `lumenc::run`) **before**
+    /// The runtime's `ScriptCommand::SetSrc` handler (in `lumen-runtime`) calls this **before**
     /// re-inserting [`ImageSource`] on the entity. Any in-flight decode for the prior path will then be
     /// identified as stale on completion via the snapshot id stored on its waiter entry, and either
     /// dropped from the per-entity insert step (if some other waiter still wants the path) or discarded
