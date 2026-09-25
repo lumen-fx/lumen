@@ -204,11 +204,15 @@ impl CandelaHost {
     /// `host "lumen"` block, because candela resolves a namespace against its
     /// first block only.
     fn prelude_extras(&self) -> Vec<String> {
-        self.script_fns
+        let fns: Vec<ScriptFn> = self
+            .script_fns
             .iter()
             .filter(|f| declare::namespace(f) == crate::host_fns::HOST_NAMESPACE)
-            .map(declare::declaration)
-            .collect()
+            .cloned()
+            .collect();
+        let mut lines = declare::struct_declarations(&fns);
+        lines.extend(fns.iter().map(declare::declaration));
+        lines
     }
 
     /// One folded `host "<ns>" { .. }` block per namespace an embedder

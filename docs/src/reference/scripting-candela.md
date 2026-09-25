@@ -139,7 +139,7 @@ The modules are read from disk when the program compiles, out of a `libs/`
 directory beside the running executable. `lumenc package` copies that directory
 into the folder it writes, so a shipped app resolves the same imports. A web
 build compiles ahead of time, so the modules travel into the browser inside the
-compiled image. `std/math`, `std/random`, and `std/time` bind a C library on
+compiled image. `std/hash`, `std/math`, `std/random`, and `std/time` bind a C library on
 the desktop; the browser runtime carries its own version of each, so they work
 in a browser too, and a seeded `std/random` draws the same sequence there. A
 `dylib` block of the app's own names a library the browser cannot open, and an
@@ -1329,12 +1329,29 @@ the host declares the namespace from what the module registered.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `process::start(cmd: string, args: string[], tag: string)` | `bool` | Start `cmd` with the argument list `args`, reporting under `tag`. `true` once the program is running. |
+| `process::start(cmd: string, args: string[], tag: string, opts: process::StartOptions)` | `bool` | Start `cmd` with the argument list `args`, reporting under `tag`. `true` once the program is running. |
+| `process::stop(tag: string)` | `bool` | End the program running under `tag`. `false` when nothing runs under it. |
 
-A `cmd` with a path separator in it names a program the app ships and resolves
-against the app directory; a bare `cmd` is looked up on `PATH`. The child runs
-in the app directory, reads end of file from its input, and has both its
-output streams captured.
+A `cmd` with a path separator in it names a program the app
+ships and resolves against the app directory; a bare `cmd` is looked up on
+`PATH`. The child reads end of file from its input and has both its output
+streams captured.
+
+`opts` is a `process::StartOptions`, a struct the module declares with a
+default for every field. Set the fields you want and take the rest from
+`..Default::default()`, or pass `Default::default()` for all of them:
+
+```rust
+process::start("java", ["-jar", "game.jar"], "game",
+    process::StartOptions { cwd: "instances/a", ..Default::default() });
+process::start("git", ["status"], "git", Default::default());
+```
+
+| Field | Type | Default | Behaviour |
+| --- | --- | --- | --- |
+| `cwd` | `string` | `""` | The directory the child starts in, relative to the app directory. Empty is the app directory. |
+| `env` | `{string: string}` | empty | Variables laid over the environment the child inherits. |
+| `end_at_exit` | `bool` | `false` | End the child when the app exits. |
 
 The call answers as soon as the program is running. Everything after that
 arrives as an event carrying the tag, so one handler serves several children:
@@ -1363,10 +1380,15 @@ line on stderr. It fires no event at all, because the tag never named a running
 program, so branch on the value the call gave back rather than waiting for an
 exit that never comes.
 
-There is no way to write to a child's input, no way to end a child from a
-script, and no per-child environment or working directory. A child is not
-ended when the app exits: a program still running outlives the app that
-started it.
+`process::stop(tag)` ends the program running under `tag`: `SIGTERM` first on
+Linux and macOS, then a kill if it is still running two seconds later, and an
+immediate end on Windows. It answers `false` when nothing runs under the tag, ends every
+child when several share it, and the child's `process_exit` still arrives as
+the last event. A child started with `end_at_exit` is ended the same way when
+the app closes; the app waits for it before it exits. An app that is killed
+rather than closed leaves its children running.
+
+There is no way to write to a child's input.
 
 On Windows nothing loads a module beside the executable, so this surface
 exists only in a

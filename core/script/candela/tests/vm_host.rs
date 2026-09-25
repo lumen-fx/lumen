@@ -13,7 +13,7 @@ use lumen_core::property_store::PropertyStore;
 use lumen_script::event;
 use lumen_script::{
     ScriptCommand, ScriptError, ScriptFn, ScriptFnAppExt, ScriptHost, ScriptLoadFailure, ScriptNs,
-    ScriptTy, ScriptValue,
+    ScriptStruct, ScriptTy, ScriptValue,
 };
 use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin};
 
@@ -569,6 +569,65 @@ fn main() {}
     assert_eq!(
         host.call("go", &[]).expect("go runs").ret,
         Some(ScriptValue::I64(42))
+    );
+}
+
+/// A struct parameter reaches an artifact the same way: the image records the
+/// struct the block declares, the registration names the same fields, and the
+/// body reads one map with every field, defaults included.
+#[test]
+fn an_artifact_binds_a_struct_parameter() {
+    const TOOL: &str = r#"
+host "tool" {
+    struct Options { dir: string = "out", verbose: bool }
+    string run(string, Options);
+}
+
+fn some() -> string {
+    return tool::run("a", tool::Options { verbose: true, ..Default::default() });
+}
+
+fn none() -> string { return tool::run("b", Default::default()); }
+
+fn main() {}
+"#;
+    let mut host = host_for(TOOL, "tool.cdl");
+    host.register_script_fn(
+        &ScriptFn::new("run")
+            .ns(ScriptNs::Named("tool".to_owned()))
+            .param("name", ScriptTy::Str)
+            .param(
+                "opts",
+                ScriptTy::Struct(
+                    ScriptStruct::new("Options")
+                        .field_default("dir", ScriptTy::Str, "out")
+                        .field("verbose", ScriptTy::Bool),
+                ),
+            )
+            .ret(ScriptTy::Str)
+            .build(|cx| {
+                let ScriptValue::Map(opts) = cx.arg_ref(1) else {
+                    return Err("not a map".to_owned());
+                };
+                Ok(ScriptValue::Str(format!(
+                    "{}:{}:{}",
+                    cx.str_arg(0),
+                    opts["dir"].stringify(),
+                    opts["verbose"].stringify()
+                )))
+            }),
+    )
+    .expect("registering before the load is allowed");
+
+    host.load("", "tool.cdlb")
+        .expect("the struct declaration binds to the registered fn");
+    assert_eq!(
+        host.call("some", &[]).expect("some runs").ret,
+        Some(ScriptValue::Str("a:out:true".to_owned()))
+    );
+    assert_eq!(
+        host.call("none", &[]).expect("none runs").ret,
+        Some(ScriptValue::Str("b:out:false".to_owned()))
     );
 }
 

@@ -39,8 +39,12 @@ fn a_compiled_program_runs_under_the_vm_alone() {
     assert_eq!(value, Value::Int(42));
 }
 
+/// A function nothing in the program calls is one the host calls by name, so
+/// the image exports it: at its declared types when it annotates every
+/// parameter, and with a bare parameter typed `any` when it does not (the
+/// build warns about the bare one).
 #[test]
-fn only_an_annotated_function_is_callable_by_name() {
+fn a_function_the_host_calls_is_callable_by_name() {
     let bytes = CandelaHost::new()
         .compile_bytecode(STANDALONE, "standalone.cdl")
         .expect("the program compiles");
@@ -53,9 +57,8 @@ fn only_an_annotated_function_is_callable_by_name() {
         "a function that annotates every parameter is exported: {exports:?}"
     );
     assert!(
-        !exports.contains(&"undeclared"),
-        "a bare parameter has no declared type to check a host's argument \
-         against, so the function is not exported: {exports:?}"
+        exports.contains(&"undeclared"),
+        "a bare parameter is exported at `any`: {exports:?}"
     );
     assert!(
         !exports.contains(&"main"),

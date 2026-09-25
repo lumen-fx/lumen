@@ -19,7 +19,8 @@ use bincode::Options;
 use lumen_core::components::Color;
 use lumen_core::property_store::{PropertyKey, PropertyValue};
 use lumen_script::{
-    Credentials, FileDialogKind, PluginEvent, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptValue,
+    Credentials, FileDialogKind, PluginEvent, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptStruct,
+    ScriptTy, ScriptValue,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -628,6 +629,21 @@ fn plugin_events_round_trip() {
         let back: PluginEvent = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(format!("{event:?}"), format!("{back:?}"), "{name} changed");
     }
+}
+
+/// A struct parameter crosses the plugin boundary whole: its name, its fields
+/// in order, and each field's default or the lack of one.
+#[test]
+fn a_struct_type_round_trips() {
+    let ty = ScriptTy::Struct(
+        ScriptStruct::new("Options")
+            .field_default("dir", ScriptTy::Str, "out")
+            .field("env", ScriptTy::Map(Box::new(ScriptTy::Str)))
+            .field_default("ratio", ScriptTy::Float, 0.5),
+    );
+    let bytes = encode(&ty).expect("encodes");
+    let back: ScriptTy = decode(&bytes).expect("decodes");
+    assert_eq!(back, ty);
 }
 
 #[test]
