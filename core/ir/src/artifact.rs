@@ -115,11 +115,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// on, their functions and their elements, so every target that runs the
 /// program binds the same names.
 ///
+/// `13`: [`crate::layout_ir::BgSpec`] gains `Image` and
+/// [`crate::layout_ir::Attributes`] gains `bg_fit`, so `bg` can name an
+/// image and say how it fills the box.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 12;
+pub const FORMAT_VERSION: u16 = 13;
 
 /// The navigable page set of a compiled multi-page app.
 ///

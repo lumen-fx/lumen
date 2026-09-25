@@ -1818,6 +1818,9 @@ pub struct SvgPayload {
     pub payload: Arc<dyn std::any::Any + Send + Sync>,
     /// Global paint order (mirrors `lumen_assets::ExtractedSvg::order`).
     pub order: u32,
+    /// `Some` when the SVG is its element's `bg: url(...)`; see
+    /// [`crate::render_world::ExtractedImage::background`].
+    pub background: Option<crate::render_world::BackgroundClip>,
 }
 
 impl std::fmt::Debug for SvgPayload {

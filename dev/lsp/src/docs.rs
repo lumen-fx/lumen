@@ -73,6 +73,7 @@ pub const ATTRS: &[&str] = &[
     "overflow-y",
     // visuals
     "bg",
+    "bg-fit",
     "radius",
     "border",
     "z-index",
@@ -271,7 +272,9 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
         "width" => "**`width`** - `auto` | `<n>px` | `<n>%`. Element width.",
         "height" => "**`height`** - `auto` | `<n>px` | `<n>%`. Element height.",
         "flex" => "**`flex`** - `row` | `column`. Flex direction for children.",
-        "bg" => "**`bg`** - `#rrggbb` or `#rrggbbaa`. Background color.",
+        "bg" => {
+            "**`bg`** - `#rrggbb`, `#rrggbbaa`, a gradient, or `url(\"path\")`. Background colour, gradient, or image painted behind the content."
+        }
         "radius" => {
             "**`radius`** - 1-4 pixel values. One value = uniform corner radius; 2-4 follow the CSS `border-radius` rotation `[top-left, top-right, bottom-right, bottom-left]` (`radius: 4 4 0 0` rounds only the top). CSS-side longhands: `border-<corner>-radius`."
         }
@@ -431,6 +434,9 @@ multi-line clamp. Not inherited."
             "**`drag`** - boolean on `<title-bar>`. Initiates a native window drag when pressed."
         }
         "fit" => "**`fit`** - `fill | cover | contain | none | scale-down`. Image fit mode.",
+        "bg-fit" => {
+            "**`bg-fit`** - `fill | cover | contain | none | scale-down`. How a `bg` image fills the box; default `cover`."
+        }
         "style" => "**`style`** - typography token (display-xl, headline-md, body-md, ...).",
         "placeholder" => "**`placeholder`** - string shown when an input is empty.",
         "label" => {
@@ -490,7 +496,7 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
         "text-align" => &["start", "center", "end"],
         "wrap" => &["normal", "nowrap", "glyph", "ellipsis"],
         "text-overflow" => &["clip", "ellipsis"],
-        "fit" => &["fill", "cover", "contain", "none", "scale-down"],
+        "fit" | "bg-fit" => &["fill", "cover", "contain", "none", "scale-down"],
         "mode" => &["render", "hide"],
         "skin" => &["default"],
         _ => &[],

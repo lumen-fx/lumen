@@ -70,7 +70,7 @@
         },
         {
           "comment": "Known Lumen property names (LSP validates the full set).",
-          "match": "\\b(width|height|min-width|min-height|max-width|max-height|flex|bg|hover-bg|radius|padding|margin|gap|text|text-color|text-align|selection-color|font-size|align|justify|position|inset|overflow|overflow-x|overflow-y|shadow|border|z-index|grow|shrink|aspect-ratio|draggable|sensitivity|inertia|tab-index|scroll|opacity)\\b\\s*(?=:)",
+          "match": "\\b(width|height|min-width|min-height|max-width|max-height|flex|bg|bg-fit|hover-bg|radius|padding|margin|gap|text|text-color|text-align|selection-color|font-size|align|justify|position|inset|overflow|overflow-x|overflow-y|shadow|border|z-index|grow|shrink|aspect-ratio|draggable|sensitivity|inertia|tab-index|scroll|opacity)\\b\\s*(?=:)",
           "name": "support.type.property-name.lumen-css"
         },
         { "include": "#value" }

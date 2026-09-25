@@ -1,0 +1,14 @@
+:root { --art: url("art/hero.png"); }
+
+.hero {
+  width: 320px;
+  height: 180px;
+  radius: 12px;
+  bg: var(--art);
+  bg-fit: contain;
+}
+
+#badge {
+  width: 48px;
+  height: 48px;
+}

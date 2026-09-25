@@ -211,6 +211,8 @@ lumen-script = { workspace = true }
 # pins it after the DOM dispatch, which is a claim about the schedule rather
 # than about anything the compiler links.
 lumen-scene = { workspace = true }
+# bg_image.rs asserts the background image's decode and marker components.
+lumen-assets = { workspace = true }
 lumen-script-rhai = { workspace = true }
 lumen-script-lua = { workspace = true }
 lumen-script-candela = { workspace = true, features = ["compiler"] }

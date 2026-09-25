@@ -587,8 +587,8 @@ pub struct DropdownButtonSpec {
     pub options: Vec<(String, String, bool)>,
 }
 
-/// Parsed `bg=` value. Solid colors and gradients share one attribute
-/// surface so authors don't pick between `bg=` and `bg-gradient=`.
+/// Parsed `bg=` value. Solid colors, gradients, and images share one
+/// attribute surface so authors don't pick between `bg=` and `bg-gradient=`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BgSpec {
     /// Solid color.
@@ -615,6 +615,10 @@ pub enum BgSpec {
         /// `(offset, color)` pairs ascending offset.
         stops: Vec<(f32, Rgba)>,
     },
+    /// `url("path")`: an image painted behind the element's content, sized by
+    /// [`Attributes::bg_fit`]. The path is as authored; it resolves against
+    /// the app directory the way an `<image src>` does.
+    Image(String),
 }
 
 /// RGBA color in `[0,1]^4`.
@@ -1058,6 +1062,9 @@ pub struct Attributes {
     /// `fit="fill|cover|contain|none|scale-down"` on `<image>` -
     /// CSS `object-fit`.
     pub image_fit: Option<ImageFitSpec>,
+    /// `bg-fit` - how a `bg: url(...)` image fills the element's box. Takes
+    /// the [`Self::image_fit`] values; `None` means cover.
+    pub bg_fit: Option<ImageFitSpec>,
     /// CSS `scrollbar-color: <thumb> [<track>]` (Scrollbars Styling
     /// Level 1) - overlay-bar thumb + optional track fills for `<scroll>`
     /// containers. `None` = the runtime's `ScrollbarStyle` default.

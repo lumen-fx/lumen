@@ -153,8 +153,8 @@ it. `<overlay>` and `<dialog>` take `position: absolute` and a full
 stylesheet cannot move them.
 
 One exception keeps skins from repainting your surfaces: when you set a
-resting `bg` (in CSS or as an attribute), a skin's `:hover` and `:active`
-background for that element is dropped. `:checked`, `:selected`,
+resting `bg` (in CSS or as an attribute, a colour, gradient, or image), a
+skin's `:hover` and `:active` background for that element is dropped. `:checked`, `:selected`,
 `:disabled`, and `:drag-over` backgrounds from the skin still stand until
 you name that state yourself.
 
@@ -269,6 +269,36 @@ position.
   middle of the box and the radius covers it. At least two stops.
 - `conic-gradient([from <angle>[deg],] <stop>, <stop>, ...)`. The start
   angle defaults to `0`. At least two stops.
+
+### Background images
+
+`bg` also takes an image, named with `url()`. The path may be
+double-quoted, single-quoted, or bare, and it resolves against the app
+directory the same way an `<image src>` does, and loads and caches the
+same way.
+
+```css
+:root { --hero: url("art/day.png"); }
+:root.night { --hero: url("art/night.png"); }
+
+.banner {
+  bg: var(--hero);
+  bg-fit: contain;
+  radius: 12px;
+}
+```
+
+The image paints as the element's background: behind its content and
+children, under its border, and clipped to its corner radius. It fills the
+border box, and `bg-fit` decides how, with the values `fit` takes on an
+`<image>`: `cover` (the default), `contain`, `fill`, `none`, and
+`scale-down`. `none` keeps the image's own size at the top-left corner;
+the others centre it. The image never sizes its element: give the element
+a size, or let its content size it.
+
+An image replaces the colour: `bg` holds one value, so set the colour on a
+parent if you want one showing through transparent pixels. An `<image>`
+element ignores a `bg` image; its `src` is its one source.
 
 ### Shadows
 
@@ -409,7 +439,8 @@ integer are clamped with a warning.
 
 | Property | Values | Default |
 | --- | --- | --- |
-| `bg` | color or gradient | transparent |
+| `bg` | color, gradient, or `url()` image | transparent |
+| `bg-fit` | `cover`, `contain`, `fill`, `none`, `scale-down` | `cover` |
 | `radius` | 1 to 4 numbers, top-left / top-right / bottom-right / bottom-left | `0` |
 | `border-top-left-radius`, `border-top-right-radius`, `border-bottom-right-radius`, `border-bottom-left-radius` | number | from `radius` |
 | `opacity` | number, clamped to 0..1 | `1` |
@@ -511,8 +542,9 @@ State-routable properties, and where each state's value lands:
 | `outline` | `:focus` and `:focus-visible` only | no | no | no | no | no |
 | `outline-offset` | `:focus` and `:focus-visible` only | no | no | no | no | no |
 
-`bg` under `:hover`, `:focus`, and `:focus-visible` shares one slot, so
-the three cannot differ. `outline` under `:focus-visible` gets its own
+`bg` under a state takes a colour; a gradient or an image there is
+dropped with a warning. `bg` under `:hover`, `:focus`, and
+`:focus-visible` shares one slot, so the three cannot differ. `outline` under `:focus-visible` gets its own
 slot and wins over `:focus` while focus came from the keyboard.
 
 On a `<toggle>` or `<switch>` track, `:disabled { bg }` wins over
@@ -716,6 +748,19 @@ names it in a warning. Split it into two tokens, or write the unit on the
 one that needs it.
 
 Gradient stop positions travel as written; write them as percentages.
+
+### Background image placement
+
+A `bg` image is copied into the site's `assets/` like an `<image src>`,
+and the `url()` is rewritten to point at the copy, whether it is written
+on `bg`, in a `bg` attribute, or in a custom property a theme swaps. A
+`bg` that is an image, or reads a token holding one, also gains
+`background-size`, `background-position`, `background-repeat: no-repeat`,
+and `background-origin: border-box`, so it sits in the box the way the
+desktop draws it. `bg-fit` is emitted as the `--lm-bg-size` and
+`--lm-bg-position` custom properties those read, registered so they do
+not inherit. Browsers have no `scale-down` for a background, so it is
+emitted as `contain`, which also enlarges an image smaller than the box.
 
 ### Properties with no browser equivalent
 

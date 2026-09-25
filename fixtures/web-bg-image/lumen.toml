@@ -1,0 +1,8 @@
+# Proof fixture for background images. The stylesheet paints one through a
+# custom property a theme could swap, and the markup paints another with the
+# `bg` attribute; a web build copies both under `assets/` and points the
+# stylesheet at the copies.
+
+# No introspection server, so a `--headless` CI run binds no port.
+[mcp]
+port = 0

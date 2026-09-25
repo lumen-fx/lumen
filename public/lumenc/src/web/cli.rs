@@ -23,7 +23,7 @@ use lumen_html::contract::{
 };
 use lumen_i18n::{Catalogues, I18nPlugin, LanguageIdentifier};
 use lumen_ir::artifact::{CompiledApp, CompiledI18n};
-use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
+use lumen_ir::layout_ir::{BgSpec, Element, LayoutIR, relativize_asset_paths};
 use lumen_modules::Target;
 use lumen_prerender::{self as prerender, Budget, Language, Prerendered, Settled};
 use lumen_runtime::app_layout::src_dir;
@@ -1269,11 +1269,12 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 /// Move every asset the app points at into the site, and rewrite what points
 /// at it to the path it lands on.
 ///
-/// The markup points at one with an `<image src>`, and the stylesheet points
-/// at one with a `url()` inside an at-rule it carried, such as the font file
-/// a `@font-face` names. Both are resolved against the app directory and
-/// both share the same set of placed files, so an image and a font naming
-/// one file ship one copy.
+/// The markup points at one with an `<image src>` or a `bg="url(...)"`, and
+/// the stylesheet points at one with a `url()` in a declaration, such as a
+/// `bg` image or a custom property a theme swaps one through, or inside an
+/// at-rule it carried, such as the font file a `@font-face` names. All of
+/// them are resolved against the app directory and share the same set of
+/// placed files, so two references to one file ship one copy.
 fn collect_assets(ir: &mut LayoutIR, dir: &Path, warnings: &mut Vec<String>) -> Vec<AssetRef> {
     let mut outside: Vec<String> = Vec::new();
     relativize_asset_paths(&mut ir.root, dir, &mut outside);
@@ -1282,13 +1283,21 @@ fn collect_assets(ir: &mut LayoutIR, dir: &Path, warnings: &mut Vec<String>) -> 
     let mut taken: BTreeSet<String> = BTreeSet::new();
     rewrite_assets(&mut ir.root, dir, &mut assets, &mut placed, &mut taken);
     if let Some(sheet) = ir.combined_stylesheet.as_mut() {
-        for at_rule in &mut sheet.at_rules {
-            at_rule.body = lumen_web::rewrite_css_urls(&at_rule.body, |url| {
+        let mut place = |css: &str| {
+            lumen_web::rewrite_css_urls(css, |url| {
                 if is_external(url) {
                     return None;
                 }
                 Some(place_asset(url, dir, &mut assets, &mut placed, &mut taken))
-            });
+            })
+        };
+        for rule in &mut sheet.rules {
+            for declaration in &mut rule.declarations {
+                declaration.value = place(&declaration.value);
+            }
+        }
+        for at_rule in &mut sheet.at_rules {
+            at_rule.body = place(&at_rule.body);
         }
     }
     for path in outside {
@@ -1311,6 +1320,21 @@ fn rewrite_assets(
         && !is_external(&src)
     {
         element.attrs.src = Some(place_asset(&src, dir, assets, placed, taken));
+    }
+    // A `bg` attribute is held twice: parsed, for the build's own cascade, and
+    // as written, for the rule the web target lifts off the element.
+    if let Some(BgSpec::Image(path)) = element.attrs.bg.as_mut()
+        && !is_external(path)
+    {
+        *path = place_asset(path, dir, assets, placed, taken);
+    }
+    for (_, value) in &mut element.attrs.markup_styles {
+        *value = lumen_web::rewrite_css_urls(value, |url| {
+            if is_external(url) {
+                return None;
+            }
+            Some(place_asset(url, dir, assets, placed, taken))
+        });
     }
     for child in &mut element.children {
         rewrite_assets(child, dir, assets, placed, taken);
