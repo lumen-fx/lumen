@@ -200,6 +200,20 @@ fn script_fns(read_bytes_cap: u64) -> Vec<ScriptFn> {
                         .collect(),
                 ))
             }),
+        f(
+            "digest",
+            "The md5, sha1 or sha256 digest of that file, as lowercase hex.",
+        )
+        .param("path", T::Str)
+        .param("algo", T::Str)
+        .ret(T::Str)
+        .build(|cx| {
+            let path = resolve(cx.str_arg(0));
+            Ok(ScriptValue::Str(degrade(
+                ops::digest(&path, &cx.str_arg(1)),
+                String::new(),
+            )))
+        }),
         f("write_bytes", "Write those bytes to that path.")
             .param("path", T::Str)
             .param("bytes", T::Array(Box::new(T::Int)))

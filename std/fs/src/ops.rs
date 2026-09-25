@@ -11,11 +11,14 @@
 //! - **Nothing is recursive.** [`remove`] takes a file or an empty directory,
 //!   [`copy`] takes a single file. A script that wants a tree walks it.
 //! - **A missing path is an answer, not a fault.** Probing for state that has
-//!   not been saved yet is ordinary, so [`read`], [`read_bytes`] and
-//!   [`remove`] report nothing when the path is absent.
+//!   not been saved yet is ordinary, so [`read`], [`read_bytes`], [`digest`]
+//!   and [`remove`] report nothing when the path is absent.
 
+use md5::Md5;
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -157,6 +160,61 @@ pub fn read_bytes(path: &Path, cap: u64) -> Outcome<Vec<u8>> {
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("read_bytes({}): {e}", path.display())),
     }
+}
+
+/// The digest of the file at `path` under `algo` (`"md5"`, `"sha1"` or
+/// `"sha256"`), as lowercase hex, or the empty string when it is not there.
+///
+/// The file streams through the hasher a buffer at a time, so a large
+/// artifact never sits in memory whole. md5 and sha1 are for ids and
+/// checksums, not for security.
+pub fn digest(path: &Path, algo: &str) -> Outcome<String> {
+    match algo {
+        "md5" => digest_with::<Md5>(path),
+        "sha1" => digest_with::<Sha1>(path),
+        "sha256" => digest_with::<Sha256>(path),
+        other => Err(format!(
+            "digest({}): unknown algorithm \"{other}\"; use \"md5\", \"sha1\" or \"sha256\"",
+            path.display()
+        )),
+    }
+}
+
+fn digest_with<D: Digest>(path: &Path) -> Outcome<String> {
+    let refuse = |e: std::io::Error| format!("digest({}): {e}", path.display());
+    if path.is_dir() {
+        return Err(format!(
+            "digest({}): a directory has no digest; digest the files inside it",
+            path.display()
+        ));
+    }
+    let mut file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(refuse(e)),
+    };
+    let mut hasher = D::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(refuse(e)),
+        }
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
+/// `bytes` as lowercase hex, two digits a byte.
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 15)]));
+    }
+    out
 }
 
 /// Write `values` to `path` as raw bytes.

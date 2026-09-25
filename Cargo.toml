@@ -509,6 +509,9 @@ sha2 = "0.10"
 # package indexes and artifact repositories publish sha1 far more often than
 # sha256.
 sha1 = "0.10"
+# The third digest `files::digest` answers, beside sha1 and sha256: ids and
+# checksums still published as md5.
+md-5 = "0.10"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 zip = { version = "6", default-features = false, features = ["deflate"] }

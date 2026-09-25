@@ -4419,6 +4419,7 @@ SOFTWARE.
 --------
 MIT License
 Used by:
+- md-5 0.10.6 - https://github.com/RustCrypto/hashes
 - sha1 0.10.7 - https://github.com/RustCrypto/hashes
 - sha2 0.10.9 - https://github.com/RustCrypto/hashes
 
