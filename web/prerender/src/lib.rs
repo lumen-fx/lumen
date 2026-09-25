@@ -13,7 +13,9 @@
 //! A run is in one language, named by a [`Language`]: the locale it starts
 //! in and the catalogues it can read. A script's `t()` answers from them, and
 //! so does every `translatable` element the app spawns, the same way it does
-//! on the desktop and in the browser.
+//! on the desktop and in the browser. Its `format_*` builtins answer for the
+//! locale with the formatter the emitter writes markup `format` with, which a
+//! browser page does not carry.
 //!
 //! Two things bound a run. A build answers the network without leaving the
 //! machine, so a page written on one computer is the page written on any
@@ -34,6 +36,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use lumen_core::app::App;
+use lumen_core::i18n::AppI18n;
 use lumen_core::plugin_events::discard_plugin_events;
 use lumen_core::property_store::{
     PropertyStore, discard_external_properties, external_properties_pending,
@@ -41,7 +44,9 @@ use lumen_core::property_store::{
 use lumen_core::request;
 use lumen_core::signals::discard_external_signals;
 use lumen_html::contract::Seed;
-use lumen_i18n::Catalogues;
+use lumen_i18n::{
+    Catalogues, Lang, LocaleFormatter, SharedFormatter, SharedI18n, format_spec, switch_locale,
+};
 use lumen_ir::artifact::CompiledApp;
 use lumen_portable::{apply_node_seed, apply_seed, hosts, install_i18n, portable_app};
 use lumen_scene::routing::install_routing;
@@ -312,19 +317,58 @@ impl BrowserOnlyCalls {
 /// Put the run's language into `app` and into the process-wide slots a
 /// script host reads it from.
 ///
-/// The translator and the active locale belong to the process, like the
-/// buses, so the run before this one left its own in them. Both are reset
-/// first, whatever this run carries: a run with no catalogue that left the
-/// last one's in place would answer `t()` in another visitor's language.
+/// The translator, the formatter and the active locale belong to the
+/// process, like the buses, so the run before this one left its own in them.
+/// All three are reset first, whatever this run carries: a run with no
+/// catalogue that left the last one's in place would answer `t()` in another
+/// visitor's language, and one that kept the last formatter would write its
+/// numbers the other visitor's way.
 fn install_language(app: &mut App, language: Language<'_>) -> Option<String> {
     lumen_core::i18n::clear_translator();
+    lumen_core::i18n::clear_formatter();
     lumen_core::i18n::set_active_locale(language.locale);
-    if language.catalogues.is_empty() {
-        return None;
-    }
-    install_i18n(&mut app.world, language.locale, language.catalogues)
-        .err()
-        .map(|error| error.to_string())
+    let error = if language.catalogues.is_empty() {
+        None
+    } else {
+        install_i18n(&mut app.world, language.locale, language.catalogues)
+            .err()
+            .map(|error| error.to_string())
+    };
+    install_formatter(app, language.locale);
+    error
+}
+
+/// Format for the run's locale: the same formatter the emitter writes a
+/// markup `format` with, so a script's `format_*` builtins and the markup in
+/// one document agree.
+///
+/// A page in the browser carries no formatter, and the assembly it shares
+/// with this one installs none, so it goes in here, where only a build or a
+/// server links it. When the run has a catalogue, the app's own handle is
+/// rebuilt around the formatter too, and a `set_locale` moves the catalogue
+/// and the formatter together the way it does on the desktop.
+///
+/// A locale that is no tag installs nothing: the run writes every value as
+/// it stands, and the catalogue half has already said why.
+fn install_formatter(app: &mut App, locale: &str) {
+    let Ok(lang) = Lang::try_from(locale) else {
+        return;
+    };
+    let formatter = SharedFormatter::new(LocaleFormatter::new(lang.into()));
+    let for_scripts = formatter.clone();
+    lumen_core::i18n::set_formatter(move |spec, value| {
+        format_spec(&for_scripts.get(), spec, value)
+    });
+    let Some(catalogue) = app.world.get_resource::<SharedI18n>().cloned() else {
+        return;
+    };
+    let for_markup = catalogue.clone();
+    let formatting = formatter.clone();
+    app.world.insert_resource(AppI18n::new(
+        Arc::new(move |key| for_markup.try_t(key)),
+        Arc::new(move |spec, value| format_spec(&formatting.get(), spec, value)),
+        Arc::new(move |tag| switch_locale(&catalogue, Some(&formatter), tag)),
+    ));
 }
 
 /// Run `compiled` as the page `key` in `language` and read the state it

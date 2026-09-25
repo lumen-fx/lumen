@@ -470,7 +470,10 @@ declared, exactly as it does in a browser.
 A site in more than one locale runs each page once per locale, in that locale.
 A script's `t()` answers from that locale's catalogue and `locale()` names it,
 so a status line written through `t()` in `on_start` reads in German in the
-German tree, and so does every row the run built.
+German tree, and so does every row the run built. Its `format_*` calls answer
+for that locale too, so an amount a run formats is written the German way in
+the German tree. After the page opens, the browser leaves a value a script
+formats as it stands.
 
 Signals are not the whole of what a run finds. `set_class`, `set_root_class`
 and the node API's `set_attr`, `set_style` and `set_text` write onto one

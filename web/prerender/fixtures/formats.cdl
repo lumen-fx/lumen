@@ -1,0 +1,10 @@
+// Publishes what `format_number` and `format_currency` answer while the app
+// starts, so a test can read which locale a run formatted for.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("amount", lumen::format_number(1234567.5));
+    lumen::signal_set("price", lumen::format_currency(1234.5, "EUR"));
+}

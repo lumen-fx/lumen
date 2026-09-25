@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use lumen_core::property_store::{PropertyKey, PropertyValue, push_external_property};
+use lumen_i18n::LocaleFormatter;
 use lumen_ir::artifact::{CompiledApp, CompiledPages, CompiledScript};
 use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, LayoutIR};
@@ -33,6 +34,10 @@ const CALLS_ADDON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/calls_addon
 
 /// A program that publishes what `t()` answers on start.
 const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
+
+/// A program that publishes what `format_number` and `format_currency`
+/// answer on start.
+const FORMATS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/formats.cdlb"));
 
 /// The name the renderer's thread carries, which is where every app is built
 /// and dropped.
@@ -882,6 +887,77 @@ fn a_scripts_translation_follows_each_request_and_leaks_into_none_after_it() {
             "t answered in English",
             "t answered in German",
             "t answered with the key",
+        ] {
+            if other != says {
+                assert!(!response.body.contains(other), "{path}: {}", response.body);
+            }
+        }
+    }
+}
+
+/// What the emitter's formatter writes for 1234.5 euros in `locale`.
+fn price_in(locale: &str) -> String {
+    LocaleFormatter::new(locale.parse().expect("the test tag parses"))
+        .format_currency(1234.5, "EUR")
+}
+
+/// A site that says which locale its script's `format_currency` answered
+/// for, holding an English and a German tree and no catalogue.
+fn formatting() -> Arc<SsrSite> {
+    let app = CompiledApp {
+        ir: LayoutIR {
+            root: element(
+                "root",
+                Attributes::default(),
+                vec![
+                    gate("price", &price_in("en-US"), "formatted for English"),
+                    gate("price", &price_in("de-DE"), "formatted for German"),
+                    gate("price", "1234.5", "formatted for nobody"),
+                ],
+            ),
+            ..LayoutIR::default()
+        },
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            source: String::new(),
+            bytecode: Some(FORMATS.to_vec()),
+        }],
+        ..CompiledApp::default()
+    };
+    let english = SsrSite::new(app, WebSpec::default()).expect("the entry is the page");
+    let german = SiteSpec {
+        locale: LocaleSpec {
+            default_locale: "en-US".to_string(),
+            ..LocaleSpec::new("de-DE")
+        },
+        ..english.spec().clone()
+    };
+    Arc::new(english.with_locale(german).expect("it has every page"))
+}
+
+/// A script's `format_*` builtins answer for the locale of the tree the
+/// request resolved to, and the formatter one render installs is gone by
+/// the next: an English visitor after a German one reads English.
+#[test]
+fn a_scripts_formatting_follows_each_request_and_leaks_into_none_after_it() {
+    let _turn = in_turn();
+    assert_ne!(price_in("en-US"), price_in("de-DE"));
+    let renderer =
+        Renderer::start(formatting(), options(Arc::new(Silent))).expect("nothing running");
+    let expected = [
+        ("/", "formatted for English"),
+        ("/de-DE/", "formatted for German"),
+        ("/", "formatted for English"),
+    ];
+    for (path, says) in expected {
+        let response = renderer
+            .render(SsrRequest::get(path))
+            .expect("the document is written");
+        assert!(response.body.contains(says), "{path}: {}", response.body);
+        for other in [
+            "formatted for English",
+            "formatted for German",
+            "formatted for nobody",
         ] {
             if other != says {
                 assert!(!response.body.contains(other), "{path}: {}", response.body);
