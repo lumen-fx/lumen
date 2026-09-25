@@ -74,6 +74,11 @@ pub use loader::{
     InitEnv, LoadedKind, LoadedModule, LoadedModules, ModuleFailure, PortablePlugins, load_modules,
 };
 
+/// The C-ABI entry a portable plugin exports. One name for every plugin: a
+/// portable plugin is opened, never linked in, so two of them never share a
+/// symbol table.
+pub const PLUGIN_ENTRY_SYMBOL: &str = "lumen_plugin_v1";
+
 /// The prefix of the C-ABI probe an engine-locked module exports; the module's
 /// declared name completes it. The probe returns the module's NUL-terminated
 /// `BUILD_ID`, read before any Rust symbol is touched.

@@ -33,12 +33,14 @@ A candela package needs no staging: its scripts compiled into the executable
 with the app's own. All of it belongs to the app; keep the folder together
 when you move it.
 
-A Windows package stays one library plus the executable. Runtime modules do
-not load beside it, because there is no shared engine there for one to load
-into, so an app that declares them is packaged with
-[`--static`](#one-self-contained-executable) instead, which compiles in the
-modules that ship with the toolchain. A `path` or `version` module cannot be
-packaged for Windows either way.
+A Windows package stays one library plus the executable, with any portable
+plugins the app declares in `modules/` and its candela packages compiled in.
+Runtime modules do not load beside it, because there is no shared engine
+there for one to load into, so an app that declares one of the modules that
+ship with the toolchain is packaged with
+[`--static`](#one-self-contained-executable) instead, which compiles them in.
+A runtime module from a `path` or `version` source cannot be packaged for
+Windows either way; a portable plugin from either source can.
 
 Choose the name and the destination yourself:
 
@@ -128,8 +130,10 @@ scripts read it off disk as they compile whatever links the engine. Copy the
 executable, `libs/`, and the app's files, and that is the whole app.
 
 Reach for it when you want one file to hand over rather than a folder to keep
-together, and on Windows when your app declares `[dependencies]`, which is the
-only shape that loads a module there.
+together, and on Windows when your app declares a module that ships with the
+toolchain, which is the only shape that loads one there. Portable plugins are
+not linked in; they travel beside the executable in `modules/`, since they
+load into it the way they load into any other host.
 
 It needs a linker on the machine doing the packaging: a C toolchain on Linux
 (`build-essential`, `base-devel`, or your distribution's equivalent), the
@@ -145,9 +149,11 @@ so:
   their own toolchain.
 - Package for a platform other than the one you are on. The link runs through
   the tools installed here.
-- Link a `path` or `version` module. Only the modules that ship with the
-  toolchain (`bundled = true`) are in the kit; on Linux and macOS, package
-  without `--static` and the library is staged beside the executable instead.
+- Link a runtime module from a `path` or `version` source. Only the modules
+  that ship with the toolchain (`bundled = true`) are in the kit; on Linux and
+  macOS, package without `--static` and the library is staged beside the
+  executable instead. Candela packages and portable plugins from either
+  source package as usual.
 
 ### What a packaged app does at startup
 

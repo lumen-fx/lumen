@@ -19,6 +19,8 @@
 
 #![cfg(feature = "package")]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -262,41 +264,79 @@ fn the_requests_static_packaging_cannot_answer_are_refused() {
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
 
-    let refusal = |config: &str, args: &[&str], expect: &str| {
+    let refusal = |config: &str, args: &[&str], answer: Option<&Path>, expect: &str| {
         write_app(&app, config, PLAIN);
         let out = root.join("out");
         let _ = std::fs::remove_dir_all(&out);
-        let mut all = vec![
-            app.to_str().expect("utf-8 path"),
-            out.to_str().expect("utf-8 path"),
-            "--static",
-        ];
-        all.extend_from_slice(args);
-        let result = run_package(&all);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lumenc"));
+        command
+            .arg("package")
+            .arg(&app)
+            .arg(&out)
+            .arg("--static")
+            .args(args)
+            .env("LPM_BIN", common::lpm_stub());
+        if let Some(answer) = answer {
+            command.env("LPM_STUB_JSON", answer);
+        }
+        let result = command.output().expect("run lumenc package");
         let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
         assert_eq!(result.status.code(), Some(2), "{stderr}");
         assert!(stderr.contains(expect), "expected {expect:?} in: {stderr}");
         assert!(!out.exists(), "nothing was written: {stderr}");
+        stderr
+    };
+    // Where a runtime module read off disk can go instead: beside the
+    // executable on the platforms with a shared engine, nowhere on Windows.
+    let instead = if cfg!(windows) {
+        "no Windows package"
+    } else {
+        "staged beside the executable"
     };
 
-    // Only the modules the kit was built with can be linked in.
-    refusal(
+    // Only the modules the kit was built with can be linked in, and a
+    // library that is not a portable plugin is a runtime module.
+    let module = app.join("modules").join(host_library("shape-tools"));
+    std::fs::create_dir_all(module.parent().expect("a parent")).expect("create modules dir");
+    std::fs::write(&module, "module bytes").expect("write the stand-in library");
+    let said = refusal(
         "[dependencies]\nshape-tools = { path = \"modules/shape-tools\" }\n",
         &[],
+        None,
         "dependency 'shape-tools'",
     );
-    refusal(
+    assert!(said.contains(instead), "{said}");
+
+    // A registry library is judged the same way once the registry answers.
+    let package = root.join("pkg");
+    std::fs::create_dir_all(&package).expect("create package dir");
+    let file = host_library("markdown-widgets");
+    std::fs::write(package.join(&file), "module bytes").expect("write the stand-in library");
+    let answer = common::stub_answer(
+        &root.join("lpm.json"),
+        &common::lumen_package(
+            "markdown-widgets",
+            "1.2.0",
+            host_target().0,
+            &package,
+            &file,
+        ),
+    );
+    let said = refusal(
         "[dependencies]\nmarkdown-widgets = \"1.2\"\n",
         &[],
+        Some(&answer),
         "dependency 'markdown-widgets'",
     );
+    assert!(said.contains(instead), "{said}");
+
     // The link runs through the tools installed here.
     let other = if cfg!(target_os = "linux") {
         "macos-aarch64"
     } else {
         "linux-x86_64"
     };
-    refusal("", &["--target", other], other);
+    refusal("", &["--target", other], None, other);
 
     // An SDK app brings its own executable.
     write_app(&app, "[app]\nkind = \"rust\"\n", PLAIN);
@@ -310,6 +350,17 @@ fn the_requests_static_packaging_cannot_answer_are_refused() {
     assert_eq!(result.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("Rust"), "{stderr}");
     assert!(stderr.contains("without --static"), "{stderr}");
+}
+
+/// The file name this machine spells library `name` with.
+fn host_library(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{name}.dylib")
+    } else {
+        format!("lib{name}.so")
+    }
 }
 
 /// This machine's platform, named the way the release assets are.
@@ -622,6 +673,132 @@ fn a_declared_module_reaches_the_executable_and_an_undeclared_one_does_not() {
     assert!(
         !carries,
         "an app that declared nothing links neither the object nor the symbol"
+    );
+}
+
+/// What `--static` does not link still ships: a candela package compiles
+/// into the app's artifact, and a portable plugin stages into `modules/`
+/// beside the executable, since it loads into a static host too. Neither is
+/// asked of the kit, whose line here holds no module at all.
+#[cfg(unix)]
+#[test]
+fn a_candela_package_and_a_portable_plugin_travel_with_a_static_package() {
+    if !cc_present() {
+        return;
+    }
+    let root = scratch("beside");
+    let kit = root.join("kit");
+    let stage = kit.join("stage");
+    std::fs::create_dir_all(&stage).expect("create the stage directory");
+    let launcher = root.join("launcher.c");
+    std::fs::write(&launcher, "int main(void) { return 0; }\n").expect("write the C file");
+    let compiled = Command::new("cc")
+        .arg("-c")
+        .arg(&launcher)
+        .arg("-o")
+        .arg(stage.join("aa-launcher.o"))
+        .status()
+        .expect("run cc");
+    assert!(compiled.success(), "cc did not compile the launcher");
+    write_manifest(
+        &kit,
+        &synthetic_manifest(vec![
+            LinkArg::File {
+                path: "aa-launcher.o".to_string(),
+                module: None,
+            },
+            LinkArg::Lit {
+                value: "-o".to_string(),
+            },
+            LinkArg::Out {
+                prefix: String::new(),
+            },
+        ]),
+    );
+
+    let app = root.join("demo");
+    std::fs::create_dir_all(app.join("src")).expect("create src dir");
+    std::fs::write(
+        app.join("src").join("main.lmn"),
+        "<root><label>hi</label><script src=\"main.cdl\"/></root>\n",
+    )
+    .expect("write markup");
+    std::fs::write(
+        app.join("src").join("main.cdl"),
+        "import \"strutil\";\n\nfn main() {\n    let n = twice(3);\n}\n",
+    )
+    .expect("write script");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[dependencies]\nstrutil = \"0.1\"\n\
+         demo-plugin = { path = \"plugins/demo-plugin\" }\n",
+    )
+    .expect("write config");
+
+    // A real shared library exporting the portable entry, so what tells it
+    // apart is the export table the platform's own linker wrote.
+    let plugins = app.join("plugins");
+    std::fs::create_dir_all(&plugins).expect("create plugins dir");
+    let plugin_source = root.join("plugin.c");
+    std::fs::write(&plugin_source, "void lumen_plugin_v1(void) {}\n").expect("write the C file");
+    let plugin = plugins.join(host_library("demo-plugin"));
+    let built = Command::new("cc")
+        .arg("-shared")
+        .arg("-fPIC")
+        .arg(&plugin_source)
+        .arg("-o")
+        .arg(&plugin)
+        .status()
+        .expect("run cc");
+    assert!(built.success(), "cc did not build the plugin");
+
+    let package = root.join("pkg").join("strutil");
+    std::fs::create_dir_all(&package).expect("create package dir");
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"strutil\"\nversion = \"0.1.0\"\nentry = \"strutil.cdl\"\n",
+    )
+    .expect("write the package manifest");
+    std::fs::write(
+        package.join("strutil.cdl"),
+        "fn twice(n: int) -> int {\n    return n * 2;\n}\n",
+    )
+    .expect("write the package source");
+    let answer = common::stub_answer(
+        &root.join("lpm.json"),
+        &format!(
+            "{{\"name\":\"strutil\",\"version\":\"0.1.0\",\"platform\":\"candela\",\
+             \"target\":\"any\",\"dir\":{},\"files\":[\"candela.toml\",\"strutil.cdl\"]}}",
+            serde_json::to_string(&package.display().to_string()).expect("a path encodes"),
+        ),
+    );
+
+    let out = root.join("out");
+    let result = package_with(&[
+        app.to_str().expect("utf-8 path"),
+        out.to_str().expect("utf-8 path"),
+        "--name",
+        "Beside",
+        "--lib-dir",
+        kit.to_str().expect("utf-8 path"),
+    ])
+    .env("LPM_BIN", common::lpm_stub())
+    .env("LPM_STUB_JSON", &answer)
+    .output()
+    .expect("run lumenc package");
+    let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(result.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("1 plugin beside it"), "{stdout}");
+    assert!(!stdout.contains("compiled in"), "{stdout}");
+    assert!(
+        out.join("Beside").is_file(),
+        "the link wrote the executable"
+    );
+    assert_eq!(
+        std::fs::read(out.join("modules").join(host_library("demo-plugin")))
+            .expect("the plugin staged"),
+        std::fs::read(&plugin).expect("the plugin built")
     );
 }
 

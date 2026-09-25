@@ -185,7 +185,7 @@ fn dependencies_against_a_static_toolchain_fail_the_package() {
     let output = run_package(&app, &out, &toolchain, &[]);
     assert!(!output.status.success(), "a broken package must not ship");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("[dependencies]"), "{stderr}");
+    assert!(stderr.contains("runtime module"), "{stderr}");
     assert!(stderr.contains("liblumen_engine"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(&root);
@@ -452,23 +452,292 @@ fn a_cross_target_package_never_ships_silently_without_its_modules() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A folder-shaped Windows package has no shared engine for a module to load
-/// into, so an app that declares one is refused and pointed at the shape that
-/// answers there: the executable with the module linked in.
-#[test]
-fn a_windows_target_refuses_declared_modules_and_names_the_static_package() {
-    let root = scratch("windows-target");
-    let app = write_app(&root, "demo-mod = { bundled = true }\n");
+/// A stand-in Windows toolchain: the launcher and the C library, which is
+/// all a Windows folder carries.
+fn write_windows_toolchain(root: &Path) -> PathBuf {
     let toolchain = root.join("win-toolchain");
     std::fs::create_dir_all(&toolchain).expect("toolchain dir");
     write(&toolchain, "lumen-launcher.exe", "stub");
     write(&toolchain, "lumen.dll", "library");
+    toolchain
+}
+
+/// A minimal x86-64 PE DLL whose export table names `exports`: the file a
+/// Windows build of a library is, down to the table a package reads to tell
+/// a portable plugin from a runtime module. It holds no code; every export
+/// points at the same empty bytes, which is all the table has to say.
+fn pe_dll(exports: &[&str]) -> Vec<u8> {
+    const FILE_ALIGN: usize = 0x200;
+    const SECTION_RVA: u32 = 0x1000;
+    let put16 = |buf: &mut Vec<u8>, at: usize, v: u16| {
+        buf[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    };
+    let put32 = |buf: &mut Vec<u8>, at: usize, v: u32| {
+        buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    };
+
+    // The section: the export directory, its three arrays, then the strings.
+    let n = exports.len() as u32;
+    let functions = 40u32;
+    let names = functions + 4 * n;
+    let ordinals = names + 4 * n;
+    let mut strings = ordinals + 2 * n;
+    let mut section = vec![0u8; FILE_ALIGN];
+    let dll_name = strings;
+    section[strings as usize..strings as usize + 10].copy_from_slice(b"plugin.dll");
+    strings += 11;
+    for (i, name) in exports.iter().enumerate() {
+        let i = i as u32;
+        put32(
+            &mut section,
+            (names + 4 * i) as usize,
+            SECTION_RVA + strings,
+        );
+        put16(&mut section, (ordinals + 2 * i) as usize, i as u16);
+        let at = strings as usize;
+        section[at..at + name.len()].copy_from_slice(name.as_bytes());
+        strings += name.len() as u32 + 1;
+    }
+    let directory_size = strings;
+    // Past the directory, so no export reads as forwarded to another DLL.
+    let body = (FILE_ALIGN - 16) as u32;
+    assert!(directory_size < body, "the export names fit the section");
+    for i in 0..n {
+        put32(
+            &mut section,
+            (functions + 4 * i) as usize,
+            SECTION_RVA + body,
+        );
+    }
+    put32(&mut section, 12, SECTION_RVA + dll_name);
+    put32(&mut section, 16, 1);
+    put32(&mut section, 20, n);
+    put32(&mut section, 24, n);
+    put32(&mut section, 28, SECTION_RVA + functions);
+    put32(&mut section, 32, SECTION_RVA + names);
+    put32(&mut section, 36, SECTION_RVA + ordinals);
+
+    // The headers: DOS stub, PE signature, COFF header, PE32+ optional header
+    // with sixteen data directories, one section header.
+    let mut image = vec![0u8; FILE_ALIGN];
+    image[0..2].copy_from_slice(b"MZ");
+    put32(&mut image, 0x3c, 0x40);
+    image[0x40..0x44].copy_from_slice(b"PE\0\0");
+    let coff = 0x44;
+    put16(&mut image, coff, 0x8664);
+    put16(&mut image, coff + 2, 1);
+    put16(&mut image, coff + 16, 240);
+    put16(&mut image, coff + 18, 0x2022);
+    let opt = coff + 20;
+    put16(&mut image, opt, 0x20b);
+    image[opt + 24..opt + 32].copy_from_slice(&0x1_8000_0000u64.to_le_bytes());
+    put32(&mut image, opt + 32, SECTION_RVA);
+    put32(&mut image, opt + 36, FILE_ALIGN as u32);
+    put16(&mut image, opt + 48, 6);
+    put32(&mut image, opt + 56, SECTION_RVA * 2);
+    put32(&mut image, opt + 60, FILE_ALIGN as u32);
+    put16(&mut image, opt + 68, 2);
+    put32(&mut image, opt + 108, 16);
+    put32(&mut image, opt + 112, SECTION_RVA);
+    put32(&mut image, opt + 116, directory_size);
+    let header = opt + 240;
+    image[header..header + 6].copy_from_slice(b".edata");
+    put32(&mut image, header + 8, FILE_ALIGN as u32);
+    put32(&mut image, header + 12, SECTION_RVA);
+    put32(&mut image, header + 16, FILE_ALIGN as u32);
+    put32(&mut image, header + 20, FILE_ALIGN as u32);
+    put32(&mut image, header + 36, 0x4000_0040);
+
+    image.extend_from_slice(&section);
+    image
+}
+
+/// The resolution for a registry package `name` holding one Windows library
+/// built with `exports`, laid out where the registry would have unpacked it.
+fn windows_library_package(root: &Path, name: &str, exports: &[&str]) -> PathBuf {
+    let package = root.join("pkg").join(name);
+    std::fs::create_dir_all(&package).expect("package root");
+    let file = format!("{name}.dll");
+    std::fs::write(package.join(&file), pe_dll(exports)).expect("write the library");
+    common::stub_answer(
+        &root.join("lpm.json"),
+        &common::lumen_package(name, "1.0.0", "windows-x86_64", &package, &file),
+    )
+}
+
+/// The table a package reads is the one Windows reads: a built DLL names its
+/// entries there, and a file exporting something else is not a plugin.
+#[test]
+fn a_windows_library_is_told_apart_by_its_export_table() {
+    use lumenc::package::library::exports;
+    let plugin = pe_dll(&["lumen_plugin_v1"]);
+    assert!(exports(&plugin, "lumen_plugin_v1"));
+    let module = pe_dll(&["lumen_module_install_demo", "lumen_module_probe_demo"]);
+    assert!(exports(&module, "lumen_module_probe_demo"));
+    assert!(!exports(&module, "lumen_plugin_v1"));
+}
+
+/// A bundled module is a runtime module, and a folder-shaped Windows package
+/// has no shared engine for one to load into, so an app declaring one is
+/// refused and pointed at the shape that answers there: the executable with
+/// the module linked in.
+#[test]
+fn a_windows_target_refuses_a_bundled_module_and_names_the_static_package() {
+    let root = scratch("windows-target");
+    let app = write_app(&root, "demo-mod = { bundled = true }\n");
+    let toolchain = write_windows_toolchain(&root);
     let out = root.join("dist");
 
     let output = run_package(&app, &out, &toolchain, &["--target", "windows-x86_64"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("dependency 'demo-mod'"), "{stderr}");
     assert!(stderr.contains("lumenc package --static"), "{stderr}");
+    assert!(!out.exists(), "nothing was written");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A registry library that is a runtime module has no Windows package in
+/// either shape, and the refusal says so rather than pointing at `--static`,
+/// which cannot link it either.
+#[test]
+fn a_windows_target_refuses_a_runtime_module_from_the_registry() {
+    let root = scratch("windows-runtime-module");
+    let app = write_app(&root, "demo-mod = \"1.0\"\n");
+    let toolchain = write_windows_toolchain(&root);
+    let answer = windows_library_package(
+        &root,
+        "demo-mod",
+        &[
+            "lumen_module_install_demo_mod",
+            "lumen_module_probe_demo_mod",
+        ],
+    );
+    let out = root.join("dist");
+
+    let output = run_package_with_registry(
+        &app,
+        &out,
+        &toolchain,
+        &["--target", "windows-x86_64"],
+        &answer,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("dependency 'demo-mod'"), "{stderr}");
+    assert!(stderr.contains("no Windows package"), "{stderr}");
+    assert!(!stderr.contains("staged beside"), "{stderr}");
+    assert!(!out.exists(), "nothing was written");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A portable plugin loads into any host, a Windows executable included, so
+/// a Windows package carries it in `modules/` under the name the loader
+/// probes for.
+#[test]
+fn a_windows_target_ships_a_portable_plugin() {
+    let root = scratch("windows-portable");
+    let app = write_app(&root, "demo-plugin = \"1.0\"\n");
+    let toolchain = write_windows_toolchain(&root);
+    let answer = windows_library_package(&root, "demo-plugin", &["lumen_plugin_v1"]);
+    let out = root.join("dist");
+
+    let output = run_package_with_registry(
+        &app,
+        &out,
+        &toolchain,
+        &["--target", "windows-x86_64"],
+        &answer,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(out.join("app.exe").is_file(), "the launcher copy");
+    assert_eq!(
+        std::fs::read(out.join("modules").join("demo-plugin.dll")).expect("the plugin staged"),
+        pe_dll(&["lumen_plugin_v1"])
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A candela package is script source the app's own scripts compile
+/// against, so it ships wherever the app does: the Windows package compiles
+/// the import in and carries nothing for it.
+#[test]
+fn a_windows_target_ships_an_app_using_a_candela_package() {
+    let root = scratch("windows-candela");
+    let app = write_app(&root, "strutil = \"0.1\"\n");
+    write(
+        &app,
+        "src/main.lmn",
+        "<root><label>hi</label><script src=\"main.cdl\"/></root>\n",
+    );
+    write(
+        &app,
+        "src/main.cdl",
+        "import \"strutil\";\n\nfn main() {\n    let n = twice(3);\n}\n",
+    );
+    let package = root.join("pkg").join("strutil");
+    write(
+        &package,
+        "candela.toml",
+        "[package]\nname = \"strutil\"\nversion = \"0.1.0\"\nentry = \"strutil.cdl\"\n",
+    );
+    write(
+        &package,
+        "strutil.cdl",
+        "fn twice(n: int) -> int {\n    return n * 2;\n}\n",
+    );
+    let answer = common::stub_answer(
+        &root.join("lpm.json"),
+        &format!(
+            "{{\"name\":\"strutil\",\"version\":\"0.1.0\",\"platform\":\"candela\",\
+             \"target\":\"any\",\"dir\":{},\"files\":[\"candela.toml\",\"strutil.cdl\"]}}",
+            serde_json::to_string(&package.display().to_string()).expect("a path encodes"),
+        ),
+    );
+    let toolchain = write_windows_toolchain(&root);
+    let out = root.join("dist");
+
+    let output = run_package_with_registry(
+        &app,
+        &out,
+        &toolchain,
+        &["--target", "windows-x86_64"],
+        &answer,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(out.join("app.exe").is_file(), "the launcher copy");
+    assert!(
+        !out.join("modules").exists(),
+        "nothing staged for a script library"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A `path` library on the way to Windows is this machine's build, whatever
+/// kind it is, and the refusal says that rather than anything about modules.
+#[test]
+fn a_windows_target_refuses_a_path_library_built_here() {
+    let root = scratch("windows-path");
+    let app = write_app(&root, "shape-tools = { path = \"modules/shape-tools\" }\n");
+    write(
+        &app,
+        &format!("modules/libshape-tools.{}", dll_ext()),
+        "module bytes",
+    );
+    let toolchain = write_windows_toolchain(&root);
+    let out = root.join("dist");
+
+    let output = run_package(&app, &out, &toolchain, &["--target", "windows-x86_64"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("dependency 'shape-tools'"), "{stderr}");
+    assert!(stderr.contains("built for one platform"), "{stderr}");
     assert!(!out.exists(), "nothing was written");
 
     let _ = std::fs::remove_dir_all(&root);
@@ -480,10 +749,7 @@ fn a_windows_target_refuses_declared_modules_and_names_the_static_package() {
 fn a_windows_target_without_modules_still_packages() {
     let root = scratch("windows-no-modules");
     let app = write_app(&root, "");
-    let toolchain = root.join("win-toolchain");
-    std::fs::create_dir_all(&toolchain).expect("toolchain dir");
-    write(&toolchain, "lumen-launcher.exe", "stub");
-    write(&toolchain, "lumen.dll", "library");
+    let toolchain = write_windows_toolchain(&root);
     let out = root.join("dist");
 
     let output = run_package(&app, &out, &toolchain, &["--target", "windows-x86_64"]);
