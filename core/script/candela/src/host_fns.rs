@@ -452,7 +452,13 @@ fn typed_params(f: &ScriptFn) -> Option<Vec<HostType>> {
 
 /// The candela signature `f` binds under, or `None` when it has to bind
 /// variadically: its parameters leave nothing to declare, or its return does.
+///
+/// A struct return binds variadically too: candela passes a struct into a host
+/// function and never takes one back.
 fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
+    if matches!(f.sig.ret, ScriptTy::Struct(_)) {
+        return None;
+    }
     Some((typed_params(f)?, host_type(&f.sig.ret)?))
 }
 
@@ -467,6 +473,14 @@ fn host_type(ty: &ScriptTy) -> Option<HostType> {
         ScriptTy::Unit => HostType::Unit,
         ScriptTy::Array(inner) => HostType::Array(Box::new(host_type(inner)?)),
         ScriptTy::Map(value) => HostType::Map(Box::new(host_type(value)?)),
+        // The struct `declare` writes into the host block, field for field.
+        ScriptTy::Struct(shape) => HostType::Struct(
+            shape
+                .fields
+                .iter()
+                .map(|field| Some((field.name.clone(), host_type(&field.ty)?)))
+                .collect::<Option<_>>()?,
+        ),
         ScriptTy::Any | ScriptTy::Dynamic => return None,
     })
 }
@@ -495,7 +509,9 @@ fn as_declared(ty: &ScriptTy, value: &ScriptValue) -> Value {
                 .map(|(k, v)| (k, as_declared(inner, &v)))
                 .collect(),
         ),
-        ScriptTy::Any | ScriptTy::Dynamic => script_value_to_candela(value),
+        // Never a typed return (see `typed_signature`); the value goes back
+        // as the map it is.
+        ScriptTy::Any | ScriptTy::Dynamic | ScriptTy::Struct(_) => script_value_to_candela(value),
     }
 }
 

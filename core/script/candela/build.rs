@@ -43,7 +43,8 @@ use install::install_tree;
 
 /// The standard library modules that bind a C source file, with the sources
 /// each one is built from. The rest of `std` is candela text and is copied.
-const NATIVE_MODULES: [(&str, &[&str]); 3] = [
+const NATIVE_MODULES: [(&str, &[&str]); 4] = [
+    ("hash", &["hash.c"]),
     ("math", &["math.c"]),
     ("random", &["random.c", "pcg_basic.c"]),
     ("time", &["time.c"]),

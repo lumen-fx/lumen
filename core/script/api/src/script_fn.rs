@@ -32,7 +32,7 @@ use crate::{ScriptCommand, ScriptValue};
 /// was meant to be open rather than left undeclared.
 ///
 /// Variants are append-only; see [`SCRIPT_WIRE_VERSION`](crate::SCRIPT_WIRE_VERSION).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScriptTy {
     /// Any value; no check. This is what a signature carries where nothing was
     /// declared, so an untyped return is read as a forgotten declaration.
@@ -56,6 +56,174 @@ pub enum ScriptTy {
     /// as [`Any`](ScriptTy::Any); the difference is that the author said so,
     /// which is what tells a deliberate open return from a missing one.
     Dynamic,
+    /// A named set of fields with declared defaults, taken as one parameter:
+    /// the shape a function's options have. See [`ScriptStruct`].
+    ///
+    /// A parameter type only. Each host renders it in its own terms (a struct
+    /// candela declares beside the function, a map on Rhai and Lua), and the
+    /// body always receives a [`ScriptValue::Map`] holding every field.
+    Struct(ScriptStruct),
+}
+
+/// A struct parameter: a name, and fields in declaration order, each with the
+/// value it starts with.
+///
+/// A script sets the fields it cares about and the rest take their defaults.
+/// candela writes it as a struct literal (`ns::Name { field: v,
+/// ..Default::default() }`); Rhai and Lua pass a map and leave out the keys
+/// they do not set. Either way the body reads one map with every field
+/// present, so it never handles a missing key.
+///
+/// ```
+/// use lumen_script::{ScriptStruct, ScriptTy, ScriptValue};
+///
+/// let opts = ScriptStruct::new("Options")
+///     .field_default("dir", ScriptTy::Str, "out")
+///     .field("verbose", ScriptTy::Bool);
+/// let ScriptValue::Map(full) = opts.default_value() else { unreachable!() };
+/// assert_eq!(full["dir"], ScriptValue::Str("out".into()));
+/// assert_eq!(full["verbose"], ScriptValue::Bool(false));
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptStruct {
+    /// The type name. candela declares it in the function's namespace, so a
+    /// script names it `ns::Name`.
+    pub name: String,
+    /// The fields, in the order they are declared.
+    pub fields: Vec<ScriptField>,
+}
+
+/// One field of a [`ScriptStruct`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptField {
+    /// The field name, the same in every host.
+    pub name: String,
+    /// The field's type.
+    pub ty: ScriptTy,
+    /// The value it starts with, or `None` for its type's empty value (see
+    /// [`ScriptTy::empty_value`]).
+    pub default: Option<ScriptValue>,
+}
+
+impl ScriptStruct {
+    /// A struct with no fields yet.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            fields: Vec::new(),
+        }
+    }
+
+    /// Add a field that starts as its type's empty value.
+    #[must_use]
+    pub fn field(mut self, name: impl Into<String>, ty: ScriptTy) -> Self {
+        self.fields.push(ScriptField {
+            name: name.into(),
+            ty,
+            default: None,
+        });
+        self
+    }
+
+    /// Add a field that starts as `default`.
+    #[must_use]
+    pub fn field_default(
+        mut self,
+        name: impl Into<String>,
+        ty: ScriptTy,
+        default: impl Into<ScriptValue>,
+    ) -> Self {
+        self.fields.push(ScriptField {
+            name: name.into(),
+            ty,
+            default: Some(default.into()),
+        });
+        self
+    }
+
+    /// The value with every field at its default.
+    pub fn default_value(&self) -> ScriptValue {
+        ScriptValue::Map(
+            self.fields
+                .iter()
+                .map(|f| (f.name.clone(), f.start_value()))
+                .collect(),
+        )
+    }
+
+    /// `value` with every field it leaves out set to its default, nested
+    /// structs included. A value that is not a map comes back unchanged; an
+    /// empty list is read as an empty map, since an empty Lua table cannot say
+    /// which of the two it is.
+    pub fn complete(&self, value: &ScriptValue) -> ScriptValue {
+        let given = match value {
+            ScriptValue::Map(map) => map,
+            ScriptValue::Array(items) if items.is_empty() => return self.default_value(),
+            other => return other.clone(),
+        };
+        let mut full = given.clone();
+        for field in &self.fields {
+            match (full.get_mut(&field.name), &field.ty) {
+                (Some(inner), ScriptTy::Struct(nested)) => *inner = nested.complete(inner),
+                (Some(_), _) => {}
+                (None, _) => {
+                    full.insert(field.name.clone(), field.start_value());
+                }
+            }
+        }
+        ScriptValue::Map(full)
+    }
+
+    /// Why `value` is not this struct, naming the first field at fault, or
+    /// `None` when it is one. A field left out is fine; it takes its default.
+    fn mismatch(&self, value: &ScriptValue) -> Option<String> {
+        let given = match value {
+            ScriptValue::Map(map) => map,
+            ScriptValue::Array(items) if items.is_empty() => return None,
+            other => {
+                return Some(format!(
+                    "expects {}, got {}",
+                    self.name,
+                    value_ty_name(other)
+                ));
+            }
+        };
+        // Sorted, so a value with two faults always reports the same one.
+        let mut keys: Vec<&String> = given.keys().collect();
+        keys.sort();
+        for key in keys {
+            let Some(field) = self.fields.iter().find(|f| &f.name == key) else {
+                let names: Vec<&str> = self.fields.iter().map(|f| f.name.as_str()).collect();
+                return Some(format!(
+                    "has no field `{key}`; {} has {}",
+                    self.name,
+                    names.join(", ")
+                ));
+            };
+            let inner = &given[key];
+            if let ScriptTy::Struct(nested) = &field.ty {
+                if let Some(why) = nested.mismatch(inner) {
+                    return Some(format!("field `{key}` {why}"));
+                }
+            } else if !field.ty.accepts(inner) {
+                return Some(format!(
+                    "field `{key}` expects {}, got {}",
+                    field.ty,
+                    value_ty_name(inner)
+                ));
+            }
+        }
+        None
+    }
+}
+
+impl ScriptField {
+    /// The value this field starts with.
+    fn start_value(&self) -> ScriptValue {
+        self.default
+            .clone()
+            .unwrap_or_else(|| self.ty.empty_value())
+    }
 }
 
 impl ScriptTy {
@@ -91,7 +259,25 @@ impl ScriptTy {
             (Self::Map(inner), ScriptValue::Map(entries)) => {
                 entries.values().all(|v| inner.accepts(v))
             }
+            (Self::Struct(shape), value) => shape.mismatch(value).is_none(),
             _ => false,
+        }
+    }
+
+    /// The value a field of this type starts with when its struct declares
+    /// none: `0`, `0.0`, `false`, `""`, an empty list or map, a nested
+    /// struct's own defaults, and unit for the open types. These are the
+    /// values candela gives an undeclared field, so every host agrees.
+    pub fn empty_value(&self) -> ScriptValue {
+        match self {
+            Self::Any | Self::Dynamic | Self::Unit => ScriptValue::Unit,
+            Self::Bool => ScriptValue::Bool(false),
+            Self::Int => ScriptValue::I64(0),
+            Self::Float => ScriptValue::F64(0.0),
+            Self::Str => ScriptValue::Str(String::new()),
+            Self::Array(_) => ScriptValue::Array(Vec::new()),
+            Self::Map(_) => ScriptValue::Map(std::collections::HashMap::new()),
+            Self::Struct(shape) => shape.default_value(),
         }
     }
 
@@ -106,12 +292,17 @@ impl ScriptTy {
             Self::Str => "string",
             Self::Array(_) => "array",
             Self::Map(_) => "map",
+            // Rhai and Lua pass a struct as a map, so that is what a mismatch
+            // message asks them for.
+            Self::Struct(_) => "map",
         }
     }
 }
 
 /// A type written the way candela writes it: `int`, `float`, `bool`,
-/// `string`, `null`, `any`, `T[]` for an array and `{string: T}` for a map.
+/// `string`, `null`, `any`, `T[]` for an array, `{string: T}` for a map, and
+/// a struct by its name. A struct name does not parse back: its fields are not
+/// in the spelling.
 ///
 /// This is the spelling a declaration uses wherever a signature is written as
 /// text rather than built in Rust, so a function described in a data file
@@ -129,6 +320,7 @@ impl fmt::Display for ScriptTy {
             Self::Str => f.write_str("string"),
             Self::Array(inner) => write!(f, "{inner}[]"),
             Self::Map(value) => write!(f, "{{string: {value}}}"),
+            Self::Struct(shape) => f.write_str(&shape.name),
         }
     }
 }
@@ -246,6 +438,28 @@ impl ScriptSig {
         self.params.iter().any(|p| !p.ty.is_dynamic())
     }
 
+    /// `args` with each [struct](ScriptTy::Struct) argument's missing fields
+    /// set to their defaults, or `None` when the signature takes no struct and
+    /// `args` stands as it is.
+    pub fn complete_args(&self, args: &[ScriptValue]) -> Option<Vec<ScriptValue>> {
+        if !self
+            .params
+            .iter()
+            .any(|p| matches!(p.ty, ScriptTy::Struct(_)))
+        {
+            return None;
+        }
+        Some(
+            args.iter()
+                .enumerate()
+                .map(|(i, arg)| match self.params.get(i).map(|p| &p.ty) {
+                    Some(ScriptTy::Struct(shape)) => shape.complete(arg),
+                    _ => arg.clone(),
+                })
+                .collect(),
+        )
+    }
+
     /// Check `args` against the declared parameters. Returns the message a host
     /// raises to the script on a mismatch.
     ///
@@ -273,6 +487,12 @@ impl ScriptSig {
                 break;
             };
             let optional = i >= self.min_arity && matches!(arg, ScriptValue::Unit);
+            if !optional
+                && let ScriptTy::Struct(shape) = &param.ty
+                && let Some(why) = shape.mismatch(arg)
+            {
+                return Err(format!("argument {} (`{}`) {why}", i + 1, param.name));
+            }
             if !optional && !param.ty.accepts(arg) {
                 return Err(format!(
                     "argument {} (`{}`) expects {}, got {}",
@@ -676,6 +896,11 @@ impl ScriptFn {
     /// it. `out` is the caller's buffer rather than a fresh one, so a host that
     /// reuses [`CallScratch`] pays no allocation per call.
     ///
+    /// A [struct](ScriptTy::Struct) argument reaches the body with every field
+    /// present: the ones the script left out take their defaults here, so a
+    /// Rhai or Lua map that sets one key reads the same as a full candela
+    /// struct.
+    ///
     /// A body that fails still leaves what it emitted before failing: a host
     /// forwards those commands and then raises, which is what the runtime has
     /// always done with a partially-completed call.
@@ -684,6 +909,8 @@ impl ScriptFn {
     ///
     /// Whatever the body reported, verbatim.
     pub fn invoke_into(&self, args: &[ScriptValue], out: &mut Vec<ScriptCommand>) -> ScriptResult {
+        let completed = self.sig.complete_args(args);
+        let args = completed.as_deref().unwrap_or(args);
         let mut cx = ScriptFnCx::new(args, out);
         (self.body)(&mut cx)
     }
@@ -1545,5 +1772,128 @@ mod tests {
         let registry = app.world.resource::<ScriptFnRegistry>();
         let names: Vec<&str> = registry.fns().iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["early"]);
+    }
+
+    /// A small options struct with one nested struct, for the struct tests.
+    fn options() -> ScriptStruct {
+        ScriptStruct::new("Options")
+            .field_default("dir", ScriptTy::Str, "out")
+            .field("env", ScriptTy::Map(Box::new(ScriptTy::Str)))
+            .field(
+                "retry",
+                ScriptTy::Struct(ScriptStruct::new("Retry").field_default(
+                    "times",
+                    ScriptTy::Int,
+                    3_i64,
+                )),
+            )
+    }
+
+    fn map(entries: &[(&str, ScriptValue)]) -> ScriptValue {
+        ScriptValue::Map(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// A field with no declared default starts empty; a nested struct starts
+    /// at its own defaults.
+    #[test]
+    fn a_struct_default_fills_every_field() {
+        assert_eq!(
+            options().default_value(),
+            map(&[
+                ("dir", "out".into()),
+                ("env", map(&[])),
+                ("retry", map(&[("times", ScriptValue::I64(3))])),
+            ])
+        );
+    }
+
+    /// Completing keeps what the script set and fills the rest, nested
+    /// structs included; an empty list is read as an empty map.
+    #[test]
+    fn completing_a_struct_keeps_what_was_set() {
+        let given = map(&[("dir", "build".into()), ("retry", map(&[]))]);
+        assert_eq!(
+            options().complete(&given),
+            map(&[
+                ("dir", "build".into()),
+                ("env", map(&[])),
+                ("retry", map(&[("times", ScriptValue::I64(3))])),
+            ])
+        );
+        assert_eq!(
+            options().complete(&ScriptValue::Array(Vec::new())),
+            options().default_value()
+        );
+    }
+
+    /// A struct accepts a map with any subset of its fields, and refuses an
+    /// unknown field or a wrong type by name.
+    #[test]
+    fn a_struct_checks_the_fields_it_is_given() {
+        let sig = ScriptSig {
+            params: vec![ScriptParam {
+                name: "opts".into(),
+                ty: ScriptTy::Struct(options()),
+            }],
+            min_arity: 1,
+            ..ScriptSig::default()
+        };
+        assert!(sig.check_args(&[map(&[])]).is_ok());
+        assert!(sig.check_args(&[map(&[("dir", "x".into())])]).is_ok());
+        assert!(sig.check_args(&[ScriptValue::Array(Vec::new())]).is_ok());
+
+        let why = sig
+            .check_args(&[map(&[("dri", "x".into())])])
+            .expect_err("unknown field");
+        assert!(why.contains("no field `dri`"), "{why}");
+        assert!(why.contains("Options has dir, env, retry"), "{why}");
+
+        let why = sig
+            .check_args(&[map(&[("dir", ScriptValue::I64(1))])])
+            .expect_err("wrong type");
+        assert!(why.contains("field `dir` expects string, got int"), "{why}");
+
+        let why = sig
+            .check_args(&[map(&[("retry", map(&[("times", "x".into())]))])])
+            .expect_err("nested wrong type");
+        assert!(why.contains("field `retry` field `times`"), "{why}");
+
+        let why = sig.check_args(&["x".into()]).expect_err("not a map");
+        assert!(why.contains("expects Options, got string"), "{why}");
+        assert!(
+            sig.check_args(&[]).is_err(),
+            "a struct parameter is required"
+        );
+    }
+
+    /// The body receives every field, whatever the script left out.
+    #[test]
+    fn a_body_reads_a_complete_struct() {
+        let f = ScriptFn::new("run")
+            .param("opts", ScriptTy::Struct(options()))
+            .ret(ScriptTy::Str)
+            .build(|cx| {
+                let ScriptValue::Map(opts) = cx.arg_ref(0) else {
+                    return Err("not a map".into());
+                };
+                Ok(ScriptValue::Str(format!(
+                    "{}:{}",
+                    opts["dir"].stringify(),
+                    opts["retry"].stringify()
+                )))
+            });
+        let (ret, _) = f.invoke(&[map(&[])]);
+        assert_eq!(ret, Ok(ScriptValue::Str("out:{times: 3}".into())));
+    }
+
+    /// A struct writes as its name, the way a declaration names it.
+    #[test]
+    fn a_struct_spells_as_its_name() {
+        assert_eq!(ScriptTy::Struct(options()).to_string(), "Options");
     }
 }

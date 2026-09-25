@@ -2671,7 +2671,9 @@ fn rhai_arg_type(ty: &ScriptTy) -> TypeId {
         ScriptTy::Float => TypeId::of::<rhai::FLOAT>(),
         ScriptTy::Str => TypeId::of::<rhai::ImmutableString>(),
         ScriptTy::Array(_) => TypeId::of::<rhai::Array>(),
-        ScriptTy::Map(_) => TypeId::of::<rhai::Map>(),
+        // A struct is a map on Rhai; the fields it leaves out take their
+        // defaults before the body runs.
+        ScriptTy::Map(_) | ScriptTy::Struct(_) => TypeId::of::<rhai::Map>(),
     }
 }
 

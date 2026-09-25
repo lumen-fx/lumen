@@ -473,19 +473,48 @@ what makes `process::start` exist:
 lumen-process = { bundled = true }
 ```
 
-Start a program with the arguments it takes and a tag you choose. The tag is
-how you tell one child from another when its output comes back:
+Start a program with the arguments it takes, a tag you choose, and its
+options. The tag is how you tell one child from another when its output comes
+back:
 
 ```rhai
 fn on_ready() {
     signals.status.set("building");
-    process::start("./tools/build.sh", ["--release"], "build");
+    process::start("./tools/build.sh", ["--release"], "build", #{});
 }
 ```
 
 `./tools/build.sh` is a program the app ships: a `cmd` with a path separator in
 it resolves against the app directory, and a bare name like `git` is looked up
-on `PATH`. Either way the child runs in the app directory.
+on `PATH`.
+
+The options are the fourth argument, and every field has a default, so pass
+only what you change:
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `cwd` | `""` | The directory the child starts in, relative to the app directory. Empty is the app directory itself. |
+| `env` | empty | Variables set for the child on top of the environment it inherits. |
+| `end_at_exit` | `false` | End the child when the app exits. By default a child outlives the app that started it. |
+
+In Rhai and Lua the options are a map, and a key you leave out takes its
+default. In candela they are the `process::StartOptions` struct; set the
+fields you want and take the rest from `..Default::default()`, or pass
+`Default::default()` for all of them:
+
+```rust
+fn launch() -> bool {
+    return process::start("java", ["-jar", "game.jar"], "game",
+        process::StartOptions { cwd: "instances/a", ..Default::default() });
+}
+
+fn status() -> bool {
+    return process::start("git", ["status", "--short"], "git", Default::default());
+}
+```
+
+A field the options do not have, or a value of the wrong type, is an error in
+the script before anything starts.
 
 The call answers as soon as the program is running, and `false` when it could
 not start at all. Branch on that, because a program that never started sends
@@ -493,7 +522,7 @@ nothing afterwards:
 
 ```rhai
 fn on_ready() {
-    if !process::start("git", ["status", "--short"], "git") {
+    if !process::start("git", ["status", "--short"], "git", #{}) {
         signals.status.set("git is not installed");
     }
 }
@@ -521,7 +550,7 @@ Route one child to handlers of its own with
 `on("process_exit", "build", "build_done")`, the same per-key routing every
 event has.
 
-candela is the same call, with the handler's parameters annotated:
+candela's handlers take the same arguments, annotated:
 
 ```rust
 fn on_process_exit(tag: string, code: int) {
@@ -533,6 +562,14 @@ fn on_process_exit(tag: string, code: int) {
 }
 ```
 
-There is no way to write to a child's input and no way to end one from a
-script. A child is also not ended when the app exits: a program still running
-outlives the app that started it, so start a long-running one deliberately.
+`process::stop(tag)` ends the program running under a tag and answers whether
+there was one. On Linux and macOS the child gets `SIGTERM` first, so it can
+save its state, and is killed if it is still running two seconds later; on
+Windows it is ended at once. Its `on_process_exit` still arrives, as the last
+event for the tag. When several children share a tag, `stop` ends all of them.
+
+A child started with `end_at_exit` is ended the same way when the app closes,
+and the app waits for it to go before it exits. An app that is killed rather
+than closed leaves its children running.
+
+There is no way to write to a child's input.
