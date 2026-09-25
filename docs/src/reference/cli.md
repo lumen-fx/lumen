@@ -495,7 +495,9 @@ release that ships no modules archive, or one whose archive does not carry a
 declared module, exits 1 naming it. A `path` source cannot cross-package - a
 local library is built for one platform - and exits 2. A Windows target with
 a non-empty `[dependencies]` exits 2: nothing loads a module beside a Windows
-executable, and `--static` is what compiles one in there.
+executable, and `--static` on a Windows machine is what compiles a `bundled`
+one in there. A `path` or `version` module has no Windows package, since
+`--static` refuses it too.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the

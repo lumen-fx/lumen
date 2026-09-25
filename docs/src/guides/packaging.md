@@ -36,7 +36,9 @@ when you move it.
 A Windows package stays one library plus the executable. Runtime modules do
 not load beside it, because there is no shared engine there for one to load
 into, so an app that declares them is packaged with
-[`--static`](#one-self-contained-executable) instead.
+[`--static`](#one-self-contained-executable) instead, which compiles in the
+modules that ship with the toolchain. A `path` or `version` module cannot be
+packaged for Windows either way.
 
 Choose the name and the destination yourself:
 
@@ -144,8 +146,8 @@ so:
 - Package for a platform other than the one you are on. The link runs through
   the tools installed here.
 - Link a `path` or `version` module. Only the modules that ship with the
-  toolchain (`bundled = true`) are in the kit; package without `--static` and
-  the library is staged beside the executable instead.
+  toolchain (`bundled = true`) are in the kit; on Linux and macOS, package
+  without `--static` and the library is staged beside the executable instead.
 
 ### What a packaged app does at startup
 

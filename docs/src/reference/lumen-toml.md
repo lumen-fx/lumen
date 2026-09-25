@@ -390,9 +390,11 @@ Each kind carries its own handshake, verified at load. A runtime module read
 off disk is version-locked to the exact engine build it was compiled against
 and opens only on Linux and macOS, into a dynamically linked engine; a module
 compiled into the executable has nothing to verify and answers on every
-platform. Windows only has the second shape, which is what
-`lumenc package --static` produces, so a Windows package of an app declaring
-this table is that one. A portable plugin is checked against the plugin ABI
+platform. Windows only has the second shape. `lumenc package --static`
+produces it, compiling in the declared modules that ship with the toolchain
+(`bundled = true`), so a Windows package of an app declaring this table is
+that one; a `path` or `version` entry stops the package with an error there,
+because neither shape can carry it. A portable plugin is checked against the plugin ABI
 version and the script wire version, and loads on every desktop platform,
 static builds included. Any failure - a missing file, a failed handshake, a
 library exporting neither entry symbol (the banner names both; a compiler
