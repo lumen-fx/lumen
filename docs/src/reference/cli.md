@@ -427,7 +427,7 @@ the most recent and names the rest.
 | `--name` | string | the app directory's name | Names the executable, and the default output directory. |
 | `--target` | see below | this machine's platform | Packages for another platform. |
 | `--lib-dir` | path | none | Directory holding the launcher stub and the runtime library to use, instead of looking them up. |
-| `--static` | - | off | Links one executable holding the engine and the app's declared modules, instead of assembling a folder of shared libraries. |
+| `--static` | - | off | Links one executable holding the engine and the app's declared runtime modules, instead of assembling a folder of shared libraries. |
 | `--zip` | - | off | Also writes `<out_dir>.zip`, holding the folder itself. |
 | `--no-hooks` | - | off | Skips the `prebuild` hooks. |
 
@@ -450,9 +450,9 @@ On Linux and macOS every other kind carries the shared runtime too: the
 runtime library there links `liblumen_engine`, so the engine and the Rust
 standard library from the toolchain travel beside it. A toolchain without
 them (an older release, a static build behind `--lib-dir`) still packages -
-its runtime library needs nothing beside it - unless the app declares
-`[dependencies]`, which exits 1 naming the gap, because runtime modules need
-the shared engine.
+its runtime library needs nothing beside it - unless the app declares a
+runtime module, which exits 1 naming the gap, because runtime modules need
+the shared engine. Candela packages and portable plugins need nothing from it.
 
 The candela standard library travels in a `libs/` subfolder of the package,
 whatever the kind and whatever links the engine: scripts read it off disk as
@@ -465,23 +465,30 @@ directory beside `lumenc`, from `--lib-dir`, or from the release archive for a
 app importing nothing from the library needs none of it.
 
 `--static` writes the same folder with one executable in it: no runtime
-library, no shared engine, no `libstd`, and no `modules/`, because all of that
-is inside the file. `libs/` still travels. It links the app from the
+library, no shared engine, and no `libstd`, because all of that is inside the
+file. `libs/` still travels, and so does any portable plugin the app declares,
+in `modules/`, since a portable plugin loads into a static executable too. It
+links the app from the
 [link kit published for the target](#which-release-toolchain-files-come-from),
 so it needs a linker on this machine - a C toolchain on Linux, the Xcode
 Command Line Tools on macOS, the Visual Studio Build Tools and Windows SDK on
 Windows - and says which one is missing when the link cannot start. Exits 2
 for a request it cannot answer: an SDK app (those bring their own executable),
 a `--target` other than this machine's platform (the link runs through the
-tools installed here), or a `path` or `version` module (only the toolchain's
-own `bundled` modules are in the kit). A module the kit does not carry exits 1
+tools installed here), or a runtime module from a `path` or `version` source
+(only the toolchain's own `bundled` modules are in the kit; on Linux and macOS,
+package without `--static` and it is staged beside the executable). A candela
+package or a portable plugin from either source packages. A module the kit does not carry exits 1
 naming what it does carry, and so does a `[capabilities]` key the kit does
 not carry. The executable holds the optional subsystems the app's sources
 show it uses plus whatever `[capabilities]` asks for, and none of the rest;
 the summary line names them.
 
 Declared `[dependencies]` stage into a `modules/` subfolder of the package,
-each under the file name the runtime probes for. `path` sources copy the
+each under the file name the runtime probes for. A library that exports
+`lumen_plugin_v1` is a portable plugin and any other is a runtime module;
+`lumenc` reads the export table rather than opening the file, so the answer
+holds for another platform's build too. `path` sources copy the
 declared library, `bundled` sources copy the toolchain's, and `version`
 sources come from the registry; a module that cannot be found or resolved
 exits 1. A candela package stages nothing: its scripts compiled into the
@@ -493,11 +500,15 @@ module ships the target's build. `bundled` modules come from the
 toolchain files come from, fetched, verified, and cached the same way; a
 release that ships no modules archive, or one whose archive does not carry a
 declared module, exits 1 naming it. A `path` source cannot cross-package - a
-local library is built for one platform - and exits 2. A Windows target with
-a non-empty `[dependencies]` exits 2: nothing loads a module beside a Windows
-executable, and `--static` on a Windows machine is what compiles a `bundled`
-one in there. A `path` or `version` module has no Windows package, since
-`--static` refuses it too.
+local library is built for one platform - and exits 2.
+
+A Windows package carries candela packages and portable plugins like any
+other. A runtime module is what it cannot load from a file: there is no
+shared engine for one to load into. A `bundled` module in a Windows folder
+exits 2; for a markup app the message points at `--static` on a Windows
+machine, which compiles the module in, and an SDK app has no Windows package
+for it. A runtime module from a `path` or `version` source exits 2 in either
+shape, since `--static` refuses it too.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the

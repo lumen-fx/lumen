@@ -422,6 +422,10 @@ thiserror = "2"
 # Shared-library loading: the dlopen run path and the compiler-plugin loader.
 libloading = "0.9"
 
+# Reading a library's export table without opening it: `lumenc package` tells
+# a portable plugin from a runtime module this way, for any platform's file.
+object = { version = "0.40", default-features = false, features = ["read_core", "std", "elf", "macho", "pe"] }
+
 # Version-requirement matching for `[[plugins]] version` resolution
 # (cargo-compatible semantics: "1.2" means ^1.2).
 semver = "1"

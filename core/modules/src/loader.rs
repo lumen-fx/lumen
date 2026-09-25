@@ -43,16 +43,12 @@ use lumen_plugin::abi::LogLevel;
 use lumen_plugin::{HostHooks, PluginEvent, PluginSet, codec};
 
 use crate::{
-    DepCfg, DependenciesCfg, INSTALL_PREFIX, ModuleSource, PROBE_PREFIX, ResolvedModules,
-    entry_symbol, library_spellings,
+    DepCfg, DependenciesCfg, INSTALL_PREFIX, ModuleSource, PLUGIN_ENTRY_SYMBOL, PROBE_PREFIX,
+    ResolvedModules, entry_symbol, library_spellings,
 };
 
 pub use lumen_plugin::InitEnv;
 
-/// The C-ABI entry a portable plugin exports. One name for every plugin: a
-/// portable plugin is opened, never linked in, so two of them never share a
-/// symbol table.
-pub const PLUGIN_ENTRY_SYMBOL: &str = "lumen_plugin_v1";
 /// The entry a compiler plugin exports - the wrong kind to declare here.
 const COMPILER_ENTRY_SYMBOL: &str = "lumenc_plugin_v1";
 
