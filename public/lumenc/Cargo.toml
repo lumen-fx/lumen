@@ -97,6 +97,10 @@ sha2 = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
+# Which kind of library a declared dependency is, read off its export table:
+# a Windows or `--static` package carries a portable plugin and refuses a
+# runtime module, and the file may be another platform's build.
+object = { workspace = true, optional = true }
 
 # Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
 # wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
@@ -256,7 +260,7 @@ web = [
 # deps it pulls are for `--target`, which fetches another platform's toolchain
 # files from the release channel; a thin compiler library omits the whole
 # subcommand with `--no-default-features`.
-package = ["dep:ureq", "dep:sha2", "dep:tar", "dep:flate2", "dep:zip"]
+package = ["dep:ureq", "dep:sha2", "dep:tar", "dep:flate2", "dep:zip", "dep:object"]
 # `lumenc bundle` - pack an app dir into a `.lpak` archive via lumen-assets.
 # ON by default. Pulls lumen-assets (and its hard vello/wgpu dep), so a thin
 # compiler library omits it with `--no-default-features`.

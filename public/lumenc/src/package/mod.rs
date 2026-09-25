@@ -8,6 +8,10 @@
 /// needs.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
 pub mod cli;
+/// Which kind of library a declared dependency is, read off its export table,
+/// for the package shapes that carry one kind and refuse the other.
+#[cfg(feature = "package")]
+pub mod library;
 /// `lpm`, the registry client. A `version` source in `[dependencies]` or
 /// `[[plugins]]` names a registry package, and this is what asks `lpm` to
 /// resolve, download, and lock it. Gated with the shape that compiles an app

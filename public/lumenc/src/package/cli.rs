@@ -35,6 +35,7 @@
 //! Finding a prebuilt file that ships with the toolchain lives here too, so a
 //! web build and a package look in the same places for the same reasons.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -459,54 +460,42 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     // What a desktop build of the app depends on: a library per module.
     let libraries = cfg.dependencies_for(lumen_modules::Target::Desktop);
 
-    if want_static && let Some(refusal) = static_refusal(kind, target, &libraries) {
+    if want_static && let Some(refusal) = static_refusal(kind, target) {
         eprintln!("lumenc package: {refusal}");
         return ExitCode::from(2);
     }
 
-    // Runtime modules are native libraries. A dynamic Windows package never
-    // carries them, whoever builds it: no shared engine exists there, so the
-    // runtime has nothing to load one into, and the only Windows shape that
-    // answers a declared name is the one that compiled the module in. A
-    // package for another Unix platform ships that platform's builds: a
-    // `bundled` module comes out of the release's modules archive and a
-    // `version` one out of the registry, both built for the target, but a
-    // `path` source names a library that only exists as this machine's build,
-    // and a folder that silently shipped without its modules is worse than
-    // stopping.
-    if !libraries.0.is_empty() && !want_static {
-        if target.os == Os::Windows {
+    // A `path` source names a library that only exists as this machine's
+    // build, so a folder for another platform cannot carry it, whatever kind
+    // of library it is. A `bundled` module comes out of the release's modules
+    // archive and a `version` one out of the registry, both built for the
+    // target, and a folder that silently shipped without its modules is worse
+    // than stopping.
+    if !want_static && target != Target::host() {
+        for dep in &libraries.0 {
+            let ModuleSource::Path(_) = &dep.source else {
+                continue;
+            };
             eprintln!(
-                "lumenc package: this app declares [dependencies], and a Windows package \
-                 loads a runtime module only when the module is compiled into the \
-                 executable: no shared engine exists there for one to load into. Package it \
-                 on a Windows machine with `lumenc package --static`, which links the \
-                 declared modules in."
+                "lumenc package: dependency '{}' comes from a path, and a local library \
+                 is built for one platform: the file it names is a {} build, not a {} \
+                 one. Package on a {} machine with its own build, or name a registry \
+                 version.",
+                dep.name,
+                Target::host().name,
+                target.name,
+                target.name
             );
             return ExitCode::from(2);
-        } else if target != Target::host() {
-            for dep in &libraries.0 {
-                let ModuleSource::Path(_) = &dep.source else {
-                    continue;
-                };
-                eprintln!(
-                    "lumenc package: dependency '{}' comes from a path, and a local library \
-                     is built for one platform: the file it names is a {} build, not a {} \
-                     one. Package on a {} machine with its own build, or name a registry \
-                     version.",
-                    dep.name,
-                    Target::host().name,
-                    target.name,
-                    target.name
-                );
-                return ExitCode::from(2);
-            }
         }
     }
 
     // Everything the app names in the registry, resolved for the platform
     // being packaged rather than for this one, so a cross-target folder
-    // carries that target's builds.
+    // carries that target's builds. It runs before any dependency is judged,
+    // because only the resolution says what a `version` entry is: a candela
+    // package compiles into the app and ships everywhere, and a native
+    // library is judged by what it exports.
     let resolved = match crate::package::lpm::resolve(
         &src_path,
         target.name,
@@ -520,10 +509,17 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             return ExitCode::FAILURE;
         }
     };
+    let shapes = classify(&src_path, &libraries, &resolved);
     let declared = Declared {
         cfg: &libraries,
         resolved: &resolved,
+        shapes: &shapes,
     };
+
+    if let Some(refusal) = dependency_refusal(kind, target, want_static, &declared) {
+        eprintln!("lumenc package: {refusal}");
+        return ExitCode::from(2);
+    }
 
     let app_name = name.unwrap_or_else(|| {
         src_path
@@ -558,7 +554,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             &app_name,
             target,
             lib_dir.as_deref(),
-            &libraries,
+            &declared,
             &cfg.capabilities,
         ),
         AppKind::Markup => package(
@@ -602,16 +598,13 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
 
 /// Why `--static` cannot produce this package, or `None` when it can.
 ///
-/// The four are all the same shape of answer: the static path links one
-/// executable out of a prebuilt kit, and the kit is one platform's link line
-/// holding the full engine and the toolchain's own modules. Anything that
-/// needs a different engine, a different platform, or a module that was never
-/// in the kit is a from-source build, which this path is not.
-fn static_refusal(
-    kind: AppKind,
-    target: Target,
-    libraries: &lumen_modules::DependenciesCfg,
-) -> Option<String> {
+/// Both are the same shape of answer: the static path links one executable
+/// out of a prebuilt kit, and the kit is one platform's link line holding the
+/// full engine and the toolchain's own modules. Anything that needs a
+/// different engine or a different platform is a from-source build, which
+/// this path is not. What the app declares is judged after the registry
+/// answers, by [`dependency_refusal`].
+fn static_refusal(kind: AppKind, target: Target) -> Option<String> {
     if kind != AppKind::Markup {
         return Some(format!(
             "--static links the app into the launcher, and a {} app brings its own \
@@ -630,31 +623,96 @@ fn static_refusal(
             target.name
         ));
     }
-    for dep in &libraries.0 {
-        let source = match &dep.source {
-            ModuleSource::Bundled => continue,
-            ModuleSource::Path(_) => "a path",
-            ModuleSource::Version(_) => "a version",
-        };
-        return Some(format!(
-            "dependency '{}' comes from {source}, and --static links only the modules the \
-             link kit was built with, which are the ones that ship with the toolchain \
-             (`bundled = true`). Package without --static, and the library is staged beside \
-             the executable instead.",
-            dep.name
-        ));
+    None
+}
+
+/// Why this package cannot carry one of the app's dependencies, or `None`
+/// when it carries them all.
+///
+/// A candela package compiles into the app and a portable plugin loads into
+/// any host, so neither is ever refused. A runtime module is the kind with
+/// limits. One read off disk loads only into a shared engine, which a
+/// Windows package and a `--static` executable do not have; one compiled into
+/// the executable needs `--static`, and the kit it links from holds only the
+/// modules that ship with the toolchain.
+fn dependency_refusal(
+    kind: AppKind,
+    target: Target,
+    want_static: bool,
+    declared: &Declared<'_>,
+) -> Option<String> {
+    let windows = target.os == Os::Windows;
+    for dep in &declared.cfg.0 {
+        match declared.shape(&dep.name) {
+            Shape::Script | Shape::Portable | Shape::Missing => {}
+            Shape::Bundled if windows && !want_static => {
+                return Some(if kind == AppKind::Markup {
+                    format!(
+                        "dependency '{}' is a runtime module, and a Windows package loads \
+                         one only when it is compiled into the executable: no shared engine \
+                         exists there for one to load into. Package it on a Windows machine \
+                         with `lumenc package --static`, which links the modules that ship \
+                         with the toolchain in.",
+                        dep.name
+                    )
+                } else {
+                    format!(
+                        "dependency '{}' is a runtime module, and a Windows package of a {} \
+                         app cannot carry one: no shared engine exists there for it to load \
+                         into, and compiling modules in with --static is for markup apps.",
+                        dep.name,
+                        language_of(kind)
+                    )
+                });
+            }
+            Shape::Bundled => {}
+            Shape::Module if windows => {
+                return Some(format!(
+                    "dependency '{}' comes from {} and is a runtime module, not a portable \
+                     plugin (its library exports no lumen_plugin_v1), so no Windows package \
+                     can carry it. A runtime module read off disk loads only into a shared \
+                     engine, which Windows does not have, and --static compiles in only the \
+                     modules that ship with the toolchain (`bundled = true`). A portable \
+                     plugin loads on Windows.",
+                    dep.name,
+                    source_of(&dep.source)
+                ));
+            }
+            Shape::Module if want_static => {
+                return Some(format!(
+                    "dependency '{}' comes from {} and is a runtime module, not a portable \
+                     plugin (its library exports no lumen_plugin_v1), and --static links in \
+                     only the modules that ship with the toolchain (`bundled = true`). \
+                     Package without --static, and the library is staged beside the \
+                     executable instead.",
+                    dep.name,
+                    source_of(&dep.source)
+                ));
+            }
+            Shape::Module => {}
+        }
     }
     None
+}
+
+/// Where a dependency comes from, for messages.
+fn source_of(source: &ModuleSource) -> &'static str {
+    match source {
+        ModuleSource::Bundled => "the toolchain",
+        ModuleSource::Path(_) => "a path",
+        ModuleSource::Version(_) => "a version",
+    }
 }
 
 /// Compile the app and link it into one executable from the link kit for this
 /// platform. Returns the one-line summary to print.
 ///
-/// No shared library travels beside the executable: the engine, the launcher,
-/// and the declared modules are inside it, so none of the library staging the
-/// folder shape does applies here. The script standard library still does -
-/// the compiler linked into the executable reads it off disk, and linking
-/// changes nothing about that.
+/// No shared engine travels beside the executable: the engine, the launcher,
+/// and the declared runtime modules are inside it. A portable plugin is not
+/// linked; it stages into `modules/` the way the folder shape stages it,
+/// because it loads into any host, this one included. The script standard
+/// library travels too - the compiler linked into the executable reads it off
+/// disk, and linking changes nothing about that.
 ///
 /// The engine inside is the app's own: of the optional subsystems the kit
 /// offers, the executable carries the ones `[capabilities]` names and, for
@@ -665,9 +723,21 @@ fn package_static(
     app_name: &str,
     target: Target,
     lib_dir: Option<&Path>,
-    deps: &DependenciesCfg,
+    declared: &Declared<'_>,
     capabilities: &crate::config::CapabilitiesCfg,
 ) -> Result<String, String> {
+    // What links in is what ships with the toolchain; everything else the
+    // app declares was cleared by `dependency_refusal` as something that
+    // travels beside the executable, or needs nothing at all.
+    let (bundled, beside): (Vec<_>, Vec<_>) = declared
+        .cfg
+        .0
+        .iter()
+        .cloned()
+        .partition(|dep| matches!(dep.source, ModuleSource::Bundled));
+    let linked_deps = DependenciesCfg(bundled);
+    let beside = DependenciesCfg(beside);
+
     let compiled = compile_for_desktop(src, lib_dir)?;
     let artifact = build_artifact(compiled, src)?;
 
@@ -679,7 +749,7 @@ fn package_static(
         &artifact,
         target,
         lib_dir,
-        deps,
+        &linked_deps,
         &capabilities.0,
         &sources,
     )?;
@@ -687,12 +757,22 @@ fn package_static(
     // `--static` is this machine's own platform, so the installation's own
     // directories are the ones holding the library.
     stage_script_library(&search_dirs(lib_dir, true), out)?;
+    let plugins = stage_modules(
+        src,
+        out,
+        target,
+        lib_dir,
+        &Declared {
+            cfg: &beside,
+            ..*declared
+        },
+    )?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     copy_generated_outputs(src, out)?;
 
     Ok(format!(
-        "linked {} for {} ({} app file{} beside it{}{})",
+        "linked {} for {} ({} app file{} beside it{}{}{})",
         exe_path.display(),
         target.name,
         copied,
@@ -704,6 +784,10 @@ fn package_static(
                 if n == 1 { "" } else { "s" },
                 modules.join(", ")
             ),
+        },
+        match plugins {
+            0 => String::new(),
+            n => format!(", {n} plugin{} beside it", if n == 1 { "" } else { "s" }),
         },
         match linked.capabilities.len() {
             0 => String::new(),
@@ -782,7 +866,7 @@ fn package_sdk(
         let toolchain = locate_toolchain(target, lib_dir)?;
         copy_c_engine(out, target, &toolchain)?;
         (
-            1 + copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?,
+            1 + copy_dynamic_runtime(out, target, &toolchain, declared.needs_shared_engine())?,
             vec![toolchain.dir],
         )
     };
@@ -891,9 +975,10 @@ fn copy_c_engine(out: &Path, target: Target, toolchain: &Toolchain) -> Result<()
 /// library beside it, and a package assembled from it must carry both or the
 /// app will not start. A toolchain without them is the static shape - older
 /// releases, a trimmed `--lib-dir` - and its `liblumen` needs nothing
-/// beside it, so their absence only matters when the app declares
-/// `[dependencies]`: runtime modules need the shared engine, and a package
-/// that quietly shipped without it would refuse every module at startup.
+/// beside it, so their absence only matters when `needs_engine` says the app
+/// declares a runtime module: one read off disk loads only into the shared
+/// engine, and a package that quietly shipped without it would refuse every
+/// module at startup.
 ///
 /// The standard library is matched by its `libstd-<hash>` name in the same
 /// directory; when the directory holds none (a source tree running against
@@ -908,7 +993,7 @@ fn copy_dynamic_runtime(
     out: &Path,
     target: Target,
     toolchain: &Toolchain,
-    deps: &DependenciesCfg,
+    needs_engine: bool,
 ) -> Result<usize, String> {
     if target.os == Os::Windows {
         return Ok(0);
@@ -916,11 +1001,11 @@ fn copy_dynamic_runtime(
     let engine = target.linked_engine_name();
     let engine_src = toolchain.dir.join(engine);
     if !engine_src.is_file() {
-        if deps.0.is_empty() {
+        if !needs_engine {
             return Ok(0);
         }
         return Err(format!(
-            "this app declares [dependencies], but the toolchain in {} has no {engine} to \
+            "this app declares a runtime module, but the toolchain in {} has no {engine} to \
              ship beside it, and runtime modules need the shared engine. Use a toolchain \
              built with the dynamic engine (any current release), or pass --lib-dir at one.",
             toolchain.dir.display()
@@ -1062,12 +1147,81 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// What the app declares to load at run time, and what the registry resolved
-/// of it. The two travel together everywhere: a declaration gives the name
-/// and the load order, and the resolution gives the file.
+/// What the app declares to load at run time, what the registry resolved of
+/// it, and what each entry turned out to be. They travel together
+/// everywhere: a declaration gives the name and the load order, the
+/// resolution gives the file, and the shape says which packages can carry it.
 struct Declared<'a> {
     cfg: &'a DependenciesCfg,
     resolved: &'a crate::package::lpm::Resolved,
+    shapes: &'a BTreeMap<String, Shape>,
+}
+
+impl<'a> Declared<'a> {
+    /// What `name` is. A name that was never classified is treated as the
+    /// kind with the most limits, so a gap here refuses rather than ships.
+    fn shape(&self, name: &str) -> Shape {
+        self.shapes.get(name).copied().unwrap_or(Shape::Module)
+    }
+
+    /// Whether anything declared needs the shared engine beside the
+    /// executable: a runtime module read off disk loads into nothing else.
+    /// A candela package and a portable plugin do not, and a declaration with
+    /// no library fails staging on its own.
+    fn needs_shared_engine(&self) -> bool {
+        self.cfg
+            .0
+            .iter()
+            .any(|dep| matches!(self.shape(&dep.name), Shape::Bundled | Shape::Module))
+    }
+}
+
+/// What each of `deps` is, once `resolved` says what the registry answered:
+/// the table a [`Declared`] reads its shapes from.
+fn classify(
+    src: &Path,
+    deps: &DependenciesCfg,
+    resolved: &crate::package::lpm::Resolved,
+) -> BTreeMap<String, Shape> {
+    deps.0
+        .iter()
+        .map(|dep| {
+            let file = match &dep.source {
+                ModuleSource::Bundled => return (dep.name.clone(), Shape::Bundled),
+                ModuleSource::Version(_)
+                    if resolved.candela_roots.iter().any(|(n, _)| *n == dep.name) =>
+                {
+                    return (dep.name.clone(), Shape::Script);
+                }
+                ModuleSource::Version(_) => resolved.modules.get(&dep.name).cloned(),
+                ModuleSource::Path(declared) => resolve_module_path(src, declared, &dep.name).ok(),
+            };
+            let shape = match file {
+                None => Shape::Missing,
+                Some(file) if crate::package::library::is_portable_plugin(&file) => Shape::Portable,
+                Some(_) => Shape::Module,
+            };
+            (dep.name.clone(), shape)
+        })
+        .collect()
+}
+
+/// What one declared dependency is, as far as packaging it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// A candela package: script source compiled into the app's artifact,
+    /// with nothing to stage.
+    Script,
+    /// A runtime module that ships with the toolchain (`bundled = true`).
+    Bundled,
+    /// A library exporting `lumen_plugin_v1`, which loads into any host.
+    Portable,
+    /// Any other library. The runtime opens it only as an engine-locked
+    /// runtime module, beside a shared engine.
+    Module,
+    /// A declaration whose library is not there; staging names what it
+    /// probed.
+    Missing,
 }
 
 /// Stage the app's declared runtime modules into `<out>/modules/`, each
@@ -1083,9 +1237,9 @@ struct Declared<'a> {
 /// that cannot be resolved fails the package, because a shipped folder is
 /// complete or it is wrong.
 ///
-/// A Windows target never arrives here with anything declared: nothing loads
-/// a module beside a Windows executable, so that combination is refused
-/// before any of this runs.
+/// A Windows target arrives here with portable plugins and candela packages
+/// only: a runtime module loads beside a Windows executable into nothing, so
+/// `dependency_refusal` stops the package before any of this runs.
 ///
 /// For a target other than this machine's, a `bundled` library comes from the
 /// release's modules archive for that target, fetched and cached the way the
@@ -1100,6 +1254,7 @@ fn stage_modules(
     let Declared {
         cfg: deps,
         resolved,
+        ..
     } = declared;
     if deps.0.is_empty() {
         return Ok(0);
@@ -1646,7 +1801,7 @@ fn package(
     }
 
     copy_c_engine(out, target, &toolchain)?;
-    copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?;
+    copy_dynamic_runtime(out, target, &toolchain, declared.needs_shared_engine())?;
     stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
     let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
