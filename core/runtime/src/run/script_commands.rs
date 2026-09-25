@@ -18,6 +18,7 @@ pub(crate) fn apply_script_commands(
     mut commands: Commands,
     ids: Query<(Entity, &LumenId)>,
     mut style_manager: ResMut<lumen_core::components::StyleManager>,
+    mut assets: Option<ResMut<lumen_assets::AssetServer>>,
 ) {
     for ev in events.read() {
         match &ev.0 {
@@ -29,6 +30,14 @@ pub(crate) fn apply_script_commands(
                 let resolved = resolve_asset_src(path);
                 for (e, id) in &ids {
                     if id.0 == *target_id {
+                        // A decode still in flight for the old source
+                        // carries the entity's current request id; moving
+                        // the id on is what makes the drain drop that
+                        // result instead of attaching the old picture to
+                        // the new source.
+                        if let Some(server) = assets.as_mut() {
+                            server.bump_request_id(e);
+                        }
                         let mut ent = commands.entity(e);
                         // Strip stale results so the asset pipeline
                         // re-decodes from scratch. Enqueued is the
@@ -158,5 +167,130 @@ mod tests {
             "a bundle URI must reach the source chain unresolved"
         );
         assert!(!resolve_asset_src("lumen://app/x").starts_with(Path::new(&dir)));
+    }
+
+    /// A load the test releases by hand, so a decode can be held in flight
+    /// while the source changes under it. Delegates to the built-in image
+    /// loader once released.
+    struct GatedLoader {
+        gates: std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl lumen_assets::AssetLoader for GatedLoader {
+        fn extensions(&self) -> &[&str] {
+            &["png"]
+        }
+
+        fn kind(&self) -> lumen_assets::AssetKind {
+            lumen_assets::AssetKind::Image
+        }
+
+        fn load(
+            &self,
+            ctx: &lumen_assets::LoadContext<'_>,
+        ) -> Result<lumen_assets::LoadedAsset, lumen_assets::LoadErrorKind> {
+            let gate = self
+                .gates
+                .lock()
+                .expect("gate map")
+                .remove(ctx.path())
+                .expect("every test path has a gate");
+            gate.recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the test releases the gate");
+            lumen_assets::AssetLoader::load(&lumen_assets::ImageLoader, ctx)
+        }
+    }
+
+    /// Runs the drain until `done` holds, failing after a generous bound
+    /// rather than hanging when the result never arrives.
+    fn drain_until(
+        world: &mut bevy_ecs::world::World,
+        done: impl Fn(&bevy_ecs::world::World) -> bool,
+    ) {
+        use bevy_ecs::system::RunSystemOnce;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !done(world) {
+            assert!(std::time::Instant::now() < deadline, "decode never landed");
+            world
+                .run_system_once(lumen_assets::drain_completed_decodes)
+                .expect("drain runs");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// `set_src` while the old source is still decoding: the old decode
+    /// finishes first, and it must not land on the element that moved on.
+    /// A second element still showing the old source gets it, which is what
+    /// proves the old result was drained and dropped for the first one
+    /// rather than not having arrived yet.
+    #[test]
+    fn set_src_drops_a_decode_still_in_flight_for_the_old_source() {
+        use bevy_ecs::message::Messages;
+        use bevy_ecs::system::RunSystemOnce;
+        use bevy_ecs::world::World;
+        use lumen_assets::{AssetServer, ImageSource, LoadedImage};
+        use lumen_core::components::{LumenId, StyleManager};
+        use lumen_script::{ScriptCommand, ScriptCommandEvent};
+
+        let dir = std::env::temp_dir().join(format!("lumen-set-src-race-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let old = dir.join("old.png");
+        let new = dir.join("new.png");
+        image::RgbaImage::new(1, 1)
+            .save(&old)
+            .expect("write old.png");
+        image::RgbaImage::new(2, 2)
+            .save(&new)
+            .expect("write new.png");
+
+        let (release_old, old_gate) = std::sync::mpsc::channel();
+        let (release_new, new_gate) = std::sync::mpsc::channel();
+        let mut server = AssetServer::default();
+        server.register_loader(GatedLoader {
+            gates: std::sync::Mutex::new(
+                [(old.clone(), old_gate), (new.clone(), new_gate)]
+                    .into_iter()
+                    .collect(),
+            ),
+        });
+
+        let mut world = World::new();
+        world.insert_resource(server);
+        world.init_resource::<StyleManager>();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        let hero = world
+            .spawn((LumenId("hero".into()), ImageSource(old.clone())))
+            .id();
+        let sentinel = world.spawn(ImageSource(old.clone())).id();
+        world
+            .run_system_once(lumen_assets::spawn_pending_decodes)
+            .expect("enqueue the old source");
+
+        world.write_message(ScriptCommandEvent(ScriptCommand::SetSrc {
+            target_id: "hero".into(),
+            path: new.to_str().expect("utf8 path").into(),
+        }));
+        world
+            .run_system_once(super::apply_script_commands)
+            .expect("apply set_src");
+        world
+            .run_system_once(lumen_assets::spawn_pending_decodes)
+            .expect("enqueue the new source");
+
+        release_old.send(()).expect("release the old decode");
+        drain_until(&mut world, |w| w.get::<LoadedImage>(sentinel).is_some());
+        assert!(
+            world.get::<LoadedImage>(hero).is_none(),
+            "the old source's decode landed on the element set_src moved on"
+        );
+
+        release_new.send(()).expect("release the new decode");
+        drain_until(&mut world, |w| w.get::<LoadedImage>(hero).is_some());
+        assert_eq!(
+            world.get::<LoadedImage>(hero).expect("new image").width,
+            2,
+            "the element shows the source set_src named"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
