@@ -498,6 +498,13 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             TickStage::Systems,
             hot_reload.before(lumen_scene::dom::build_dom_index),
         );
+        // An image or SVG file edited on disk reloads in place: the asset
+        // watcher reports the path, and this strips what every element on
+        // it shows so the next tick decodes the new bytes.
+        app.add_systems(
+            TickStage::Systems,
+            lumen_assets::reload_changed_images.after(lumen_assets::process_watch_events),
+        );
     }
 
     // RunOptions (set by the CLI / embedder) overrides lumen.toml,

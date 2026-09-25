@@ -424,8 +424,8 @@ What is available is up to the app's Rust, so look in its source, not here.
 ## Hot reload
 
 `lumenc run` watches every file the app loads. Editing markup, CSS, an included
-fragment, a stylesheet import, a script, or a translation catalogue updates the
-running window without restarting it.
+fragment, a stylesheet import, a script, a translation catalogue, or an image or
+SVG the app shows updates the running window without restarting it.
 
 What survives an edit:
 

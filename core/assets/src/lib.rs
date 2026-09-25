@@ -12,7 +12,7 @@
 //! - [`keep_frame_loop_awake_for_assets`] holds an event-driven loop open while an [`ImageSource`] in the tree has no verdict on it yet, so an element that enters the tree after [`spawn_pending_decodes`] has run is looked up on the next tick rather than at the next unrelated event. The claim is keyed on the element, so it retires when the element has its content or leaves the tree.
 //! - Handles are strong [`Arc`]s to decoded data; the cache holds [`Handle<T>`] entries that share identity across consumers.
 //! - The vello GPU upload cache is keyed by the underlying `peniko::Blob` identity, so identical handles short-circuit the upload.
-//! - A [`notify::RecommendedWatcher`] tracks every loaded file URL. On change the asset cache invalidates the affected entry, the request id of every entity referencing that path is bumped, and an [`AssetReloadRequested`] message fires so consumers (e.g. the markup runtime) can re-enqueue the load.
+//! - A [`notify::RecommendedWatcher`] tracks every loaded file URL. On change the asset cache invalidates the affected entry, the request id of every entity referencing that path is bumped, and an [`AssetReloadRequested`] message fires. [`reload_changed_images`] is the consumer that re-enqueues the load; the runtime installs it for a hot-reload session. The watcher wakes a parked frame loop so the change is picked up without waiting for input.
 //!
 //! Eviction is true LRU bounded by `max_bytes` (default 256 MiB). Insert / evict mutate a running `bytes_used: usize` in O(1); a `debug_assert!` reconciles the running counter against a full sweep at most once per second when debug assertions are on.
 
@@ -29,7 +29,7 @@ pub use loader::{AssetKind, AssetLoader, AssetLoaders, LoadContext, LoadedAsset,
 pub use loaders::{ImageLoader, SvgLoader};
 pub use source::{AssetSource, BundleSource, SourceReader};
 
-use bevy_ecs::message::MessageWriter;
+use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
@@ -311,9 +311,9 @@ impl From<LoadErrorKind> for ImageLoadFailed {
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RequestId(pub u64);
 
-/// Message fired when a watched asset file changes on disk. Consumers (e.g. the markup runtime in `lumenc::run`) react by
-/// stripping `LoadedImage` / `LoadedSvg` / `ImageLoadFailed` from every entity whose `ImageSource` matches `path` so the
-/// pipeline re-enqueues the load.
+/// Message fired when a watched asset file changes on disk. [`reload_changed_images`] reacts by stripping
+/// `LoadedImage` / `LoadedSvg` / `ImageLoadFailed` / `Enqueued` from every entity whose `ImageSource` matches `path`
+/// so the pipeline re-enqueues the load. The runtime installs that consumer only for a hot-reload session.
 #[derive(Message, Clone, Debug)]
 pub struct AssetReloadRequested {
     /// Canonicalized source path whose bytes-on-disk changed.
@@ -398,6 +398,9 @@ pub struct AssetServer {
     watch_rx: Receiver<notify::Result<notify::Event>>,
     /// Sender end of the watch channel; cloned into the watcher callback.
     watch_tx: Sender<notify::Result<notify::Event>>,
+    /// Frame-loop waker the watcher callback fires after queueing an event, so a parked loop runs the tick that
+    /// drains it. Empty until [`process_watch_events`] first sees an [`EventLoopWaker`] resource.
+    watch_waker: Arc<std::sync::OnceLock<EventLoopWaker>>,
     /// Set of paths the watcher is currently subscribed to. Watch ops are idempotent - subscribing a path
     /// twice is cheap and avoids tracking per-path refcounts.
     watched: HashSet<PathBuf>,
@@ -507,6 +510,7 @@ impl AssetServer {
             watcher: None,
             watch_rx,
             watch_tx,
+            watch_waker: Arc::default(),
             watched: HashSet::new(),
             shutdown_flag,
             loaders: AssetLoaders::default(),
@@ -758,9 +762,13 @@ impl AssetServer {
         }
         if self.watcher.is_none() {
             let tx = self.watch_tx.clone();
+            let waker = Arc::clone(&self.watch_waker);
             let watcher = RecommendedWatcher::new(
                 move |res| {
                     let _ = tx.send(res);
+                    if let Some(w) = waker.get() {
+                        w.wake();
+                    }
                 },
                 notify::Config::default(),
             );
@@ -780,6 +788,19 @@ impl AssetServer {
                 return;
             }
             self.watched.insert(path.to_path_buf());
+        }
+    }
+
+    /// Drops the watch on `path` so the next cache insert subscribes it again. An editor that saves by
+    /// writing a new file and renaming it over the old one leaves the subscription on the replaced file,
+    /// and every later save would go unseen if the path stayed marked as watched.
+    fn forget_watch(&mut self, path: &Path) {
+        if self.watched.remove(path)
+            && let Some(w) = self.watcher.as_mut()
+        {
+            // The platform may have dropped the registration with the replaced file already; either way the
+            // path is no longer covered.
+            let _ = w.unwatch(path);
         }
     }
 
@@ -1365,7 +1386,15 @@ pub fn process_watch_events(
     mut server: ResMut<AssetServer>,
     sources: Query<(Entity, &ImageSource)>,
     mut writer: MessageWriter<AssetReloadRequested>,
+    waker: Option<Res<EventLoopWaker>>,
 ) {
+    // The waker resource appears after plugin build (headless: before the
+    // loop; windowed: inside `run`), so wire it on the first tick that sees it.
+    if let Some(w) = waker
+        && server.watch_waker.get().is_none()
+    {
+        let _ = server.watch_waker.set((*w).clone());
+    }
     // Collect changed paths first to release the borrow on `server.watch_rx`. `recv` borrows immutably; we
     // need `&mut server` afterwards for `invalidate_path` + `bump_request_id`.
     let mut changed: Vec<PathBuf> = Vec::new();
@@ -1388,6 +1417,7 @@ pub fn process_watch_events(
         }
     }
     for path in changed {
+        server.forget_watch(&path);
         if !server.invalidate_path(&path) {
             // Still notify consumers - they may want to re-resolve the path even if the cache had nothing.
             // But skip the request-id bumps in that case (nothing to reconcile).
@@ -1402,6 +1432,34 @@ pub fn process_watch_events(
             server.bump_request_id(e);
         }
         writer.write(AssetReloadRequested { path });
+    }
+}
+
+/// Re-enqueues the load for every element showing a file that changed on disk.
+///
+/// Reads [`AssetReloadRequested`] and strips the decoded payload, a cached failure, and the [`Enqueued`] marker
+/// from each entity whose [`ImageSource`] names the changed path, so [`spawn_pending_decodes`] looks the path
+/// up again on the next tick. [`process_watch_events`] already dropped the cache entry and moved the entity's
+/// request id on, so that lookup decodes the new bytes and a decode of the old bytes still in flight is
+/// discarded.
+///
+/// Not installed by [`AssetsPlugin`]: reloading content is part of a hot-reload session, and the runtime
+/// adds this system when it starts one, ordered after [`process_watch_events`].
+pub fn reload_changed_images(
+    mut reloads: MessageReader<AssetReloadRequested>,
+    sources: Query<(Entity, &ImageSource)>,
+    mut commands: Commands,
+) {
+    let changed: HashSet<PathBuf> = reloads.read().map(|r| r.path.clone()).collect();
+    if changed.is_empty() {
+        return;
+    }
+    for (entity, source) in &sources {
+        if changed.contains(&source.0) {
+            commands
+                .entity(entity)
+                .try_remove::<(LoadedImage, LoadedSvg, ImageLoadFailed, Enqueued)>();
+        }
     }
 }
 
@@ -1986,5 +2044,141 @@ mod tests {
             !world.resource::<AnimationsActive>().get(),
             "nothing in the tree is waiting any more, so the app parks"
         );
+    }
+
+    /// A reload strips what the element was showing from every element on
+    /// the changed path, so the next lookup decodes again, and leaves every
+    /// other element alone.
+    #[test]
+    fn reload_changed_images_strips_only_the_changed_path() {
+        use bevy_ecs::message::Messages;
+        use bevy_ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Messages<AssetReloadRequested>>();
+        let changed = PathBuf::from("/tmp/lumen-reload-changed.png");
+        let other = PathBuf::from("/tmp/lumen-reload-other.png");
+        let shown = world
+            .spawn((
+                ImageSource(changed.clone()),
+                LoadedImage(make_image_data(64).into()),
+            ))
+            .id();
+        let failed = world
+            .spawn((
+                ImageSource(changed.clone()),
+                ImageLoadFailed::new(LoadErrorKind::NotFound),
+            ))
+            .id();
+        let waiting = world.spawn((ImageSource(changed.clone()), Enqueued)).id();
+        let untouched = world
+            .spawn((ImageSource(other), LoadedImage(make_image_data(64).into())))
+            .id();
+        world.write_message(AssetReloadRequested { path: changed });
+
+        world.run_system_once(reload_changed_images).unwrap();
+
+        assert!(world.get::<LoadedImage>(shown).is_none());
+        assert!(world.get::<ImageLoadFailed>(failed).is_none());
+        assert!(world.get::<Enqueued>(waiting).is_none());
+        assert!(
+            world.get::<LoadedImage>(untouched).is_some(),
+            "an element on another path keeps its image"
+        );
+    }
+
+    /// Writes an opaque `side` x `side` PNG to `path`.
+    fn write_png(path: &Path, side: u32) {
+        image::RgbaImage::from_pixel(side, side, image::Rgba([255, 0, 0, 255]))
+            .save(path)
+            .expect("write png");
+    }
+
+    /// Ticks the asset systems until `done` holds, failing after a
+    /// generous bound rather than hanging.
+    fn tick_until(
+        schedule: &mut bevy_ecs::schedule::Schedule,
+        world: &mut World,
+        done: impl Fn(&World) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !done(world) {
+            assert!(std::time::Instant::now() < deadline, "asset never settled");
+            schedule.run(world);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// The whole reload path: the file behind a shown image changes on disk,
+    /// the watch event reaches the server, and the element ends up showing
+    /// the new bytes. The event is queued by hand so the test does not
+    /// depend on the platform watcher's timing.
+    #[test]
+    fn an_edited_image_reloads() {
+        use bevy_ecs::message::Messages;
+        use bevy_ecs::schedule::Schedule;
+        let dir = std::env::temp_dir().join(format!("lumen-assets-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("edited.png");
+        write_png(&path, 1);
+
+        let mut world = World::new();
+        world.insert_resource(AssetServer::default());
+        world.init_resource::<Messages<AssetReloadRequested>>();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(
+            (
+                spawn_pending_decodes,
+                drain_completed_decodes,
+                process_watch_events,
+                reload_changed_images,
+            )
+                .chain(),
+        );
+        let e = world.spawn(ImageSource(path.clone())).id();
+        tick_until(&mut schedule, &mut world, |w| {
+            w.get::<LoadedImage>(e).is_some()
+        });
+        assert_eq!(world.get::<LoadedImage>(e).unwrap().width, 1);
+
+        write_png(&path, 2);
+        let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+            .add_path(path.clone());
+        world
+            .resource::<AssetServer>()
+            .watch_tx
+            .send(Ok(event))
+            .unwrap();
+        tick_until(&mut schedule, &mut world, |w| {
+            w.get::<LoadedImage>(e).is_some_and(|img| img.width == 2)
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The watcher callback wakes the frame loop through the waker the
+    /// server picked up from the world, so a parked app runs the tick that
+    /// drains the event.
+    #[test]
+    fn the_watch_waker_is_wired_from_the_world() {
+        use bevy_ecs::message::Messages;
+        use bevy_ecs::system::RunSystemOnce;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let mut world = World::new();
+        world.insert_resource(AssetServer::default());
+        world.init_resource::<Messages<AssetReloadRequested>>();
+        world.insert_resource(EventLoopWaker(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })));
+
+        world.run_system_once(process_watch_events).unwrap();
+
+        world
+            .resource::<AssetServer>()
+            .watch_waker
+            .get()
+            .expect("waker wired on the first tick")
+            .wake();
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
     }
 }
