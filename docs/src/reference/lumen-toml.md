@@ -348,7 +348,7 @@ for getting them onto a machine:
 | `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the [`canvas` namespace](scripting-candela.md#canvas) that draws on it, with vello on the desktop and Canvas 2D in a page. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
 | `lumen-cookie` | The [`cookie` namespace](scripting-candela.md#cookies): the page's cookies in a web build, and on the desktop a cookie jar that `http()` and `fetch()` requests carry and fill. | |
 | `lumen-download` | The `download` script namespace: fetch a URL to a file off the tick loop, reporting progress, completion, and failure as events. | `timeout_ms`, `max_bytes`, `max_concurrent` |
-| `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
+| `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, byte-level file access, and file digests, resolved against the app directory. | `read_bytes_cap` |
 | `lumen-js` | The [`js` namespace](scripting-candela.md#javascript): the page's own JavaScript, modules loaded at run time, DOM events. Browser only: on the desktop each call raises. | `allow` |
 | `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
 | `lumen-storage` | The [`storage` namespace](scripting-candela.md#storage): text under text keys that lasts across runs, and a set that lasts one run. Local and session storage in a page, a file in the app's data directory on the desktop. | |

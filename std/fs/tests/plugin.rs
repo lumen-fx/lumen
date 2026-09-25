@@ -315,6 +315,9 @@ fn on_start() {
     lumen::signal_set_int("first_byte", bytes[0]);
     lumen::signal_set_bool("wrote_bytes", files::write_bytes("raw.bin", [104, 105]));
     lumen::signal_set("raw", files::read("raw.bin"));
+    lumen::signal_set("sha256", files::digest("from-candela.txt", "sha256"));
+    lumen::signal_set("md5", files::digest("from-candela.txt", "md5"));
+    lumen::signal_set("bad_algo", files::digest("from-candela.txt", "crc32"));
 }
 
 fn main() {}
@@ -334,6 +337,20 @@ fn main() {}
     assert_eq!(signal(&app, "first_byte").as_deref(), Some("119"));
     assert_eq!(signal(&app, "wrote_bytes").as_deref(), Some("true"));
     assert_eq!(signal(&app, "raw").as_deref(), Some("hi"));
+    assert_eq!(
+        signal(&app, "sha256").as_deref(),
+        Some("ccc0e8da6b80e08e80d75a89afe11e8f2d5cd0f29a10f782104ca5f2648e8903"),
+        "the path resolves against the app, like every other call"
+    );
+    assert_eq!(
+        signal(&app, "md5").as_deref(),
+        Some("9cc26fa09ce37bc95afe01bc718836d1")
+    );
+    assert_eq!(
+        signal(&app, "bad_algo").as_deref(),
+        Some(""),
+        "an unknown algorithm degrades to empty"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
