@@ -2222,9 +2222,30 @@ mod tests {
     /// depend on the platform watcher's timing.
     #[test]
     fn an_edited_image_reloads() {
+        edited_file_reloads("content", |world, path| world.spawn(ImageSource(path)).id());
+    }
+
+    /// A background (`bg: url(...)`) is an [`ImageSource`] like any other, so
+    /// editing its file reloads it the same way.
+    #[test]
+    fn an_edited_background_image_reloads() {
+        edited_file_reloads("background", |world, path| {
+            world
+                .spawn((ImageSource(path), BackgroundImage::default()))
+                .id()
+        });
+    }
+
+    /// Show the file at a fresh path on the entity `spawn` makes, rewrite
+    /// the file, report the change, and wait for the entity to show the new
+    /// bytes.
+    fn edited_file_reloads(label: &str, spawn: impl FnOnce(&mut World, PathBuf) -> Entity) {
         use bevy_ecs::message::Messages;
         use bevy_ecs::schedule::Schedule;
-        let dir = std::env::temp_dir().join(format!("lumen-assets-reload-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-assets-reload-{label}-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("edited.png");
         write_png(&path, 1);
@@ -2242,7 +2263,7 @@ mod tests {
             )
                 .chain(),
         );
-        let e = world.spawn(ImageSource(path.clone())).id();
+        let e = spawn(&mut world, path.clone());
         tick_until(&mut schedule, &mut world, |w| {
             w.get::<LoadedImage>(e).is_some()
         });
