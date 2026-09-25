@@ -17,10 +17,10 @@
 //! declaration above its origin's normal block.
 
 use crate::layout_ir::{
-    Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
-    ImageFitSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError, PositionSpec,
-    Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec,
-    TrackSizeSpec, TransitionIr, TransitionPropertyIr,
+    Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify, LayoutIR,
+    LengthSpec, LineHeightSpec, OverflowSpec, ParseError, PositionSpec, Rgba, ScrollAxisSpec,
+    ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec, TrackSizeSpec, TransitionIr,
+    TransitionPropertyIr,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 use std::rc::Rc;
@@ -1901,6 +1901,9 @@ fn restore_inline_origin(target: &mut Attributes, inline: &Attributes) {
     if inline.image_fit.is_some() {
         target.image_fit = inline.image_fit;
     }
+    if inline.bg_fit.is_some() {
+        target.bg_fit = inline.bg_fit;
+    }
     if inline.style_role.is_some() {
         target.style_role = inline.style_role.clone();
     }
@@ -2320,6 +2323,7 @@ pub fn computed_property(attrs: &Attributes, name: &str) -> Option<String> {
         "caret-color" => attrs.caret_color.as_ref().map(hex),
         "bg" => attrs.bg.as_ref().and_then(|b| match b {
             BgSpec::Solid(c) => Some(hex(c)),
+            BgSpec::Image(path) => Some(format!("url(\"{path}\")")),
             _ => None,
         }),
         "width" => attrs.width.as_ref().map(len),
@@ -3409,6 +3413,7 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "shadow",
     "box-shadow",
     "fit",
+    "bg-fit",
     "transition",
     "transition-property",
     "transition-delay",
@@ -4125,16 +4130,8 @@ fn apply_declaration(
         "shadow" | "box-shadow" => {
             attrs.shadows = parse_box_shadow(ctx, name, value)?;
         }
-        "fit" => {
-            attrs.image_fit = Some(match value {
-                "fill" => ImageFitSpec::Fill,
-                "cover" => ImageFitSpec::Cover,
-                "contain" => ImageFitSpec::Contain,
-                "none" => ImageFitSpec::None,
-                "scale-down" => ImageFitSpec::ScaleDown,
-                other => return Err(bad(ctx, name, value, format!("unknown fit '{other}'"))),
-            });
-        }
+        "fit" => attrs.image_fit = Some(crate::values::parse_image_fit(ctx, name, value)?),
+        "bg-fit" => attrs.bg_fit = Some(crate::values::parse_image_fit(ctx, name, value)?),
         "transition" => {
             attrs.transitions = parse_transition(ctx, name, value)?;
         }

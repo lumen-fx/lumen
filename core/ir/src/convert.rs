@@ -132,7 +132,7 @@ impl From<&Attributes> for Style {
 /// invariant the render extract relies on.
 impl From<&Attributes> for Option<Visuals> {
     fn from(attrs: &Attributes) -> Self {
-        let fill = attrs.bg.as_ref().map(Fill::from);
+        let fill = attrs.bg.as_ref().and_then(|bg| Fill::try_from(bg).ok());
         let radius = attrs.radius.unwrap_or(0.0);
         let corner_radii = attrs.radius_corners;
         let shadows: Vec<ShadowSpec> = attrs.shadows.iter().copied().map(Into::into).collect();
@@ -164,9 +164,15 @@ impl From<&Attributes> for Option<Visuals> {
     }
 }
 
-impl From<&crate::layout_ir::BgSpec> for Fill {
-    fn from(spec: &crate::layout_ir::BgSpec) -> Self {
-        match spec {
+/// A colour or gradient `bg` is a [`Fill`]. An image is not one: it paints
+/// through the asset pipeline instead, and the conversion hands back the path
+/// it names.
+impl<'a> TryFrom<&'a crate::layout_ir::BgSpec> for Fill {
+    type Error = &'a str;
+
+    fn try_from(spec: &'a crate::layout_ir::BgSpec) -> Result<Self, Self::Error> {
+        Ok(match spec {
+            crate::layout_ir::BgSpec::Image(path) => return Err(path),
             crate::layout_ir::BgSpec::Solid(rgba) => Fill::Solid((*rgba).into()),
             crate::layout_ir::BgSpec::Linear { angle_deg, stops } => Fill::Linear {
                 angle_deg: *angle_deg,
@@ -180,7 +186,7 @@ impl From<&crate::layout_ir::BgSpec> for Fill {
                 from_deg: *from_deg,
                 stops: stops.iter().map(|(o, c)| (*o, (*c).into())).collect(),
             },
-        }
+        })
     }
 }
 

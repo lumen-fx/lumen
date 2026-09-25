@@ -1,0 +1,6 @@
+<root>
+  <tile id="hero" class="hero">
+    <label text="Painted over the art" />
+  </tile>
+  <tile id="badge" bg="url('art/badge.png')" bg-fit="none" />
+</root>

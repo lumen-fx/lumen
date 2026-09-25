@@ -23,6 +23,7 @@ templates is capped at 64 levels of nesting.
 | integer | `<n>` | |
 | color | `#rrggbb`, `#rrggbbaa` | Named colours and `rgb()` are not accepted. |
 | gradient | `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)` | `bg` only. See [CSS values](css.md#gradients). |
+| image | `url("path")`, `url('path')`, `url(path)` | `bg` only. The path resolves against the app directory. See [background images](css.md#background-images). |
 | edges | 1 to 4 terms, top-right-bottom-left | `8`, `8 16`, `8 16 4`, `8 16 4 12`. Each term may be `<n>`, `<n>px`, or `<n>%`. |
 | duration | `<n>ms`, `<n>s` | |
 | signal | `name` or `$name` | The `$` prefix is the preferred spelling. |
@@ -132,7 +133,8 @@ are set.
 
 | Attribute | Value | Default |
 | --- | --- | --- |
-| `bg` | color or gradient | transparent |
+| `bg` | color, gradient, or `url()` image | transparent |
+| `bg-fit` | `cover`, `contain`, `fill`, `none`, `scale-down` | `cover` |
 | `radius` | number | `0` |
 | `border` | `<width> [solid\|none] <#color>` in any order, or `none` | none |
 | `shadow` | `[inset] <x> <y> <blur> [<spread>] <#color>` | none |

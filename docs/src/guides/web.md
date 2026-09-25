@@ -210,6 +210,10 @@ behind an external URL or with a `src` built from a `{...}` placeholder,
 carries no size, because there was no file to read it out of. Every image
 after the first one on the page is fetched when the reader scrolls near it.
 
+A background image (`bg: url(...)`) is copied the same way, and the
+stylesheet points at the copy. It is sized and placed the way the desktop
+draws it; see [CSS](../reference/css.md#background-image-placement).
+
 A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
 clicked, and a `derive()` recomputes when one of its dependencies changes.
@@ -651,6 +655,8 @@ none of them means anything without an absolute address.
 
 ## Known limits
 
+- `bg-fit: scale-down` is emitted as `contain`, which enlarges a background
+  image smaller than its box where the desktop keeps it at its own size.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.

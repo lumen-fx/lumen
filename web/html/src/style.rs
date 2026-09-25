@@ -151,7 +151,8 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ),
     ("grid-row", "grid-row", Value::AsIs),
     ("grid-column", "grid-column", Value::AsIs),
-    // Paint
+    // Paint. A `bg` value is written by `background`, which adds an image's
+    // placement; the entry here names the property for a transition list.
     ("bg", "background", Value::AsIs),
     ("opacity", "opacity", Value::AsIs),
     ("shadow", "box-shadow", Value::Length),
@@ -349,6 +350,9 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
         "outline" => Emission::one("outline", outline(value)),
         "selection-color" => state("::selection", "background", value),
         "selection-text-color" => state("::selection", "color", value),
+        // A background that can be an image carries how it is placed.
+        "bg" => background(value),
+        "bg-fit" => background_fit(value),
         // Values that pick the property.
         "justify" => Emission::one("justify-content", justify(value)),
         "wrap" => wrap(value),
@@ -388,6 +392,48 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
             Emission::Drop(UNKNOWN_PROPERTY)
         }
     }
+}
+
+/// The custom properties `bg-fit` writes and a background image reads. They
+/// are registered as not inherited in the reset, so a parent's `bg-fit` does
+/// not reach a child's background the way it does not on the desktop.
+const BG_SIZE: &str = "--lm-bg-size";
+const BG_POSITION: &str = "--lm-bg-position";
+
+/// `bg`. A colour or a gradient is a plain `background`. A value that is or
+/// may be an image (`url()`, or a `var()` a theme can point at one) also says
+/// how the image sits in the box, the way the desktop draws it: once, in the
+/// border box, sized by `bg-fit` and cover when that is unset.
+fn background(value: &str) -> Emission {
+    let lower = value.to_ascii_lowercase();
+    if !lower.contains("url(") && !lower.contains("var(") {
+        return Emission::one("background", value);
+    }
+    Emission::Plain(vec![
+        WebDecl::new("background", value),
+        WebDecl::new("background-size", format!("var({BG_SIZE}, cover)")),
+        WebDecl::new("background-position", format!("var({BG_POSITION}, center)")),
+        WebDecl::new("background-repeat", "no-repeat"),
+        WebDecl::new("background-origin", "border-box"),
+    ])
+}
+
+/// `bg-fit`, as the size and position a background image reads. `fill`
+/// stretches, `none` keeps the image's own size at the top-left corner, and
+/// `scale-down` has no browser equivalent and is written as `contain`.
+fn background_fit(value: &str) -> Emission {
+    let (size, position) = match value {
+        "cover" => ("cover", "center"),
+        "contain" | "scale-down" => ("contain", "center"),
+        "fill" => ("100% 100%", "center"),
+        "none" => ("auto", "0 0"),
+        other if other.to_ascii_lowercase().starts_with("var(") => (other, "center"),
+        _ => return Emission::Drop(UNREADABLE_VALUE),
+    };
+    Emission::Plain(vec![
+        WebDecl::new(BG_SIZE, size),
+        WebDecl::new(BG_POSITION, position),
+    ])
 }
 
 fn state(pseudo: &'static str, name: &str, value: &str) -> Emission {
@@ -648,6 +694,11 @@ mod tests {
         ("grid-row", "1 / 3", "grid-row: 1 / 3"),
         ("grid-column", "2", "grid-column: 2"),
         ("bg", "#0a3358", "background: #0a3358"),
+        (
+            "bg-fit",
+            "contain",
+            "--lm-bg-size: contain; --lm-bg-position: center",
+        ),
         ("opacity", "0.5", "opacity: 0.5"),
         ("shadow", "0 2 6 #0008", "box-shadow: 0px 2px 6px #0008"),
         (
@@ -890,6 +941,43 @@ mod tests {
     fn every_property_becomes_what_the_table_says() {
         for (name, value, expected) in CASES {
             assert_eq!(&rewritten(name, value), expected, "rewriting `{name}`");
+        }
+    }
+
+    /// A background that is or may be an image says how it sits in the box;
+    /// a colour or a gradient stays one declaration.
+    #[test]
+    fn an_image_background_carries_its_placement() {
+        let placed = |value: &str| {
+            format!(
+                "background: {value}; background-size: var(--lm-bg-size, cover); \
+                 background-position: var(--lm-bg-position, center); \
+                 background-repeat: no-repeat; background-origin: border-box"
+            )
+        };
+        for value in [r#"url("art/hero.png")"#, "URL(art/hero.png)", "var(--hero)"] {
+            assert_eq!(rewritten("bg", value), placed(value), "{value}");
+        }
+        assert_eq!(
+            rewritten("bg", "linear-gradient(#000000, #ffffff)"),
+            "background: linear-gradient(#000000, #ffffff)"
+        );
+        for (fit, expected) in [
+            ("cover", "--lm-bg-size: cover; --lm-bg-position: center"),
+            ("contain", "--lm-bg-size: contain; --lm-bg-position: center"),
+            (
+                "scale-down",
+                "--lm-bg-size: contain; --lm-bg-position: center",
+            ),
+            ("fill", "--lm-bg-size: 100% 100%; --lm-bg-position: center"),
+            ("none", "--lm-bg-size: auto; --lm-bg-position: 0 0"),
+            (
+                "var(--fit)",
+                "--lm-bg-size: var(--fit); --lm-bg-position: center",
+            ),
+            ("tile", "drop"),
+        ] {
+            assert_eq!(rewritten("bg-fit", fit), expected, "{fit}");
         }
     }
 

@@ -816,8 +816,20 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         ent.insert(lumen_core::components::ZIndex(z));
     }
 
-    // Paint props -> `Visuals`.
-    let want_fill = attrs.bg.as_ref().map(Fill::from);
+    // Paint props -> `Visuals`. A `bg` image replaces the element's colour,
+    // which the asset pipeline then paints in its place.
+    let want_fill = attrs.bg.as_ref().and_then(|bg| Fill::try_from(bg).ok());
+    if matches!(attrs.bg, Some(lumen_ir::layout_ir::BgSpec::Image(_)))
+        && let Some(mut v) = ent.get_mut::<Visuals>()
+        && v.fill.is_some()
+    {
+        v.fill = None;
+    }
+    let tag = ent
+        .get::<lumen_core::components::LumenTag>()
+        .map(|t| t.0.to_string())
+        .unwrap_or_default();
+    lumen_scene::spawn::apply_background_image(&mut ent, &tag, attrs);
     let want_radius = attrs.radius;
     let want_shadows: Vec<ShadowSpec> = attrs.shadows.iter().copied().map(Into::into).collect();
     let border_authored = attrs.border_style.is_some();
@@ -1170,7 +1182,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         if let Some(selected) = selected
             && let Some(mut ts) = ent.get_mut::<lumen_primitives::TabButtonStyle>()
         {
-            if let Some(Fill::Solid(c)) = attrs.bg.as_ref().map(Fill::from) {
+            if let Some(Ok(Fill::Solid(c))) = attrs.bg.as_ref().map(Fill::try_from) {
                 ts.unselected_bg = c;
             }
             if let Some(c) = attrs.selected_bg {

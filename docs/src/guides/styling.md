@@ -106,6 +106,15 @@ class flip. Declare a second scope on the root and every descendant reading
 .theme-light { --bg: #f8f9fb; --text: #1a1d23; }
 ```
 
+A token can hold an image as well as a colour, so the art behind a screen is
+themed the same way:
+
+```css
+:root { --art: url("art/day.png"); }
+.theme-dark { --art: url("art/night.png"); }
+.app { bg: var(--art); bg-fit: cover; }
+```
+
 Lumen keeps `theme-dark` or `theme-light` on the root element in sync with the
 effective color scheme, so the pair above follows the OS with no script. A
 script can override the choice with `set_color_scheme`, which accepts

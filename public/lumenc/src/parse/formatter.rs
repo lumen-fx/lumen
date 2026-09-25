@@ -139,7 +139,7 @@ fn attr_rank(name: &str) -> u32 {
         "text" => 41,
         "font-size" => 42,
         "wrap" | "max-lines" | "text-align" => 43,
-        "fit" => 44,
+        "fit" | "bg-fit" => 44,
         "hover-bg" | "press-bg" | "focus-outline" => 60,
         "bind" | "bind-text" | "bind-checked" | "bind-value" => 70,
         "each" | "key" | "signal" | "eq" | "mode" => 80,

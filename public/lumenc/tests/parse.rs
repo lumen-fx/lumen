@@ -3469,3 +3469,80 @@ fn markup_parses_at_the_nesting_cap() {
     }
     assert_eq!(el.children[0].attrs.text.as_deref(), Some("deep"));
 }
+
+/// `bg` names an image with `url()`, the path double-quoted, single-quoted,
+/// or bare, and `bg-fit` says how it fills the box.
+#[test]
+fn css_bg_takes_an_image_in_every_url_form() {
+    use lumenc::layout_ir::{BgSpec, ImageFitSpec};
+    for (value, fit) in [
+        (r#"url("art/hero.png")"#, "cover"),
+        ("url('art/hero.png')", "contain"),
+        ("url(art/hero.png)", "none"),
+        ("URL( art/hero.png )", "scale-down"),
+    ] {
+        let mut ir = parse_html(r##"<root><tile class="t" /></root>"##).expect("html");
+        let css = lumenc::parse_css(&format!(".t {{ bg: {value}; bg-fit: {fit}; }}")).expect("css");
+        let warnings = lumenc::apply_css(&mut ir, &css).expect("apply");
+        assert!(warnings.is_empty(), "{value}: {warnings:?}");
+        let attrs = &ir.root.children[0].attrs;
+        assert_eq!(
+            attrs.bg,
+            Some(BgSpec::Image("art/hero.png".into())),
+            "{value}"
+        );
+        let want = match fit {
+            "cover" => ImageFitSpec::Cover,
+            "contain" => ImageFitSpec::Contain,
+            "none" => ImageFitSpec::None,
+            _ => ImageFitSpec::ScaleDown,
+        };
+        assert_eq!(attrs.bg_fit, Some(want), "{value}");
+    }
+}
+
+/// A theme swaps the art through a custom property the way it swaps a colour.
+#[test]
+fn css_bg_image_resolves_through_var() {
+    use lumenc::layout_ir::BgSpec;
+    let mut ir = parse_html(r##"<root><tile class="t" /></root>"##).expect("html");
+    let css = lumenc::parse_css(
+        r##"
+        :root { --hero: url("art/day.png"); }
+        .t    { bg: var(--hero); }
+        "##,
+    )
+    .expect("css");
+    lumenc::apply_css(&mut ir, &css).expect("apply");
+    assert_eq!(
+        ir.root.children[0].attrs.bg,
+        Some(BgSpec::Image("art/day.png".into()))
+    );
+}
+
+/// The markup attribute reads the same forms through the same parser.
+#[test]
+fn bg_attribute_takes_an_image_and_a_fit() {
+    use lumenc::layout_ir::{BgSpec, ImageFitSpec};
+    let ir = parse_html(r##"<root><tile bg="url('art/hero.png')" bg-fit="fill"/></root>"##)
+        .expect("parse");
+    let attrs = &ir.root.children[0].attrs;
+    assert_eq!(attrs.bg, Some(BgSpec::Image("art/hero.png".into())));
+    assert_eq!(attrs.bg_fit, Some(ImageFitSpec::Fill));
+}
+
+/// An empty `url()` and an unknown fit are refused, and a state background
+/// stays a colour: `:hover { bg: url(...) }` is dropped with a warning.
+#[test]
+fn bg_image_errors_are_reported() {
+    let r = parse_html(r##"<root><tile bg="url()"/></root>"##);
+    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));
+    let r = parse_html(r##"<root><tile bg-fit="tile"/></root>"##);
+    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg-fit"));
+
+    let mut ir = parse_html(r##"<root><tile class="t" /></root>"##).expect("html");
+    let css = lumenc::parse_css(".t:hover { bg: url(a.png); }").expect("css");
+    let warnings = lumenc::apply_css(&mut ir, &css).expect("apply");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(ir.root.children[0].attrs.hover_bg, None);
+}

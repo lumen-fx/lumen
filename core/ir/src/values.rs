@@ -51,10 +51,11 @@ pub fn parse_color(ctx: &str, name: &str, value: &str) -> Result<Rgba, ParseErro
     Ok(Rgba { r, g, b, a })
 }
 
-/// Parse a `bg=` value - either a hex color or a `linear-gradient(...)`
-/// function. Stops accept the CSS forms `<color>` (auto-distributed) or
-/// `<color> <offset%>` (explicit). Parsed stops are sorted by offset
-/// ascending so the renderer can hand them straight to peniko.
+/// Parse a `bg=` value: a hex color, a gradient function, or an image named
+/// with `url(...)`. Gradient stops accept the CSS forms `<color>`
+/// (auto-distributed) or `<color> <offset%>` (explicit). Parsed stops are
+/// sorted by offset ascending so the renderer can hand them straight to
+/// peniko.
 pub fn parse_bg(
     ctx: &str,
     name: &str,
@@ -62,6 +63,9 @@ pub fn parse_bg(
 ) -> Result<crate::layout_ir::BgSpec, ParseError> {
     use crate::layout_ir::BgSpec;
     let trimmed = value.trim();
+    if let Some(path) = parse_url(ctx, name, value)? {
+        return Ok(BgSpec::Image(path));
+    }
     if let Some(inner) = trimmed
         .strip_prefix("linear-gradient(")
         .and_then(|s| s.strip_suffix(')'))
@@ -88,6 +92,61 @@ pub fn parse_bg(
             .map(|(from_deg, stops)| BgSpec::Conic { from_deg, stops });
     }
     Ok(BgSpec::Solid(parse_color(ctx, name, value)?))
+}
+
+/// The path inside a CSS `url(...)`, or `None` when `value` is not a
+/// `url()` at all. The path may be double-quoted, single-quoted, or bare;
+/// an empty one is an error.
+pub fn parse_url(ctx: &str, name: &str, value: &str) -> Result<Option<String>, ParseError> {
+    let trimmed = value.trim();
+    let Some(inner) = trimmed
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case("url("))
+        .and_then(|_| trimmed[4..].strip_suffix(')'))
+    else {
+        return Ok(None);
+    };
+    let inner = inner.trim();
+    let path = ['"', '\'']
+        .iter()
+        .find_map(|q| {
+            inner
+                .strip_prefix(*q)
+                .and_then(|rest| rest.strip_suffix(*q))
+        })
+        .unwrap_or(inner);
+    if path.is_empty() {
+        return Err(bad(ctx, name, value, "url() names no file".into()));
+    }
+    Ok(Some(path.to_string()))
+}
+
+/// An image fit: `fill`, `cover`, `contain`, `none`, or `scale-down`. The
+/// `fit` of an `<image>` and the `bg-fit` of a background image take the same
+/// values.
+pub fn parse_image_fit(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::ImageFitSpec, ParseError> {
+    use crate::layout_ir::ImageFitSpec;
+    Ok(match value.trim() {
+        "fill" => ImageFitSpec::Fill,
+        "cover" => ImageFitSpec::Cover,
+        "contain" => ImageFitSpec::Contain,
+        "none" => ImageFitSpec::None,
+        "scale-down" => ImageFitSpec::ScaleDown,
+        other => {
+            return Err(bad(
+                ctx,
+                name,
+                value,
+                format!(
+                    "unknown fit '{other}' (supported: fill, cover, contain, none, scale-down)"
+                ),
+            ));
+        }
+    })
 }
 
 /// Parses `radial-gradient(<color1>, <color2 [stop%]>, ...)`. Every term is a colour stop; the radius is always 1.0.

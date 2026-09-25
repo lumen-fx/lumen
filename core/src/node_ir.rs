@@ -48,8 +48,8 @@
 use crate::components::{Color, ImageBlob, SvgPayload};
 use crate::native::ExtractedNative;
 use crate::render_world::{
-    Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedOutline, ExtractedRect,
-    ExtractedScrollbar, ExtractedShadow, ExtractedText, PaintOrder, Rect,
+    BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedOutline,
+    ExtractedRect, ExtractedScrollbar, ExtractedShadow, ExtractedText, PaintOrder, Rect,
 };
 use bevy_ecs::entity::Entity;
 use bevy_ecs::prelude::Resource;
@@ -542,6 +542,26 @@ impl std::fmt::Debug for PreviousScene {
     }
 }
 
+/// Wraps a background image leaf in the clip of the box it fills, so it takes
+/// the element's corner radii the way the element's colour does.
+fn background_clip(clip: BackgroundClip, leaf: Node) -> Arc<Node> {
+    let rect = Rect::new(clip.origin, clip.size);
+    let shape = if clip.radii.iter().any(|r| *r > 0.0) {
+        ClipShape::RoundedRect {
+            rect,
+            radii: clip.radii,
+        }
+    } else {
+        ClipShape::Rect(rect)
+    };
+    Arc::new(Node::Clip {
+        shape,
+        child: Arc::new(Node::Container {
+            children: vec![Arc::new(leaf)],
+        }),
+    })
+}
+
 /// Sort key for ordering [`DrawEntry`] before tree assembly.
 type EntryOrder = PaintOrder;
 
@@ -585,6 +605,23 @@ pub fn transform_extracted_to_nodes(
     for r in &rects {
         entries.push((r.order, Arc::new(Node::from(r))));
     }
+    // Background images (`bg: url(...)`) share the entity's order key too.
+    // Pushed after the fills and before the borders, they paint over the
+    // element's colour and under its border, clipped to its rounded box.
+    for (i, maybe_blob) in &images {
+        if let Some(clip) = i.background {
+            let leaf = match maybe_blob {
+                Some(blob) => Node::from((i, blob)),
+                None => Node::from(i),
+            };
+            entries.push((i.order, background_clip(clip, leaf)));
+        }
+    }
+    for s in &svgs {
+        if let Some(clip) = s.background {
+            entries.push((s.order, background_clip(clip, Node::from(s))));
+        }
+    }
     // Borders share the entity's own order key with its background rect;
     // pushing them after rects keeps `background -> border` paint order
     // through the stable sort below.
@@ -600,7 +637,7 @@ pub fn transform_extracted_to_nodes(
     for t in &texts {
         entries.push((t.order, Arc::new(Node::from(t))));
     }
-    for (i, maybe_blob) in &images {
+    for (i, maybe_blob) in images.iter().filter(|(i, _)| i.background.is_none()) {
         // Splice the type-erased blob payload (set by lumen-assets in its extract pass) directly
         // into Node::Image.blob - the renderer walker downcasts it back. Closes the loop from the
         // round-4 W36 / W39 deferral note: the on-screen path previously spliced blobs via a
@@ -611,7 +648,7 @@ pub fn transform_extracted_to_nodes(
         };
         entries.push((i.order, Arc::new(node)));
     }
-    for s in &svgs {
+    for s in svgs.iter().filter(|s| s.background.is_none()) {
         entries.push((s.order, Arc::new(Node::from(s))));
     }
     // Plugin-painted leaves. Query iteration follows archetype order, which
@@ -795,6 +832,74 @@ mod tests {
         assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
         assert!(matches!(children[1].as_ref(), Node::Border { .. }));
         assert!(matches!(children[2].as_ref(), Node::Rect { .. }));
+    }
+
+    fn image(order: PaintOrder, background: Option<BackgroundClip>) -> ExtractedImage {
+        ExtractedImage {
+            origin: Vec2::ZERO,
+            size: Vec2::new(10.0, 10.0),
+            width: 1,
+            height: 1,
+            rgba: Arc::from(vec![255u8; 4]),
+            fit: crate::components::ImageFit::Cover,
+            order,
+            alpha: 1.0,
+            background,
+        }
+    }
+
+    /// A `bg: url(...)` image paints at its element's own order key over the
+    /// element's colour and under its border, clipped to the element's rounded
+    /// box, and a child still paints over it. An `<image>` at the same key
+    /// keeps its place after the border.
+    #[test]
+    fn a_background_image_sits_between_fill_and_border_inside_its_clip() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(10.0, 10.0)));
+        world.spawn(ExtractedBorder {
+            origin: Vec2::ZERO,
+            size: Vec2::new(10.0, 10.0),
+            widths: [1.0; 4],
+            color: Color::rgba(0.0, 0.0, 1.0, 1.0),
+            side_colors: None,
+            radius: 3.0,
+            corner_radii: None,
+            order: 4,
+        });
+        world.spawn(image(
+            4,
+            Some(BackgroundClip {
+                origin: Vec2::ZERO,
+                size: Vec2::new(10.0, 10.0),
+                radii: [3.0; 4],
+            }),
+        ));
+        world.spawn(image(4, None));
+        world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(4.0, 4.0)));
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 5);
+        assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
+        let Node::Clip { shape, child } = children[1].as_ref() else {
+            panic!("the background is clipped, got {:?}", children[1]);
+        };
+        assert_eq!(
+            *shape,
+            ClipShape::RoundedRect {
+                rect: Rect::new(Vec2::ZERO, Vec2::new(10.0, 10.0)),
+                radii: [3.0; 4],
+            }
+        );
+        assert!(matches!(
+            children_of(child)[0].as_ref(),
+            Node::Image { image, .. } if image.background.is_some()
+        ));
+        assert!(matches!(children[2].as_ref(), Node::Border { .. }));
+        assert!(matches!(
+            children[3].as_ref(),
+            Node::Image { image, .. } if image.background.is_none()
+        ));
+        assert!(matches!(children[4].as_ref(), Node::Rect { .. }));
     }
 
     fn native(

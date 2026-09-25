@@ -466,9 +466,82 @@ pub fn track_style_over(
         unchecked_bg: attrs
             .bg
             .as_ref()
-            .and_then(|b| Fill::from(b).as_solid())
+            .and_then(|b| Fill::try_from(b).ok()?.as_solid())
             .unwrap_or(base.unchecked_bg),
         disabled_bg: attrs.disabled_bg.map(Into::into).or(base.disabled_bg),
+    }
+}
+
+/// Points an element's background at the image its `bg` names, or takes a
+/// background image away when `bg` names a colour or a gradient instead.
+///
+/// The image travels the same road as an `<image src>`: an
+/// [`lumen_assets::ImageSource`] the asset pipeline resolves, decodes and
+/// caches, marked [`lumen_assets::BackgroundImage`] so it paints behind
+/// the content and never sizes the element. An `<image>` keeps its `src` as
+/// its one source, so a `bg` image on one is ignored.
+///
+/// A `bg` or `bg-fit` left unset changes nothing, the way every other value a
+/// restyle does not name stays where it was.
+pub fn apply_background_image(
+    ent: &mut bevy_ecs::world::EntityWorldMut<'_>,
+    tag: &str,
+    attrs: &Attributes,
+) {
+    use lumen_assets::{
+        AssetServer, BackgroundImage, Enqueued, ImageLoadFailed, ImageSource, LoadedImage,
+        LoadedSvg,
+    };
+    use lumen_ir::layout_ir::BgSpec;
+    if tag == "image" {
+        return;
+    }
+    let current = ent.get::<BackgroundImage>().copied();
+    match &attrs.bg {
+        Some(BgSpec::Image(path)) => {
+            let source = lumen_assets::resolve_source_path(path);
+            if current.is_none() || ent.get::<ImageSource>().is_none_or(|s| s.0 != source) {
+                // A new source starts from nothing: the old bitmap goes, and
+                // a decode still out for the old path is made stale so it
+                // cannot land on top of the new one.
+                ent.remove::<(LoadedImage, LoadedSvg, ImageLoadFailed, Enqueued)>();
+                let id = ent.id();
+                ent.world_scope(|world| {
+                    if let Some(mut server) = world.get_resource_mut::<AssetServer>() {
+                        server.bump_request_id(id);
+                    }
+                });
+                ent.insert(ImageSource(source));
+            }
+            let fit = attrs
+                .bg_fit
+                .map(ImageFit::from)
+                .or(current.map(|bg| bg.fit))
+                .unwrap_or(ImageFit::Cover);
+            if current != Some(BackgroundImage { fit }) {
+                ent.insert(BackgroundImage { fit });
+            }
+        }
+        Some(_) => {
+            if current.is_some() {
+                ent.remove::<(
+                    BackgroundImage,
+                    ImageSource,
+                    LoadedImage,
+                    LoadedSvg,
+                    ImageLoadFailed,
+                    Enqueued,
+                )>();
+            }
+        }
+        None => {
+            if let (Some(bg), Some(fit)) = (current, attrs.bg_fit) {
+                let fit = ImageFit::from(fit);
+                if bg.fit != fit {
+                    ent.insert(BackgroundImage { fit });
+                }
+            }
+        }
     }
 }
 
@@ -867,7 +940,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .attrs
                 .bg
                 .as_ref()
-                .and_then(|b| Fill::from(b).as_solid())
+                .and_then(|b| Fill::try_from(b).ok()?.as_solid())
                 .unwrap_or(defaults.unselected_bg),
         });
         // The selected/unselected swap needs a fill to write into even
@@ -957,6 +1030,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if let Some(f) = el.attrs.image_fit {
         entity.insert(ImageFit::from(f));
     }
+    apply_background_image(&mut entity, &el.tag, &el.attrs);
     if let Some(o) = el.attrs.opacity {
         entity.insert(Opacity(o));
     }
