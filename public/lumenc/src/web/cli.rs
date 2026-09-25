@@ -392,7 +392,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // machine's. `[web] skin` names it; failing that the app's own skin,
     // unless that is `auto`, which is the machine's.
     let skin = skin_for(&cfg, &mut warnings);
-    let mut compiled = crate::compile_app_with(dir, Some(&skin), &deps)
+    let mut compiled = crate::compile_app_with(dir, Some(&skin), &deps, &mut warnings)
         .map_err(|e| format!("compile {}: {e}", dir.display()))?;
     if compiled.ir.skin.as_deref() == Some("auto") {
         warnings.push(
@@ -1431,22 +1431,18 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
     refs
 }
 
-/// Warn about a function the app calls by name that its compiled program
-/// cannot be called by.
+/// Warn about what the compiled program leaves a page without.
 ///
-/// candela exports a function only when every parameter it takes is
-/// annotated. One written with a bare parameter still compiles and still
-/// ships; it is simply never called, because the runtime asks the artifact for
-/// it by name and the artifact has no such name. The desktop hides this: the
-/// compiler is in the process there and answers from the source, so the same
-/// app works on a desktop and shows a blank where the value should be in a
-/// browser.
+/// The browser loads the program the same way this reads it back, so a
+/// program that will not load here does not load there either.
 ///
-/// A component the build could not stand in for is the same failure with a
-/// worse symptom: the page carries the box the call was to fill, and an empty
-/// box is what a reader would not notice. `browser_filled` names the markers
-/// the fill pass left standing on purpose, which are the ones nothing called
-/// and so the ones this must not speak for.
+/// A component the build called and could not stand in for leaves the page
+/// the box the call was to fill, and an empty box is what a reader would not
+/// notice. `browser_filled` names the markers the fill pass left standing on
+/// purpose, which are the ones nothing called and so the ones this must not
+/// speak for. A component the program does not export is not named here:
+/// candela exports every function a host calls by name, and one it cannot is
+/// a warning the compile already raised.
 fn check_exports(
     compiled: &CompiledApp,
     browser_filled: &BTreeSet<String>,
@@ -1458,30 +1454,17 @@ fn check_exports(
         let Some(read_back) = lumen_runtime::run::script_exports(script, &compiled.addons) else {
             continue;
         };
-        let exports = match read_back {
-            Ok(exports) => exports,
-            // The browser loads the program the same way this reads it, so a
-            // program that will not load here will not load there either.
-            Err(error) => {
-                warnings.push(format!(
-                    "the compiled {} program does not load: {error}. The pages are emitted, but \
-                     the app's script will not run in a browser",
-                    script.engine
-                ));
-                continue;
+        match read_back {
+            Ok(exports) => {
+                exported.extend(exports);
+                read_any = true;
             }
-        };
-        for (name, params) in called_by_name(&script.source) {
-            if !exports.contains(&name) {
-                warnings.push(format!(
-                    "`{name}` is called by name and the compiled program does not export it, so \
-                     nothing happens when it is called{}",
-                    annotation_advice(&name, &params)
-                ));
-            }
+            Err(error) => warnings.push(format!(
+                "the compiled {} program does not load: {error}. The pages are emitted, but the \
+                 app's script will not run in a browser",
+                script.engine
+            )),
         }
-        exported.extend(exports);
-        read_any = true;
     }
 
     // A component belongs to the app, not to whichever script the loop above
@@ -1490,48 +1473,19 @@ fn check_exports(
     if !read_any {
         return;
     }
-    // Every name still here is one the build ran and could not fill, so each
-    // gets the reason it could not be. A component the build did fill is its
-    // body by now and names nothing, and one the build left standing on
-    // purpose was never called to judge.
-    for name in components_called(compiled).difference(browser_filled) {
-        if exported.contains(name) {
-            warnings.push(format!(
-                "`{name}` returned no markup when the build called it, so the page carries an \
-                 empty box where its body belongs; a component returns one `lmn!` block"
-            ));
-        } else {
-            let params = compiled
-                .fragments
-                .component(name)
-                .map(|component| component.params.clone())
-                .unwrap_or_default();
-            warnings.push(format!(
-                "the markup writes `<{name}/>`, and the compiled program does not export \
-                 `{name}`, so the page carries an empty box where its body belongs{}",
-                annotation_advice(name, &params)
-            ));
-        }
+    // A name still here that the program exports is one the build called and
+    // got nothing back from. A component the build did fill is its body by now
+    // and names nothing, and one the build left standing on purpose was never
+    // called to judge.
+    for name in components_called(compiled)
+        .difference(browser_filled)
+        .filter(|name| exported.contains(*name))
+    {
+        warnings.push(format!(
+            "`{name}` returned no markup when the build called it, so the page carries an empty \
+             box where its body belongs; a component returns one `lmn!` block"
+        ));
     }
-}
-
-/// The half of a warning that says how to make the program export `name`,
-/// written out of the parameters the function declares.
-///
-/// candela exports a function only when every parameter it takes is
-/// annotated, so the advice is the function's own parameter list with an
-/// annotation on each one, which is text an author can paste. A function that
-/// takes nothing is exported as written, so a missing name there is not an
-/// annotation problem and the sentence ends where it is.
-fn annotation_advice(name: &str, params: &[String]) -> String {
-    if params.is_empty() {
-        return String::new();
-    }
-    let signature: Vec<String> = params.iter().map(|param| format!("{param}: any")).collect();
-    format!(
-        "; annotate every parameter it takes, as in `fn {name}({})`",
-        signature.join(", ")
-    )
 }
 
 /// Every component name the tree names, which the runtime fills by calling the
@@ -1557,61 +1511,6 @@ fn components_called(compiled: &CompiledApp) -> BTreeSet<String> {
         }
     }
     out
-}
-
-/// Every function `source` defines that something calls by name, with the
-/// parameters it takes: a handler bound by name, a derivation body, or one of
-/// the `on_` names Lumen calls when the thing they stand for happens.
-fn called_by_name(source: &str) -> BTreeMap<String, Vec<String>> {
-    let quoted: BTreeSet<&str> = source
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .filter(|text| is_identifier(text))
-        .collect();
-    defined_functions(source)
-        .into_iter()
-        .filter(|(name, _)| name.starts_with("on_") || quoted.contains(name.as_str()))
-        .collect()
-}
-
-/// The functions `source` declares, each with the names of its parameters.
-fn defined_functions(source: &str) -> BTreeMap<String, Vec<String>> {
-    let mut functions = BTreeMap::new();
-    for line in source.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("fn ") else {
-            continue;
-        };
-        let Some((name, rest)) = rest.split_once('(') else {
-            continue;
-        };
-        let name = name.trim();
-        if is_identifier(name) {
-            functions.insert(name.to_string(), parameter_names(rest));
-        }
-    }
-    functions
-}
-
-/// The parameter names in a `fn` line, read off the text after its opening
-/// parenthesis. An annotation a parameter already carries is left off, so a
-/// list that is already annotated comes back the way it went in.
-fn parameter_names(rest: &str) -> Vec<String> {
-    rest.split(')')
-        .next()
-        .unwrap_or_default()
-        .split(',')
-        .map(|param| param.split(':').next().unwrap_or_default().trim())
-        .filter(|name| is_identifier(name))
-        .map(str::to_string)
-        .collect()
-}
-
-/// True for a name a script could declare a function under.
-fn is_identifier(text: &str) -> bool {
-    !text.is_empty()
-        && !text.starts_with(|c: char| c.is_ascii_digit())
-        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Write the compiled candela program beside the pages, when the app has one.
@@ -1742,40 +1641,4 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
     std::fs::copy(source, target)
         .map(|_| ())
         .map_err(|e| format!("copy {} to {}: {e}", source.display(), target.display()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The fix a warning prints is the function's own parameter list, not a
-    /// stand-in: pasting it is the whole remedy.
-    #[test]
-    fn the_suggested_signature_names_the_parameters_the_function_takes() {
-        let params = vec!["name".to_string(), "count".to_string()];
-        assert_eq!(
-            annotation_advice("Greet", &params),
-            "; annotate every parameter it takes, as in `fn Greet(name: any, count: any)`"
-        );
-    }
-
-    /// candela exports a function that takes nothing, so a missing name there
-    /// is not an annotation problem and the sentence stops.
-    #[test]
-    fn a_function_that_takes_nothing_is_told_to_annotate_nothing() {
-        assert!(annotation_advice("on_start", &[]).is_empty());
-    }
-
-    #[test]
-    fn a_parameter_list_is_read_with_and_without_its_annotations() {
-        let functions = defined_functions("fn Greet(name, count) {}\nfn Row(label: any) {}\n");
-        assert_eq!(functions["Greet"], vec!["name", "count"]);
-        assert_eq!(functions["Row"], vec!["label"]);
-    }
-
-    #[test]
-    fn a_function_that_takes_nothing_has_an_empty_parameter_list() {
-        let functions = defined_functions("fn main() {}\n");
-        assert!(functions["main"].is_empty());
-    }
 }

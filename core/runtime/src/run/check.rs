@@ -69,14 +69,18 @@ fn addon_stubs(addons: &[lumen_ir::addon::Addon]) -> Result<Vec<lumen_script::Sc
 /// A multi-page app compiles whole - every page assembled into the one gated
 /// tree the run path builds, plus the page set the routing needs. Requires the
 /// source parser (`runtime-parse` feature).
+///
+/// What a script compiler warned about is added to `warnings`, one line each,
+/// for the caller to print where it prints its own warnings.
 #[cfg(feature = "runtime-parse")]
 pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
     deps: &CompileDeps,
+    warnings: &mut Vec<String>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    compile_app_with_skin(dir, parser, plugins, None, deps)
+    compile_app_with_skin(dir, parser, plugins, None, deps, warnings)
 }
 
 /// [`compile_app`] with the skin named outright instead of read from
@@ -93,6 +97,7 @@ pub fn compile_app_with_skin(
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
     skin: Option<&str>,
     deps: &CompileDeps,
+    warnings: &mut Vec<String>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     register_declared_tags(&cfg, &[deps.target], &deps.addons);
@@ -136,7 +141,15 @@ pub fn compile_app_with_skin(
             // An engine with an ahead-of-time form compiles here, so the
             // artifact carries the program a compiler-free runtime can run.
             // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir, deps, &stubs)?,
+            bytecode: compiled_bytecode(
+                engine,
+                &source,
+                &uri,
+                &layout.lib_dir,
+                deps,
+                &stubs,
+                warnings,
+            )?,
             source,
         });
     }
@@ -193,6 +206,8 @@ pub fn compile_app_with_skin(
 /// `fns` are declared to the compile the way a live run declares a module's
 /// functions, so the image names them and a runtime that binds the same
 /// names can load it. Their bodies are never called here.
+///
+/// What the compiler warned about is added to `warnings`, one line each.
 #[cfg(feature = "runtime-parse")]
 fn compiled_bytecode(
     engine: crate::config::ScriptEngine,
@@ -201,17 +216,19 @@ fn compiled_bytecode(
     lib_dir: &Path,
     deps: &CompileDeps,
     fns: &[lumen_script::ScriptFn],
+    warnings: &mut Vec<String>,
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
         let host = candela_compiler(lib_dir, deps, fns)?;
-        return host
+        let (image, raised) = host
             .compile_bytecode(source, uri)
-            .map(Some)
-            .map_err(|e| RunError::Script(e.to_string()));
+            .map_err(|e| RunError::Script(e.to_string()))?;
+        warnings.extend(raised);
+        return Ok(Some(image));
     }
     #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri, lib_dir, deps, fns);
+    let _ = (engine, source, uri, lib_dir, deps, fns, warnings);
     Ok(None)
 }
 

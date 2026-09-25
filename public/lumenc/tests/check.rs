@@ -203,7 +203,8 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
             .unwrap_or_else(|e| panic!("reading {}: {e}", script.display()));
         let bytes = CandelaHost::new()
             .compile_bytecode(&source, "main.cdl")
-            .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name));
+            .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name))
+            .0;
         match load_program(&bytes, &HostRegistry::new()) {
             Ok(_) | Err(LoadError::HostBinding(_)) => {}
             Err(e) => panic!("template `{}` image is not loadable: {e}", template.name),

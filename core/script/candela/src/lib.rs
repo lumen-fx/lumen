@@ -121,6 +121,8 @@
 #![warn(missing_docs)]
 
 pub mod builtins;
+#[cfg(feature = "compiler")]
+mod compile_warnings;
 mod declare;
 #[cfg(feature = "compiler")]
 mod diagnose;

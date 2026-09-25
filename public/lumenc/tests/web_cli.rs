@@ -571,11 +571,10 @@ fn a_block_with_no_rows_emits_neither_body_nor_box() {
 }
 
 #[test]
-fn a_function_the_program_cannot_be_called_by_is_named() {
-    // candela exports a function only when every parameter it takes is
-    // annotated. One written without an annotation compiles and ships and is
-    // then never called, and on the desktop it works anyway, because the
-    // compiler is in the process there. The build has to say so.
+fn a_function_with_a_bare_parameter_is_named_once() {
+    // A function a host calls by name with a parameter that says nothing about
+    // its type is exported taking `any`, which the compiler warns about. The
+    // build relays that warning on its own channel, once.
     let scratch = scratch("exports");
     let app = scratch.join("app");
     std::fs::create_dir_all(app.join("src")).expect("create the app directory");
@@ -608,8 +607,12 @@ fn a_function_the_program_cannot_be_called_by_is_named() {
         .expect("running lumenc web");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("`calc_label`"), "{stderr}");
-    assert!(stderr.contains("does not export it"), "{stderr}");
+    assert!(
+        stderr.contains("lumenc web: warning: ")
+            && stderr.contains("`calc_label` takes `n` with no type"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("calc_label").count(), 1, "{stderr}");
 }
 
 /// Write one app whose only component is `fn Greet` as `source` declares it,
@@ -646,11 +649,10 @@ fn build_app(app: &Path, scratch: &Path, extra: &[&str]) -> (bool, String) {
     )
 }
 
-/// The fix the build prints is the component's own parameter list, so an
-/// author can paste it. A made-up list would send someone writing `fn
-/// Greet(id: any)` over a function that never took an `id`.
+/// candela raises a warning per bare parameter; the build prints one line
+/// per function naming them all, and `--strict` fails on it.
 #[test]
-fn an_unexported_component_is_named_with_the_signature_to_write() {
+fn a_component_with_bare_parameters_is_one_warning() {
     let scratch = scratch("component-signature");
     let app = component_app(
         &scratch,
@@ -661,11 +663,14 @@ fn an_unexported_component_is_named_with_the_signature_to_write() {
 
     let (ok, stderr) = build_app(&app, &scratch, &[]);
     assert!(ok, "{stderr}");
-    assert!(stderr.contains("does not export `Greet`"), "{stderr}");
     assert!(
-        stderr.contains("`fn Greet(name: any, count: any)`"),
+        stderr.contains("`Greet` takes `name`, `count` with no type"),
         "{stderr}"
     );
+    assert_eq!(stderr.matches("Greet").count(), 1, "{stderr}");
+    // Taking `any` is still a function the page calls, so its body is in it.
+    let html = read(&scratch.join("site"), "index.html");
+    assert!(!html.contains("lm-fragment"), "{html}");
 
     // The same gap is a failed build for anyone who asks for one.
     let (ok, stderr) = build_app(&app, &scratch, &["--strict"]);
@@ -673,10 +678,8 @@ fn an_unexported_component_is_named_with_the_signature_to_write() {
     assert!(stderr.contains("--strict"), "{stderr}");
 }
 
-/// A component inside a `<for>` is left standing on purpose: the tree holds
-/// the row template and each row's body is written into the row. It gets the
-/// one warning that says so, and not a second one accusing the build of
-/// calling it.
+/// A component inside a `<for>` is called once per row, and its bare
+/// parameter is one warning, not one per row or per compile.
 #[test]
 fn a_component_inside_a_for_is_reported_once() {
     let scratch = scratch("component-row");
@@ -694,9 +697,14 @@ fn a_component_inside_a_for_is_reported_once() {
     // build reads what the component built.
     let (ok, stderr) = build_app(&app, &scratch, &["--prerender", "run"]);
     assert!(ok, "{stderr}");
-    let mentions = stderr.matches("`Row`").count();
+    let mentions = stderr.matches("Row").count();
     assert_eq!(mentions, 1, "{stderr}");
-    assert!(stderr.contains("is written inside a `<for>`"), "{stderr}");
+    assert!(
+        stderr.contains("`Row` takes `label` with no type"),
+        "{stderr}"
+    );
+    let html = read(&scratch.join("site"), "index.html");
+    assert!(html.contains("Alpha"), "the row carries its body: {html}");
 }
 
 #[test]

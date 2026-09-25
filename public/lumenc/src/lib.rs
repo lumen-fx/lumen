@@ -296,21 +296,31 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
 
 /// AOT-compile an app from source for the desktop (`lumenc build`), using the
 /// compiler's default parser. See [`lumen_runtime::compile_app`].
+///
+/// What the script compiler warned about is printed to stderr, one line each.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let deps =
         addons::target_deps(dir, lumen_modules::Target::Desktop, None).map_err(RunError::Plugin)?;
-    compile_app_with(dir, None, &deps)
+    let mut warnings = Vec::new();
+    let compiled = compile_app_with(dir, None, &deps, &mut warnings)?;
+    for warning in &warnings {
+        eprintln!("lumenc build: warning: {warning}");
+    }
+    Ok(compiled)
 }
 
 /// AOT-compile an app from source against what was resolved for its target,
 /// with the skin named outright when `skin` is set, which is how `lumenc web`
 /// builds a site. See [`lumen_runtime::compile_app_with_skin`].
+///
+/// What the script compiler warned about is added to `warnings`.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app_with(
     dir: &std::path::Path,
     skin: Option<&str>,
     deps: &addons::TargetDeps,
+    warnings: &mut Vec<String>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let plugins = plugin_host::compiler_plugins_for(dir, false, &deps.resolved.compiler_plugins)
         .map_err(RunError::Plugin)?;
@@ -320,5 +330,6 @@ pub fn compile_app_with(
         &*plugins,
         skin,
         &deps.compile,
+        warnings,
     )
 }

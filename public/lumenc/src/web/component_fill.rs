@@ -59,11 +59,12 @@ const MAX_ROUNDS: u32 = 16;
 /// produces, and hand back what the components inside its `<for>` rows built
 /// along with the names this pass left standing on purpose.
 ///
-/// The tree is left as it was where a marker cannot be resolved, which is a
-/// component the loaded program cannot be called by name; the export check in
-/// `web::cli` reports it, because it holds the export list. The names that come
-/// back are the ones it must not report: a marker this pass never called, so
-/// nothing about it says the call came back empty.
+/// The tree is left as it was where a marker cannot be resolved: a call that
+/// built nothing, which the export check in `web::cli` reports because it
+/// holds the export list, or a component the loaded program cannot be called
+/// by, which the compile already warned about. The names that come back are
+/// the ones the export check must not report: a marker this pass never
+/// called, so nothing about it says the call came back empty.
 ///
 /// A component inside a `<for>` row renders a body per row, and the tree holds
 /// the template rather than the rows, so those bodies come back separately for

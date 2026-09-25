@@ -28,7 +28,8 @@ fn main() {}
 fn a_compiled_program_runs_under_the_vm_alone() {
     let bytes = CandelaHost::new()
         .compile_bytecode(STANDALONE, "standalone.cdl")
-        .expect("the program compiles");
+        .expect("the program compiles")
+        .0;
     let hosts = HostRegistry::new();
     let mut program = load_program(&bytes, &hosts).expect("the image loads");
     program.run();
@@ -47,7 +48,8 @@ fn a_compiled_program_runs_under_the_vm_alone() {
 fn a_function_the_host_calls_is_callable_by_name() {
     let bytes = CandelaHost::new()
         .compile_bytecode(STANDALONE, "standalone.cdl")
-        .expect("the program compiles");
+        .expect("the program compiles")
+        .0;
     let hosts = HostRegistry::new();
     let program = load_program(&bytes, &hosts).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
@@ -85,7 +87,8 @@ fn main() {}
 "#;
     let bytes = CandelaHost::new()
         .compile_bytecode(HANDLERS, "handlers.cdl")
-        .expect("the handlers compile");
+        .expect("the handlers compile")
+        .0;
     let program = load_program(&bytes, &HostRegistry::new()).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
 
@@ -121,7 +124,8 @@ fn main() {}
 "#;
     let bytes = CandelaHost::new()
         .compile_bytecode(source, "smoke.cdl")
-        .expect("the program compiles");
+        .expect("the program compiles")
+        .0;
 
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn(
@@ -145,6 +149,37 @@ fn main() {}
         text.contains("signal_get"),
         "the ones with no closure behind them are what it names: {text}"
     );
+}
+
+/// candela raises a warning per bare parameter of a function a host calls by
+/// name; the build gets one line per function, placed in the author's source,
+/// and nothing printed on its behalf.
+#[test]
+fn a_function_with_bare_parameters_is_one_warning_line() {
+    let source = "fn greet(name, count, loud: bool) {\n    return name;\n}\n\nfn main() {}\n";
+    let (_, warnings) = CandelaHost::new()
+        .compile_bytecode(source, "greet.cdl")
+        .expect("a bare parameter compiles as `any`");
+    assert_eq!(
+        warnings,
+        [
+            "greet.cdl:1:4: `greet` takes `name`, `count` with no type, so a host calling it passes \
+          them as `any`; annotate each with the type the host passes"
+        ],
+    );
+}
+
+#[test]
+fn a_fully_annotated_program_raises_no_warning() {
+    let (_, warnings) = CandelaHost::new()
+        .compile_bytecode(
+            STANDALONE
+                .replace("fn undeclared(n)", "fn undeclared(n: int)")
+                .as_str(),
+            "standalone.cdl",
+        )
+        .expect("the program compiles");
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[test]
@@ -204,7 +239,8 @@ fn main() {}
 "#;
     let bytes = CandelaHost::new()
         .compile_bytecode(DECLARED, "gpio.cdl")
-        .expect("the program compiles");
+        .expect("the program compiles")
+        .0;
 
     let Err(error) = load_program(&bytes, &HostRegistry::new()) else {
         panic!("nothing is registered under `gpio`, so the load fails");
@@ -271,7 +307,8 @@ fn main() {}
         .expect("gpio::level declares");
     let bytes = host
         .compile_bytecode(SOURCE, "gpio_plugin.cdl")
-        .expect("the registration folds a declaration in, so the call resolves");
+        .expect("the registration folds a declaration in, so the call resolves")
+        .0;
 
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
@@ -303,7 +340,8 @@ fn main() {}
         .expect("lumen::echo_len declares");
     let bytes = host
         .compile_bytecode(SOURCE, "module_fn.cdl")
-        .expect("the registration folds into the prelude's own lumen block");
+        .expect("the registration folds into the prelude's own lumen block")
+        .0;
 
     // The artifact host binds the closure the same way the source declared
     // it: the same registration, made again before the image loads.
@@ -337,7 +375,8 @@ fn main() {}
         .expect("lumen::echo_len declares");
     let bytes = host
         .compile_bytecode(SOURCE, "module_fn.cdl")
-        .expect("the registration folds into the prelude's own lumen block");
+        .expect("the registration folds into the prelude's own lumen block")
+        .0;
 
     let mut vm_host = CandelaVmHost::new(bytes);
     let err = vm_host
