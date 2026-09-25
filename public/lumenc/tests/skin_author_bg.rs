@@ -148,3 +148,41 @@ fn an_inherited_custom_property_reaches_the_field() {
          drops the author bg and leaves the skin's navy"
     );
 }
+
+/// An author background image counts as a resting `bg` the same way a
+/// colour does: the skin's resting fill gives way to it, and the skin's hover
+/// fill is dropped, so hovering the field does not paint over the image.
+#[test]
+fn an_author_background_image_survives_a_hover() {
+    let css = r##".editor { bg: url("art/paper.png"); radius: 10; padding: 16; }"##;
+    let mut app = build(MARKUP, css, 4);
+    let ed = find(&mut app, "ed");
+    assert!(
+        app.world.get::<lumen_assets::BackgroundImage>(ed).is_some(),
+        "the field carries its background image"
+    );
+    assert_eq!(
+        fill_of(&app, ed),
+        None,
+        "the skin's resting fill still paints under the image"
+    );
+
+    let t = *app.world.get::<Transform>(ed).unwrap();
+    let p = t.absolute + t.size * 0.5;
+    app.world.resource_mut::<PointerState>().position = Some(p);
+    app.world
+        .resource_mut::<bevy_ecs::message::Messages<PointerMoved>>()
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
+    app.tick();
+    app.tick();
+    assert!(app.world.get::<lumen_core::input::Hovered>(ed).is_some());
+    let tint = app
+        .world
+        .get::<lumen_primitives::Interaction>(ed)
+        .and_then(|i| i.hover_tint);
+    assert_eq!(tint, None, "the skin installed a hover fill over the image");
+    assert_eq!(fill_of(&app, ed), None, "hovering painted a fill");
+}

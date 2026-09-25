@@ -602,3 +602,30 @@ fn a_longer_name_ending_in_the_same_letters_is_not_the_function() {
         "src: burl(x.png); background: url(\"assets/y.png\");"
     );
 }
+
+/// A `bg` that reads a token holding an image, directly or through another
+/// token, says how the image is placed; one reading a colour stays a single
+/// `background`.
+#[test]
+fn a_background_placed_only_where_a_token_holds_an_image() {
+    let emitted = css(vec![
+        rule(
+            ":root",
+            &[
+                ("--art", "url(\"assets/art/hero.png\")"),
+                ("--hero", "var(--art)"),
+                ("--tint", "#0a3358"),
+            ],
+        ),
+        rule(".a", &[("bg", "var(--hero)")]),
+        rule(".b", &[("bg", "var(--tint)")]),
+    ]);
+    let placed = ".a {\n  background: var(--hero);\n  background-size: var(--lm-bg-size, \
+                  cover);\n  background-position: var(--lm-bg-position, center);\n  \
+                  background-repeat: no-repeat;\n  background-origin: border-box;\n}\n";
+    assert!(emitted.contains(placed), "{emitted}");
+    assert!(
+        emitted.contains(".b {\n  background: var(--tint);\n}\n"),
+        "{emitted}"
+    );
+}

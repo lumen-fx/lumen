@@ -29,9 +29,9 @@
 
 use crate::layout_ir::{
     Attributes, BindKind, BindSpec, DeferredAttr, Element, FlexAlign, FlexAxis, FlexJustify,
-    FragmentUse, ImageFitSpec, InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec,
-    LintFinding, LintKind, LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec,
-    ScriptRefs, ScrollAxisSpec, TextAlignSpec, TextWrapSpec, WidgetRole,
+    FragmentUse, InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec, LintFinding, LintKind,
+    LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScriptRefs, ScrollAxisSpec,
+    TextAlignSpec, TextWrapSpec, WidgetRole,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 // `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
@@ -2819,25 +2819,8 @@ fn apply_attribute(
                 inner,
             }];
         }
-        "fit" => {
-            attrs.image_fit = Some(match value {
-                "fill" => ImageFitSpec::Fill,
-                "cover" => ImageFitSpec::Cover,
-                "contain" => ImageFitSpec::Contain,
-                "none" => ImageFitSpec::None,
-                "scale-down" => ImageFitSpec::ScaleDown,
-                other => {
-                    return Err(bad(
-                        tag,
-                        name,
-                        value,
-                        format!(
-                            "unknown fit '{other}' (supported: fill, cover, contain, none, scale-down)"
-                        ),
-                    ));
-                }
-            });
-        }
+        "fit" => attrs.image_fit = Some(crate::values::parse_image_fit(tag, name, value)?),
+        "bg-fit" => attrs.bg_fit = Some(crate::values::parse_image_fit(tag, name, value)?),
         "overflow" | "overflow-x" | "overflow-y" => {
             let o = match value {
                 "visible" => OverflowSpec::Visible,

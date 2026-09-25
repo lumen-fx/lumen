@@ -33,7 +33,9 @@ use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
+use lumen_core::components::{Opacity, Visuals};
 use lumen_core::prelude::*;
+use lumen_core::render_world::{BackgroundClip, parent_opacities, parent_scroll_offsets};
 use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::Entry as MapEntry;
@@ -107,6 +109,26 @@ pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 /// Replaced by [`LoadedImage`] (or [`ImageLoadFailed`]) once the asset plugin finishes decoding.
 #[derive(Component, Clone, Debug)]
 pub struct ImageSource(pub PathBuf);
+
+/// Marks an element whose [`ImageSource`] is its background (`bg: url(...)`)
+/// rather than its content. The image loads and caches like any other
+/// source; it paints behind the element's content, clipped to its box, and
+/// never sizes the element.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackgroundImage {
+    /// How the image fills the element's box (`bg-fit`).
+    pub fit: lumen_core::components::ImageFit,
+}
+
+/// The path an authored asset reference loads from: a `lumen://` URI as
+/// written, anything else resolved against the app directory.
+pub fn resolve_source_path(path: &str) -> PathBuf {
+    if path.starts_with("lumen://") {
+        PathBuf::from(path)
+    } else {
+        lumen_core::app_paths::resolve(path)
+    }
+}
 
 /// Newtype wrapper holding an `Arc<[u8]>` and implementing `AsRef<[u8]>` so it can be passed to
 /// `peniko::Blob::new`, which requires `Arc<T: ?Sized + AsRef<[u8]> + Send + Sync>`.
@@ -1011,10 +1033,50 @@ pub fn register_asset_loader(app: &mut App, loader: impl AssetLoader) {
 #[allow(dead_code)]
 const _LRU_CAP_PROBE: NonZeroUsize = NonZeroUsize::MIN;
 
+/// What placing a background image needs from the whole tree: the scroll
+/// offset and the ancestor opacity each element inherits. A background moves
+/// and fades with the element whose colour it replaces, so it reads both the
+/// way the rect extract does.
+struct Backdrop {
+    scroll: HashMap<Entity, glam::Vec2>,
+    inherited_alpha: HashMap<Entity, f32>,
+}
+
+impl Backdrop {
+    fn new(main: &mut World, parents: &HashMap<Entity, Entity>) -> Self {
+        Self {
+            scroll: parent_scroll_offsets(main, parents),
+            inherited_alpha: parent_opacities(main, parents),
+        }
+    }
+
+    /// The on-screen origin, the alpha, and the clip of `e`'s background.
+    fn place(
+        &self,
+        e: Entity,
+        t: &Transform,
+        visuals: Option<&Visuals>,
+        opacity: Option<&Opacity>,
+    ) -> (glam::Vec2, f32, BackgroundClip) {
+        let origin = t.absolute - self.scroll.get(&e).copied().unwrap_or(glam::Vec2::ZERO);
+        let alpha = opacity.map(|o| o.0).unwrap_or(1.0)
+            * self.inherited_alpha.get(&e).copied().unwrap_or(1.0);
+        let radii = visuals
+            .map(|v| v.corner_radii.unwrap_or([v.radius; 4]))
+            .unwrap_or([0.0; 4]);
+        let clip = BackgroundClip {
+            origin,
+            size: t.size,
+            radii,
+        };
+        (origin, alpha, clip)
+    }
+}
+
 /// Extracts every `(Transform, LoadedSvg)` entity into an [`ExtractedSvg`] in the render world via keyed upsert.
 /// Despawns prior-frame render entries whose source entity no longer matches.
 pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
-    use lumen_core::components::{ImageFit, Opacity, SvgPayload};
+    use lumen_core::components::{ImageFit, SvgPayload};
     use lumen_core::render_world::{
         RenderEntityMap, build_parent_map, hidden_entities, paint_order_of,
     };
@@ -1023,6 +1085,7 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
     // the whole subtree (CSS `visibility: hidden`), matching the core rect /
     // text extractors.
     let hidden = hidden_entities(main, &parents);
+    let backdrop = Backdrop::new(main, &parents);
     #[allow(clippy::type_complexity)]
     let mut q = main.query::<(
         Entity,
@@ -1030,26 +1093,41 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
         &LoadedSvg,
         Option<&ImageFit>,
         Option<&Opacity>,
+        Option<&BackgroundImage>,
+        Option<&Visuals>,
     )>();
     let pairs: Vec<(Entity, ExtractedSvg, SvgPayload)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .map(|(e, t, svg, fit, opacity)| {
+        .map(|(e, t, svg, fit, opacity, bg, visuals)| {
+            let (origin, alpha, fit, background) = match bg {
+                Some(bg) => {
+                    let (origin, alpha, clip) = backdrop.place(e, t, visuals, opacity);
+                    (origin, alpha, bg.fit, Some(clip))
+                }
+                None => (
+                    t.absolute,
+                    opacity.map(|o| o.0).unwrap_or(1.0),
+                    // Default fit for SVGs is `Contain` (aspect-preserving).
+                    fit.copied().unwrap_or(ImageFit::Contain),
+                    None,
+                ),
+            };
             let extracted = ExtractedSvg {
-                origin: t.absolute,
+                origin,
                 size: t.size,
                 intrinsic: svg.intrinsic,
                 asset: svg.0.clone(),
-                // Default fit for SVGs is `Contain` (aspect-preserving).
-                fit: fit.copied().unwrap_or(ImageFit::Contain),
+                fit,
                 order: paint_order_of(e, &parents, &mut depth_cache),
-                alpha: opacity.map(|o| o.0).unwrap_or(1.0),
+                alpha,
             };
             // Sidecar payload for the Node-IR splice path. The walker downcasts the inner Arc
             // back to ExtractedSvg.
             let payload = SvgPayload {
                 payload: std::sync::Arc::new(extracted.clone()),
                 order: extracted.order,
+                background,
             };
             (e, extracted, payload)
         })
@@ -1105,13 +1183,14 @@ pub struct ExtractedImageBlob(pub vello::peniko::Blob<u8>);
 /// The sidecar [`ExtractedImageBlob`] is the Node-IR-ready blob payload - see its doc-comment for the splice
 /// path to `Node::Image { blob: Some(...) }`.
 pub fn extract_loaded_images(main: &mut World, render: &mut World) {
-    use lumen_core::components::{ImageBlob, ImageFit, Opacity};
+    use lumen_core::components::{ImageBlob, ImageFit};
     use lumen_core::render_world::{build_parent_map, hidden_entities, paint_order_of};
     let (parents, mut depth_cache) = build_parent_map(main);
     // A `Visible(false)` on this entity or any ancestor suppresses paint for
     // the whole subtree (CSS `visibility: hidden`), matching the core rect /
     // text extractors.
     let hidden = hidden_entities(main, &parents);
+    let backdrop = Backdrop::new(main, &parents);
     #[allow(clippy::type_complexity)]
     let mut q = main.query::<(
         Entity,
@@ -1119,20 +1198,35 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
         &LoadedImage,
         Option<&ImageFit>,
         Option<&Opacity>,
+        Option<&BackgroundImage>,
+        Option<&Visuals>,
     )>();
     let rows: Vec<(Entity, ExtractedImage, ExtractedImageBlob, ImageBlob)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .map(|(e, t, img, fit, opacity)| {
+        .map(|(e, t, img, fit, opacity, bg, visuals)| {
+            let (origin, alpha, fit, background) = match bg {
+                Some(bg) => {
+                    let (origin, alpha, clip) = backdrop.place(e, t, visuals, opacity);
+                    (origin, alpha, bg.fit, Some(clip))
+                }
+                None => (
+                    t.absolute,
+                    opacity.map(|o| o.0).unwrap_or(1.0),
+                    fit.copied().unwrap_or_default(),
+                    None,
+                ),
+            };
             let extracted = ExtractedImage {
-                origin: t.absolute,
+                origin,
                 size: t.size,
                 width: img.width,
                 height: img.height,
                 rgba: img.rgba.clone(),
-                fit: fit.copied().unwrap_or_default(),
+                fit,
                 order: paint_order_of(e, &parents, &mut depth_cache),
-                alpha: opacity.map(|o| o.0).unwrap_or(1.0),
+                alpha,
+                background,
             };
             // Sidecar: the legacy `ExtractedImageBlob` keeps any external query path
             // (embedders, headless tests) working; the core-facing `ImageBlob` carries the same
@@ -1409,6 +1503,10 @@ pub fn process_watch_events(
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Enqueued;
 
+/// A content image whose bitmap just landed. A [`BackgroundImage`] is left
+/// out: a background never sizes its element.
+type NewContentImage = (Changed<LoadedImage>, Without<BackgroundImage>);
+
 /// D6: stamp the decoded bitmap's intrinsic size onto
 /// [`lumen_core::components::ImageComponent`] as soon as a
 /// [`LoadedImage`] lands on the entity (cache hit or decode
@@ -1422,9 +1520,11 @@ pub struct Enqueued;
 /// `Changed<ImageComponent>` hook in the layout crate turns this write
 /// into a `DirtyLayout`, so the image relayouts to its natural size on
 /// the tick after decode.
+///
+/// A [`BackgroundImage`] is skipped: a background never sizes its element.
 pub fn stamp_image_natural_size(
     mut commands: Commands,
-    changed: Query<(Entity, &ImageSource, &LoadedImage), Changed<LoadedImage>>,
+    changed: Query<(Entity, &ImageSource, &LoadedImage), NewContentImage>,
     mut existing: Query<&mut lumen_core::components::ImageComponent>,
 ) {
     for (entity, source, img) in &changed {

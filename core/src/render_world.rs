@@ -737,6 +737,22 @@ pub struct ExtractedImage {
     pub order: PaintOrder,
     /// Alpha multiplier from [`crate::components::Opacity`] (1.0 when absent). Applied via `push_layer` at draw time so the whole image fades together.
     pub alpha: f32,
+    /// `Some` when the image is its element's background (`bg: url(...)`)
+    /// rather than an `<image>`. A background paints over the element's fill
+    /// and under its border, at the element's own [`PaintOrder`].
+    pub background: Option<BackgroundClip>,
+}
+
+/// The box a background image is clipped to: the element's border box with
+/// its corner radii, the same shape its background colour fills.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackgroundClip {
+    /// Top-left in window coordinates.
+    pub origin: Vec2,
+    /// Border-box size.
+    pub size: Vec2,
+    /// Per-corner radii `[top-left, top-right, bottom-right, bottom-left]`.
+    pub radii: [f32; 4],
 }
 
 /// Single built-in fallback for the selection highlight when no

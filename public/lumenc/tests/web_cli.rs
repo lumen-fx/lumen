@@ -413,6 +413,56 @@ fn a_site_ships_the_font_its_stylesheet_declares() {
     check_documents(&out, "/");
 }
 
+/// A site ships the images its backgrounds name.
+///
+/// A `url()` reached through a custom property and one written in a `bg`
+/// attribute are both copied under `assets/`, the stylesheet points at the
+/// copies, and every image background says how it is placed: once, sized by
+/// its `bg-fit`, with that fit kept from reaching the children.
+#[test]
+fn a_site_ships_the_images_its_backgrounds_name() {
+    let scratch = scratch("bg-image");
+    let out = scratch.join("site");
+    web(
+        "fixtures/web-bg-image",
+        &out,
+        &["--render", "static", "--no-runtime"],
+    );
+
+    let styles = read(&out, &hashed(&out, "styles.css"));
+    let hero = hashed(&out, "assets/art/hero.png");
+    let badge = hashed(&out, "assets/art/badge.png");
+    for (path, source) in [(&hero, "art/hero.png"), (&badge, "art/badge.png")] {
+        assert_eq!(
+            std::fs::read(out.join(path)).expect("the image is copied into the site"),
+            std::fs::read(repo().join("fixtures/web-bg-image").join(source))
+                .expect("the source image"),
+        );
+    }
+    assert!(
+        styles.contains(&format!("--art: url(\"{hero}\")")),
+        "the custom property names the placed file:\n{styles}"
+    );
+    assert!(
+        styles.contains(&format!("background: url(\"{badge}\")")),
+        "the attribute's image names the placed file:\n{styles}"
+    );
+    for placement in [
+        "background: var(--art);",
+        "background-size: var(--lm-bg-size, cover);",
+        "background-position: var(--lm-bg-position, center);",
+        "background-repeat: no-repeat;",
+        "background-origin: border-box;",
+        "--lm-bg-size: contain;",
+        "--lm-bg-size: auto;",
+        "--lm-bg-position: 0 0;",
+        "@property --lm-bg-size { syntax: \"*\"; inherits: false; }",
+    ] {
+        assert!(styles.contains(placement), "no `{placement}` in:\n{styles}");
+    }
+    check_documents(&out, "/");
+}
+
 #[test]
 fn a_candela_app_ships_the_program_the_browser_runs() {
     let scratch = scratch("candela");

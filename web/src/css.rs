@@ -26,7 +26,8 @@ use lumen_html::style::{
 };
 use lumen_html::web_names;
 use lumen_ir::css::{
-    Origin, Rule, Specificity, Stylesheet, media_query_to_css, palette_root_css, selector_to_web,
+    Origin, Rule, Specificity, Stylesheet, canonical_property_name, media_query_to_css,
+    palette_root_css, selector_to_web,
 };
 
 use crate::markup::MarkupSheet;
@@ -46,6 +47,13 @@ pub const RESET_CSS: &str = include_str!("reset.css");
 /// overridden by `:hover`, a media query or a keyframe.
 const LAYER_ORDER: &str = "@layer lumen.reset, lumen.sheet;\n";
 
+/// The custom properties `bg-fit` writes, registered as not inherited. On
+/// the desktop `bg-fit` applies to the element it is written on and nothing
+/// else, and an unregistered custom property would pass a parent's value
+/// down to every background image under it.
+const BG_FIT_PROPERTIES: &str = "@property --lm-bg-size { syntax: \"*\"; inherits: false; }\n\
+@property --lm-bg-position { syntax: \"*\"; inherits: false; }\n";
+
 /// The whole `styles.css` for a site.
 ///
 /// In [`CssMode::Computed`] the file is the reset and the at-rules a
@@ -55,6 +63,7 @@ const LAYER_ORDER: &str = "@layer lumen.reset, lumen.sheet;\n";
 /// second copy of the rules would only argue with them.
 pub fn styles_css(sheet: Option<&Stylesheet>, markup: &MarkupSheet, mode: CssMode) -> String {
     let mut out = String::from(LAYER_ORDER);
+    out.push_str(BG_FIT_PROPERTIES);
     if let Some(sheet) = sheet {
         out.push_str(&at_rules_css(sheet, mode));
     }
@@ -353,6 +362,11 @@ type SortKey = (Origin, Specificity, usize, usize);
 #[derive(Debug, Default)]
 pub struct Tokens {
     lengths: BTreeSet<String>,
+    /// Tokens that hold a `url()`, directly or through another token. A
+    /// `bg` reading one of these is an image and says how it is placed; a
+    /// `bg` reading any other token is a colour or a gradient and is written
+    /// as one declaration.
+    images: BTreeSet<String>,
     /// Tokens the sheet uses as a length in one place and as a plain number
     /// in another.
     pub ambiguous: BTreeSet<String>,
@@ -373,10 +387,14 @@ impl Tokens {
         // that decides `--a` may be read after this definition, so the two
         // sets are grown to a fixed point rather than in one pass.
         let mut aliases: Vec<(String, Vec<String>)> = Vec::new();
+        let mut images: BTreeSet<String> = BTreeSet::new();
         for rule in &sheet.rules {
             for declaration in &rule.declarations {
                 let referenced = var_names(&declaration.value);
                 if declaration.name.starts_with("--") {
+                    if declaration.value.to_ascii_lowercase().contains("url(") {
+                        images.insert(declaration.name.clone());
+                    }
                     if !referenced.is_empty() {
                         aliases.push((declaration.name.clone(), referenced));
                     }
@@ -394,6 +412,18 @@ impl Tokens {
                     &mut others
                 };
                 set.extend(referenced);
+            }
+        }
+        // An image flows the other way along an alias: `--a: var(--b)` holds
+        // an image when `--b` does.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (name, referenced) in &aliases {
+                if !images.contains(name) && referenced.iter().any(|r| images.contains(r)) {
+                    images.insert(name.clone());
+                    changed = true;
+                }
             }
         }
         let mut changed = true;
@@ -425,7 +455,25 @@ impl Tokens {
                 .filter(|name| candidates.contains(*name))
                 .cloned()
                 .collect(),
+            images,
             ambiguous,
+        }
+    }
+
+    /// The declarations `bg: value` becomes in this sheet. The rewrite on its
+    /// own cannot see what a token holds, so it places every `var()` as if it
+    /// were an image; here, a token the sheet never points at an image stays
+    /// one plain `background`.
+    fn background(&self, value: &str) -> Emission {
+        let value = value.trim();
+        let image = value.to_ascii_lowercase().contains("url(")
+            || var_names(value)
+                .iter()
+                .any(|name| self.images.contains(name));
+        if image {
+            rewrite_property("bg", value)
+        } else {
+            Emission::Plain(vec![WebDecl::new("background", value)])
         }
     }
 
@@ -525,7 +573,12 @@ fn split_declarations(
     let mut plain: Declarations = Vec::new();
     let mut states: Vec<(&'static str, Declarations)> = Vec::new();
     for decl in &rule.declarations {
-        match rewrite_property(&decl.name, &decl.value) {
+        let emission = if canonical_property_name(&decl.name) == "bg" {
+            tokens.background(&decl.value)
+        } else {
+            rewrite_property(&decl.name, &decl.value)
+        };
+        match emission {
             Emission::Plain(written) => {
                 plain.extend(written.into_iter().map(|d| (d, decl.important)));
             }
@@ -589,7 +642,7 @@ mod tests {
         let emitted = styles_css(None, &MarkupSheet::default(), CssMode::Computed);
         assert_eq!(
             emitted,
-            format!("{LAYER_ORDER}@layer lumen.reset {{\n{RESET_CSS}}}\n")
+            format!("{LAYER_ORDER}{BG_FIT_PROPERTIES}@layer lumen.reset {{\n{RESET_CSS}}}\n")
         );
     }
 
