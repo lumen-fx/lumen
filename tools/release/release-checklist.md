@@ -100,26 +100,31 @@ binary the two Linux archives do, copied in rather than rebuilt.
    `about.toml`, rather than dropping the crate from the report.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
    about to tag. It usually is already, because the previous release set it
-   (step 8). If it is not, run `tools/release/bump-version.py <version>`,
+   (step 9). If it is not, run `tools/release/bump-version.py <version>`,
    commit, push, and wait for green. The tag has to match this value: the
    release workflow compares them first and publishes nothing if they differ,
    because the MSI's version, the install receipt, and `lumenc --version` all
    read from these two places.
-3. Check that every template repository under `lumen-fx` (`blank`, `hello`,
+3. Read `docs/migration/unreleased/` on the commit you are about to tag. Those
+   notes are this release's migration guide, and their headings go into the
+   release body, so fix a note now rather than after the tag. A breaking pull
+   request that merged without one needs its note added first (CONTRIBUTING.md,
+   Breaking changes).
+4. Check that every template repository under `lumen-fx` (`blank`, `hello`,
    `counter`, `form`, `todo`, `dashboard`, `settings`, `hotkeys`) has a
    release tagged `vX.Y.Z`. A template release is named for the Lumen release
    it is for, and the build fetches that tag; a repository without it fails
    the build before anything is published. Tag any that lack it (a pushed
    tag publishes the release, and a tag re-pushed before Lumen `vX.Y.Z` is
    out republishes it) and wait for their `release` workflows.
-4. Tag and push:
+5. Tag and push:
 
    ```sh
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
-5. The `release` workflow then, automatically, for each target:
+6. The `release` workflow then, automatically, for each target:
    - checks out at the tag and builds `lumenc`, `liblumen`, the launcher
      stub, and `lumen-server` in release mode (`cargo build --release` with
      `-p lumenc`, `-p lumen`, `-p lumen-launcher`, and `-p lumen-server`; the
@@ -157,6 +162,14 @@ binary the two Linux archives do, copied in rather than rebuilt.
      did get built into `sha256sums.txt`, creates the release for the tag if
      it does not exist, and uploads the archives and the checksum file.
 
+   The release body is GitHub's generated list of merged pull requests. When
+   the tag is a plain `vX.Y.Z` and its tree has migration notes in `docs/migration/unreleased/`,
+   `tools/release/migration-notes.sh` puts a section above that list:
+   `## Migrating from <previous release>`, a link to
+   `https://docs.lumenfx.dev/migration/vX.Y.Z/`, and the heading of each note.
+   A release with no notes gets the generated list alone. The body is written
+   only when the release is created, so a re-run leaves an edited body alone.
+
    Beside the per-target archives it builds the browser runtime once, as
    `lumen-web.tar.gz`. That pair is WebAssembly, so it is the same file on
    every platform; `lumenc web` downloads it the first time a site needs it,
@@ -169,7 +182,7 @@ binary the two Linux archives do, copied in rather than rebuilt.
    Re-running the workflow after a fix is safe, because `gh release upload
    --clobber` replaces same-named assets rather than erroring on them.
 
-6. The same run then goes on to the four channels a release feeds, each in the
+7. The same run then goes on to the four channels a release feeds, each in the
    workflow that owns it and each checked out at the tag: `publish.yml` for the
    language registries, `publish-packages.yml` for the OS package managers,
    `publish-extensions.yml` for the editor marketplaces, and `site-rebuild.yml`
@@ -209,11 +222,20 @@ binary the two Linux archives do, copied in rather than rebuilt.
    in the same commit. A release carrying an unchanged extension publishes
    nothing and says which registry already holds that version.
 
-7. Work through [Verify](#verify) against the published release.
+8. Work through [Verify](#verify) against the published release.
 
-8. Check that `main` moved on. The release's last job commits
+9. Check that `main` moved on. The release's last job commits
    `chore: set the workspace version to X.Y.Z+1` straight to `main`, so the tag
    push is the whole release and there is nothing left to merge.
+
+   The same commit moves the migration notes the tag shipped with from
+   `docs/migration/unreleased/` to `docs/migration/vX.Y.Z/`, with
+   `tools/release/release-fragments.sh`. It moves exactly the notes in the
+   tag's tree, so a note merged after the tag stays in `unreleased/` for the
+   next release. The notes move even when the version does not because `main`
+   is already at the next version; then the commit is
+   `docs: file the vX.Y.Z migration notes under their release` and carries
+   only the move.
 
    From there `main` carries a version with no release behind it, which is the
    point: `main` builds identify themselves as the version they will become,
@@ -251,10 +273,13 @@ binary the two Linux archives do, copied in rather than rebuilt.
    - The job never ran, because the release job did not finish. Fix what
      failed and re-run the workflow; the bump follows the release, and a
      release that published only some of its archives still reaches it.
-   - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes are left
-     alone. Run `tools/release/bump-version.py` yourself.
+   - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes keep
+     their version and their migration notes stay in `unreleased/` for the
+     plain release that follows. Run `tools/release/bump-version.py` yourself.
    - `main is at N, at or past ...`. The bump already landed, or this is a
-     re-run of an older release. Nothing to do.
+     re-run of an older release. The notes still move if they have not.
+   - `nothing to commit`. The version and the notes are already where they
+     belong. Nothing to do.
    - `a file that always moves did not`. A version literal changed shape, or
      one appeared somewhere new. The job names the file; teach
      `bump-version.py` about it and bump by hand this once.
@@ -265,12 +290,15 @@ binary the two Linux archives do, copied in rather than rebuilt.
      from the repository secrets, or it no longer bypasses the ruleset on
      `main`. The job fails rather than opening a pull request instead, so that
      a broken push is repaired now and not discovered by the next release
-     failing its tag-versus-version check. Restore the key, then run
-     `tools/release/bump-version.py` and land the bump by hand this once.
+     failing its tag-versus-version check. The job log shows the commit it
+     could not push. Restore the key, then run `tools/release/bump-version.py`
+     and `tools/release/release-fragments.sh vX.Y.Z` and land the result by
+     hand this once.
 
    Re-running a release is safe: the first run leaves `main` past the version
-   the tag was cut for, and every later run of that tag, or of an older one,
-   reads `main`, finds it already there, and stops without committing.
+   the tag was cut for with the notes moved, and every later run of that tag,
+   or of an older one, reads `main`, finds both already there, and stops
+   without committing.
 
 ## Why liblumen goes in bin/, not lib/
 

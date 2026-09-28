@@ -39,9 +39,10 @@ name: release
 # own without another tag; the image is re-run from the release run, because
 # it copies that run's binaries.
 #
-# The last job sets the workspace version on `main` to the next patch and
-# pushes it there, so a tag push is the whole release: nothing is left to merge
-# and nothing is left to type.
+# The last job sets the workspace version on `main` to the next patch, files
+# the migration notes the release shipped with under its own version, and
+# pushes both there, so a tag push is the whole release: nothing is left to
+# merge and nothing is left to type.
 
 on:
   push:
@@ -145,6 +146,17 @@ jobs:
       - name: Collect what was built
         run: .github/scripts/collect-release-assets.sh artifacts
 
+      # For a plain vX.Y.Z tag, the migration notes in the tag's tree become
+      # the top of the release body: the release they migrate from, a link to
+      # the guide, and one line per note. The earlier release tags are fetched so the script can name
+      # the one this migrates from. With no notes the file is empty and the
+      # body is GitHub's generated notes alone; with notes, GitHub puts the
+      # file's text above the generated notes.
+      - name: Write the migration notes
+        run: |
+          git fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+          tools/release/migration-notes.sh "${{ github.ref_name }}" "${RUNNER_TEMP}/migration-notes.md"
+
       - name: Create the release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -158,6 +170,7 @@ jobs:
             gh release create "${{ github.ref_name }}" "${files[@]}" \
               --repo "${{ github.repository }}" \
               --title "${{ github.ref_name }}" \
+              --notes-file "${RUNNER_TEMP}/migration-notes.md" \
               --generate-notes
           fi
 
@@ -240,13 +253,23 @@ jobs:
   # remember is not. Tags in any other shape, a prerelease among them, are left
   # alone, because incrementing one is a decision rather than an increment.
   #
+  # The same commit moves the migration notes. In the tree of a tag,
+  # docs/migration/unreleased/ is the guide for that tag, so the notes it holds
+  # move to docs/migration/<tag>/ (tools/release/release-fragments.sh). That
+  # happens even when the version is left alone because main is already at or
+  # past the next one: a note left in unreleased/ would be claimed by the next
+  # release instead. A note merged after the tag is not in its tree and stays
+  # where it is. When only the notes move, the commit carries only them. A
+  # prerelease or other tag shape files no notes; they stay for the plain
+  # release that follows it.
+  #
   # A release that published only some of its archives still published the tag,
   # so main stops claiming that version either way; `release` runs on a partial
   # release and this follows it. What makes a re-run safe is the version on
   # main itself: the first run moves main past the tag it was cut for, and
   # every later run of that tag, or of an older one, reads main, finds it at or
-  # past the number it was going to write, and stops before committing
-  # anything. Two releases running at once resolve the same way, because each
+  # past the number it was going to write, finds the notes already moved, and
+  # stops before committing anything. Two releases running at once resolve the same way, because each
   # attempt re-reads main immediately before it writes.
   #
   # A push that cannot be made fails the job rather than falling back to a
@@ -274,30 +297,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          released="${TAG#v}"
-          if ! printf '%s' "$released" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::notice::${TAG} is not a plain vX.Y.Z tag, so what comes after it is a choice; bump by hand"
-            exit 0
-          fi
-          next="${released%.*}.$(( 10#${released##*.} + 1 ))"
+          # The migration notes move by what the tag's tree holds, so the tag
+          # itself has to be here.
+          git fetch --quiet --depth=1 origin "+refs/tags/${TAG}:refs/tags/${TAG}"
 
-          if [ -z "${DEPLOY_KEY}" ]; then
-            echo "release.yml: no REPIN_DEPLOY_KEY, and main takes no other pusher." >&2
-            echo "Run tools/release/bump-version.py ${next} and land it as a pull request." >&2
-            exit 1
+          next=""
+          released="${TAG#v}"
+          if printf '%s' "$released" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            next="${released%.*}.$(( 10#${released##*.} + 1 ))"
+          else
+            echo "::notice::${TAG} is not a plain vX.Y.Z tag, so what comes after it is a choice; bump by hand"
           fi
-          key_file="$(mktemp)"
-          trap 'rm -f "${key_file}"' EXIT
-          printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
-          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          if [ -n "${DEPLOY_KEY}" ]; then
+            key_file="$(mktemp)"
+            trap 'rm -f "${key_file}"' EXIT
+            printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
+            export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Each attempt reads main, writes the bump against that exact commit,
-          # and pushes it as a fast-forward. A refused push means either that
-          # main moved while this was being prepared, which reading main again
-          # answers, or that the key cannot write, which nothing here answers.
+          # Each attempt reads main, writes the change against that exact
+          # commit, and pushes it as a fast-forward. A refused push means either
+          # that main moved while this was being prepared, which reading main
+          # again answers, or that the key cannot write, which nothing here
+          # answers.
           for attempt in 1 2 3; do
             git fetch --quiet origin main
             git reset --quiet --hard FETCH_HEAD
@@ -306,41 +332,70 @@ jobs:
               exit 1
             fi
 
-            current="$(awk -F'"' '
-              /^\[workspace\.package\]/ { in_section = 1; next }
-              /^\[/                     { in_section = 0 }
-              in_section && /^version[[:space:]]*=/ { print $2; exit }
-            ' Cargo.toml)"
-            if [ -z "$current" ]; then
-              echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
-              exit 1
+            bump=""
+            if [ -n "$next" ]; then
+              current="$(awk -F'"' '
+                /^\[workspace\.package\]/ { in_section = 1; next }
+                /^\[/                     { in_section = 0 }
+                in_section && /^version[[:space:]]*=/ { print $2; exit }
+              ' Cargo.toml)"
+              if [ -z "$current" ]; then
+                echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
+                exit 1
+              fi
+
+              # The bump already landed, or this is a re-run of an older
+              # release after later ones went out. Either way main is where it
+              # should be or further on, and bumping would walk it backwards.
+              oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
+              if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
+                echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+              else
+                python3 tools/release/bump-version.py "$next"
+                if git diff --quiet; then
+                  echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
+                  exit 1
+                fi
+                bump="$next"
+              fi
             fi
 
-            # The bump already landed, or this is a re-run of an older release
-            # after later ones went out. Either way main is where it should be
-            # or further on, and bumping would walk it backwards.
-            oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
-            if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
-              echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+            # The notes a plain tag shipped with move to docs/migration/<tag>/
+            # in the same commit, whether or not the version moved. Notes
+            # merged after the tag are not in its tree and stay for the next
+            # release.
+            tools/release/release-fragments.sh "$TAG"
+
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "::notice::nothing to commit for ${TAG}"
               exit 0
             fi
+            if [ -n "$bump" ]; then
+              body=()
+              if ! git diff --cached --quiet -- docs/migration; then
+                body=(-m "Files the ${TAG} migration notes under docs/migration/${TAG}/.")
+              fi
+              git commit -qa -m "chore: set the workspace version to ${bump}" "${body[@]}"
+            else
+              git commit -qm "docs: file the ${TAG} migration notes under their release"
+            fi
 
-            python3 tools/release/bump-version.py "$next"
-            if git diff --quiet; then
-              echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
+            if [ -z "${DEPLOY_KEY}" ]; then
+              echo "release.yml: no REPIN_DEPLOY_KEY, and main takes no other pusher." >&2
+              echo "Land this commit as a pull request instead:" >&2
+              git show --stat --format='  %s' HEAD >&2
               exit 1
             fi
-            git commit -am "chore: set the workspace version to ${next}"
-
             if git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
-              echo "::notice::main is at ${next}"
+              echo "::notice::main is at $(git rev-parse --short HEAD) for ${TAG}"
               exit 0
             fi
-            echo "::notice::attempt ${attempt} to push ${next} to main was refused; reading main again"
+            echo "::notice::attempt ${attempt} to push the ${TAG} follow-up to main was refused; reading main again"
           done
 
-          echo "release.yml: ${next} could not be pushed to main. Either the deploy key" >&2
-          echo "no longer bypasses the ruleset, or main is moving faster than this can" >&2
-          echo "follow. Run tools/release/bump-version.py ${next} and land it as a" >&2
-          echo "pull request." >&2
+          echo "release.yml: the ${TAG} follow-up could not be pushed to main. Either the" >&2
+          echo "deploy key no longer bypasses the ruleset, or main is moving faster than" >&2
+          echo "this can follow. Run tools/release/bump-version.py <next version> (if the" >&2
+          echo "version still has to move) and tools/release/release-fragments.sh ${TAG}," >&2
+          echo "and land the result as a pull request." >&2
           exit 1

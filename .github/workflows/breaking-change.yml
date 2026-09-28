@@ -1,0 +1,47 @@
+name: breaking change
+
+# A pull request that breaks something an app has to act on carries the
+# C-Breaking-Change label and adds a migration note under
+# docs/migration/unreleased/ in the same change. This keeps the two in step:
+# a label without a note fails, and so does a note without the label. It also
+# checks that each note it adds starts with a `# ` heading and is ASCII, since
+# the docs site builds the migration guide from those files and the release
+# body lists their headings. The rules and the note's shape are in
+# CONTRIBUTING.md; the logic is .github/scripts/breaking-change.sh, which runs
+# the same way from a laptop.
+#
+# It runs again when a label is added or removed, so fixing the label turns
+# the check green without a push.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: migration note
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The notes are read from the pull request's own tree; nothing in it is
+      # built or run.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          sparse-checkout: |
+            .github/scripts/breaking-change.sh
+            docs/migration
+          sparse-checkout-cone-mode: false
+
+      - name: Check the label against the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/breaking-change.sh ${{ github.event.pull_request.number }}

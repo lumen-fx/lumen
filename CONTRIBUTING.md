@@ -72,6 +72,36 @@ CodeQL scans every pull request. A new security alert of high or higher
 severity blocks the merge; fix the finding or dismiss it with a reason on the
 Security tab.
 
+## Breaking changes
+
+A change is breaking when an app, script, or embedder that works on the last
+release has to change something to work on the next one. That covers a
+removed or renamed tag, attribute, CSS property, `lumen.toml` key, `lumenc`
+flag, or script builtin; a changed default a user can see; a C ABI or SDK
+change that needs a recompile or a code edit; and a compiled-artifact format
+bump that needs a rebuild.
+
+A breaking pull request carries the `C-Breaking-Change` label and adds a
+migration note in the same change, as its own file under
+`docs/migration/unreleased/`, for example
+`docs/migration/unreleased/window-title-key.md`:
+
+```markdown
+# The `title` key moved from `[app]` to `[window]`
+
+Who this affects, what changed, and what to do, with the code before and
+after.
+```
+
+The first line is a `# ` heading that states the break in one line; it is
+what the release notes list. The body says who is affected and how to
+migrate. Notes are ASCII only. A check on every pull request fails when the
+label and the note disagree, or when a note is not in this shape.
+
+When a release is cut, the notes in its tag move to `docs/migration/vX.Y.Z/`,
+the docs site renders them as that version's migration guide, and the release
+notes link to it.
+
 ## Review
 
 Every pull request is read before it merges. A change under `.github/`, the
