@@ -5,8 +5,9 @@
 //! halves do is each crate's own tests. This checks what a build reads off
 //! disk: every web half's descriptor, where `bundled = true` finds a module's
 //! root, that a web build takes web halves where every other build reads only
-//! their descriptors, and that a desktop compile declares what the
-//! descriptors declare and binds against the real modules.
+//! their descriptors, that a desktop compile declares what the descriptors
+//! declare and binds against the real modules, and that it declares what a
+//! module with no web half registers.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -392,4 +393,111 @@ fn check_refuses_a_call_the_descriptor_does_not_declare() {
 fn check_passes_the_std_modules_fixture_for_every_target() {
     let (ok, text) = lumenc(&repo(), &std::env::temp_dir(), &["check", APP]);
     assert!(ok, "{text}");
+}
+
+/// Calls into every first-party module that has no web half. `main` runs
+/// whenever the program is compiled, so its write is the proof that a compile
+/// never does a module's work.
+const NO_WEB_HALF: &str = r#"import "lumen.cdl";
+
+fn on_start() {
+    files::write("started.txt", "written by the module");
+    print("fs: " + files::read("started.txt") + " under " + files::data_dir());
+    print("download: " + str(download::to_file("http://127.0.0.1:1/none", "none.bin", "dl", "")));
+    print("archive: " + str(archive::extract("none.zip", "none", "ar")));
+    print("process: " + str(process::stop("nothing")));
+    let opts = process::StartOptions { ..Default::default() };
+    print("process opts: " + str(opts.end_at_exit));
+}
+
+fn main() {
+    files::write("compiled.txt", "main ran");
+}
+"#;
+
+#[test]
+fn a_desktop_compile_declares_the_modules_with_no_web_half() {
+    let scratch =
+        std::env::temp_dir().join(format!("lumen-std-modules-no-web-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"dev.lumen.test.std-modules-no-web\"\n\n[script]\nengine = \"candela\"\n\n\
+         [dependencies]\nlumen-archive = { bundled = true }\nlumen-download = { bundled = true }\n\
+         lumen-fs = { bundled = true }\nlumen-process = { bundled = true }\n\n[mcp]\nport = 0\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        app.join("src/main.lmn"),
+        "<root>\n  <label text=\"modules\" />\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(app.join("src/main.cdl"), NO_WEB_HALF).expect("write the script");
+    let data = scratch.join("data");
+
+    let (ok, text) = lumenc(&app, &data, &["check", "."]);
+    assert!(ok, "{text}");
+    let (ok, text) = lumenc(&app, &data, &["build", ".", "app.lmna"]);
+    assert!(ok, "{text}");
+    assert!(
+        !app.join("compiled.txt").exists(),
+        "a compile ran the module's body"
+    );
+
+    let (ok, text) = lumenc(
+        &app,
+        &data,
+        &[
+            "run",
+            ".",
+            "--artifact",
+            "app.lmna",
+            "--headless",
+            "--ticks",
+            "2",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("fs: written by the module under "), "{text}");
+    assert!(text.contains("process: false"), "{text}");
+    assert!(text.contains("process opts: false"), "{text}");
+    assert!(text.contains("download: "), "{text}");
+    assert!(text.contains("archive: "), "{text}");
+    assert!(app.join("compiled.txt").is_file(), "a run runs main");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn check_refuses_a_call_a_module_with_no_web_half_does_not_register() {
+    let scratch = std::env::temp_dir().join(format!(
+        "lumen-std-modules-no-web-undeclared-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[script]\nengine = \"candela\"\n\n[dependencies]\nlumen-fs = { bundled = true }\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        app.join("src/main.lmn"),
+        "<root>\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("src/main.cdl"),
+        "import \"lumen.cdl\";\nfn on_start() { files::format_disk(); }\nfn main() {}\n",
+    )
+    .expect("write the script");
+    let (ok, text) = lumenc(&app, &scratch.join("data"), &["check", "."]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("the `files` namespace has no `format_disk`"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
 }

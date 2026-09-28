@@ -210,6 +210,56 @@ fn a_static_package_is_one_executable_carrying_its_declared_module() {
     );
 }
 
+/// A candela program is compiled before the link, against what the declared
+/// module registers, so an app whose script calls into the module packages,
+/// links, and runs.
+#[test]
+fn a_candela_app_calling_its_declared_module_links_and_runs() {
+    if no_kit() {
+        return;
+    }
+    let root = scratch("candela");
+    let app = root.join("demo");
+    std::fs::create_dir_all(app.join("src")).expect("create app dir");
+    std::fs::write(
+        app.join("src").join("main.lmn"),
+        "<root>\n  <label id=\"greeting\" text=\"linked\"/>\n  \
+         <script src=\"main.cdl\"/>\n</root>\n",
+    )
+    .expect("write markup");
+    std::fs::write(
+        app.join("src").join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn on_start() {\n  print(\"alive\");\n  \
+         files::write(\"started.txt\", files::data_dir());\n}\n\nfn main() {}\n",
+    )
+    .expect("write script");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[script]\nengine = \"candela\"\n\n[dependencies]\nlumen-fs = { bundled = true }\n",
+    )
+    .expect("write config");
+    let out = root.join("out");
+
+    let exe = link_app(&app, &out, "Demo");
+
+    let run = Command::new(&exe)
+        .args(["--headless", "--ticks", "3"])
+        .current_dir(&*root)
+        .output()
+        .expect("start the linked app");
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.status.success(), "the linked app failed: {output}");
+    assert!(output.contains("alive"), "the script did not run: {output}");
+    assert!(
+        out.join("started.txt").is_file(),
+        "the module's `files` namespace did not answer: {output}"
+    );
+}
+
 /// An app that declares no module links without one, and the module it did
 /// not declare is not in the file: the link dropped everything nothing asked
 /// for.

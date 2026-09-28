@@ -29,10 +29,14 @@ pub struct CompileDeps {
     /// What the web halves of the modules the app depends on declare. A
     /// module's descriptor is its script surface on every target, so their
     /// functions are declared to the compile and their elements to the
-    /// parser whatever the target, and the compiled app carries them. A
-    /// compile opens no module's library: the functions are declared here
-    /// and bound, at run time, to whatever the loaded module registers.
+    /// parser whatever the target, and the compiled app carries them. The
+    /// functions are declared here and bound, at run time, to whatever the
+    /// loaded module registers.
     pub addons: Vec<lumen_ir::addon::Addon>,
+    /// What the modules with no web half register for scripts, read by
+    /// installing each the way a run does ([`module_surface`]). Empty for a
+    /// web build, which cannot take such a module.
+    pub modules: ModuleSurface,
 }
 
 impl CompileDeps {
@@ -42,13 +46,107 @@ impl CompileDeps {
             target,
             import_roots: Vec::new(),
             addons: Vec::new(),
+            modules: ModuleSurface::default(),
         }
     }
 }
 
-/// The add-ons' functions, bound to the body every target without a page
-/// binds, for handing to a compiler: it declares them and never calls them.
-/// Nothing a run registers comes from here; a run binds the module's own.
+/// What a set of modules registers for scripts: the functions a program
+/// calls them by, and the language sources compiled ahead of it.
+///
+/// Each function keeps its name, namespace and signature, and its body is
+/// replaced by one that answers the zero of its declared return type (`0`,
+/// `false`, the empty string, an empty list or map, null). A compile declares
+/// the functions and a check runs the script's `main` once, so a call there
+/// answers without doing the module's work.
+#[derive(Debug, Clone, Default)]
+pub struct ModuleSurface {
+    /// The functions, in registration order.
+    pub fns: Vec<lumen_script::ScriptFn>,
+    /// The language sources, in registration order.
+    pub preludes: Vec<lumen_script::ScriptPrelude>,
+}
+
+/// What the modules in `deps` register for scripts, read the way a run reads
+/// it: each is installed into a scratch app, in headless mode, by the loader a
+/// run uses, and its registrations are taken back out. A module compiled into
+/// this binary answers from there, and any other is opened from disk, so the
+/// surface is the one the app's run binds to.
+///
+/// `dir` is the app directory and `resolved` what the compiler resolved for
+/// the `version` sources. A module that does not load prints the loader's
+/// banner and registers nothing, so a call into it fails the compile that
+/// follows.
+#[cfg(feature = "modules")]
+pub fn module_surface(
+    dir: &Path,
+    deps: &lumen_modules::DependenciesCfg,
+    resolved: &lumen_modules::ResolvedModules,
+) -> ModuleSurface {
+    if deps.0.is_empty() {
+        return ModuleSurface::default();
+    }
+    let app_id = crate::config::LumenToml::load_or_default(dir)
+        .ok()
+        .and_then(|cfg| cfg.app.id)
+        .unwrap_or_else(|| lumen_capability::derive_app_id(dir));
+    let mut app = App::new();
+    app.world
+        .insert_resource(lumen_core::app::RunMode { headless: true });
+    let env = crate::modules::InitEnv {
+        app_dir: dir.to_path_buf(),
+        app_id,
+        headless: true,
+        hot_reload: false,
+    };
+    crate::modules::load_modules(&mut app, dir, deps, resolved, &env);
+    let Some(registry) = app.world.get_resource::<lumen_script::ScriptFnRegistry>() else {
+        return ModuleSurface::default();
+    };
+    ModuleSurface {
+        fns: registry.fns().iter().map(answering_zero).collect(),
+        preludes: registry.preludes().to_vec(),
+    }
+}
+
+/// `f` with a body that answers the zero of its declared return type.
+#[cfg(feature = "modules")]
+fn answering_zero(f: &lumen_script::ScriptFn) -> lumen_script::ScriptFn {
+    let zero = zero_of(&f.sig.ret);
+    let mut declared = f.clone();
+    declared.body = std::sync::Arc::new(move |_| Ok(zero.clone()));
+    declared
+}
+
+/// The zero of a declared type.
+#[cfg(feature = "modules")]
+fn zero_of(ty: &lumen_script::ScriptTy) -> lumen_script::ScriptValue {
+    use lumen_script::{ScriptTy, ScriptValue};
+    match ty {
+        ScriptTy::Bool => ScriptValue::Bool(false),
+        ScriptTy::Int => ScriptValue::I64(0),
+        ScriptTy::Float => ScriptValue::F64(0.0),
+        ScriptTy::Str => ScriptValue::Str(String::new()),
+        ScriptTy::Array(_) => ScriptValue::Array(Vec::new()),
+        ScriptTy::Map(_) => ScriptValue::Map(Default::default()),
+        ScriptTy::Struct(shape) => shape.default_value(),
+        ScriptTy::Any | ScriptTy::Unit | ScriptTy::Dynamic => ScriptValue::Unit,
+    }
+}
+
+/// The functions a compile declares: the add-ons' functions, bound to the
+/// body every target without a page binds, and the modules' functions as
+/// [`ModuleSurface`] holds them. A compiler declares them; nothing a run
+/// registers comes from here, since a run binds the module's own.
+#[cfg(feature = "runtime-parse")]
+fn declared_fns(deps: &CompileDeps) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
+    let mut fns = addon_stubs(&deps.addons)?;
+    fns.extend(deps.modules.fns.iter().cloned());
+    Ok(fns)
+}
+
+/// The add-ons' functions alone, bound to the body every target without a
+/// page binds.
 #[cfg(feature = "runtime-parse")]
 fn addon_stubs(addons: &[lumen_ir::addon::Addon]) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
     let mut fns = Vec::new();
@@ -101,7 +199,7 @@ pub fn compile_app_with_skin(
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     register_declared_tags(&cfg, &[deps.target], &deps.addons);
-    let stubs = addon_stubs(&deps.addons)?;
+    let stubs = declared_fns(deps)?;
     let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
@@ -234,7 +332,8 @@ fn compiled_bytecode(
 
 /// A candela compiler set up the way every compile path sets it up: the
 /// app's library directory, the packages it imports, the compile-time flags
-/// of the target it compiles for, and `fns` declared.
+/// of the target it compiles for, `fns` declared, and the candela sources the
+/// modules register staged ahead of the program.
 #[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
 fn candela_compiler(
     lib_dir: &Path,
@@ -247,9 +346,13 @@ fn candela_compiler(
         host.add_import_root(name.clone(), dir.clone());
     }
     host.set_cfg_flags(deps.target.cfg_flags());
-    for f in fns {
+    let lang = host.lang();
+    for f in fns.iter().filter(|f| f.visible_to(lang)) {
         host.register_script_fn(f)
             .map_err(|e| RunError::Script(e.to_string()))?;
+    }
+    for prelude in deps.modules.preludes.iter().filter(|p| p.lang == lang) {
+        host.add_prelude(&prelude.ns, &prelude.source);
     }
     Ok(host)
 }
@@ -409,7 +512,7 @@ fn check_candela_per_target(
 ) -> Result<(), RunError> {
     let mut failures = Vec::new();
     for deps in targets {
-        let stubs = addon_stubs(&deps.addons)?;
+        let stubs = declared_fns(deps)?;
         let checked = candela_compiler(lib_dir, deps, &stubs)?.compile_check(source, uri);
         if let Err(e) = checked {
             failures.push((deps.target, e.to_string()));
