@@ -7,7 +7,7 @@ candela standard library scripts import, and the app
 [templates](templates.md) `lumenc new` writes. You do not need a Rust toolchain
 to build apps, or to package one for someone else.
 
-Every install also carries `lumen-server`, the server that runs a
+Every release install also carries `lumen-server`, the server that runs a
 [server-rendered site](../guides/server-rendering.md#running-in-production) in
 production and the one `lumenc web --serve` starts. It is published as a
 container image too, `ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and
@@ -199,6 +199,10 @@ whose `modules/<name>/web/` holds it.
 It does not build the [runtime modules](#runtime-modules) either, so the
 capabilities behind [`[dependencies]`](../reference/lumen-toml.md#dependencies)
 need a release install.
+
+Nor does it build `lumen-server`, which `lumenc web --serve` runs. Build it
+from a Lumen checkout of the same version with `cargo build --release -p
+lumen-server`, and point `LUMEN_SERVER` at the binary.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the rest yourself. `lumenc run`, `build`, and `check` work without the

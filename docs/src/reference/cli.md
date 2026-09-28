@@ -328,7 +328,7 @@ the server's `--bind`, `--port` and `--allow-host`, and a site built without
 anyone else uses with `lumen-server` without `--dev`, behind a reverse proxy.
 
 `lumenc` looks for `lumen-server` in the directory holding the running
-`lumenc`, where every install puts it, then at the path in `$LUMEN_SERVER`,
+`lumenc`, where every release install puts it, then at the path in `$LUMEN_SERVER`,
 then on `PATH`. When none has it, `--serve` fails, says where the site was
 built, and names the three places.
 
