@@ -1095,9 +1095,9 @@ fn register_typed_signal_bool<S: HostFnSink>(engine: &mut S, r: &Registries) {
 /// Rhai and Lua hand back an `ArraySignal` handle object; candela has no
 /// user-defined value type, so the surface is name-keyed free functions and the
 /// prelude's `ArraySignal` struct wraps a name to give the same
-/// `rows.push(item)` reading. Items are records - string-keyed maps whose
-/// fields `<for>` binds by name - and a non-record item is carried as a
-/// one-field `value` row, matching the other hosts.
+/// `rows.push(item)` reading. Items are usually records - string-keyed maps
+/// whose fields `<for>` binds by name. A non-record item renders as a
+/// one-field `value` row; `get` and `all` return every item as pushed.
 ///
 /// The item-carrying entries register variadically because a record mixes
 /// value types; the rest have concrete signatures. Indices are zero-based.
@@ -1132,7 +1132,7 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
         },
     );
 
-    // get(name, index) -> the record, or null when out of range.
+    // get(name, index) -> the item as pushed, or null when out of range.
     let reg = r.clone();
     engine.register_host_fn_variadic(
         HOST_NAMESPACE,
@@ -1149,7 +1149,7 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
         },
     );
 
-    // all(name) -> every record, as a list.
+    // all(name) -> every item as pushed, as a list.
     let reg = r.clone();
     engine.register_host_fn_variadic(
         HOST_NAMESPACE,
