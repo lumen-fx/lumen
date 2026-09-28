@@ -361,17 +361,19 @@ string sink. That is the form for a cell whose type is not fixed.
 ### Array signals
 
 An array signal is the reactive list `<for each="name">` renders, one element
-per record. A record is a string-keyed map whose fields `<for>` binds by name;
-an item that is not a map is carried as a one-field `value` record.
+per item. An item is usually a record, a string-keyed map whose fields `<for>`
+binds by name. An item that is not a map renders as a one-field `value` row, so
+`<for>` binds it as `value`; the array itself keeps the item as pushed, and
+`signal_array_get` and `signal_array_all` return it unchanged.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `lumen::signal_array_set(name: string, items: any)` | | Replace the whole array with a list of records. |
-| `lumen::signal_array_push(name: string, item: any)` | | Append one record. |
-| `lumen::signal_array_get(name: string, index: int)` | `any` | One record by zero-based index; null when out of range. |
-| `lumen::signal_array_all(name: string)` | `any` | Every record, as a list. |
-| `lumen::signal_array_len(name: string)` | `int` | Record count. |
-| `lumen::signal_array_remove(name: string, index: int)` | | Drop the record at `index`. An out-of-range index does nothing. |
+| `lumen::signal_array_set(name: string, items: any)` | | Replace the whole array with a list of items. |
+| `lumen::signal_array_push(name: string, item: any)` | | Append one item. |
+| `lumen::signal_array_get(name: string, index: int)` | `any` | One item by zero-based index, as pushed; null when out of range. |
+| `lumen::signal_array_all(name: string)` | `any` | Every item, as a list. |
+| `lumen::signal_array_len(name: string)` | `int` | Item count. |
+| `lumen::signal_array_remove(name: string, index: int)` | | Drop the item at `index`. An out-of-range index does nothing. |
 | `lumen::signal_array_clear(name: string)` | | Empty the array. |
 
 `signal_array(name)` wraps the name so the same calls read as methods:
