@@ -54,10 +54,11 @@
 //! The table is unordered, so load order is the sorted key order; declaring
 //! order in the file carries no meaning.
 //!
-//! `tags` is how a module introduces markup. A compile opens no module - a
-//! release build of an app runs the parser on a machine with nothing loaded -
-//! so an element the language does not know is refused unless the app said
-//! which module answers for it. See [`register_declared_tags`].
+//! `tags` is how a module introduces markup when nothing installs it ahead
+//! of the parse. A compile reads a web half's elements from its descriptor
+//! and installs a module with no web half, which registers its own; for any
+//! other module an element the language does not know is refused unless the
+//! app said which module answers for it. See [`register_declared_tags`].
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -310,10 +311,10 @@ pub struct TargetCfg {
 /// parser accepts them.
 ///
 /// A module that answers for a tag registers it from its `Plugin::build`,
-/// which is too late for a build that never loads a module: `lumenc build`
-/// compiles the markup on a machine where nothing is opened. The `tags` key
-/// is the declaration that works on both paths, and this is what turns it
-/// into the parser's answer. Call it after the config is read and before any
+/// which is too late for a build that cannot install the module before it
+/// parses, such as one whose library is not built yet. The `tags` key is the
+/// declaration that works on every path, and this is what turns it into the
+/// parser's answer. Call it after the config is read and before any
 /// markup is parsed.
 ///
 /// The registry is process-wide and holds what it is given for the life of
@@ -331,9 +332,9 @@ pub fn register_declared_tags(deps: &DependenciesCfg) {
 }
 
 /// Publish the elements the add-ons `addons` answer for, so the markup parser
-/// accepts them. The same registry [`register_declared_tags`] writes to, and
-/// the same reason: a compile opens nothing, so the declaration is what tells
-/// the parser the element exists.
+/// accepts them. The same registry [`register_declared_tags`] writes to: a
+/// compile does not install a module that has a web half, so the descriptor
+/// is what tells the parser the element exists.
 pub fn register_addon_elements(addons: &[lumen_ir::addon::Addon]) {
     for element in addons.iter().flat_map(|addon| &addon.elements) {
         lumen_widget::register_widget_tag_owned(&element.tag);
@@ -376,10 +377,10 @@ pub struct DepCfg {
     /// Markup tags this module answers for, so the parser accepts them
     /// before anything is loaded.
     ///
-    /// A compile has no module in it - `lumenc build` produces an artifact on
-    /// a machine that opens nothing - so a tag a module introduces has to be
-    /// declared for the parse to accept it. Declaring a tag no module answers
-    /// for costs an element that renders as an empty box.
+    /// A compile that cannot install the module before it parses has only
+    /// this to go on, so a tag such a module introduces has to be declared
+    /// for the parse to accept it. Declaring a tag no module answers for
+    /// costs an element that renders as an empty box.
     pub tags: Vec<String>,
 }
 

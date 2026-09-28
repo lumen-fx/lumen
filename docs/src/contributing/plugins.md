@@ -732,10 +732,11 @@ A precompiled `.cdlb` gets the same declarations a live compile gets, folded
 in from whatever was registered on the host before it compiled;
 `CandelaHost::compile_bytecode` folds a registered function into its
 namespace's block exactly as `lumenc check` and `lumenc run` do. `lumenc build`
-opens no plugin or module before it compiles your script's `.cdlb`: it
-declares the functions each module's [web half](#a-web-half) describes, and
-nothing else. A script that calls any other plugin and will be compiled ahead
-of time writes the `host "<ns>" { .. }` block itself. Without it, a call in a
+declares the functions of the modules the app lists under `[dependencies]`:
+what each module's [web half](#a-web-half) describes, or, for a module without
+one, what it registers when the build installs it. A script that calls any
+other plugin and will be compiled ahead of time writes the
+`host "<ns>" { .. }` block itself. Without it, a call in a
 function the compiler checks (one `main` reaches, or one that annotates every
 parameter) fails the build naming the call; in any other function the call
 compiles, the function holding it is left out of the image, and the app
@@ -865,6 +866,12 @@ than speaking a serialized ABI, and it sets the contract:
   gets that shape without a Rust toolchain.
 - **A loaded module is never unloaded.** The schedules hold function
   pointers into the library for as long as the app lives.
+- **A compile installs a module that has no web half.** `lumenc check`,
+  `lumenc build` and `lumenc package` read such a module's script surface by
+  installing it into a scratch app, headless, and declaring the functions and
+  candela sources it registers. So `build` runs outside any run of the app:
+  register the whole script surface whatever the mode, and take the headless
+  shape for anything that holds a device, a thread, or a file.
 
 ### Authoring a module
 
@@ -938,7 +945,7 @@ carries a web half too: a `web/` directory beside its sources, holding a
 build takes the web half of every module the app declares; every other build
 loads the library. Every compile, the desktop's and `lumenc check` included,
 reads the descriptor: it declares the module's functions and elements to the
-app's scripts and markup, since a compile opens no library. At run time the
+app's scripts and markup without installing the module. At run time the
 script binds to the functions the loaded library registers, so the two halves
 have to declare the same surface.
 

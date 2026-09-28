@@ -79,6 +79,8 @@ pub mod window_state;
 
 pub use compiler_plugins::CompilerPlugins;
 pub use config::{ConfigError, LumenToml};
+#[cfg(all(feature = "runtime-parse", feature = "modules"))]
+pub use run::module_surface;
 #[cfg(feature = "host-rhai")]
 pub use run::run_with;
 pub use run::{
@@ -86,6 +88,6 @@ pub use run::{
     run_app, run_app_headless,
 };
 #[cfg(feature = "runtime-parse")]
-pub use run::{CompileDeps, check_app, compile_app, compile_app_with_skin};
+pub use run::{CompileDeps, ModuleSurface, check_app, compile_app, compile_app_with_skin};
 pub use run_headless::{HeadlessOptions, run_app_headless_rendered};
 pub use source_parser::SourceParser;

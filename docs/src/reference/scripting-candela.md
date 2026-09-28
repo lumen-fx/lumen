@@ -177,7 +177,9 @@ in the web build. Lumen turns on one flag per target:
 
 `lumenc check` compiles the scripts once per target, each against that
 target's [dependencies](lumen-toml.md#targetweb-and-targetdesktop) with that
-target's flag on, and reports an error with the target it breaks. The
+target's flag on, and reports an error with the target it breaks. An app whose
+web dependencies include a module with no web half has no web build, so its
+check is the desktop's alone. The
 conditions (`not`, `any`, `all`, `key = "value"`) are candela's; see
 [conditional compilation](https://docs.lumenfx.dev/candela/language/conditional-compilation/).
 
@@ -1767,12 +1769,13 @@ Two things follow from where the declarations come from. An app calling a
 function nothing registered fails the compile, naming it, so `lumenc check` and
 `lumenc run` reject a call meant for an embedder they do not carry. And a
 `.cdlb` build gets the same synthesized declarations a live compile gets, from
-whatever was registered on the host before it compiled. `lumenc build` opens
-no plugin or runtime module before it compiles your script's `.cdlb`; it
-declares the functions each module's [web half](web-addons.md) describes.
-For any other plugin or
-module, write the `host` block by hand in a script you will build to an
-artifact, exactly as you would for an embedder `lumenc` does not carry.
+whatever was registered on the host before it compiled. `lumenc build`
+declares the functions of every module the app declares under
+`[dependencies]`: the ones a module's [web half](web-addons.md) describes, or,
+for a module without one, the ones it registers when installed the way a run
+installs it. For a function anything else registers, write the `host` block by
+hand in a script you will build to an artifact, exactly as you would for an
+embedder `lumenc` does not carry.
 
 At the artifact's own load, a declaration with no closure behind it fails the
 load and names the function, rather than the call silently doing nothing. That

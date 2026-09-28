@@ -131,13 +131,7 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
     let deps = addons::target_deps(&opts.dir, lumen_modules::Target::Desktop, None)
         .map_err(RunError::Plugin)?;
     let resolved = &deps.resolved;
-    opts.resolved_modules = lumen_runtime::modules::ResolvedModules(
-        resolved
-            .modules
-            .iter()
-            .map(|(name, file)| (name.clone(), Ok(file.clone())))
-            .collect(),
-    );
+    opts.resolved_modules = addons::resolved_modules(resolved);
     opts.import_roots = deps.compile.import_roots.clone();
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
         let chain = plugin_host::compiler_plugins_for(&opts.dir, false, &resolved.compiler_plugins)
@@ -300,8 +294,8 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
 /// What the script compiler warned about is printed to stderr, one line each.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    let deps =
-        addons::target_deps(dir, lumen_modules::Target::Desktop, None).map_err(RunError::Plugin)?;
+    let deps = addons::compile_deps(dir, lumen_modules::Target::Desktop, None)
+        .map_err(RunError::Plugin)?;
     let mut warnings = Vec::new();
     let compiled = compile_app_with(dir, None, &deps, &mut warnings)?;
     for warning in &warnings {

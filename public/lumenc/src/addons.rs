@@ -12,8 +12,9 @@
 //! The descriptor is where a module declares its script surface, and both of
 //! its halves offer that surface, so every compile reads it: the functions it
 //! declares are what the app's scripts compile against, for every target. A
-//! compile opens no library, so a module without a web half declares nothing
-//! to it.
+//! module without a web half has no descriptor, so a compile for any target
+//! but the web installs it the way a run does and declares what it registers
+//! ([`compile_deps`]).
 //!
 //! Only a web build takes the rest of a web half, and `lumenc web` refuses a
 //! module that has none. Every other build hands the table to the loader,
@@ -26,7 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use lumen_modules::addon::{AddonPackage, read_web_half, web_half};
-use lumen_modules::{DependenciesCfg, ModuleSource, Target};
+use lumen_modules::{DependenciesCfg, ModuleSource, ResolvedModules, Target};
 use lumen_runtime::CompileDeps;
 
 use crate::package::lpm::Resolved;
@@ -46,6 +47,10 @@ pub struct TargetDeps {
     pub packages: Vec<AddonPackage>,
     /// Everything `lpm` resolved for the target.
     pub resolved: Resolved,
+    /// The target's dependencies that have no web half, in table order: what
+    /// a web build cannot take, and what a compile for any other target reads
+    /// by installing each module.
+    pub without_web_half: DependenciesCfg,
 }
 
 /// Resolve what the app at `dir` depends on for a build for `target`: its
@@ -66,7 +71,14 @@ pub fn target_deps(
     let cfg =
         lumen_runtime::LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let resolved = crate::registry_packages(dir, target)?;
-    let halves = web_halves(dir, &cfg.dependencies_for(target), &resolved, lib_dir)?;
+    let deps = cfg.dependencies_for(target);
+    let halves = web_halves(dir, &deps, &resolved, lib_dir)?;
+    let without_web_half = DependenciesCfg(
+        deps.0
+            .into_iter()
+            .filter(|dep| !halves.iter().any(|p| p.addon.name == dep.name))
+            .collect(),
+    );
     let addons = halves.iter().map(|p| p.addon.clone()).collect();
     let packages = if target == Target::Web {
         halves
@@ -79,18 +91,57 @@ pub fn target_deps(
         target,
         import_roots,
         addons,
+        ..CompileDeps::new(target)
     };
     Ok(TargetDeps {
         compile,
         packages,
         resolved,
+        without_web_half,
     })
+}
+
+/// [`target_deps`] for a compile. For every target but the web, each module
+/// without a web half is installed the way a run installs it, and what it
+/// registers for scripts is declared to the compile
+/// ([`lumen_runtime::module_surface`]). A web build cannot take such a module,
+/// so there is nothing to read for one.
+///
+/// # Errors
+///
+/// As [`target_deps`].
+pub fn compile_deps(
+    dir: &Path,
+    target: Target,
+    lib_dir: Option<&Path>,
+) -> Result<TargetDeps, String> {
+    let mut found = target_deps(dir, target, lib_dir)?;
+    if target != Target::Web {
+        found.compile.modules = lumen_runtime::module_surface(
+            dir,
+            &found.without_web_half,
+            &resolved_modules(&found.resolved),
+        );
+    }
+    Ok(found)
+}
+
+/// What `lpm` resolved for the `version` sources, in the form the module
+/// loader reads.
+pub fn resolved_modules(resolved: &Resolved) -> ResolvedModules {
+    ResolvedModules(
+        resolved
+            .modules
+            .iter()
+            .map(|(name, file)| (name.clone(), Ok(file.clone())))
+            .collect(),
+    )
 }
 
 /// The web half of each module in `deps` that has one, read in table order,
 /// each carrying the `config` table its entry gave it. A module without one
 /// is passed over; saying that a web build cannot take it is `lumenc web`'s
-/// business, and a check of the app for the web still reads the rest.
+/// business.
 ///
 /// # Errors
 ///
@@ -186,18 +237,27 @@ fn candela_root(package: &AddonPackage) -> Option<(String, PathBuf)> {
     is_package.then(|| (package.addon.name.clone(), package.dir.clone()))
 }
 
-/// What the app at `dir` compiles against for each target, which is what
-/// `lumenc check` compiles against: a check is for no one target, so it
-/// checks the app the way each target's build compiles it.
+/// What the app at `dir` compiles against for each target it can be built
+/// for, which is what `lumenc check` compiles against: a check is for no one
+/// target, so it checks the app the way each target's build compiles it.
+///
+/// A web build refuses an app whose web dependencies include a module with no
+/// web half, so for such an app the web is left out and the check is the
+/// desktop's alone.
 ///
 /// # Errors
 ///
 /// As [`target_deps`].
 pub fn every_target(dir: &Path) -> Result<Vec<CompileDeps>, String> {
-    Target::ALL
-        .into_iter()
-        .map(|target| target_deps(dir, target, None).map(|found| found.compile))
-        .collect()
+    let mut targets = Vec::new();
+    for target in Target::ALL {
+        let found = compile_deps(dir, target, None)?;
+        if target == Target::Web && !found.without_web_half.0.is_empty() {
+            continue;
+        }
+        targets.push(found.compile);
+    }
+    Ok(targets)
 }
 
 /// A web half's files, as a site ships them: the whole `web/` directory under

@@ -366,12 +366,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // candela package is script source, so it compiles into the app like the
     // app's own scripts and travels wherever the app does, the web included.
     let deps = crate::addons::target_deps(dir, Target::Web, options.lib_dir.as_deref())?;
-    let desktop_only = cfg
-        .dependencies_for(Target::Web)
-        .0
-        .into_iter()
-        .find(|dep| !deps.packages.iter().any(|p| p.addon.name == dep.name));
-    if let Some(dep) = desktop_only {
+    if let Some(dep) = deps.without_web_half.0.first() {
         return Err(format!(
             "this app declares '{}' as a dependency of its web build, and the module has no \
              web half (a web/lumen-addon.toml under its root): its library is loaded by \

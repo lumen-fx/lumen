@@ -318,11 +318,14 @@ binds those functions to the ones the loaded library registers.
 A module's root is the directory a `path` source names, the package a
 `version` source resolved to, or the toolchain's copy of a `bundled` one.
 
-A module without a web half declares nothing to a compile, because a compile
-opens no library. Of the first-party modules that is `lumen-archive`,
-`lumen-audio`, `lumen-download`, `lumen-fs` and `lumen-process`: `lumenc run`
-runs a script that calls one, and `lumenc check`, `lumenc build` and
-`lumenc package` fail on it, naming the call.
+A module without a web half has no descriptor, so a desktop compile
+(`lumenc check`, `lumenc build`, `lumenc package`) installs it the way
+`lumenc run` does, with no window, and declares the functions it registers.
+While the program compiles each of them answers the zero of its return type,
+so the check's run of `main` does none of the module's work. Of the
+first-party modules that is `lumen-archive`, `lumen-audio`, `lumen-download`,
+`lumen-fs` and `lumen-process`. `lumenc web` refuses such a module, so an app
+that declares one for its web build is checked for the desktop only.
 
 One table entry per module; the key is its name.
 
@@ -377,11 +380,12 @@ A module that brings a markup element declares it too:
 |-----|------|--------|
 | `tags` | array of strings | Markup tags this module answers for, so the parser accepts them. Lowercase letters, digits, and dashes; a tag the language already owns is refused. |
 
-A compile loads nothing, so `lumenc build`, `lumenc check`, and
-`lumenc package` know an element exists only because the app said so or
-because the module's web half declares it. A run also learns it from the
-module itself, which registers its tags as it installs, so an app missing
-the key for an element no web half declares runs and fails to build.
+`lumenc build`, `lumenc check`, and `lumenc package` know an element exists
+because the app said so, because the module's web half declares it, or
+because the module has no web half and registers the tag as the compile
+installs it. A run learns it from the module itself the same way. The key is
+what covers a module the compile cannot install, such as a `path` library
+that is not built yet.
 
 The table is unordered, so entries load in sorted-name order; where an entry
 sits in the file carries no meaning.

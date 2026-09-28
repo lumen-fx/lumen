@@ -1428,6 +1428,11 @@ impl ScriptFnRegistry {
         &self.fns
     }
 
+    /// Every registered language source, in registration order.
+    pub fn preludes(&self) -> &[ScriptPrelude] {
+        &self.preludes
+    }
+
     /// The sources `lang` is to compile ahead of the app's program, in
     /// registration order.
     pub fn preludes_for_lang(&self, lang: &str) -> Vec<&ScriptPrelude> {
