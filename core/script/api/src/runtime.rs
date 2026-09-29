@@ -428,12 +428,24 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             // tick late - after `retire_due_timers` had already re-armed the
             // timer and fired it one extra time. Draining right after the
             // firing pass applies the cancel on the same tick, before the next
-            // re-fire.
+            // re-fire. After every other set that calls into a host too, for
+            // the reason `drain_frame_requests` gives: a timer armed in a set
+            // this ran past is not registered until the next tick, and an
+            // idle loop never runs one to wake for it.
             app.add_systems(
                 TickStage::Systems,
                 drain_timer_commands
                     .after(ScriptSet::Tick)
-                    .after(ScriptSet::Timers),
+                    .after(ScriptSet::Dispatch)
+                    .after(ScriptSet::Derivations)
+                    .after(ScriptSet::Frame)
+                    .after(ScriptSet::Timers)
+                    .after(ScriptSet::Fetch)
+                    .after(ScriptSet::PluginEvents)
+                    .after(ScriptSet::Ready)
+                    .after(ScriptSet::Fill)
+                    .after(ScriptSet::DomInput)
+                    .after(ScriptSet::DomState),
             );
         }
         // -- Once per host -------------------------------------------------
@@ -914,10 +926,14 @@ pub struct TimerRegistry {
 }
 
 /// Read `SetTimer` / `CancelTimer` commands emitted by the script's
-/// builtins this tick and update the [`TimerRegistry`] accordingly.
+/// builtins this tick and update the [`TimerRegistry`] accordingly, then
+/// ask the loop to wake at the earliest pending deadline. Without that
+/// request an idle loop parks on events alone and a timer armed from a
+/// click fires only when some unrelated input ticks the app.
 pub fn drain_timer_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     mut timers: ResMut<TimerRegistry>,
+    wake: Option<Res<lumen_core::tick::WakeDeadline>>,
 ) {
     let now = Instant::now();
     for ev in events.read() {
@@ -941,6 +957,11 @@ pub fn drain_timer_commands(
             }
             _ => {}
         }
+    }
+    if let Some(wake) = wake
+        && let Some(next) = timers.timers.values().map(|t| t.fire_at).min()
+    {
+        wake.request(next);
     }
 }
 

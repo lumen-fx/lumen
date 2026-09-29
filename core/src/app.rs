@@ -311,6 +311,9 @@ impl App {
         // they still have motion, so the window backend can self-schedule
         // follow-up frames without spinning at idle.
         world.insert_resource(crate::render_world::AnimationsActive::default());
+        // Per-tick "tick again no later than" request, reset alongside
+        // `AnimationsActive` and read by the loop to sleep until it.
+        world.insert_resource(crate::tick::WakeDeadline::default());
         // Per-extract-phase memo of the hierarchy-derived maps the extract
         // fns would otherwise each rebuild identically (parent map, scroll
         // offsets, opacities, hidden set, clip rects). Populated by the
@@ -429,6 +432,7 @@ impl App {
             TickStage::Input,
             crate::render_world::reset_animations_active,
         );
+        s.add_systems(TickStage::Input, crate::tick::reset_wake_deadline);
         // Wave-D dirty-queue lifecycle. `clear_signal_dirty` keeps the legacy
         // `Signals::dirty` set tidy for embedders that still hold a `Res<Signals>`
         // reference; `clear_property_store_dirty` runs against the canonical

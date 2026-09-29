@@ -249,7 +249,10 @@ a tick that only changed your state is a clean tick and extract never runs. If
 the content animates, or is waiting on something that will arrive on a later
 tick, raise `AnimationsActive` while that is still true. Key the raise on the
 thing being waited for rather than on a queue of your own, so the claim
-retires when that thing settles or leaves the tree and the app can park.
+retires when that thing settles or leaves the tree and the app can park. If
+the next change is due at a known instant rather than every frame, call
+`WakeDeadline::request(at)` each tick instead; the loop sleeps until then
+rather than ticking at frame rate.
 
 Together:
 
