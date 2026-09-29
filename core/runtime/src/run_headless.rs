@@ -20,9 +20,9 @@
 //! Ticks run on demand, mirroring the windowed `RedrawScheduler`
 //! semantics without the pause-on-unfocused gate (there is no focus):
 //!
-//! * a wake from the MCP server thread (simulate push or screenshot
-//!   request, via [`lumen_core::app::EventLoopWaker`]) runs a tick
-//!   immediately;
+//! * a wake through [`lumen_core::app::EventLoopWaker`] runs a tick
+//!   immediately: the MCP server thread (simulate push or screenshot
+//!   request), a finished HTTP request, or a module event on the core bus;
 //! * while work is pending (animations mid-flight, undrained external
 //!   property writes, dirty frame), ticks are paced at ~60 Hz - the
 //!   stand-in for vsync;
