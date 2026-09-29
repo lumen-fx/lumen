@@ -182,6 +182,10 @@ fn assets_resolve_from_a_bundle_named_by_a_relative_app_dir() {
     let _one_app = one_app();
     let dir = scratch_dir("relative");
     std::fs::create_dir_all(dir.join("icons")).unwrap();
+    // The working directory reads back in canonical form, which on macOS is
+    // /private/var for a temp dir named /var. Compile against that same
+    // spelling, as a build and a run from one working directory would.
+    let dir = dir.canonicalize().unwrap();
     std::fs::write(dir.join("icons/dot.png"), RED_DOT_PNG).unwrap();
     let bytes = image_app(&dir);
 
