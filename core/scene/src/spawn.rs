@@ -2739,6 +2739,90 @@ pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style)
             style.overflow_y = Overflow::Hidden;
         }
     }
+    if let Some(axis) = attrs.scroll {
+        // A scroll container's automatic minimum size is zero (CSS
+        // flexbox section 4.5): a `grow="1"` scroller in a fixed-height
+        // column takes the space it is given and scrolls the rest,
+        // instead of growing to its content and having nothing to scroll.
+        // The layout engine keys that rule on `overflow`, which the
+        // `scroll` attribute does not set, so it is set here: `scroll` on
+        // the axes it scrolls and `hidden` on the other, as CSS computes
+        // `visible` beside `scroll` and as the web target emits it.
+        // Authored overflow attrs and `min-width` / `min-height` still win.
+        let axis: ScrollAxis = axis.into();
+        let overflow_for = |scrolls: bool| {
+            if scrolls {
+                Overflow::Scroll
+            } else {
+                Overflow::Hidden
+            }
+        };
+        if attrs.overflow.is_none() && attrs.overflow_x.is_none() {
+            style.overflow_x = overflow_for(axis.allows_x());
+        }
+        if attrs.overflow.is_none() && attrs.overflow_y.is_none() {
+            style.overflow_y = overflow_for(axis.allows_y());
+        }
+    }
+}
+
+#[cfg(test)]
+mod ua_style_tests {
+    use super::*;
+    use lumen_ir::layout_ir::{OverflowSpec, ScrollAxisSpec};
+
+    fn ua_style(attrs: &Attributes) -> Style {
+        let mut style = Style::from(attrs);
+        apply_ua_style_defaults("scroll", attrs, &mut style);
+        style
+    }
+
+    #[test]
+    fn a_scroller_scrolls_its_axes_and_clips_the_other() {
+        let y = ua_style(&Attributes {
+            scroll: Some(ScrollAxisSpec::Y),
+            ..Attributes::default()
+        });
+        assert_eq!(
+            (y.overflow_x, y.overflow_y),
+            (Overflow::Hidden, Overflow::Scroll)
+        );
+        let x = ua_style(&Attributes {
+            scroll: Some(ScrollAxisSpec::X),
+            ..Attributes::default()
+        });
+        assert_eq!(
+            (x.overflow_x, x.overflow_y),
+            (Overflow::Scroll, Overflow::Hidden)
+        );
+        let both = ua_style(&Attributes {
+            scroll: Some(ScrollAxisSpec::Both),
+            ..Attributes::default()
+        });
+        assert_eq!(
+            (both.overflow_x, both.overflow_y),
+            (Overflow::Scroll, Overflow::Scroll)
+        );
+    }
+
+    #[test]
+    fn an_authored_overflow_wins_over_the_scroller_default() {
+        let s = ua_style(&Attributes {
+            scroll: Some(ScrollAxisSpec::Both),
+            overflow: Some(OverflowSpec::Hidden),
+            ..Attributes::default()
+        });
+        assert_eq!(
+            (s.overflow_x, s.overflow_y),
+            (Overflow::Hidden, Overflow::Hidden)
+        );
+        let s = ua_style(&Attributes {
+            scroll: Some(ScrollAxisSpec::Y),
+            overflow_y: Some(OverflowSpec::Visible),
+            ..Attributes::default()
+        });
+        assert_eq!(s.overflow_y, Overflow::Visible);
+    }
 }
 
 /// Absolute-position [`Style`] seed for the toggle knob / slider thumb
