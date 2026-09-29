@@ -1062,16 +1062,17 @@ pub fn register_asset_loader(app: &mut App, loader: impl AssetLoader) {
 #[allow(dead_code)]
 const _LRU_CAP_PROBE: NonZeroUsize = NonZeroUsize::MIN;
 
-/// What placing a background image needs from the whole tree: the scroll
-/// offset and the ancestor opacity each element inherits. A background moves
-/// and fades with the element whose colour it replaces, so it reads both the
-/// way the rect extract does.
-struct Backdrop {
+/// What placing an image needs from the whole tree: the scroll offset and
+/// the ancestor opacity each element inherits. A content image moves and
+/// fades with its ancestors, and a background moves and fades with the
+/// element whose colour it replaces, so both read the two the way the rect
+/// extract does.
+struct Placement {
     scroll: HashMap<Entity, glam::Vec2>,
     inherited_alpha: HashMap<Entity, f32>,
 }
 
-impl Backdrop {
+impl Placement {
     fn new(main: &mut World, parents: &HashMap<Entity, Entity>) -> Self {
         Self {
             scroll: parent_scroll_offsets(main, parents),
@@ -1079,17 +1080,24 @@ impl Backdrop {
         }
     }
 
+    /// The on-screen origin and the alpha of `e`: its layout position less
+    /// its ancestors' scroll, and its own opacity times theirs.
+    fn place(&self, e: Entity, t: &Transform, opacity: Option<&Opacity>) -> (glam::Vec2, f32) {
+        let origin = t.absolute - self.scroll.get(&e).copied().unwrap_or(glam::Vec2::ZERO);
+        let alpha = opacity.map(|o| o.0).unwrap_or(1.0)
+            * self.inherited_alpha.get(&e).copied().unwrap_or(1.0);
+        (origin, alpha)
+    }
+
     /// The on-screen origin, the alpha, and the clip of `e`'s background.
-    fn place(
+    fn place_background(
         &self,
         e: Entity,
         t: &Transform,
         visuals: Option<&Visuals>,
         opacity: Option<&Opacity>,
     ) -> (glam::Vec2, f32, BackgroundClip) {
-        let origin = t.absolute - self.scroll.get(&e).copied().unwrap_or(glam::Vec2::ZERO);
-        let alpha = opacity.map(|o| o.0).unwrap_or(1.0)
-            * self.inherited_alpha.get(&e).copied().unwrap_or(1.0);
+        let (origin, alpha) = self.place(e, t, opacity);
         let radii = visuals
             .map(|v| v.corner_radii.unwrap_or([v.radius; 4]))
             .unwrap_or([0.0; 4]);
@@ -1114,7 +1122,7 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
     // the whole subtree (CSS `visibility: hidden`), matching the core rect /
     // text extractors.
     let hidden = hidden_entities(main, &parents);
-    let backdrop = Backdrop::new(main, &parents);
+    let placement = Placement::new(main, &parents);
     #[allow(clippy::type_complexity)]
     let mut q = main.query::<(
         Entity,
@@ -1131,16 +1139,19 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
         .map(|(e, t, svg, fit, opacity, bg, visuals)| {
             let (origin, alpha, fit, background) = match bg {
                 Some(bg) => {
-                    let (origin, alpha, clip) = backdrop.place(e, t, visuals, opacity);
+                    let (origin, alpha, clip) = placement.place_background(e, t, visuals, opacity);
                     (origin, alpha, bg.fit, Some(clip))
                 }
-                None => (
-                    t.absolute,
-                    opacity.map(|o| o.0).unwrap_or(1.0),
+                None => {
+                    let (origin, alpha) = placement.place(e, t, opacity);
                     // Default fit for SVGs is `Contain` (aspect-preserving).
-                    fit.copied().unwrap_or(ImageFit::Contain),
-                    None,
-                ),
+                    (
+                        origin,
+                        alpha,
+                        fit.copied().unwrap_or(ImageFit::Contain),
+                        None,
+                    )
+                }
             };
             let extracted = ExtractedSvg {
                 origin,
@@ -1219,7 +1230,7 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
     // the whole subtree (CSS `visibility: hidden`), matching the core rect /
     // text extractors.
     let hidden = hidden_entities(main, &parents);
-    let backdrop = Backdrop::new(main, &parents);
+    let placement = Placement::new(main, &parents);
     #[allow(clippy::type_complexity)]
     let mut q = main.query::<(
         Entity,
@@ -1236,15 +1247,13 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
         .map(|(e, t, img, fit, opacity, bg, visuals)| {
             let (origin, alpha, fit, background) = match bg {
                 Some(bg) => {
-                    let (origin, alpha, clip) = backdrop.place(e, t, visuals, opacity);
+                    let (origin, alpha, clip) = placement.place_background(e, t, visuals, opacity);
                     (origin, alpha, bg.fit, Some(clip))
                 }
-                None => (
-                    t.absolute,
-                    opacity.map(|o| o.0).unwrap_or(1.0),
-                    fit.copied().unwrap_or_default(),
-                    None,
-                ),
+                None => {
+                    let (origin, alpha) = placement.place(e, t, opacity);
+                    (origin, alpha, fit.copied().unwrap_or_default(), None)
+                }
             };
             let extracted = ExtractedImage {
                 origin,
@@ -1674,6 +1683,70 @@ mod tests {
                 .last_changed(),
             tick
         );
+    }
+
+    /// A content image and an SVG move with their ancestors' scroll and
+    /// fade with their opacity, the same as a background image does.
+    #[test]
+    fn content_images_follow_ancestor_scroll_and_opacity() {
+        use lumen_core::input::ScrollOffset;
+        use lumen_core::render_world::RenderEntityMap;
+        let mut main = World::new();
+        let parent = main
+            .spawn((
+                Transform::default(),
+                ScrollOffset(glam::Vec2::new(0.0, 50.0)),
+                Opacity(0.5),
+            ))
+            .id();
+        let at = Transform {
+            absolute: glam::Vec2::new(0.0, 100.0),
+            size: glam::Vec2::new(10.0, 10.0),
+            ..Default::default()
+        };
+        let content = main
+            .spawn((at, LoadedImage(make_image_data(64).into()), ChildOf(parent)))
+            .id();
+        let background = main
+            .spawn((
+                at,
+                LoadedImage(make_image_data(64).into()),
+                BackgroundImage::default(),
+                ChildOf(parent),
+            ))
+            .id();
+        let svg = main
+            .spawn((
+                at,
+                LoadedSvg(
+                    SvgData {
+                        intrinsic: glam::Vec2::new(10.0, 10.0),
+                        scene: vello::Scene::new(),
+                        source_bytes: 0,
+                    }
+                    .into(),
+                ),
+                ChildOf(parent),
+            ))
+            .id();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        extract_loaded_images(&mut main, &mut render);
+        extract_loaded_svgs(&mut main, &mut render);
+
+        let map = render.resource::<RenderEntityMap>();
+        let (content_e, background_e, svg_e) =
+            (map.image[&content], map.image[&background], map.svg[&svg]);
+        for img in [
+            render.get::<ExtractedImage>(content_e).unwrap(),
+            render.get::<ExtractedImage>(background_e).unwrap(),
+        ] {
+            assert_eq!(img.origin, glam::Vec2::new(0.0, 50.0));
+            assert_eq!(img.alpha, 0.5);
+        }
+        let svg = render.get::<ExtractedSvg>(svg_e).unwrap();
+        assert_eq!(svg.origin, glam::Vec2::new(0.0, 50.0));
+        assert_eq!(svg.alpha, 0.5);
     }
 
     /// A waiter registered at enqueue time can be despawned before its
