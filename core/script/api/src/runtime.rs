@@ -1220,10 +1220,15 @@ struct HttpOutcome {
 /// Read `Fetch` / `Http` commands the script emitted this tick and hand each
 /// to the registry's dispatcher. Other variants are no-ops here (they
 /// flow to apply_script_commands and timer drains separately).
+///
+/// Each reply wakes the event loop once it is queued, so an app that went idle
+/// while the request was in flight runs the tick that delivers it. The waker is
+/// optional so a bare test can drive this without a loop to wake.
 pub fn drain_fetch_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     fetcher: Res<FetchRegistry>,
     hooks: Option<Res<HttpHooks>>,
+    waker: Option<Res<lumen_core::app::EventLoopWaker>>,
 ) {
     for ev in events.read() {
         let (mut req, tag, style) = match &ev.0 {
@@ -1276,6 +1281,7 @@ pub fn drain_fetch_commands(
             }
         }
         let tx = fetcher.sender.clone();
+        let wake = waker.as_deref().cloned();
         let label = tag.clone();
         let sent = hooks.map(|hooks| (hooks, req.clone()));
         let done: HttpDone = Box::new(move |result| {
@@ -1284,7 +1290,12 @@ pub fn drain_fetch_commands(
                     hook.on_reply(sent, response);
                 }
             }
+            // Queue first, then wake: the tick the wake runs must find the
+            // reply on the channel.
             let _ = tx.send(HttpOutcome { tag, style, result });
+            if let Some(wake) = &wake {
+                wake.wake();
+            }
         });
         fetcher
             .dispatch

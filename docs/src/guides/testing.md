@@ -30,8 +30,8 @@ position signals, but no output device is opened, so a headless run never
 takes the machine's audio endpoint from whatever else is using it.
 
 Ticks happen on demand. The app ticks when something asks it to (an
-animation, a pending change, an incoming command) and parks otherwise, so an
-idle headless app costs nothing.
+animation, a pending change, an incoming command, an HTTP reply or a module
+event arriving) and parks otherwise, so an idle headless app costs nothing.
 
 | Flag | Effect |
 |------|--------|
