@@ -10,8 +10,8 @@
 // is what the three-OS matrix covers.
 #![cfg(all(feature = "dev-run", target_os = "linux"))]
 
-//! Every app the repo ships runs, and so does every app `lumenc new`
-//! scaffolds.
+//! Every app the repo ships builds and runs, and every app `lumenc new`
+//! scaffolds runs.
 //!
 //! The rest of the suite drives the pipeline through fixtures it writes
 //! itself, which leaves the shipped apps and the scaffold templates
@@ -194,6 +194,47 @@ fn every_example_app_runs_clean() {
         }
     }
     report(failures, "example apps");
+}
+
+/// The demo apps compile ahead of time too. A build declares a module's
+/// functions from what the module registers rather than from a running app,
+/// so an app can run under `lumenc run` and still fail `lumenc build`.
+#[test]
+fn every_example_app_builds() {
+    let out_dir = std::env::temp_dir().join(format!("lumenc_example_build_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("create the build output dir");
+
+    let mut failures = Vec::new();
+    for dir in tracked_app_dirs("apps") {
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        // A native-SDK app builds through its own toolchain.
+        if detect(&dir) != AppKind::Markup {
+            continue;
+        }
+        let artifact = out_dir.join(format!("{name}.lmna"));
+        let out = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("build")
+            .arg(&dir)
+            .arg(&artifact)
+            .output()
+            .unwrap_or_else(|e| panic!("build {}: {e}", dir.display()));
+        if !out.status.success() || !artifact.is_file() {
+            failures.push(format!(
+                "apps/{name} exits {}\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim_end()
+            ));
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    assert!(
+        failures.is_empty(),
+        "{} example apps do not build:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 /// The fixtures the rest of the suite loads in-process. A test that reads
