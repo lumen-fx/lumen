@@ -362,7 +362,9 @@ fn install_assets(app: &mut App, lpak: Option<&Path>, dir: &Path) -> Result<(), 
     let Some(mut server) = app.world.get_resource_mut::<lumen_assets::AssetServer>() else {
         return Ok(());
     };
-    server.set_bundle_root(dir);
+    // The paths the markup resolved are absolute (see `resolve_asset_paths`),
+    // so the root they are matched against has to be as well.
+    server.set_bundle_root(absolute_dir(dir));
     server.register_bundle(bundle);
     Ok(())
 }

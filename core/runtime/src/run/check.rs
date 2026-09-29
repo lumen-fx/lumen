@@ -542,7 +542,25 @@ fn count_elements(el: &Element) -> usize {
 /// Runs on the from-source load and on the artifact load alike, which is what
 /// lets a packaged app carry paths relative to itself and still find its
 /// files from whichever directory it was started in.
+///
+/// `dir` may be relative to the working directory, as it is when a user
+/// types `lumenc build tracker`; it is made absolute first. A path joined
+/// onto a relative `dir` would stay relative, and the artifact load would
+/// then join `dir` onto it a second time.
 pub(crate) fn resolve_asset_paths(el: &mut Element, dir: &Path, extra_roots: &[PathBuf]) {
+    let dir = absolute_dir(dir);
+    let extra_roots: Vec<PathBuf> = extra_roots.iter().map(|r| absolute_dir(r)).collect();
+    resolve_asset_paths_under(el, &dir, &extra_roots);
+}
+
+/// `dir` made absolute against the working directory. A path the platform
+/// cannot make absolute (an empty one, or a working directory that is gone)
+/// is returned as given.
+pub(crate) fn absolute_dir(dir: &Path) -> PathBuf {
+    std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+fn resolve_asset_paths_under(el: &mut Element, dir: &Path, extra_roots: &[PathBuf]) {
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
     {
@@ -568,6 +586,50 @@ pub(crate) fn resolve_asset_paths(el: &mut Element, dir: &Path, extra_roots: &[P
         }
     }
     for child in &mut el.children {
-        resolve_asset_paths(child, dir, extra_roots);
+        resolve_asset_paths_under(child, dir, extra_roots);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_ir::layout_ir::Attributes;
+
+    fn image(src: &str) -> Element {
+        Element {
+            tag: "image".to_string(),
+            attrs: Attributes {
+                src: Some(src.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// A relative app directory still yields an absolute `src`, rooted at the
+    /// working directory.
+    #[test]
+    fn a_relative_app_dir_resolves_to_an_absolute_src() {
+        let mut el = image("icons/gear.png");
+        resolve_asset_paths(&mut el, Path::new("tracker"), &[]);
+        let expected = std::env::current_dir()
+            .unwrap()
+            .join("tracker")
+            .join("icons/gear.png");
+        assert_eq!(el.attrs.src.as_deref(), expected.to_str());
+    }
+
+    /// `lumenc build tracker` then `lumenc run --artifact ... tracker`: the
+    /// compile resolves the path against `tracker`, and the artifact load
+    /// resolves it against `tracker` again. The second pass must leave it
+    /// alone rather than produce `tracker/tracker/icons/gear.png`.
+    #[test]
+    fn resolving_twice_against_a_relative_dir_does_not_double_it() {
+        let mut el = image("icons/gear.png");
+        resolve_asset_paths(&mut el, Path::new("tracker"), &[]);
+        let once = el.attrs.src.clone();
+        resolve_asset_paths(&mut el, Path::new("tracker"), &[]);
+        assert_eq!(el.attrs.src, once);
+        assert!(Path::new(el.attrs.src.as_deref().unwrap()).is_absolute());
     }
 }

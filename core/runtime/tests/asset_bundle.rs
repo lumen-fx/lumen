@@ -172,3 +172,47 @@ fn an_unreadable_bundle_fails_the_run() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `lumenc run --assets app.lpak app` with the app directory relative to the
+/// working directory. The markup's paths are absolute by the time they are
+/// looked up, so the archive is matched against the absolute app directory,
+/// not the relative spelling it was named by.
+#[test]
+fn assets_resolve_from_a_bundle_named_by_a_relative_app_dir() {
+    let _one_app = one_app();
+    let dir = scratch_dir("relative");
+    std::fs::create_dir_all(dir.join("icons")).unwrap();
+    std::fs::write(dir.join("icons/dot.png"), RED_DOT_PNG).unwrap();
+    let bytes = image_app(&dir);
+
+    let lpak = dir.with_extension("lpak");
+    LumenBundle::pack_dir(&dir, &lpak).expect("pack the app directory");
+    std::fs::remove_file(dir.join("icons/dot.png")).unwrap();
+
+    // The working directory is process-wide; `one_app` keeps every other test
+    // in this binary out while it points at the scratch dir's parent.
+    let cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.parent().unwrap()).unwrap();
+    let rel = std::path::PathBuf::from(dir.file_name().unwrap());
+    let mut opts = RunOptions::new(&rel)
+        .with_artifact_bytes(bytes)
+        .with_assets(&lpak);
+    opts.bounded = true;
+    let built = build_headless_app(opts);
+    let decoded = built.map(|(mut app, _window)| {
+        let entity = tick_until_decoded(&mut app);
+        (app, entity)
+    });
+    std::env::set_current_dir(cwd).unwrap();
+    let (app, entity) = decoded.expect("build headless app");
+
+    let entity = entity.expect("the image never resolved");
+    assert!(
+        app.world.get::<ImageLoadFailed>(entity).is_none(),
+        "the archive entry must decode: {:?}",
+        app.world.get::<ImageLoadFailed>(entity).map(|f| &f.detail)
+    );
+
+    let _ = std::fs::remove_file(&lpak);
+    let _ = std::fs::remove_dir_all(&dir);
+}

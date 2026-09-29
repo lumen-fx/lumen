@@ -1186,6 +1186,7 @@ mod virtualization_tests {
 #[cfg(test)]
 mod aot_roundtrip_tests {
     use super::*;
+    use lumen_assets::{ImageLoadFailed, ImageSource, LoadedImage};
     use lumen_core::components::{Fill, TextContent, Visuals};
 
     /// Small but non-trivial app: CSS cascade (class -> bg + radius), inline
@@ -1313,6 +1314,71 @@ mod aot_roundtrip_tests {
         assert_eq!(bytes, reencoded, "artifact re-serialization not stable");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 1x1 red PNG. Small enough to inline, real enough for the decoder.
+    const RED_DOT_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// `lumenc build app app/app.lmna` then `lumenc run --artifact
+    /// app/app.lmna app`, both with the app directory relative to the working
+    /// directory: the image the markup names still decodes. The compile and
+    /// the artifact load each resolve `src` against the app directory, and a
+    /// relative one used to be joined twice (`app/app/icons/dot.png`).
+    #[test]
+    fn an_artifact_run_from_a_relative_app_dir_finds_its_image() {
+        let _serial = crate::serial();
+        let parent = std::env::temp_dir().join(format!("lumenc_rel_dir_{}", std::process::id()));
+        let dir = parent.join("app");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("icons")).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("src/main.lmn"),
+            r#"<root><image id="dot" src="icons/dot.png" /></root>"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("icons/dot.png"), RED_DOT_PNG).unwrap();
+
+        // The working directory is process-wide; `serial` keeps every other
+        // test in this binary out while it points at `parent`.
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&parent).unwrap();
+        let rel = std::path::Path::new("app");
+        let compiled = lumenc::compile_app(rel).expect("compile_app");
+        lumenc::artifact::write(&rel.join("app.lmna"), &compiled).expect("write artifact");
+        let mut opts = RunOptions::new(rel).with_artifact(rel.join("app.lmna"));
+        opts.bounded = true;
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+
+        let mut outcome = None;
+        for _ in 0..200 {
+            app.tick();
+            let mut q = app.world.query_filtered::<Entity, With<ImageSource>>();
+            let entities: Vec<Entity> = q.iter(&app.world).collect();
+            outcome = entities.into_iter().find(|&e| {
+                app.world.get::<LoadedImage>(e).is_some()
+                    || app.world.get::<ImageLoadFailed>(e).is_some()
+            });
+            if outcome.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::env::set_current_dir(cwd).unwrap();
+        let _ = std::fs::remove_dir_all(&parent);
+
+        let entity = outcome.expect("the image never reported an outcome");
+        assert!(
+            app.world.get::<LoadedImage>(entity).is_some(),
+            "the image did not decode: {:?}",
+            app.world.get::<ImageLoadFailed>(entity).map(|f| &f.detail)
+        );
     }
 
     /// A compiled candela app carries the bytecode image beside its source,
