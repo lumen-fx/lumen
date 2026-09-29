@@ -158,7 +158,7 @@ pub struct DockInsets {
 
 /// Per-frame flag indicating that the upcoming frame requires a fresh GPU encode.
 ///
-/// - Set by [`roll_up_frame_dirty`] from `Changed<T>` filters on render-relevant components: [`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`], [`TextInputScroll`], [`Opacity`], [`Visible`], [`Viewport`], [`crate::components::LumenClasses`], plus the [`crate::property_store::PropertyStore`] notify queue (any property write since the previous tick), plus child-set mutations (newly added [`Visible`] / removed `ChildOf`).
+/// - Set by [`roll_up_frame_dirty`] from `Changed<T>` filters on render-relevant components: [`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`], [`TextInputScroll`], [`Opacity`], [`Visible`], [`Viewport`], [`crate::components::LumenClasses`], [`ScrollOffset`], plus the [`crate::property_store::PropertyStore`] notify queue (any property write since the previous tick), plus child-set mutations (newly added [`Visible`] / removed `ChildOf`).
 /// - Cleared by the window backend after submitting the frame.
 /// - When unset, window backends skip GPU encode and submit in `RedrawRequested`.
 ///
@@ -402,6 +402,10 @@ pub fn roll_up_frame_dirty(
             // Overlay-scrollbar fade: alpha steps must repaint even when
             // nothing else changed (the fade-out frames).
             bevy_ecs::query::Changed<crate::input::ScrollbarState>,
+            // A scroll moves the content and the scrollbar thumb, neither of
+            // which is a component write of its own; the scrollbar's fade
+            // state stops changing once the bar is fully shown.
+            bevy_ecs::query::Changed<ScrollOffset>,
             // Runtime `type` / echo-mode flips (`bind-*`) must repaint even
             // when the underlying text is unchanged (mask <-> plaintext).
             bevy_ecs::query::Changed<EchoMode>,
@@ -421,6 +425,7 @@ pub fn roll_up_frame_dirty(
         Query<Entity, bevy_ecs::query::Changed<Visible>>,
         Query<Entity, bevy_ecs::query::Changed<crate::components::LumenClasses>>,
         Query<Entity, bevy_ecs::query::Changed<crate::input::ScrollbarState>>,
+        Query<Entity, bevy_ecs::query::Changed<ScrollOffset>>,
     ),
 ) {
     // Fully drain the `RemovedComponents` reader every tick. `.next()` would
@@ -468,6 +473,7 @@ pub fn roll_up_frame_dirty(
                 "Visible",
                 "LumenClasses",
                 "ScrollbarState",
+                "ScrollOffset",
             ];
             let counts = [
                 trace.0.iter().count(),
@@ -480,6 +486,7 @@ pub fn roll_up_frame_dirty(
                 trace.7.iter().count(),
                 trace.8.iter().count(),
                 trace.9.iter().count(),
+                trace.10.iter().count(),
             ];
             for (name, count) in names.iter().zip(counts) {
                 if count > 0 {
