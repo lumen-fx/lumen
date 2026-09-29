@@ -311,6 +311,12 @@ switches to a horizontal row scroller and `scroll="both"` enables both
 axes. Accepts `sensitivity`, `inertia`, `bind-scroll`, and the
 `scrollbar-*` attributes. A scroll container is a layout boundary.
 
+Its automatic minimum size is zero on both axes, as for
+`overflow: scroll` in CSS: a `<scroll grow="1">` in a fixed-height
+column stays at the height it is given and scrolls the rest instead of
+growing to its content. Write `min-height` (or `min-width`) to set a
+floor.
+
 Its direct children default to `shrink: 0`, so content taller (or wider)
 than the container keeps its own size and scrolls instead of being
 squeezed to fit. Write `shrink: 1` on a child to opt back in.

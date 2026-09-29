@@ -373,12 +373,16 @@ Two properties change it:
 
 - `min-width: 0` / `min-height: 0` drops the floor entirely, so the
   element shrinks past its content and the content overflows. This is
-  what a long unbreakable label or a nested scroll pane usually wants.
+  what a long unbreakable label usually wants.
 - `shrink: 0` takes the element off the shrinking list, so it keeps its
   authored size and the line overflows instead.
 
 `overflow: hidden` and `overflow: scroll` also drop the automatic
-floor to zero, since the element clips its own content.
+floor to zero, since the element clips its own content. So does a
+`<scroll>` (or any element with a `scroll` attribute), on both axes: a
+`grow: 1` scroller in a fixed-height column takes the space it is given
+and scrolls the rest. An authored `min-width` /
+`min-height` still sets the floor.
 
 #### Positioning
 
