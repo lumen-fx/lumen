@@ -1,0 +1,12 @@
+[app]
+id = "org.lumen.benchcomp.textview"
+
+[window]
+title = "Bench"
+size = [800, 600]
+
+# Non-default port: other lumenc instances on this machine (dev tooling,
+# agents) commonly hold 7878.
+[mcp]
+port = 7941
+simulate = true

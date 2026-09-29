@@ -1,0 +1,10 @@
+<root class="app">
+  <row class="header">
+    <label class="title" text="Bench" />
+  </row>
+  <scroll id="doc" class="doc" sensitivity="1.0" inertia="0">
+    <column class="doc-col">
+    </column>
+  </scroll>
+  <script src="main.rhai" />
+</root>

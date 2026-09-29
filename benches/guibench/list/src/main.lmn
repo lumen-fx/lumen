@@ -1,0 +1,21 @@
+<root class="app">
+  <row class="header">
+    <label class="title" text="Bench" />
+    <spacer />
+    <button id="count" class="count-btn" bind-text="count_label" text="Count: 0" />
+  </row>
+  <scroll class="list" sensitivity="1.0" inertia="0">
+    <for each="items" key="id" virtualized="true" row-height="36">
+      <row class="item-row">
+        <label class="primary" text="Item {row.i}" />
+        <label class="secondary" text="subtitle {row.i}" />
+      </row>
+    </for>
+  </scroll>
+  <row class="footer">
+    <input id="entry" class="entry" placeholder="Type here..." bind-text="entry_text" width="240px" />
+    <slider id="level" bind-value="level" min="0" max="100" value="50" width="200px" />
+    <label class="level-label" bind-text="level_label" text="50" />
+  </row>
+  <script src="main.rhai" />
+</root>

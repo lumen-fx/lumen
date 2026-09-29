@@ -1,0 +1,7 @@
+<root class="app">
+  <column class="center">
+    <label class="hello" text="Hello" />
+    <button id="press" text="Press" />
+  </column>
+  <script src="main.rhai" />
+</root>
