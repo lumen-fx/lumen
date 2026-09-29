@@ -528,6 +528,9 @@ state component at parse time, and a system swaps between the stored variants.
 
 `<for>` and `<if>` are not resolved at spawn time. They stay as markers that
 reconcilers in the `Systems` stage keep in sync with the data behind them.
+`<for>` keeps a row whose key survives a write: when its record changed, the
+row's placeholders are resolved again and written onto the entities it
+already has, so focus, scroll, and animation state stay with it.
 `<if>` has two policies: rebuild the subtree on each transition, or mount it
 once and toggle visibility, which preserves focus, scroll position, and
 per-row state.

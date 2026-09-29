@@ -114,10 +114,11 @@ pub struct IfMarker {
 
 /// Marker for a `<for each="...">` block. The reconciler reads the referenced [`ArraySignals`] entry each tick,
 /// expands `body` once per item (substituting `{field}` placeholders against the item record), and spawns/despawns child entities to match.
-/// The reconciler compares the key sequence it built last tick with the new one: an unchanged sequence is a no-op,
-/// an appended prefix spawns only the new rows, a truncated prefix despawns only the trailing rows, and anything
-/// else (reorder, mid-insert, mid-remove) is a full despawn-and-respawn. `key_field` names the record field the
-/// keys come from; without it the item index is the key.
+/// The reconciler compares the key sequence it built last tick with the new one: an unchanged sequence mounts
+/// nothing, an appended prefix spawns only the new rows, a truncated prefix despawns only the trailing rows, and
+/// anything else (reorder, mid-insert, mid-remove) is a full despawn-and-respawn. A row whose key is kept but whose
+/// record changed is updated in place, on the entities it already has. `key_field` names the record field the keys
+/// come from; without it the item index is the key.
 #[derive(bevy_ecs::component::Component, Clone, Debug)]
 pub struct ForMarker {
     /// Name of the `ArraySignals` entry to iterate.
@@ -153,6 +154,12 @@ pub struct ForMarker {
     /// `class` attrs contain `{...}` placeholders, because then selector
     /// matching depends on per-row substitution results.
     pub cascaded_body: Option<std::sync::Arc<Vec<Element>>>,
+    /// The record each mounted row was built from, in the order of
+    /// [`Self::cached_keys`] (or of [`Self::win_rows`] when virtualized).
+    /// A kept row whose record no longer matches its entry here has its
+    /// placeholders resolved again and written onto the entities it
+    /// already has.
+    pub row_items: Vec<ArrayItem>,
 }
 
 /// Who mounts the rows of a virtualized `<for>`.
@@ -545,6 +552,18 @@ pub fn apply_background_image(
     }
 }
 
+/// The in-app drag source a `drag-payload` attribute publishes. An empty
+/// payload names the element by its `id`.
+fn drag_source(attrs: &Attributes) -> Option<lumen_os_dnd::DragSource> {
+    let payload = attrs.drag_payload.as_ref()?;
+    let text = if payload.is_empty() {
+        attrs.id.clone().unwrap_or_default()
+    } else {
+        payload.clone()
+    };
+    Some(lumen_os_dnd::DragSource::new(text).with_effects(lumen_os_dnd::DropEffectSet::ANY))
+}
+
 fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
     // Seed any synthetic signal defaults (currently only the
     // `<tabs>` parser pass authors this - picks the first `<tab>` as
@@ -895,15 +914,8 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // value derives it from the element `id`. Mirrors HTML5
     // `dataTransfer.setData` / Qt `QMimeData`. Independent of `draggable`
     // (which stays the "physically translate on drag" opt-in).
-    if let Some(payload) = &el.attrs.drag_payload {
-        let text = if payload.is_empty() {
-            el.attrs.id.clone().unwrap_or_default()
-        } else {
-            payload.clone()
-        };
-        entity.insert(
-            lumen_os_dnd::DragSource::new(text).with_effects(lumen_os_dnd::DropEffectSet::ANY),
-        );
+    if let Some(source) = drag_source(&el.attrs) {
+        entity.insert(source);
     }
     if el.attrs.title_bar_drag {
         entity.insert(lumen_core::components::TitleBarDraggable);
@@ -1561,6 +1573,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             row_height: el.attrs.row_height.unwrap_or(32.0),
             win_rows: Vec::new(),
             cascaded_body: None,
+            row_items: Vec::new(),
         });
         // Virtualized for-blocks pin rows via `position: absolute` against
         // this entity. Author-supplied flex defaults shrink it to content
@@ -2149,7 +2162,13 @@ pub fn mark_dialog_accept_on_default_click(
 /// [`ArraySignals`][lumen_core::signals::ArraySignals] state.
 ///
 /// **Reconciliation policy (alpha7):**
-/// * Equal key sequence -> no-op.
+/// * Equal key sequence -> nothing mounts or unmounts.
+/// * In every case that keeps rows, a kept row whose record changed has
+///   its placeholders resolved again and written onto its existing
+///   entities, so it keeps focus / scroll / animation state and shows the
+///   new record. A row the template no longer lines up with (a script
+///   reshaped it, or the change reaches a nested `<for>` / `<if>` body or
+///   a component use site) cannot follow in place and the block rebuilds.
 /// * New keys are an extension of cached (cached is a prefix of new) ->
 ///   spawn only the appended items. Common case: `signal_array.push(...)`
 ///   adds one item, only the new row spawns; existing rows keep their
@@ -2175,9 +2194,7 @@ pub fn reconcile_for_blocks(
         Option<&bevy_ecs::hierarchy::Children>,
     )>,
     mut commands: bevy_ecs::system::Commands,
-    world_helper: bevy_ecs::system::ParamSet<(
-        bevy_ecs::system::Query<&bevy_ecs::hierarchy::Children>,
-    )>,
+    lookup: RowLookup,
     // Walk the [`ChildOf`] chain to locate the nearest [`Scroll`] ancestor's [`ScrollOffset`] and [`Transform`].
     // Virtualised for-blocks consult them to spawn only rows in the visible band; plain for-blocks
     // ignore these queries entirely.
@@ -2193,8 +2210,10 @@ pub fn reconcile_for_blocks(
     stylesheet: Option<bevy_ecs::system::Res<LumenStylesheet>>,
     policy: Option<bevy_ecs::system::Res<ScenePolicy>>,
 ) {
-    let _ = world_helper;
     let policy = policy.map(|p| *p).unwrap_or_default();
+    // Nothing wrote an array since the last pass, so every mounted row
+    // still shows the record it was built from.
+    let arrays_changed = array_signals.is_changed();
     let css_changed = stylesheet.as_ref().map(|s| s.is_changed()).unwrap_or(false);
     // Under `RowStyle::HostStyled` the rows reach a cascade of their own, so
     // every substitution below hands the template on unresolved.
@@ -2321,7 +2340,7 @@ pub fn reconcile_for_blocks(
             // in row-index order: `desired` is built that way and
             // `win_rows` is re-sorted into it at the end of this branch,
             // in step with the children list it indexes into.
-            if children.is_some() && marker.win_rows == desired {
+            if children.is_some() && marker.win_rows == desired && !arrays_changed {
                 continue;
             }
 
@@ -2337,12 +2356,33 @@ pub fn reconcile_for_blocks(
             let desired_by_idx: std::collections::HashMap<usize, &str> =
                 desired.iter().map(|(i, k)| (*i, k.as_str())).collect();
             let mut new_win: Vec<(usize, String)> = Vec::new();
+            let mut new_items: Vec<ArrayItem> = Vec::new();
+            let mut patches: Vec<RowPatch> = Vec::new();
+            let row_template = RowTemplate {
+                body: &marker.body,
+                store: &store,
+                css: row_css,
+            };
             if aligned {
                 for (row_i, (idx, key)) in marker.win_rows.iter().enumerate() {
-                    let keep = desired_by_idx.get(idx) == Some(&key.as_str());
                     let slice = &kids[row_i * body_len..(row_i + 1) * body_len];
+                    let item = &items[*idx];
+                    let was = marker.row_items.get(row_i);
+                    // A kept row whose record changed follows it in place;
+                    // one that cannot is dropped and mounts again below.
+                    let keep = desired_by_idx.get(idx) == Some(&key.as_str())
+                        && (was == Some(item)
+                            || row_template.plan(
+                                slice,
+                                (was, item),
+                                *idx,
+                                &report_missing,
+                                &lookup,
+                                &mut patches,
+                            ));
                     if keep {
                         new_win.push((*idx, key.clone()));
+                        new_items.push(item.clone());
                     } else {
                         for child in slice {
                             commands.entity(*child).despawn();
@@ -2422,6 +2462,10 @@ pub fn reconcile_for_blocks(
                     spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
                 }
                 new_win.push((*i, key.clone()));
+                new_items.push(item.clone());
+            }
+            if !patches.is_empty() {
+                commands.queue(move |world: &mut World| apply_row_patches(world, patches));
             }
             // Rows reach `Children` in mount order: a kept row holds the
             // slot it already had and a row entering the window appends
@@ -2437,11 +2481,13 @@ pub fn reconcile_for_blocks(
             row_order.sort_unstable_by_key(|&r| new_win[r].0);
             if row_order.iter().enumerate().any(|(slot, &r)| slot != r) {
                 new_win = row_order.iter().map(|&r| new_win[r].clone()).collect();
+                new_items = row_order.iter().map(|&r| new_items[r].clone()).collect();
                 commands.queue(move |world: &mut World| {
                     sort_virtual_rows(world, parent_id, body_len, &row_order);
                 });
             }
             marker.win_rows = new_win;
+            marker.row_items = new_items;
             continue;
         }
 
@@ -2459,37 +2505,81 @@ pub fn reconcile_for_blocks(
             })
             .collect();
 
-        if new_keys == marker.cached_keys && children.is_some() {
+        let same_keys = new_keys == marker.cached_keys && children.is_some();
+        if same_keys && !arrays_changed {
             continue;
         }
 
         let body_len = marker.body.len();
         let cached = marker.cached_keys.clone();
+        let appended = cached.len() < new_keys.len() && new_keys[..cached.len()] == cached[..];
+        let trimmed = new_keys.len() < cached.len() && cached[..new_keys.len()] == new_keys[..];
+        let kids: Vec<Entity> = children.map(|c| c.iter().collect()).unwrap_or_default();
 
-        // Append-only: new = cached + tail. Spawn just the tail.
-        if cached.len() < new_keys.len() && new_keys[..cached.len()] == cached[..] {
-            for (i, item) in items.iter().enumerate().skip(cached.len()) {
-                let scope = Scope::new(&*store)
-                    .with_row(item, i)
-                    .reporting_to(&report_missing);
-                for tmpl in &marker.body {
-                    let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                    spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
+        // The rows both key lists share sit at the front, `body_len`
+        // children each. One whose record changed follows it in place;
+        // `None` when any of them cannot, and the block rebuilds below.
+        let kept_rows =
+            (same_keys || appended || trimmed).then(|| cached.len().min(new_keys.len()));
+        let aligned = kids.len() == cached.len() * body_len;
+        let followed = kept_rows.and_then(|kept| {
+            let row_template = RowTemplate {
+                body: &marker.body,
+                store: &store,
+                css: row_css,
+            };
+            let mut patches: Vec<RowPatch> = Vec::new();
+            let mut moved = false;
+            for (i, item) in items.iter().enumerate().take(kept) {
+                let was = marker.row_items.get(i);
+                if was == Some(item) {
+                    continue;
+                }
+                moved = true;
+                if !aligned {
+                    return None;
+                }
+                let roots = &kids[i * body_len..(i + 1) * body_len];
+                if !row_template.plan(
+                    roots,
+                    (was, item),
+                    i,
+                    &report_missing,
+                    &lookup,
+                    &mut patches,
+                ) {
+                    return None;
                 }
             }
-            marker.cached_keys = new_keys;
-            continue;
-        }
+            Some((patches, moved))
+        });
 
-        // Trim-from-tail: cached = new + tail. Despawn the tail
-        // entities (`body_len` per popped item, last-spawn-first).
-        if new_keys.len() < cached.len() && cached[..new_keys.len()] == new_keys[..] {
-            if let Some(kids) = children {
-                let kids: Vec<Entity> = kids.iter().collect();
+        if let Some((patches, moved)) = followed {
+            if !patches.is_empty() {
+                commands.queue(move |world: &mut World| apply_row_patches(world, patches));
+            }
+            // Append-only: new = cached + tail. Spawn just the tail.
+            if appended {
+                for (i, item) in items.iter().enumerate().skip(cached.len()) {
+                    let scope = Scope::new(&*store)
+                        .with_row(item, i)
+                        .reporting_to(&report_missing);
+                    for tmpl in &marker.body {
+                        let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
+                        spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
+                    }
+                }
+            }
+            // Trim-from-tail: cached = new + tail. Despawn the tail
+            // entities (`body_len` per popped item, last-spawn-first).
+            if trimmed {
                 let drop_count = (cached.len() - new_keys.len()) * body_len;
                 for child in kids.iter().rev().take(drop_count) {
                     commands.entity(*child).despawn();
                 }
+            }
+            if moved || !same_keys {
+                marker.row_items = items.to_vec();
             }
             marker.cached_keys = new_keys;
             continue;
@@ -2514,6 +2604,251 @@ pub fn reconcile_for_blocks(
             }
         }
         marker.cached_keys = new_keys;
+        marker.row_items = items.to_vec();
+    }
+}
+
+/// Which of an element's placeholder-carrying strings differ between two
+/// instances of the same template: the strings
+/// [`lumen_ir::interpolate::substitute_attrs`] resolves, grouped by the
+/// component each one lands on.
+#[derive(Clone, Copy, Debug, Default)]
+struct RowStringChanges {
+    /// `text` or `placeholder`, which reach the element through
+    /// [`resolve_strings`].
+    strings: bool,
+    id: bool,
+    classes: bool,
+    src: bool,
+    style_role: bool,
+    drag_payload: bool,
+}
+
+impl RowStringChanges {
+    fn between(old: &Attributes, new: &Attributes) -> Self {
+        Self {
+            strings: old.text != new.text || old.placeholder != new.placeholder,
+            id: old.id != new.id,
+            classes: old.classes != new.classes,
+            src: old.src != new.src,
+            style_role: old.style_role != new.style_role,
+            drag_payload: old.drag_payload != new.drag_payload,
+        }
+    }
+
+    fn any(self) -> bool {
+        self.strings || self.id || self.classes || self.src || self.style_role || self.drag_payload
+    }
+}
+
+/// One in-place write a kept `<for>` row needs: the entity, the attributes
+/// its template resolves to for the new record, and which of them moved.
+type RowPatch = (Entity, Box<Attributes>, RowStringChanges);
+
+/// Whether a use site passes different arguments in two instances.
+fn use_args_differ(old: &Element, new: &Element) -> bool {
+    match (&old.frag_use, &new.frag_use) {
+        (Some(a), Some(b)) => a.args != b.args,
+        (None, None) => false,
+        _ => true,
+    }
+}
+
+/// Whether two instances of one template subtree resolve every placeholder
+/// the same way.
+fn same_resolution(old: &Element, new: &Element) -> bool {
+    !RowStringChanges::between(&old.attrs, &new.attrs).any()
+        && !use_args_differ(old, new)
+        && old.children.len() == new.children.len()
+        && old
+            .children
+            .iter()
+            .zip(&new.children)
+            .all(|(a, b)| same_resolution(a, b))
+}
+
+/// The children `spawn_element` builds for an element ahead of its markup
+/// children: the knob of a `<toggle>` / `<switch>` and the thumb of a
+/// `<slider>`.
+fn generated_children(tag: &str) -> usize {
+    usize::from(matches!(tag, "toggle" | "switch" | "slider"))
+}
+
+/// Collect the writes that take the entities `entity` heads from the `old`
+/// instance of a row template to the `new` one. `false` when the row cannot
+/// follow in place: the tree no longer has the shape the template spawned,
+/// or a change reaches something that holds its own copy of the template (a
+/// nested `<for>` / `<if>` body, a component use site).
+fn plan_row_element(
+    entity: Entity,
+    old: &Element,
+    new: &Element,
+    lookup: &RowLookup<'_, '_>,
+    out: &mut Vec<RowPatch>,
+) -> bool {
+    if !new.tag.is_empty() && lookup.tags.get(entity).map(|t| &*t.0) != Ok(new.tag.as_str()) {
+        return false;
+    }
+    if use_args_differ(old, new) {
+        return false;
+    }
+    let changes = RowStringChanges::between(&old.attrs, &new.attrs);
+    if changes.any() {
+        out.push((entity, Box::new(new.attrs.clone()), changes));
+    }
+    if old.children.len() != new.children.len() {
+        return false;
+    }
+    // A marker keeps its body as a template and builds from it later; a use
+    // site hands its children to the fragment. Neither is walked here, so a
+    // change that reaches into one cannot be followed in place.
+    let holds_template = new.frag_use.is_some()
+        || (new.tag == "for" && new.attrs.each.is_some())
+        || (matches!(new.tag.as_str(), "if" | "dialog") && new.attrs.if_signal.is_some());
+    if holds_template {
+        return old
+            .children
+            .iter()
+            .zip(&new.children)
+            .all(|(a, b)| same_resolution(a, b));
+    }
+    if new.children.is_empty() {
+        return true;
+    }
+    let skip = generated_children(&new.tag);
+    let Some(kids) = lookup
+        .children
+        .get(entity)
+        .ok()
+        .and_then(|c| c.get(skip..skip + new.children.len()))
+    else {
+        return false;
+    };
+    kids.iter()
+        .zip(old.children.iter().zip(&new.children))
+        .all(|(&kid, (o, n))| plan_row_element(kid, o, n, lookup, out))
+}
+
+/// The queries a kept row's walk reads to line its entities up with its
+/// template.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct RowLookup<'w, 's> {
+    children: bevy_ecs::system::Query<'w, 's, &'static bevy_ecs::hierarchy::Children>,
+    tags: bevy_ecs::system::Query<'w, 's, &'static lumen_core::components::LumenTag>,
+}
+
+/// What one `<for>` block's kept rows are rebuilt against when their
+/// records change: the body template, the signals its `{$name}`
+/// placeholders read, and the stylesheet its rows cascade through.
+struct RowTemplate<'a> {
+    body: &'a [Element],
+    store: &'a PropertyStore,
+    css: Option<&'a lumen_ir::css::Stylesheet>,
+}
+
+impl RowTemplate<'_> {
+    /// Collect the writes that take a kept row, whose top-level entities
+    /// are `roots`, from the record `old` to `new`, both at `index`.
+    /// `false` when the row cannot follow in place; see
+    /// [`plan_row_element`].
+    fn plan(
+        &self,
+        roots: &[Entity],
+        (old, new): (Option<&ArrayItem>, &ArrayItem),
+        index: usize,
+        report_missing: &dyn Fn(&str),
+        lookup: &RowLookup<'_, '_>,
+        out: &mut Vec<RowPatch>,
+    ) -> bool {
+        if roots.len() != self.body.len() {
+            return false;
+        }
+        let unknown = ArrayItem::new();
+        let old_scope = Scope::new(self.store).with_row(old.unwrap_or(&unknown), index);
+        let new_scope = Scope::new(self.store)
+            .with_row(new, index)
+            .reporting_to(report_missing);
+        roots.iter().zip(self.body).all(|(&root, tmpl)| {
+            let before = substitute_in_element_with_css(tmpl, &old_scope, self.css);
+            let after = substitute_in_element_with_css(tmpl, &new_scope, self.css);
+            plan_row_element(root, &before, &after, lookup, out)
+        })
+    }
+}
+
+/// Write the planned in-place changes of kept `<for>` rows onto their
+/// entities, the way `spawn_element` would have built them from the same
+/// attributes.
+fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
+    use lumen_core::components::{BindText, LumenTag, TextInput};
+    use lumen_core::input::Focused;
+    use lumen_primitives::TooltipSource;
+    let mut shown = world.query::<(
+        Option<&mut TextContent>,
+        Option<&mut TextInput>,
+        Option<&mut TooltipSource>,
+        Has<Focused>,
+        Has<BindText>,
+    )>();
+    let mut restyle = false;
+    for (entity, attrs, changes) in patches {
+        if world.get_entity(entity).is_err() {
+            continue;
+        }
+        if changes.strings {
+            let authored = AuthoredStrings::from(&*attrs);
+            let strings = resolve_strings(
+                world.get_resource::<lumen_core::i18n::AppI18n>(),
+                &authored,
+                attrs.format.as_deref(),
+            );
+            if world.get::<AuthoredStrings>(entity).is_some() {
+                world.entity_mut(entity).insert(authored);
+            }
+            if let Ok((text, input, tooltip, focused, bound)) = shown.get_mut(world, entity) {
+                // A `bind-text` element shows its signal, not the markup.
+                let text = if bound { None } else { text };
+                crate::i18n::write_strings(strings, text, input, tooltip, focused);
+            }
+        }
+        let mut e = world.entity_mut(entity);
+        if changes.id {
+            match &attrs.id {
+                Some(id) => e.insert(LumenId(id.clone())),
+                None => e.remove::<LumenId>(),
+            };
+            restyle = true;
+        }
+        if changes.classes {
+            if attrs.classes.is_empty() {
+                e.remove::<LumenClasses>();
+            } else {
+                e.insert(LumenClasses::from(attrs.classes.clone()));
+            }
+            restyle = true;
+        }
+        if changes.src && e.get::<LumenTag>().is_some_and(|t| &*t.0 == "image") {
+            match &attrs.src {
+                Some(src) => e.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src))),
+                None => e.remove::<lumen_assets::ImageSource>(),
+            };
+        }
+        if changes.style_role
+            && let Some(ts) = Option::<TextStyle>::from(&*attrs)
+        {
+            e.insert(ts);
+        }
+        // An empty payload is the element's `id`, so a new id moves it too.
+        if changes.drag_payload || changes.id {
+            match drag_source(&attrs) {
+                Some(source) => e.insert(source),
+                None => e.remove::<lumen_os_dnd::DragSource>(),
+            };
+        }
+    }
+    // A new id or class can change which rules match the element.
+    if restyle {
+        lumen_core::components::StyleVersion::bump(world);
     }
 }
 
