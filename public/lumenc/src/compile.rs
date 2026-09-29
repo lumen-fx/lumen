@@ -621,7 +621,16 @@ fn extract_root_vars(css: &str) -> HashMap<String, String> {
 /// Rewrite every relative `<image src>` absolute against `dir`. Mirror of
 /// `lumen_runtime::run::resolve_asset_paths` (without the extra asset-roots,
 /// which come from `lumen.toml` config the launcher path does not read).
+///
+/// A relative `dir` is made absolute first, as the runtime's copy does: the
+/// runtime joins its own app directory onto any `src` still relative when it
+/// loads the bytes, so a relative one here would be joined twice.
 fn resolve_asset_paths(el: &mut Element, dir: &Path) {
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    resolve_asset_paths_under(el, &dir);
+}
+
+fn resolve_asset_paths_under(el: &mut Element, dir: &Path) {
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
     {
@@ -634,7 +643,7 @@ fn resolve_asset_paths(el: &mut Element, dir: &Path) {
         }
     }
     for child in &mut el.children {
-        resolve_asset_paths(child, dir);
+        resolve_asset_paths_under(child, dir);
     }
 }
 
@@ -649,6 +658,7 @@ fn read_optional(path: &Path) -> Result<Option<String>, CompileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_ir::layout_ir::Attributes;
 
     /// A directory with markup + CSS + inline script compiles to valid LMNA
     /// bytes that decode back into an artifact carrying the baked script and a
@@ -672,6 +682,28 @@ mod tests {
         assert!(app.ir.combined_stylesheet.is_some());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `lumenc run tracker` compiles against the relative `tracker` and then
+    /// hands the bytes to a runtime that joins `tracker` onto every `src`
+    /// still relative. The compile has to leave none relative, or the image
+    /// is looked up at `tracker/tracker/icons/gear.png`.
+    #[test]
+    fn a_relative_app_dir_bakes_an_absolute_image_src() {
+        let mut el = Element {
+            tag: "image".to_string(),
+            attrs: Attributes {
+                src: Some("icons/gear.png".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        resolve_asset_paths(&mut el, Path::new("tracker"));
+        let expected = std::env::current_dir()
+            .unwrap()
+            .join("tracker")
+            .join("icons/gear.png");
+        assert_eq!(el.attrs.src.as_deref(), expected.to_str());
     }
 
     /// The always-on `ua.css` baseline reaches a control compiled through
