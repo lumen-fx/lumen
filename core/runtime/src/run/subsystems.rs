@@ -210,8 +210,20 @@ pub(crate) fn register_reactive(app: &mut App) {
     // presentation layer. A host that windows long lists or cascades CSS on
     // its own replaces this before the app runs.
     app.world.init_resource::<crate::spawn::ScenePolicy>();
-    app.add_systems(TickStage::Systems, crate::spawn::reconcile_for_blocks);
-    app.add_systems(TickStage::Systems, crate::spawn::reconcile_if_blocks);
+    // Both reconcilers run ahead of the asset pipeline's cache lookup, so
+    // an `<image>` they mount gets a bitmap already in the cache in the
+    // frame it first paints. Unordered, the lookup could run first and
+    // miss the new element until the next tick: a page swap between two
+    // pages showing the same image then presented one frame with the old
+    // page gone and the new image not yet attached.
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::reconcile_for_blocks.before(lumen_assets::spawn_pending_decodes),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::reconcile_if_blocks.before(lumen_assets::spawn_pending_decodes),
+    );
     // A mounted subtree takes its place in the document, not at the end
     // of it: `DocumentOrder` is restated from the hierarchy once the
     // reconcilers have flushed their spawns, so Tab reaches an `<if>`
@@ -397,6 +409,11 @@ pub(crate) fn register_styles(
     // resolved, so without a re-resolve a page reached by navigation comes
     // up in whatever color scheme the app booted with rather than the one
     // now in force.
+    //
+    // It runs ahead of the asset pipeline's cache lookup for the same
+    // single-frame reason: a restyle that points `bg` at an image, and
+    // the elements the DOM commands before it spawned, have their cached
+    // bitmap attached in the frame they appear.
     app.add_systems(TickStage::Systems, detect_media_change);
     app.add_systems(
         TickStage::Systems,
@@ -407,7 +424,8 @@ pub(crate) fn register_styles(
         reapply_computed_styles
             .after(reapply_styles_on_root_class_change)
             .after(lumen_scene::dom::apply_dom_commands)
-            .after(crate::spawn::reconcile_if_blocks),
+            .after(crate::spawn::reconcile_if_blocks)
+            .before(lumen_assets::spawn_pending_decodes),
     );
 }
 
