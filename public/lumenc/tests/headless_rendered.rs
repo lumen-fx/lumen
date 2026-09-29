@@ -75,3 +75,84 @@ fn bounded_headless_run_at_fractional_dpr() {
     .expect("headless run at dpr 1.5");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A timer armed once the app has gone idle fires on its own. Nothing else
+/// ticks the app here: no input, no MCP wake, no animation. Before the loop
+/// slept until the timer's deadline it parked on events alone, and the
+/// callback waited for an unrelated tick that never came.
+#[test]
+fn an_idle_app_wakes_for_its_timer() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+    let dir = temp_app_dir("timer");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[script]\nengine = \"candela\"\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::write(
+        dir.join("src/main.lmn"),
+        "<root>\n  <label text=\"timer\" />\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write main.lmn");
+    // Long enough that startup's own follow-up frames have settled and the
+    // loop is parked when the deadline passes.
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        "import \"lumen.cdl\";\n\
+         fn on_ready() { lumen::set_timeout(\"t\", 1500); }\n\
+         fn on_timer(name: string) { print(\"timer fired \" + name); }\n\
+         fn main() {}\n",
+    )
+    .expect("write main.cdl");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("run")
+        .arg(&dir)
+        .arg("--headless")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lumenc run --headless");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let started = Instant::now();
+    let limit = Duration::from_secs(6);
+    let mut fired = None;
+    while fired.is_none() {
+        let Some(left) = limit.checked_sub(started.elapsed()) else {
+            break;
+        };
+        match rx.recv_timeout(left) {
+            Ok(line) if line.contains("timer fired t") => fired = Some(started.elapsed()),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    let fired = fired.expect("the timer never fired on an idle headless app");
+    assert!(
+        fired >= Duration::from_millis(1500),
+        "the timer fired early, after {fired:?}"
+    );
+}

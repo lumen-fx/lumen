@@ -435,6 +435,14 @@ driver keys its claim on something in the tree rather than on its own
 bookkeeping, so the claim dies with that thing even when the work behind it
 never finishes.
 
+Work that comes due at a known instant rather than now, such as a script
+timer, asks for a wake deadline instead (`WakeDeadline` in `lumen_core::tick`).
+The deadline is cleared at the start of every tick and re-requested by each
+driver whose deadline is still outstanding; the earliest request wins. An idle
+loop sleeps until it (the windowed backend through `ControlFlow::WaitUntil`,
+the headless loop through a timed park) and ticks once it passes, so a pending
+timer neither polls nor waits for unrelated input.
+
 ## The extract step
 
 Extract functions are plain function pointers, not closures, so per-extract

@@ -24,7 +24,7 @@ use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOcc
 use lumen_core::prelude::*;
 use lumen_core::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
 use lumen_core::text_model::TextBuffer;
-use lumen_core::tick::work_pending;
+use lumen_core::tick::{wake_deadline, work_pending};
 use lumen_core::traits::{A11yBackend, FrameRequest, RenderTarget, SurfaceRenderer};
 use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
 use raw_window_handle::{
@@ -1229,6 +1229,16 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             event_loop.exit();
             return;
         }
+        // A deadline a system asked to be woken at (a script timer) that
+        // has come due needs a tick: this is the pass the `WaitUntil` set
+        // below resumes into.
+        let wake_at = wake_deadline(&self.app.world);
+        let now = std::time::Instant::now();
+        if wake_at.is_some_and(|at| at <= now)
+            && let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>()
+        {
+            sch.pending = true;
+        }
         if let Some(window) = self.window.as_ref() {
             let should_paint = self
                 .app
@@ -1264,7 +1274,6 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // of spinning - capping the self-driven cadence at ~60 Hz. A
                 // stale anchor (first frame after idle) is also already past,
                 // so a fresh input event still paints without delay.
-                let now = std::time::Instant::now();
                 let deadline = self.last_frame_at.map(|t| t + ANIM_FRAME_INTERVAL);
                 match deadline {
                     Some(d) if d > now => event_loop.set_control_flow(ControlFlow::WaitUntil(d)),
@@ -1274,12 +1283,24 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     }
                 }
             } else {
-                // Idle: park until the next event (input, resize, MCP wake).
-                // Clears any WaitUntil left from a just-settled animation so
-                // the loop doesn't keep waking.
-                event_loop.set_control_flow(ControlFlow::Wait);
+                // Idle: park until the next event (input, resize, MCP wake)
+                // or the earliest requested deadline. Replaces any WaitUntil
+                // left from a just-settled animation so the loop doesn't keep
+                // waking.
+                event_loop.set_control_flow(idle_control_flow(wake_at, now));
             }
         }
+    }
+}
+
+/// Control flow for an idle loop: sleep until `wake_at` while it lies in the
+/// future, else wait for the next event. A deadline already past is not
+/// waited on here; it raised `pending` above, and a paused (occluded) window
+/// holds it like any other pending frame instead of spinning on it.
+fn idle_control_flow(wake_at: Option<std::time::Instant>, now: std::time::Instant) -> ControlFlow {
+    match wake_at {
+        Some(at) if at > now => ControlFlow::WaitUntil(at),
+        _ => ControlFlow::Wait,
     }
 }
 
@@ -1750,7 +1771,7 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedrawScheduler, present_frame};
+    use super::{RedrawScheduler, idle_control_flow, present_frame};
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, RenderTarget, SurfaceError,
@@ -2031,5 +2052,24 @@ mod tests {
         // Occluded / minimized: park even with work pending (battery win).
         assert!(!scheduler(true, false, true).should_forward_redraw());
         assert!(!scheduler(true, true, true).should_forward_redraw());
+    }
+
+    #[test]
+    fn an_idle_loop_sleeps_until_a_future_wake_deadline_and_no_longer() {
+        use std::time::{Duration, Instant};
+        use winit::event_loop::ControlFlow;
+        let now = Instant::now();
+        let later = now + Duration::from_secs(2);
+        assert_eq!(idle_control_flow(None, now), ControlFlow::Wait);
+        assert_eq!(
+            idle_control_flow(Some(later), now),
+            ControlFlow::WaitUntil(later)
+        );
+        // A passed deadline is a pending frame, never a WaitUntil in the
+        // past that would spin the loop.
+        assert_eq!(
+            idle_control_flow(Some(now - Duration::from_millis(1)), now),
+            ControlFlow::Wait
+        );
     }
 }

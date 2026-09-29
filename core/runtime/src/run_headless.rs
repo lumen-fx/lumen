@@ -26,6 +26,8 @@
 //! * while work is pending (animations mid-flight, undrained external
 //!   property writes, dirty frame), ticks are paced at ~60 Hz - the
 //!   stand-in for vsync;
+//! * a deadline a system asked to be woken at (a script timer, see
+//!   [`lumen_core::tick::WakeDeadline`]) ends the park when it comes due;
 //! * otherwise the loop parks. With hot reload active it re-ticks every
 //!   ~250 ms so the source watcher polls; without it, the loop sleeps
 //!   until the next wake (SIGINT/SIGTERM are still observed within one
@@ -48,7 +50,7 @@ use bevy_ecs::message::Messages;
 use lumen_core::input::CloseRequest;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{FrameDirty, SurfaceCapture, SurfaceFrame};
-use lumen_core::tick::work_pending;
+use lumen_core::tick::{wake_deadline, work_pending};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
@@ -455,18 +457,29 @@ pub fn run_app_headless_rendered(
             }
         } else {
             next_frame_deadline = None;
-            // Idle-park until an MCP wake. Timeout slices keep signals -
-            // and, when hot reload is on, the source watcher - serviced.
+            // Idle-park until an MCP wake or the earliest deadline a
+            // driver asked to be woken at (a script timer). Timeout
+            // slices keep signals - and, when hot reload is on, the
+            // source watcher - serviced.
+            let wake_at = wake_deadline(&app.world);
             loop {
                 if exit_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                let woken = parker.park_timeout(IDLE_PARK_SLICE);
+                let slice = match wake_at {
+                    Some(at) => match at.checked_duration_since(Instant::now()) {
+                        Some(left) if !left.is_zero() => left.min(IDLE_PARK_SLICE),
+                        _ => break,
+                    },
+                    None => IDLE_PARK_SLICE,
+                };
+                let woken = parker.park_timeout(slice);
                 // Tick on: an explicit wake (MCP, notify hot-reload
-                // watcher), or a poll slice when the mtime fallback is
-                // active. Otherwise stay parked - zero ticks at idle,
-                // like the windowed scheduler.
-                if woken || hot_reload_poll {
+                // watcher), a poll slice when the mtime fallback is
+                // active, or the deadline coming due. Otherwise stay
+                // parked - zero ticks at idle, like the windowed
+                // scheduler.
+                if woken || hot_reload_poll || wake_at.is_some_and(|at| Instant::now() >= at) {
                     break;
                 }
             }

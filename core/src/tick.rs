@@ -67,7 +67,7 @@ impl Tick {
 /// Whether the tick that just ran left work behind, so a driver that only
 /// wakes on events has to schedule another frame.
 ///
-/// Four sources, each of which reaches `false` on its own once the system
+/// Five sources, each of which reaches `false` on its own once the system
 /// settles, so a caller that loops on this can never spin forever:
 ///
 /// 1. The external typed-property bus still holds undrained writes, from a
@@ -83,6 +83,9 @@ impl Tick {
 ///    driver keys its claim on something that settles or leaves the tree.
 /// 4. [`FrameDirty`] is still set, which a system dirtying state after the
 ///    encode leaves behind. The next present clears it.
+/// 5. A [`WakeDeadline`] requested this tick has already passed. A driver
+///    that reaches a deadline hands its work out on the tick that follows,
+///    so the claim settles with it.
 ///
 /// This is a frame predicate, not a state predicate: an app with a permanent
 /// animation raises the third source forever. A caller that needs to know
@@ -95,4 +98,89 @@ pub fn work_pending(world: &World) -> bool {
             .get_resource::<AnimationsActive>()
             .is_some_and(|a| a.get())
         || world.get_resource::<FrameDirty>().is_some_and(|f| f.dirty)
+        || wake_deadline(world).is_some_and(|at| at <= Instant::now())
+}
+
+/// The earliest instant a driver asked for another tick at, if any.
+///
+/// The companion of [`work_pending`] for work that is due later rather than
+/// now: a driver that parks on events alone sleeps until this instant (winit's
+/// `ControlFlow::WaitUntil`, a timed park) instead of polling, and ticks when
+/// it passes. `None` means nothing is scheduled and the loop may wait for an
+/// event indefinitely.
+pub fn wake_deadline(world: &World) -> Option<Instant> {
+    world
+        .get_resource::<WakeDeadline>()
+        .and_then(WakeDeadline::get)
+}
+
+/// Per-tick "tick again no later than this" request, the timed counterpart of
+/// [`AnimationsActive`].
+///
+/// A system whose work comes due at a known instant with nothing else to wake
+/// the loop (a script timer, a delayed transition) calls [`Self::request`]
+/// with that instant. Several requests keep the earliest. Like
+/// [`AnimationsActive`], [`reset_wake_deadline`] clears it at the top of every
+/// tick and each driver re-requests only while its deadline is still
+/// outstanding, so a loop that settles has nothing left to wake for.
+///
+/// Interior-mutable so drivers can request through a shared `Res`.
+#[derive(Resource, Debug, Default)]
+pub struct WakeDeadline(std::sync::Mutex<Option<Instant>>);
+
+impl WakeDeadline {
+    /// Ask for a tick no later than `at`. Keeps the earliest of all requests
+    /// made since the last [`Self::clear`].
+    pub fn request(&self, at: Instant) {
+        let mut slot = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        *slot = Some(slot.map_or(at, |cur| cur.min(at)));
+    }
+
+    /// The earliest instant requested since the last [`Self::clear`].
+    pub fn get(&self) -> Option<Instant> {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Drop every request. Called by [`reset_wake_deadline`] at tick start.
+    pub fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
+/// Clears [`WakeDeadline`] at the top of every tick (registered in
+/// [`TickStage::Input`], chained before the `Systems` stage where drivers
+/// request), so a deadline nobody renews stops waking the loop.
+pub fn reset_wake_deadline(deadline: Res<WakeDeadline>) {
+    deadline.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_earliest_request_wins_until_cleared() {
+        let deadline = WakeDeadline::default();
+        assert_eq!(deadline.get(), None);
+        let now = Instant::now();
+        deadline.request(now + Duration::from_secs(5));
+        deadline.request(now + Duration::from_secs(2));
+        deadline.request(now + Duration::from_secs(9));
+        assert_eq!(deadline.get(), Some(now + Duration::from_secs(2)));
+        deadline.clear();
+        assert_eq!(deadline.get(), None);
+    }
+
+    #[test]
+    fn only_a_passed_deadline_is_pending_work() {
+        let mut world = World::new();
+        world.init_resource::<WakeDeadline>();
+        assert!(!work_pending(&world));
+        let later = Instant::now() + Duration::from_secs(60);
+        world.resource::<WakeDeadline>().request(later);
+        assert!(!work_pending(&world), "a future deadline is not due yet");
+        assert_eq!(wake_deadline(&world), Some(later));
+        world.resource::<WakeDeadline>().request(Instant::now());
+        assert!(work_pending(&world), "a passed deadline is due");
+    }
 }

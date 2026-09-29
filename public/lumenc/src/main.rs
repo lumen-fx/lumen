@@ -942,7 +942,8 @@ USAGE:
                           lumen.toml sets [mcp] simulate = true or
                           [runtime] mcp = true.
                           Ticks run on demand (MCP wake / animations /
-                          dirty state) and the process idles otherwise.
+                          dirty state / a script timer coming due) and
+                          the process idles otherwise.
                           --size sets the logical viewport (default:
                           lumen.toml [window] size, else 960x720);
                           --dpr scales the offscreen target (screenshot
