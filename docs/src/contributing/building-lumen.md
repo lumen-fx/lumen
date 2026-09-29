@@ -513,6 +513,16 @@ actionable if you know which phase is slow. The run is also reported in
 tenths, so a cost that grows with the number of starts shows as a trend
 instead of disappearing into one number. `--iterations` sets the sample count.
 
+## Comparing against other toolkits
+
+[guibench](https://github.com/lumen-fx/guibench) implements the same four apps
+in Lumen and in eight other GUI toolkits, and measures startup, scrolling,
+interaction, memory, and size the same way for each. The Lumen versions live in
+`benches/guibench`; guibench builds `lumenc` from a Lumen checkout and runs them
+from there. A change that breaks one of those apps fixes it in the same pull
+request. To run the suite against your checkout, clone guibench beside it (or
+point `LUMEN_REPO` at it) and follow the guibench README.
+
 ## Language server and editor extension
 
 The language server is a normal workspace binary:

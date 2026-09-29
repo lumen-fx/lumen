@@ -1,0 +1,44 @@
+.app {
+  width: 100%;
+  height: 100%;
+}
+
+.header {
+  height: 48px;
+  padding: 8;
+  gap: 12;
+  align: center;
+}
+
+.title {
+  font-size: 18;
+  font-weight: bold;
+}
+
+.list {
+  grow: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.item-row {
+  height: 36px;
+  padding: 0 0 0 8;
+  gap: 12;
+  align: center;
+}
+
+.primary {
+  font-weight: bold;
+}
+
+.secondary {
+  text-color: #777777;
+}
+
+.footer {
+  height: 56px;
+  padding: 8;
+  gap: 12;
+  align: center;
+}

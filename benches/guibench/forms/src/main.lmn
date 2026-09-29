@@ -1,0 +1,191 @@
+<root class="app">
+  <row class="header">
+    <label class="title" text="Bench" />
+  </row>
+  <scroll id="form-scroll" class="form" sensitivity="1.0" inertia="0">
+    <column class="form-col">
+
+      <column class="group">
+        <label class="group-title" text="Account" />
+        <row class="frow">
+          <label class="flabel" text="Username:" />
+          <input id="username" width="220px" placeholder="Username" bind-text="username" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Email:" />
+          <input id="email" width="220px" placeholder="Email" bind-text="email" />
+        </row>
+        <row class="frow">
+          <checkbox id="remember" label="Remember me" bind-checked="remember" />
+          <checkbox id="newsletter" label="Subscribe to newsletter" bind-checked="newsletter" />
+        </row>
+        <row class="frow">
+          <button id="signout" text="Sign out" />
+        </row>
+      </column>
+
+      <column class="group">
+        <label class="group-title" text="Appearance" />
+        <row class="frow" align="start">
+          <label class="flabel" text="Theme:" />
+          <column gap="4">
+            <radio id="theme-system" group="theme" value="system" label="System" checked="true" />
+            <radio id="theme-light" group="theme" value="light" label="Light" />
+            <radio id="theme-dark" group="theme" value="dark" label="Dark" />
+            <radio id="theme-contrast" group="theme" value="contrast" label="High contrast" />
+          </column>
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Font size:" />
+          <slider id="font-size" bind-value="font_size" min="0" max="100" value="50" width="200px" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Density:" />
+          <dropdown id="density" bind-value="density">
+            <option value="compact" label="Compact" />
+            <option value="cozy" label="Cozy" />
+            <option value="normal" label="Normal" />
+            <option value="comfortable" label="Comfortable" />
+            <option value="spacious" label="Spacious" />
+          </dropdown>
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Animations:" />
+          <toggle id="animations" bind-checked="animations" />
+        </row>
+      </column>
+
+      <column class="group">
+        <label class="group-title" text="Network" />
+        <row class="frow">
+          <label class="flabel" text="Proxy host:" />
+          <input id="proxy-host" width="220px" placeholder="proxy.example.com" bind-text="proxy_host" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Proxy port:" />
+          <input id="proxy-port" width="100px" placeholder="8080" bind-text="proxy_port" />
+        </row>
+        <row class="frow">
+          <checkbox id="use-proxy" label="Use proxy" bind-checked="use_proxy" />
+          <checkbox id="verify-tls" label="Verify TLS certificates" bind-checked="verify_tls" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Timeout:" />
+          <slider id="timeout" bind-value="timeout" min="0" max="100" value="50" width="200px" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Protocol:" />
+          <dropdown id="protocol" bind-value="protocol">
+            <option value="auto" label="Auto" />
+            <option value="http1" label="HTTP/1.1" />
+            <option value="http2" label="HTTP/2" />
+            <option value="http3" label="HTTP/3" />
+            <option value="socks5" label="SOCKS5" />
+          </dropdown>
+        </row>
+        <row class="frow">
+          <button id="test-connection" text="Test connection" />
+        </row>
+      </column>
+
+      <column class="group">
+        <label class="group-title" text="Editor" />
+        <row class="frow">
+          <label class="flabel" text="Font family:" />
+          <input id="font-family" width="220px" placeholder="monospace" bind-text="font_family" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Tab width:" />
+          <input id="tab-width" width="100px" placeholder="4" bind-text="tab_width" />
+        </row>
+        <row class="frow">
+          <checkbox id="word-wrap" label="Word wrap" bind-checked="word_wrap" />
+          <checkbox id="line-numbers" label="Line numbers" bind-checked="line_numbers" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Line endings:" />
+          <dropdown id="line-endings" bind-value="line_endings">
+            <option value="auto" label="Auto" />
+            <option value="lf" label="LF" />
+            <option value="crlf" label="CRLF" />
+            <option value="cr" label="CR" />
+            <option value="mixed" label="Keep mixed" />
+          </dropdown>
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Rulers:" />
+          <slider id="rulers" bind-value="rulers" min="0" max="100" value="50" width="200px" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Autosave:" />
+          <toggle id="autosave" bind-checked="autosave" />
+        </row>
+      </column>
+
+      <column class="group">
+        <label class="group-title" text="Privacy" />
+        <row class="frow" align="start">
+          <label class="flabel" text="Telemetry:" />
+          <column gap="4">
+            <radio id="telemetry-off" group="telemetry" value="off" label="Off" checked="true" />
+            <radio id="telemetry-crash" group="telemetry" value="crash" label="Crash reports only" />
+            <radio id="telemetry-basic" group="telemetry" value="basic" label="Basic" />
+            <radio id="telemetry-full" group="telemetry" value="full" label="Full" />
+          </column>
+        </row>
+        <row class="frow">
+          <checkbox id="crash-reports" label="Upload crash reports" bind-checked="crash_reports" />
+          <checkbox id="usage-stats" label="Share usage statistics" bind-checked="usage_stats" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Do not track:" />
+          <toggle id="dnt" bind-checked="dnt" />
+        </row>
+        <row class="frow">
+          <button id="clear-data" text="Clear data" />
+        </row>
+      </column>
+
+      <column class="group">
+        <label class="group-title" text="Advanced" />
+        <row class="frow">
+          <label class="flabel" text="Config path:" />
+          <input id="config-path" width="220px" placeholder="~/.config/bench" bind-text="config_path" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Log filter:" />
+          <input id="log-filter" width="220px" placeholder="info" bind-text="log_filter" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Log level:" />
+          <dropdown id="log-level" bind-value="log_level">
+            <option value="error" label="Error" />
+            <option value="warn" label="Warn" />
+            <option value="info" label="Info" />
+            <option value="debug" label="Debug" />
+            <option value="trace" label="Trace" />
+          </dropdown>
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Cache size:" />
+          <slider id="cache-size" bind-value="cache_size" min="0" max="100" value="50" width="200px" />
+        </row>
+        <row class="frow">
+          <label class="flabel" text="Experimental:" />
+          <toggle id="experimental" bind-checked="experimental" />
+        </row>
+        <row class="frow">
+          <button id="reset-all" text="Reset all" />
+        </row>
+      </column>
+
+    </column>
+  </scroll>
+  <row class="footer">
+    <label class="fstatus" text="theme:" />
+    <label class="fstatus" bind-text="theme" />
+    <label class="fstatus" text="telemetry:" />
+    <label class="fstatus" bind-text="telemetry" />
+  </row>
+  <script src="main.rhai" />
+</root>
