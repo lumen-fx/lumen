@@ -60,7 +60,8 @@ element is there, so a value a script keeps writing wants that:
 
 A `<for>` row is built per record, so it reads later and reads more: each row
 resolves `{row.field}` against the record it is built for and its `{$signal}`
-placeholders against the signals at that moment. An `<if>` body belongs to the
+placeholders against the signals at that moment, and resolves both again when
+its record changes. An `<if>` body belongs to the
 tree it arrived in, so its placeholders hold what that tree was built with,
 whenever the branch is taken.
 
@@ -84,8 +85,10 @@ whenever the branch is taken.
   to a column.
 
 Appending rows spawns only the new ones, and dropping rows from the end
-despawns only those, so existing rows keep their focus and scroll state.
-Reordering the array or editing the middle of it rebuilds the block.
+despawns only those. A row whose key stays but whose fields change is updated
+where it stands. Either way the existing rows keep their focus and scroll
+state. Reordering the array, or inserting or removing rows in the middle of it,
+rebuilds the block.
 
 For a long list, add `virtualized="true"` and `row-height="56"` and only the
 rows in the visible window are built.

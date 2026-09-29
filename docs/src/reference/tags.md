@@ -60,10 +60,11 @@ suggesting the explicit form.
 
 A placeholder is resolved when the tree it belongs to is built, against the
 signals as they stand then; a `<for>` row is built per record and reads the
-signals then. One naming a signal nothing has set stays in the string as the
-braces the author wrote, so a typo reads as a typo. A `{row.field}` the record
-does not carry is the exception: it resolves to an empty string and is
-reported, because the record is what says which fields there are.
+signals then, and again whenever its record changes. One naming a signal
+nothing has set stays in the string as the braces the author wrote, so a typo
+reads as a typo. A `{row.field}` the record does not carry is the exception:
+it resolves to an empty string and is reported, because the record is what
+says which fields there are.
 
 A `{k}` placeholder inside a `<template>` body reads the parameter `k`, and
 falls back to the global signal `k` when no use site binds it. See
@@ -629,7 +630,7 @@ column.
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `each` | array signal name | Required for iteration. Without it the children spawn once, unrepeated. |
-| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. |
+| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is kept is updated in place when its record's fields change. |
 | `virtualized` | `true`, `yes` | Spawn only the rows in the visible scroll window. Needs a `<scroll>` ancestor. |
 | `row-height` | number | Pixel height per virtualized row. Defaults to `32`. |
 

@@ -19,6 +19,7 @@ use lumen_core::components::{AuthoredStrings, BindText, TextContent, TextFormat,
 use lumen_core::i18n::AppI18n;
 use lumen_core::input::Focused;
 use lumen_core::prelude::{App, TickStage};
+use lumen_ir::translate::TranslatedStrings;
 use lumen_primitives::TooltipSource;
 
 use crate::script_commands::apply_scene_script_commands;
@@ -61,11 +62,9 @@ type Retranslated<'w, 's> = Query<
 /// does when it switches the locale through a `ResMut` borrow. A steady
 /// tick costs one flag read.
 ///
-/// Two kinds of element are left alone. One carrying a `bind-text` belongs
-/// to its signal, and [`lumen_core::signals::apply_text_bindings`] refreshes
-/// it on the same tick. A focused text entry has an edit in flight, and
-/// overwriting the buffer under the caret would lose the keystroke; its
-/// placeholder still moves, since nothing is typing into that.
+/// An element carrying a `bind-text` is left alone: it belongs to its
+/// signal, and [`lumen_core::signals::apply_text_bindings`] refreshes it on
+/// the same tick. [`write_strings`] says what a focused entry keeps.
 pub fn retranslate_on_locale_change(i18n: Option<Res<AppI18n>>, mut q: Retranslated<'_, '_>) {
     let Some(i18n) = i18n else {
         return;
@@ -73,48 +72,66 @@ pub fn retranslate_on_locale_change(i18n: Option<Res<AppI18n>>, mut q: Retransla
     if !i18n.is_changed() {
         return;
     }
-    for (authored, format, text, mut input, tooltip, focused) in &mut q {
+    for (authored, format, text, input, tooltip, focused) in &mut q {
         let strings = resolve_strings(Some(&*i18n), authored, format.map(|f| f.0.as_str()));
-        // A placeholder shows while the field is empty, so it moves even
-        // mid-edit; the buffer under the caret does not.
-        if let Some(input) = input.as_mut() {
-            let want = strings.placeholder.unwrap_or_default();
-            if input.placeholder != want {
-                input.placeholder = want;
-            }
+        write_strings(strings, text, input, tooltip, focused.is_some());
+    }
+}
+
+/// Write an element's resolved strings onto the components that show them,
+/// touching only what changed.
+///
+/// Shared by the locale rebuild and by a `<for>` row whose record changed
+/// under it, so both follow one rule. `editing` says the element holds
+/// focus: a focused text entry has an edit in flight, and overwriting the
+/// buffer under the caret would lose the keystroke; its placeholder still
+/// moves, since nothing is typing into that.
+pub(crate) fn write_strings(
+    strings: TranslatedStrings,
+    text: Option<Mut<'_, TextContent>>,
+    mut input: Option<Mut<'_, TextInput>>,
+    tooltip: Option<Mut<'_, TooltipSource>>,
+    editing: bool,
+) {
+    // A placeholder shows while the field is empty, so it moves even
+    // mid-edit; the buffer under the caret does not.
+    if let Some(input) = input.as_mut() {
+        let want = strings.placeholder.unwrap_or_default();
+        if input.placeholder != want {
+            input.placeholder = want;
         }
-        if let Some(mut tooltip) = tooltip
-            && let Some(body) = &strings.tooltip
-            && tooltip.text != *body
+    }
+    if let Some(mut tooltip) = tooltip
+        && let Some(body) = &strings.tooltip
+        && tooltip.text != *body
+    {
+        tooltip.text = body.clone();
+    }
+    // The edit in flight the gate protects: a focused text buffer, whose
+    // next keystroke would land on the text this write replaces.
+    if editing && input.is_some() {
+        return;
+    }
+    // Only when the rule resolved a text at all: an `<input
+    // translatable="search" placeholder="Search"/>` has none, and its
+    // typed value is not the catalogue's to replace.
+    let (Some(mut content), Some(want)) = (text, strings.text) else {
+        return;
+    };
+    if content.0 == want {
+        return;
+    }
+    content.0 = want;
+    // Byte offsets into the old text can point past the end of the new
+    // one; the next keystroke would insert out of bounds.
+    if let Some(input) = input.as_mut() {
+        if input.cursor > content.0.len() {
+            input.cursor = content.0.len();
+        }
+        if let Some(anchor) = input.selection_anchor
+            && anchor > content.0.len()
         {
-            tooltip.text = body.clone();
-        }
-        // The edit in flight the gate protects: a focused text buffer, whose
-        // next keystroke would land on the text this write replaces.
-        if focused.is_some() && input.is_some() {
-            continue;
-        }
-        // Only when the rule resolved a text at all: an `<input
-        // translatable="search" placeholder="Search"/>` has none, and its
-        // typed value is not the catalogue's to replace.
-        let (Some(mut content), Some(want)) = (text, strings.text) else {
-            continue;
-        };
-        if content.0 == want {
-            continue;
-        }
-        content.0 = want;
-        // Byte offsets into the old text can point past the end of the new
-        // one; the next keystroke would insert out of bounds.
-        if let Some(input) = input.as_mut() {
-            if input.cursor > content.0.len() {
-                input.cursor = content.0.len();
-            }
-            if let Some(anchor) = input.selection_anchor
-                && anchor > content.0.len()
-            {
-                input.selection_anchor = None;
-            }
+            input.selection_anchor = None;
         }
     }
 }

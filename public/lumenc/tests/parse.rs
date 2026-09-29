@@ -2067,6 +2067,7 @@ fn virtualized_for_inserts_style_only_when_changed() {
                 row_height: 20.0,
                 win_rows: Vec::new(),
                 cascaded_body: None,
+                row_items: Vec::new(),
             },
         ))
         .id();
@@ -2160,6 +2161,7 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
                     row_height: 20.0,
                     win_rows: Vec::new(),
                     cascaded_body: None,
+                    row_items: Vec::new(),
                 },
             ))
             .id();

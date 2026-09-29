@@ -226,6 +226,182 @@ mod pipeline_integration_tests {
         }
     }
 
+    /// A record the way a script's `signal_array(...).set(...)` delivers it.
+    fn record(pairs: &[(&str, &str)]) -> lumen_core::signals::ArrayItem {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Replace an array signal through the command every script host
+    /// sends for `signal_array(name).set(items)`, then tick once.
+    fn set_rows(app: &mut App, items: Vec<lumen_core::signals::ArrayItem>) {
+        use bevy_ecs::message::Messages;
+        use lumen_script::runtime::ScriptCommandEvent;
+        app.world
+            .resource_mut::<Messages<ScriptCommandEvent>>()
+            .write(ScriptCommandEvent(ScriptCommand::SetArray {
+                name: "rows".into(),
+                items,
+            }));
+        app.tick();
+    }
+
+    /// The entity carrying `id`, or a panic naming it.
+    fn by_id(app: &mut App, id: &str) -> Entity {
+        let mut q = app.world.query::<(Entity, &LumenId)>();
+        q.iter(&app.world)
+            .find(|(_, i)| i.0 == id)
+            .map(|(e, _)| e)
+            .unwrap_or_else(|| panic!("no entity with id `{id}`"))
+    }
+
+    fn text_of(app: &App, e: Entity) -> String {
+        app.world
+            .get::<TextContent>(e)
+            .map(|t| t.0.clone())
+            .unwrap_or_default()
+    }
+
+    fn classes_of(app: &App, e: Entity) -> Vec<String> {
+        app.world
+            .get::<lumen_core::components::LumenClasses>(e)
+            .map(|c| c.0.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    const KEYED_ROWS: &str = r#"
+<root>
+  <scroll height="400">
+    <for each="rows" key="id" VIRTUAL>
+      <row id="row-{row.id}" class="tag-{row.tag}">
+        <column>
+          <label id="name-{row.id}" text="{row.name}" />
+        </column>
+        <label id="tag-{row.id}" text="{row.tag}" />
+      </row>
+    </for>
+  </scroll>
+  <script>
+    fn on_start() {}
+  </script>
+</root>
+"#;
+
+    /// Rewriting an array with the same keys but different fields updates
+    /// the kept rows on the entities they already have: text, a nested
+    /// label, and a class all follow the new record, and a row whose
+    /// record did not change is not written at all.
+    fn kept_row_follows_its_record(virtualized: bool) {
+        let markup = KEYED_ROWS.replace(
+            "VIRTUAL",
+            if virtualized {
+                r#"virtualized="true" row-height="32""#
+            } else {
+                ""
+            },
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "lumenc_kept_row_{}_{virtualized}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
+        let opts = RunOptions::new(&dir)
+            .with_parser(lumenc::default_parser())
+            .with_markup(markup)
+            .with_css(".tag-one { bg: #ff0000; }\n.tag-two { bg: #00ff00; }\n".to_string());
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+        let _ = std::fs::remove_dir_all(&dir);
+        app.tick();
+        app.tick();
+        let fill = |app: &App, e: Entity| {
+            app.world
+                .get::<lumen_core::components::Visuals>(e)
+                .and_then(|v| v.fill.as_ref()?.as_solid())
+                .map(|c| (c.r.round(), c.g.round()))
+        };
+        set_rows(
+            &mut app,
+            vec![
+                record(&[("id", "a"), ("name", "alpha"), ("tag", "one")]),
+                record(&[("id", "b"), ("name", "beta"), ("tag", "one")]),
+            ],
+        );
+        app.tick();
+        let row = by_id(&mut app, "row-a");
+        let name = by_id(&mut app, "name-a");
+        let tag = by_id(&mut app, "tag-a");
+        let other = by_id(&mut app, "tag-b");
+        assert_eq!(text_of(&app, tag), "one");
+        assert_eq!(classes_of(&app, row), ["tag-one"]);
+        assert_eq!(fill(&app, row), Some((1.0, 0.0)));
+        let other_written = app
+            .world
+            .entity(other)
+            .get_ref::<TextContent>()
+            .unwrap()
+            .last_changed();
+
+        set_rows(
+            &mut app,
+            vec![
+                record(&[("id", "a"), ("name", "alpha 2"), ("tag", "two")]),
+                record(&[("id", "b"), ("name", "beta"), ("tag", "one")]),
+            ],
+        );
+        app.tick();
+
+        assert_eq!(by_id(&mut app, "row-a"), row, "the kept row was respawned");
+        assert_eq!(
+            by_id(&mut app, "tag-a"),
+            tag,
+            "the kept label was respawned"
+        );
+        assert_eq!(text_of(&app, tag), "two", "the label kept the old field");
+        assert_eq!(
+            text_of(&app, name),
+            "alpha 2",
+            "the nested label kept the old field"
+        );
+        assert_eq!(
+            classes_of(&app, row),
+            ["tag-two"],
+            "the class kept the old field"
+        );
+        assert_eq!(
+            fill(&app, row),
+            Some((0.0, 1.0)),
+            "the new class was not restyled"
+        );
+        assert_eq!(
+            app.world
+                .entity(other)
+                .get_ref::<TextContent>()
+                .unwrap()
+                .last_changed(),
+            other_written,
+            "an unchanged row was written"
+        );
+    }
+
+    #[test]
+    fn keyed_for_row_follows_a_changed_record_in_place() {
+        let _serial = crate::serial();
+        kept_row_follows_its_record(false);
+    }
+
+    #[test]
+    fn virtualized_keyed_for_row_follows_a_changed_record_in_place() {
+        let _serial = crate::serial();
+        kept_row_follows_its_record(true);
+    }
+
     // Bindings and a nested `<for>` mounted inside a `<tab>` panel - which
     // the parser compiles to an `<if eq="...">` gate whose body is spawned by
     // the reconciler's `spawn_body_child`, not the top-level `spawn_element`.
