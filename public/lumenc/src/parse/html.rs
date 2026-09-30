@@ -663,6 +663,16 @@ fn normalize_dollar_interpolation(
     out
 }
 
+/// The signal name a signal-valued attribute names.
+///
+/// Every attribute that takes a signal accepts `name` or `$name`; the `$`
+/// marks a signal reference for the reader and is not part of the name the
+/// signal stores key by.
+fn signal_attr_name(value: &str) -> String {
+    let trimmed = value.trim();
+    trimmed.strip_prefix('$').unwrap_or(trimmed).to_string()
+}
+
 /// Reject a `bind-*` value naming a fragment argument.
 ///
 /// A fragment argument substitutes once, when the instance is built, so
@@ -1075,7 +1085,7 @@ fn build_composed_widget(
     if tag == "tabs" {
         let signal_name = node
             .attribute("bind-value")
-            .map(|s| s.to_string())
+            .map(signal_attr_name)
             .ok_or_else(|| {
                 ParseError::Xml(format!(
                     "<tabs> at byte {} requires bind-value=\"signal-name\"",
@@ -1225,7 +1235,7 @@ fn build_composed_widget(
     if tag == "dropdown" {
         let signal_name = node
             .attribute("bind-value")
-            .map(|s| s.to_string())
+            .map(signal_attr_name)
             .ok_or_else(|| {
                 ParseError::Xml(format!(
                     "<dropdown> at byte {} requires bind-value=\"signal-name\"",
@@ -1558,7 +1568,7 @@ fn build_composed_widget(
         let is_time = tag == "time-picker";
         let signal_name = node
             .attribute("bind-value")
-            .map(|s| s.to_string())
+            .map(signal_attr_name)
             .ok_or_else(|| {
                 ParseError::Xml(format!(
                     "<{tag}> at byte {} requires bind-value=\"signal-name\"",
@@ -2626,7 +2636,7 @@ fn apply_attribute(
                         .to_string(),
                 ));
             }
-            let signal = trimmed.strip_prefix('$').unwrap_or(trimmed).to_string();
+            let signal = signal_attr_name(trimmed);
             if signal.is_empty() {
                 return Err(bad(tag, name, value, "expected a signal name".to_string()));
             }
@@ -2649,7 +2659,7 @@ fn apply_attribute(
                         .to_string(),
                 ));
             }
-            let signal = trimmed.strip_prefix('$').unwrap_or(trimmed).to_string();
+            let signal = signal_attr_name(trimmed);
             if signal.is_empty() {
                 return Err(bad(tag, name, value, "expected a signal name".to_string()));
             }
@@ -2708,7 +2718,7 @@ fn apply_attribute(
             } else {
                 // Strip the optional leading `$` on plain named-signal
                 // bindings - `$count` is sugar for `count`.
-                let signal = trimmed.strip_prefix('$').unwrap_or(trimmed).to_string();
+                let signal = signal_attr_name(trimmed);
                 attrs.bind = Some(BindSpec { kind, name: signal });
             }
         }
@@ -2717,9 +2727,7 @@ fn apply_attribute(
             // is identical to `each="users"`. The `ArraySignals` store
             // keys by bare name; the `$` prefix is a reviewer-facing
             // marker that the author is referencing a signal.
-            let v = value.trim();
-            let stripped = v.strip_prefix('$').unwrap_or(v).to_string();
-            attrs.each = Some(stripped);
+            attrs.each = Some(signal_attr_name(value));
         }
         "key" => attrs.key = Some(value.trim().to_string()),
         "virtualized" => attrs.virtualized = ctx.bool_value(tag, name, value),
@@ -2866,13 +2874,13 @@ fn apply_attribute(
         // only on the `<if>` tag. On any other tag it's silently ignored
         // (unknown attrs are tolerated for forward-compat).
         "signal" if tag == "if" => {
-            attrs.if_signal = Some(value.trim().to_string());
+            attrs.if_signal = Some(signal_attr_name(value));
         }
         // `<dialog open="signal">` is sugar for `<if signal="signal"
         // mode="hide">`. Preserving children state across show/hide is
         // the right default for modal forms.
         "open" if tag == "dialog" => {
-            attrs.if_signal = Some(value.trim().to_string());
+            attrs.if_signal = Some(signal_attr_name(value));
             attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
         }
         "mode" if tag == "if" => {

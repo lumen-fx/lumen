@@ -625,6 +625,35 @@ fn dialog_desugars_to_absolute_if_with_hide_mode() {
 }
 
 #[test]
+fn signal_gates_strip_the_leading_dollar() {
+    let ir = parse_html(
+        r##"<root><if signal="$open"/><if signal=" open "/><dialog open="$show"/><dialog open="show"/></root>"##,
+    )
+    .expect("html");
+    let gates: Vec<_> = ir
+        .root
+        .children
+        .iter()
+        .map(|c| c.attrs.if_signal.as_deref())
+        .collect();
+    assert_eq!(
+        gates,
+        [Some("open"), Some("open"), Some("show"), Some("show")]
+    );
+}
+
+#[test]
+fn tabs_bind_value_strips_the_leading_dollar() {
+    let dollar =
+        parse_html(r##"<root><tabs bind-value="$tab"><tab name="a" label="A"/></tabs></root>"##)
+            .expect("html");
+    let bare =
+        parse_html(r##"<root><tabs bind-value="tab"><tab name="a" label="A"/></tabs></root>"##)
+            .expect("html");
+    assert_eq!(format!("{dollar:?}"), format!("{bare:?}"));
+}
+
+#[test]
 fn if_mode_defaults_to_render_and_parses_hide() {
     let default = parse_html(r##"<root><if signal="x"/></root>"##).expect("html");
     let blk = &default.root.children[0];
