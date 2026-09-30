@@ -3803,6 +3803,7 @@ dependencies = [
  "lumen-assets",
  "lumen-capability",
  "lumen-core",
+ "lumen-input",
  "lumen-primitives",
  "serde",
  "serde_json",

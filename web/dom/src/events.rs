@@ -1329,8 +1329,8 @@ pub fn drain_dom_events(
             }
             // The browser reports the modifier state on the event itself,
             // so there is no separate modifiers event to mirror: the
-            // resource `type_into_focused` and `activate_focused_on_enter`
-            // read is refreshed from each key as it lands.
+            // held-modifier resource that pointer handling reads (a
+            // shift+click) is refreshed from each key as it lands.
             PendingEvent::Key {
                 down,
                 key,

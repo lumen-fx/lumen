@@ -110,7 +110,6 @@ fn move_to(app: &mut App, p: glam::Vec2) {
 }
 
 fn write_key_mods(app: &mut App, key: Key, modifiers: Modifiers) {
-    app.world.resource_mut::<ModifiersState>().0 = modifiers;
     app.world
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {

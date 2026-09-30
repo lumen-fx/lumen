@@ -300,7 +300,6 @@ fn write_key(world: &mut World, key: Key, ctrl: bool, shift: bool) {
         shift,
         ..Modifiers::default()
     };
-    world.resource_mut::<ModifiersState>().0 = modifiers;
     world
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {

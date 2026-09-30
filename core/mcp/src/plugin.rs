@@ -1474,6 +1474,51 @@ mod simulate_tests {
         assert_eq!(released, 1, "one PointerReleased emitted");
     }
 
+    /// A simulated chord edits a focused field the way the held keys would:
+    /// Ctrl+A selects the text, so the next typed character replaces it
+    /// instead of the chord typing an "a" (#415).
+    #[test]
+    fn simulated_ctrl_chord_edits_the_focused_field() {
+        use lumen_core::components::{TextContent, TextInput};
+        use lumen_input::InputPlugin;
+
+        let queue = SimulateQueue::default();
+        let mut app = simulate_test_app(&queue);
+        app.add_plugin(InputPlugin { clipboard: false });
+        let field = app
+            .world
+            .spawn((
+                TextContent("abc".to_string()),
+                TextInput {
+                    cursor: 3,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        app.world.resource_mut::<FocusTracker>().0 = Some(field);
+
+        queue.push(SimulateRequest {
+            kind: SimulateKind::Key {
+                key: "a".to_string(),
+                modifiers: crate::simulate::SimulateModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            },
+            wait_for: None,
+        });
+        queue.push(SimulateRequest {
+            kind: SimulateKind::Type {
+                text: "X".to_string(),
+            },
+            wait_for: None,
+        });
+        app.tick();
+        app.tick();
+
+        assert_eq!(app.world.get::<TextContent>(field).unwrap().0, "X");
+    }
+
     /// A simulated `PointerMove` likewise updates `PointerState.position`.
     #[test]
     fn simulate_pointer_move_updates_position() {
