@@ -463,6 +463,35 @@ mod pipeline_integration_tests {
         );
     }
 
+    /// `<if signal>` and `<dialog open>` take `name` or `$name` like every
+    /// other signal-valued attribute; the `$` is not part of the name the
+    /// gate reads (#414).
+    #[test]
+    fn if_and_dialog_gates_open_on_dollar_and_bare_names() {
+        let _serial = crate::serial();
+        let markup = r#"
+<root>
+  <if signal="$open"><label text="dollar if"/></if>
+  <if signal="open"><label text="bare if"/></if>
+  <dialog open="$open"><label text="dollar dialog"/></dialog>
+  <dialog open="open"><label text="bare dialog"/></dialog>
+  <script>
+    fn on_start() {
+        signal("open", "").set("1");
+    }
+  </script>
+</root>
+"#;
+        let mut app = build_and_tick(markup, 6);
+        let texts = all_texts(&mut app);
+        for want in ["dollar if", "bare if", "dollar dialog", "bare dialog"] {
+            assert!(
+                texts.iter().any(|t| t == want),
+                "gate '{want}' did not open; TextContents = {texts:?}"
+            );
+        }
+    }
+
     #[test]
     fn signal_write_after_startup_updates_text_within_one_tick() {
         let _serial = crate::serial();
