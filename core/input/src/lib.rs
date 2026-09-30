@@ -144,7 +144,6 @@ fn is_named_key_string(s: &str) -> bool {
 #[allow(deprecated)]
 pub fn type_into_focused(
     tracker: Res<FocusTracker>,
-    mods: Res<ModifiersState>,
     clipboard: Option<NonSendMut<ClipboardResource>>,
     mut keys: MessageReader<FocusedKey>,
     mut applied: MessageWriter<lumen_core::text_events::TextEditApplied>,
@@ -238,17 +237,7 @@ pub fn type_into_focused(
         if ev.entity != entity {
             continue;
         }
-        apply_focused_key(
-            ev,
-            &mods.0,
-            multiline,
-            concealed,
-            &mut clipboard,
-            b,
-            c,
-            u,
-            geom,
-        );
+        apply_focused_key(ev, multiline, concealed, &mut clipboard, b, c, u, geom);
     }
 
     // Announce a keyboard edit the same way `text_apply_edits` announces a
@@ -327,10 +316,12 @@ fn seed_cursor(text: &str, input: &TextInput) -> TextCursor {
 /// field instead of replaying. Lumen drops the history the moment the
 /// buffer is empty or the value has been submitted, so Ctrl+Z can never
 /// walk a password back after the field looks cleared.
+///
+/// The held modifiers are the ones the key event carries, so a chord reads
+/// the same whether a window, a page, or a simulated key produced it.
 #[allow(deprecated, clippy::too_many_arguments)]
 fn apply_focused_key(
     ev: &FocusedKey,
-    mods: &lumen_core::input::Modifiers,
     multiline: bool,
     concealed: bool,
     clipboard: &mut Option<NonSendMut<'_, ClipboardResource>>,
@@ -339,8 +330,8 @@ fn apply_focused_key(
     u: &mut UndoStack,
     geom: Option<&lumen_text::TextGeometry>,
 ) {
-    apply_focused_key_inner(ev, mods, multiline, concealed, clipboard, b, c, u, geom);
-    if concealed && (b.len_bytes() == 0 || is_submit_key(ev, mods, multiline)) {
+    apply_focused_key_inner(ev, multiline, concealed, clipboard, b, c, u, geom);
+    if concealed && (b.len_bytes() == 0 || is_submit_key(ev, multiline)) {
         u.clear();
     }
 }
@@ -348,15 +339,14 @@ fn apply_focused_key(
 /// Enter on a single-line input, or Shift+Enter on a multiline one, is the
 /// commit signal `activate_focused_on_enter` turns into
 /// [`TextInputCommitted`].
-fn is_submit_key(ev: &FocusedKey, mods: &lumen_core::input::Modifiers, multiline: bool) -> bool {
-    matches!(&ev.key, Key::Named(NamedKey::Enter)) && (!multiline || mods.shift)
+fn is_submit_key(ev: &FocusedKey, multiline: bool) -> bool {
+    matches!(&ev.key, Key::Named(NamedKey::Enter)) && (!multiline || ev.modifiers.shift)
 }
 
 /// Key handling proper; see [`apply_focused_key`].
 #[allow(deprecated, clippy::too_many_arguments)]
 fn apply_focused_key_inner(
     ev: &FocusedKey,
-    mods: &lumen_core::input::Modifiers,
     multiline: bool,
     concealed: bool,
     clipboard: &mut Option<NonSendMut<'_, ClipboardResource>>,
@@ -366,6 +356,7 @@ fn apply_focused_key_inner(
     geom: Option<&lumen_text::TextGeometry>,
 ) {
     use lumen_text::{delete_range, insert_text, move_cursor, move_cursor_visual, replace_range};
+    let mods = &ev.modifiers;
     let shift = mods.shift;
     // D5: only consecutive VERTICAL motions keep the sticky goal-x; every
     // other key path clears it. The vertical arms below set it explicitly;
@@ -716,7 +707,6 @@ pub fn dispatch_file_drops(
 pub fn activate_focused_on_enter(
     mut commands: Commands,
     tracker: Res<FocusTracker>,
-    mods: Res<ModifiersState>,
     mut keys: MessageReader<FocusedKey>,
     mut releases: MessageReader<lumen_core::input::KeyReleased>,
     inputs: Query<(&TextContent, &TextInput)>,
@@ -746,7 +736,7 @@ pub fn activate_focused_on_enter(
             if let Some((text, multiline)) = &input_state {
                 if is_enter {
                     // Multiline inputs commit only on Shift+Enter; bare Enter inserts a newline (handled in `type_into_focused`).
-                    if !*multiline || mods.0.shift {
+                    if !*multiline || ev.modifiers.shift {
                         commits.write(TextInputCommitted {
                             entity,
                             text: text.clone(),
@@ -2411,7 +2401,6 @@ mod typing_tests {
                 modifiers,
                 repeat: false,
             });
-        world.resource_mut::<ModifiersState>().0 = modifiers;
         world.run_system_once(type_into_focused).unwrap();
         // run_system_once builds a fresh MessageReader each call, which
         // would re-read this press on the next call - drain it.

@@ -213,13 +213,7 @@ fn shift_arrow_extends_the_selection() {
     let (e, t) = field(&mut app);
     let y = t.absolute.y + 8.0 + 9.6;
     press_at(&mut app, glam::Vec2::new(t.absolute.x + 8.0, y));
-    // The key router reads the live modifier state, not the event's copy.
-    app.world
-        .resource_mut::<lumen_core::input::ModifiersState>()
-        .0 = Modifiers {
-        shift: true,
-        ..Default::default()
-    };
+    // The key router reads the modifiers the key event carries.
     for _ in 0..3 {
         app.world
             .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
