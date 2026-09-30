@@ -182,10 +182,11 @@ lumenc lint --signals myapp --strict
 ```
 
 `check` parses the app. `fmt --check` fails when the markup is not formatted
-and rewrites nothing. `lint --signals` reads the markup, the script, and the
-optional `[signals]` schema, and reports untyped writes, schema mismatches,
-ambiguous `{name}` interpolation, signals bound in markup with no schema
-entry, and signals the script writes that nothing reads. `--strict` turns its
+and rewrites nothing. `lint --signals` reads every page and script of the app
+and the optional `[signals]` schema, and reports untyped writes, schema
+mismatches, ambiguous `{name}` interpolation, signals bound in markup that no
+schema entry or script covers, and signals a script writes that nothing
+reads. `--strict` turns its
 warnings into failures.
 
 `lumenc lint --css-cascade myapp` is worth running once when you inherit an

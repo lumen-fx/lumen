@@ -788,9 +788,12 @@ rule whose resolved value differs between first-wins and last-wins cascade
 ordering. It exits 1 when it finds any divergence, and 0 when the app has no
 stylesheet.
 
-`--signals` is offline: it reads `<app-dir>/src/main.lmn`, the app script
-(`src/main.cdl`, `src/main.rhai`, or `src/main.lua`), and the optional
-`[signals]` schema.
+`--signals` is offline: it reads every page the app loads (the same set
+`lumenc run` finds, `[pages] include` honoured), the shared `layout.lmn`, the
+markup those files `<include>`, the app script (`src/main.cdl`,
+`src/main.rhai`, or `src/main.lua`), every script a `<script src>` in that
+markup names, and the optional `[signals]` schema. A signal bound in one file
+and written in another counts as both bound and written.
 Findings are printed as `<severity> <file>:<line>:<col> [<kind>] <signal>:
 <message>` with an optional hint line. Kinds: `untyped-write`,
 `schema-mismatch`, `bare-interpolation`, `untracked-signal`, `orphan-write`.

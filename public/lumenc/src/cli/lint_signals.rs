@@ -1,9 +1,12 @@
 //! `lumenc lint --signals <app-dir>` - static signal lint.
 //!
-//! Scans the app's markup entry and its script (`main.cdl`, `main.rhai`, or
-//! `main.lua`), both under `<app-dir>/src`, against the optional `[signals]`
-//! schema declared in `<app-dir>/lumen.toml` and reports four classes of
-//! finding:
+//! Scans the whole app under `<app-dir>/src`: every page the app loads (the
+//! same page set `lumenc run` discovers, `[pages] include` honoured), the
+//! shared `layout.lmn`, the markup those files `<include>`, the app script
+//! (`main.cdl`, `main.rhai`, or `main.lua`), and every script a `<script src>`
+//! names. Bindings and writes are collected across all of them, then checked
+//! against the optional `[signals]` schema declared in
+//! `<app-dir>/lumen.toml`. It reports these classes of finding:
 //!
 //! - **Untyped write** - `signal_set("count", "5")` reaches the
 //!   string-typed sink and bypasses the typed PropertyStore variant.
@@ -58,6 +61,7 @@ use serde_json::json;
 use crate::app_layout::AppLayout;
 use crate::config::{LumenToml, SignalType, SignalsCfg};
 use crate::layout_ir::{LintFinding, LintKind, LintSeverity};
+use lumen_core::nav;
 
 /// Convert a parser-emitted [`LintFinding`] (anchored to its source
 /// file) into a CLI [`Finding`] so the two pipelines can share the
@@ -191,10 +195,11 @@ pub fn cmd_lint_signals(args: impl Iterator<Item = String>) -> ExitCode {
 USAGE:
     lumenc lint --signals [<app-dir>] [--json] [--strict]
 
-Reads <app-dir>/src/main.lmn, the app script (src/main.cdl / src/main.rhai
-/ src/main.lua), and the optional [signals] schema in lumen.toml, then flags
-untyped writes, bare {name} interpolation ambiguities, schema mismatches,
-untracked binds, and orphan writes.
+Reads every page under <app-dir>/src (with layout.lmn and the markup they
+include), the app script (src/main.cdl / src/main.rhai / src/main.lua), every
+<script src> those pages name, and the optional [signals] schema in
+lumen.toml, then flags untyped writes, bare {name} interpolation ambiguities,
+schema mismatches, untracked binds, and orphan writes.
 
     --json            One JSON object per finding.
     --strict          Upgrade warnings to errors.";
@@ -244,28 +249,117 @@ untracked binds, and orphan writes.
             return ExitCode::FAILURE;
         }
     };
-    let lmn_path = layout.entry_path;
-    let lmn_src = std::fs::read_to_string(&lmn_path).unwrap_or_default();
-    // The app's script, whichever host it targets. The scanner matches call
-    // sites by substring, so a candela `lumen::signal_set_int(...)` and a Rhai
-    // `signal_set_int(...)` both land; only the file name differs. With no
-    // script present at all the path names the default host's file, which is
-    // the one an author would go on to create.
-    let script_path = ["main.cdl", "main.rhai", "main.lua"]
-        .iter()
-        .map(|f| layout.src_dir.join(f))
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| layout.src_dir.join("main.cdl"));
-    let script_src = std::fs::read_to_string(&script_path).unwrap_or_default();
-
-    let report = analyze(&cfg.signals, &lmn_src, &lmn_path, &script_src, &script_path);
+    let plan = crate::pages::discover(&layout.src_dir, &cfg);
+    let (markup, scripts) = app_sources(&layout.src_dir, &plan);
+    let report = analyze(&cfg.signals, &markup, &scripts);
 
     emit(&report, as_json, strict)
 }
 
-/// Pure analysis pass - given the schema and both source texts,
-/// returns the full finding list. Split out so the unit tests can
-/// exercise it without touching the filesystem.
+/// One file the lint reads.
+#[derive(Debug, Clone)]
+pub struct SourceFile {
+    /// Where the file lives; findings in it are reported against this path.
+    pub path: PathBuf,
+    /// The file's text.
+    pub text: String,
+}
+
+impl SourceFile {
+    /// A file at `path` holding `text`.
+    pub fn new(path: impl Into<PathBuf>, text: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            text: text.into(),
+        }
+    }
+}
+
+/// Every file a signal of the app can be bound or written from: the markup
+/// and the scripts.
+///
+/// The markup is each page [`crate::pages::discover`] finds, the shared
+/// `layout.lmn`, and the files those `<include>`. The scripts are the app
+/// script (`main.cdl`, `main.rhai`, or `main.lua`) and every `<script src>`
+/// the markup names, resolved against `src/` as the loader resolves them. A
+/// file that cannot be read is left out; `lumenc check` is what reports it.
+fn app_sources(
+    src_dir: &Path,
+    plan: &crate::pages::PagePlan,
+) -> (Vec<SourceFile>, Vec<SourceFile>) {
+    fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    let mut markup_paths: Vec<PathBuf> = Vec::new();
+    for path in plan
+        .pages
+        .iter()
+        .map(|p| &p.path)
+        .chain(&plan.fragment_files)
+    {
+        push_unique(&mut markup_paths, path.clone());
+    }
+    // The app's script, whichever host it targets. The scanner matches call
+    // sites by substring, so a candela `lumen::signal_set_int(...)` and a Rhai
+    // `signal_set_int(...)` both land; only the file name differs.
+    let mut script_paths: Vec<PathBuf> = ["main.cdl", "main.rhai", "main.lua"]
+        .iter()
+        .map(|f| src_dir.join(f))
+        .find(|p| p.is_file())
+        .into_iter()
+        .collect();
+
+    let mut markup = Vec::new();
+    // `markup_paths` grows as includes are found, so walk it by index.
+    let mut next = 0;
+    while let Some(path) = markup_paths.get(next).cloned() {
+        next += 1;
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut included = Vec::new();
+        if crate::parse::resolve::resolve_includes(
+            &text,
+            &path,
+            Some(&crate::FsLoader),
+            &mut included,
+        )
+        .is_ok()
+        {
+            for file in included {
+                push_unique(&mut markup_paths, file);
+            }
+        }
+        // Without a loader each file yields only its own `<script>` tags; an
+        // included file is walked as markup of its own above.
+        if let Ok(refs) = crate::collect_script_refs(&text, &path, None) {
+            for rel in refs.external {
+                push_unique(&mut script_paths, src_dir.join(rel));
+            }
+        }
+        markup.push(SourceFile { path, text });
+    }
+
+    let scripts = script_paths
+        .into_iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some(SourceFile { path, text })
+        })
+        .collect();
+    (markup, scripts)
+}
+
+/// Pure analysis pass - given the schema, the app's markup files, and its
+/// script files, returns the full finding list. Split out so the unit tests
+/// can exercise it without touching the filesystem.
+///
+/// Bindings and writes are pooled across every file before the untracked and
+/// orphan checks run, so a signal one page binds and another file writes is
+/// neither. A markup file is also scanned for writes and reads, which is what
+/// covers its inline `<script>` blocks.
 ///
 /// `BareInterpolation` findings are preferentially sourced from the
 /// markup parser's structured [`LintFinding`] output (round-8 wave B);
@@ -273,57 +367,39 @@ untracked binds, and orphan writes.
 /// Parse-side findings carry accurate line / column numbers tied to
 /// the actual brace positions, which the legacy substring scan can
 /// drift on for multi-line text nodes.
-pub fn analyze(
-    schema: &SignalsCfg,
-    lmn_src: &str,
-    lmn_path: &Path,
-    script_src: &str,
-    script_path: &Path,
-) -> Vec<Finding> {
+pub fn analyze(schema: &SignalsCfg, markup: &[SourceFile], scripts: &[SourceFile]) -> Vec<Finding> {
     let mut findings = Vec::new();
-
-    // Try to parse the markup first; on success, use the structured
-    // `lint_findings` for the bare-interpolation rule. We pass the
-    // success flag down to `scan_markup` so it skips its own bare-
-    // interpolation pass and avoids duplicate findings.
-    // The structured parser pass is only available when the markup parser
-    // is compiled in (`runtime-parse`). Without it, `scan_markup` falls back
-    // to its own substring bare-interpolation scan.
-    #[cfg(feature = "runtime-parse")]
-    let parser_findings: Option<Vec<LintFinding>> = crate::parse::html::parse_html(lmn_src)
-        .ok()
-        .map(|ir| ir.lint_findings);
-    #[cfg(not(feature = "runtime-parse"))]
-    let parser_findings: Option<Vec<LintFinding>> = None;
-    if let Some(pf) = &parser_findings {
-        findings.extend(
-            pf.iter()
-                .filter_map(|f| Finding::try_from((f, lmn_path)).ok()),
-        );
+    let mut markup_refs: Vec<(&SourceFile, MarkupRef)> = Vec::new();
+    for file in markup {
+        let refs = scan_markup_file(&file.text, &file.path, &mut findings);
+        markup_refs.extend(refs.into_iter().map(|r| (file, r)));
     }
-    let skip_bare_substring_scan = parser_findings.is_some();
-
-    let markup_refs = scan_markup(lmn_src, lmn_path, &mut findings, skip_bare_substring_scan);
-    let script_writes = scan_script(script_src, script_path, schema, &mut findings);
-    let script_reads = scan_script_reads(script_src);
+    let mut script_writes: Vec<(&SourceFile, ScriptWrite)> = Vec::new();
+    let mut script_reads: BTreeSet<String> = BTreeSet::new();
+    for file in scripts.iter().chain(markup) {
+        let writes = scan_script(&file.text, &file.path, schema, &mut findings);
+        script_writes.extend(writes.into_iter().map(|w| (file, w)));
+        script_reads.extend(scan_script_reads(&file.text));
+    }
 
     // Untracked signal: markup bind refers to a name with no schema
     // entry AND no script write.
     let mut untracked: BTreeSet<&str> = BTreeSet::new();
-    for r in &markup_refs {
+    for (file, r) in &markup_refs {
         let name = r.signal.as_str();
         if !schema.fields.contains_key(name)
-            && !script_writes.iter().any(|w| w.name == name)
-            && !is_template_field(name, lmn_src)
+            && !is_framework_signal(name)
+            && !script_writes.iter().any(|(_, w)| w.name == name)
+            && !is_template_field(name, &file.text)
         {
             untracked.insert(name);
         }
     }
     for name in untracked {
         // Find the first markup ref for line/col anchoring.
-        if let Some(r) = markup_refs.iter().find(|x| x.signal == name) {
+        if let Some((file, r)) = markup_refs.iter().find(|(_, x)| x.signal == name) {
             findings.push(Finding {
-                file: lmn_path.to_path_buf(),
+                file: file.path.clone(),
                 line: r.line,
                 col: r.col,
                 signal: name.to_string(),
@@ -342,13 +418,13 @@ pub fn analyze(
     // Orphan write: script writes a signal but no markup bind / read /
     // schema entry covers it.
     let mut orphans: BTreeSet<&str> = BTreeSet::new();
-    for w in &script_writes {
+    for (_, w) in &script_writes {
         let name = w.name.as_str();
         // Skip framework-internal "__menu_open:..." / "valid:..." names.
-        if name.starts_with("__") || name.starts_with("valid:") {
+        if name.starts_with("__") || name.starts_with("valid:") || is_framework_signal(name) {
             continue;
         }
-        if !markup_refs.iter().any(|r| r.signal == name)
+        if !markup_refs.iter().any(|(_, r)| r.signal == name)
             && !schema.fields.contains_key(name)
             && !script_reads.contains(name)
         {
@@ -356,9 +432,9 @@ pub fn analyze(
         }
     }
     for name in orphans {
-        if let Some(w) = script_writes.iter().find(|w| w.name == name) {
+        if let Some((file, w)) = script_writes.iter().find(|(_, w)| w.name == name) {
             findings.push(Finding {
-                file: script_path.to_path_buf(),
+                file: file.path.clone(),
                 line: w.line,
                 col: w.col,
                 signal: name.to_string(),
@@ -381,6 +457,40 @@ pub fn analyze(
         (a.file.as_path(), a.line, a.col, ak).cmp(&(b.file.as_path(), b.line, b.col, bk))
     });
     findings
+}
+
+/// A signal the runtime itself reads or writes: page navigation's `route.*`
+/// cells. The router writes `route.path` and `route.segment` for markup to
+/// bind, and reads the `route.request` a script writes.
+fn is_framework_signal(name: &str) -> bool {
+    [nav::REQUEST_SIGNAL, nav::PATH_SIGNAL, nav::SEGMENT_SIGNAL].contains(&name)
+}
+
+/// Scan one markup file for the signals it binds, adding its
+/// bare-interpolation findings to `findings`.
+fn scan_markup_file(lmn_src: &str, lmn_path: &Path, findings: &mut Vec<Finding>) -> Vec<MarkupRef> {
+    // Try to parse the markup first; on success, use the structured
+    // `lint_findings` for the bare-interpolation rule. We pass the
+    // success flag down to `scan_markup` so it skips its own bare-
+    // interpolation pass and avoids duplicate findings.
+    // The structured parser pass is only available when the markup parser
+    // is compiled in (`runtime-parse`). Without it, `scan_markup` falls back
+    // to its own substring bare-interpolation scan.
+    #[cfg(feature = "runtime-parse")]
+    let parser_findings: Option<Vec<LintFinding>> = crate::parse::html::parse_html(lmn_src)
+        .ok()
+        .map(|ir| ir.lint_findings);
+    #[cfg(not(feature = "runtime-parse"))]
+    let parser_findings: Option<Vec<LintFinding>> = None;
+    if let Some(pf) = &parser_findings {
+        findings.extend(
+            pf.iter()
+                .filter_map(|f| Finding::try_from((f, lmn_path)).ok()),
+        );
+    }
+    let skip_bare_substring_scan = parser_findings.is_some();
+
+    scan_markup(lmn_src, lmn_path, findings, skip_bare_substring_scan)
 }
 
 #[derive(Debug, Clone)]
@@ -410,7 +520,7 @@ struct ScriptWrite {
 /// Recognized shapes (per the markup grammar):
 ///
 /// - `bind-text="<name>"` / `bind-checked="<name>"` /
-///   `bind-value="<name>"` - direct binds.
+///   `bind-value="<name>"` - direct binds, with or without the leading `$`.
 /// - `{<name>}` and `{$<name>}` - text interpolation. Bare `{name}`
 ///   gets a [`FindingKind::BareInterpolation`] info-level nudge when
 ///   `skip_bare_lint` is false; when true (the markup parser already
@@ -431,6 +541,8 @@ fn scan_markup(
                 let start = search_idx + pos + attr.len();
                 if let Some(name) = read_quoted(&line[start..]) {
                     let col = start + 1;
+                    // `$name` and `name` bind the same signal.
+                    let name = name.strip_prefix('$').map(str::to_string).unwrap_or(name);
                     refs.push(MarkupRef {
                         signal: name,
                         line: lineno,
@@ -534,12 +646,10 @@ fn is_template_field(name: &str, lmn_src: &str) -> bool {
     if !lmn_src.contains("<for") {
         return false;
     }
-    let binds = [
-        format!("bind-text=\"{name}\""),
-        format!("bind-checked=\"{name}\""),
-        format!("bind-value=\"{name}\""),
-    ];
-    !binds.iter().any(|b| lmn_src.contains(b.as_str()))
+    let mut binds = ["bind-text", "bind-checked", "bind-value"]
+        .into_iter()
+        .flat_map(|attr| [format!("{attr}=\"{name}\""), format!("{attr}=\"${name}\"")]);
+    !binds.any(|b| lmn_src.contains(b.as_str()))
 }
 
 /// The spelling this script's host writes a typed signal in.
@@ -1336,7 +1446,6 @@ fn summarize(findings: &[Finding], strict: bool) -> HashMap<String, usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn schema_with(entries: &[(&str, SignalType)]) -> SignalsCfg {
         let mut m = HashMap::new();
@@ -1357,10 +1466,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let untyped: Vec<_> = findings
             .iter()
@@ -1392,10 +1499,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            cdl,
-            &PathBuf::from("main.cdl"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.cdl", cdl)],
         );
         let untyped: Vec<_> = findings
             .iter()
@@ -1432,10 +1537,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            cdl,
-            &PathBuf::from("main.cdl"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.cdl", cdl)],
         );
         assert!(
             findings.is_empty(),
@@ -1457,10 +1560,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            cdl,
-            &PathBuf::from("main.cdl"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.cdl", cdl)],
         );
         assert!(
             !findings
@@ -1484,10 +1585,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            cdl,
-            &PathBuf::from("main.cdl"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.cdl", cdl)],
         );
         assert!(
             !findings.iter().any(|f| f.kind == FindingKind::OrphanWrite),
@@ -1509,10 +1608,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            cdl,
-            &PathBuf::from("main.cdl"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.cdl", cdl)],
         );
         let mismatches: Vec<_> = findings
             .iter()
@@ -1538,10 +1635,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let mismatches: Vec<_> = findings
             .iter()
@@ -1565,10 +1660,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let bare: Vec<_> = findings
             .iter()
@@ -1589,10 +1682,8 @@ mod tests {
         let rhai = r#""#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let untracked: Vec<_> = findings
             .iter()
@@ -1618,10 +1709,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         assert!(
             findings.is_empty(),
@@ -1640,10 +1729,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let untyped: Vec<_> = findings
             .iter()
@@ -1666,10 +1753,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let untyped: Vec<_> = findings
             .iter()
@@ -1690,10 +1775,8 @@ mod tests {
         "#;
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         let bare: Vec<_> = findings
             .iter()
@@ -1709,10 +1792,8 @@ mod tests {
         let lmn = "";
         let findings = analyze(
             &schema,
-            lmn,
-            &PathBuf::from("main.lmn"),
-            rhai,
-            &PathBuf::from("main.rhai"),
+            &[SourceFile::new("main.lmn", lmn)],
+            &[SourceFile::new("main.rhai", rhai)],
         );
         // int literal is compatible with declared i64 - no mismatch.
         let mismatches: Vec<_> = findings
@@ -1722,6 +1803,73 @@ mod tests {
         assert!(
             mismatches.is_empty(),
             "int literal should match i64 schema; got {findings:?}"
+        );
+    }
+
+    /// A multi-page app: the findings pool bindings and writes from every
+    /// page, the shared layout, the app script, and each page's own
+    /// `<script src>` (#413).
+    #[test]
+    fn multi_page_app_pools_bindings_and_writes_across_files() {
+        let dir = std::env::temp_dir().join(format!("lumenc_lint_pages_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src/pages")).unwrap();
+        let write = |rel: &str, text: &str| std::fs::write(dir.join(rel), text).unwrap();
+        write(
+            "lumen.toml",
+            "[pages]\ninclude = [\"main.lmn\", \"pages/launch.lmn\"]\n",
+        );
+        write(
+            "src/layout.lmn",
+            // The documented `$name` spelling binds the same signal as `name`.
+            r#"<root><label bind-text="$status" /></root>"#,
+        );
+        write(
+            "src/main.lmn",
+            r#"<root><label bind-text="java_version" /></root>"#,
+        );
+        write(
+            "src/main.cdl",
+            r#"fn on_start() { signal<string>("status").set("ready"); }"#,
+        );
+        write(
+            "src/pages/launch.lmn",
+            r#"<root><label bind-text="route.segment" /><script src="pages/launch.cdl" /></root>"#,
+        );
+        write(
+            "src/pages/launch.cdl",
+            "fn on_start() {\n    signal<string>(\"java_version\").set(\"21\");\n    signal<string>(\"dead\").set(\"x\");\n}\n",
+        );
+
+        let cfg = LumenToml::load_or_default(&dir).unwrap();
+        let layout = AppLayout::resolve(&dir, &cfg).unwrap();
+        let plan = crate::pages::discover(&layout.src_dir, &cfg);
+        let (markup, scripts) = app_sources(&layout.src_dir, &plan);
+        let findings = analyze(&cfg.signals, &markup, &scripts);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let of = |kind: FindingKind| -> Vec<&str> {
+            findings
+                .iter()
+                .filter(|f| f.kind == kind)
+                .map(|f| f.signal.as_str())
+                .collect()
+        };
+        assert_eq!(
+            of(FindingKind::UntrackedSignal),
+            Vec::<&str>::new(),
+            "java_version is written by the launch page's script, route.segment by the router: {findings:?}"
+        );
+        assert_eq!(
+            of(FindingKind::OrphanWrite),
+            ["dead"],
+            "status is bound in layout.lmn; only `dead` is unread: {findings:?}"
+        );
+        let dead = findings.iter().find(|f| f.signal == "dead").unwrap();
+        assert!(
+            dead.file.ends_with("pages/launch.cdl"),
+            "the orphan is reported in the page script: {}",
+            dead.file.display()
         );
     }
 }
