@@ -190,7 +190,7 @@ error.
     --css-cascade     Offline static check that flags every rule whose
                       resolved value flips between the old first-wins
                       ordering and CSS Cascade-5 last-wins ordering.
-    --signals         Offline signal lint over the app's markup, script,
+    --signals         Offline signal lint over the app's pages, scripts,
                       and [signals] schema.
     --strict          Upgrade warnings to errors (--signals).
     --json            One JSON object per finding.
