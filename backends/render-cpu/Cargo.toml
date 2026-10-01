@@ -17,6 +17,9 @@ lumen-core = { workspace = true }
 lumen-text = { workspace = true }
 # The frame definition this backend paints through its `CpuPainter` sink.
 lumen-paint = { workspace = true }
+# Registers this backend into the app's render-backend registry as the
+# `render-cpu` capability; see `capability.rs`.
+lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # The rasterizer. Single-threaded, the u8 pipeline only, and glyph rendering;

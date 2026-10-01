@@ -8,6 +8,7 @@
 
 #![warn(missing_docs)]
 
+pub mod capability;
 pub mod sink;
 pub mod surface;
 pub use sink::{BACKEND_ID, VelloPainter};
@@ -22,6 +23,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::system::NonSendMut;
 use lumen_core::components::Color as LumenColor;
 use lumen_core::prelude::*;
+use lumen_core::render_world::{SurfaceCapture, SurfaceFrame};
 use lumen_paint::{FragmentCache, PaintTarget, WalkContext};
 use lumen_text::{ShaperService, TextShaper};
 use thiserror::Error;
@@ -473,6 +475,8 @@ impl Plugin for WgpuRendererPlugin {
 /// previous frame's root and skips the entire encode + submit when the diff is empty (the visual tree is
 /// unchanged), keeping the last-rendered target on screen. A non-empty diff re-encodes the whole scene -
 /// bounding the encode to the damage rect is not pixel-safe while vello clears the whole target per call.
+///
+/// A pending [`SurfaceCapture`] request is answered from the target after the frame.
 #[allow(clippy::too_many_arguments)]
 fn wgpu_render_system(
     mut renderer: NonSendMut<WgpuRenderer>,
@@ -483,6 +487,7 @@ fn wgpu_render_system(
     mut previous: ResMut<lumen_core::node_ir::PreviousScene>,
     mut damage: ResMut<FrameDamage>,
     natives: Option<Res<lumen_core::native::NativePainters>>,
+    capture: Option<Res<SurfaceCapture>>,
 ) {
     // Device pixel ratio: the walker scales every leaf (and clip) from logical to physical pixels
     // at emit time, so the target texture and the damage scissor must be sized in the same physical
@@ -545,6 +550,24 @@ fn wgpu_render_system(
 
     // Park the just-walked tree so the next frame's diff has something to compare against.
     previous.root = retained.root.clone();
+
+    // A screenshot request is answered from the target, which holds this
+    // frame whether it was painted now or kept from an unchanged tree.
+    if let Some(capture) = capture
+        && capture.is_requested()
+    {
+        let (width, height) = renderer.size();
+        match renderer.read_rgba8() {
+            Ok(rgba8) => capture.write(SurfaceFrame {
+                width,
+                height,
+                rgba8,
+            }),
+            Err(e) => eprintln!("lumen-render-wgpu: offscreen readback failed: {e}"),
+        }
+        // Cleared either way so a persistent GPU error cannot wedge the requester.
+        capture.clear_request();
+    }
 }
 
 fn make_target(

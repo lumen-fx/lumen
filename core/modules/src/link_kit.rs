@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use crate::{REGISTER_PREFIX, entry_symbol};
 
 /// The manifest version this build writes and accepts.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// One target's link kit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -200,6 +200,46 @@ pub enum KitSelect {
     OnUse(Vec<String>),
     /// No app; only a `[capabilities]` entry brings it in.
     OnRequest,
+    /// An app whose `lumen.toml` sets `key` (a dotted path) to one of
+    /// `any_of`, reading `default` when the key is absent.
+    OnConfig {
+        /// Dotted path of the key.
+        key: String,
+        /// The values that select the capability.
+        any_of: Vec<String>,
+        /// The value an absent key reads as.
+        default: String,
+    },
+}
+
+impl KitSelect {
+    /// Whether an app with these sources and this `lumen.toml` gets the
+    /// capability.
+    fn selects(&self, sources: &str, config: &toml::Table) -> bool {
+        match self {
+            KitSelect::Always => true,
+            KitSelect::OnUse(markers) => markers.iter().any(|m| sources.contains(m.as_str())),
+            KitSelect::OnRequest => false,
+            KitSelect::OnConfig {
+                key,
+                any_of,
+                default,
+            } => {
+                let value = config_value(config, key).unwrap_or(default.as_str());
+                any_of.iter().any(|v| v == value)
+            }
+        }
+    }
+}
+
+/// The string at dotted path `key` in `config`, when there is one.
+fn config_value<'a>(config: &'a toml::Table, key: &str) -> Option<&'a str> {
+    let mut parts = key.split('.');
+    let mut value = config.get(parts.next()?)?;
+    for part in parts {
+        value = value.as_table()?.get(part)?;
+    }
+    value.as_str()
 }
 
 impl From<&lumen_capability::Capability> for KitCapability {
@@ -213,6 +253,15 @@ impl From<&lumen_capability::Capability> for KitCapability {
                     KitSelect::OnUse(markers.iter().map(|m| m.to_string()).collect())
                 }
                 lumen_capability::Select::OnRequest => KitSelect::OnRequest,
+                lumen_capability::Select::OnConfig {
+                    key,
+                    any_of,
+                    default,
+                } => KitSelect::OnConfig {
+                    key: key.to_string(),
+                    any_of: any_of.iter().map(|v| v.to_string()).collect(),
+                    default: default.to_string(),
+                },
             },
         }
     }
@@ -224,11 +273,13 @@ impl From<&lumen_capability::Capability> for KitCapability {
 /// `requested` is the app's `[capabilities]` table, and an entry there
 /// settles that capability outright. Every other one follows its own rule
 /// against `sources`, the app's markup, scripts, styles and config read into
-/// one haystack. A requested name the kit does not carry is an error naming
-/// what it does, so a misspelling is caught rather than ignored.
+/// one haystack, and `config`, the app's parsed `lumen.toml`. A requested
+/// name the kit does not carry is an error naming what it does, so a
+/// misspelling is caught rather than ignored.
 pub fn select_capabilities<'a>(
     kit: &'a [KitCapability],
     sources: &str,
+    config: &toml::Table,
     requested: &BTreeMap<String, bool>,
 ) -> Result<Vec<&'a KitCapability>, String> {
     if let Some(unknown) = requested
@@ -250,11 +301,7 @@ pub fn select_capabilities<'a>(
         .iter()
         .filter(|capability| match requested.get(&capability.name) {
             Some(wanted) => *wanted,
-            None => match &capability.select {
-                KitSelect::Always => true,
-                KitSelect::OnUse(markers) => markers.iter().any(|m| sources.contains(m.as_str())),
-                KitSelect::OnRequest => false,
-            },
+            None => capability.select.selects(sources, config),
         })
         .collect())
 }
@@ -351,6 +398,7 @@ mod tests {
         let selected = select_capabilities(
             &kit,
             "fn on_start() { tray_icon(\"app\", \"icon.png\", \"\"); }",
+            &toml::Table::new(),
             &BTreeMap::new(),
         )
         .expect("nothing was requested");
@@ -365,7 +413,8 @@ mod tests {
             capability("mcp", KitSelect::OnRequest),
         ];
         let requested = BTreeMap::from([("os-tray".to_string(), false), ("mcp".to_string(), true)]);
-        let selected = select_capabilities(&kit, "tray_icon(", &requested).expect("both are known");
+        let selected = select_capabilities(&kit, "tray_icon(", &toml::Table::new(), &requested)
+            .expect("both are known");
         assert_eq!(names(&selected), ["mcp"]);
     }
 
@@ -374,9 +423,46 @@ mod tests {
     fn a_requested_capability_the_kit_lacks_is_an_error_naming_the_offer() {
         let kit = vec![capability("os-tray", KitSelect::Always)];
         let requested = BTreeMap::from([("os-trey".to_string(), true)]);
-        let error = select_capabilities(&kit, "", &requested).expect_err("a misspelling");
+        let error = select_capabilities(&kit, "", &toml::Table::new(), &requested)
+            .expect_err("a misspelling");
         assert!(error.contains("'os-trey'"), "{error}");
         assert!(error.contains("os-tray"), "{error}");
+    }
+
+    /// Two interchangeable capabilities keyed on one config value: the value
+    /// picks one, a value both answer to picks both, an absent key reads as
+    /// the default, and a `[capabilities]` entry still wins.
+    #[test]
+    fn a_config_value_picks_between_capabilities() {
+        let on = |any_of: &[&str]| KitSelect::OnConfig {
+            key: "render.backend".to_string(),
+            any_of: any_of.iter().map(|v| v.to_string()).collect(),
+            default: "auto".to_string(),
+        };
+        let kit = vec![
+            capability("render-gpu", on(&["gpu", "auto"])),
+            capability("render-cpu", on(&["cpu", "auto"])),
+        ];
+        let pick = |toml: &str, requested: &[(&str, bool)]| {
+            let config: toml::Table = toml::from_str(toml).expect("valid toml");
+            let requested = requested
+                .iter()
+                .map(|(n, w)| (n.to_string(), *w))
+                .collect::<BTreeMap<_, _>>();
+            names(&select_capabilities(&kit, "", &config, &requested).expect("known"))
+        };
+        assert_eq!(pick("[render]\nbackend = \"cpu\"\n", &[]), ["render-cpu"]);
+        assert_eq!(pick("[render]\nbackend = \"gpu\"\n", &[]), ["render-gpu"]);
+        assert_eq!(pick("", &[]), ["render-gpu", "render-cpu"]);
+        assert_eq!(
+            pick("[render]\nbackend = \"auto\"\n", &[("render-gpu", false)]),
+            ["render-cpu"]
+        );
+        // A key that is not a string reads as absent rather than matching.
+        assert_eq!(
+            pick("[render]\nbackend = 3\n", &[]),
+            ["render-gpu", "render-cpu"]
+        );
     }
 
     /// The registry's entry becomes the kit's, rule included.

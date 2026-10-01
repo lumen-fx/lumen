@@ -106,6 +106,18 @@ pub enum Select {
     /// Only an app that asks for it by name. For a subsystem that exists for
     /// development rather than for the app's users.
     OnRequest,
+    /// An app whose `lumen.toml` sets `key` to one of `any_of`. `key` is a
+    /// dotted path, `section.field`; `default` stands in for it when the file
+    /// leaves it unset. For one of several interchangeable implementations an
+    /// app picks between in its configuration.
+    OnConfig {
+        /// Dotted path of the key, for example `render.backend`.
+        key: &'static str,
+        /// The values that select this capability.
+        any_of: &'static [&'static str],
+        /// The value an absent key reads as.
+        default: &'static str,
+    },
 }
 
 /// What a preflight decides.

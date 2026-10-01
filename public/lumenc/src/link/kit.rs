@@ -58,20 +58,35 @@ const MANIFEST: &str = "manifest.json";
 /// static-packaging tests point at the kit they just built.
 const KIT_DIR_ENV: &str = "LUMEN_LINK_KIT_DIR";
 
+/// What decides which of a kit's capabilities an app's executable carries.
+pub(crate) struct CapabilityChoice<'a> {
+    /// The app's `[capabilities]` table, which settles a capability it names.
+    pub(crate) requested: &'a BTreeMap<String, bool>,
+    /// The app's sources, read into one haystack.
+    pub(crate) sources: &'a str,
+    /// The app's parsed `lumen.toml`.
+    pub(crate) config: &'a toml::Table,
+}
+
 /// Link `exe` from the kit for `target`, with the modules `deps` declares
-/// compiled in and `artifact` inside the file.
+/// compiled in, the capabilities `choice` selects, and `artifact` inside the
+/// file.
 pub(crate) fn link_app(
     exe: &Path,
     artifact: &[u8],
     target: Target,
     lib_dir: Option<&Path>,
     deps: &DependenciesCfg,
-    requested: &BTreeMap<String, bool>,
-    sources: &str,
+    choice: &CapabilityChoice<'_>,
 ) -> Result<Linked, String> {
     let kit = locate(target, lib_dir)?;
     let manifest = read_manifest(&kit, target)?;
-    let capabilities = select_capabilities(&manifest.capabilities, sources, requested)?;
+    let capabilities = select_capabilities(
+        &manifest.capabilities,
+        choice.sources,
+        choice.config,
+        choice.requested,
+    )?;
 
     // Written before the line is planned, because macOS puts it on the line.
     let scratch = exe.with_extension("lmna-staging");

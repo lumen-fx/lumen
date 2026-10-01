@@ -112,8 +112,19 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // installed here, and the renderer gets the sibling returned here.
     let render_shaper = register_text(&mut app);
     register_core(&mut app);
-    // Host services: OS integration, the introspection server.
+    // Host services: OS integration, the introspection server, the render
+    // backends.
     lumen_capability::install_phase(&mut app, &env, Phase::Platform);
+    // A rendered headless run starts its offscreen renderer now: the
+    // backends registered above, and bringing one up (a GPU device and its
+    // pipelines) needs nothing from the rest of the build it overlaps.
+    if let Some((width, height)) = opts.offscreen_prestart.take() {
+        let candidates = crate::run::render_backends(&app, &cfg)?;
+        app.world
+            .insert_resource(crate::run_headless::OffscreenPrestart::spawn(
+                candidates, width, height,
+            )?);
+    }
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
     // always-on reactive core.
     register_reactive(&mut app);

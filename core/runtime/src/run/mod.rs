@@ -44,7 +44,6 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // `ScriptSet` is how the host-neutral half orders against them: with several
 // hosts installed, an edge naming one host's system leaves the others outside
 // the one-tick dirty window.
-use lumen_render_wgpu::WgpuSurfaceRenderer;
 use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
@@ -204,6 +203,10 @@ pub struct RunOptions {
     /// [`Self::resolved_modules`] is: the runtime resolves nothing, and
     /// `lumenc` hands in what the registry answered.
     pub import_roots: Vec<(String, std::path::PathBuf)>,
+    /// Start an offscreen renderer of this physical size while the app
+    /// builds: set by the rendered headless run, which picks the result up
+    /// from [`crate::run_headless`]'s side of the build.
+    pub(crate) offscreen_prestart: Option<(u32, u32)>,
 }
 
 impl RunOptions {
@@ -239,6 +242,7 @@ impl RunOptions {
             compiler_plugins: None,
             resolved_modules: crate::modules::ResolvedModules::default(),
             import_roots: Vec::new(),
+            offscreen_prestart: None,
         }
     }
 
@@ -417,11 +421,15 @@ pub enum RunError {
     /// winit returned an error.
     #[error("window: {0}")]
     Window(String),
-    /// Headless mode failed to initialise (offscreen GPU context or
+    /// Headless mode failed to initialise (offscreen renderer or
     /// signal-handler install). Raised only by
     /// [`crate::run_headless::run_app_headless_rendered`].
     #[error("headless: {0}")]
     Headless(String),
+    /// `[render] backend` names a backend this build does not carry, or the
+    /// build carries none.
+    #[error("lumen.toml [render] backend: {0}")]
+    Render(String),
     /// The app's script failed to compile. Raised by [`check_app`],
     /// which compiles the combined `<script>` source with the exact
     /// engine settings `lumenc run` loads with - a script that would
@@ -490,22 +498,43 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
             .insert_non_send(ShaperService::from(shaper));
     }
     // Backend selection happens here, at the composition point: the window
-    // backend drives both of these through their traits and names neither.
-    let renderer = Box::new(WgpuSurfaceRenderer::new());
+    // backend drives the renderers and the bridge through their traits and
+    // names none of them. Under `auto` every backend the build carries is
+    // handed over in priority order, and the window binds the first that
+    // can start.
+    let renderers = render_backends(&app, &cfg)?
+        .iter()
+        .map(|backend| (backend.surface)())
+        .collect();
     let a11y: A11yBridgeFactory = Box::new(lumen_a11y_accesskit::winit_bridge);
-    run(app, window.options, renderer, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))
+    run(app, window.options, renderers, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))
+}
+
+/// The render backends a launch of `app` tries, in order: the one
+/// `[render] backend` names, or every backend the build registered, highest
+/// priority first, under `auto`.
+pub(crate) fn render_backends(
+    app: &App,
+    cfg: &crate::config::LumenToml,
+) -> Result<Vec<lumen_core::render_backend::RenderBackend>, RunError> {
+    app.world
+        .get_resource::<lumen_core::render_backend::RenderBackends>()
+        .cloned()
+        .unwrap_or_default()
+        .select(cfg.render.backend.backend_name())
+        .map_err(RunError::Render)
 }
 
 /// Build the full app WITHOUT opening a window, then drive `ticks`
 /// main-schedule ticks and return. Headless / CI entry point: same
 /// plugin stack, scripts, and reactive bindings as [`run_app`], but no
-/// windowing, input, or GPU rendering - just [`App::tick`] in a loop.
+/// windowing, input, or rendering - just [`App::tick`] in a loop.
 ///
 /// `ticks == 0` builds-and-drops (validates the app loads). The window
 /// setup (title, size, text shaper) built alongside the app is
 /// discarded; headless ticks run the main schedule + extract + an empty
-/// render schedule (no GPU renderer plugin is installed off the winit
-/// path), which is sufficient to exercise signal round-trips, script
+/// render schedule (no renderer is installed off the winit path), which
+/// is sufficient to exercise signal round-trips, script
 /// execution, and `<for>` / `<if>` reconciliation.
 pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError> {
     // Headless / FFI contract: no interactive session, so gate off the MCP
@@ -523,14 +552,14 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 /// `run()`; its `build` is window-free (backend messages,
 /// `RedrawScheduler`, the `A11yPlugin` resources + `sync_a11y_tree`
 /// system, and the XDG color-scheme command handler) - only the event
-/// loop and GPU init in `run()` need a display. Installing it here gives
+/// loop and the renderer bind in `run()` need a display. Installing it here gives
 /// every headless schedule the same resource/system set so a11y-sync and
 /// any system that reads a WinitPlugin-provided resource don't fail
 /// validation. Used by [`run_app_headless`] (no renderer; FFI/test
 /// contract), [`crate::run_headless::run_app_headless_rendered`] (full
-/// offscreen-GPU mode), and the golden-image screenshot suite
-/// (`public/lumenc/tests/golden.rs`), which installs an offscreen
-/// `WgpuRendererPlugin` on top and reads the framebuffer back.
+/// offscreen-render mode), and the golden-image screenshot suite
+/// (`public/lumenc/tests/golden.rs`), which installs an offscreen renderer
+/// on top and reads the framebuffer back.
 pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     let (mut app, window) = build_app(opts)?;

@@ -23,6 +23,7 @@ pub mod output;
 pub mod palette;
 pub mod plugin_events;
 pub mod property_store;
+pub mod render_backend;
 pub mod render_world;
 pub mod request;
 pub mod signals;

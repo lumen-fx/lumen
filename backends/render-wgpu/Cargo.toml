@@ -18,6 +18,9 @@ lumen-text = { workspace = true }
 # The frame definition: the walker, the emitters, and the fragment cache this
 # backend paints through its `VelloPainter` sink.
 lumen-paint = { workspace = true }
+# Registers this backend into the app's render-backend registry as the
+# `render-gpu` capability; see `capability.rs`.
+lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # vello re-exports wgpu (`vello::wgpu`) so code never drifts the version.
