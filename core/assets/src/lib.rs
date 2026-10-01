@@ -11,7 +11,7 @@
 //! - Attaching a decoded payload raises [`lumen_core::render_world::FrameDirty`]. An asset is the one piece of scene content that arrives ticks after the tree it belongs to, and a tick whose frame is not dirty is never extracted, so without the raise the arrival would wait for an unrelated repaint.
 //! - [`keep_frame_loop_awake_for_assets`] holds an event-driven loop open while an [`ImageSource`] in the tree has no verdict on it yet, so an element that enters the tree after [`spawn_pending_decodes`] has run is looked up on the next tick rather than at the next unrelated event. The claim is keyed on the element, so it retires when the element has its content or leaves the tree.
 //! - Handles are strong [`Arc`]s to decoded data; the cache holds [`Handle<T>`] entries that share identity across consumers.
-//! - The vello GPU upload cache is keyed by the underlying `peniko::Blob` identity, so identical handles short-circuit the upload.
+//! - A renderer's image upload cache is keyed by the underlying `peniko::Blob` identity, so identical handles short-circuit the upload.
 //! - A [`notify::RecommendedWatcher`] tracks every loaded file URL. On change the asset cache invalidates the affected entry, the request id of every entity referencing that path is bumped, and an [`AssetReloadRequested`] message fires. [`reload_changed_images`] is the consumer that re-enqueues the load; the runtime installs it for a hot-reload session. The watcher wakes a parked frame loop so the change is picked up without waiting for input.
 //!
 //! Eviction is true LRU bounded by `max_bytes` (default 256 MiB). Insert / evict mutate a running `bytes_used: usize` in O(1); a `debug_assert!` reconciles the running counter against a full sweep at most once per second when debug assertions are on.
@@ -151,7 +151,7 @@ impl AsRef<[u8]> for PixBytes {
 /// Strong, content-addressed handle to a decoded asset.
 ///
 /// - Wraps an `Arc<T>`; cloning is an `Arc` bump (`O(1)`, no data copy).
-/// - Identical handles share identity via [`Handle::id`], which keys the vello GPU upload cache.
+/// - Identical handles share identity via [`Handle::id`].
 /// - [`AssetServer`] stores `Handle<T>` entries so entities sharing a path share one decoded asset.
 pub struct Handle<T> {
     inner: Arc<T>,
@@ -211,16 +211,16 @@ pub trait AssetSize {
 /// Decoded image payload in RGBA8 with top-left origin.
 ///
 /// - Shared via [`Handle<ImageData>`]; never deep-copied.
-/// - `blob` is a pre-built `peniko::Blob` whose stable identity keys vello's GPU texture upload cache across frames. `Blob` cloning is `Arc`-cheap.
+/// - `blob` is a pre-built `peniko::Blob` whose stable identity keys a renderer's image upload cache across frames. `Blob` cloning is `Arc`-cheap.
 pub struct ImageData {
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// RGBA8 pixel buffer in row-major order (`width * height * 4` bytes), accessible to non-vello consumers such as the MCP inspector.
+    /// RGBA8 pixel buffer in row-major order (`width * height * 4` bytes), accessible to consumers other than the renderer, such as the MCP inspector.
     pub rgba: Arc<[u8]>,
-    /// Pre-built `peniko::Blob` whose identity is used as the GPU upload cache key in vello.
-    pub blob: vello::peniko::Blob<u8>,
+    /// Pre-built `peniko::Blob` whose identity is the renderer's upload cache key.
+    pub blob: peniko::Blob<u8>,
 }
 
 impl AssetSize for ImageData {
@@ -247,16 +247,27 @@ impl std::fmt::Debug for LoadedImage {
     }
 }
 
-/// Pre-rendered SVG payload produced once at decode time and shared per-frame via [`Handle<SvgData>`] clones.
+/// Parsed SVG payload produced once at decode time and shared per-frame via [`Handle<SvgData>`] clones.
 pub struct SvgData {
     /// Native pixel size derived from the SVG `viewBox` / `width` / `height`.
     pub intrinsic: glam::Vec2,
-    /// Pre-rendered vello scene.
-    pub scene: vello::Scene,
-    /// Raw source-file length in bytes; budgeted by the LRU as a proxy for the encoded `vello::Scene` cost,
-    /// which vello does not expose. Replaces the previous fixed `size_of::<vello::Scene>()` placeholder so
-    /// eviction is no longer blind to SVG memory pressure.
+    /// The parsed document, painted at frame time by the renderer.
+    pub tree: usvg::Tree,
+    /// Identity of this decode, unique for the life of the process. A renderer keys its cached
+    /// drawing of the SVG on it; see [`SvgData::next_id`].
+    pub id: u64,
+    /// Raw source-file length in bytes; budgeted by the LRU as a proxy for the parsed tree's cost,
+    /// which usvg does not expose, so eviction is not blind to SVG memory pressure.
     pub source_bytes: usize,
+}
+
+impl SvgData {
+    /// A fresh [`SvgData::id`]. Never repeats within a process, so a renderer cache keyed on it
+    /// cannot hand one SVG another's drawing.
+    pub fn next_id() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl AssetSize for SvgData {
@@ -265,7 +276,7 @@ impl AssetSize for SvgData {
     }
 }
 
-/// Strong handle to a decoded SVG, with `Deref<Target = SvgData>` enabling field access (`svg.intrinsic`, `svg.scene`).
+/// Strong handle to a decoded SVG, with `Deref<Target = SvgData>` enabling field access (`svg.intrinsic`, `svg.tree`).
 #[derive(Component, Clone)]
 pub struct LoadedSvg(pub Handle<SvgData>);
 
@@ -350,7 +361,7 @@ pub struct AssetReloadRequested {
     pub path: PathBuf,
 }
 
-/// One pre-rendered SVG to draw this frame. Defined in `lumen-assets` (not `lumen-core`) because the cached scene carries vello types.
+/// One SVG to draw this frame. Defined in `lumen-assets` (not `lumen-core`) because the payload carries the parsed usvg tree.
 #[derive(Component, Clone)]
 pub struct ExtractedSvg {
     /// Top-left position in window coordinates.
@@ -359,7 +370,7 @@ pub struct ExtractedSvg {
     pub size: glam::Vec2,
     /// Native SVG size derived from the viewBox.
     pub intrinsic: glam::Vec2,
-    /// Strong handle to the cached SVG payload; `Deref` exposes `asset.scene` and `asset.intrinsic`.
+    /// Strong handle to the cached SVG payload; `Deref` exposes `asset.tree` and `asset.intrinsic`.
     pub asset: Handle<SvgData>,
     /// Scaling mode applied when fitting the SVG into the drawn rect.
     pub fit: lumen_core::components::ImageFit,
@@ -1201,12 +1212,12 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
 }
 
 /// Render-world sidecar carrying a pre-built `peniko::Blob` for an extracted image.
-/// Queried alongside `ExtractedImage` by the renderer so the Blob is fed directly into vello, preserving its GPU upload-cache identity.
+/// Queried alongside `ExtractedImage` by the renderer so the Blob reaches the painter unchanged, preserving its upload-cache identity.
 ///
 /// ## Node IR splice (W2.1 follow-up)
 ///
 /// The retained Node IR's `Node::Image { blob: Option<Arc<dyn Any + Send + Sync>> }` already accepts this
-/// payload as an opaque `Arc<dyn Any>` so the walker downcasts back to `ExtractedImageBlob` and feeds vello.
+/// payload as an opaque `Arc<dyn Any>` so the walker downcasts back to `ExtractedImageBlob` and paints it.
 /// On the on-screen winit path the splice is handled today by `render_frame` reading both `ExtractedImage` and
 /// `ExtractedImageBlob` in lockstep and emitting the image draw alongside the retained-tree walk; the same
 /// splice is the reason the offscreen retained-tree path doesn't yet light up images. The audit-follow-up that
@@ -1214,10 +1225,10 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
 /// `ExtractedImageBlob` and set `Node::Image.blob = Some(Arc::new(blob.clone()))` directly - which requires a
 /// core-touching PR that this crate is not allowed to perform alone.
 #[derive(Component, Clone)]
-pub struct ExtractedImageBlob(pub vello::peniko::Blob<u8>);
+pub struct ExtractedImageBlob(pub peniko::Blob<u8>);
 
 /// Extracts every `(Transform, LoadedImage)` entity into a paired [`ExtractedImage`] + [`ExtractedImageBlob`]
-/// in the render world. Clones the `Blob` (Arc-cheap) so vello's upload-cache identity is preserved across
+/// in the render world. Clones the `Blob` (Arc-cheap) so the renderer's upload-cache identity is preserved across
 /// frames.
 ///
 /// The sidecar [`ExtractedImageBlob`] is the Node-IR-ready blob payload - see its doc-comment for the splice
@@ -1269,7 +1280,7 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
             // Sidecar: the legacy `ExtractedImageBlob` keeps any external query path
             // (embedders, headless tests) working; the core-facing `ImageBlob` carries the same
             // payload type-erased so `lumen_core::node_ir::transform_extracted_to_nodes` can
-            // splice it into `Node::Image.blob` without lumen-core needing a `vello` dep.
+            // splice it into `Node::Image.blob` without lumen-core needing a `peniko` dep.
             let blob = ExtractedImageBlob(img.blob.clone());
             let core_blob = ImageBlob(std::sync::Arc::new(blob.clone()));
             (e, extracted, blob, core_blob)
@@ -1640,7 +1651,7 @@ mod tests {
             width: 4,
             height: 4,
             rgba: Arc::from(bytes.clone().into_boxed_slice()),
-            blob: vello::peniko::Blob::new(Arc::new(PixBytes(Arc::from(bytes.into_boxed_slice())))),
+            blob: peniko::Blob::new(Arc::new(PixBytes(Arc::from(bytes.into_boxed_slice())))),
         }
     }
 
@@ -1721,7 +1732,8 @@ mod tests {
                 LoadedSvg(
                     SvgData {
                         intrinsic: glam::Vec2::new(10.0, 10.0),
-                        scene: vello::Scene::new(),
+                        tree: empty_svg_tree(),
+                        id: SvgData::next_id(),
                         source_bytes: 0,
                     }
                     .into(),
@@ -1942,7 +1954,8 @@ mod tests {
     fn svg_bytes_track_source_bytes() {
         let svg = SvgData {
             intrinsic: glam::Vec2::ZERO,
-            scene: vello::Scene::new(),
+            tree: empty_svg_tree(),
+            id: SvgData::next_id(),
             source_bytes: 12_345,
         };
         assert_eq!(svg.bytes(), 12_345);
@@ -1951,6 +1964,12 @@ mod tests {
     /// A minimal well-formed SVG with a known intrinsic size. Its file
     /// length is what the loader budgets as the payload's byte cost.
     const TINY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
+
+    /// The parsed form of [`TINY_SVG`], for payloads whose drawing a test
+    /// never looks at.
+    fn empty_svg_tree() -> usvg::Tree {
+        usvg::Tree::from_data(TINY_SVG, &usvg::Options::default()).expect("tiny svg parses")
+    }
 
     /// Runs a loader the way a worker would: the path, plus bytes only when
     /// a source already produced them.

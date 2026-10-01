@@ -19,7 +19,7 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["png"];
 ///
 /// The decoded pixels are published twice over one allocation: as `rgba` for
 /// consumers that read pixels directly, and as a `peniko::Blob` whose
-/// identity keys vello's GPU upload cache across frames.
+/// identity keys a renderer's image upload cache across frames.
 pub struct ImageLoader;
 
 impl AssetLoader for ImageLoader {
@@ -51,7 +51,7 @@ impl AssetLoader for ImageLoader {
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
         let pixels: Arc<[u8]> = Arc::from(rgba.into_raw());
-        let blob = vello::peniko::Blob::new(Arc::new(PixBytes(pixels.clone())));
+        let blob = peniko::Blob::new(Arc::new(PixBytes(pixels.clone())));
         let data = ImageData {
             width,
             height,

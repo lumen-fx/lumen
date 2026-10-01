@@ -37,9 +37,12 @@ impl AssetLoader for BlipLoader {
             let path = ctx.path();
             return Err(LoadErrorKind::DecodeFailed(format!("{path:?}: not a blip")));
         }
+        let empty = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>"#;
         let data = SvgData {
             intrinsic: BLIP_INTRINSIC,
-            scene: vello::Scene::new(),
+            tree: usvg::Tree::from_data(empty, &usvg::Options::default())
+                .map_err(|e| LoadErrorKind::DecodeFailed(e.to_string()))?,
+            id: SvgData::next_id(),
             // The body past the magic is what this format costs; the header
             // is not part of the payload.
             source_bytes: bytes.len() - 4,

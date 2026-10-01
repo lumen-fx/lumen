@@ -1,19 +1,17 @@
-//! Vello sub-scene fragment cache.
+//! Fragment cache.
 //!
-//! - Encodes each drawn primitive into a small [`vello::Scene`] keyed by its position-independent appearance (size, brush, radius, blur).
-//! - The renderer reissues the cached encoding via `Scene::append(&frag, Some(Affine::translate(...)))` instead of re-encoding each frame.
-//! - Caches the rect, shadow, and outline primitive families. Text shaping is cached separately by [`lumen_text_cosmic::CosmicShaper`]; image uploads are keyed by `peniko::Blob` identity on the GPU.
+//! - Records each drawn primitive once as a [`Fragment`] keyed by its position-independent appearance (size, brush, radius, blur), on a sink that supports fragments.
+//! - The walker replays the cached fragment under a translation instead of encoding the primitive again each frame.
+//! - Caches the rect, shadow, and outline primitive families, plus each SVG asset's drawing. Text shaping is cached separately by the text shaper; image uploads are keyed by `peniko::Blob` identity in the sink.
 
+use crate::Fragment;
 use lru::LruCache;
 use lumen_core::render_world::Brush as LumenBrush;
 use lumen_core::render_world::{ExtractedOutline, ExtractedRect, ExtractedShadow};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
-use vello::Scene;
-use vello::peniko::kurbo::Affine;
 
-/// Default fragment-cache capacity in entries; the runtime may resize via [`SceneFragmentCache::set_capacity`].
+/// Default fragment-cache capacity in entries; the runtime may resize via [`FragmentCache::set_capacity`].
 const FRAGMENT_CAP: usize = 256;
 
 /// Lookup key derived from a primitive's *appearance* - everything
@@ -21,6 +19,16 @@ const FRAGMENT_CAP: usize = 256;
 /// rendered glyphs once translated.
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct FragmentKey(u64);
+
+impl FragmentKey {
+    /// The key for one SVG asset's drawing, by the id its asset carries.
+    pub fn svg(asset_id: u64) -> Self {
+        let mut h = fragment_hasher();
+        3u8.hash(&mut h);
+        asset_id.hash(&mut h);
+        Self(h.finish())
+    }
+}
 
 impl From<&ExtractedRect> for FragmentKey {
     fn from(r: &ExtractedRect) -> Self {
@@ -127,20 +135,20 @@ pub struct CacheStats {
     pub misses: u64,
 }
 
-/// Cache of pre-encoded, position-independent vello fragments, registered as a `bevy_ecs::Resource` on the render world.
+/// Cache of recorded, position-independent fragments, registered as a `bevy_ecs::Resource` on the render world.
 #[derive(bevy_ecs::prelude::Resource)]
-pub struct SceneFragmentCache {
-    entries: LruCache<FragmentKey, Arc<Scene>>,
+pub struct FragmentCache {
+    entries: LruCache<FragmentKey, Fragment>,
     stats: CacheStats,
 }
 
-impl Default for SceneFragmentCache {
+impl Default for FragmentCache {
     fn default() -> Self {
         Self::with_capacity(FRAGMENT_CAP)
     }
 }
 
-impl SceneFragmentCache {
+impl FragmentCache {
     /// Build with a fixed entry cap.
     pub fn with_capacity(cap: usize) -> Self {
         Self {
@@ -158,7 +166,7 @@ impl SceneFragmentCache {
 
     /// Fetch (and mark recent) the cached fragment for `key`, or `None`
     /// if cold. Caller is expected to encode + [`Self::insert`] on miss.
-    pub fn get(&mut self, key: FragmentKey) -> Option<Arc<Scene>> {
+    pub fn get(&mut self, key: FragmentKey) -> Option<Fragment> {
         if let Some(s) = self.entries.get(&key) {
             self.stats.hits += 1;
             Some(s.clone())
@@ -168,9 +176,9 @@ impl SceneFragmentCache {
         }
     }
 
-    /// Insert a freshly-encoded fragment.
-    pub fn insert(&mut self, key: FragmentKey, fragment: Scene) {
-        self.entries.put(key, Arc::new(fragment));
+    /// Insert a freshly recorded fragment.
+    pub fn insert(&mut self, key: FragmentKey, fragment: Fragment) {
+        self.entries.put(key, fragment);
     }
 
     /// Stats snapshot.
@@ -193,15 +201,6 @@ impl SceneFragmentCache {
         self.entries.clear();
         self.stats = CacheStats::default();
     }
-}
-
-/// Append a cached fragment translated to `origin`. The caller computed
-/// the cache hit; this just wraps the `Scene::append` boilerplate.
-pub fn append_translated(target: &mut Scene, fragment: &Scene, origin: glam::Vec2) {
-    target.append(
-        fragment,
-        Some(Affine::translate((origin.x as f64, origin.y as f64))),
-    );
 }
 
 #[cfg(test)]
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn hit_miss_stats_increment() {
-        let mut cache = SceneFragmentCache::default();
+        let mut cache = FragmentCache::default();
         let r = solid_rect(
             Vec2::new(10.0, 10.0),
             Color {
@@ -256,7 +255,7 @@ mod tests {
         );
         let key = FragmentKey::from(&r);
         assert!(cache.get(key).is_none());
-        cache.insert(key, Scene::new());
+        cache.insert(key, Fragment::new(std::sync::Arc::new(())));
         assert!(cache.get(key).is_some());
         assert!(cache.get(key).is_some());
         let s = cache.stats();

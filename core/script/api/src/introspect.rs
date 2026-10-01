@@ -282,14 +282,14 @@ pub fn node_inline_style(handle: u64) -> Vec<(String, String)> {
 pub fn node_attrs(handle: u64) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let index = dom_index_snapshot();
-    if let Some(entity) = NodeRef(handle).entity() {
-        if let Some(rec) = index.record(entity) {
-            if let Some(id) = &rec.id {
-                out.push(("id".to_string(), id.clone()));
-            }
-            if !rec.classes.is_empty() {
-                out.push(("class".to_string(), rec.classes.join(" ")));
-            }
+    if let Some(entity) = NodeRef(handle).entity()
+        && let Some(rec) = index.record(entity)
+    {
+        if let Some(id) = &rec.id {
+            out.push(("id".to_string(), id.clone()));
+        }
+        if !rec.classes.is_empty() {
+            out.push(("class".to_string(), rec.classes.join(" ")));
         }
     }
     if let Some(text) = crate::node_query::node_text(handle) {
@@ -409,10 +409,10 @@ fn write_markup(index: &DomIndex, entity: Entity, depth: usize, out: &mut String
         return;
     }
     out.push('>');
-    if let Some(t) = &text {
-        if !t.is_empty() {
-            out.push_str(t);
-        }
+    if let Some(t) = &text
+        && !t.is_empty()
+    {
+        out.push_str(t);
     }
     if rec.children.is_empty() {
         out.push_str(&format!("</{tag}>\n"));

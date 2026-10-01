@@ -7,13 +7,12 @@
 //! rasterizer.
 
 use lumen_core::prelude::*;
-use lumen_render_wgpu::vello::peniko::BlendMode;
-use lumen_render_wgpu::vello::peniko::Fill as VelloFill;
-use lumen_render_wgpu::vello::peniko::color::{AlphaColor, Srgb};
-use lumen_render_wgpu::vello::peniko::kurbo::{Affine, Rect as KurboRect};
-use lumen_render_wgpu::{
-    WalkContext, WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason, walk_node,
-};
+use lumen_paint::kurbo::{Affine, Rect as KurboRect};
+use lumen_paint::peniko::BlendMode;
+use lumen_paint::peniko::Fill as PaintFill;
+use lumen_paint::peniko::color::{AlphaColor, Srgb};
+use lumen_paint::{PaintTarget, Shape, WalkContext, walk_node};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use std::sync::{Arc, Mutex};
 
 const W: u32 = 64;
@@ -47,20 +46,20 @@ impl NativePainter for SolidPainter {
         let [r, g, b, a] = payload.color.to_rgba8();
         let color = AlphaColor::<Srgb>::from_rgba8(r, g, b, a);
         let transform = Affine::new(ctx.device_transform().coeffs);
-        let Some(scene) = ctx.target_as::<lumen_render_wgpu::vello::Scene>() else {
+        let Some(target) = ctx.target_as::<PaintTarget>() else {
             return;
         };
-        scene.fill(
-            VelloFill::NonZero,
+        target.fill(
+            PaintFill::NonZero,
             transform,
-            color,
+            color.into(),
             None,
-            &KurboRect::new(
+            &Shape::Rect(KurboRect::new(
                 (bounds.origin.x - over) as f64,
                 (bounds.origin.y - over) as f64,
                 (bounds.origin.x + bounds.size.x + over) as f64,
                 (bounds.origin.y + bounds.size.y + over) as f64,
-            ),
+            )),
         );
     }
 }
@@ -368,20 +367,20 @@ impl NativePainter for OpaqueFill {
         let [r, g, b, a] = self.color.to_rgba8();
         let color = AlphaColor::<Srgb>::from_rgba8(r, g, b, a);
         let transform = Affine::new(ctx.device_transform().coeffs);
-        let Some(scene) = ctx.target_as::<lumen_render_wgpu::vello::Scene>() else {
+        let Some(target) = ctx.target_as::<PaintTarget>() else {
             return;
         };
-        scene.fill(
-            VelloFill::NonZero,
+        target.fill(
+            PaintFill::NonZero,
             transform,
-            color,
+            color.into(),
             None,
-            &KurboRect::new(
+            &Shape::Rect(KurboRect::new(
                 bounds.origin.x as f64,
                 bounds.origin.y as f64,
                 (bounds.origin.x + bounds.size.x) as f64,
                 (bounds.origin.y + bounds.size.y) as f64,
-            ),
+            )),
         );
     }
 }
@@ -393,15 +392,15 @@ struct LeavesALayerOpen;
 impl NativePainter for LeavesALayerOpen {
     fn paint(&self, ctx: &mut NativePaintCtx<'_>) {
         let transform = Affine::new(ctx.device_transform().coeffs);
-        let Some(scene) = ctx.target_as::<lumen_render_wgpu::vello::Scene>() else {
+        let Some(target) = ctx.target_as::<PaintTarget>() else {
             return;
         };
-        scene.push_layer(
-            VelloFill::NonZero,
+        target.push_layer(
+            PaintFill::NonZero,
             BlendMode::default(),
             1.0,
             transform,
-            &KurboRect::new(0.0, 0.0, (W / 2) as f64, (H / 2) as f64),
+            &Shape::Rect(KurboRect::new(0.0, 0.0, (W / 2) as f64, (H / 2) as f64)),
         );
     }
 }
@@ -435,9 +434,9 @@ fn rect_node(bounds: (f32, f32, f32, f32), color: Color) -> Arc<Node> {
 /// nodes the tree builder does not emit yet, like opacity groups.
 fn render_tree(root: &Arc<Node>, painters: &NativePainters) -> Vec<u8> {
     let mut renderer = WgpuRenderer::new_offscreen(W, H).expect("offscreen renderer");
-    renderer.scene.reset();
+    renderer.vello_painter().reset();
     {
-        let mut ctx = WalkContext::new_with_dpr(&mut renderer.scene, None, None, 1.0)
+        let mut ctx = WalkContext::new_with_dpr(renderer.painter_mut(), None, None, 1.0)
             .with_native_painters(painters);
         walk_node(&mut ctx, root);
     }

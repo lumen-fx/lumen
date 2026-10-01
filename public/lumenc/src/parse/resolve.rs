@@ -124,10 +124,10 @@ fn tag_attr<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
             let after_trim = after.trim_start();
             if let Some(v) = after_trim.strip_prefix('=') {
                 let v = v.trim_start();
-                if let Some(v) = v.strip_prefix('"') {
-                    if let Some(end) = v.find('"') {
-                        return Some(&v[..end]);
-                    }
+                if let Some(v) = v.strip_prefix('"')
+                    && let Some(end) = v.find('"')
+                {
+                    return Some(&v[..end]);
                 }
             }
         }
@@ -362,11 +362,11 @@ fn parse_import_target(s: &str) -> Option<(String, &str)> {
 fn skip_ws_and_comments(mut s: &str) -> &str {
     loop {
         let t = s.trim_start();
-        if let Some(after) = t.strip_prefix("/*") {
-            if let Some(end) = after.find("*/") {
-                s = &after[end + 2..];
-                continue;
-            }
+        if let Some(after) = t.strip_prefix("/*")
+            && let Some(end) = after.find("*/")
+        {
+            s = &after[end + 2..];
+            continue;
         }
         return t;
     }

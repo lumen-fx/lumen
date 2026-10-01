@@ -3482,10 +3482,10 @@ dependencies = [
  "lru",
  "lumen-core",
  "notify",
+ "peniko",
  "thiserror 2.0.19",
  "tracing",
  "usvg",
- "vello",
 ]
 
 [[package]]
@@ -4095,6 +4095,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-paint"
+version = "0.0.9"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "lru",
+ "lumen-assets",
+ "lumen-core",
+ "lumen-text",
+ "peniko",
+ "rustc-hash 2.1.3",
+ "tracing",
+ "usvg",
+]
+
+[[package]]
 name = "lumen-plugin"
 version = "0.0.9"
 dependencies = [
@@ -4210,14 +4226,12 @@ dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
  "image",
- "lru",
- "lumen-assets",
  "lumen-core",
  "lumen-layout-taffy",
+ "lumen-paint",
  "lumen-text",
  "lumen-text-cosmic",
  "pollster",
- "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
  "vello",

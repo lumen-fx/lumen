@@ -1,5 +1,5 @@
-//! On-screen presentation: a wgpu swap chain fed by the same vello scene
-//! walker the offscreen renderer uses.
+//! On-screen presentation: a wgpu swap chain fed by the same scene walker
+//! the offscreen renderer uses.
 //!
 //! Vello's compute pipeline binds the render target as a storage texture
 //! with the format hard-pinned to `Rgba8Unorm`, while most swap chains
@@ -12,14 +12,12 @@
 //! [`lumen_core::traits::SurfaceRenderer`], so it never sees a vello or
 //! wgpu type: it attaches a window, reports resizes, and asks for frames.
 
-use crate::walker::{WalkContext, diff_retained_scenes, walk_node};
-use crate::{NATIVE_BACKENDS, SceneFragmentCache, vello_options};
+use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
 use lumen_core::node_ir::{PreviousScene, RetainedScene};
-use lumen_core::render_world::{
-    FrameDamage, Rect as LumenRect, SurfaceCapture, SurfaceFrame, Viewport,
-};
+use lumen_core::render_world::{SurfaceCapture, SurfaceFrame, Viewport};
 use lumen_core::traits::{FrameRequest, RenderTarget, Renderer, SurfaceError, SurfaceRenderer};
+use lumen_paint::{FragmentCache, PaintTarget, WalkContext, scene_has_damage, walk_node};
 use lumen_text::{ShaperService, TextShaper};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -128,12 +126,12 @@ struct GpuState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     vello: vello::Renderer,
-    vello_scene: vello::Scene,
-    /// Vello sub-scene fragment cache: position-independent encoded paths
-    /// for rects, shadows, and outlines keyed by appearance hash.
-    /// `Scene::append(&frag, Some(translate))` reuses each encoded
-    /// fragment across every position it appears at.
-    fragment_cache: SceneFragmentCache,
+    /// The sink a frame is painted into; a [`VelloPainter`].
+    painter: PaintTarget,
+    /// Fragment cache: position-independent encoded paths for rects,
+    /// shadows, outlines, and SVGs keyed by appearance, each reused across
+    /// every position it appears at.
+    fragment_cache: FragmentCache,
     /// Rgba8Unorm intermediate (storage-binding compatible). Vello writes
     /// here; the blitter samples it via [`GpuState::intermediate_view_srgb`],
     /// which re-interprets the bytes as sRGB-encoded so a final blit into
@@ -251,37 +249,6 @@ fn capture_requested(render_world: &World) -> bool {
     render_world
         .get_resource::<SurfaceCapture>()
         .is_some_and(|c| c.is_requested())
-}
-
-/// Whether the retained Node IR differs visually from the last painted
-/// frame.
-///
-/// Diffs `PreviousScene` (the last painted tree) against `RetainedScene`
-/// (this tick's freshly built tree). The first frame - `PreviousScene.root
-/// == None` - reports damage so the initial paint always runs.
-///
-/// Conservative: the diff assumes-changed for any leaf it cannot compare
-/// (images, SVGs), so it never under-reports the dirty region.
-fn scene_has_damage(render_world: &World) -> bool {
-    let previous = render_world.get_resource::<PreviousScene>();
-    let retained = render_world.get_resource::<RetainedScene>();
-    let (Some(previous), Some(retained)) = (previous, retained) else {
-        // Resources missing (non-standard embed) - never skip.
-        return true;
-    };
-    let size = render_world.resource::<Viewport>().size;
-    let viewport_rect = LumenRect {
-        origin: glam::Vec2::ZERO,
-        size,
-    };
-    let mut damage = FrameDamage::default();
-    diff_retained_scenes(
-        previous.root.as_ref(),
-        retained.root.as_ref(),
-        viewport_rect,
-        &mut damage,
-    );
-    !damage.is_empty()
 }
 
 impl GpuState {
@@ -403,8 +370,8 @@ impl GpuState {
             device,
             queue,
             vello,
-            vello_scene: vello::Scene::new(),
-            fragment_cache: SceneFragmentCache::default(),
+            painter: Box::new(VelloPainter::new()),
+            fragment_cache: FragmentCache::default(),
             intermediate,
             intermediate_view_linear,
             intermediate_view_srgb,
@@ -438,7 +405,7 @@ impl GpuState {
         // sidecars on the extracted entities, and
         // `transform_extracted_to_nodes` splices the type-erased payloads
         // into `Node::Image.blob` / `Node::Svg.payload`. The walker
-        // downcasts those payloads back to the concrete vello types inline.
+        // downcasts those payloads back to the concrete asset types inline.
         //
         // Carve a local Arc of the tree so the borrow on the render world
         // releases before the walker takes mutable refs.
@@ -459,12 +426,12 @@ impl GpuState {
             .get_resource::<lumen_core::native::NativePainters>()
             .cloned();
 
-        self.vello_scene.reset();
+        vello_painter(&mut self.painter).reset();
         {
             // The Node IR stays in LOGICAL pixels end to end
             // (`transform_extracted_to_nodes` does not pre-scale). The
             // walker scales every leaf and clip shape by `ctx.dpr` at emit
-            // time, producing physical-pixel vello geometry that matches
+            // time, producing physical-pixel geometry that matches
             // the surface texture.
             //
             // The shaper is a render-world service, so a build with no text
@@ -475,7 +442,7 @@ impl GpuState {
                 .map(|s| &mut **s as &mut dyn TextShaper);
             if let Some(root) = retained_root.as_ref() {
                 let mut ctx = WalkContext::new_with_dpr(
-                    &mut self.vello_scene,
+                    &mut self.painter,
                     Some(&mut self.fragment_cache),
                     shaper_ref,
                     dpr,
@@ -502,7 +469,7 @@ impl GpuState {
             .render_to_texture(
                 &self.device,
                 &self.queue,
-                &self.vello_scene,
+                vello_painter(&mut self.painter).scene(),
                 &self.intermediate_view_linear,
                 &params,
             )
@@ -676,6 +643,14 @@ impl GpuState {
     }
 }
 
+/// The surface's sink as the [`VelloPainter`] it always is.
+fn vello_painter(painter: &mut PaintTarget) -> &mut VelloPainter {
+    painter
+        .native()
+        .downcast_mut::<VelloPainter>()
+        .expect("the surface paints through a VelloPainter")
+}
+
 fn make_intermediate(
     device: &wgpu::Device,
     width: u32,
@@ -722,6 +697,7 @@ fn make_intermediate(
 mod tests {
     use super::*;
     use lumen_core::node_ir::{PreviousScene, RetainedScene};
+    use lumen_core::render_world::Rect as LumenRect;
     use vello::wgpu::rwh::HasWindowHandle;
 
     fn render_world() -> World {

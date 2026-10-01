@@ -1221,15 +1221,16 @@ pub fn hit_test(
     // Trusting `currently_hovered` (the live query) closes that desync while
     // staying idempotent: we only touch the ECS when it actually disagrees with
     // the desired hit, so a truly-still pointer emits no redundant change ticks.
-    if let Some(prev) = *current {
-        if hit != Some(prev) && currently_hovered.contains(prev) {
-            commands.entity(prev).remove::<Hovered>();
-        }
+    if let Some(prev) = *current
+        && hit != Some(prev)
+        && currently_hovered.contains(prev)
+    {
+        commands.entity(prev).remove::<Hovered>();
     }
-    if let Some(next) = hit {
-        if !currently_hovered.contains(next) {
-            commands.entity(next).insert(Hovered);
-        }
+    if let Some(next) = hit
+        && !currently_hovered.contains(next)
+    {
+        commands.entity(next).insert(Hovered);
     }
     *current = hit;
 }

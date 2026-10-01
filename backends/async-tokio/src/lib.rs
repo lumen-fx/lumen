@@ -392,11 +392,11 @@ mod tests {
         let mut recv = app.commands();
         let mut found = false;
         for cmd in recv.drain() {
-            if let Command::ScriptUpdate(payload) = cmd {
-                if let Ok(s) = payload.downcast::<String>() {
-                    assert_eq!(*s, "hi");
-                    found = true;
-                }
+            if let Command::ScriptUpdate(payload) = cmd
+                && let Ok(s) = payload.downcast::<String>()
+            {
+                assert_eq!(*s, "hi");
+                found = true;
             }
         }
         assert!(found, "expected the async-pushed command on next tick");

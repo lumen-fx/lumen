@@ -736,11 +736,12 @@ fn typed_handles(src: &str) -> Vec<TypedHandle> {
         let tail = src[after_close..].trim_start();
         let mut writes = tail.starts_with(".set(");
         let mut reads = tail.starts_with(".get(");
-        if !writes && !reads {
-            if let Some(binding) = let_binding_before(src, abs) {
-                writes = src.contains(&format!("{binding}.set("));
-                reads = src.contains(&format!("{binding}.get("));
-            }
+        if !writes
+            && !reads
+            && let Some(binding) = let_binding_before(src, abs)
+        {
+            writes = src.contains(&format!("{binding}.set("));
+            reads = src.contains(&format!("{binding}.get("));
         }
         let (line, col) = line_col_of(src, abs);
         out.push(TypedHandle {
@@ -897,9 +898,10 @@ fn scan_script(
                 let written = typed
                     .clone()
                     .or_else(|| inferred.as_ref().map(SignalType::from));
-                if let Some(actual) = written {
-                    if !types_compatible(declared, &actual) {
-                        out.push(Finding {
+                if let Some(actual) = written
+                    && !types_compatible(declared, &actual)
+                {
+                    out.push(Finding {
                             file: path.to_path_buf(),
                             line,
                             col,
@@ -916,7 +918,6 @@ fn scan_script(
                                 type_name(&actual)
                             ),
                         });
-                    }
                 }
             }
             writes.push(ScriptWrite {
@@ -971,9 +972,10 @@ fn scan_script(
             name, line, col, ..
         } = handle;
         let written = handle_type_arg(&handle.arg);
-        if let (Some(declared), Some(actual)) = (schema.fields.get(&name), written.as_ref()) {
-            if !types_compatible(declared, actual) {
-                out.push(Finding {
+        if let (Some(declared), Some(actual)) = (schema.fields.get(&name), written.as_ref())
+            && !types_compatible(declared, actual)
+        {
+            out.push(Finding {
                     file: path.to_path_buf(),
                     line,
                     col,
@@ -990,7 +992,6 @@ fn scan_script(
                         type_name(actual)
                     ),
                 });
-            }
         }
         writes.push(ScriptWrite {
             name,

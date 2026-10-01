@@ -103,7 +103,7 @@ pub struct ShapedSegment {
 impl ShapedSegment {
     /// Convenience: even-level = LTR.
     pub const fn is_ltr(&self) -> bool {
-        self.level % 2 == 0
+        self.level.is_multiple_of(2)
     }
     /// Convenience: odd-level = RTL.
     pub const fn is_rtl(&self) -> bool {

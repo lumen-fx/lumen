@@ -1,34 +1,34 @@
-//! Vello tree-walker for the retained [`lumen_core::node_ir::Node`] IR.
+//! Tree-walker for the retained [`lumen_core::node_ir::Node`] IR.
 //!
-//! Single source of truth for both render paths (offscreen `wgpu_render_system` and on-screen
-//! window-winit `render_frame`). Each [`Node`] variant maps onto the appropriate vello scene call -
-//! see the `Node` doc-comments for the 1:1 mapping table to Qt SceneGraph and GTK GSK.
+//! Single source of truth for every render path: each backend hands its
+//! [`Painter`] to [`walk_node`], and each [`Node`] variant maps onto the
+//! matching painter calls - see the `Node` doc-comments for the 1:1 mapping
+//! table to Qt SceneGraph and GTK GSK.
 //!
-//! ## Damage-rect diff (W2.2)
+//! ## Damage-rect diff
 //!
-//! `walk_retained_scene` accepts the prior frame's tree (via `lumen_core::node_ir::PreviousScene`) and short-
-//! circuits via `Arc::ptr_eq` on identical subtrees. Today the diff only gates whether to *re-encode*, not
-//! what GPU region is touched - vello 0.5 has no scissor API. Wave 2 ships the structural diff scaffolding
-//! and emits damage rects into `FrameDamage` for downstream consumers (e.g. region invalidation when vello
-//! grows scissor support, or when the embedder drives a partial-redraw path).
+//! [`diff_retained_scenes`] compares the prior frame's tree (via `lumen_core::node_ir::PreviousScene`)
+//! against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The diff gates whether a
+//! backend repaints at all; the damage rects it leaves in `FrameDamage` are there for consumers that bound
+//! their work to the dirty region.
 
-use crate::{
-    SceneFragmentCache, append_translated, draw_image_into_vello, draw_text_into_vello,
-    emit_outline, emit_outline_cached, emit_outline_into_fragment, emit_rect, emit_rect_cached,
-    emit_rect_into_fragment, emit_shadow, emit_shadow_cached, emit_shadow_into_fragment, emit_svg,
+use crate::cache::FragmentCache;
+use crate::emit::{
+    draw_image, draw_text, emit_border, emit_outline, emit_outline_cached, emit_rect,
+    emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, folded,
 };
+use crate::{PaintTarget, Shape};
+use bevy_ecs::world::World;
 use lumen_core::native::{NativePaintCtx, NativePainters};
-use lumen_core::node_ir::{Affine2, ClipShape, Node, RetainedScene};
+use lumen_core::node_ir::{Affine2, ClipShape, Node, PreviousScene, RetainedScene};
 use lumen_core::render_world::{
-    ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedShadow, FrameDamage,
-    Rect as LumenRect,
+    ExtractedOutline, ExtractedRect, ExtractedShadow, FrameDamage, Rect as LumenRect, Viewport,
 };
+use peniko::Fill;
+use peniko::kurbo::{Affine, Rect, RoundedRect};
 use std::sync::Arc;
-use vello::peniko;
-use vello::peniko::Fill;
-use vello::peniko::kurbo::{Affine, Rect, RoundedRect};
 
-/// Active clip stack maintained by [`walk_node`]; each entry is the vello `push_layer` count we owe.
+/// Active clip stack maintained by [`walk_node`]; each entry is the `push_layer` count we owe.
 ///
 /// `walk_node` tracks the number of `push_layer` calls outstanding so the corresponding number of
 /// `pop_layer` calls can be issued when the [`Node::Clip`] subtree returns. Modelled as a `Vec<u32>` of
@@ -59,11 +59,11 @@ impl ClipStack {
 /// Walker context shared across recursive `walk_node` calls. Carries the running transform stack and
 /// opacity multiplier so `Node::Transform` / `Node::Opacity` compose along the recursion.
 pub struct WalkContext<'a> {
-    /// Target vello scene receiving the encoding.
-    pub scene: &'a mut vello::Scene,
-    /// Optional sub-scene fragment cache (the shared T1.3 + W2.4 cache). When `Some`, leaf encoders go
-    /// through the cached emitters; when `None`, leaves take the uncached path.
-    pub cache: Option<&'a mut SceneFragmentCache>,
+    /// The backend's sink receiving the frame.
+    pub painter: &'a mut PaintTarget,
+    /// Optional fragment cache. When `Some`, leaf encoders go through the cached emitters; when
+    /// `None`, leaves take the uncached path.
+    pub cache: Option<&'a mut FragmentCache>,
     /// Optional text shaper. When `None`, [`Node::Text`] leaves are silently skipped (matches the legacy
     /// behaviour when the offscreen plugin is built without a shaper).
     pub shaper: Option<&'a mut dyn lumen_text::TextShaper>,
@@ -72,8 +72,8 @@ pub struct WalkContext<'a> {
     pub transform: Affine,
     /// Device pixel ratio. Multiplied into every leaf's origin / size /
     /// font size / radius / shadow blur before the emit helper hands the
-    /// scaled values to vello. Lumen layout-taffy outputs LOGICAL pixels;
-    /// the vello surface texture is sized in PHYSICAL pixels. Without this
+    /// scaled values to the painter. Lumen layout-taffy outputs LOGICAL
+    /// pixels; the target is sized in PHYSICAL pixels. Without this
     /// scale, content draws only into the top-left `1/dpr x 1/dpr` of the
     /// surface on hi-DPI displays - the search-bar-not-visible bug.
     pub dpr: f32,
@@ -91,16 +91,16 @@ impl<'a> WalkContext<'a> {
     ///
     /// Walker coordinates are LOGICAL pixels (matching `Viewport.size` /
     /// `Transform.absolute` from layout-taffy). For drawing into a
-    /// physical-pixel-sized vello surface, callers should use
+    /// physical-pixel-sized target, callers should use
     /// [`Self::new_with_dpr`] instead so logical coords scale to physical
     /// at the root.
     pub fn new(
-        scene: &'a mut vello::Scene,
-        cache: Option<&'a mut SceneFragmentCache>,
+        painter: &'a mut PaintTarget,
+        cache: Option<&'a mut FragmentCache>,
         shaper: Option<&'a mut dyn lumen_text::TextShaper>,
     ) -> Self {
         Self {
-            scene,
+            painter,
             cache,
             shaper,
             transform: Affine::IDENTITY,
@@ -113,19 +113,19 @@ impl<'a> WalkContext<'a> {
 
     /// Same as [`Self::new`] but seeds the root transform with a
     /// `scale(dpr)` so logical-pixel Node IR coordinates map to physical
-    /// pixels in the vello surface. Pass the window's `scale_factor`
+    /// pixels in the target. Pass the window's `scale_factor`
     /// (a.k.a. device-pixel ratio). Without this scale, hi-DPI surfaces
     /// only fill the top-left `1/dpr x 1/dpr` of the window - the
     /// logical 1280-wide layout lands at physical pixels 0..1280 of a
     /// 2560-wide surface, leaving the right + bottom quadrants dark.
     pub fn new_with_dpr(
-        scene: &'a mut vello::Scene,
-        cache: Option<&'a mut SceneFragmentCache>,
+        painter: &'a mut PaintTarget,
+        cache: Option<&'a mut FragmentCache>,
         shaper: Option<&'a mut dyn lumen_text::TextShaper>,
         dpr: f32,
     ) -> Self {
         Self {
-            scene,
+            painter,
             cache,
             shaper,
             transform: Affine::IDENTITY,
@@ -145,8 +145,8 @@ impl<'a> WalkContext<'a> {
     }
 }
 
-/// Converts the walker's running vello transform back into the IR's affine, which is what a
-/// painter is handed - painters see logical coordinates and the device scale, not vello types.
+/// Converts the walker's running transform back into the IR's affine, which is what a native
+/// painter is handed - native painters see logical coordinates and the device scale, not kurbo types.
 fn affine_to_affine2(a: Affine) -> Affine2 {
     Affine2 {
         coeffs: a.as_coeffs(),
@@ -167,7 +167,7 @@ fn lumen_rect_to_rounded(r: LumenRect, radii: [f32; 4]) -> RoundedRect {
     // [top-left, top-right, bottom-right, bottom-left] matches
     // kurbo's `RoundedRectRadii::new(top_left, top_right, bottom_right,
     // bottom_left)` argument order.
-    use vello::peniko::kurbo::RoundedRectRadii;
+    use peniko::kurbo::RoundedRectRadii;
     let rect = lumen_rect_to_kurbo(r);
     RoundedRect::from_rect(
         rect,
@@ -207,37 +207,30 @@ fn scale_clip_shape(shape: ClipShape, dpr: f32) -> ClipShape {
     }
 }
 
-/// Pushes a vello layer matching the given [`ClipShape`]. Returns the number of pops the caller owes.
-fn push_clip_layer(scene: &mut vello::Scene, shape: ClipShape, opacity: f32) -> u32 {
+/// Pushes a layer matching the given [`ClipShape`]. Returns the number of pops the caller owes.
+fn push_clip_layer(painter: &mut PaintTarget, shape: ClipShape, opacity: f32) -> u32 {
     let alpha = opacity.clamp(0.0, 1.0);
-    match shape {
-        ClipShape::Rect(r) => {
-            scene.push_layer(
-                Fill::NonZero,
-                peniko::BlendMode::default(),
-                alpha,
-                Affine::IDENTITY,
-                &lumen_rect_to_kurbo(r),
-            );
-        }
+    let clip = match shape {
+        ClipShape::Rect(r) => Shape::Rect(lumen_rect_to_kurbo(r)),
         ClipShape::RoundedRect { rect, radii } => {
-            scene.push_layer(
-                Fill::NonZero,
-                peniko::BlendMode::default(),
-                alpha,
-                Affine::IDENTITY,
-                &lumen_rect_to_rounded(rect, radii),
-            );
+            Shape::RoundedRect(lumen_rect_to_rounded(rect, radii))
         }
-    }
+    };
+    painter.push_layer(
+        Fill::NonZero,
+        peniko::BlendMode::default(),
+        alpha,
+        Affine::IDENTITY,
+        &clip,
+    );
     1
 }
 
-/// Walks a single [`Node`] subtree onto the target scene.
+/// Walks a single [`Node`] subtree onto the painter.
 ///
-/// Each variant maps onto vello primitives the same way the legacy `Extracted*` emitters did, plus the new
-/// Container/Transform/Opacity/Clip composition primitives. Leaves go through the supplied
-/// [`SceneFragmentCache`] when one is present; structural variants compose along the recursion.
+/// Each leaf variant maps onto painter calls through the matching emitter, and the
+/// Container/Transform/Opacity/Clip variants compose along the recursion. Leaves go through the
+/// supplied [`FragmentCache`] when one is present.
 pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
     match node {
         Node::Container { children } => {
@@ -246,10 +239,8 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             }
         }
         Node::Transform { matrix, child } => {
-            // Push the transform onto our running matrix; vello applies the running matrix lazily inside
-            // the emitter helpers via Scene::push_layer + Affine. For wave 2 we re-route through a clip
-            // layer with the identity-clip rect to honour the transform without re-encoding every leaf -
-            // matches Qt's `QSGTransformNode` which is a stack push, not a per-leaf transform.
+            // Push the transform onto the running matrix - a stack push, not a per-leaf transform,
+            // matching Qt's `QSGTransformNode`.
             let prev = ctx.transform;
             let c = matrix.coeffs;
             let t = Affine::new([c[0], c[1], c[2], c[3], c[4], c[5]]);
@@ -266,12 +257,12 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
         Node::Clip { shape, child } => {
             // Scale the logical clip rect to physical pixels - leaves below scale themselves by
             // ctx.dpr at emit time, so the clip must live in the same (physical) space.
-            let pops = push_clip_layer(ctx.scene, scale_clip_shape(*shape, ctx.dpr), ctx.opacity);
+            let pops = push_clip_layer(ctx.painter, scale_clip_shape(*shape, ctx.dpr), ctx.opacity);
             ctx.clips.push(pops);
             walk_node(ctx, child);
             let to_pop = ctx.clips.pop();
             for _ in 0..to_pop {
-                ctx.scene.pop_layer();
+                ctx.painter.pop_layer();
             }
         }
         Node::Rect {
@@ -283,7 +274,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             // Synthesise a transient ExtractedRect so the same emit helper
             // drives both legacy and tree paths. Pre-multiply by ctx.dpr so
             // logical coords from layout-taffy land at the right physical
-            // pixels in the vello surface.
+            // pixels in the target.
             let cmd = ExtractedRect {
                 origin: bounds.origin * ctx.dpr,
                 size: bounds.size * ctx.dpr,
@@ -299,9 +290,9 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 order: 0,
             };
             if let Some(cache) = ctx.cache.as_deref_mut() {
-                emit_rect_cached(ctx.scene, cache, &cmd);
+                emit_rect_cached(&mut **ctx.painter, cache, &cmd);
             } else {
-                emit_rect(ctx.scene, &cmd);
+                emit_rect(&mut **ctx.painter, &cmd);
             }
         }
         Node::Shadow {
@@ -314,7 +305,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             inner,
             rect_origin,
         } => {
-            let color = crate::folded(*color, ctx.opacity);
+            let color = folded(*color, ctx.opacity);
             let cmd = ExtractedShadow {
                 origin: *origin * ctx.dpr,
                 size: *size * ctx.dpr,
@@ -327,9 +318,9 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 rect_origin: *rect_origin * ctx.dpr,
             };
             if let Some(cache) = ctx.cache.as_deref_mut() {
-                emit_shadow_cached(ctx.scene, cache, &cmd);
+                emit_shadow_cached(&mut **ctx.painter, cache, &cmd);
             } else {
-                emit_shadow(ctx.scene, &cmd);
+                emit_shadow(&mut **ctx.painter, &cmd);
             }
         }
         Node::Border {
@@ -341,8 +332,8 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             radius,
             corners,
         } => {
-            let color = crate::folded(*color, ctx.opacity);
-            let side_colors = side_colors.map(|cs| cs.map(|c| crate::folded(c, ctx.opacity)));
+            let color = folded(*color, ctx.opacity);
+            let side_colors = side_colors.map(|cs| cs.map(|c| folded(c, ctx.opacity)));
             let cmd = lumen_core::render_world::ExtractedBorder {
                 origin: *origin * ctx.dpr,
                 size: *size * ctx.dpr,
@@ -358,7 +349,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 corner_radii: corners.map(|cs| cs.map(|c| c * ctx.dpr)),
                 order: 0,
             };
-            crate::emit_border(ctx.scene, &cmd);
+            emit_border(&mut **ctx.painter, &cmd);
         }
         Node::Outline {
             origin,
@@ -367,7 +358,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             width,
             radius,
         } => {
-            let stroke = crate::folded(*stroke, ctx.opacity);
+            let stroke = folded(*stroke, ctx.opacity);
             let cmd = ExtractedOutline {
                 origin: *origin * ctx.dpr,
                 size: *size * ctx.dpr,
@@ -377,19 +368,19 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 order: 0,
             };
             if let Some(cache) = ctx.cache.as_deref_mut() {
-                emit_outline_cached(ctx.scene, cache, &cmd);
+                emit_outline_cached(&mut **ctx.painter, cache, &cmd);
             } else {
-                emit_outline(ctx.scene, &cmd);
+                emit_outline(&mut **ctx.painter, &cmd);
             }
         }
         Node::Text { run } => {
-            // Pass the run by reference; `draw_text_into_vello` folds in
+            // Pass the run by reference; `draw_text` folds in
             // ctx.dpr (origin / font size / container width) and ctx.opacity
             // (fill alpha) locally, so no per-node clone of the run - and its
             // owned String - is needed. caret + selection stay byte offsets
             // into the source string and are not scaled.
             if let Some(shaper) = ctx.shaper.as_deref_mut() {
-                draw_text_into_vello(shaper, ctx.scene, run, ctx.dpr, ctx.opacity);
+                draw_text(shaper, &mut **ctx.painter, run, ctx.dpr, ctx.opacity);
             }
         }
         Node::Image { image, blob } => {
@@ -401,10 +392,10 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             }
             img.origin *= ctx.dpr;
             img.size *= ctx.dpr;
-            if let Some(blob) = blob {
-                if let Some(b) = blob.downcast_ref::<lumen_assets::ExtractedImageBlob>() {
-                    draw_image_into_vello(ctx.scene, &img, b);
-                }
+            if let Some(blob) = blob
+                && let Some(b) = blob.downcast_ref::<lumen_assets::ExtractedImageBlob>()
+            {
+                draw_image(&mut **ctx.painter, &img, b);
             }
         }
         Node::Svg { payload } => {
@@ -415,7 +406,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 }
                 svg.origin *= ctx.dpr;
                 svg.size *= ctx.dpr;
-                emit_svg(ctx.scene, &svg);
+                emit_svg(&mut **ctx.painter, ctx.cache.as_deref_mut(), &svg);
             }
         }
         Node::Native {
@@ -438,7 +429,7 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             let (dpr, opacity) = (ctx.dpr, ctx.opacity);
             // Layers the walker owns right now. Everything the painter opens sits above this mark,
             // and nothing below it is the painter's to close.
-            let depth_before = ctx.scene.encoding().n_open_clips;
+            let depth_before = ctx.painter.layer_depth();
             if *clip_to_bounds {
                 // Clip in the painter's own space: the same device transform the painter is handed,
                 // over the same logical bounds. Pre-scaling the rect instead would put the clip in a
@@ -447,18 +438,19 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 // `ctx.opacity`. A clip that also composited would make the leaf's alpha depend on
                 // whether it asked to be clipped.
                 let device = Affine::scale(dpr as f64) * ctx.transform;
-                ctx.scene.push_layer(
+                ctx.painter.push_layer(
                     Fill::NonZero,
                     peniko::BlendMode::default(),
                     1.0,
                     device,
-                    &lumen_rect_to_kurbo(*bounds),
+                    &Shape::Rect(lumen_rect_to_kurbo(*bounds)),
                 );
             }
+            let backend_id = ctx.painter.backend_id();
             let mut paint_ctx = NativePaintCtx::new(
                 payload.as_ref(),
-                &mut *ctx.scene,
-                crate::BACKEND_ID,
+                &mut *ctx.painter,
+                backend_id,
                 *bounds,
                 transform,
                 dpr,
@@ -469,14 +461,14 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             // pops close its layers instead of the walker's own; one that over-popped would already
             // have closed an ancestor's clip, and popping again here would close another. Closing
             // down to the mark and no further is the only move that is right in both directions.
-            while ctx.scene.encoding().n_open_clips > depth_before {
-                ctx.scene.pop_layer();
+            while ctx.painter.layer_depth() > depth_before {
+                ctx.painter.pop_layer();
             }
         }
     }
 }
 
-/// Walks the [`RetainedScene`] root into the supplied scene.
+/// Walks the [`RetainedScene`] root into the context's painter.
 ///
 /// Convenience entry point - equivalent to `walk_node(&ctx, &scene.root)` once the root is known to exist.
 pub fn walk_retained_scene(ctx: &mut WalkContext<'_>, scene: &RetainedScene) {
@@ -496,9 +488,8 @@ pub fn walk_retained_scene(ctx: &mut WalkContext<'_>, scene: &RetainedScene) {
 /// reordered around an insertion), the per-position walk overestimates - that overestimate is bounded by the
 /// involved subtrees' bounds and is still smaller than today's whole-viewport fallback.
 ///
-/// Renderers can read [`FrameDamage::is_empty`] to skip submit entirely, or feed the rect list into a
-/// scissor box when the backend supports it (vello 0.8 still lacks a scissor API; the rect list still gates
-/// the encode pass).
+/// Renderers read [`FrameDamage::is_empty`] to skip the frame entirely, or feed the rect list into a
+/// scissor box when the backend supports one.
 pub fn diff_retained_scenes(
     prev: Option<&Arc<Node>>,
     curr: Option<&Arc<Node>>,
@@ -869,8 +860,8 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
 }
 
 /// Compose ancestor running affine with a child Affine2 from the IR. Mirrors the multiplication used inside
-/// `walk_node`'s Transform branch but lives at the diff layer because we don't need a vello scene to compute
-/// bounds.
+/// `walk_node`'s Transform branch but lives at the diff layer because computing bounds needs no
+/// painter.
 fn compose_affine(parent: Affine, child: lumen_core::node_ir::Affine2) -> Affine {
     let c = child.coeffs;
     let m = Affine::new([c[0], c[1], c[2], c[3], c[4], c[5]]);
@@ -891,7 +882,7 @@ fn apply_affine_to_rect(r: LumenRect, xform: Affine) -> LumenRect {
     let mut max_x = f64::NEG_INFINITY;
     let mut max_y = f64::NEG_INFINITY;
     for (px, py) in pts {
-        let p = xform * vello::peniko::kurbo::Point::new(px, py);
+        let p = xform * peniko::kurbo::Point::new(px, py);
         min_x = min_x.min(p.x);
         min_y = min_y.min(p.y);
         max_x = max_x.max(p.x);
@@ -950,14 +941,35 @@ pub fn damage_union(damage: &FrameDamage) -> Option<LumenRect> {
     Some(acc)
 }
 
-// Silence unused-import lints when downstream features pare back the emit set.
-#[allow(dead_code)]
-fn _suppress_unused_imports() {
-    let _ = append_translated;
-    let _ = emit_rect_into_fragment;
-    let _ = emit_shadow_into_fragment;
-    let _ = emit_outline_into_fragment;
-    let _: Option<&ExtractedImage> = None;
+/// Whether the retained Node IR differs visually from the last painted frame.
+///
+/// Diffs `PreviousScene` (the last painted tree) against `RetainedScene` (this tick's freshly built
+/// tree). The first frame - `PreviousScene.root == None` - reports damage so the initial paint always
+/// runs. Conservative: the diff assumes-changed for any leaf it cannot compare (images, SVGs), so it
+/// never under-reports the dirty region, and a render world missing the scene resources (a
+/// non-standard embed) always reports damage.
+pub fn scene_has_damage(render_world: &World) -> bool {
+    let previous = render_world.get_resource::<PreviousScene>();
+    let retained = render_world.get_resource::<RetainedScene>();
+    let (Some(previous), Some(retained)) = (previous, retained) else {
+        return true;
+    };
+    let size = render_world
+        .get_resource::<Viewport>()
+        .map(|v| v.size)
+        .unwrap_or_default();
+    let viewport_rect = LumenRect {
+        origin: glam::Vec2::ZERO,
+        size,
+    };
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(
+        previous.root.as_ref(),
+        retained.root.as_ref(),
+        viewport_rect,
+        &mut damage,
+    );
+    !damage.is_empty()
 }
 
 #[cfg(test)]

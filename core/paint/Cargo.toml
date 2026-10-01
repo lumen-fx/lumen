@@ -1,0 +1,38 @@
+# The one definition of what a frame looks like. The retained-scene walker,
+# the leaf emitters, and the fragment cache paint through the `Painter` trait,
+# and each render backend supplies a sink for it. Nothing here names a GPU, a
+# window, or a rasterizer, so a backend's link carries this crate and its own
+# sink and nothing of the other backends.
+[package]
+name = "lumen-paint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Backend-neutral frame painting: the Painter trait, the scene walker, and the fragment cache."
+keywords = ["ui", "gui", "rendering", "vector", "lumen"]
+categories = ["rendering", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-text = { workspace = true }
+# Images and SVGs reach the walker as payloads `lumen-assets` defines.
+lumen-assets = { workspace = true }
+bevy_ecs.workspace = true
+glam.workspace = true
+# The vocabulary every sink already speaks: vello and vello_cpu both take
+# peniko brushes and kurbo shapes, from the same release of each.
+peniko.workspace = true
+# The SVG tree an asset holds; painted through the trait at frame time.
+usvg.workspace = true
+# Bounded LRU for the fragment cache.
+lru.workspace = true
+# FxHasher for fragment keys and the per-font blob cache (trusted keys).
+rustc-hash.workspace = true
+# Flags SVG nodes the painter drops (Image, Text, Pattern) instead of
+# dropping them silently.
+tracing.workspace = true

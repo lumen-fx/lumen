@@ -73,10 +73,10 @@ pub fn portable_app() -> App {
     // dropped on the wrong thread. `NonSendMut` cannot express "pin the
     // whole schedule", only individual systems, so the executor is pinned
     // instead.
-    if let Some(mut schedules) = app.world.get_resource_mut::<Schedules>() {
-        if let Some(schedule) = schedules.get_mut(Tick) {
-            schedule.set_executor(SingleThreadedExecutor::new());
-        }
+    if let Some(mut schedules) = app.world.get_resource_mut::<Schedules>()
+        && let Some(schedule) = schedules.get_mut(Tick)
+    {
+        schedule.set_executor(SingleThreadedExecutor::new());
     }
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
