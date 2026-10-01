@@ -283,7 +283,7 @@ lumen-portable = { path = "web/portable", default-features = false }
 lumen-prerender = { path = "web/prerender", default-features = false }
 lumen-primitives = { path = "core/primitives" }
 lumen-process = { path = "std/process", default-features = false }
-lumen-render-headless = { path = "backends/render-headless" }
+lumen-render-cpu = { path = "backends/render-cpu" }
 lumen-render-wgpu = { path = "backends/render-wgpu" }
 # Every subsystem is a default feature, and every consumer picks its own set:
 # the shared library takes them all, a `--bundle` takes the app's capabilities.

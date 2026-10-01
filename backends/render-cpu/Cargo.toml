@@ -1,0 +1,33 @@
+[package]
+name = "lumen-render-cpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CPU render backend: vello_cpu offscreen and in a window, no GPU required."
+keywords = ["ui", "gui", "rendering", "software", "vello"]
+categories = ["rendering", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-text = { workspace = true }
+# The frame definition this backend paints through its `CpuPainter` sink.
+lumen-paint = { workspace = true }
+bevy_ecs.workspace = true
+glam.workspace = true
+# The rasterizer. Single-threaded, the u8 pipeline only, and glyph rendering;
+# no PNG decoding, because images reach the painter already decoded.
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline"] }
+# Presents the rasterized frame into a window: the platform's own blit for a
+# CPU buffer, with no graphics API underneath. The KMS backend is left out;
+# Lumen presents through a window backend, never straight to a display.
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+raw-window-handle = "0.6"
+tracing.workspace = true
+
+[dev-dependencies]
+lumen-text-cosmic = { workspace = true }
