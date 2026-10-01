@@ -50,6 +50,7 @@ area_for() {
     core/widget/*|core/widget-macros/*|core/primitives/*) echo A-Widgets ;;
     core/i18n/*) echo A-I18n ;;
     core/assets/*) echo A-Assets ;;
+    core/paint/*) echo A-Rendering ;;
     core/runtime/*|core/launcher/*|src/*) echo A-Runtime ;;
     core/mcp/*|dev/mcp-server/*|capabilities/mcp/*) echo A-MCP ;;
     core/plugin-abi/*|sdk/*|public/lumen-dylib/*) echo A-FFI ;;
@@ -70,7 +71,7 @@ area_for() {
     os/launcher/*|capabilities/os-launcher/*) echo A-Launcher ;;
     os/power/*|capabilities/os-power/*) echo A-Power ;;
     os/lifecycle/*|capabilities/os-lifecycle/*) echo A-Lifecycle ;;
-    backends/render-wgpu/*|backends/render-cpu/*|core/paint/*|capabilities/render-gpu/*|capabilities/render-cpu/*) echo A-Rendering ;;
+    backends/render-wgpu/*|backends/render-cpu/*|capabilities/render-gpu/*|capabilities/render-cpu/*) echo A-Rendering ;;
     backends/window-winit/*) echo A-Windowing ;;
     backends/layout-taffy/*) echo A-Layout ;;
     backends/text-cosmic/*) echo A-Text ;;
