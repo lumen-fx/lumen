@@ -1,8 +1,8 @@
 //! Pixel buffers: the read-write side of a canvas.
 //!
 //! A canvas surface is write-only. What it holds is a list of drawing calls
-//! bound for the GPU, not an image, so there is nothing on the CPU to read a
-//! pixel back from and asking would mean stalling the frame on a readback.
+//! bound for the renderer, not an image, so there is nothing to read a pixel
+//! back from without stalling the frame on a readback.
 //!
 //! A buffer is the other half: plain CPU pixels a script creates, writes,
 //! reads, loads from a PNG, saves to one, and draws onto a canvas. Filters,

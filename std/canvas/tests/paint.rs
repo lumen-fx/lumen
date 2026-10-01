@@ -190,7 +190,7 @@ fn the_painter_recognizes_the_engines_draw_target() {
     }
 
     // The downcast in the painter is a TypeId match, so it holds only while
-    // this module and the renderer mean the same vello. Nothing here would
+    // this module and the renderer mean the same lumen-paint. Nothing here would
     // fail to compile if they drifted apart; the pixels would simply stop
     // arriving, which is what this asserts against.
     let mut app = app();
@@ -201,9 +201,9 @@ fn the_painter_recognizes_the_engines_draw_target() {
     let (_, g, _) = pixel(&pixels, 32, 32);
     assert!(
         g > 200,
-        "the canvas painted nothing, which is what a renderer / module vello \
-         mismatch looks like: check that std/canvas takes lumen-render-wgpu \
-         through lumen-module's paint feature"
+        "the canvas painted nothing, which is what a renderer / module \
+         lumen-paint mismatch looks like: check that std/canvas takes \
+         lumen-paint through lumen-module's paint feature"
     );
 }
 

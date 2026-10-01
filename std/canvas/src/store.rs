@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use lumen_module::lumen_core::app::EventLoopWaker;
-use lumen_module::lumen_render_wgpu::vello::Scene;
+use lumen_module::lumen_paint::Recording;
 
 use crate::buffer::PixBuf;
 use crate::ops::{Gfx, Op};
@@ -76,12 +76,12 @@ pub struct Surface {
     pub logical: (f32, f32),
     /// Calls recorded since the last encode.
     pub pending: Vec<Op>,
-    /// The encoded scene, which is what the painter appends.
-    pub scene: std::sync::Arc<Scene>,
+    /// The recorded drawing, which is what the painter replays.
+    pub drawing: std::sync::Arc<Recording>,
     /// The drawing state, which persists across ticks: a fill set in one
     /// handler is still the fill in the next.
     pub gfx: Gfx,
-    /// Bumped every time the scene changes, so the extract can tell the
+    /// Bumped every time the drawing changes, so the extract can tell the
     /// renderer whether anything moved.
     pub revision: u64,
 }
@@ -91,7 +91,7 @@ impl Default for Surface {
         Surface {
             logical: UA_SIZE,
             pending: Vec::new(),
-            scene: std::sync::Arc::new(Scene::new()),
+            drawing: std::sync::Arc::new(Recording::default()),
             gfx: Gfx::default(),
             revision: 0,
         }
@@ -214,11 +214,11 @@ impl CanvasStore {
         handle
     }
 
-    /// Forget a canvas: its recorded calls, its encoded scene, and the fact
+    /// Forget a canvas: its recorded calls, its drawing, and the fact
     /// that an element ever answered for it.
     ///
     /// Called when the element goes away. A `<for>` block whose rows carry
-    /// distinct canvas ids would otherwise leave a retained scene behind for
+    /// distinct canvas ids would otherwise leave a retained drawing behind for
     /// every row it ever spawned.
     pub fn retire(&mut self, id: &str) {
         self.surfaces.remove(id);

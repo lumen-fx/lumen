@@ -69,12 +69,14 @@
 //! # Painting
 //!
 //! A module that draws its own pixels turns on the `paint` feature and takes
-//! the renderer through [`lumen_render_wgpu`] and the text shaper through
+//! the paint vocabulary through [`lumen_paint`] and the text shaper through
 //! [`lumen_text`]. Both are re-exports of the crates the engine itself uses,
 //! and taking them from here rather than declaring them is not a
 //! convenience: a painter receives its target as `&mut dyn Any` and
-//! downcasts it, so a module holding its own build of vello would compile,
-//! register, and paint nothing at all.
+//! downcasts it to [`lumen_paint::PaintTarget`], so a module holding its own
+//! build of lumen-paint would compile, register, and paint nothing at all.
+//! Painting through the [`lumen_paint::Painter`] trait draws the same on
+//! every render backend.
 //!
 //! Build the `cdylib` with the engine taken as a shared library: `-C
 //! prefer-dynamic` together with an explicit `--target` (which keeps the
@@ -115,17 +117,18 @@ pub use lumen_script;
 /// with no module in it reads.
 pub use lumen_widget;
 
-/// The renderer a module paints through, behind the `paint` feature: the
-/// `vello` re-export is the scene type a
-/// [`lumen_core::native::NativePainter`] downcasts its target to.
+/// What a module paints through, behind the `paint` feature:
+/// [`lumen_paint::PaintTarget`] is the type a
+/// [`lumen_core::native::NativePainter`] downcasts its target to, on every
+/// render backend, and its [`lumen_paint::Painter`] methods draw.
 ///
-/// It has to be this crate's vello and no other. The downcast is a `TypeId`
-/// match, and two builds of the same version are two different types as far
-/// as `TypeId` is concerned; a module that declared vello itself would
-/// compile, register, and then silently paint nothing. Taking the engine's
-/// re-export is what makes the match hold.
+/// It has to be this crate's lumen-paint and no other. The downcast is a
+/// `TypeId` match, and two builds of the same version are two different
+/// types as far as `TypeId` is concerned; a module that declared lumen-paint
+/// itself would compile, register, and then silently paint nothing. Taking
+/// the engine's re-export is what makes the match hold.
 #[cfg(feature = "paint")]
-pub use lumen_render_wgpu;
+pub use lumen_paint;
 /// The text seam a painting module shapes through, behind the `paint`
 /// feature. A module that draws glyphs shapes them with the app's own
 /// `ShaperService`, so its text picks up the fonts the rest of the app uses.

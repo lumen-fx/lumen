@@ -13,10 +13,13 @@ use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush};
 use std::any::Any;
 
 /// [`Shape`] with its path owned.
-#[derive(Clone, Debug)]
-enum OwnedShape {
+#[derive(Clone, Debug, PartialEq)]
+pub enum OwnedShape {
+    /// An axis-aligned rectangle.
     Rect(Rect),
+    /// A rectangle with per-corner radii.
     RoundedRect(RoundedRect),
+    /// Any path.
     Path(BezPath),
 }
 
@@ -29,7 +32,8 @@ impl OwnedShape {
         }
     }
 
-    fn as_shape(&self) -> Shape<'_> {
+    /// The borrowed form a [`Painter`] takes.
+    pub fn as_shape(&self) -> Shape<'_> {
         match self {
             OwnedShape::Rect(r) => Shape::Rect(*r),
             OwnedShape::RoundedRect(r) => Shape::RoundedRect(*r),
@@ -38,9 +42,14 @@ impl OwnedShape {
     }
 }
 
-/// One recorded call.
+/// One recorded call, with the arguments [`Painter`] was given.
 #[derive(Clone, Debug)]
-enum Command {
+#[allow(
+    missing_docs,
+    reason = "each field is the Painter argument of the same name"
+)]
+pub enum Command {
+    /// [`Painter::fill`].
     Fill {
         style: Fill,
         transform: Affine,
@@ -48,6 +57,7 @@ enum Command {
         brush_transform: Option<Affine>,
         shape: OwnedShape,
     },
+    /// [`Painter::stroke`].
     Stroke {
         style: Stroke,
         transform: Affine,
@@ -55,6 +65,7 @@ enum Command {
         brush_transform: Option<Affine>,
         shape: OwnedShape,
     },
+    /// [`Painter::push_layer`].
     PushLayer {
         clip_style: Fill,
         blend: BlendMode,
@@ -62,7 +73,9 @@ enum Command {
         transform: Affine,
         clip: OwnedShape,
     },
+    /// [`Painter::pop_layer`].
     PopLayer,
+    /// [`Painter::draw_blurred_rounded_rect`].
     BlurredRoundedRect {
         transform: Affine,
         rect: Rect,
@@ -70,10 +83,12 @@ enum Command {
         radius: f64,
         std_dev: f64,
     },
+    /// [`Painter::draw_image`].
     Image {
         image: ImageBrush,
         transform: Affine,
     },
+    /// [`Painter::draw_glyphs`].
     Glyphs {
         font: FontData,
         font_size: f32,
@@ -100,6 +115,11 @@ impl Recording {
     /// Whether nothing has been recorded.
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+
+    /// The recorded calls, in order.
+    pub fn commands(&self) -> &[Command] {
+        &self.commands
     }
 
     /// Forget every recorded call.

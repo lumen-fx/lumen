@@ -328,7 +328,7 @@ fn on_start() { canvas::fill_rect("typo", 0.0, 0.0, 4.0, 4.0); }
 fn a_canvas_whose_element_goes_away_is_forgotten() {
     // A `<for>` block cycling rows spawns and despawns canvases with distinct
     // ids. Without retirement every one it ever showed keeps its recorded
-    // calls and its encoded scene for the life of the app.
+    // calls and its drawing for the life of the app.
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     lumen_canvas::store::reset();
     let dir = app_dir("retire");
@@ -517,7 +517,7 @@ fn a_canvas_that_was_never_given_a_box_still_encodes() {
     app.world.spawn(Canvas {
         id: "bare".to_string(),
         logical: (32.0, 32.0),
-        scene: std::sync::Arc::new(lumen_render_wgpu::vello::Scene::new()),
+        drawing: std::sync::Arc::new(lumen_module::lumen_paint::Recording::default()),
         revision: 0,
     });
     lumen_canvas::store::store()

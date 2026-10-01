@@ -3841,7 +3841,7 @@ dependencies = [
  "lumen-module-macros",
  "lumen-module-registry",
  "lumen-modules",
- "lumen-render-wgpu",
+ "lumen-paint",
  "lumen-script",
  "lumen-text",
  "lumen-widget",

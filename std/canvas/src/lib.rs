@@ -58,7 +58,7 @@
 //! # Pixels
 //!
 //! The canvas itself is write-only, because what it holds is a list of
-//! drawing calls bound for the GPU rather than an image. Reading and writing
+//! drawing calls bound for the renderer rather than an image. Reading and writing
 //! pixels is what the buffer functions are for: `buffer_new`,
 //! `buffer_set_pixel`, `buffer_get_region`, `buffer_load_png`, and
 //! `draw_buffer` to put one on a canvas. Pixels are packed `0xRRGGBBAA`
@@ -99,8 +99,8 @@ mod plugin;
 
 /// The geometry types this module's public state is spelled in: the
 /// transform on a [`ops::GfxState`] and the path on a [`ops::Gfx`] are
-/// kurbo's, taken through the engine's own vello so there is one of each.
-pub use lumen_module::lumen_render_wgpu::vello::peniko::kurbo;
+/// kurbo's, taken through the engine's own lumen-paint so there is one of each.
+pub use lumen_module::lumen_paint::kurbo;
 pub use paint::{CanvasLeaf, CanvasPainter, EXTENSION_ID, extract_canvases};
 pub use plugin::{Canvas, CanvasPlugin, TAG};
 pub use store::{
