@@ -4252,6 +4252,7 @@ version = "0.0.9"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
+ "lumen-capability",
  "lumen-core",
  "lumen-paint",
  "lumen-text",
@@ -4263,12 +4264,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-render-cpu-capability"
+version = "0.0.9"
+dependencies = [
+ "lumen-capability",
+ "lumen-render-cpu",
+]
+
+[[package]]
+name = "lumen-render-gpu-capability"
+version = "0.0.9"
+dependencies = [
+ "lumen-capability",
+ "lumen-render-wgpu",
+]
+
+[[package]]
 name = "lumen-render-wgpu"
 version = "0.0.9"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
  "image",
+ "lumen-capability",
  "lumen-core",
  "lumen-layout-taffy",
  "lumen-paint",
@@ -4315,7 +4333,8 @@ dependencies = [
  "lumen-os-tray-capability",
  "lumen-plugin",
  "lumen-primitives",
- "lumen-render-wgpu",
+ "lumen-render-cpu-capability",
+ "lumen-render-gpu-capability",
  "lumen-scene",
  "lumen-script",
  "lumen-script-candela",

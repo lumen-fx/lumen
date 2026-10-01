@@ -50,6 +50,9 @@ pub enum WinitError {
     /// winit event-loop run terminated with an error.
     #[error("event loop run error: {0}")]
     Run(String),
+    /// [`run`] was handed no renderer to present with.
+    #[error("no renderer to present with")]
+    NoRenderer,
 }
 
 /// Minimum wall interval between two consecutive animation-driven paints
@@ -293,8 +296,12 @@ impl RenderTarget for WinitTarget {
 
 /// Run the app on a real winit window. Blocks until the window closes.
 ///
-/// `renderer` presents the frames; it is attached to the window once the
-/// window exists and detached before the platform connection closes.
+/// `renderers` are the renderers that may present the frames, in the order
+/// to try them. Once the window exists the first is attached; one that
+/// fails to bind ([`lumen_core::traits::SurfaceError::Init`]) is dropped
+/// for the next, so a machine with no usable GPU can still get a picture
+/// from a renderer that needs none. The one that binds presents every frame
+/// and is detached before the platform connection closes.
 /// `a11y` builds the accessibility bridge at the same moment, or is
 /// `None` for a run without one. Both ride beside [`WindowOptions`]
 /// rather than inside it: the options are pure data every launch path
@@ -303,9 +310,12 @@ impl RenderTarget for WinitTarget {
 pub fn run(
     mut app: App,
     opts: WindowOptions,
-    renderer: Box<dyn SurfaceRenderer>,
+    renderers: Vec<Box<dyn SurfaceRenderer>>,
     a11y: Option<A11yBridgeFactory>,
 ) -> Result<(), WinitError> {
+    let mut renderers = renderers.into_iter();
+    let renderer = renderers.next().ok_or(WinitError::NoRenderer)?;
+    let fallbacks: Vec<Box<dyn SurfaceRenderer>> = renderers.collect();
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| WinitError::EventLoop(e.to_string()))?;
@@ -435,6 +445,7 @@ pub fn run(
         app,
         opts,
         renderer,
+        fallbacks: fallbacks.into(),
         a11y_factory: a11y,
         a11y: None,
         window: None,
@@ -459,6 +470,29 @@ pub fn run(
         .map_err(|e| WinitError::Run(e.to_string()))
 }
 
+/// Bind `renderer` to `target`, moving on to the next of `fallbacks` each
+/// time a renderer cannot initialise against the window. Leaves the one that
+/// bound in `renderer`. Any other failure, or running out of renderers,
+/// returns the last error.
+fn attach_first(
+    renderer: &mut Box<dyn SurfaceRenderer>,
+    fallbacks: &mut std::collections::VecDeque<Box<dyn SurfaceRenderer>>,
+    target: Arc<dyn RenderTarget>,
+) -> Result<(), lumen_core::traits::SurfaceError> {
+    loop {
+        match renderer.attach(target.clone()) {
+            Ok(()) => return Ok(()),
+            Err(lumen_core::traits::SurfaceError::Init(why)) if !fallbacks.is_empty() => {
+                eprintln!(
+                    "lumen-window-winit: renderer init failed ({why}); trying the next renderer"
+                );
+                *renderer = fallbacks.pop_front().expect("checked non-empty");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 struct WinitHandler {
     app: App,
     opts: WindowOptions,
@@ -466,6 +500,9 @@ struct WinitHandler {
     /// [`ApplicationHandler::resumed`] and detached in
     /// [`ApplicationHandler::exiting`].
     renderer: Box<dyn SurfaceRenderer>,
+    /// Renderers to try, in order, when [`Self::renderer`] cannot bind to
+    /// the window.
+    fallbacks: std::collections::VecDeque<Box<dyn SurfaceRenderer>>,
     /// Builds [`Self::a11y`] once the window exists. `None` runs without
     /// accessibility.
     a11y_factory: Option<A11yBridgeFactory>,
@@ -618,7 +655,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         if let Some(spec) = self.opts.menubar.take() {
             attach_menubar_via_os_menu(&window, &spec);
         }
-        if let Err(e) = self.renderer.attach(Arc::new(WinitTarget(window.clone()))) {
+        if let Err(e) = attach_first(
+            &mut self.renderer,
+            &mut self.fallbacks,
+            Arc::new(WinitTarget(window.clone())),
+        ) {
             eprintln!("lumen-window-winit: renderer init failed: {e}");
             event_loop.exit();
             return;
@@ -1771,7 +1812,7 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedrawScheduler, idle_control_flow, present_frame};
+    use super::{RedrawScheduler, attach_first, idle_control_flow, present_frame};
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, RenderTarget, SurfaceError,
@@ -2070,6 +2111,78 @@ mod tests {
         assert_eq!(
             idle_control_flow(Some(now - Duration::from_millis(1)), now),
             ControlFlow::Wait
+        );
+    }
+
+    /// A renderer whose bind fails the way a renderer with no usable device
+    /// does.
+    struct NoDevice(SurfaceError);
+
+    impl lumen_core::traits::Renderer for NoDevice {}
+
+    impl SurfaceRenderer for NoDevice {
+        fn attach(&mut self, _target: Arc<dyn RenderTarget>) -> Result<(), SurfaceError> {
+            Err(match &self.0 {
+                SurfaceError::Init(why) => SurfaceError::Init(why.clone()),
+                SurfaceError::Present(why) => SurfaceError::Present(why.clone()),
+                SurfaceError::Detached => SurfaceError::Detached,
+            })
+        }
+        fn resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+        fn wants_present(&mut self, _: &mut World, _: FrameRequest) -> bool {
+            false
+        }
+        fn present(&mut self, _: &mut World) -> Result<(), SurfaceError> {
+            Ok(())
+        }
+        fn detach(&mut self) {}
+    }
+
+    /// A renderer that cannot initialise against the window hands over to
+    /// the next one; the one that binds is the one kept.
+    #[test]
+    fn a_renderer_that_cannot_initialise_falls_through_to_the_next() {
+        let window: Arc<dyn RenderTarget> = Arc::new(SizedWindow { size: (640, 480) });
+        let mut renderer: Box<dyn SurfaceRenderer> =
+            Box::new(NoDevice(SurfaceError::Init("no adapter".into())));
+        let mut fallbacks: std::collections::VecDeque<Box<dyn SurfaceRenderer>> =
+            std::collections::VecDeque::from([Box::new(FakeRenderer::default()) as Box<_>]);
+
+        attach_first(&mut renderer, &mut fallbacks, window).expect("the fallback binds");
+        assert!(fallbacks.is_empty());
+        assert!(
+            !renderer.resize(640, 480),
+            "the fallback took the window's size"
+        );
+    }
+
+    /// With nothing left to try, the bind failure is the launch's failure,
+    /// and a failure that is not about initialising is never papered over.
+    #[test]
+    fn running_out_of_renderers_or_a_non_init_failure_is_an_error() {
+        let window: Arc<dyn RenderTarget> = Arc::new(SizedWindow { size: (8, 8) });
+        let mut alone: Box<dyn SurfaceRenderer> =
+            Box::new(NoDevice(SurfaceError::Init("no adapter".into())));
+        let mut none = std::collections::VecDeque::new();
+        assert!(matches!(
+            attach_first(&mut alone, &mut none, window.clone()),
+            Err(SurfaceError::Init(_))
+        ));
+
+        let mut broken: Box<dyn SurfaceRenderer> =
+            Box::new(NoDevice(SurfaceError::Present("lost".into())));
+        let mut fallbacks: std::collections::VecDeque<Box<dyn SurfaceRenderer>> =
+            std::collections::VecDeque::from([Box::new(FakeRenderer::default()) as Box<_>]);
+        assert!(matches!(
+            attach_first(&mut broken, &mut fallbacks, window),
+            Err(SurfaceError::Present(_))
+        ));
+        assert_eq!(
+            fallbacks.len(),
+            1,
+            "nothing was tried past a non-init failure"
         );
     }
 }

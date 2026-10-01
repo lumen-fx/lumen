@@ -13,6 +13,7 @@
 
 #![warn(missing_docs)]
 
+pub mod capability;
 pub mod sink;
 pub mod surface;
 pub use sink::{BACKEND_ID, CpuPainter};
@@ -23,7 +24,7 @@ pub use surface::CpuSurfaceRenderer;
 pub use vello_cpu;
 
 use bevy_ecs::prelude::*;
-use bevy_ecs::system::NonSendMut;
+use bevy_ecs::system::{NonSendMut, SystemParam};
 use lumen_core::components::Color as LumenColor;
 use lumen_core::node_ir::{PreviousScene, RetainedScene};
 use lumen_core::prelude::*;
@@ -158,6 +159,13 @@ impl CpuRendererPlugin {
     }
 }
 
+impl From<CpuRenderer> for CpuRendererPlugin {
+    /// A plugin installing an already-built renderer.
+    fn from(renderer: CpuRenderer) -> Self {
+        Self { renderer }
+    }
+}
+
 impl Plugin for CpuRendererPlugin {
     fn build(self, app: &mut App) {
         // The walker reads the retained tree; this is what builds it.
@@ -167,20 +175,31 @@ impl Plugin for CpuRendererPlugin {
     }
 }
 
+/// The scene state a frame reads and leaves behind: this tick's tree, the
+/// last painted one, and the damage between them.
+#[derive(SystemParam)]
+struct SceneState<'w> {
+    retained: Res<'w, RetainedScene>,
+    previous: ResMut<'w, PreviousScene>,
+    damage: ResMut<'w, FrameDamage>,
+}
+
 /// Render-world system that paints the retained scene into the offscreen
 /// [`CpuRenderer`] when it changed, and answers a pending screenshot request
 /// from the last frame.
-#[allow(clippy::too_many_arguments)]
 fn cpu_render_system(
     mut renderer: NonSendMut<CpuRenderer>,
     shaper: Option<NonSendMut<ShaperService>>,
     viewport: Res<Viewport>,
-    retained: Res<RetainedScene>,
-    mut previous: ResMut<PreviousScene>,
-    mut damage: ResMut<FrameDamage>,
+    scene: SceneState,
     natives: Option<Res<lumen_core::native::NativePainters>>,
     capture: Option<Res<SurfaceCapture>>,
 ) {
+    let SceneState {
+        retained,
+        mut previous,
+        mut damage,
+    } = scene;
     // The target is sized in physical pixels; the walker scales every leaf
     // from logical to physical at emit time.
     let dpr = viewport.scale_factor.max(0.01);

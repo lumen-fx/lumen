@@ -1,0 +1,20 @@
+# The link's handle on the `render-cpu` capability: nothing but the constructor
+# that registers it, in an object of its own. A link that names the register
+# symbol carries the CPU render backend; one that leaves it out carries none
+# of it. The backend itself is `lumen-render-cpu`, which nothing else has to reference.
+[package]
+name = "lumen-render-cpu-capability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Registers the render-cpu capability of the Lumen runtime for a link to select."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-capability = { workspace = true }
+lumen-render-cpu = { workspace = true }

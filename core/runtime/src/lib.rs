@@ -55,6 +55,8 @@ use lumen_os_lifecycle_capability as _;
 use lumen_os_notify_capability as _;
 use lumen_os_power_capability as _;
 use lumen_os_tray_capability as _;
+use lumen_render_cpu_capability as _;
+use lumen_render_gpu_capability as _;
 /// File-based pages - multi-`.lmn` discovery, `<if>`-reconciler page mount,
 /// and the navigation resolver reachable from every embedding surface.
 pub mod pages;

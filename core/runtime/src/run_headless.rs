@@ -1,7 +1,7 @@
-//! True headless run mode: the FULL app pipeline - layout, real GPU
-//! rendering (wgpu + vello via the shared Node-IR walker), the MCP
-//! server, input simulation, hot reload, and screenshots - with zero
-//! windows. No winit event loop is created, so the desktop / compositor
+//! True headless run mode: the FULL app pipeline - layout, real
+//! rendering through the app's render backend and the shared Node-IR
+//! walker, the MCP server, input simulation, hot reload, and screenshots -
+//! with zero windows. No winit event loop is created, so the desktop / compositor
 //! is never touched. This is the automation / CI mode behind
 //! `lumenc run <app> --headless`.
 //!
@@ -9,11 +9,11 @@
 //!
 //! The bare `run_app_headless` (kept as the FFI / SDK contract) only
 //! ticks the main-world schedule - no renderer, no pixels. This mode
-//! additionally installs [`lumen_render_wgpu::WgpuRendererPlugin`], the
-//! same offscreen renderer the golden-image tests use, driven by the
-//! same retained-scene walker the windowed backend runs - so extracted
-//! geometry, dpr scaling, text shaping, and fragment caching behave
-//! identically to the windowed path.
+//! additionally installs the offscreen renderer of the backend
+//! `[render] backend` selects (under `auto`, the first that starts, GPU
+//! before CPU), driven by the same retained-scene walker the windowed
+//! backend runs - so extracted geometry, dpr scaling, and text shaping
+//! behave identically to the windowed path.
 //!
 //! ## Frame pacing
 //!
@@ -47,11 +47,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_ecs::message::Messages;
+use bevy_ecs::prelude::Resource;
 use lumen_core::input::CloseRequest;
 use lumen_core::prelude::*;
-use lumen_core::render_world::{FrameDirty, SurfaceCapture, SurfaceFrame};
+use lumen_core::render_backend::{OffscreenRenderer, RenderBackend};
+use lumen_core::render_world::{FrameDirty, SurfaceCapture};
 use lumen_core::tick::{wake_deadline, work_pending};
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 
@@ -69,7 +70,7 @@ const WORK_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 const IDLE_PARK_SLICE: Duration = Duration::from_millis(250);
 
 /// Opt-in boot-phase timing. Set `LUMEN_BOOT_TRACE=1` to print a
-/// phase-by-phase startup breakdown (build/parse/font-scan, GPU
+/// phase-by-phase startup breakdown (build/parse/font-scan, renderer
 /// bring-up, shaper warmup, first frame) to stderr - the reproducible
 /// backing for the startup regression story. Off by default: the checks
 /// are a single `env::var_os` read plus a few `Instant::now()` calls on
@@ -207,35 +208,30 @@ pub fn run_app_headless_rendered(
     // session: gate off the MCP server (unless `[mcp] simulate` is on) and
     // the hot-reload watcher via the `bounded` flag. See `build_app`.
     opts.bounded = true;
-    // GPU bring-up (wgpu instance/adapter/device + vello pipeline
-    // compilation) costs ~30-35 ms and needs nothing from the app world,
-    // so it runs on a spawned thread OVERLAPPED with `build_headless_app`
-    // (markup/CSS parse, system-font scan, ECS spawn). Sized from the
-    // CLI size as a guess; if `lumen.toml [window] size` overrides it the
-    // offscreen target is re-allocated after the join - `resize` only
-    // swaps the texture, every expensive init step is size-independent.
     let boot = BootTrace::new();
     let dpr = headless.dpr.max(0.01);
-    let guess_w = (opts.size.0 as f32 * dpr).round().max(1.0) as u32;
-    let guess_h = (opts.size.1 as f32 * dpr).round().max(1.0) as u32;
-    let gpu_init = std::thread::Builder::new()
-        .name("lumen-gpu-init".into())
-        .spawn(move || {
-            // Time the whole bring-up (instance + adapter + device +
-            // vello pipeline/shader compile) on the bg thread so the
-            // trace can compare it against the concurrent build wall.
-            let t = Instant::now();
-            let r = WgpuRenderer::new_offscreen(guess_w, guess_h);
-            (r, t.elapsed())
-        })
-        .map_err(|e| RunError::Headless(format!("spawn GPU init thread: {e}")))?;
+    // Renderer bring-up (a GPU device and its pipelines, or a rasterizer)
+    // needs nothing from the app world, so `build_app` starts it on a
+    // spawned thread as soon as the render backends have registered, and it
+    // runs OVERLAPPED with the rest of the build (markup/CSS parse, scripts,
+    // ECS spawn) and the shaper warmup below. Sized from the CLI size as a
+    // guess; the render system resizes the target to the viewport, and
+    // every expensive init step is size-independent.
+    opts.offscreen_prestart = Some((
+        (opts.size.0 as f32 * dpr).round().max(1.0) as u32,
+        (opts.size.1 as f32 * dpr).round().max(1.0) as u32,
+    ));
 
     let t_build = Instant::now();
     let (mut app, mut window) = build_headless_app(opts)?;
     boot.mark("build_app (parse+ecs+fontscan)", t_build.elapsed());
     boot.standalone_fontscan();
+    let renderer_init = app
+        .world
+        .remove_resource::<OffscreenPrestart>()
+        .ok_or_else(|| RunError::Headless("the app build started no renderer".into()))?;
 
-    // While the GPU thread finishes: pre-warm the shapers' cold path
+    // While the renderer thread finishes: pre-warm the shapers' cold path
     // (sans-serif face load + fallback-chain init inside cosmic-text,
     // ~10-15 ms on first shape) so the first real layout/render tick
     // doesn't pay it. The strings are throwaway; only the font-system
@@ -263,7 +259,7 @@ pub fn run_app_headless_rendered(
             warm(render_shaper);
         }
     }
-    boot.mark("shaper warmup (overlap gpu)", t_warm.elapsed());
+    boot.mark("shaper warmup (overlap renderer)", t_warm.elapsed());
     // Hot-reload wakes: with the notify watcher active (the default), fs
     // events wake the parked loop directly and idle stays at zero ticks.
     // Only the poll fallback (`LUMEN_HOT_RELOAD_POLL` / watcher init
@@ -291,30 +287,22 @@ pub fn run_app_headless_rendered(
         vp.clear = window.options.clear;
     }
 
-    // Offscreen GPU context: join the init thread spawned before
-    // `build_headless_app` (adapter requested WITHOUT a surface - falls
-    // back to lavapipe/llvmpipe where no hardware GPU is reachable). The
-    // renderer is pre-built here so init failure surfaces as an error
-    // instead of the plugin's panic.
-    let phys_w = (logical.x * dpr).round().max(1.0) as u32;
-    let phys_h = (logical.y * dpr).round().max(1.0) as u32;
+    // Join the renderer thread. A GPU adapter is requested WITHOUT a
+    // surface, so a machine with no display still gets one where a driver
+    // exists; under `auto` a backend that cannot start hands over to the
+    // next. Init failure of every candidate surfaces as an error.
     let t_join = Instant::now();
-    let (renderer_res, gpu_wall) = gpu_init
-        .join()
-        .map_err(|_| RunError::Headless("GPU init thread panicked".into()))?;
-    boot.mark("gpu_join_wait (main blocked)", t_join.elapsed());
-    boot.mark("  |- gpu_init_wall (bg thread)", gpu_wall);
-    let mut renderer =
-        renderer_res.map_err(|e| RunError::Headless(format!("offscreen GPU init: {e}")))?;
-    // No-op when lumen.toml didn't override the CLI size guess.
-    renderer.resize(phys_w, phys_h);
-    let mut render_plugin = WgpuRendererPlugin::new(phys_w, phys_h).with_renderer(renderer);
-    // Reuse the text shaper built for the windowed path so glyph output
-    // matches the window byte-for-byte.
+    let (renderer_res, init_wall) = renderer_init.join()?;
+    boot.mark("renderer_join_wait (main blocked)", t_join.elapsed());
+    boot.mark("  |- renderer_init_wall (bg thread)", init_wall);
+    let renderer = renderer_res.map_err(RunError::Headless)?;
+    // The text shaper built for the windowed path is the render world's,
+    // so glyph output matches the window byte-for-byte.
     if let Some(shaper) = window.text_shaper.take() {
-        render_plugin = render_plugin.with_boxed_text_shaper(shaper);
+        app.render_world
+            .insert_non_send(ShaperService::from(shaper));
     }
-    app.add_plugin(render_plugin);
+    renderer.install(&mut app);
 
     // Wake plumbing: the same EventLoopWaker contract the winit backend
     // provides, backed by a condvar instead of an event-loop proxy.
@@ -382,11 +370,14 @@ pub fn run_app_headless_rendered(
     // to "now" instead of firing a catch-up run.
     let mut next_frame_deadline: Option<Instant> = None;
     while !exit_flag.load(Ordering::Relaxed) {
-        // A pending off-thread screenshot must force a fresh encode even
-        // when nothing changed (mirrors the windowed `present_frame`
-        // capture bypass of the idle-frame retain).
-        let capture = app.render_world.get_resource::<SurfaceCapture>().cloned();
-        let capture_pending = capture.as_ref().is_some_and(|c| c.is_requested());
+        // A pending off-thread screenshot runs a tick even when nothing
+        // changed, so the renderer's system answers it this iteration
+        // (mirrors the windowed `present_frame` capture bypass of the
+        // idle-frame retain).
+        let capture_pending = app
+            .render_world
+            .get_resource::<SurfaceCapture>()
+            .is_some_and(|c| c.is_requested());
         if capture_pending && let Some(mut fd) = app.world.get_resource_mut::<FrameDirty>() {
             fd.dirty = true;
         }
@@ -404,10 +395,6 @@ pub fn run_app_headless_rendered(
         // re-raise it and the work check below schedules a follow-up.
         if let Some(mut fd) = app.world.get_resource_mut::<FrameDirty>() {
             fd.dirty = false;
-        }
-
-        if capture_pending && let Some(capture) = capture {
-            service_capture(&mut app, &capture);
         }
 
         if let Some(n) = headless.ticks
@@ -495,26 +482,78 @@ pub fn run_app_headless_rendered(
     Ok(())
 }
 
-/// Fulfil a pending [`SurfaceCapture`] request from the offscreen target.
-/// Headless counterpart of the readback in the windowed `render_frame`:
-/// the texture holds the last encoded frame (this tick's, since a pending
-/// capture forces `FrameDirty` before the tick), so the copy is exact.
-fn service_capture(app: &mut lumen_core::app::App, capture: &SurfaceCapture) {
-    let readback = app
-        .render_world
-        .get_non_send::<WgpuRenderer>()
-        .map(|renderer| (renderer.size(), renderer.read_rgba8()));
-    match readback {
-        Some(((width, height), Ok(rgba8))) => {
-            capture.write(SurfaceFrame {
-                width,
-                height,
-                rgba8,
-            });
-        }
-        Some((_, Err(e))) => eprintln!("lumenc: headless surface readback failed: {e}"),
-        None => eprintln!("lumenc: headless surface readback failed: no renderer installed"),
+/// An offscreen renderer coming up on its own thread while the app builds.
+#[derive(Resource)]
+pub(crate) struct OffscreenPrestart(
+    std::sync::Mutex<Option<std::thread::JoinHandle<(OffscreenResult, Duration)>>>,
+);
+
+/// What starting an offscreen renderer produced.
+type OffscreenResult = Result<Box<dyn OffscreenRenderer>, String>;
+
+impl OffscreenPrestart {
+    /// Start the first of `candidates` that comes up, at `width` x `height`,
+    /// on a new thread.
+    pub(crate) fn spawn(
+        candidates: Vec<RenderBackend>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, RunError> {
+        let handle = std::thread::Builder::new()
+            .name("lumen-renderer-init".into())
+            .spawn(move || {
+                let t = Instant::now();
+                let r = first_offscreen(&candidates, width, height);
+                (r, t.elapsed())
+            })
+            .map_err(|e| RunError::Headless(format!("spawn renderer init thread: {e}")))?;
+        Ok(Self(std::sync::Mutex::new(Some(handle))))
     }
-    // Always clear so a persistent GPU error can't wedge the requester.
-    capture.clear_request();
+
+    /// Wait for the renderer, and how long its bring-up took.
+    fn join(self) -> Result<(OffscreenResult, Duration), RunError> {
+        let handle = self
+            .0
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .ok_or_else(|| RunError::Headless("the renderer was already taken".into()))?;
+        handle
+            .join()
+            .map_err(|_| RunError::Headless("renderer init thread panicked".into()))
+    }
+}
+
+/// The offscreen renderer of the first of `candidates` that starts, at
+/// `width` x `height` physical pixels. A backend that cannot start is
+/// reported and the next one tried; when none starts, the error names each
+/// one's reason.
+fn first_offscreen(
+    candidates: &[RenderBackend],
+    width: u32,
+    height: u32,
+) -> Result<Box<dyn OffscreenRenderer>, String> {
+    let mut failures = Vec::new();
+    for backend in candidates {
+        match (backend.offscreen)(width, height) {
+            Ok(renderer) => {
+                if !failures.is_empty() {
+                    eprintln!(
+                        "lumenc: {}; rendering with the '{}' backend",
+                        failures.join("; "),
+                        backend.name
+                    );
+                }
+                return Ok(renderer);
+            }
+            Err(why) => failures.push(format!(
+                "the '{}' render backend did not start: {why}",
+                backend.name
+            )),
+        }
+    }
+    Err(if failures.is_empty() {
+        "no render backend to start".to_string()
+    } else {
+        failures.join("; ")
+    })
 }

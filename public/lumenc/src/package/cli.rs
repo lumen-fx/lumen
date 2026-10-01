@@ -555,7 +555,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             &declared,
-            &cfg.capabilities,
+            &cfg,
         ),
         AppKind::Markup => package(
             &src_path,
@@ -716,7 +716,7 @@ fn source_of(source: &ModuleSource) -> &'static str {
 ///
 /// The engine inside is the app's own: of the optional subsystems the kit
 /// offers, the executable carries the ones `[capabilities]` names and, for
-/// the rest, the ones the app's sources show it uses.
+/// the rest, the ones the app's sources and `lumen.toml` select.
 fn package_static(
     src: &Path,
     out: &Path,
@@ -724,7 +724,7 @@ fn package_static(
     target: Target,
     lib_dir: Option<&Path>,
     declared: &Declared<'_>,
-    capabilities: &crate::config::CapabilitiesCfg,
+    cfg: &crate::LumenToml,
 ) -> Result<String, String> {
     // What links in is what ships with the toolchain; everything else the
     // app declares was cleared by `dependency_refusal` as something that
@@ -750,8 +750,11 @@ fn package_static(
         target,
         lib_dir,
         &linked_deps,
-        &capabilities.0,
-        &sources,
+        &crate::link::kit::CapabilityChoice {
+            requested: &cfg.capabilities.0,
+            sources: &sources,
+            config: &cfg.raw,
+        },
     )?;
     let modules = linked.modules;
     // `--static` is this machine's own platform, so the installation's own

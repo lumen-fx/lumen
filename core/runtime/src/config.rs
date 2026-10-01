@@ -79,6 +79,8 @@ pub struct LumenToml {
     pub asset_roots: AssetRootsCfg,
     /// `[script]` section - script-engine selection.
     pub script: ScriptCfg,
+    /// `[render]` section - which render backend draws the app.
+    pub render: RenderCfg,
     /// `[perf]` section - per-cache memory budgets.
     pub perf: PerfCfg,
     /// `[runtime]` section - subsystem init overrides (MCP /
@@ -315,6 +317,47 @@ pub struct ScriptCfg {
     /// Engine name: `"candela"` (default), `"rhai"`, or `"lua"`. Unknown values
     /// fall back to candela via [`ScriptCfg::engine_kind`].
     pub engine: Option<String>,
+}
+
+/// `[render]` block: which render backend draws the app.
+///
+/// ```toml
+/// [render]
+/// backend = "cpu"
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RenderCfg {
+    /// The backend. `auto` (the default) tries the GPU and falls back to the
+    /// CPU when no GPU can start; `gpu` and `cpu` use that one backend and
+    /// fail the launch when it cannot start. A static package links only the
+    /// backends this selects.
+    pub backend: RenderBackendChoice,
+}
+
+/// The value of `[render] backend`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderBackendChoice {
+    /// Every backend the binary carries, GPU first.
+    #[default]
+    Auto,
+    /// The GPU backend only.
+    Gpu,
+    /// The CPU backend only.
+    Cpu,
+}
+
+impl RenderBackendChoice {
+    /// The registered backend name this choice asks for, or `None` for
+    /// `auto`, which asks for every backend in priority order.
+    pub fn backend_name(self) -> Option<&'static str> {
+        match self {
+            RenderBackendChoice::Auto => None,
+            RenderBackendChoice::Gpu => Some("gpu"),
+            RenderBackendChoice::Cpu => Some("cpu"),
+        }
+    }
 }
 
 /// One script engine.
@@ -1370,6 +1413,19 @@ mod tests {
         "#;
         let res: Result<LumenToml, _> = toml::from_str(src);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn the_render_backend_defaults_to_auto_and_rejects_unknown_names() {
+        let absent: LumenToml = toml::from_str("").unwrap();
+        assert_eq!(absent.render.backend, RenderBackendChoice::Auto);
+        assert_eq!(absent.render.backend.backend_name(), None);
+        let cpu: LumenToml = toml::from_str("[render]\nbackend = \"cpu\"\n").unwrap();
+        assert_eq!(cpu.render.backend.backend_name(), Some("cpu"));
+        let gpu: LumenToml = toml::from_str("[render]\nbackend = \"gpu\"\n").unwrap();
+        assert_eq!(gpu.render.backend.backend_name(), Some("gpu"));
+        assert!(toml::from_str::<LumenToml>("[render]\nbackend = \"vulkan\"\n").is_err());
+        assert!(toml::from_str::<LumenToml>("[render]\nthreads = 4\n").is_err());
     }
 
     #[test]

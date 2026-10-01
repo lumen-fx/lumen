@@ -991,3 +991,125 @@ fn a_capability_reaches_the_executable_when_the_app_uses_or_asks_for_it() {
     assert!(stderr.contains("'os-trey'"), "{stderr}");
     assert!(stderr.contains("os-tray"), "{stderr}");
 }
+
+/// Two interchangeable capabilities keyed on one `lumen.toml` value, the
+/// shape the render backends take: the value links one, `auto` (and an
+/// absent key, which reads as `auto`) links both, and `[capabilities]` still
+/// settles either one outright.
+#[cfg(unix)]
+#[test]
+fn a_config_value_links_the_capabilities_it_selects() {
+    if !cc_present() {
+        return;
+    }
+    let root = scratch("config-capabilities");
+    let kit = root.join("kit");
+    let stage = kit.join("stage");
+    std::fs::create_dir_all(&stage).expect("create the stage directory");
+
+    let gpu = "lumen_capability_register_render_gpu";
+    let cpu = "lumen_capability_register_render_cpu";
+    let compile = |name: &str, body: &str| -> PathBuf {
+        let source = root.join(format!("{name}.c"));
+        std::fs::write(&source, body).expect("write the C file");
+        let object = stage.join(format!("{name}.o"));
+        let compiled = Command::new("cc")
+            .arg("-c")
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("run cc");
+        assert!(compiled.success(), "cc did not compile {name}");
+        object
+    };
+    let archive = |name: &str, symbol: &str| {
+        let object = compile(name, &format!("void {symbol}(void) {{}}\n"));
+        let archived = Command::new("ar")
+            .arg("rcs")
+            .arg(stage.join(format!("{name}.a")))
+            .arg(&object)
+            .status()
+            .expect("run ar");
+        assert!(archived.success(), "ar did not write the archive");
+        std::fs::remove_file(&object).expect("only the archive stays");
+    };
+    compile("aa-launcher", "int main(void) { return 0; }\n");
+    archive("bb-gpu", gpu);
+    archive("cc-cpu", cpu);
+
+    let file = |path: &str| LinkArg::File {
+        path: path.to_string(),
+        module: None,
+    };
+    let mut manifest = synthetic_manifest(vec![
+        file("aa-launcher.o"),
+        file("bb-gpu.a"),
+        file("cc-cpu.a"),
+        LinkArg::Lit {
+            value: "-o".to_string(),
+        },
+        LinkArg::Out {
+            prefix: String::new(),
+        },
+    ]);
+    let on_config = |any_of: &[&str]| lumen_modules::link_kit::KitSelect::OnConfig {
+        key: "render.backend".to_string(),
+        any_of: any_of.iter().map(|v| v.to_string()).collect(),
+        default: "auto".to_string(),
+    };
+    manifest.capabilities = vec![
+        lumen_modules::link_kit::KitCapability {
+            name: "render-gpu".to_string(),
+            register_symbol: gpu.to_string(),
+            select: on_config(&["gpu", "auto"]),
+        },
+        lumen_modules::link_kit::KitCapability {
+            name: "render-cpu".to_string(),
+            register_symbol: cpu.to_string(),
+            select: on_config(&["cpu", "auto"]),
+        },
+    ];
+    write_manifest(&kit, &manifest);
+
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    let link = |config: &str, name: &str| {
+        write_app(&app, config, PLAIN);
+        let out = root.join(name);
+        let result = package_with(&[
+            app.to_str().expect("utf-8 path"),
+            out.to_str().expect("utf-8 path"),
+            "--name",
+            name,
+            "--lib-dir",
+            kit.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("run lumenc package");
+        let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        assert_eq!(result.status.code(), Some(0), "{name}: {stderr}");
+        let exe = out.join(name);
+        (carries(&exe, gpu), carries(&exe, cpu))
+    };
+
+    assert_eq!(
+        link("[render]\nbackend = \"cpu\"\n", "cpu"),
+        (false, true),
+        "a cpu app links no GPU backend"
+    );
+    assert_eq!(
+        link("[render]\nbackend = \"gpu\"\n", "gpu"),
+        (true, false),
+        "a gpu app links no CPU backend"
+    );
+    assert_eq!(link("", "default"), (true, true), "auto is the default");
+    assert_eq!(
+        link(
+            "[render]\nbackend = \"auto\"\n\n[capabilities]\nrender-gpu = false\n",
+            "trimmed"
+        ),
+        (false, true),
+        "the table wins over the config rule"
+    );
+}
