@@ -10,19 +10,22 @@ machine with no display, and a way to click through it from a script.
 lumenc run myapp --headless
 ```
 
-This is not a reduced mode. Layout runs, the GPU renders, scripts execute, and
-screenshots come out pixel-identical to the windowed path. The window is
-missing, so no compositor is touched and this is safe on a build machine and
-safe to run while you are working.
+This is not a reduced mode. Layout runs, the app's renderer draws, scripts
+execute, and screenshots come out pixel-identical to the windowed path. The
+window is missing, so no compositor is touched and this is safe on a build
+machine and safe to run while you are working.
 
 Hot reload is off: a headless run watches no files, so an edit shows up only
 after a restart. Set `hot_reload = true` under `[runtime]` in `lumen.toml` to
 turn it on for a headless run.
 
-A machine with no GPU still renders when it has a software rasterizer: Mesa's
-lavapipe on Linux, or Direct3D's WARP on Windows, which is what hosted Windows
-CI runners offer. Screenshots from a software rasterizer are close to a GPU's
-but not pixel-identical.
+A machine with no GPU still renders. Under the default
+[`[render] backend = "auto"`](../reference/lumen-toml.md#render), a run that
+finds no GPU renderer falls back to the CPU one and says so; set
+`backend = "cpu"` to render on the CPU every time, which gives the same
+pixels on every machine whatever its graphics hardware. A GPU run on a
+software rasterizer (Mesa's lavapipe on Linux, Direct3D's WARP on Windows)
+draws close to a GPU's pixels but not the same ones.
 
 Hardware nobody is there to use is left alone too: an app that declares the
 audio module still gets the `audio_*` functions, the playback state, and the
@@ -168,8 +171,8 @@ Two things to watch for:
 - Do not combine `--ticks` with the automation commands. A bounded run exits
   as soon as it hits the tick count, and your driver will find nothing to talk
   to. Leave the run unbounded and stop it yourself.
-- Poll for readiness rather than sleeping a fixed time. Startup includes GPU
-  bring-up and a font scan, and both vary by machine.
+- Poll for readiness rather than sleeping a fixed time. Startup includes the
+  renderer's bring-up and a font scan, and both vary by machine.
 
 ## Static checks
 

@@ -3,7 +3,7 @@
 Lumen is a markup-first UI framework for native desktop apps. You describe the
 interface in `.lmn` markup, style it in CSS, and drive it with a script. The
 result is a native application on Linux, macOS, and Windows, drawn on the
-GPU.
+GPU, or on the CPU where there is none.
 
 ```html
 <root padding="32" gap="20" align="center" justify="center">

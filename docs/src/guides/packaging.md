@@ -125,9 +125,13 @@ subfolder. The engine inside is the app's own: of the optional subsystems
 the kit offers (tray, notifications, dialogs, hotkeys, the HTTP client and
 the rest), the executable carries the ones the app's sources show it uses,
 and [`[capabilities]`](../reference/lumen-toml.md#capabilities) names any it
-should carry or leave out regardless. The candela standard library still travels in `libs/`, because
-scripts read it off disk as they compile whatever links the engine. Copy the
-executable, `libs/`, and the app's files, and that is the whole app.
+should carry or leave out regardless. The renderer follows
+[`[render] backend`](../reference/lumen-toml.md#render): `cpu` or `gpu` links
+that one renderer and none of the other, which is the way to keep a small app
+small, and `auto` links both so the app starts on a machine without a GPU. The
+candela standard library still travels in `libs/`, because scripts read it off
+disk as they compile whatever links the engine. Copy the executable, `libs/`,
+and the app's files, and that is the whole app.
 
 Reach for it when you want one file to hand over rather than a folder to keep
 together, and on Windows when your app declares a module that ships with the

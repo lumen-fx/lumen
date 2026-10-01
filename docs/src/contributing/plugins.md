@@ -182,11 +182,27 @@ being suppressed.
 
 A render backend inserts itself into `app.render_world`, registers a system
 in `RenderStage::Render`, and calls `install_extract_pipeline` so the extract
-step that feeds it exists at all. The whole of the software rasterizer's
+step that feeds it exists at all. The whole of the CPU renderer's offscreen
 plugin is that call, a resource insert and one system registration; the GPU
 backend adds a fragment cache and an optional text shaper alongside. The
 install is a no-op when another backend already made it, so a test that builds
 a bare `App` and reads the render world makes the same call itself.
+
+The system walks the retained tree with `lumen_paint::walk_retained_scene`
+into the backend's own `Painter`. That trait is the one definition of a frame:
+fill, stroke, clip and opacity layers, blurred rounded rects for shadows,
+images, and glyph runs, in peniko and kurbo types. A new backend implements
+`Painter` over its draw target and gets every primitive the walker knows,
+drawn the way the other backends draw it. A sink that can record and replay
+encoded work also implements the fragment methods, and the walker then
+encodes each repeated appearance once; a sink that cannot leaves them at
+their defaults and paints every leaf in place.
+
+A backend reaches a launch by registering into `RenderBackends` (in
+`lumen_core::render_backend`) from a capability's install: a name the app's
+`[render] backend` selects it by, a priority for `auto`, a constructor for
+its window renderer, and one for its offscreen renderer. See
+[Optional subsystems](#optional-subsystems) for the capability itself.
 
 Getting data across is the extract step. An extract function is a plain
 function pointer, `fn(&mut World, &mut World)`, not a closure, so any state it
@@ -230,13 +246,15 @@ turn comes:
 app.register_native_painter("acme.sparkline", SparklinePainter);
 ```
 
-A painter receives its draw target as `&mut dyn Any` and downcasts it to the
-backend's scene type, which for the wgpu backend is a `vello::Scene`. That
-downcast is a `TypeId` match, and two builds of the same vello version are two
-different types as far as `TypeId` is concerned: a crate that declared vello
-itself would compile, register, and then quietly paint nothing. Take it from
-the one place that cannot drift - `lumen_render_wgpu::vello`, re-exported by
-the module SDK behind its off-by-default `paint` feature:
+A painter receives its draw target as `&mut dyn Any` and downcasts it to
+`lumen_paint::PaintTarget`, the boxed `Painter` every render backend hands
+over, then draws through the trait. The same painter then draws the same
+pixels on the GPU and on the CPU. That downcast is a `TypeId` match, and two
+builds of the same crate version are two different types as far as `TypeId`
+is concerned: a crate that declared lumen-paint itself would compile,
+register, and then quietly paint nothing. Take it from the one place that
+cannot drift - `lumen_module::lumen_paint`, re-exported by the module SDK
+behind its off-by-default `paint` feature:
 
 ```toml
 [dependencies]
@@ -288,9 +306,9 @@ impl NativePainter for SparklinePainter {
         let Some(payload) = ctx.payload_as::<SparklinePayload>() else {
             return;
         };
-        // Draw into the backend's target, in logical coordinates placed by
-        // `ctx.device_transform()`. On lumen-render-wgpu the target is a
-        // `vello::Scene`, reached through that crate's `vello` re-export.
+        // Draw through `ctx.target_as::<lumen_paint::PaintTarget>()`, in
+        // logical coordinates placed by `ctx.device_transform()`. Every
+        // backend hands over the same target type.
         let _ = (payload, ctx.bounds, ctx.opacity);
     }
 }
@@ -369,9 +387,14 @@ Which backends paint these leaves:
 
 | Backend | Native leaves |
 |---|---|
-| `lumen-render-wgpu` | Painted. The draw target is a `vello::Scene`, reached through that crate's `vello` re-export so a painter cannot version-skew its downcast. `BACKEND_ID` names the backend in the paint context. |
-| `lumen-render-headless` | Not painted. It rasterises the extracted rects directly and never walks the node tree. |
+| `lumen-render-wgpu` | Painted, through a `PaintTarget`. `BACKEND_ID` names the backend in the paint context; `Painter::native` downcasts to its `VelloPainter`, whose scene a painter written against vello can encode into directly, through the crate's `vello` re-export. |
+| `lumen-render-cpu` | Painted, through a `PaintTarget`. `BACKEND_ID` names the backend; `Painter::native` downcasts to its `CpuPainter`. |
 | `lumen-web-dom` | Not painted. The web target emits DOM nodes rather than walking the retained tree. |
+
+A drawing made outside the frame, the way the canvas module records a
+script's calls as they arrive, goes into a `lumen_paint::Recording`: a
+`Painter` that keeps its calls, which the native painter replays into the
+frame's target.
 
 The paint context carries no text shaper. Draw text through a sibling text
 element, or shape it yourself before extract.
@@ -469,8 +492,22 @@ its register symbol and by nothing else.
 
 `select` says when a static package carries the capability: `Select::Always`,
 `Select::OnUse(&[...])` for an app whose sources mention one of the listed
-names, or `Select::OnRequest` for a development subsystem an app has to name
-in `[capabilities]`. The phase says where in the build it runs: `Platform` after the core stack
+names, `Select::OnRequest` for a development subsystem an app has to name
+in `[capabilities]`, or `Select::OnConfig` for one of several
+interchangeable implementations an app picks between in `lumen.toml`:
+
+```rust
+// The CPU render backend: linked when `[render] backend` is `cpu` or
+// `auto`, and `auto` is what an absent key reads as.
+pub const SELECT: Select = Select::OnConfig {
+    key: "render.backend",
+    any_of: &["cpu", "auto"],
+    default: "auto",
+};
+```
+
+An entry in the app's `[capabilities]` table settles a capability outright
+whatever its rule says. The phase says where in the build it runs: `Platform` after the core stack
 and before the reactive bindings, `BeforeScripts` ahead of the script hosts
 (for something a host binds to at construction, such as the HTTP client),
 `AfterBuild` once the document is spawned and styled (an overlay). Within a
@@ -1019,7 +1056,10 @@ and gives it a box by inserting an `ImageComponent` with a natural size, which
 is the leaf shape the layout engine already sizes the way a canvas needs;
 nothing loads, because the asset pipeline keys off a source component a canvas
 never carries. It paints through the seam above, with the module's `paint`
-feature supplying the vello its painter downcasts to.
+feature supplying the `lumen_paint::PaintTarget` its painter downcasts to: the
+journal is replayed into a `Recording` once per tick, and the painter replays
+that recording into the frame, so a canvas draws the same on the GPU and the
+CPU renderer.
 
 The rest of its design is about where a script can run. A script-function body
 has no world, so a drawing call records into a journal the module owns and one

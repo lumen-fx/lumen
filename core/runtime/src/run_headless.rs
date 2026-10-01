@@ -1,4 +1,4 @@
-//! True headless run mode: the FULL app pipeline - layout, real
+//! True headless run mode: the full app pipeline - layout, real
 //! rendering through the app's render backend and the shared Node-IR
 //! walker, the MCP server, input simulation, hot reload, and screenshots -
 //! with zero windows. No winit event loop is created, so the desktop / compositor
@@ -213,7 +213,7 @@ pub fn run_app_headless_rendered(
     // Renderer bring-up (a GPU device and its pipelines, or a rasterizer)
     // needs nothing from the app world, so `build_app` starts it on a
     // spawned thread as soon as the render backends have registered, and it
-    // runs OVERLAPPED with the rest of the build (markup/CSS parse, scripts,
+    // runs overlapped with the rest of the build (markup/CSS parse, scripts,
     // ECS spawn) and the shaper warmup below. Sized from the CLI size as a
     // guess; the render system resizes the target to the viewport, and
     // every expensive init step is size-independent.
@@ -287,7 +287,7 @@ pub fn run_app_headless_rendered(
         vp.clear = window.options.clear;
     }
 
-    // Join the renderer thread. A GPU adapter is requested WITHOUT a
+    // Join the renderer thread. A GPU adapter is requested without a
     // surface, so a machine with no display still gets one where a driver
     // exists; under `auto` a backend that cannot start hands over to the
     // next. Init failure of every candidate surfaces as an error.

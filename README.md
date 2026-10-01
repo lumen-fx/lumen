@@ -15,7 +15,7 @@ Lumen is a markup-first UI framework for native desktop apps.
 
 You describe the interface in `.lmn` markup, style it in CSS, and drive it with
 a script. The result is a native application on Linux, macOS, and Windows,
-drawn on the GPU. Reach for it when you want a desktop app that looks and
+drawn on the GPU, or on the CPU where there is none. Reach for it when you want a desktop app that looks and
 behaves like one, and you would rather write markup and CSS than assemble
 widgets in code. It is not a browser: there is no DOM engine, no JavaScript
 runtime, and no web view.

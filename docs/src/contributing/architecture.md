@@ -60,8 +60,8 @@ tools/             the release plumbing and the editor plugins
   tick loop and its stages, the two worlds, the command queue, the ECS
   component vocabulary, the property store, input types, the retained node IR,
   the window description a launch path resolves (size, title, clear color,
-  chrome, menu bar), and every backend capability trait. Depends on no other
-  workspace crate.
+  chrome, menu bar), every backend capability trait, and the registry the
+  render backends put themselves on. Depends on no other workspace crate.
 - **lumen-ir**: the shared data model. The layout IR that markup parses into,
   the CSS abstract syntax tree and cascade application, the shared value
   parsers, the `var()` resolver, and the compiled-artifact container.
@@ -79,6 +79,12 @@ tools/             the release plumbing and the editor plugins
   their internal order is not the host's to choose. `lumen-runtime` re-exports
   it, and the browser runtime uses it directly, which is what lets one scene
   run in a window and in a document.
+- **lumen-paint**: what a frame looks like, independent of what draws it. The
+  `Painter` trait, the walker that turns the retained node tree into painter
+  calls, the leaf emitters (rects, gradients, borders, shadows, images, SVGs,
+  text, the caret and selection), the fragment cache, and `Recording`, a
+  painter that keeps its calls to replay later. Every render backend paints
+  through it, so the backends agree on a frame by construction.
 
 ### Backends
 
@@ -90,12 +96,14 @@ tools/             the release plumbing and the editor plugins
   text editing model.
 - **lumen-text-cosmic**: the cosmic-text shaper implementation, with a shape
   cache.
-- **lumen-render-wgpu**: the GPU renderer. Encodes the retained node tree into
-  a vello scene and renders it, either into an offscreen texture or into a
-  window's swap chain.
-- **lumen-render-headless**: a deterministic software rasterizer used by golden
-  tests, with no GPU or display dependency. It can also stand in for the GPU
-  renderer on a window, which is how a windowed run stays reproducible.
+- **lumen-render-wgpu**: the GPU renderer. Paints the frame through
+  `lumen-paint` into a vello scene and renders it with wgpu, either into an
+  offscreen texture or into a window's swap chain.
+- **lumen-render-cpu**: the CPU renderer. Paints the same frame through
+  `lumen-paint` into vello_cpu and rasterizes it with no GPU, driver, or
+  graphics API, either into an offscreen buffer or into a window through
+  softbuffer. It renders on machines no GPU renderer starts on, and an app
+  that picks it links none of wgpu.
 - **lumen-window-winit**: the on-screen window. winit event loop, input
   translation, redraw pacing, and the close-request veto. It owns no pixels: a
   renderer and an accessibility bridge are handed to it, and it drives both
@@ -124,8 +132,9 @@ tools/             the release plumbing and the editor plugins
   through the generic tag registry, and paints through the generic
   native-paint seam. A drawing call records into a journal rather than
   drawing, because a script-function body has no world; one system per tick
-  replays the journal into a retained vello scene, which the extract hands the
-  render world. One crate builds both link shapes: the cdylib is the bundled
+  replays the journal into a retained `lumen_paint::Recording`, which the
+  extract hands the render world and the module's painter replays into the
+  frame on either render backend. One crate builds both link shapes: the cdylib is the bundled
   `lumen-canvas` runtime module an app declares in `lumen.toml`, and a static
   build compiles the same plugin in. Its web half in `std/canvas/web` draws
   the same calls with Canvas 2D; a unit test in this crate holds the web
@@ -293,7 +302,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `main`, and the environment it is installed with. The tray and notification
   hosts, the file dialogs, global hotkeys, the launcher, sleep inhibit, the
   lifecycle services, the HTTP client, the async executor, the introspection
-  server and the devtools overlay are all capabilities. The run loop reads
+  server, the devtools overlay, and the two render backends are all
+  capabilities. The run loop reads
   the list at three points of the build and installs what it finds; a
   capability decides for itself whether an app uses it. Each one exports a
   symbol the linker can select it by, which is what lets a link leave a
@@ -397,8 +407,8 @@ Each schedule runs on `bevy_ecs`'s multi-threaded executor: systems within a
 stage that touch disjoint data run across the worker pool, while systems the
 scheduler finds in conflict (same resource, same component set) still run in
 the order `.chain()` or `.after()` puts them in. Some systems take
-`NonSendMut` params, though: the layout shaper, the wgpu renderer, and the
-clipboard. Those stay pinned to the thread that calls `App::tick`, which is
+`NonSendMut` params, though: the layout shaper, the offscreen renderers, and
+the clipboard. Those stay pinned to the thread that calls `App::tick`, which is
 the window backend's event-loop thread. The worker count comes from
 `App::desired_threads` (`min(cpu count, 4)` by default, raised by a plugin
 via `request_threads_at_least` or overridden by `[runtime] threads` /
@@ -458,8 +468,8 @@ change into every primitive at once.
 
 The chain, the dirty roll-up that gates it, and the `Prepare` systems below
 are installed by the render backend through `install_extract_pipeline`, not by
-`App::new`. The window backend, the offscreen GPU renderer and the software
-rasteriser each ask for it, and asking twice is a no-op. An app with no render
+`App::new`. The window backend and the offscreen renderers of both render
+backends each ask for it, and asking twice is a no-op. An app with no render
 backend never asks: the browser runtime and a server render tick the main
 world and stop, and their builds link none of the extract step.
 
@@ -573,10 +583,25 @@ what that half does. A build that installs none gets `NullShaper`, which shapes
 nothing and measures every run as an empty box, and a renderer with no shaper
 paints no text.
 
-Rendering walks the retained node tree. The GPU backend encodes each leaf into
-a vello scene, reusing cached fragments for leaves that have not changed, and
-diffs against the previous frame's tree; an empty diff skips encode and submit
-entirely and leaves the last frame on screen.
+Rendering walks the retained node tree. The walker in `lumen-paint` turns each
+node into calls on a `Painter`, the immediate-mode trait every render backend
+implements over its own draw target: the GPU backend's sink encodes into a
+vello scene, the CPU backend's draws into a vello_cpu context. A sink that can
+record work offers fragments, and the walker then encodes each repeated
+appearance once and replays it at every position; the GPU sink does, the CPU
+sink paints every leaf in place. Both diff against the previous frame's tree,
+and an empty diff skips the frame entirely and leaves the last one on screen.
+
+Which backend renders is the app's choice, `[render] backend` in `lumen.toml`.
+Each backend registers itself into the `RenderBackends` registry in
+`lumen-core` from its capability crate while the app builds, under a name and
+a priority, offering a window renderer and an offscreen one. The runtime asks
+the registry for the configured name, or under `auto` for every backend by
+priority, and the window backend binds the first renderer that starts, so a
+machine with no usable GPU falls through to the CPU. The core and the runtime
+name neither backend. A static package links only the backends the app's
+setting selects, through the capability's `Select::OnConfig` rule; see
+[optional subsystems](plugins.md#optional-subsystems).
 
 Presentation belongs to the renderer, behind the `SurfaceRenderer` trait. The
 window backend attaches a window to it, reports resizes, and asks for a frame;
@@ -586,7 +611,8 @@ Vello's compute pipeline pins its render target to a linear RGBA format, while
 most swap chains expose a BGRA sRGB surface, so the GPU renderer draws into an
 intermediate texture of the required format and blits that onto the surface.
 Which GPU backend is compiled is decided at the manifest level, one per
-operating system.
+operating system. The CPU renderer hands its rasterized frame to softbuffer,
+the platform's own path for showing a CPU buffer in a window.
 
 Accessibility splits along the same line. The world-side half walks the tree
 once per tick in `A11ySync` and leaves an update behind; the platform half,
@@ -607,9 +633,9 @@ trait in `lumen-runtime`.
 
 An implementation crate depends on the trait crate and ships a plugin that
 installs itself. Nothing depends on an implementation crate except the assembly
-layer that chooses one, which is why the software rasterizer and the GPU
-renderer are interchangeable behind the same render stage, and why a shaper or
-a script host can be swapped the same way.
+layer that chooses one, which is why the CPU and GPU renderers are
+interchangeable behind the same render stage, and why a shaper or a script
+host can be swapped the same way.
 
 A consumer reaches the installed implementation through a resource rather than
 by naming a crate: `ShaperService` for text, `SpawnService` and `TimerService`

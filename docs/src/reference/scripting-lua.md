@@ -644,7 +644,7 @@ segment as it is added; this is the one place the two differ.
 ### Pixel buffers
 
 A canvas is write-only: what it holds is a list of drawing calls bound for the
-GPU, not an image, so there is nothing to read a pixel back from. Buffers are
+renderer, not an image, so there is nothing to read a pixel back from. Buffers are
 the read-write half - plain CPU pixels a script creates, edits, loads from a
 PNG, saves to one, and draws onto a canvas. A pixel is one packed
 `0xRRGGBBAA` integer with straight (not premultiplied) alpha, so what a script

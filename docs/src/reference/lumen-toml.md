@@ -2,8 +2,8 @@
 
 `lumen.toml` sits at the app root, beside the `src/` directory holding the
 app's code, and declares everything static about the app: its entry file,
-window, skin, locale, script engine, runtime modules, build hooks, and
-subsystem settings. The file is optional; every key has a default.
+window, skin, locale, script engine, render backend, runtime modules, build
+hooks, and subsystem settings. The file is optional; every key has a default.
 
 Unknown top-level sections and unknown keys inside a section are rejected with
 a parse error naming the offending key. A parse error aborts the command.
@@ -101,6 +101,31 @@ external language when there is exactly one, and candela otherwise. Set
 `engine` when that is not the host you want, most often for an inline script
 written in something other than candela.
 
+## [render]
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `backend` | `"auto"`, `"gpu"`, `"cpu"` | `"auto"` | Which renderer draws the app. |
+
+```toml
+[render]
+backend = "cpu"
+```
+
+`gpu` renders through wgpu on the machine's graphics adapter. `cpu` rasterizes
+on the processor and needs no GPU or driver at all. Both draw the same frame.
+
+`auto` tries the GPU and falls back to the CPU when no GPU renderer starts, in
+a window and in a headless run alike, and prints which one it fell back to.
+`gpu` and `cpu` are hard choices: when the named renderer cannot start, or the
+build does not carry it, the launch fails with an error naming this key.
+
+`lumenc package --static` links only the renderers this key selects: a `cpu`
+app carries no GPU code, and a `gpu` app no CPU rasterizer. Pick one for a
+small app that draws a static UI and should pay for one renderer only; leave
+`auto` for an app that has to start on any machine. The `render-gpu` and
+`render-cpu` entries under `[capabilities]` override the choice for the link.
+
 ## [mcp]
 
 The introspection and automation server. See [Testing](../guides/testing.md)
@@ -190,6 +215,8 @@ kit does not carry stops the package and lists what it does.
 | `os-launcher` | the app calls `open_url`, `open_path` or `reveal_path` | The URL and file launcher. |
 | `os-power` | the app calls `keep_awake` | Sleep inhibit. |
 | `os-lifecycle` | the app uses recent files, autostart or `single_instance` | Recent files, autostart, single-instance launch. |
+| `render-gpu` | `[render] backend` is `gpu` or `auto` | The GPU renderer. |
+| `render-cpu` | `[render] backend` is `cpu` or `auto` | The CPU renderer. |
 | `mcp` | never; `mcp = true` asks for it | The introspection server. |
 | `devtools` | never; `devtools = true` asks for it | The in-window devtools overlay. |
 
@@ -348,7 +375,7 @@ for getting them onto a machine:
 | `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
 | `lumen-browser` | The [`browser` namespace](scripting-candela.md#browser): popups and their messages, sharing, downloads, the leave-page prompt, media queries, a file picker, fullscreen. Browser only: on the desktop each call raises. | |
-| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the [`canvas` namespace](scripting-candela.md#canvas) that draws on it, with vello on the desktop and Canvas 2D in a page. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
+| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the [`canvas` namespace](scripting-candela.md#canvas) that draws on it, with the app's renderer on the desktop and Canvas 2D in a page. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
 | `lumen-cookie` | The [`cookie` namespace](scripting-candela.md#cookies): the page's cookies in a web build, and on the desktop a cookie jar that `http()` and `fetch()` requests carry and fill. | |
 | `lumen-download` | The `download` script namespace: fetch a URL to a file off the tick loop, reporting progress, completion, and failure as events. | `timeout_ms`, `max_bytes`, `max_concurrent` |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, byte-level file access, and file digests, resolved against the app directory. | `read_bytes_cap` |
