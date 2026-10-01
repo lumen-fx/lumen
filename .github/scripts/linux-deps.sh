@@ -9,8 +9,9 @@
 #   libwayland-dev      wayland session support under winit
 #   libvulkan1          Vulkan loader; wgpu builds the Vulkan backend on Linux
 #   mesa-vulkan-drivers lavapipe software ICD, the only Vulkan device a runner
-#                       has. Without it wgpu finds no adapter and the render
-#                       and golden-image tests skip instead of running.
+#                       has. Without it wgpu finds no adapter, the GPU render
+#                       tests skip, and the golden images compare on the CPU
+#                       backend alone.
 set -euxo pipefail
 
 sudo apt-get update

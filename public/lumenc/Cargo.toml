@@ -183,8 +183,8 @@ rustix = { workspace = true, optional = true, features = ["process"] }
 ctrlc = { workspace = true, optional = true }
 
 # Golden-image screenshot suite (tests/golden.rs) + the headless-render and
-# kanban DnD integration tests: offscreen wgpu+vello renderer / real app world
-# driven fully in-process - never a real window. Test-only, so these never
+# kanban DnD integration tests: offscreen renderers on both backends / real
+# app world driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
 # web_cli.rs renders a site the way a server would, straight through the
@@ -195,6 +195,7 @@ sha2 = { workspace = true }
 # The compiler-plugin fixture builder for tests/compiler_plugins.rs.
 lumenc-plugin = { workspace = true, features = ["host", "testing"] }
 lumen-render-wgpu = { workspace = true }
+lumen-render-cpu = { workspace = true }
 lumen-core = { workspace = true }
 lumen-os-dnd = { workspace = true }
 # Widget-component assertions (parse.rs / run_pipeline.rs): StateVisuals,

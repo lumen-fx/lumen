@@ -177,19 +177,13 @@ jobs:
       # Vulkan device, which covers the renderer end to end: device init,
       # scene encode, submit, and framebuffer readback.
       #
-      # Two things do not survive a runner and skip themselves with a printed
-      # reason rather than failing:
-      #
-      #   - Pixel checks on a software adapter. WARP and lavapipe draw close
-      #     to a GPU but not the same pixels, so those tests want a real GPU.
-      #   - The screenshot goldens. They carry the font set of the machine that
-      #     captured them; a runner resolves a different default sans-serif and
-      #     every case containing text redraws with different glyphs. Linux and
-      #     macOS runners diverge from the baselines by nearly the same amount
-      #     on the same cases despite sharing no renderer, which is the font
-      #     talking, not the rasterizer. Pinning a font file into the harness
-      #     would make them portable; widening the tolerance would only stop
-      #     them catching real text regressions.
+      # The screenshot goldens run on every leg: on the CPU backend always,
+      # and on the GPU backend where wgpu finds a hardware adapter or
+      # lavapipe, both against the same baselines. Their text is shaped with
+      # the font file the harness carries, so a runner draws the glyphs the
+      # baselines were captured with. Other pixel checks on a software
+      # adapter (WARP, lavapipe) skip themselves with a printed reason: those
+      # draw close to a GPU but not the same pixels.
       #
       # --no-fail-fast so one red target does not hide the rest of the suite.
       # This matrix doubles as the release parity check and a partial report

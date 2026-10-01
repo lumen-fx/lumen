@@ -33,4 +33,5 @@ raw-window-handle = "0.6"
 tracing.workspace = true
 
 [dev-dependencies]
-lumen-text-cosmic = { workspace = true }
+# The native-paint test draws through the same paint target a plugin gets.
+lumen-paint = { workspace = true }

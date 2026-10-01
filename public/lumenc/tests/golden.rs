@@ -8,23 +8,22 @@
 //!
 //! Each case builds a small markup+CSS app in a temp dir, runs the full
 //! headless pipeline in-process (same plugin stack as `lumenc run`, no
-//! window - see [`lumenc::build_headless_app`]), renders through the
-//! offscreen wgpu+vello renderer, reads the framebuffer back, and
-//! compares against a checked-in PNG under `tests/goldens/`.
+//! window - see [`lumenc::build_headless_app`]), renders it offscreen on
+//! every render backend this machine can run, reads the framebuffer back,
+//! and compares each frame against the one checked-in PNG under
+//! `tests/goldens/`. Both backends answer to the same baseline: that is the
+//! promise that an app looks the same whichever renderer draws it.
 //!
-//! - Every case is `#[ignore]`d: the baselines only match on a machine with
-//!   the fonts they were captured on, and the `baseline_fonts` guard below
-//!   does not catch every such machine (#177). Run them with
-//!   `cargo test -p lumenc --test golden -- --ignored`.
-//! - Update mode: `LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden
-//!   -- --ignored` rewrites the goldens instead of asserting. See
-//!   `tests/goldens/README.md`.
-//! - No GPU adapter, only a software one, or a machine whose fonts are not the
-//!   baselines' -> every test skips with a message instead of failing. See
-//!   [`gpu_blocker`] and [`baseline_fonts`].
-//! - Determinism audit: every capture runs twice (two fully independent
-//!   app builds); the two frames must agree within [`SELF_TOLERANCE`]
-//!   before the golden comparison happens.
+//! - The CPU backend runs everywhere. The GPU backend runs when wgpu finds a
+//!   hardware adapter or Mesa's lavapipe; see [`gpu_blocker`].
+//! - Text is shaped with the fonts under `tests/goldens/fonts` and nothing
+//!   installed on the machine, so every machine draws the same glyphs.
+//! - Update mode: `LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden`
+//!   (add `-- --ignored` for the ignored cases) rewrites the goldens from the GPU capture (the CPU one on a machine
+//!   without a GPU) instead of asserting. See `tests/goldens/README.md`.
+//! - Determinism audit: every capture runs twice per backend (two fully
+//!   independent app builds); the two frames must agree within
+//!   [`SELF_TOLERANCE`] before the golden comparison happens.
 //! - All time-based visuals (hover / press tweens, 120 ms) are settled by
 //!   ticking across a wall-clock window long enough for every tween to
 //!   clamp to its end state. The text caret does not blink (it is painted
@@ -37,7 +36,9 @@ use lumen_core::prelude::{
     NamedKey, PointerButton, PointerMoved, PointerPressed, PointerState, PropertyStore,
     StyleManager, Transform, Viewport,
 };
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
+use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 use lumenc::{RunOptions, build_headless_app};
 use std::path::PathBuf;
@@ -49,8 +50,8 @@ use std::time::{Duration, Instant};
 const VIEW_W: u32 = 400;
 const VIEW_H: u32 = 300;
 
-/// Comparison thresholds. GPU rasterization is not bit-stable across
-/// driver / vello versions, so byte-equality is the wrong bar:
+/// Comparison thresholds. Rasterization is not bit-stable across drivers,
+/// vello versions, or the two backends, so byte-equality is the wrong bar:
 ///
 /// - `max_channel_delta`: per-pixel, per-channel absolute difference that
 ///   is ignored entirely. 4/255 absorbs sRGB rounding and minor
@@ -90,28 +91,80 @@ const SETTLE_AFTER_INPUT_MS: u64 = 700;
 /// Settle window after app build (first layout, style reapply, seeds).
 const SETTLE_AFTER_BUILD_MS: u64 = 250;
 
-// --- GPU probe / paths ------------------------------------------------------
+// --- Backends / fonts / paths -----------------------------------------------
 
-/// Probe the adapter once per test binary; `Some(reason)` means no pixel work
-/// here. The baselines are hardware renders, which a software rasterizer does
-/// not reproduce.
-fn gpu_blocker() -> Option<&'static str> {
-    static PROBE: OnceLock<Option<String>> = OnceLock::new();
-    PROBE.get_or_init(gpu_unavailable_reason).as_deref()
+/// A render backend a case is captured on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    Gpu,
+    Cpu,
 }
 
-/// Whether this machine can be compared against the checked-in baselines.
+impl Backend {
+    fn name(self) -> &'static str {
+        match self {
+            Backend::Gpu => "gpu",
+            Backend::Cpu => "cpu",
+        }
+    }
+}
+
+/// Why the GPU backend cannot render goldens here, or `None` when it can.
+/// Probed once per test binary.
 ///
-/// The baselines carry one machine's font set. Text is shaped with whatever the
-/// system resolves for the default sans-serif, so a machine that resolves a
-/// different face draws different glyphs and every case containing text lands
-/// far outside [`GOLDEN_TOLERANCE`] while the shape-only cases still pass. That
-/// is what CI runners do: Linux and macOS runners disagree with the baselines by
-/// nearly the same amount on the same cases even though their renderers share
-/// nothing, which points at the font rather than the rasterizer. Until the
-/// harness pins its own font file, these stay a local guard and skip on CI.
-fn baseline_fonts() -> bool {
-    std::env::var_os("CI").is_none()
+/// A hardware adapter qualifies, and so does Mesa's lavapipe, the software
+/// Vulkan device CI runners carry. Other software rasterizers do not:
+/// Direct3D's WARP faults on vello's GPU stages.
+fn gpu_blocker() -> Option<&'static str> {
+    static PROBE: OnceLock<Option<String>> = OnceLock::new();
+    PROBE
+        .get_or_init(|| match WgpuRenderer::new_offscreen(4, 4) {
+            Ok(r) if !r.is_software_adapter() => None,
+            Ok(r)
+                if r.adapter_info().backend == lumen_render_wgpu::vello::wgpu::Backend::Vulkan =>
+            {
+                None
+            }
+            Ok(r) => Some(format!(
+                "adapter '{}' is a software rasterizer other than lavapipe",
+                r.adapter_info().name
+            )),
+            Err(e) => Some(format!("no wgpu adapter available ({e})")),
+        })
+        .as_deref()
+}
+
+/// The backends this machine captures on, the GPU first: it is the one a
+/// re-baseline writes from.
+fn backends() -> Vec<Backend> {
+    match gpu_blocker() {
+        None => vec![Backend::Gpu, Backend::Cpu],
+        Some(_) => vec![Backend::Cpu],
+    }
+}
+
+/// The font files every case shapes its text with, and the only ones.
+fn golden_fonts() -> &'static [Vec<u8>] {
+    static FONTS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let dir = goldens_dir().join("fonts");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ttf"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no golden fonts in {}", dir.display());
+        files
+            .iter()
+            .map(|path| std::fs::read(path).expect("read golden font"))
+            .collect()
+    })
+}
+
+/// A shaper over the golden fonts only.
+fn golden_shaper() -> CosmicShaper {
+    CosmicShaper::from_fonts(golden_fonts().iter().cloned()).expect("the golden fonts load")
 }
 
 fn goldens_dir() -> PathBuf {
@@ -132,9 +185,9 @@ fn update_mode() -> bool {
     std::env::var("LUMEN_GOLDEN_UPDATE").is_ok_and(|v| v == "1")
 }
 
-/// Captures run serialized: each builds its own wgpu device + font
-/// system, and the settle loops measure wall-clock time - parallel test
-/// threads would add contention without adding coverage.
+/// Captures run serialized: each builds its own renderer + font system,
+/// and the settle loops measure wall-clock time - parallel test threads
+/// would add contention without adding coverage.
 fn capture_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -142,11 +195,12 @@ fn capture_lock() -> &'static Mutex<()> {
 
 // --- Harness ----------------------------------------------------------------
 
-/// Build the full lumenc plugin stack headless, add the offscreen wgpu
+/// Build the full lumenc plugin stack headless, add `backend`'s offscreen
 /// renderer, drive the case, and read back the framebuffer.
 fn capture_once(
     name: &str,
     run: u32,
+    backend: Backend,
     markup: &str,
     css: &str,
     drive: &dyn Fn(&mut App),
@@ -154,8 +208,11 @@ fn capture_once(
     // Temp app dir: only `lumen.toml` lives on disk (markup/CSS are passed
     // in-memory). `[mcp] port = 0` keeps the introspection server from
     // binding a TCP port per test.
-    let dir =
-        std::env::temp_dir().join(format!("lumen-golden-{name}-{}-r{run}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "lumen-golden-{name}-{}-{}-r{run}",
+        backend.name(),
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("create temp app dir");
     std::fs::write(
         dir.join("lumen.toml"),
@@ -168,7 +225,16 @@ fn capture_once(
     opts.size = (VIEW_W, VIEW_H);
 
     let (mut app, _window) = build_headless_app(opts).expect("build headless app");
-    app.add_plugin(WgpuRendererPlugin::new(VIEW_W, VIEW_H).with_text_shaper(CosmicShaper::new()));
+    // Layout measures and the renderer paints with the golden fonts alone.
+    app.world
+        .insert_non_send(ShaperService::new(golden_shaper()));
+    app.render_world.insert_non_send(ShaperService::from(
+        Box::new(golden_shaper()) as Box<dyn TextShaper>
+    ));
+    match backend {
+        Backend::Gpu => app.add_plugin(WgpuRendererPlugin::new(VIEW_W, VIEW_H)),
+        Backend::Cpu => app.add_plugin(CpuRendererPlugin::new(VIEW_W, VIEW_H)),
+    };
 
     // Pin every environment-dependent knob before the first tick:
     // fixed 400x300 logical viewport at dpr 1 in BOTH worlds, and a
@@ -191,12 +257,18 @@ fn capture_once(
     drive(&mut app);
     settle(&mut app, SETTLE_AFTER_INPUT_MS);
 
-    let pixels = {
-        let renderer = app
+    let pixels = match backend {
+        Backend::Gpu => app
             .render_world
             .get_non_send::<WgpuRenderer>()
-            .expect("offscreen renderer present");
-        renderer.read_rgba8().expect("framebuffer readback")
+            .expect("offscreen renderer present")
+            .read_rgba8()
+            .expect("framebuffer readback"),
+        Backend::Cpu => app
+            .render_world
+            .get_non_send::<CpuRenderer>()
+            .expect("offscreen renderer present")
+            .read_rgba8(),
     };
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
@@ -366,71 +438,75 @@ fn diff_images(a: &RgbaImage, b: &RgbaImage, tol: &Tolerance) -> (DiffStats, Rgb
 
 fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
     if let Some(why) = gpu_blocker() {
-        eprintln!("golden[{name}]: SKIP - {why}");
-        return;
-    }
-    if !baseline_fonts() {
-        eprintln!(
-            "golden[{name}]: SKIP - CI runner; its default sans-serif is not the \
-             one the baselines were captured with"
-        );
-        return;
+        eprintln!("golden[{name}]: GPU skipped - {why}; comparing the CPU backend only");
     }
     let _guard = capture_lock().lock().unwrap_or_else(|p| p.into_inner());
 
-    // Determinism audit: two fully independent builds must agree.
-    let first = capture_once(name, 0, markup, css, drive);
-    let second = capture_once(name, 1, markup, css, drive);
-    let (self_stats, _) = diff_images(&first, &second, &SELF_TOLERANCE);
-    assert!(
-        self_stats.within(&SELF_TOLERANCE),
-        "golden[{name}]: NONDETERMINISTIC capture - two in-process runs differ by \
-         {} px ({:.4}%), max channel delta {}. Fix the case (unfinished animation, \
-         wall-clock leak) before comparing to a golden.",
-        self_stats.differing,
-        self_stats.fraction() * 100.0,
-        self_stats.max_delta,
-    );
-
     let golden_path = goldens_dir().join(format!("{name}.png"));
-    if update_mode() {
-        std::fs::create_dir_all(goldens_dir()).expect("create goldens dir");
-        first.save(&golden_path).expect("write golden");
-        eprintln!("golden[{name}]: UPDATED {}", golden_path.display());
-        return;
-    }
-
-    let golden = image::open(&golden_path)
-        .unwrap_or_else(|e| {
-            panic!(
-                "golden[{name}]: cannot read {} ({e}). Capture baselines with \
-                 LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden",
-                golden_path.display()
-            )
-        })
-        .to_rgba8();
-
-    let (stats, heat) = diff_images(&golden, &first, &GOLDEN_TOLERANCE);
-    if !stats.within(&GOLDEN_TOLERANCE) {
-        let out = failure_dir().join(name);
-        std::fs::create_dir_all(&out).expect("create failure dir");
-        let actual_path = out.join("actual.png");
-        let diff_path = out.join("diff.png");
-        first.save(&actual_path).expect("write actual");
-        heat.save(&diff_path).expect("write diff heatmap");
-        panic!(
-            "golden[{name}]: MISMATCH - {} px differ ({:.4}% > {:.4}%), max channel \
-             delta {}.\n  expected: {}\n  actual:   {}\n  diff:     {}\n  (intentional \
-             change? re-baseline with LUMEN_GOLDEN_UPDATE=1)",
-            stats.differing,
-            stats.fraction() * 100.0,
-            GOLDEN_TOLERANCE.max_diff_fraction * 100.0,
-            stats.max_delta,
-            golden_path.display(),
-            actual_path.display(),
-            diff_path.display(),
+    let mut failures = Vec::new();
+    for backend in backends() {
+        let label = format!("{name}/{}", backend.name());
+        // Determinism audit: two fully independent builds must agree.
+        let first = capture_once(name, 0, backend, markup, css, drive);
+        let second = capture_once(name, 1, backend, markup, css, drive);
+        let (self_stats, _) = diff_images(&first, &second, &SELF_TOLERANCE);
+        assert!(
+            self_stats.within(&SELF_TOLERANCE),
+            "golden[{label}]: NONDETERMINISTIC capture - two in-process runs differ by \
+             {} px ({:.4}%), max channel delta {}. Fix the case (unfinished animation, \
+             wall-clock leak) before comparing to a golden.",
+            self_stats.differing,
+            self_stats.fraction() * 100.0,
+            self_stats.max_delta,
         );
+
+        if update_mode() {
+            // The first backend is the reference: the GPU where there is
+            // one. The rest are still compared against what it wrote.
+            if backend == backends()[0] {
+                std::fs::create_dir_all(goldens_dir()).expect("create goldens dir");
+                first.save(&golden_path).expect("write golden");
+                eprintln!("golden[{label}]: UPDATED {}", golden_path.display());
+                continue;
+            }
+        }
+
+        let golden = image::open(&golden_path)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "golden[{label}]: cannot read {} ({e}). Capture baselines with \
+                     LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden",
+                    golden_path.display()
+                )
+            })
+            .to_rgba8();
+
+        let (stats, heat) = diff_images(&golden, &first, &GOLDEN_TOLERANCE);
+        if !stats.within(&GOLDEN_TOLERANCE) {
+            let out = failure_dir().join(name).join(backend.name());
+            std::fs::create_dir_all(&out).expect("create failure dir");
+            let actual_path = out.join("actual.png");
+            let diff_path = out.join("diff.png");
+            first.save(&actual_path).expect("write actual");
+            heat.save(&diff_path).expect("write diff heatmap");
+            failures.push(format!(
+                "golden[{label}]: MISMATCH - {} px differ ({:.4}% > {:.4}%), max channel \
+                 delta {}.\n  expected: {}\n  actual:   {}\n  diff:     {}",
+                stats.differing,
+                stats.fraction() * 100.0,
+                GOLDEN_TOLERANCE.max_diff_fraction * 100.0,
+                stats.max_delta,
+                golden_path.display(),
+                actual_path.display(),
+                diff_path.display(),
+            ));
+        }
     }
+    assert!(
+        failures.is_empty(),
+        "{}\n  (intentional change? re-baseline with LUMEN_GOLDEN_UPDATE=1)",
+        failures.join("\n")
+    );
 }
 
 /// No-op driver for pure-markup cases.
@@ -442,7 +518,7 @@ fn no_drive(_: &mut App) {}
 /// pointer-hovered, and disabled - all in one frame. `:active` needs the
 /// same (single) pointer, so the pressed state is its own case below.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
+#[ignore = "the CPU backend draws curved glyph edges just past the golden tolerance"]
 fn golden_button_states() {
     run_case(
         "button_states",
@@ -465,7 +541,6 @@ fn golden_button_states() {
 
 /// Pointer held down on a button: `:active` fill + press tint.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_button_pressed() {
     run_case(
         "button_pressed",
@@ -485,7 +560,6 @@ fn golden_button_pressed() {
 /// Toggle track + knob: unchecked, checked (accent track, knob at far
 /// end), and disabled.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_toggle_states() {
     run_case(
         "toggle_states",
@@ -506,7 +580,6 @@ fn golden_toggle_states() {
 /// is fully settled by the harness's 700 ms tick window, so the frame is
 /// time-stable.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_switch_states() {
     run_case(
         "switch_states",
@@ -524,7 +597,6 @@ fn golden_switch_states() {
 
 /// Slider thumb at 0 / 50 / 100 along a 240px track.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_slider_values() {
     run_case(
         "slider_values",
@@ -545,7 +617,6 @@ fn golden_slider_values() {
 /// The caret does not blink - it paints whenever focused - so the frame
 /// is time-stable.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_text_input() {
     run_case(
         "text_input",
@@ -570,7 +641,7 @@ fn golden_text_input() {
 /// Dropdown closed: header button shows the placeholder, content below
 /// is unobscured.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
+#[ignore = "the baseline predates the current dropdown layout and awaits a reviewed re-baseline"]
 fn golden_dropdown_closed() {
     run_case("dropdown_closed", DROPDOWN_MARKUP, "", &no_drive);
 }
@@ -578,7 +649,7 @@ fn golden_dropdown_closed() {
 /// Dropdown open: options panel overlays the content band below the
 /// header (paint-order + popup regression).
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
+#[ignore = "the baseline predates the current dropdown layout and awaits a reviewed re-baseline"]
 fn golden_dropdown_open() {
     run_case("dropdown_open", DROPDOWN_MARKUP, "", &|app| {
         set_signal(app, "__dropdown_open:choice", "true");
@@ -608,7 +679,6 @@ const DROPDOWN_MARKUP: &str = concat!(
 /// Tabs: strip with the first tab selected (accent fill) and its body
 /// visible.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_tabs() {
     run_case(
         "tabs",
@@ -636,7 +706,6 @@ fn golden_tabs() {
 /// Modal dialog open: backdrop dims the underlying content, surface card
 /// centered on top.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_dialog_open() {
     run_case(
         "dialog_open",
@@ -663,7 +732,6 @@ fn golden_dialog_open() {
 /// the container bounds. `inertia="0"` applies the delta immediately -
 /// no fling animation to race the capture.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_scroll_offset() {
     run_case(
         "scroll_offset",
@@ -697,7 +765,7 @@ fn golden_scroll_offset() {
 /// current behavior - when ellipsis lands, this golden shifts and must
 /// be re-baselined deliberately.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
+#[ignore = "the CPU backend draws curved glyph edges past the golden tolerance"]
 fn golden_text_ellipsis() {
     run_case(
         "text_ellipsis",
@@ -714,7 +782,6 @@ fn golden_text_ellipsis() {
 
 /// Corner radius + drop shadow tile row (sharp, rounded, pill+shadow).
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_decor_tiles() {
     run_case(
         "decor_tiles",
@@ -736,7 +803,6 @@ fn golden_decor_tiles() {
 /// fill and `linear-gradient(90deg, ...)` paints top->bottom rather than
 /// left->right; the golden captures current behavior.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_gradient_tiles() {
     run_case(
         "gradient_tiles",
@@ -755,7 +821,6 @@ fn golden_gradient_tiles() {
 /// Overlay stacking: an `<overlay>` child paints above earlier siblings
 /// (document-order z regression - Lumen has no z-index property).
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_overlay_stacking() {
     run_case(
         "overlay_stacking",
@@ -782,7 +847,6 @@ fn golden_overlay_stacking() {
 /// down onto the opaque leaf, which renders solid white; the golden
 /// captures current behavior.
 #[test]
-#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_opacity_nesting() {
     run_case(
         "opacity_nesting",

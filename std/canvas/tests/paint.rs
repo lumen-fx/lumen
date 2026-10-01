@@ -1,12 +1,11 @@
-//! The pixels, on a real GPU.
+//! The pixels, on every render backend.
 //!
-//! Everything else about this module can be checked without one; whether a
-//! canvas appears cannot. These cases run the wgpu/vello backend
-//! offscreen, draw through the module the way a script would, and read the
-//! framebuffer back.
-//!
-//! They skip themselves on a machine with no usable adapter, which is the
-//! same contract every other pixel-level suite in the tree has.
+//! Everything else about this module can be checked without a renderer;
+//! whether a canvas appears cannot. These cases run each backend offscreen,
+//! draw through the module the way a script would, and read the framebuffer
+//! back. The CPU backend runs everywhere; the GPU backend skips itself on a
+//! machine with no usable adapter, the same contract every other GPU pixel
+//! suite in the tree has.
 
 use lumen_canvas::{Canvas, CanvasPlugin};
 use lumen_core::app::App;
@@ -14,6 +13,7 @@ use lumen_core::components::{
     Color, Length, LumenId, LumenTag, Opacity, Style, Transform, Visible,
 };
 use lumen_core::prelude::Viewport;
+use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 
 const W: u32 = 64;
@@ -22,11 +22,34 @@ const H: u32 = 64;
 /// The canvas store is process-global, so these run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A 64x64 offscreen app with the canvas module installed and a black clear.
-fn app() -> App {
+/// A render backend a case runs on.
+#[derive(Clone, Copy, Debug)]
+enum Backend {
+    Gpu,
+    Cpu,
+}
+
+/// The backends this machine can run: the CPU always, the GPU when it has
+/// an adapter.
+fn backends() -> Vec<Backend> {
+    match gpu_unavailable_reason() {
+        None => vec![Backend::Gpu, Backend::Cpu],
+        Some(why) => {
+            eprintln!("GPU skipped: {why}");
+            vec![Backend::Cpu]
+        }
+    }
+}
+
+/// A 64x64 offscreen app on `backend` with the canvas module installed and
+/// a black clear.
+fn app(backend: Backend) -> App {
     lumen_canvas::store::reset();
     let mut app = App::new();
-    app.add_plugin(WgpuRendererPlugin::new(W, H));
+    match backend {
+        Backend::Gpu => app.add_plugin(WgpuRendererPlugin::new(W, H)),
+        Backend::Cpu => app.add_plugin(CpuRendererPlugin::new(W, H)),
+    };
     app.add_plugin(CanvasPlugin::default());
     let mut vp = app.render_world.resource_mut::<Viewport>();
     vp.size = glam::Vec2::new(W as f32, H as f32);
@@ -64,11 +87,14 @@ fn fill_green(id: &str, x: f64, y: f64, w: f64, h: f64) {
 }
 
 fn read_back(app: &App) -> Vec<u8> {
-    app.render_world
-        .get_non_send::<WgpuRenderer>()
-        .expect("renderer")
-        .read_rgba8()
-        .expect("readback")
+    match app.render_world.get_non_send::<WgpuRenderer>() {
+        Some(gpu) => gpu.read_rgba8().expect("readback"),
+        None => app
+            .render_world
+            .get_non_send::<CpuRenderer>()
+            .expect("a renderer")
+            .read_rgba8(),
+    }
 }
 
 fn pixel(pixels: &[u8], x: u32, y: u32) -> (u8, u8, u8) {
@@ -87,151 +113,133 @@ fn draw(app: &mut App) -> Vec<u8> {
 #[test]
 fn what_a_script_draws_lands_inside_the_element_and_nowhere_else() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
+        fill_green("chart", 0.0, 0.0, 32.0, 32.0);
+        let pixels = draw(&mut app);
+
+        let (r, g, b) = pixel(&pixels, 32, 32);
+        assert!(g > 200 && r < 40 && b < 40, "canvas centre: {r},{g},{b}");
+        let (r, g, b) = pixel(&pixels, 2, 2);
+        assert!(
+            r < 40 && g < 40 && b < 40,
+            "outside the element should stay clear: {r},{g},{b}"
+        );
     }
-
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
-    fill_green("chart", 0.0, 0.0, 32.0, 32.0);
-    let pixels = draw(&mut app);
-
-    let (r, g, b) = pixel(&pixels, 32, 32);
-    assert!(g > 200 && r < 40 && b < 40, "canvas centre: {r},{g},{b}");
-    let (r, g, b) = pixel(&pixels, 2, 2);
-    assert!(
-        r < 40 && g < 40 && b < 40,
-        "outside the element should stay clear: {r},{g},{b}"
-    );
 }
 
 #[test]
 fn drawing_past_the_edge_is_clipped_to_the_element() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (16.0, 16.0), (16.0, 16.0), (16.0, 16.0));
+        // Four times the drawing space, in canvas units.
+        fill_green("chart", 0.0, 0.0, 64.0, 64.0);
+        let pixels = draw(&mut app);
+
+        let (_, g, _) = pixel(&pixels, 20, 20);
+        assert!(g > 200, "inside the element: {g}");
+        let (r, g, b) = pixel(&pixels, 40, 40);
+        assert!(
+            r < 40 && g < 40 && b < 40,
+            "a canvas must not spill onto its siblings: {r},{g},{b}"
+        );
     }
-
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (16.0, 16.0), (16.0, 16.0), (16.0, 16.0));
-    // Four times the drawing space, in canvas units.
-    fill_green("chart", 0.0, 0.0, 64.0, 64.0);
-    let pixels = draw(&mut app);
-
-    let (_, g, _) = pixel(&pixels, 20, 20);
-    assert!(g > 200, "inside the element: {g}");
-    let (r, g, b) = pixel(&pixels, 40, 40);
-    assert!(
-        r < 40 && g < 40 && b < 40,
-        "a canvas must not spill onto its siblings: {r},{g},{b}"
-    );
 }
 
 #[test]
 fn a_box_larger_than_the_drawing_space_scales_the_drawing_onto_it() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        let mut app = app(backend);
+        // A 16-unit drawing space in a 48-pixel box: one unit is three pixels.
+        spawn_canvas(&mut app, "chart", (8.0, 8.0), (48.0, 48.0), (16.0, 16.0));
+        // The top-left quarter of the drawing space.
+        fill_green("chart", 0.0, 0.0, 8.0, 8.0);
+        let pixels = draw(&mut app);
+
+        // Scaled up, that quarter covers the top-left 24 pixels of the box.
+        let (_, g, _) = pixel(&pixels, 26, 26);
+        assert!(g > 200, "the drawing scaled with the box: {g}");
+        let (r, g, b) = pixel(&pixels, 44, 44);
+        assert!(
+            r < 40 && g < 40 && b < 40,
+            "and only the quarter that was drawn: {r},{g},{b}"
+        );
     }
-
-    let mut app = app();
-    // A 16-unit drawing space in a 48-pixel box: one unit is three pixels.
-    spawn_canvas(&mut app, "chart", (8.0, 8.0), (48.0, 48.0), (16.0, 16.0));
-    // The top-left quarter of the drawing space.
-    fill_green("chart", 0.0, 0.0, 8.0, 8.0);
-    let pixels = draw(&mut app);
-
-    // Scaled up, that quarter covers the top-left 24 pixels of the box.
-    let (_, g, _) = pixel(&pixels, 26, 26);
-    assert!(g > 200, "the drawing scaled with the box: {g}");
-    let (r, g, b) = pixel(&pixels, 44, 44);
-    assert!(
-        r < 40 && g < 40 && b < 40,
-        "and only the quarter that was drawn: {r},{g},{b}"
-    );
 }
 
 #[test]
 fn an_ancestor_opacity_reaches_the_pixels() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
+        fill_green("chart", 0.0, 0.0, 32.0, 32.0);
+        let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenTag)>();
+        let entity = q
+            .iter(&app.world)
+            .map(|(e, _)| e)
+            .next()
+            .expect("the canvas element");
+        app.world.entity_mut(entity).insert(Opacity(0.5));
+        let pixels = draw(&mut app);
+
+        let (_, g, _) = pixel(&pixels, 32, 32);
+        assert!(
+            (100..=180).contains(&g),
+            "half-opaque green over black: {g}"
+        );
     }
-
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
-    fill_green("chart", 0.0, 0.0, 32.0, 32.0);
-    let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenTag)>();
-    let entity = q
-        .iter(&app.world)
-        .map(|(e, _)| e)
-        .next()
-        .expect("the canvas element");
-    app.world.entity_mut(entity).insert(Opacity(0.5));
-    let pixels = draw(&mut app);
-
-    let (_, g, _) = pixel(&pixels, 32, 32);
-    assert!(
-        (100..=180).contains(&g),
-        "half-opaque green over black: {g}"
-    );
 }
 
 #[test]
 fn the_painter_recognizes_the_engines_draw_target() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        // The downcast in the painter is a TypeId match, so it holds only while
+        // this module and the renderer mean the same lumen-paint. Nothing here would
+        // fail to compile if they drifted apart; the pixels would simply stop
+        // arriving, which is what this asserts against.
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (0.0, 0.0), (64.0, 64.0), (64.0, 64.0));
+        fill_green("chart", 0.0, 0.0, 64.0, 64.0);
+        let pixels = draw(&mut app);
+
+        let (_, g, _) = pixel(&pixels, 32, 32);
+        assert!(
+            g > 200,
+            "the canvas painted nothing, which is what a renderer / module \
+             lumen-paint mismatch looks like: check that std/canvas takes \
+             lumen-paint through lumen-module's paint feature"
+        );
     }
-
-    // The downcast in the painter is a TypeId match, so it holds only while
-    // this module and the renderer mean the same lumen-paint. Nothing here would
-    // fail to compile if they drifted apart; the pixels would simply stop
-    // arriving, which is what this asserts against.
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (0.0, 0.0), (64.0, 64.0), (64.0, 64.0));
-    fill_green("chart", 0.0, 0.0, 64.0, 64.0);
-    let pixels = draw(&mut app);
-
-    let (_, g, _) = pixel(&pixels, 32, 32);
-    assert!(
-        g > 200,
-        "the canvas painted nothing, which is what a renderer / module \
-         lumen-paint mismatch looks like: check that std/canvas takes \
-         lumen-paint through lumen-module's paint feature"
-    );
 }
 
 #[test]
 fn a_canvas_that_drew_nothing_this_tick_keeps_its_revision() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
+        fill_green("chart", 0.0, 0.0, 32.0, 32.0);
+        draw(&mut app);
+        let after_drawing = revision(&mut app);
+        assert!(after_drawing > 0);
+
+        // Two idle ticks: no calls recorded, so nothing is re-encoded and the
+        // renderer is told the leaf is the one it already has.
+        app.tick();
+        app.tick();
+        assert_eq!(revision(&mut app), after_drawing);
+
+        // One more call and it moves again.
+        fill_green("chart", 0.0, 0.0, 4.0, 4.0);
+        app.tick();
+        assert!(revision(&mut app) > after_drawing);
     }
-
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
-    fill_green("chart", 0.0, 0.0, 32.0, 32.0);
-    draw(&mut app);
-    let after_drawing = revision(&mut app);
-    assert!(after_drawing > 0);
-
-    // Two idle ticks: no calls recorded, so nothing is re-encoded and the
-    // renderer is told the leaf is the one it already has.
-    app.tick();
-    app.tick();
-    assert_eq!(revision(&mut app), after_drawing);
-
-    // One more call and it moves again.
-    fill_green("chart", 0.0, 0.0, 4.0, 4.0);
-    app.tick();
-    assert!(revision(&mut app) > after_drawing);
 }
 
 /// The canvas's revision, which is what tells the renderer its pixels moved.
@@ -243,37 +251,34 @@ fn revision(app: &mut App) -> u64 {
 #[test]
 fn a_fade_over_a_canvas_that_is_not_drawing_still_reaches_the_pixels() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = gpu_unavailable_reason() {
-        eprintln!("skipping: {why}");
-        return;
+    for backend in backends() {
+        // The seam compares native leaves by their stamp, and treats an equal
+        // stamp at equal geometry as equal pixels. A canvas that drew once and
+        // then only fades changes nothing else about its leaf, so an opacity left
+        // out of the stamp is an alpha that never updates again.
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
+        fill_green("chart", 0.0, 0.0, 32.0, 32.0);
+        let pixels = draw(&mut app);
+        let (_, opaque, _) = pixel(&pixels, 32, 32);
+        assert!(opaque > 200, "the canvas drew: {opaque}");
+
+        // Fade it, and draw nothing at all.
+        let entity = {
+            let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenTag)>();
+            q.iter(&app.world)
+                .map(|(e, _)| e)
+                .next()
+                .expect("the canvas element")
+        };
+        app.world.entity_mut(entity).insert(Opacity(0.5));
+        app.tick();
+        app.tick();
+
+        let (_, faded, _) = pixel(&read_back(&app), 32, 32);
+        assert!(
+            faded < opaque - 40,
+            "the fade reached the pixels: {faded} against {opaque}"
+        );
     }
-
-    // The seam compares native leaves by their stamp, and treats an equal
-    // stamp at equal geometry as equal pixels. A canvas that drew once and
-    // then only fades changes nothing else about its leaf, so an opacity left
-    // out of the stamp is an alpha that never updates again.
-    let mut app = app();
-    spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
-    fill_green("chart", 0.0, 0.0, 32.0, 32.0);
-    let pixels = draw(&mut app);
-    let (_, opaque, _) = pixel(&pixels, 32, 32);
-    assert!(opaque > 200, "the canvas drew: {opaque}");
-
-    // Fade it, and draw nothing at all.
-    let entity = {
-        let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenTag)>();
-        q.iter(&app.world)
-            .map(|(e, _)| e)
-            .next()
-            .expect("the canvas element")
-    };
-    app.world.entity_mut(entity).insert(Opacity(0.5));
-    app.tick();
-    app.tick();
-
-    let (_, faded, _) = pixel(&read_back(&app), 32, 32);
-    assert!(
-        faded < opaque - 40,
-        "the fade reached the pixels: {faded} against {opaque}"
-    );
 }
