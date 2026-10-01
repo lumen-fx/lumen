@@ -238,7 +238,35 @@ impl CosmicShaper {
         Self::from_font_system(font_cache::load_font_system())
     }
 
-    /// Wrap an already-built [`FontSystem`]. The shared body of the two
+    /// Build a shaper that knows only `fonts`, the raw bytes of font files,
+    /// and nothing installed on the machine. Every generic family
+    /// (`sans-serif`, `serif`, `monospace`) resolves to the first face's
+    /// family. Text shapes the same on every machine, which is what a
+    /// screenshot compared across machines needs. `None` when the bytes hold
+    /// no font face: a shaper with nothing to draw with cannot shape.
+    pub fn from_fonts<I>(fonts: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = Vec<u8>>,
+    {
+        let mut db = fontdb::Database::new();
+        for bytes in fonts {
+            db.load_font_data(bytes);
+        }
+        let family = db
+            .faces()
+            .next()
+            .and_then(|face| face.families.first())
+            .map(|(family, _)| family.clone())?;
+        db.set_sans_serif_family(family.clone());
+        db.set_serif_family(family.clone());
+        db.set_monospace_family(family);
+        Some(Self::from_font_system(FontSystem::new_with_locale_and_db(
+            String::from("en-US"),
+            db,
+        )))
+    }
+
+    /// Wrap an already-built [`FontSystem`]. The shared body of the
     /// public constructors, and the seam the unit tests build a shaper
     /// over a hand-made font database through.
     fn from_font_system(mut font_system: FontSystem) -> Self {
@@ -1222,6 +1250,35 @@ mod tests {
         }
         db.set_sans_serif_family(family);
         db
+    }
+
+    /// A shaper built from font files alone answers every generic family
+    /// with the first file's family and draws with nothing else; with no
+    /// face in the bytes there is no shaper, rather than one that reaches
+    /// for the system's fonts.
+    #[test]
+    fn a_shaper_from_fonts_knows_only_those_fonts() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../public/lumenc/tests/goldens/fonts/NotoSans-Regular.ttf"
+        );
+        let bytes = std::fs::read(path).expect("the golden font");
+        let mut shaper = CosmicShaper::from_fonts([bytes]).expect("one face");
+        let db = shaper.font_system.db();
+        assert_eq!(db.faces().count(), 1);
+        for generic in [FamilyChoice::SansSerif, FamilyChoice::Monospace] {
+            assert_eq!(
+                provided_family_name(db, &generic).as_deref(),
+                Some("Noto Sans")
+            );
+        }
+        let run = shaper
+            .shape("Save", 16.0, ShapeOptions::default())
+            .expect("the run shapes");
+        assert_eq!(run.glyphs.len(), 4);
+
+        assert!(CosmicShaper::from_fonts(Vec::new()).is_none());
+        assert!(CosmicShaper::from_fonts([b"not a font".to_vec()]).is_none());
     }
 
     /// The sans-serif alias resolves to the family the database holds,

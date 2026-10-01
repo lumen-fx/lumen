@@ -54,13 +54,14 @@ default = ["engine-dylib"]
 engine-dylib = ["lumen-module/engine-dylib"]
 
 # Tests only: the compiled-in-shape tests build a headless app around the
-# plugin the way `lumenc run` would, the paint test drives a real GPU, and the
-# module-shape test drives the loader end to end over a subprocess. The
-# shipping crate stays on `lumen-module` and `image`.
+# plugin the way `lumenc run` would, the paint test draws on both render
+# backends, and the module-shape test drives the loader end to end over a
+# subprocess. The shipping crate stays on `lumen-module` and `image`.
 [dev-dependencies]
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-render-wgpu = { workspace = true }
+lumen-render-cpu = { workspace = true }
 lumen-runtime = { workspace = true }
 # The shaper the app itself installs, so the encode tests draw text with the
 # fonts a real app would rather than skipping the path.
