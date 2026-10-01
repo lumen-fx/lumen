@@ -438,12 +438,11 @@ pub fn drain_file_dialog_results(
     mut out: MessageWriter<FileDialogResult>,
 ) {
     for cmd in commands.drain() {
-        if let Command::Typed { type_id, payload } = cmd {
-            if type_id == TypeId::of::<FileDialogResultCommand>() {
-                if let Ok(p) = payload.downcast::<FileDialogResultCommand>() {
-                    out.write(FileDialogResult::from(*p));
-                }
-            }
+        if let Command::Typed { type_id, payload } = cmd
+            && type_id == TypeId::of::<FileDialogResultCommand>()
+            && let Ok(p) = payload.downcast::<FileDialogResultCommand>()
+        {
+            out.write(FileDialogResult::from(*p));
         }
     }
 }

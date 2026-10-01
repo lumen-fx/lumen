@@ -243,15 +243,15 @@ pub fn apply_dom_commands(world: &mut World) {
                 source,
                 reserved: tok,
             } => {
-                if let Some(src) = resolve(world, &reserved, source) {
-                    if let Some(el) = element_from_entity(world, src) {
-                        // Read back out of a live entity, so its strings are
-                        // the resolved ones the original was built with.
-                        let entity =
-                            crate::spawn::spawn_subtree(world, &el, None, Placeholders::Resolved);
-                        reserved.insert(tok, entity);
-                        style_dirty = true;
-                    }
+                if let Some(src) = resolve(world, &reserved, source)
+                    && let Some(el) = element_from_entity(world, src)
+                {
+                    // Read back out of a live entity, so its strings are
+                    // the resolved ones the original was built with.
+                    let entity =
+                        crate::spawn::spawn_subtree(world, &el, None, Placeholders::Resolved);
+                    reserved.insert(tok, entity);
+                    style_dirty = true;
                 }
             }
             ScriptCommand::Insert {

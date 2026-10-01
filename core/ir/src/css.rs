@@ -1120,10 +1120,10 @@ fn collect_matching_rules(
     };
     let mut matched: Vec<MatchedRule> = Vec::new();
     for (rule_idx, rule) in css.rules.iter().enumerate() {
-        if let Some(mq) = &rule.media {
-            if !mq.matches(media) {
-                continue;
-            }
+        if let Some(mq) = &rule.media
+            && !mq.matches(media)
+        {
+            continue;
         }
         for (sel_idx, sel) in rule.selectors.iter().enumerate() {
             if let Some(subject) = match_selector(sel, &subject_ctx) {
@@ -1276,15 +1276,15 @@ fn extract_subject_pseudo(c: &CompoundSelector) -> SubjectPseudo {
 
 fn match_compound(compound: &CompoundSelector, node: &NodeCtx) -> bool {
     let el = node.el;
-    if let Some(t) = &compound.tag {
-        if t != &el.tag {
-            return false;
-        }
+    if let Some(t) = &compound.tag
+        && t != &el.tag
+    {
+        return false;
     }
-    if let Some(id) = &compound.id {
-        if el.id.as_deref() != Some(id.as_str()) {
-            return false;
-        }
+    if let Some(id) = &compound.id
+        && el.id.as_deref() != Some(id.as_str())
+    {
+        return false;
     }
     for c in &compound.classes {
         if !el.classes.iter().any(|x| x == c) {

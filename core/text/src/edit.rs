@@ -749,7 +749,7 @@ pub fn caret_blink(
             .as_millis()
             .checked_div(blink.period.as_millis())
             .unwrap_or(0);
-        blink.visible = periods % 2 == 0;
+        blink.visible = periods.is_multiple_of(2);
     }
     // Repaint on a visibility flip, and on fresh focus (focus markers
     // aren't in `roll_up_frame_dirty`'s watch list, so nothing else

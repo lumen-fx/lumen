@@ -6,7 +6,7 @@
 use lumen_core::components::Color;
 use lumen_core::node_ir::Node;
 use lumen_core::render_world::{Brush, FrameDamage, Rect};
-use lumen_render_wgpu::diff_retained_scenes;
+use lumen_paint::diff_retained_scenes;
 use std::sync::Arc;
 
 fn rect(origin: (f32, f32), size: (f32, f32), color: Color) -> Arc<Node> {

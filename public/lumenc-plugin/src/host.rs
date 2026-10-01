@@ -309,33 +309,31 @@ impl PluginSet {
             }
             let input = bytes.as_deref().expect("encoded above");
             let ctx = self.ctx(plugin, entry, entry);
-            if let Some(hook) = desc.lint {
-                if let HookOut::Bytes(out) = call(plugin, hook, "lint", input, &ctx)? {
-                    let batch: Vec<Finding> =
-                        codec::decode(&out).map_err(|e| PluginError::Codec {
-                            plugin: plugin.name.clone(),
-                            hook: "lint",
-                            message: e,
-                        })?;
-                    findings.extend(batch.into_iter().map(|f| (plugin.name.clone(), f)));
-                }
+            if let Some(hook) = desc.lint
+                && let HookOut::Bytes(out) = call(plugin, hook, "lint", input, &ctx)?
+            {
+                let batch: Vec<Finding> = codec::decode(&out).map_err(|e| PluginError::Codec {
+                    plugin: plugin.name.clone(),
+                    hook: "lint",
+                    message: e,
+                })?;
+                findings.extend(batch.into_iter().map(|f| (plugin.name.clone(), f)));
             }
-            if let Some(hook) = desc.emit {
-                if let HookOut::Bytes(out) = call(plugin, hook, "emit", input, &ctx)? {
-                    let outputs: Vec<Output> =
-                        codec::decode(&out).map_err(|e| PluginError::Codec {
-                            plugin: plugin.name.clone(),
-                            hook: "emit",
-                            message: e,
-                        })?;
-                    // Accumulated per NAME and written once after the chain:
-                    // an app may declare one plugin several times (different
-                    // configs), and per-call writes would let a later entry's
-                    // directory reset destroy an earlier entry's files.
-                    match emitted.iter_mut().find(|(n, _)| *n == plugin.name) {
-                        Some((_, all)) => all.extend(outputs),
-                        None => emitted.push((plugin.name.clone(), outputs)),
-                    }
+            if let Some(hook) = desc.emit
+                && let HookOut::Bytes(out) = call(plugin, hook, "emit", input, &ctx)?
+            {
+                let outputs: Vec<Output> = codec::decode(&out).map_err(|e| PluginError::Codec {
+                    plugin: plugin.name.clone(),
+                    hook: "emit",
+                    message: e,
+                })?;
+                // Accumulated per NAME and written once after the chain:
+                // an app may declare one plugin several times (different
+                // configs), and per-call writes would let a later entry's
+                // directory reset destroy an earlier entry's files.
+                match emitted.iter_mut().find(|(n, _)| *n == plugin.name) {
+                    Some((_, all)) => all.extend(outputs),
+                    None => emitted.push((plugin.name.clone(), outputs)),
                 }
             }
         }

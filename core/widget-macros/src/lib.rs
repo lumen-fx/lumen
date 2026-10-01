@@ -310,10 +310,10 @@ fn emit_prop_write(field: &Field) -> syn::Result<TokenStream2> {
 }
 
 fn type_is_string(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
-            return seg.ident == "String";
-        }
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last()
+    {
+        return seg.ident == "String";
     }
     false
 }

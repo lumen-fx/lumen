@@ -135,6 +135,7 @@ members = [
     "core/mcp",
     "core/module-registry",
     "core/modules",
+    "core/paint",
     "core/plugin-abi",
     "core/primitives",
     "core/runtime",
@@ -180,7 +181,7 @@ edition = "2024"
 license = "MPL-2.0"
 authors = ["Lumen contributors"]
 repository = "https://github.com/lumen-fx/lumen"
-rust-version = "1.85"
+rust-version = "1.88"
 homepage = "https://lumenfx.dev"
 documentation = "https://docs.lumenfx.dev"
 # Registry metadata every crate inherits with `keywords.workspace = true` /
@@ -269,6 +270,7 @@ lumen-os-mime = { path = "os/mime" }
 lumen-os-notify = { path = "os/notify" }
 lumen-os-power = { path = "os/power" }
 lumen-os-tray = { path = "os/tray" }
+lumen-paint = { path = "core/paint" }
 # Runtime-plugin SDK and loader. Defaults off: plugin authors take the trait
 # and macro only; the runtime asks for the `host` loader feature.
 lumen-plugin = { path = "public/lumen-plugin", default-features = false }
@@ -360,20 +362,24 @@ wgpu = { version = "29", default-features = false }
 vello = { version = "0.9", default-features = false, features = ["wgpu"] }
 # SVG parser. vello_svg can't be used directly: its 0.8 release pins
 # vello 0.6 and its 0.9 release pins vello 0.7 - both conflict with
-# our pinned vello 0.9 + wgpu 29. So we pull `usvg` standalone, walk
-# the parsed tree on the asset worker, and emit kurbo paths into our
-# own vello::Scene. Keeps vello version control local and supports the
-# common SVG-icon subset (paths + solid fills/strokes).
+# our pinned vello 0.9 + wgpu 29. So we pull `usvg` standalone, parse
+# on the asset worker, and paint the tree through `lumen-paint`, which
+# every render backend shares. Supports the common SVG-icon subset
+# (paths + solid fills/strokes).
 #
 # default-features = false drops usvg's `text` stack (rustybuzz + its
 # fontdb wiring) - a SECOND shaping engine next to cosmic-text's
 # harfrust, ~0.5 MiB of duplicate .text in release lumenc. No behavior
-# change: the usvg->vello walker in lumen-assets has always ignored
+# change: the SVG painter in lumen-paint has always ignored
 # `Node::Text` (the enum variant exists regardless of the feature), so
 # SVG <text> was never rendered. If SVG text support ever lands,
 # prefer pre-flattening via cosmic-text over re-enabling usvg's
 # parallel shaper stack.
 usvg = { version = "0.48", default-features = false }
+# Brushes, colors, images, and (through `peniko::kurbo`) geometry: the paint
+# vocabulary vello and vello_cpu share. Pinned to the release vello 0.9 takes,
+# so `lumen-paint` and every sink name one copy of each type.
+peniko = "0.6.1"
 
 # Layout
 taffy = "0.13"

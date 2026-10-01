@@ -709,7 +709,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
     // D8 extended the whitelist beyond width/height/padding/margin to
     // min/max sizes, gap, flex, and display so theme / media restyles
     // of those properties actually reach layout.
-    if attrs.width.is_some()
+    if (attrs.width.is_some()
         || attrs.height.is_some()
         || attrs.padding.is_some()
         || attrs.margin.is_some()
@@ -732,82 +732,81 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         || attrs.box_sizing.is_some()
         || attrs.gap_pct.is_some()
         || attrs.gap_row_pct.is_some()
-        || attrs.gap_column_pct.is_some()
+        || attrs.gap_column_pct.is_some())
+        && let Some(mut style) = ent.get_mut::<Style>()
     {
-        if let Some(mut style) = ent.get_mut::<Style>() {
-            if let Some(w) = attrs.width {
-                style.width = w.into();
+        if let Some(w) = attrs.width {
+            style.width = w.into();
+        }
+        if let Some(h) = attrs.height {
+            style.height = h.into();
+        }
+        if let Some(p) = attrs.padding {
+            style.padding = p.into();
+        }
+        if let Some(m) = attrs.margin {
+            style.margin = m.into();
+        }
+        if let Some(v) = attrs.min_width {
+            style.min_width = v.into();
+        }
+        if let Some(v) = attrs.min_height {
+            style.min_height = v.into();
+        }
+        if let Some(v) = attrs.max_width {
+            style.max_width = v.into();
+        }
+        if let Some(v) = attrs.max_height {
+            style.max_height = v.into();
+        }
+        match (attrs.gap_row, attrs.gap_column, attrs.gap) {
+            (None, None, None) => {}
+            (Some(r), Some(c), _) => {
+                style.gap = lumen_core::components::Gap {
+                    row: r,
+                    column: c,
+                    ..Default::default()
+                };
             }
-            if let Some(h) = attrs.height {
-                style.height = h.into();
-            }
-            if let Some(p) = attrs.padding {
-                style.padding = p.into();
-            }
-            if let Some(m) = attrs.margin {
-                style.margin = m.into();
-            }
-            if let Some(v) = attrs.min_width {
-                style.min_width = v.into();
-            }
-            if let Some(v) = attrs.min_height {
-                style.min_height = v.into();
-            }
-            if let Some(v) = attrs.max_width {
-                style.max_width = v.into();
-            }
-            if let Some(v) = attrs.max_height {
-                style.max_height = v.into();
-            }
-            match (attrs.gap_row, attrs.gap_column, attrs.gap) {
-                (None, None, None) => {}
-                (Some(r), Some(c), _) => {
-                    style.gap = lumen_core::components::Gap {
-                        row: r,
-                        column: c,
-                        ..Default::default()
-                    };
-                }
-                (Some(r), None, _) => style.gap.row = r,
-                (None, Some(c), _) => style.gap.column = c,
-                (None, None, Some(v)) => style.gap = lumen_core::components::Gap::from(v),
-            }
-            if let Some(g) = attrs.grow {
-                style.grow = g;
-            }
-            if let Some(f) = attrs.flex {
-                style.flex_direction = f.into();
-            }
-            if let Some(d) = attrs.display {
-                style.display = d.into();
-            }
-            if let Some(s) = attrs.shrink {
-                style.shrink = s;
-            }
-            if let Some(b) = attrs.basis {
-                style.basis = b.into();
-            }
-            if let Some(w) = attrs.flex_wrap {
-                style.flex_wrap = w.into();
-            }
-            if let Some(a) = attrs.align_content {
-                style.align_content = Some(a.into());
-            }
-            if attrs.border_style.is_some() || attrs.border_width.is_some() {
-                style.border = attrs
-                    .effective_border()
-                    .map(|(widths, _)| widths.into())
-                    .unwrap_or_default();
-            }
-            if let Some(b) = attrs.box_sizing {
-                style.box_sizing = b.into();
-            }
-            if let Some(p) = attrs.gap_row_pct.or(attrs.gap_pct) {
-                style.gap.row_pct = Some(p);
-            }
-            if let Some(p) = attrs.gap_column_pct.or(attrs.gap_pct) {
-                style.gap.column_pct = Some(p);
-            }
+            (Some(r), None, _) => style.gap.row = r,
+            (None, Some(c), _) => style.gap.column = c,
+            (None, None, Some(v)) => style.gap = lumen_core::components::Gap::from(v),
+        }
+        if let Some(g) = attrs.grow {
+            style.grow = g;
+        }
+        if let Some(f) = attrs.flex {
+            style.flex_direction = f.into();
+        }
+        if let Some(d) = attrs.display {
+            style.display = d.into();
+        }
+        if let Some(s) = attrs.shrink {
+            style.shrink = s;
+        }
+        if let Some(b) = attrs.basis {
+            style.basis = b.into();
+        }
+        if let Some(w) = attrs.flex_wrap {
+            style.flex_wrap = w.into();
+        }
+        if let Some(a) = attrs.align_content {
+            style.align_content = Some(a.into());
+        }
+        if attrs.border_style.is_some() || attrs.border_width.is_some() {
+            style.border = attrs
+                .effective_border()
+                .map(|(widths, _)| widths.into())
+                .unwrap_or_default();
+        }
+        if let Some(b) = attrs.box_sizing {
+            style.box_sizing = b.into();
+        }
+        if let Some(p) = attrs.gap_row_pct.or(attrs.gap_pct) {
+            style.gap.row_pct = Some(p);
+        }
+        if let Some(p) = attrs.gap_column_pct.or(attrs.gap_pct) {
+            style.gap.column_pct = Some(p);
         }
     }
 
@@ -876,12 +875,12 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
                     retarget(cur_border.color, new_border.color, &spec).map(BorderColorTransition);
             }
             let mut v = ent.get_mut::<Visuals>().expect("checked above");
-            if let Some(f) = want_fill {
-                if bg_tween.is_none() {
-                    v.fill = Some(f);
-                }
-                // else: the driver animates fill from current -> new.
+            if let Some(f) = want_fill
+                && bg_tween.is_none()
+            {
+                v.fill = Some(f);
             }
+            // else: the driver animates fill from current -> new.
             if let Some(r) = want_radius {
                 v.radius = r;
             }
