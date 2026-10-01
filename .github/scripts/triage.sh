@@ -70,7 +70,7 @@ area_for() {
     os/launcher/*|capabilities/os-launcher/*) echo A-Launcher ;;
     os/power/*|capabilities/os-power/*) echo A-Power ;;
     os/lifecycle/*|capabilities/os-lifecycle/*) echo A-Lifecycle ;;
-    backends/render-wgpu/*|backends/render-headless/*) echo A-Rendering ;;
+    backends/render-wgpu/*|backends/render-cpu/*|core/paint/*|capabilities/render-gpu/*|capabilities/render-cpu/*) echo A-Rendering ;;
     backends/window-winit/*) echo A-Windowing ;;
     backends/layout-taffy/*) echo A-Layout ;;
     backends/text-cosmic/*) echo A-Text ;;
