@@ -14,7 +14,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Lumen's canvas module: registers the canvas script namespace and paints <canvas> elements through vello, as a runtime module or a compiled-in plugin."
+description = "Lumen's canvas module: registers the canvas script namespace and paints <canvas> elements on every render backend, as a runtime module or a compiled-in plugin."
 keywords = ["ui", "gui", "canvas", "graphics", "scripting"]
 categories = ["graphics", "gui"]
 publish = false
@@ -27,9 +27,9 @@ name = "lumen_canvas"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
-# The one engine-facing dependency. `paint` adds the renderer and the text
-# shaper: a painter downcasts its target to the engine's own vello scene, and
-# only the SDK's re-export is guaranteed to be that vello.
+# The one engine-facing dependency. `paint` adds lumen-paint and the text
+# shaper: a painter downcasts its target to the engine's own paint target, and
+# only the SDK's re-export is guaranteed to be that lumen-paint.
 lumen-module = { workspace = true, features = ["paint"] }
 
 # PNG, for `canvas::buffer_load_png` / `buffer_save_png`. Decoding only what

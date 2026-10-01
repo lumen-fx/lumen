@@ -1,7 +1,7 @@
-//! Turning recorded calls into a vello scene.
+//! Turning recorded calls into a drawing the renderer replays.
 //!
 //! One pass per tick, over whatever the script recorded since the last one.
-//! The scene is retained: an encode appends to what is already there, so a
+//! The drawing is retained: an encode appends to what is already there, so a
 //! canvas that drew a background once keeps it without redrawing, and a tick
 //! that recorded nothing costs nothing.
 //!
@@ -14,12 +14,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lumen_module::lumen_render_wgpu::vello::Scene;
-use lumen_module::lumen_render_wgpu::vello::peniko;
-use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::{
-    Affine, Cap, Join, Rect, Stroke as KurboStroke,
-};
-use lumen_module::lumen_render_wgpu::vello::peniko::{Blob, Fill};
+use lumen_module::lumen_paint::kurbo::{Affine, Cap, Join, Rect, Stroke as KurboStroke};
+use lumen_module::lumen_paint::peniko;
+use lumen_module::lumen_paint::peniko::{Blob, Fill};
+use lumen_module::lumen_paint::{GlyphRun, Painter, Recording, Shape};
 use lumen_module::lumen_text::{ShapeOptions, TextShaper};
 
 use crate::buffer::PixBuf;
@@ -29,7 +27,7 @@ use crate::store::Surface;
 
 /// The peniko blobs an encode hands the renderer, kept across ticks.
 ///
-/// vello keys its GPU upload caches off blob identity, so a freshly built
+/// A renderer keys its upload caches off blob identity, so a freshly built
 /// blob means a fresh upload. Both halves of this exist to stop that: a
 /// buffer's pixels re-upload only when the buffer has been written since, and
 /// a font's bytes are uploaded once for the life of the process rather than
@@ -85,7 +83,7 @@ fn peniko_color(c: Rgba) -> peniko::Color {
     peniko::Color::new([c.r, c.g, c.b, c.a])
 }
 
-/// Replay `ops` into `surface`'s scene. Returns whether anything drew, which
+/// Replay `ops` into `surface`'s drawing. Returns whether anything drew, which
 /// is what decides whether the canvas needs a new frame.
 ///
 /// `shaper` is the app's; without one (a headless app with no text stack)
@@ -122,58 +120,58 @@ pub fn encode(
         if surface.gfx.apply(op) {
             continue;
         }
-        // The scene is shared with whatever the render world is still
+        // The drawing is shared with whatever the render world is still
         // holding, so the first draw after a publish copies it and every draw
         // after that writes in place. A `clear` costs nothing at all, because
-        // `reset` hands over a fresh scene instead of copying one to throw
+        // `reset` hands over a fresh drawing instead of copying one to throw
         // away - which is the shape an animation that redraws each frame
         // takes.
-        let scene = Arc::make_mut(&mut surface.scene);
+        let drawing: &mut dyn Painter = Arc::<Recording>::make_mut(&mut surface.drawing);
         let gfx = &surface.gfx;
         match op {
             Op::Fill => {
-                scene.fill(
+                drawing.fill(
                     Fill::NonZero,
                     gfx.state.transform,
-                    peniko_color(gfx.fill_brush()),
+                    peniko_color(gfx.fill_brush()).into(),
                     None,
-                    &gfx.path,
+                    &Shape::Path(&gfx.path),
                 );
                 drew = true;
             }
             Op::Stroke => {
-                scene.stroke(
+                drawing.stroke(
                     &stroke_style(gfx),
                     gfx.state.transform,
-                    peniko_color(gfx.stroke_brush()),
+                    peniko_color(gfx.stroke_brush()).into(),
                     None,
-                    &gfx.path,
+                    &Shape::Path(&gfx.path),
                 );
                 drew = true;
             }
             Op::FillRect(x, y, w, h) => {
-                scene.fill(
+                drawing.fill(
                     Fill::NonZero,
                     gfx.state.transform,
-                    peniko_color(gfx.fill_brush()),
+                    peniko_color(gfx.fill_brush()).into(),
                     None,
-                    &Rect::new(*x, *y, x + w, y + h),
+                    &Shape::Rect(Rect::new(*x, *y, x + w, y + h)),
                 );
                 drew = true;
             }
             Op::StrokeRect(x, y, w, h) => {
-                scene.stroke(
+                drawing.stroke(
                     &stroke_style(gfx),
                     gfx.state.transform,
-                    peniko_color(gfx.stroke_brush()),
+                    peniko_color(gfx.stroke_brush()).into(),
                     None,
-                    &Rect::new(*x, *y, x + w, y + h),
+                    &Shape::Rect(Rect::new(*x, *y, x + w, y + h)),
                 );
                 drew = true;
             }
             Op::FillText { text, x, y } => {
                 if let Some(shaper) = shaper.as_deref_mut()
-                    && draw_text(scene, gfx, blobs, shaper, text, *x, *y)
+                    && draw_text(drawing, gfx, blobs, shaper, text, *x, *y)
                 {
                     drew = true;
                 }
@@ -181,7 +179,7 @@ pub fn encode(
             Op::DrawBuffer { buffer, x, y } => {
                 if let Some(buf) = buffers.get(buffer) {
                     let size = (f64::from(buf.width()), f64::from(buf.height()));
-                    draw_buffer(scene, gfx, blobs, *buffer, buf, (*x, *y), size);
+                    draw_buffer(drawing, gfx, blobs, *buffer, buf, (*x, *y), size);
                     drew = true;
                 }
             }
@@ -193,7 +191,15 @@ pub fn encode(
                 height,
             } => {
                 if let Some(buf) = buffers.get(buffer) {
-                    draw_buffer(scene, gfx, blobs, *buffer, buf, (*x, *y), (*width, *height));
+                    draw_buffer(
+                        drawing,
+                        gfx,
+                        blobs,
+                        *buffer,
+                        buf,
+                        (*x, *y),
+                        (*width, *height),
+                    );
                     drew = true;
                 }
             }
@@ -207,16 +213,16 @@ pub fn encode(
     drew
 }
 
-/// Empty a surface: a fresh scene and a fresh drawing state. A resize does
+/// Empty a surface: a fresh drawing and a fresh drawing state. A resize does
 /// this too, which is what writing `width` on an HTML canvas does.
 ///
-/// A fresh `Arc` rather than resetting the one that is there: the scene is
-/// shared with the render world, so resetting it in place would first copy
+/// A fresh `Arc` rather than clearing the one that is there: the drawing is
+/// shared with the render world, so clearing it in place would first copy
 /// every command it accumulated, only to discard the copy. A canvas that
 /// clears and redraws every frame would pay for the whole previous frame each
 /// time.
 fn reset(surface: &mut Surface) {
-    surface.scene = Arc::new(Scene::new());
+    surface.drawing = Arc::new(Recording::default());
     surface.gfx = crate::ops::Gfx::default();
 }
 
@@ -238,7 +244,7 @@ fn stroke_style(gfx: &crate::ops::Gfx) -> KurboStroke {
 /// Shape and draw one run, `(x, y)` on the alphabetic baseline. Returns
 /// whether any glyph landed.
 fn draw_text(
-    scene: &mut Scene,
+    drawing: &mut dyn Painter,
     gfx: &crate::ops::Gfx,
     blobs: &mut BlobCache,
     shaper: &mut dyn TextShaper,
@@ -263,22 +269,14 @@ fn draw_text(
         }
         let blob = blobs.font(seg.font_id, seg.font_index, &seg.font_data);
         let font_data = peniko::FontData::new(blob, seg.font_index);
-        scene
-            .draw_glyphs(&font_data)
-            .font_size(font.size)
-            .normalized_coords(&seg.normalized_coords)
-            .brush(brush)
-            .transform(gfx.state.transform * Affine::translate((x, y)))
-            .draw(
-                Fill::NonZero,
-                seg.glyphs
-                    .iter()
-                    .map(|g| lumen_module::lumen_render_wgpu::vello::Glyph {
-                        id: g.id,
-                        x: g.x,
-                        y: g.y,
-                    }),
-            );
+        drawing.draw_glyphs(&GlyphRun {
+            font: &font_data,
+            font_size: font.size,
+            normalized_coords: &seg.normalized_coords,
+            transform: gfx.state.transform * Affine::translate((x, y)),
+            brush: brush.into(),
+            glyphs: &seg.glyphs,
+        });
         drew = true;
     }
     drew
@@ -286,7 +284,7 @@ fn draw_text(
 
 /// Draw a buffer into a box at `origin` of `size`.
 fn draw_buffer(
-    scene: &mut Scene,
+    drawing: &mut dyn Painter,
     gfx: &crate::ops::Gfx,
     blobs: &mut BlobCache,
     handle: u32,
@@ -312,17 +310,22 @@ fn draw_buffer(
         gfx.state.transform * Affine::translate(origin) * Affine::scale_non_uniform(sx, sy);
     let alpha = gfx.state.global_alpha.clamp(0.0, 1.0);
     if alpha < 1.0 {
-        scene.push_layer(
+        drawing.push_layer(
             Fill::NonZero,
             peniko::BlendMode::default(),
             alpha,
             gfx.state.transform,
-            &Rect::new(origin.0, origin.1, origin.0 + size.0, origin.1 + size.1),
+            &Shape::Rect(Rect::new(
+                origin.0,
+                origin.1,
+                origin.0 + size.0,
+                origin.1 + size.1,
+            )),
         );
     }
-    scene.draw_image(&peniko::ImageBrush::new(image), transform);
+    drawing.draw_image(&peniko::ImageBrush::new(image), transform);
     if alpha < 1.0 {
-        scene.pop_layer();
+        drawing.pop_layer();
     }
 }
 
@@ -331,14 +334,14 @@ mod tests {
     use super::*;
     use crate::ops::{FontSpec, LineCap, LineJoin};
     use crate::store::Surface;
+    use lumen_module::lumen_paint::recording::Command;
     use lumen_text_cosmic::CosmicShaper;
 
     /// Replay a list of calls into a fresh surface, and hand back the surface
     /// and whether anything drew.
     ///
-    /// Encoding is CPU work - a scene is a command buffer, and only
-    /// presenting one needs a device - so every case here runs with no
-    /// adapter.
+    /// Encoding records calls and paints nothing, so every case here runs
+    /// with no renderer at all.
     fn encode_ops(ops: Vec<Op>) -> (Surface, bool) {
         let mut surface = Surface::default();
         let buffers = std::collections::BTreeMap::new();
@@ -347,16 +350,31 @@ mod tests {
         (surface, drew)
     }
 
-    /// How many paths the surface's scene holds.
-    fn paths(surface: &Surface) -> u32 {
-        surface.scene.encoding().n_paths
+    /// How many fills and strokes the surface's drawing holds.
+    fn paths(surface: &Surface) -> usize {
+        surface
+            .drawing
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Fill { .. } | Command::Stroke { .. }))
+            .count()
+    }
+
+    /// How many recorded calls match `kind`.
+    fn count(surface: &Surface, kind: fn(&Command) -> bool) -> usize {
+        surface
+            .drawing
+            .commands()
+            .iter()
+            .filter(|c| kind(c))
+            .count()
     }
 
     #[test]
     fn nothing_recorded_encodes_nothing() {
         let (surface, drew) = encode_ops(Vec::new());
         assert!(!drew);
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
     }
 
     #[test]
@@ -370,11 +388,11 @@ mod tests {
             Op::Restore,
         ]);
         assert!(!drew);
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
     }
 
     #[test]
-    fn each_way_of_filling_and_stroking_reaches_the_scene() {
+    fn each_way_of_filling_and_stroking_reaches_the_drawing() {
         for (name, ops) in [
             ("fill_rect", vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)]),
             ("stroke_rect", vec![Op::StrokeRect(0.0, 0.0, 10.0, 10.0)]),
@@ -421,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_hands_over_a_fresh_scene_rather_than_copying_one() {
+    fn clearing_hands_over_a_fresh_drawing_rather_than_copying_one() {
         let mut surface = Surface::default();
         let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
@@ -434,18 +452,18 @@ mod tests {
             None,
         );
         assert_eq!(paths(&surface), 1);
-        let before = std::sync::Arc::as_ptr(&surface.scene);
+        let before = std::sync::Arc::as_ptr(&surface.drawing);
 
         // What the render world holding the previous frame looks like.
-        let _published = surface.scene.clone();
+        let _published = surface.drawing.clone();
         let drew = encode(&mut surface, vec![Op::Clear], &buffers, &mut blobs, None);
 
         assert!(drew, "emptying the canvas is a change the renderer sees");
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
         assert_ne!(
-            std::sync::Arc::as_ptr(&surface.scene),
+            std::sync::Arc::as_ptr(&surface.drawing),
             before,
-            "a clear swaps the scene out; copying one to discard it is the \
+            "a clear swaps the drawing out; copying one to discard it is the \
              cost an animation would pay every frame"
         );
     }
@@ -459,7 +477,7 @@ mod tests {
         ]);
         assert!(drew);
         assert_eq!(surface.logical, (64.0, 32.0));
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
         assert_eq!(surface.gfx.state.global_alpha, 1.0);
     }
 
@@ -472,15 +490,16 @@ mod tests {
             Op::FillRect(0.0, 0.0, 10.0, 10.0),
         ]);
         let (still, _) = encode_ops(vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)]);
-        assert_ne!(
-            moved.scene.encoding().transforms.len() + moved.scene.encoding().path_data.len(),
-            0
-        );
+        assert_eq!(paths(&moved), 1);
         assert_eq!(paths(&moved), paths(&still));
+        let transform = |surface: &Surface| match &surface.drawing.commands()[0] {
+            Command::Fill { transform, .. } => *transform,
+            other => panic!("expected a fill, got {other:?}"),
+        };
         assert_ne!(
-            moved.scene.encoding().transforms,
-            still.scene.encoding().transforms,
-            "the translate reached the encoded transform"
+            transform(&moved),
+            transform(&still),
+            "the translate reached the recorded transform"
         );
     }
 
@@ -515,9 +534,9 @@ mod tests {
         );
         assert!(drew);
         assert_eq!(
-            surface.scene.encoding().draw_tags.len(),
+            count(&surface, |c| matches!(c, Command::Image { .. })),
             2,
-            "both draws reached the scene"
+            "both draws reached the drawing"
         );
     }
 
@@ -542,8 +561,11 @@ mod tests {
             &mut blobs,
             None,
         );
-        assert!(surface.scene.encoding().n_clips > 0);
-        assert_eq!(surface.scene.encoding().n_open_clips, 0);
+        assert_eq!(
+            count(&surface, |c| matches!(c, Command::PushLayer { .. })),
+            1
+        );
+        assert_eq!(surface.drawing.layer_depth(), 0);
     }
 
     #[test]
@@ -572,7 +594,7 @@ mod tests {
             None,
         );
         assert!(!drew, "a stale handle is not a reason to repaint");
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
     }
 
     #[test]
@@ -592,7 +614,7 @@ mod tests {
             &mut blobs,
             None,
         );
-        assert!(surface.scene.encoding().is_empty());
+        assert!(surface.drawing.is_empty());
     }
 
     #[test]
@@ -615,7 +637,7 @@ mod tests {
         let mut bare = Surface::default();
         let drew = encode(&mut bare, ops(), &buffers, &mut blobs, None);
         assert!(!drew);
-        assert!(bare.scene.encoding().is_empty());
+        assert!(bare.drawing.is_empty());
 
         // With the app's shaper, the glyphs land.
         let mut shaper = CosmicShaper::new();
@@ -627,16 +649,16 @@ mod tests {
             &mut blobs,
             Some(&mut shaper as &mut dyn TextShaper),
         );
-        assert!(drew, "the run reached the scene");
+        assert!(drew, "the run reached the drawing");
         assert!(
-            !surface.scene.encoding().resources.glyph_runs.is_empty(),
+            count(&surface, |c| matches!(c, Command::Glyphs { .. })) > 0,
             "shaped glyphs, not an outline the canvas drew itself"
         );
     }
 
     #[test]
-    fn text_that_shapes_to_nothing_visible_draws_nothing() {
-        // A zero-width space is text the shaper accepts and has no glyph for.
+    fn text_that_shapes_to_nothing_visible_adds_no_geometry() {
+        // A zero-width space is text the shaper accepts and has no ink for.
         let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
         let mut shaper = CosmicShaper::new();
@@ -655,9 +677,15 @@ mod tests {
             &mut blobs,
             Some(&mut shaper as &mut dyn TextShaper),
         );
-        // Whether it produced an empty run or an empty segment, nothing
-        // visible reached the scene.
-        assert!(surface.scene.encoding().is_empty());
+        // Whether it produced an empty run, an empty segment, or a glyph with
+        // no outline, the canvas added no geometry of its own around it.
+        assert!(
+            surface
+                .drawing
+                .commands()
+                .iter()
+                .all(|c| matches!(c, Command::Glyphs { .. }))
+        );
     }
 
     #[test]

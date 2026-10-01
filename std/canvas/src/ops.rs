@@ -3,8 +3,8 @@
 //! A script function body does no drawing. It appends one [`Op`] to the
 //! surface's journal and returns, because the body runs on the script host's
 //! stack with no world access at all, while drawing needs the app's fonts and
-//! its own scene. One system per tick replays the journal into a retained
-//! vello scene ([`crate::encode`]); that is also what makes a canvas cheap
+//! its own drawing. One system per tick replays the journal into a retained
+//! recording ([`crate::encode`]); that is also what makes a canvas cheap
 //! when nothing changed, since a tick with an empty journal re-encodes
 //! nothing.
 //!
@@ -12,7 +12,7 @@
 //! ticks, so a script that sets a fill in one handler and draws in the next
 //! gets the fill it set.
 
-use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::{Affine, BezPath, Point};
+use lumen_module::lumen_paint::kurbo::{Affine, BezPath, Point};
 
 use crate::color::Rgba;
 
@@ -297,7 +297,7 @@ impl Gfx {
     /// one of them, so the encoder knows it has nothing left to draw.
     ///
     /// This is where `save` / `restore` / the transform / the path live,
-    /// which is the half that has no vello in it and can be exercised on its
+    /// which is the half that draws nothing and can be exercised on its
     /// own.
     pub fn apply(&mut self, op: &Op) -> bool {
         match op {
@@ -400,8 +400,8 @@ impl Gfx {
     /// Append a circular arc, joining it to the current subpath if there is
     /// one, as the HTML canvas does.
     fn arc(&mut self, x: f64, y: f64, radius: f64, start: f64, end: f64) {
-        use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::Arc as KurboArc;
-        use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::Shape;
+        use lumen_module::lumen_paint::kurbo::Arc as KurboArc;
+        use lumen_module::lumen_paint::kurbo::Shape;
 
         let radius = radius.max(0.0);
         let sweep = end - start;

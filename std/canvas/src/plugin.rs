@@ -56,9 +56,9 @@ pub struct Canvas {
     pub id: String,
     /// The drawing space, in canvas units.
     pub logical: (f32, f32),
-    /// The encoded scene the painter appends.
-    pub scene: std::sync::Arc<lumen_module::lumen_render_wgpu::vello::Scene>,
-    /// Bumped whenever the scene changes.
+    /// The recorded drawing the painter replays.
+    pub drawing: std::sync::Arc<lumen_module::lumen_paint::Recording>,
+    /// Bumped whenever the drawing changes.
     pub revision: u64,
 }
 
@@ -224,7 +224,7 @@ fn adopt_canvases(
             Canvas {
                 id,
                 logical,
-                scene: std::sync::Arc::new(lumen_module::lumen_render_wgpu::vello::Scene::new()),
+                drawing: std::sync::Arc::new(lumen_module::lumen_paint::Recording::default()),
                 revision: 0,
             },
             // What gives the element its box. An image with a natural size is
@@ -257,7 +257,7 @@ fn encode_canvases(
     // Canvases whose element went away. The id is not on the entity any more
     // by the time this runs, so it comes from the map built while the element
     // was alive; without this a `<for>` block cycling through rows would
-    // leave a retained scene behind for every id it ever spawned.
+    // leave a retained drawing behind for every id it ever spawned.
     let removed: Vec<Entity> = gone.read().collect();
     if !removed.is_empty() {
         let live: std::collections::HashSet<&str> = canvases
@@ -295,10 +295,10 @@ fn encode_canvases(
         if drew {
             surface.revision += 1;
         }
-        if !drew && !resized && std::sync::Arc::ptr_eq(&canvas.scene, &surface.scene) {
+        if !drew && !resized && std::sync::Arc::ptr_eq(&canvas.drawing, &surface.drawing) {
             continue;
         }
-        canvas.scene = surface.scene.clone();
+        canvas.drawing = surface.drawing.clone();
         canvas.logical = surface.logical;
         canvas.revision = surface.revision;
         if let Some(mut image) = image {

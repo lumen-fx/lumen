@@ -3,8 +3,9 @@
 //! Two halves of the engine's native-paint seam, and nothing else. The
 //! extract runs on the main world and hands the render world a leaf per
 //! canvas: where the element ended up after layout, how opaque it is, and the
-//! encoded scene. The painter runs on the render world and appends that scene
-//! into the frame the renderer is building.
+//! recorded drawing. The painter runs on the render world and replays that
+//! drawing into the frame the renderer is building, through the paint target
+//! every backend hands it.
 //!
 //! The engine knows none of this is a canvas. It knows there is a leaf under
 //! an extension id and a painter registered for that id, which is the whole
@@ -15,8 +16,9 @@ use lumen_module::lumen_core::native::{
     ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, upsert_native_leaves,
 };
 use lumen_module::lumen_core::prelude::*;
-use lumen_module::lumen_render_wgpu::vello::Scene;
-use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::Affine;
+use lumen_module::lumen_paint::kurbo::{Affine, Rect as KurboRect};
+use lumen_module::lumen_paint::peniko::{BlendMode, Fill};
+use lumen_module::lumen_paint::{PaintTarget, Recording, Shape};
 
 use crate::plugin::Canvas;
 
@@ -26,12 +28,12 @@ pub const EXTENSION_ID: &str = "lumen.canvas";
 
 /// One canvas, as the render world sees it.
 pub struct CanvasLeaf {
-    /// The encoded drawing. Cloning is an `Arc` bump; the scene itself is
+    /// The recorded drawing. Cloning is an `Arc` bump; the drawing itself is
     /// shared with the store until the next encode writes into it.
-    pub scene: std::sync::Arc<Scene>,
-    /// The drawing space the scene was encoded in. The painter scales this
+    pub drawing: std::sync::Arc<Recording>,
+    /// The drawing space the calls were recorded in. The painter scales this
     /// onto the element's box, which is how CSS resizes a canvas without
-    /// re-encoding it.
+    /// recording it again.
     pub logical: (f32, f32),
     /// The element's opacity, ancestors folded in.
     pub opacity: f32,
@@ -39,7 +41,7 @@ pub struct CanvasLeaf {
 
 /// Publish one leaf per canvas element.
 ///
-/// The scene comes off the component the module's own system keeps current,
+/// The drawing comes off the component the module's own system keeps current,
 /// not out of the store: an extract has no business taking a process-wide
 /// lock in the middle of a frame.
 pub fn extract_canvases(main: &mut World, render: &mut World) {
@@ -54,7 +56,7 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
                 ExtractedNative {
                     extension_id: EXTENSION_ID.into(),
                     payload: std::sync::Arc::new(CanvasLeaf {
-                        scene: canvas.scene.clone(),
+                        drawing: canvas.drawing.clone(),
                         logical: canvas.logical,
                         opacity: placed.opacity,
                     }),
@@ -88,7 +90,7 @@ fn leaf_revision(revision: u64, opacity: f32) -> u64 {
     (revision << 16) | quantized
 }
 
-/// Appends a canvas's scene into the frame.
+/// Replays a canvas's drawing into the frame.
 pub struct CanvasPainter;
 
 impl NativePainter for CanvasPainter {
@@ -115,31 +117,31 @@ impl NativePainter for CanvasPainter {
             * Affine::translate((f64::from(bounds.origin.x), f64::from(bounds.origin.y)))
             * Affine::scale_non_uniform(scale_x, scale_y);
         let opacity = leaf.opacity.clamp(0.0, 1.0);
-        let scene = leaf.scene.clone();
+        let drawing = leaf.drawing.clone();
 
-        let Some(target) = ctx.target_as::<Scene>() else {
+        let Some(target) = ctx.target_as::<PaintTarget>() else {
             // The downcast fails when this module and the renderer hold
-            // different builds of vello, which the SDK's `paint` re-export
-            // exists to prevent. Say so once rather than drawing nothing in
-            // silence.
+            // different builds of lumen-paint, which the SDK's `paint`
+            // re-export exists to prevent. Say so once rather than drawing
+            // nothing in silence.
             report_backend_mismatch(ctx.backend_id);
             return;
         };
         if opacity < 1.0 {
             target.push_layer(
-                lumen_module::lumen_render_wgpu::vello::peniko::Fill::NonZero,
-                lumen_module::lumen_render_wgpu::vello::peniko::BlendMode::default(),
+                Fill::NonZero,
+                BlendMode::default(),
                 opacity,
                 device,
-                &lumen_module::lumen_render_wgpu::vello::peniko::kurbo::Rect::new(
+                &Shape::Rect(KurboRect::new(
                     f64::from(bounds.origin.x),
                     f64::from(bounds.origin.y),
                     f64::from(bounds.origin.x + bounds.size.x),
                     f64::from(bounds.origin.y + bounds.size.y),
-                ),
+                )),
             );
         }
-        target.append(&scene, Some(transform));
+        drawing.replay(&mut **target, transform);
         if opacity < 1.0 {
             target.pop_layer();
         }
@@ -154,7 +156,7 @@ fn report_backend_mismatch(backend_id: &str) {
         lumen_module::lumen_core::warn_line!(
             "lumen-canvas: the '{backend_id}' renderer handed this module a draw target it \
              does not recognize, so nothing is drawn. The module and the engine were built \
-             against different versions of the renderer."
+             against different versions of lumen-paint."
         );
     }
 }
@@ -165,28 +167,27 @@ mod tests {
     use lumen_module::lumen_core::components::Visible;
     use lumen_module::lumen_core::node_ir::Affine2;
     use lumen_module::lumen_core::render_world::Rect;
-    use lumen_module::lumen_render_wgpu::vello::peniko::Fill;
-    use lumen_module::lumen_render_wgpu::vello::peniko::kurbo::Rect as KurboRect;
+    use lumen_module::lumen_paint::Painter;
+    use lumen_module::lumen_paint::recording::Command;
 
-    /// Encoding a scene is CPU work; only presenting it needs a device. These
-    /// cases drive the painter over a real vello scene with no adapter at
-    /// all, which is what lets them run on a machine (and a CI runner) that
-    /// has no GPU.
-    fn one_filled_square() -> std::sync::Arc<Scene> {
-        let mut scene = Scene::new();
-        scene.fill(
+    /// The painter replays into whatever paint target it is handed. These
+    /// cases hand it a recording, which draws no pixels, so they run with no
+    /// renderer at all.
+    fn one_filled_square() -> std::sync::Arc<Recording> {
+        let mut drawing = Recording::default();
+        drawing.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            lumen_module::lumen_render_wgpu::vello::peniko::Color::new([0.0, 1.0, 0.0, 1.0]),
+            lumen_module::lumen_paint::peniko::Color::new([0.0, 1.0, 0.0, 1.0]).into(),
             None,
-            &KurboRect::new(0.0, 0.0, 10.0, 10.0),
+            &Shape::Rect(KurboRect::new(0.0, 0.0, 10.0, 10.0)),
         );
-        std::sync::Arc::new(scene)
+        std::sync::Arc::new(drawing)
     }
 
     fn leaf(logical: (f32, f32), opacity: f32) -> CanvasLeaf {
         CanvasLeaf {
-            scene: one_filled_square(),
+            drawing: one_filled_square(),
             logical,
             opacity,
         }
@@ -196,14 +197,14 @@ mod tests {
         Rect::new(glam::Vec2::new(8.0, 4.0), glam::Vec2::new(40.0, 20.0))
     }
 
-    /// Run the painter over a fresh scene and hand back what it encoded.
-    fn paint_into(leaf: &CanvasLeaf) -> Scene {
-        let mut target = Scene::new();
+    /// Run the painter over a fresh paint target and hand back what it drew.
+    fn paint_into(leaf: &CanvasLeaf) -> Recording {
+        let mut target: PaintTarget = Box::<Recording>::default();
         {
             let mut ctx = NativePaintCtx::new(
                 leaf,
                 &mut target,
-                "lumen.render-wgpu",
+                "lumen.recording",
                 bounds(),
                 Affine2::IDENTITY,
                 1.0,
@@ -212,6 +213,14 @@ mod tests {
             CanvasPainter.paint(&mut ctx);
         }
         target
+            .native()
+            .downcast_mut::<Recording>()
+            .expect("the target is a recording")
+            .clone()
+    }
+
+    fn count(drawing: &Recording, kind: fn(&Command) -> bool) -> usize {
+        drawing.commands().iter().filter(|c| kind(c)).count()
     }
 
     #[test]
@@ -234,15 +243,15 @@ mod tests {
     }
 
     #[test]
-    fn the_painter_appends_the_canvas_scene() {
+    fn the_painter_replays_the_canvas_drawing() {
         let painted = paint_into(&leaf((10.0, 10.0), 1.0));
         assert_eq!(
-            painted.encoding().n_paths,
+            count(&painted, |c| matches!(c, Command::Fill { .. })),
             1,
             "the canvas's one path reached the frame"
         );
         assert_eq!(
-            painted.encoding().n_clips,
+            count(&painted, |c| matches!(c, Command::PushLayer { .. })),
             0,
             "a fully opaque canvas needs no layer"
         );
@@ -251,14 +260,12 @@ mod tests {
     #[test]
     fn a_partly_transparent_canvas_is_painted_through_a_layer() {
         let painted = paint_into(&leaf((10.0, 10.0), 0.5));
-        assert!(
-            painted.encoding().n_clips > 0,
+        assert_eq!(
+            count(&painted, |c| matches!(c, Command::PushLayer { .. })),
+            1,
             "the opacity is applied to the canvas as a whole"
         );
-        assert!(
-            painted.encoding().n_open_clips == 0,
-            "and the layer is closed again"
-        );
+        assert_eq!(painted.layer_depth(), 0, "and the layer is closed again");
     }
 
     #[test]
@@ -266,14 +273,14 @@ mod tests {
         // `resize(id, 0, 0)` is a legal call, and the scale it implies is
         // not. The painter falls back to placing the drawing untouched.
         let painted = paint_into(&leaf((0.0, 0.0), 1.0));
-        assert_eq!(painted.encoding().n_paths, 1);
+        assert_eq!(count(&painted, |c| matches!(c, Command::Fill { .. })), 1);
     }
 
     #[test]
     fn a_target_this_painter_does_not_know_is_left_alone() {
-        // What a renderer/module vello mismatch looks like from in here: the
-        // downcast misses, and the painter reports rather than drawing into
-        // something it cannot understand.
+        // What a renderer/module lumen-paint mismatch looks like from in here:
+        // the downcast misses, and the painter reports rather than drawing
+        // into something it cannot understand.
         let leaf = leaf((10.0, 10.0), 1.0);
         let mut foreign = 0u32;
         let mut ctx = NativePaintCtx::new(
@@ -293,13 +300,13 @@ mod tests {
     fn a_payload_from_another_extension_is_not_ours_to_paint() {
         // Two extensions can put leaves in one frame. A painter that read
         // whatever it was handed would paint another module's state.
-        let mut target = Scene::new();
+        let mut target: PaintTarget = Box::<Recording>::default();
         let not_a_canvas = 7u64;
         {
             let mut ctx = NativePaintCtx::new(
                 &not_a_canvas,
                 &mut target,
-                "lumen.render-wgpu",
+                "lumen.recording",
                 bounds(),
                 Affine2::IDENTITY,
                 1.0,
@@ -307,7 +314,14 @@ mod tests {
             );
             CanvasPainter.paint(&mut ctx);
         }
-        assert!(target.encoding().is_empty());
+        assert_eq!(target.layer_depth(), 0);
+        assert!(
+            target
+                .native()
+                .downcast_mut::<Recording>()
+                .expect("recording")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -323,7 +337,7 @@ mod tests {
                 Canvas {
                     id: "chart".to_string(),
                     logical: (32.0, 32.0),
-                    scene: one_filled_square(),
+                    drawing: one_filled_square(),
                     revision: 4,
                 },
                 Transform {
@@ -364,7 +378,7 @@ mod tests {
             Canvas {
                 id: "chart".to_string(),
                 logical: (32.0, 32.0),
-                scene: one_filled_square(),
+                drawing: one_filled_square(),
                 revision: 1,
             },
             Transform {
@@ -392,7 +406,7 @@ mod tests {
             Canvas {
                 id: "chart".to_string(),
                 logical: (32.0, 32.0),
-                scene: one_filled_square(),
+                drawing: one_filled_square(),
                 revision: 2,
             },
             Transform {
