@@ -934,7 +934,7 @@ USAGE:
                           builds compile no span instrumentation and
                           error here with a rebuild hint.
                           --headless is the automation/CI mode: the full
-                          pipeline (layout, GPU rendering, MCP server,
+                          pipeline (layout, rendering, MCP server,
                           simulate, screenshots, hot reload) runs with
                           no window - the desktop is never touched.
                           A headless run is bounded, so the MCP server

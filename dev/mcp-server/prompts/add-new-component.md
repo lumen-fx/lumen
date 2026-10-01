@@ -37,7 +37,8 @@ world.
 - Docs: document the new tag or attribute on the reference page that owns it,
   in the same change.
 - Tests: ship a unit test under the relevant crate, and a golden-image case in
-  `backends/render-headless/tests/` if the component renders.
+  `public/lumenc/tests/golden.rs` if the component renders; it runs on both
+  render backends against one baseline.
 
 ## Definition of done
 

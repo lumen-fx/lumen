@@ -349,6 +349,11 @@ target-scoped dependencies, so a build compiles the Vulkan, Metal, or DX12
 backend and nothing else. The off-by-default `gl-fallback` feature adds the
 OpenGL backend for GL-only virtual machines and Vulkan-less containers.
 
+The render backends are not features. A plain build links both,
+`lumen-render-wgpu` and `lumen-render-cpu`, each through its capability crate,
+and the app's `[render] backend` picks one at launch; a static package links
+only the ones that setting selects.
+
 ## Gates
 
 CI runs these, and they are the same commands to run locally before opening a
@@ -433,15 +438,19 @@ support them, printing the reason:
   the suite.
 - Pixel checks on a software adapter. Direct3D's WARP and Mesa's lavapipe draw
   close to a GPU but not the same pixels, so those cases want a real GPU.
-- The screenshot goldens in `public/lumenc/tests/golden.rs`. Baselines carry
-  the font set of the machine that captured them, and a machine that resolves a
-  different default sans-serif redraws every case containing text. They run
-  locally and skip when `CI` is set.
+
+The screenshot goldens in `public/lumenc/tests/golden.rs` run everywhere,
+CI included. Each case renders on the CPU backend, and on the GPU backend when
+wgpu finds a hardware adapter or lavapipe, and both frames are compared against
+the same baseline. Text is shaped with the font file the harness carries rather
+than the machine's, so every machine draws the same glyphs. Cases with a known
+reason not to run are `#[ignore]`d with that reason in the attribute.
 
 Useful targeted runs while working in one area:
 
 ```sh
-cargo test -p lumen-render-headless --test golden_rects
+cargo test -p lumenc --test golden
+cargo test -p lumen-render-cpu
 cargo test -p lumen-render-wgpu --test smoke
 cargo test -p lumen-layout-taffy --test dirty_invariant
 ```
@@ -487,11 +496,11 @@ one tool runs one job. None of it needs `liblumen`. The JetBrains Plugin
 Verifier is the exception to the per-pull-request rule: it downloads a full
 IDE per version it checks, so it runs weekly and on demand.
 
-Golden images are regenerated, not hand-edited. `UPDATE_GOLDENS=1` rewrites the
-software rasterizer baseline in `lumen-render-headless`;
-`LUMEN_GOLDEN_UPDATE=1` rewrites the screenshot baselines in `lumenc`. On a
-mismatch the screenshot suite writes the actual and diff images under a
-`lumen-golden-failures` directory inside `CARGO_TARGET_DIR`.
+Golden images are regenerated, not hand-edited. `LUMEN_GOLDEN_UPDATE=1`
+rewrites the screenshot baselines in `lumenc`, from the GPU capture where there
+is a GPU and from the CPU one otherwise; look at the new images before
+committing them. On a mismatch the suite writes the actual and diff images
+under `lumen-golden-failures/<case>/<backend>/` inside `CARGO_TARGET_DIR`.
 
 ## Measuring how long an app takes to start
 

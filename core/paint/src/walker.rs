@@ -72,8 +72,8 @@ pub struct WalkContext<'a> {
     pub transform: Affine,
     /// Device pixel ratio. Multiplied into every leaf's origin / size /
     /// font size / radius / shadow blur before the emit helper hands the
-    /// scaled values to the painter. Lumen layout-taffy outputs LOGICAL
-    /// pixels; the target is sized in PHYSICAL pixels. Without this
+    /// scaled values to the painter. Lumen layout-taffy outputs logical
+    /// pixels; the target is sized in physical pixels. Without this
     /// scale, content draws only into the top-left `1/dpr x 1/dpr` of the
     /// surface on hi-DPI displays - the search-bar-not-visible bug.
     pub dpr: f32,

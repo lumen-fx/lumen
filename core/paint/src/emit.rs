@@ -734,7 +734,7 @@ pub fn draw_text<S: TextShaper + ?Sized>(
             painter.pop_layer();
         }
     }
-    // Caret position computed from the SAME TextGeometry - no extra
+    // Caret position computed from the same TextGeometry - no extra
     // shape pass. `caret_xy` also yields the baseline offset of
     // the byte's line so multiline carets land on the right line.
     if let Some(byte_offset) = text.caret {
