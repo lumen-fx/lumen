@@ -4258,6 +4258,7 @@ dependencies = [
  "lumen-text",
  "raw-window-handle",
  "softbuffer",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "vello_cpu",
 ]

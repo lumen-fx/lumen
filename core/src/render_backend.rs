@@ -203,4 +203,28 @@ mod tests {
         assert_eq!(backends.names(), ["gpu"]);
         assert_eq!(backends.get("gpu").map(|b| b.priority), Some(5));
     }
+
+    /// What a launch gets back from the registry is the backend's own
+    /// constructors: the surface renderer it builds and the offscreen
+    /// failure it reports reach the caller unchanged.
+    #[test]
+    fn a_selected_backend_builds_the_renderers_it_registered() {
+        let mut backends = RenderBackends::default();
+        backends.register(backend("gpu", 1));
+        let [gpu] = backends.select(None).expect("one").try_into().expect("one");
+
+        let mut surface = (gpu.surface)();
+        let mut world = World::new();
+        assert!(!surface.resize(8, 8));
+        let request = FrameRequest {
+            dirty: true,
+            force_full: false,
+        };
+        assert!(!surface.wants_present(&mut world, request));
+        assert!(surface.present(&mut world).is_ok());
+        surface.detach();
+
+        let offscreen = (gpu.offscreen)(8, 8).err();
+        assert_eq!(offscreen.as_deref(), Some("not in a test"));
+    }
 }

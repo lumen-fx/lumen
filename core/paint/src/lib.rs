@@ -224,3 +224,40 @@ pub trait Painter: Send + 'static {
 /// `ctx.target_as::<PaintTarget>()` and paints through [`Painter`], which
 /// draws the same on every backend.
 pub type PaintTarget = Box<dyn Painter>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each geometry converts into the shape variant a sink fast-paths.
+    #[test]
+    fn geometry_converts_into_its_own_shape() {
+        let rect = Rect::new(0.0, 0.0, 2.0, 2.0);
+        let rounded = RoundedRect::from_rect(rect, 1.0);
+        let path = BezPath::from_vec(Vec::new());
+        assert!(matches!(Shape::from(rect), Shape::Rect(r) if r == rect));
+        assert!(matches!(Shape::from(rounded), Shape::RoundedRect(r) if r == rounded));
+        assert!(matches!(Shape::from(&path), Shape::Path(p) if p.elements().is_empty()));
+    }
+
+    /// A fragment hands its work back only to the sink type that made it.
+    #[test]
+    fn a_fragment_downcasts_only_to_the_type_it_wraps() {
+        let fragment = Fragment::new(Arc::new(7u32));
+        assert_eq!(fragment.downcast::<u32>(), Some(&7));
+        assert!(fragment.downcast::<String>().is_none());
+        assert_eq!(format!("{fragment:?}"), "Fragment");
+    }
+
+    /// A sink that does not override the fragment calls has no fragments:
+    /// it refuses to record, has nothing to end, and paints no replay.
+    #[test]
+    fn a_sink_without_fragments_refuses_every_fragment_call() {
+        let mut sink = Recording::default();
+        assert!(!sink.begin_fragment());
+        assert!(sink.end_fragment().is_none());
+        let foreign = Fragment::new(Arc::new(()));
+        assert!(!sink.append_fragment(&foreign, Affine::IDENTITY));
+        assert!(sink.is_empty());
+    }
+}
