@@ -412,4 +412,166 @@ mod tests {
         drawing.pop_layer();
         assert!(drawing.is_empty());
     }
+
+    /// Every kind of call survives the round trip: recorded with its own
+    /// arguments, owned, and replayed with the replay's transform in front.
+    #[test]
+    fn every_call_kind_records_and_replays() {
+        use peniko::kurbo::{Point, Shape as _};
+        use peniko::{Blob, Gradient, ImageAlphaType, ImageData, ImageFormat};
+        use std::sync::Arc;
+
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((4.0, 0.0));
+        path.line_to((0.0, 4.0));
+        path.close_path();
+        let rounded = RoundedRect::new(0.0, 0.0, 8.0, 8.0, 2.0);
+        let gradient = Gradient::new_linear(Point::ZERO, Point::new(8.0, 0.0)).with_stops(
+            [
+                Color::new([1.0, 0.0, 0.0, 1.0]),
+                Color::new([0.0, 0.0, 1.0, 1.0]),
+            ]
+            .as_slice(),
+        );
+        let image = ImageBrush::new(ImageData {
+            data: Blob::new(Arc::new(vec![255u8; 4])),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: 1,
+            height: 1,
+        });
+        let font = FontData::new(Blob::new(Arc::new(Vec::new())), 0);
+        let glyphs = [GlyphPosition {
+            id: 7,
+            x: 1.0,
+            y: 2.0,
+            advance: 3.0,
+            byte_start: 0,
+            byte_end: 1,
+        }];
+        let at = Affine::translate((1.0, 1.0));
+
+        let mut drawing = Recording::default();
+        drawing.fill(
+            Fill::EvenOdd,
+            at,
+            BrushRef::Gradient(&gradient),
+            Some(Affine::scale(2.0)),
+            &Shape::Path(&path),
+        );
+        drawing.stroke(
+            &Stroke::new(3.0),
+            at,
+            BrushRef::Image(image.as_ref()),
+            None,
+            &Shape::RoundedRect(rounded),
+        );
+        drawing.draw_blurred_rounded_rect(
+            at,
+            Rect::new(0.0, 0.0, 4.0, 4.0),
+            Color::new([0.0, 0.0, 0.0, 0.5]),
+            1.0,
+            2.0,
+        );
+        drawing.draw_image(&image, at);
+        drawing.draw_glyphs(&GlyphRun {
+            font: &font,
+            font_size: 12.0,
+            normalized_coords: &[1, 2],
+            transform: at,
+            brush: Color::new([0.0, 1.0, 0.0, 1.0]).into(),
+            glyphs: &glyphs,
+        });
+        assert_eq!(drawing.len(), 5);
+        assert!(!drawing.is_empty());
+        assert_eq!(drawing.backend_id(), "lumen.recording");
+        assert!(drawing.native().downcast_mut::<Recording>().is_some());
+
+        let mut copy = Recording::default();
+        drawing.replay(&mut copy, Affine::translate((10.0, 0.0)));
+        let moved = |t: &Affine| t.translation() == (11.0, 1.0).into();
+
+        match &copy.commands()[0] {
+            Command::Fill {
+                style,
+                transform,
+                brush: Brush::Gradient(g),
+                brush_transform,
+                shape: OwnedShape::Path(p),
+            } => {
+                assert_eq!(*style, Fill::EvenOdd);
+                assert!(moved(transform));
+                assert_eq!(g.stops.len(), 2);
+                assert_eq!(*brush_transform, Some(Affine::scale(2.0)));
+                assert_eq!(p.bounding_box(), path.bounding_box());
+            }
+            other => panic!("expected the gradient fill, got {other:?}"),
+        }
+        match &copy.commands()[1] {
+            Command::Stroke {
+                style,
+                transform,
+                brush: Brush::Image(_),
+                shape: OwnedShape::RoundedRect(r),
+                ..
+            } => {
+                assert_eq!(style.width, 3.0);
+                assert!(moved(transform));
+                assert_eq!(*r, rounded);
+            }
+            other => panic!("expected the image stroke, got {other:?}"),
+        }
+        match &copy.commands()[2] {
+            Command::BlurredRoundedRect {
+                transform,
+                radius,
+                std_dev,
+                ..
+            } => {
+                assert!(moved(transform));
+                assert_eq!((*radius, *std_dev), (1.0, 2.0));
+            }
+            other => panic!("expected the blurred rect, got {other:?}"),
+        }
+        match &copy.commands()[3] {
+            Command::Image { image, transform } => {
+                assert!(moved(transform));
+                assert_eq!(image.image.width, 1);
+            }
+            other => panic!("expected the image, got {other:?}"),
+        }
+        match &copy.commands()[4] {
+            Command::Glyphs {
+                font_size,
+                normalized_coords,
+                transform,
+                glyphs,
+                ..
+            } => {
+                assert_eq!(*font_size, 12.0);
+                assert_eq!(normalized_coords, &[1, 2]);
+                assert!(moved(transform));
+                assert_eq!(glyphs[0].id, 7);
+            }
+            other => panic!("expected the glyph run, got {other:?}"),
+        }
+
+        drawing.clear();
+        assert!(drawing.is_empty());
+        assert_eq!(drawing.layer_depth(), 0);
+    }
+
+    /// An owned shape hands back the same geometry it was made from.
+    #[test]
+    fn an_owned_shape_borrows_back_as_the_same_shape() {
+        let rounded = RoundedRect::new(0.0, 0.0, 4.0, 4.0, 1.0);
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((1.0, 1.0));
+        for shape in [square(), Shape::RoundedRect(rounded), Shape::Path(&path)] {
+            let owned = OwnedShape::from_shape(&shape);
+            assert_eq!(OwnedShape::from_shape(&owned.as_shape()), owned);
+        }
+    }
 }

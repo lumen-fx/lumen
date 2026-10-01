@@ -322,4 +322,51 @@ mod tests {
         assert_eq!(at(2, 2), [0, 0, 0, 255]);
         assert_eq!(renderer.render_count(), 1);
     }
+
+    /// An unchanged scene keeps the last frame, a resize repaints at the
+    /// new size, and a screenshot request is answered from the last frame
+    /// and then cleared.
+    #[test]
+    fn the_plugin_repaints_on_change_and_answers_a_capture() {
+        let mut renderer = CpuRenderer::new(8, 8);
+        assert_eq!(renderer.cpu_painter().size(), (8, 8));
+        let mut app = App::new();
+        app.add_plugin(CpuRendererPlugin::from(renderer));
+        let capture = SurfaceCapture::default();
+        app.render_world.insert_resource(capture.clone());
+        let set_size = |app: &mut App, size: glam::Vec2| {
+            for world in [&mut app.world, &mut app.render_world] {
+                world.resource_mut::<Viewport>().size = size;
+            }
+        };
+        set_size(&mut app, glam::Vec2::new(8.0, 8.0));
+
+        app.tick();
+        app.tick();
+        let count = |app: &App| app.render_world.non_send::<CpuRenderer>().render_count();
+        assert_eq!(count(&app), 1, "a static scene paints once");
+        assert!(capture.read().is_none());
+
+        set_size(&mut app, glam::Vec2::new(12.0, 6.0));
+        capture.request();
+        app.tick();
+        assert_eq!(count(&app), 2, "a resize repaints");
+        assert!(!capture.is_requested());
+        let shot = capture.read().expect("the request was answered");
+        assert_eq!((shot.width, shot.height), (12, 6));
+        assert_eq!(shot.rgba8.len(), 12 * 6 * 4);
+    }
+
+    /// Resizing to the size the target already has keeps its pixels.
+    #[test]
+    fn resizing_to_the_same_size_keeps_the_frame() {
+        let mut renderer = CpuRenderer::new(4, 4);
+        renderer.begin_frame(LumenColor::rgb(1.0, 0.0, 0.0));
+        renderer.render_current();
+        renderer.resize(4, 4);
+        assert_eq!(&renderer.read_rgba8()[..4], &[255, 0, 0, 255]);
+        renderer.resize(2, 2);
+        assert_eq!(renderer.size(), (2, 2));
+        assert_eq!(&renderer.read_rgba8()[..4], &[0, 0, 0, 0], "a new target");
+    }
 }

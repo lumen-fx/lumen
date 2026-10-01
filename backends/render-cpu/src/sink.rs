@@ -364,4 +364,223 @@ mod tests {
         painter.begin_frame(4, 4, Color::new([0.0, 0.0, 0.0, 1.0]));
         assert!(painter.images.is_empty(), "not drawn last frame, dropped");
     }
+
+    fn black() -> Color {
+        Color::new([0.0, 0.0, 0.0, 1.0])
+    }
+
+    /// Every shape kind fills and strokes where it is, whatever the brush:
+    /// rounded rects and paths go through the path rasterizer, gradients and
+    /// images through their paints.
+    #[test]
+    fn every_shape_and_brush_kind_paints() {
+        use vello_cpu::kurbo::{Point, RoundedRect};
+        use vello_cpu::peniko::{Blob, Gradient, ImageAlphaType, ImageData, ImageFormat};
+        let mut painter = CpuPainter::new(32, 32);
+        painter.begin_frame(32, 32, black());
+
+        painter.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            BrushRef::Solid(Color::new([1.0, 0.0, 0.0, 1.0])),
+            None,
+            &Shape::RoundedRect(RoundedRect::new(0.0, 0.0, 16.0, 16.0, 4.0)),
+        );
+        let gradient = Gradient::new_linear(Point::new(16.0, 0.0), Point::new(32.0, 0.0))
+            .with_stops(
+                [
+                    Color::new([0.0, 1.0, 0.0, 1.0]),
+                    Color::new([0.0, 1.0, 0.0, 1.0]),
+                ]
+                .as_slice(),
+            );
+        let mut triangle = BezPath::new();
+        triangle.move_to((16.0, 0.0));
+        triangle.line_to((32.0, 0.0));
+        triangle.line_to((32.0, 16.0));
+        triangle.close_path();
+        painter.fill(
+            Fill::EvenOdd,
+            Affine::IDENTITY,
+            BrushRef::Gradient(&gradient),
+            None,
+            &Shape::Path(&triangle),
+        );
+        let image = ImageBrush::new(ImageData {
+            data: Blob::new(std::sync::Arc::new([0u8, 0, 255, 255].repeat(4))),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: 2,
+            height: 2,
+        });
+        painter.fill(
+            Fill::NonZero,
+            Affine::translate((0.0, 16.0)),
+            BrushRef::Image(image.as_ref()),
+            None,
+            &Shape::Rect(Rect::new(0.0, 0.0, 2.0, 2.0)),
+        );
+        let white = Color::new([1.0, 1.0, 1.0, 1.0]);
+        painter.stroke(
+            &Stroke::new(2.0),
+            Affine::IDENTITY,
+            white.into(),
+            None,
+            &Shape::Rect(Rect::new(20.0, 20.0, 30.0, 30.0)),
+        );
+        painter.stroke(
+            &Stroke::new(2.0),
+            Affine::IDENTITY,
+            white.into(),
+            None,
+            &Shape::RoundedRect(RoundedRect::new(4.0, 20.0, 14.0, 30.0, 2.0)),
+        );
+        painter.stroke(
+            &Stroke::new(2.0),
+            Affine::IDENTITY,
+            white.into(),
+            None,
+            &Shape::Path(&triangle),
+        );
+
+        let target = frame(&mut painter, 32, 32);
+        let px = |x, y| {
+            let p = target.sample(x, y);
+            (p.r, p.g, p.b)
+        };
+        assert_eq!(px(8, 8), (255, 0, 0), "the rounded rect");
+        assert_eq!(px(0, 0), (0, 0, 0), "outside the rounded corner");
+        assert_eq!(px(28, 4), (0, 255, 0), "inside the triangle");
+        assert_eq!(px(18, 12), (0, 0, 0), "outside the triangle");
+        assert_eq!(px(1, 17), (0, 0, 255), "the image paint");
+        assert_eq!(px(20, 25), (255, 255, 255), "the rect stroke");
+        assert_eq!(px(25, 25), (0, 0, 0), "a stroke does not fill");
+        assert_eq!(px(9, 20), (255, 255, 255), "the rounded stroke");
+    }
+
+    /// A layer clipped to a path clips to the path, not its bounds.
+    #[test]
+    fn a_layer_clips_to_a_path() {
+        let mut painter = CpuPainter::new(16, 16);
+        painter.begin_frame(16, 16, black());
+        let mut triangle = BezPath::new();
+        triangle.move_to((0.0, 0.0));
+        triangle.line_to((16.0, 0.0));
+        triangle.line_to((0.0, 16.0));
+        triangle.close_path();
+        painter.push_layer(
+            Fill::NonZero,
+            BlendMode::default(),
+            1.0,
+            Affine::IDENTITY,
+            &Shape::Path(&triangle),
+        );
+        painter.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::new([1.0, 0.0, 0.0, 1.0]).into(),
+            None,
+            &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+        );
+        painter.pop_layer();
+        let target = frame(&mut painter, 16, 16);
+        assert_eq!(target.sample(2, 2).r, 255);
+        assert_eq!(target.sample(14, 14).r, 0);
+    }
+
+    /// A box shadow is dense at its middle and fades out past its edge.
+    #[test]
+    fn a_blurred_rect_fades_past_its_edge() {
+        let mut painter = CpuPainter::new(32, 32);
+        painter.begin_frame(32, 32, black());
+        painter.draw_blurred_rounded_rect(
+            Affine::IDENTITY,
+            Rect::new(8.0, 8.0, 24.0, 24.0),
+            Color::new([1.0, 1.0, 1.0, 1.0]),
+            2.0,
+            2.0,
+        );
+        let target = frame(&mut painter, 32, 32);
+        let middle = target.sample(16, 16).r;
+        let edge = target.sample(8, 16).r;
+        let outside = target.sample(1, 16).r;
+        assert!(middle > 240, "{middle}");
+        assert!(edge > outside && edge < middle, "{edge}");
+        assert_eq!(outside, 0);
+    }
+
+    /// Glyphs paint from the font they name; an empty run or an empty image
+    /// paints nothing.
+    #[test]
+    fn glyphs_paint_and_empty_draws_do_not() {
+        use lumen_text::GlyphPosition;
+        use vello_cpu::peniko::{Blob, FontData, ImageAlphaType, ImageData, ImageFormat};
+        let font_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../public/lumenc/tests/goldens/fonts/NotoSans-Regular.ttf"
+        );
+        let bytes = std::fs::read(font_path).expect("the pinned golden font");
+        let font = FontData::new(Blob::new(std::sync::Arc::new(bytes)), 0);
+        let mut painter = CpuPainter::new(32, 32);
+        painter.begin_frame(32, 32, black());
+        let white = Color::new([1.0, 1.0, 1.0, 1.0]);
+        let run = |glyphs| GlyphRun {
+            font: &font,
+            font_size: 24.0,
+            normalized_coords: &[],
+            transform: Affine::translate((4.0, 26.0)),
+            brush: white.into(),
+            glyphs,
+        };
+        painter.draw_glyphs(&run(&[]));
+        painter.draw_image(
+            &ImageBrush::new(ImageData {
+                data: Blob::new(std::sync::Arc::new(Vec::new())),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: 0,
+                height: 0,
+            }),
+            Affine::IDENTITY,
+        );
+        assert!(
+            frame(&mut painter, 32, 32).data().iter().all(|p| p.r == 0),
+            "nothing to draw draws nothing",
+        );
+
+        painter.begin_frame(32, 32, black());
+        let glyph = [GlyphPosition {
+            // A filled capital in the golden font.
+            id: 50,
+            x: 0.0,
+            y: 0.0,
+            advance: 16.0,
+            byte_start: 0,
+            byte_end: 1,
+        }];
+        painter.draw_glyphs(&run(&glyph));
+        let lit = frame(&mut painter, 32, 32)
+            .data()
+            .iter()
+            .filter(|p| p.r > 128)
+            .count();
+        assert!(lit > 20, "the glyph covers pixels: {lit}");
+    }
+
+    /// The sink reports itself, resizes with the frame, and hands out its
+    /// context and its concrete type.
+    #[test]
+    fn the_sink_resizes_and_names_itself() {
+        let mut painter = CpuPainter::new(4, 4);
+        painter.begin_frame(8, 2, black());
+        assert_eq!(painter.size(), (8, 2));
+        assert_eq!(painter.render_context().width(), 8);
+        assert_eq!(painter.backend_id(), BACKEND_ID);
+        assert!(painter.native().downcast_mut::<CpuPainter>().is_some());
+        let debug = format!("{painter:?}");
+        assert!(
+            debug.contains("width: 8") && debug.contains("height: 2"),
+            "{debug}"
+        );
+    }
 }

@@ -50,3 +50,37 @@ impl OffscreenRenderer for CpuRenderer {
         app.add_plugin(CpuRendererPlugin::from(*self));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_core::render_backend::RenderBackends;
+
+    /// Installing the capability registers `cpu` at its priority, and the
+    /// constructors it registers build this backend's renderers: a detached
+    /// surface renderer and an offscreen one that paints once installed.
+    #[test]
+    fn the_capability_registers_a_working_cpu_backend() {
+        let mut app = App::new();
+        install(
+            &mut app,
+            &CapabilityEnv::new(".", toml::Table::new(), String::new(), false),
+        );
+        let backends = app.world.resource::<RenderBackends>().clone();
+        let [cpu] = backends
+            .select(Some(NAME))
+            .expect("registered")
+            .try_into()
+            .expect("one");
+        assert_eq!(cpu.priority, PRIORITY);
+
+        let mut surface = (cpu.surface)();
+        assert!(!surface.resize(4, 4), "nothing to resize before a window");
+
+        let offscreen = (cpu.offscreen)(4, 4).expect("the CPU always starts");
+        let mut app = App::new();
+        offscreen.install(&mut app);
+        app.tick();
+        assert_eq!(app.render_world.non_send::<CpuRenderer>().render_count(), 1);
+    }
+}

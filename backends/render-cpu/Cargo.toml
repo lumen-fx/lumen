@@ -35,3 +35,5 @@ tracing.workspace = true
 [dev-dependencies]
 # The native-paint test draws through the same paint target a plugin gets.
 lumen-paint = { workspace = true }
+# The capability test builds the environment a capability is installed with.
+toml.workspace = true

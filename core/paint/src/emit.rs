@@ -915,4 +915,768 @@ mod tests {
             "nothing was recorded, so nothing is cached"
         );
     }
+
+    use crate::Fragment;
+    use crate::recording::{Command, OwnedShape};
+    use lumen_core::components::ImageFit;
+    use lumen_core::render_world::{Brush as LumenBrush, ExtractedBorder};
+    use lumen_text::{GlyphPosition, ShapedSegment};
+    use std::sync::Arc;
+
+    /// A sink with fragments: a fragment is a [`Recording`], and appending
+    /// one replays it into the frame.
+    #[derive(Default)]
+    struct FragmentSink {
+        frame: Recording,
+        open: Option<Recording>,
+        appended: usize,
+    }
+
+    impl FragmentSink {
+        fn target(&mut self) -> &mut Recording {
+            match &mut self.open {
+                Some(open) => open,
+                None => &mut self.frame,
+            }
+        }
+    }
+
+    impl Painter for FragmentSink {
+        fn fill(
+            &mut self,
+            style: Fill,
+            transform: Affine,
+            brush: BrushRef<'_>,
+            brush_transform: Option<Affine>,
+            shape: &Shape<'_>,
+        ) {
+            self.target()
+                .fill(style, transform, brush, brush_transform, shape);
+        }
+        fn stroke(
+            &mut self,
+            style: &Stroke,
+            transform: Affine,
+            brush: BrushRef<'_>,
+            brush_transform: Option<Affine>,
+            shape: &Shape<'_>,
+        ) {
+            self.target()
+                .stroke(style, transform, brush, brush_transform, shape);
+        }
+        fn push_layer(
+            &mut self,
+            clip_style: Fill,
+            blend: peniko::BlendMode,
+            alpha: f32,
+            transform: Affine,
+            clip: &Shape<'_>,
+        ) {
+            self.target()
+                .push_layer(clip_style, blend, alpha, transform, clip);
+        }
+        fn pop_layer(&mut self) {
+            self.target().pop_layer();
+        }
+        fn layer_depth(&self) -> usize {
+            self.frame.layer_depth()
+        }
+        fn draw_blurred_rounded_rect(
+            &mut self,
+            transform: Affine,
+            rect: Rect,
+            color: PenikoColor,
+            radius: f64,
+            std_dev: f64,
+        ) {
+            self.target()
+                .draw_blurred_rounded_rect(transform, rect, color, radius, std_dev);
+        }
+        fn draw_image(&mut self, image: &peniko::ImageBrush, transform: Affine) {
+            self.target().draw_image(image, transform);
+        }
+        fn draw_glyphs(&mut self, run: &GlyphRun<'_>) {
+            self.target().draw_glyphs(run);
+        }
+        fn begin_fragment(&mut self) -> bool {
+            self.open = Some(Recording::default());
+            true
+        }
+        fn end_fragment(&mut self) -> Option<Fragment> {
+            self.open.take().map(|r| Fragment::new(Arc::new(r)))
+        }
+        fn append_fragment(&mut self, fragment: &Fragment, transform: Affine) -> bool {
+            let Some(recorded) = fragment.downcast::<Recording>() else {
+                return false;
+            };
+            recorded.replay(&mut self.frame, transform);
+            self.appended += 1;
+            true
+        }
+        fn backend_id(&self) -> &'static str {
+            "test.fragments"
+        }
+        fn native(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn red() -> LumenColor {
+        LumenColor::rgb(1.0, 0.0, 0.0)
+    }
+
+    fn rect(brush: LumenBrush) -> ExtractedRect {
+        ExtractedRect {
+            origin: glam::Vec2::new(10.0, 20.0),
+            size: glam::Vec2::new(40.0, 20.0),
+            brush,
+            radius: 0.0,
+            corner_radii: None,
+            order: 0,
+        }
+    }
+
+    fn only_fill(target: &Recording) -> (&peniko::Brush, &OwnedShape) {
+        assert_eq!(target.len(), 1, "{:?}", target.commands());
+        match &target.commands()[0] {
+            Command::Fill { brush, shape, .. } => (brush, shape),
+            other => panic!("expected one fill, got {other:?}"),
+        }
+    }
+
+    /// Each Lumen brush becomes the peniko brush of the same kind, centred
+    /// on the rect, and the radius picks the rect's shape.
+    #[test]
+    fn a_rect_paints_its_brush_in_its_shape() {
+        let stops: Arc<[(f32, LumenColor)]> =
+            Arc::from([(0.0, red()), (1.0, LumenColor::rgb(0.0, 0.0, 1.0))].as_slice());
+
+        let mut target = Recording::default();
+        emit_rect(&mut target, &rect(LumenBrush::Solid(red())));
+        let (brush, shape) = only_fill(&target);
+        assert!(matches!(brush, peniko::Brush::Solid(_)));
+        assert_eq!(*shape, OwnedShape::Rect(Rect::new(10.0, 20.0, 50.0, 40.0)));
+
+        let mut target = Recording::default();
+        let mut linear = rect(LumenBrush::Linear {
+            angle_deg: 0.0,
+            stops: stops.clone(),
+        });
+        linear.radius = 4.0;
+        emit_rect(&mut target, &linear);
+        let (brush, shape) = only_fill(&target);
+        let peniko::Brush::Gradient(g) = brush else {
+            panic!("expected a gradient, got {brush:?}");
+        };
+        let peniko::GradientKind::Linear(pos) = g.kind else {
+            panic!("expected a linear gradient, got {:?}", g.kind);
+        };
+        assert_eq!(pos.start.y, 30.0, "a 0deg gradient runs through the middle");
+        assert!(pos.start.x < pos.end.x, "0deg runs left to right");
+        assert_eq!(g.stops.len(), 2);
+        assert!(matches!(shape, OwnedShape::RoundedRect(r) if r.radii().top_left == 4.0));
+
+        let mut target = Recording::default();
+        let mut radial = rect(LumenBrush::Radial {
+            radius: 1.0,
+            stops: stops.clone(),
+        });
+        radial.corner_radii = Some([1.0, 2.0, 3.0, 4.0]);
+        emit_rect(&mut target, &radial);
+        let (brush, shape) = only_fill(&target);
+        let peniko::Brush::Gradient(g) = brush else {
+            panic!("expected a gradient, got {brush:?}");
+        };
+        let peniko::GradientKind::Radial(pos) = g.kind else {
+            panic!("expected a radial gradient, got {:?}", g.kind);
+        };
+        assert_eq!(pos.end_center, Point::new(30.0, 30.0));
+        assert_eq!(pos.end_radius, 10.0, "1.0 reaches the nearest edge");
+        assert!(matches!(shape, OwnedShape::RoundedRect(r) if r.radii().bottom_left == 4.0));
+
+        let mut target = Recording::default();
+        emit_rect(
+            &mut target,
+            &rect(LumenBrush::Conic {
+                from_deg: 90.0,
+                stops,
+            }),
+        );
+        let (brush, _) = only_fill(&target);
+        let peniko::Brush::Gradient(g) = brush else {
+            panic!("expected a gradient, got {brush:?}");
+        };
+        let peniko::GradientKind::Sweep(pos) = g.kind else {
+            panic!("expected a sweep gradient, got {:?}", g.kind);
+        };
+        assert_eq!(pos.center, Point::new(30.0, 30.0));
+        assert_eq!(pos.end_angle - pos.start_angle, 360.0);
+    }
+
+    /// On a sink with fragments a leaf is recorded once at the local origin
+    /// and replayed at every origin after that; a second appearance at
+    /// another place is a cache hit, not a second recording.
+    #[test]
+    fn a_sink_with_fragments_records_a_leaf_once_and_replays_it() {
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+        let first = rect(LumenBrush::Solid(red()));
+        let mut second = first.clone();
+        second.origin = glam::Vec2::new(100.0, 0.0);
+
+        emit_rect_cached(&mut sink, &mut cache, &first);
+        emit_rect_cached(&mut sink, &mut cache, &second);
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(sink.appended, 2);
+        let origins: Vec<(f64, f64)> = sink
+            .frame
+            .commands()
+            .iter()
+            .map(|c| match c {
+                Command::Fill { transform, .. } => transform.translation().into(),
+                other => panic!("expected fills, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(origins, [(10.0, 20.0), (100.0, 0.0)]);
+    }
+
+    /// A cached fragment the sink cannot replay (another sink made it) is
+    /// recorded again and replaced, rather than leaving the leaf unpainted.
+    #[test]
+    fn a_fragment_the_sink_cannot_replay_is_recorded_again() {
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+        let leaf = rect(LumenBrush::Solid(red()));
+        cache.insert(FragmentKey::from(&leaf), Fragment::new(Arc::new(())));
+
+        emit_rect_cached(&mut sink, &mut cache, &leaf);
+
+        assert_eq!(sink.frame.len(), 1, "the leaf is painted");
+        let replaced = cache.get(FragmentKey::from(&leaf)).expect("re-cached");
+        assert!(replaced.downcast::<Recording>().is_some());
+    }
+
+    fn shadow() -> ExtractedShadow {
+        ExtractedShadow {
+            origin: glam::Vec2::new(12.0, 22.0),
+            size: glam::Vec2::new(40.0, 20.0),
+            radius: 4.0,
+            spread: 2.0,
+            blur: 3.0,
+            color: LumenColor::rgba(0.0, 0.0, 0.0, 0.5),
+            order: 0,
+            inner: false,
+            rect_origin: glam::Vec2::new(10.0, 20.0),
+        }
+    }
+
+    /// An outer shadow is one blurred rect grown by its spread; a spread
+    /// that swallows the box paints nothing.
+    #[test]
+    fn an_outer_shadow_is_one_blurred_rect_grown_by_its_spread() {
+        let mut target = Recording::default();
+        emit_shadow(&mut target, &shadow());
+        assert_eq!(target.len(), 1);
+        let Command::BlurredRoundedRect {
+            rect,
+            radius,
+            std_dev,
+            ..
+        } = &target.commands()[0]
+        else {
+            panic!("expected a blurred rect, got {:?}", target.commands());
+        };
+        assert_eq!(*rect, Rect::new(10.0, 20.0, 54.0, 44.0));
+        assert_eq!((*radius, *std_dev), (6.0, 3.0));
+
+        let mut swallowed = shadow();
+        swallowed.spread = -30.0;
+        let mut target = Recording::default();
+        emit_shadow(&mut target, &swallowed);
+        assert!(target.is_empty());
+
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+        emit_shadow_cached(&mut sink, &mut cache, &shadow());
+        emit_shadow_cached(&mut sink, &mut cache, &shadow());
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(sink.frame.len(), 2);
+    }
+
+    /// An inset shadow is clipped to its box and never cached, since it
+    /// depends on where the box is.
+    #[test]
+    fn an_inner_shadow_paints_inside_its_box_and_skips_the_cache() {
+        let mut inner = shadow();
+        inner.inner = true;
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+
+        emit_shadow_cached(&mut sink, &mut cache, &inner);
+
+        assert!(cache.is_empty());
+        let commands = sink.frame.commands();
+        assert_eq!(commands.len(), 3, "{commands:?}");
+        assert!(matches!(
+            &commands[0],
+            Command::PushLayer { clip: OwnedShape::Rect(r), .. }
+                if *r == Rect::new(10.0, 20.0, 50.0, 40.0)
+        ));
+        assert!(matches!(commands[1], Command::BlurredRoundedRect { .. }));
+        assert!(matches!(commands[2], Command::PopLayer));
+    }
+
+    /// An outline strokes its box, rounded when it has a radius, and a zero
+    /// width draws nothing.
+    #[test]
+    fn an_outline_strokes_its_box() {
+        let mut outline = ExtractedOutline {
+            origin: glam::Vec2::new(1.0, 2.0),
+            size: glam::Vec2::new(10.0, 10.0),
+            stroke: red(),
+            width: 2.0,
+            radius: 3.0,
+            order: 0,
+        };
+        let mut target = Recording::default();
+        emit_outline(&mut target, &outline);
+        assert!(matches!(
+            &target.commands()[0],
+            Command::Stroke { style, shape: OwnedShape::RoundedRect(_), .. } if style.width == 2.0
+        ));
+
+        outline.radius = 0.0;
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+        emit_outline_cached(&mut sink, &mut cache, &outline);
+        assert!(matches!(
+            &sink.frame.commands()[0],
+            Command::Stroke {
+                shape: OwnedShape::Rect(_),
+                ..
+            }
+        ));
+
+        outline.width = 0.0;
+        let mut target = Recording::default();
+        emit_outline(&mut target, &outline);
+        assert!(target.is_empty());
+    }
+
+    fn border() -> ExtractedBorder {
+        ExtractedBorder {
+            origin: glam::Vec2::ZERO,
+            size: glam::Vec2::new(20.0, 10.0),
+            widths: [1.0, 2.0, 3.0, 4.0],
+            color: red(),
+            side_colors: None,
+            radius: 0.0,
+            corner_radii: None,
+            order: 0,
+        }
+    }
+
+    /// One border color is one even-odd fill of the ring, rounded or not; no
+    /// width at all paints nothing.
+    #[test]
+    fn a_one_color_border_is_one_ring_fill() {
+        let mut target = Recording::default();
+        emit_border(&mut target, &border());
+        let (_, shape) = only_fill(&target);
+        let OwnedShape::Path(ring) = shape else {
+            panic!("the ring is a path, got {shape:?}");
+        };
+        assert!(matches!(
+            target.commands()[0],
+            Command::Fill {
+                style: Fill::EvenOdd,
+                ..
+            }
+        ));
+        use peniko::kurbo::Shape as _;
+        assert_eq!(ring.winding(Point::new(2.0, 0.5)), 1, "on the ring");
+        assert_eq!(ring.winding(Point::new(10.0, 5.0)) % 2, 0, "in the hole");
+
+        let mut rounded = border();
+        rounded.corner_radii = Some([6.0, 6.0, 0.0, 0.0]);
+        rounded.side_colors = Some([red(); 4]);
+        let mut target = Recording::default();
+        emit_border(&mut target, &rounded);
+        assert_eq!(target.len(), 1, "four equal side colors are one color");
+
+        let mut none = border();
+        none.widths = [0.0; 4];
+        let mut target = Recording::default();
+        emit_border(&mut target, &none);
+        assert!(target.is_empty());
+    }
+
+    /// Per-side colors fill one trapezoid per side with a width, each in
+    /// its own color, inside a clip to the ring.
+    #[test]
+    fn a_border_with_side_colors_fills_each_side_inside_the_ring() {
+        let blue = LumenColor::rgb(0.0, 0.0, 1.0);
+        let mut sides = border();
+        sides.widths = [2.0, 2.0, 0.0, 2.0];
+        sides.radius = 3.0;
+        sides.side_colors = Some([red(), blue, red(), blue]);
+        let mut target = Recording::default();
+
+        emit_border(&mut target, &sides);
+
+        let commands = target.commands();
+        assert!(matches!(
+            commands[0],
+            Command::PushLayer {
+                clip_style: Fill::EvenOdd,
+                ..
+            }
+        ));
+        let colors: Vec<peniko::Brush> = commands[1..commands.len() - 1]
+            .iter()
+            .map(|c| match c {
+                Command::Fill { brush, .. } => brush.clone(),
+                other => panic!("expected side fills, got {other:?}"),
+            })
+            .collect();
+        let red = peniko::Brush::Solid(peniko_color(red()));
+        let blue = peniko::Brush::Solid(peniko_color(blue));
+        assert_eq!(colors, [red, blue.clone(), blue], "the bottom has no width");
+        assert!(matches!(commands.last(), Some(Command::PopLayer)));
+        assert_eq!(target.layer_depth(), 0);
+    }
+
+    /// The fit modes place content the way CSS `object-fit` does.
+    #[test]
+    fn fit_box_follows_object_fit() {
+        let wide = (200.0, 100.0);
+        let tall = (100.0, 200.0);
+        let square = (100.0, 100.0);
+        let small = (10.0, 10.0);
+        assert_eq!(fit_box(wide, square, ImageFit::Fill), ((0.0, 0.0), square));
+        assert_eq!(fit_box(wide, square, ImageFit::None), ((0.0, 0.0), wide));
+        assert_eq!(
+            fit_box(wide, square, ImageFit::Contain),
+            ((0.0, 25.0), (100.0, 50.0))
+        );
+        assert_eq!(
+            fit_box(tall, square, ImageFit::Contain),
+            ((25.0, 0.0), (50.0, 100.0))
+        );
+        assert_eq!(
+            fit_box(wide, square, ImageFit::Cover),
+            ((-50.0, 0.0), (200.0, 100.0))
+        );
+        assert_eq!(
+            fit_box(tall, square, ImageFit::Cover),
+            ((0.0, -50.0), (100.0, 200.0))
+        );
+        assert_eq!(
+            fit_box(small, square, ImageFit::ScaleDown),
+            ((45.0, 45.0), small)
+        );
+        assert_eq!(
+            fit_box(wide, square, ImageFit::ScaleDown),
+            ((0.0, 25.0), (100.0, 50.0))
+        );
+        assert_eq!(
+            fit_box(tall, square, ImageFit::ScaleDown),
+            ((25.0, 0.0), (50.0, 100.0))
+        );
+        assert_eq!(
+            fit_box((0.0, 0.0), (10.0, 0.0), ImageFit::Contain),
+            ((5.0, 0.0), (0.0, 0.0)),
+            "a zero dimension does not divide by zero",
+        );
+    }
+
+    fn image(fit: ImageFit, alpha: f32) -> ExtractedImage {
+        ExtractedImage {
+            origin: glam::Vec2::new(5.0, 5.0),
+            size: glam::Vec2::new(4.0, 4.0),
+            width: 2,
+            height: 2,
+            rgba: Arc::from(vec![255u8; 16]),
+            fit,
+            order: 0,
+            alpha,
+            background: None,
+        }
+    }
+
+    /// An image scales into its box; it gets a clip layer only when it can
+    /// overflow the box or must fade, and an empty image paints nothing.
+    #[test]
+    fn an_image_clips_only_when_it_can_overflow_or_fades() {
+        let blob = lumen_assets::ExtractedImageBlob(peniko::Blob::new(Arc::new(vec![255u8; 16])));
+
+        let mut target = Recording::default();
+        draw_image(&mut target, &image(ImageFit::Fill, 1.0), &blob);
+        assert_eq!(target.len(), 1);
+        let Command::Image {
+            image: drawn,
+            transform,
+        } = &target.commands()[0]
+        else {
+            panic!("expected the image, got {:?}", target.commands());
+        };
+        assert_eq!((drawn.image.width, drawn.image.height), (2, 2));
+        assert_eq!(transform.translation(), (5.0, 5.0).into());
+        assert_eq!(transform.as_coeffs()[0], 2.0, "2 px scaled into a 4 px box");
+
+        for (fit, alpha) in [(ImageFit::Cover, 1.0), (ImageFit::Fill, 0.5)] {
+            let mut target = Recording::default();
+            draw_image(&mut target, &image(fit, alpha), &blob);
+            assert_eq!(target.len(), 3, "{fit:?} at {alpha}");
+            assert!(matches!(
+                target.commands()[0],
+                Command::PushLayer { alpha: a, .. } if a == alpha
+            ));
+        }
+
+        let mut empty = image(ImageFit::Fill, 1.0);
+        empty.width = 0;
+        let mut target = Recording::default();
+        draw_image(&mut target, &empty, &blob);
+        assert!(target.is_empty());
+    }
+
+    fn svg(alpha: f32) -> lumen_assets::ExtractedSvg {
+        let tree = usvg::Tree::from_str(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+              <rect width="10" height="10" fill="#ff0000"/>
+            </svg>"##,
+            &usvg::Options::default(),
+        )
+        .expect("valid svg");
+        lumen_assets::ExtractedSvg {
+            origin: glam::Vec2::new(20.0, 0.0),
+            size: glam::Vec2::new(20.0, 20.0),
+            intrinsic: glam::Vec2::new(10.0, 10.0),
+            asset: lumen_assets::SvgData {
+                intrinsic: glam::Vec2::new(10.0, 10.0),
+                tree,
+                id: lumen_assets::SvgData::next_id(),
+                source_bytes: 0,
+            }
+            .into(),
+            fit: ImageFit::Fill,
+            order: 0,
+            alpha,
+        }
+    }
+
+    /// An SVG paints scaled into its box. Without fragments it paints in
+    /// place, cache or not; a fade wraps it in one layer.
+    #[test]
+    fn an_svg_paints_scaled_into_its_box() {
+        let mut target = Recording::default();
+        emit_svg(&mut target, None, &svg(1.0));
+        let Command::Fill { transform, .. } = &target.commands()[0] else {
+            panic!("expected the svg's fill, got {:?}", target.commands());
+        };
+        assert_eq!(transform.translation(), (20.0, 0.0).into());
+        assert_eq!(transform.as_coeffs()[0], 2.0);
+
+        let mut target = Recording::default();
+        let mut cache = FragmentCache::default();
+        emit_svg(&mut target, Some(&mut cache), &svg(0.5));
+        assert!(cache.is_empty(), "no fragments, nothing to cache");
+        let commands = target.commands();
+        assert_eq!(commands.len(), 3, "{commands:?}");
+        assert!(matches!(commands[0], Command::PushLayer { alpha, .. } if alpha == 0.5));
+        assert!(matches!(commands[2], Command::PopLayer));
+
+        let mut empty = svg(1.0);
+        empty.intrinsic = glam::Vec2::ZERO;
+        let mut target = Recording::default();
+        emit_svg(&mut target, None, &empty);
+        assert!(target.is_empty());
+    }
+
+    /// On a sink with fragments an SVG asset is recorded once, by its id,
+    /// and every later paint of it replays the recording.
+    #[test]
+    fn an_svg_is_recorded_once_per_asset() {
+        let mut sink = FragmentSink::default();
+        let mut cache = FragmentCache::default();
+        let drawing = svg(1.0);
+
+        emit_svg(&mut sink, Some(&mut cache), &drawing);
+        emit_svg(&mut sink, Some(&mut cache), &drawing);
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(sink.appended, 2);
+        assert_eq!(sink.frame.len(), 2);
+        for command in sink.frame.commands() {
+            let Command::Fill { transform, .. } = command else {
+                panic!("expected fills, got {command:?}");
+            };
+            assert_eq!(transform.translation(), (20.0, 0.0).into());
+        }
+    }
+
+    /// One glyph per byte, `advance` apart, on one baseline: enough of a
+    /// shaper to place carets and selections.
+    struct MonoShaper {
+        advance: f32,
+    }
+
+    impl TextShaper for MonoShaper {
+        fn shape(&mut self, text: &str, _size_px: f32, _opts: ShapeOptions) -> Option<ShapedRun> {
+            if text.is_empty() {
+                return None;
+            }
+            let glyphs: Vec<GlyphPosition> = (0..text.len())
+                .map(|i| GlyphPosition {
+                    id: i as u32 + 1,
+                    x: i as f32 * self.advance,
+                    y: 0.0,
+                    advance: self.advance,
+                    byte_start: i as u32,
+                    byte_end: i as u32 + 1,
+                })
+                .collect();
+            let width = glyphs.len() as f32 * self.advance;
+            let font_data = Arc::new(Vec::new());
+            Some(ShapedRun {
+                font_data: font_data.clone(),
+                font_index: 0,
+                glyphs: glyphs.clone(),
+                segments: vec![
+                    ShapedSegment {
+                        font_id: 1,
+                        font_data,
+                        font_index: 0,
+                        normalized_coords: Vec::new(),
+                        level: 0,
+                        glyphs,
+                        width,
+                    },
+                    ShapedSegment {
+                        font_id: 2,
+                        font_data: Arc::new(Vec::new()),
+                        font_index: 0,
+                        normalized_coords: Vec::new(),
+                        level: 0,
+                        glyphs: Vec::new(),
+                        width: 0.0,
+                    },
+                ],
+                width,
+            })
+        }
+    }
+
+    /// A shaped label paints one glyph run per non-empty segment, shifted by
+    /// its alignment inside the container.
+    #[test]
+    fn a_label_paints_its_glyphs_where_its_alignment_puts_them() {
+        use lumen_core::components::TextAlign;
+        let mut shaper = MonoShaper { advance: 10.0 };
+        for (align, x) in [
+            (TextAlign::Start, 10.0),
+            (TextAlign::Center, 10.0 + 80.0),
+            (TextAlign::End, 10.0 + 160.0),
+        ] {
+            let mut text = label("Save");
+            text.align = align;
+            let mut target = Recording::default();
+            draw_text(&mut shaper, &mut target, &text, 1.0, 1.0);
+            assert_eq!(target.len(), 1, "the empty segment paints nothing");
+            let Command::Glyphs {
+                transform, glyphs, ..
+            } = &target.commands()[0]
+            else {
+                panic!("expected a glyph run, got {:?}", target.commands());
+            };
+            assert_eq!(glyphs.len(), 4);
+            assert_eq!(transform.translation(), (x, 20.0).into(), "{align:?}");
+        }
+    }
+
+    /// A selection paints its highlight under the glyphs, re-paints the
+    /// selected glyphs in the selection foreground inside a clip, and the
+    /// caret lands after the byte it follows, in the caret color.
+    #[test]
+    fn a_selection_and_caret_paint_around_the_glyphs() {
+        let mut shaper = MonoShaper { advance: 10.0 };
+        let mut field = label("Save");
+        field.selection = Some((1, 3));
+        field.selection_foreground = Some(LumenColor::rgb(1.0, 1.0, 1.0));
+        field.caret = Some(3);
+        field.caret_color = Some(red());
+        let mut target = Recording::default();
+
+        draw_text(&mut shaper, &mut target, &field, 1.0, 0.5);
+
+        let commands = target.commands();
+        let kinds: Vec<&str> = commands
+            .iter()
+            .map(|c| match c {
+                Command::Fill { .. } => "fill",
+                Command::Glyphs { .. } => "glyphs",
+                Command::PushLayer { .. } => "push",
+                Command::PopLayer => "pop",
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["fill", "glyphs", "push", "glyphs", "pop", "fill"]);
+
+        let Command::Fill {
+            shape: OwnedShape::Rect(band),
+            brush,
+            ..
+        } = &commands[0]
+        else {
+            panic!("expected the selection band, got {:?}", commands[0]);
+        };
+        assert_eq!((band.x0, band.x1), (20.0, 40.0), "bytes 1..3");
+        let peniko::Brush::Solid(highlight) = brush else {
+            panic!("the highlight is a solid fill, got {brush:?}");
+        };
+        assert!(
+            highlight.components[3] < 1.0,
+            "opacity folds into the highlight"
+        );
+
+        let Command::Fill {
+            shape: OwnedShape::Rect(caret),
+            brush,
+            ..
+        } = &commands[5]
+        else {
+            panic!("expected the caret, got {:?}", commands[5]);
+        };
+        assert_eq!(caret.x0, 40.0, "after byte 3");
+        let peniko::Brush::Solid(caret_color) = brush else {
+            panic!("the caret is a solid fill, got {brush:?}");
+        };
+        assert_eq!(caret_color.components[0], 1.0);
+    }
+
+    /// A caret right after a newline sits at the start of the next line,
+    /// one line height down, even though a newline shapes no glyph.
+    #[test]
+    fn a_caret_after_a_newline_starts_the_next_line() {
+        let mut shaper = MonoShaper { advance: 10.0 };
+        let mut field = label("ab\n");
+        field.caret = Some(3);
+        let mut target = Recording::default();
+
+        draw_text(&mut shaper, &mut target, &field, 1.0, 1.0);
+
+        let Some(Command::Fill {
+            shape: OwnedShape::Rect(caret),
+            ..
+        }) = target.commands().last()
+        else {
+            panic!("expected the caret last, got {:?}", target.commands());
+        };
+        assert_eq!(caret.x0, 10.0, "the line start is the field origin");
+        assert!(caret.y1 > 20.0 + 20.0, "one line height below the first");
+    }
 }
