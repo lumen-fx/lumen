@@ -14,6 +14,10 @@
 //! - **Links are not written.** A symbolic or hard link inside the
 //!   destination can point anywhere, and following it afterwards escapes a
 //!   check made at write time. They are counted and skipped instead.
+//! - **A filter picks files, not the guard.** With a [`Filter`], only the
+//!   files it matches are written, but every entry still passes the guard
+//!   first: a hostile entry fails the extraction whether or not the filter
+//!   would have kept it.
 
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -41,6 +45,89 @@ pub struct Unpacked {
     pub files: usize,
     /// Entries passed over because they are links rather than data.
     pub links_skipped: usize,
+    /// Files passed over because the filter did not match them.
+    pub filtered: usize,
+}
+
+/// Which files an extraction keeps: the entries matching any of its glob
+/// patterns.
+///
+/// `*` matches any run of characters and `?` any one character, both inside
+/// one path segment; `**` as a whole segment matches any number of segments.
+/// A pattern without a `/` is matched against the entry's file name at any
+/// depth, so `*.so` keeps `linux/x64/liblwjgl.so`; a pattern with one is
+/// matched against the whole path inside the archive. A filter with no
+/// patterns keeps nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filter {
+    patterns: Vec<String>,
+}
+
+impl Filter {
+    /// A filter keeping the files that match any of `patterns`.
+    #[must_use]
+    pub fn new<S: Into<String>>(patterns: impl IntoIterator<Item = S>) -> Self {
+        Self {
+            patterns: patterns.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Whether the file at `relative`, a path inside the archive, is kept.
+    #[must_use]
+    pub fn matches(&self, relative: &Path) -> bool {
+        let segments: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let Some(file_name) = segments.last() else {
+            return false;
+        };
+        self.patterns.iter().any(|pattern| {
+            let pattern = pattern.trim_start_matches('/');
+            if pattern.contains('/') {
+                let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
+                path_matches(&parts, &segments)
+            } else {
+                segment_matches(pattern.as_bytes(), file_name.as_bytes())
+            }
+        })
+    }
+}
+
+/// Whether the pattern segments `parts` match the path `segments`, with `**`
+/// standing for any number of whole segments.
+fn path_matches(parts: &[&str], segments: &[String]) -> bool {
+    match parts.split_first() {
+        None => segments.is_empty(),
+        Some((&"**", rest)) => {
+            (0..=segments.len()).any(|skip| path_matches(rest, &segments[skip..]))
+        }
+        Some((part, rest)) => match segments.split_first() {
+            Some((segment, tail)) => {
+                segment_matches(part.as_bytes(), segment.as_bytes()) && path_matches(rest, tail)
+            }
+            None => false,
+        },
+    }
+}
+
+/// Whether one pattern segment matches one path segment, with `*` for any run
+/// of characters and `?` for exactly one.
+fn segment_matches(pattern: &[u8], text: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => text.is_empty(),
+        Some((b'*', rest)) => (0..=text.len()).any(|skip| segment_matches(rest, &text[skip..])),
+        Some((b'?', rest)) => {
+            // One character, which in UTF-8 is a lead byte and its
+            // continuation bytes.
+            let Some((_, tail)) = text.split_first() else {
+                return false;
+            };
+            let continuation = tail.iter().take_while(|b| (**b & 0xC0) == 0x80).count();
+            segment_matches(rest, &tail[continuation..])
+        }
+        Some((head, rest)) => text.first() == Some(head) && segment_matches(rest, &text[1..]),
+    }
 }
 
 /// Which container `head` holds, falling back to what `name` is called.
@@ -71,13 +158,15 @@ pub fn detect(head: &[u8], name: &Path) -> Option<Format> {
     }
 }
 
-/// Unpack `src` into `dest`, creating `dest` and everything under it.
+/// Unpack `src` into `dest`, creating `dest` and everything under it. With a
+/// `filter`, only the files it matches are written, and only the directories
+/// those files need are created.
 ///
 /// An existing file in the way is overwritten. A rejected entry ends the run
 /// with an error naming it; whatever earlier entries already wrote stays on
 /// disk, so a destination that took a failed extraction is not a place to
 /// keep using.
-pub fn extract(src: &Path, dest: &Path) -> Result<Unpacked, String> {
+pub fn extract(src: &Path, dest: &Path, filter: Option<&Filter>) -> Result<Unpacked, String> {
     let mut file = File::open(src).map_err(|e| format!("cannot open {}: {e}", src.display()))?;
     let mut head = Vec::new();
     (&mut file)
@@ -96,14 +185,18 @@ pub fn extract(src: &Path, dest: &Path) -> Result<Unpacked, String> {
 
     let reader = std::io::BufReader::new(file);
     match format {
-        Format::Zip => unzip(reader, &root),
-        Format::TarGz => untar(flate2::read::GzDecoder::new(reader), &root),
-        Format::Tar => untar(reader, &root),
+        Format::Zip => unzip(reader, &root, filter),
+        Format::TarGz => untar(flate2::read::GzDecoder::new(reader), &root, filter),
+        Format::Tar => untar(reader, &root, filter),
     }
 }
 
 /// Write out a zip.
-fn unzip<R: Read + Seek>(reader: R, root: &Path) -> Result<Unpacked, String> {
+fn unzip<R: Read + Seek>(
+    reader: R,
+    root: &Path,
+    filter: Option<&Filter>,
+) -> Result<Unpacked, String> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| format!("cannot read the archive: {e}"))?;
     let mut out = Unpacked::default();
@@ -118,9 +211,13 @@ fn unzip<R: Read + Seek>(reader: R, root: &Path) -> Result<Unpacked, String> {
             continue;
         }
         if member.is_dir() {
-            if !relative.as_os_str().is_empty() {
+            if filter.is_none() && !relative.as_os_str().is_empty() {
                 directory(root, &relative, &name)?;
             }
+            continue;
+        }
+        if filter.is_some_and(|f| !f.matches(&relative)) {
+            out.filtered += 1;
             continue;
         }
         let target = file_slot(root, &relative, &name)?;
@@ -136,7 +233,7 @@ fn unzip<R: Read + Seek>(reader: R, root: &Path) -> Result<Unpacked, String> {
 }
 
 /// Write out a tar, whatever supplied its bytes.
-fn untar<R: Read>(reader: R, root: &Path) -> Result<Unpacked, String> {
+fn untar<R: Read>(reader: R, root: &Path, filter: Option<&Filter>) -> Result<Unpacked, String> {
     let mut archive = tar::Archive::new(reader);
     archive.set_overwrite(true);
     archive.set_preserve_permissions(true);
@@ -150,7 +247,7 @@ fn untar<R: Read>(reader: R, root: &Path) -> Result<Unpacked, String> {
         let relative = guarded(&name)?;
         let kind = entry.header().entry_type();
         if kind.is_dir() {
-            if !relative.as_os_str().is_empty() {
+            if filter.is_none() && !relative.as_os_str().is_empty() {
                 directory(root, &relative, &name)?;
             }
             continue;
@@ -159,6 +256,10 @@ fn untar<R: Read>(reader: R, root: &Path) -> Result<Unpacked, String> {
             // Symbolic links, hard links, devices, and fifos: everything that
             // is a reference rather than data.
             out.links_skipped += 1;
+            continue;
+        }
+        if filter.is_some_and(|f| !f.matches(&relative)) {
+            out.filtered += 1;
             continue;
         }
         let target = file_slot(root, &relative, &name)?;

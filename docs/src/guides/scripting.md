@@ -342,7 +342,7 @@ set of templates, an update. Unpacking it is a runtime module of its own:
 lumen-archive = { bundled = true }
 ```
 
-That adds `archive::extract(src, dest, tag)`, which reads zip, tar, and
+That adds `archive::extract(src, dest, tag, opts)`, which reads zip, tar, and
 gzip-compressed tar. Downloading and unpacking is the usual pairing, so the
 call is built for it: extraction never happens inside the call, because an
 archive of any size would hold up the frame. The call answers with whether the
@@ -351,7 +351,7 @@ passed:
 
 ```rust
 fn on_start() {
-    archive::extract("themes.zip", "themes", "themes");
+    archive::extract("themes.zip", "themes", "themes", Default::default());
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -365,6 +365,15 @@ fn on_archive_error(tag: string, message: string) {
 Both paths resolve against the app directory, the same as everywhere else.
 `on("archive_done", tag, fn)` handles one job on its own, so several
 extractions in flight stay apart.
+
+`opts` picks which files to keep. A launcher unpacking a jar of native
+libraries wants the libraries and not the jar's metadata, so it names them
+and nothing else reaches the disk:
+
+```rust
+archive::extract("natives.jar", "natives", "natives",
+    archive::ExtractOptions { include: ["*.so", "*.dll", "*.dylib"] });
+```
 
 An archive from the network is untrusted input, and the module treats it that
 way. An entry that would write outside `dest`, by naming an absolute path or

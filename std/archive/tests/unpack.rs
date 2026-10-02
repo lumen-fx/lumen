@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use lumen_archive::testkit;
-use lumen_archive::unpack::{self, Format};
+use lumen_archive::unpack::{self, Filter, Format};
 
 /// One of the fixture writers: it takes the path to save the archive at.
 type FixtureWriter = fn(&Path) -> std::io::Result<()>;
@@ -115,7 +115,7 @@ fn every_container_unpacks_to_the_same_tree() {
         let dest = dir.join(format!("out-{name}"));
         write(&src).expect("fixture");
 
-        let unpacked = unpack::extract(&src, &dest).expect("the archive unpacks");
+        let unpacked = unpack::extract(&src, &dest, None).expect("the archive unpacks");
         assert_eq!(unpacked.files, testkit::MEMBERS.len(), "{name}");
         assert_eq!(unpacked.links_skipped, 0, "{name}");
         assert_eq!(
@@ -148,7 +148,7 @@ fn an_entry_that_climbs_out_stops_the_extraction() {
     let dest = dir.join("out");
     testkit::escaping_zip(&src).expect("fixture");
 
-    let error = unpack::extract(&src, &dest).expect_err("the extraction is refused");
+    let error = unpack::extract(&src, &dest, None).expect_err("the extraction is refused");
     assert!(
         error.contains(testkit::ESCAPING_ENTRY),
         "the error names the entry: {error}"
@@ -176,7 +176,7 @@ fn an_absolute_entry_stops_the_extraction() {
     testkit::absolute_tar_gz(&src).expect("fixture");
     let _ = std::fs::remove_file(testkit::ABSOLUTE_ENTRY);
 
-    let error = unpack::extract(&src, &dest).expect_err("the extraction is refused");
+    let error = unpack::extract(&src, &dest, None).expect_err("the extraction is refused");
     assert!(
         error.contains(testkit::ABSOLUTE_ENTRY),
         "the error names the entry: {error}"
@@ -200,7 +200,7 @@ fn a_link_entry_is_skipped_rather_than_written() {
     let dest = dir.join("out");
     testkit::symlink_zip(&src).expect("fixture");
 
-    let unpacked = unpack::extract(&src, &dest).expect("the archive unpacks");
+    let unpacked = unpack::extract(&src, &dest, None).expect("the archive unpacks");
     assert_eq!(unpacked.files, 1);
     assert_eq!(unpacked.links_skipped, 1);
     assert_eq!(tree(&dest), vec!["real.txt".to_string()]);
@@ -226,7 +226,7 @@ fn an_existing_file_is_overwritten() {
     )
     .expect("stale file");
 
-    let unpacked = unpack::extract(&src, &dest).expect("the archive unpacks");
+    let unpacked = unpack::extract(&src, &dest, None).expect("the archive unpacks");
     assert_eq!(unpacked.files, testkit::MEMBERS.len());
     assert_eq!(
         std::fs::read_to_string(dest.join("top.txt")).ok(),
@@ -246,7 +246,7 @@ fn a_truncated_archive_reports_an_error() {
     let dest = dir.join("out");
     testkit::truncated_zip(&src).expect("fixture");
 
-    let error = unpack::extract(&src, &dest).expect_err("a half archive cannot unpack");
+    let error = unpack::extract(&src, &dest, None).expect_err("a half archive cannot unpack");
     assert!(
         error.contains("cannot read the archive"),
         "the error says the archive is unreadable: {error}"
@@ -263,7 +263,7 @@ fn a_file_that_is_no_archive_is_refused() {
     let dest = dir.join("out");
     std::fs::write(&src, "just some text").expect("file");
 
-    let error = unpack::extract(&src, &dest).expect_err("the file is refused");
+    let error = unpack::extract(&src, &dest, None).expect_err("the file is refused");
     assert!(
         error.contains("not a zip, tar, or tar.gz archive"),
         "the error names what was expected: {error}"
@@ -277,9 +277,108 @@ fn a_file_that_is_no_archive_is_refused() {
 #[test]
 fn a_missing_archive_reports_the_open_failure() {
     let dir = scratch("missing");
-    let error = unpack::extract(&dir.join("never-downloaded.zip"), &dir.join("out"))
+    let error = unpack::extract(&dir.join("never-downloaded.zip"), &dir.join("out"), None)
         .expect_err("a missing archive cannot unpack");
     assert!(error.contains("cannot open"), "{error}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The glob rules a filter matches by: `*` and `?` inside one segment, `**`
+/// across segments, and a pattern without a `/` against the file name alone.
+#[test]
+fn a_filter_matches_by_its_glob_rules() {
+    let kept = |patterns: &[&str], path: &str| {
+        Filter::new(patterns.iter().copied()).matches(Path::new(path))
+    };
+    assert!(kept(&["*.so"], "liblwjgl.so"));
+    assert!(kept(&["*.so"], "linux/x64/liblwjgl.so"), "any depth");
+    assert!(!kept(&["*.so"], "liblwjgl.so.sha1"));
+    assert!(kept(&["lib?.so"], "liba.so"));
+    assert!(!kept(&["lib?.so"], "libab.so"));
+    assert!(kept(&["linux/*/*.so"], "linux/x64/a.so"));
+    assert!(
+        !kept(&["linux/*.so"], "linux/x64/a.so"),
+        "`*` stays in a segment"
+    );
+    assert!(kept(&["linux/**/*.so"], "linux/x64/org/a.so"));
+    assert!(
+        kept(&["linux/**/*.so"], "linux/a.so"),
+        "`**` matches no segments"
+    );
+    assert!(!kept(&["linux/**/*.so"], "windows/a.so"));
+    assert!(
+        kept(&["*.dll", "*.so"], "a.so"),
+        "any pattern keeps the file"
+    );
+    assert!(!kept(&[], "a.so"), "no patterns keep nothing");
+}
+
+/// A natives jar filtered to its libraries leaves the library and nothing
+/// else: no metadata, no checksum files, and no directory the kept file does
+/// not need.
+#[test]
+fn a_filter_keeps_only_the_matching_files() {
+    let dir = scratch("filter");
+    let src = dir.join("natives.jar");
+    let dest = dir.join("out");
+    testkit::natives_jar(&src).expect("fixture");
+
+    let unpacked =
+        unpack::extract(&src, &dest, Some(&Filter::new(["*.so"]))).expect("the jar unpacks");
+    assert_eq!(unpacked.files, 1);
+    assert_eq!(unpacked.filtered, 4);
+    assert_eq!(
+        tree(&dest),
+        vec!["linux/x64/org/lwjgl/liblwjgl.so".to_string()]
+    );
+    assert!(
+        !dest.join("META-INF").exists(),
+        "a directory no kept file needs is not created"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The filter works the same on a tar, and a filter with no patterns writes
+/// nothing at all.
+#[test]
+fn a_filter_reads_a_tar_and_an_empty_one_keeps_nothing() {
+    let dir = scratch("filter-tar");
+    let src = dir.join("bundle.tar.gz");
+    testkit::normal_tar_gz(&src).expect("fixture");
+
+    let dest = dir.join("deep");
+    let unpacked = unpack::extract(&src, &dest, Some(&Filter::new(["nested/deep/*"])))
+        .expect("the tar unpacks");
+    assert_eq!(unpacked.files, 1);
+    assert_eq!(tree(&dest), vec!["nested/deep/leaf.txt".to_string()]);
+
+    let dest = dir.join("none");
+    let unpacked = unpack::extract(&src, &dest, Some(&Filter::new(Vec::<String>::new())))
+        .expect("the tar is read");
+    assert_eq!(unpacked.files, 0);
+    assert_eq!(unpacked.filtered, 3);
+    assert!(tree(&dest).is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The guard runs before the filter: an entry climbing out of the
+/// destination fails the extraction even when the filter would have dropped
+/// it.
+#[test]
+fn a_filter_does_not_excuse_a_hostile_entry() {
+    let dir = scratch("filter-escape");
+    let src = dir.join("hostile.zip");
+    testkit::escaping_zip(&src).expect("fixture");
+
+    let error = unpack::extract(&src, &dir.join("out"), Some(&Filter::new(["*.so"])))
+        .expect_err("the extraction is refused");
+    assert!(
+        error.contains(testkit::ESCAPING_ENTRY),
+        "the error names the entry: {error}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

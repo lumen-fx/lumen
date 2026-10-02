@@ -227,7 +227,7 @@ fn the_bundled_module_unpacks_an_archive() {
         "lumen-archive = { bundled = true }\n",
         r#"
 fn on_start() {
-    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle"));
+    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{}));
 }
 fn on_archive_done(tag, dest, count) {
     signal("done", "").set(tag);
@@ -270,7 +270,7 @@ fn without_the_module_the_function_does_not_exist() {
         f,
         "archive-absent",
         "",
-        r#"fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle")); }"#,
+        r#"fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{})); }"#,
     );
     let (stdout, stderr) = run_host(f, &dir, 20, "taken");
 

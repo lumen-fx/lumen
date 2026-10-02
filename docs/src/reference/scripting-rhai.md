@@ -752,7 +752,7 @@ lumen-archive = { bundled = true }
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `archive::extract(src, dest, tag)` | `bool` | Unpack the archive at `src` into the directory `dest`, creating it. `true` when the job was taken; `false` when it was not, which also fires `archive_error`. |
+| `archive::extract(src, dest, tag, opts)` | `bool` | Unpack the archive at `src` into the directory `dest`, creating it. `true` when the job was taken; `false` when it was not, which also fires `archive_error`. |
 
 Both paths resolve against the app directory, and the extraction runs off the
 tick loop, so the call answers before any bytes are read. The outcome arrives
@@ -768,11 +768,31 @@ the fallback, the same as any other event.
 
 ```rhai
 fn on_start() {
-    archive::extract("themes.zip", "themes", "themes");
+    archive::extract("themes.zip", "themes", "themes", #{});
 }
 fn on_archive_done(tag, dest, count) { signal("status", "").set(count + " files"); }
 fn on_archive_error(tag, message) { signal("status", "").set(message); }
 ```
+
+`opts` is a map of the options below; a key left out takes its default, so
+`#{}` keeps every file. A key the options do not have, or a value of the
+wrong type, raises before anything is read:
+
+```rhai
+archive::extract("natives.jar", "natives", "natives", #{ include: ["*.so", "*.dll"] });
+```
+
+| Field | Type | Default | Behaviour |
+| --- | --- | --- | --- |
+| `include` | array of strings | empty | Glob patterns for the files to write. Empty writes every file. |
+
+`*` and `?` match inside one path segment and `**` matches any number of
+segments. A pattern without a `/` is matched against the file name at any
+depth, so `*.so` keeps `linux/x64/liblwjgl.so`; a pattern with one is matched
+against the whole path inside the archive. Only the directories the kept files
+need are created. Every entry still passes the path checks below, so a hostile
+entry fails the extraction even when the filter would have dropped it.
+`count` is the files written.
 
 zip, tar, and gzip-compressed tar are read. The container is taken from the
 file's leading bytes, so an archive saved under a name that disagrees with its

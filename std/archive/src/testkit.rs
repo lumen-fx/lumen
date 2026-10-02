@@ -48,6 +48,38 @@ pub fn normal_zip(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The files a natives jar carries: one platform library, nested the way
+/// newer jars nest them, beside the metadata a launcher does not want.
+pub const JAR_MEMBERS: [(&str, &str); 5] = [
+    ("META-INF/MANIFEST.MF", "Manifest-Version: 1.0"),
+    ("META-INF/INDEX.LIST", "JarIndex-Version: 1.0"),
+    ("linux/x64/org/lwjgl/liblwjgl.so", "elf"),
+    ("linux/x64/org/lwjgl/liblwjgl.so.sha1", "da39a3ee"),
+    ("linux/x64/org/lwjgl/liblwjgl.so.git", "abc123"),
+];
+
+/// A jar-shaped zip carrying [`JAR_MEMBERS`], with a directory entry for each
+/// level.
+pub fn natives_jar(path: &Path) -> std::io::Result<()> {
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(path)?);
+    let options = SimpleFileOptions::default();
+    for directory in [
+        "META-INF/",
+        "linux/",
+        "linux/x64/",
+        "linux/x64/org/",
+        "linux/x64/org/lwjgl/",
+    ] {
+        writer.add_directory(directory, options).map_err(other)?;
+    }
+    for (name, body) in JAR_MEMBERS {
+        writer.start_file(name, options).map_err(other)?;
+        writer.write_all(body.as_bytes())?;
+    }
+    writer.finish().map_err(other)?;
+    Ok(())
+}
+
 /// A well-formed gzip-compressed tar carrying the same three members.
 pub fn normal_tar_gz(path: &Path) -> std::io::Result<()> {
     let encoder =

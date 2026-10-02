@@ -1161,7 +1161,7 @@ the host declares the namespace from what the module registered.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `archive::extract(src: string, dest: string, tag: string)` | `bool` | Unpack the archive at `src` into the directory `dest`, creating it. `true` when the job was taken; `false` when it was not, which also fires `archive_error`. |
+| `archive::extract(src: string, dest: string, tag: string, opts: archive::ExtractOptions)` | `bool` | Unpack the archive at `src` into the directory `dest`, creating it. `true` when the job was taken; `false` when it was not, which also fires `archive_error`. |
 
 Both paths resolve against the app directory, and the extraction runs off the
 tick loop, so the call answers before any bytes are read. The outcome arrives
@@ -1177,7 +1177,7 @@ wins over the fallback, the same as any other event.
 
 ```rust
 fn on_start() {
-    archive::extract("themes.zip", "themes", "themes");
+    archive::extract("themes.zip", "themes", "themes", Default::default());
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -1188,6 +1188,27 @@ fn on_archive_error(tag: string, message: string) {
     lumen::signal_set("status", message);
 }
 ```
+
+`opts` is an `archive::ExtractOptions`, a struct the module declares with a
+default for every field. Pass `Default::default()` to keep every file, or name
+the files to keep with `include`:
+
+```rust
+archive::extract("natives.jar", "natives", "natives",
+    archive::ExtractOptions { include: ["*.so", "*.dll", "*.dylib"] });
+```
+
+| Field | Type | Default | Behaviour |
+| --- | --- | --- | --- |
+| `include` | `string[]` | empty | Glob patterns for the files to write. Empty writes every file. |
+
+`*` and `?` match inside one path segment and `**` matches any number of
+segments. A pattern without a `/` is matched against the file name at any
+depth, so `*.so` keeps `linux/x64/liblwjgl.so`; a pattern with one is matched
+against the whole path inside the archive. Only the directories the kept files
+need are created. Every entry still passes the path checks below, so a hostile
+entry fails the extraction even when the filter would have dropped it.
+`count` is the files written.
 
 zip, tar, and gzip-compressed tar are read. The container is taken from the
 file's leading bytes, so an archive saved under a name that disagrees with its

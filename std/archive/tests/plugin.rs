@@ -126,7 +126,7 @@ fn rhai_unpacks_into_the_app_directory() {
         "rhai",
         r#"
 fn on_start() {
-    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle"));
+    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{}));
 }
 fn on_archive_done(tag, dest, count) {
     signal("done", "").set(tag);
@@ -180,7 +180,7 @@ fn a_per_tag_handler_wins_over_the_fallback() {
         r#"
 fn on_start() {
     on("archive_done", "bundle", "bundle_ready");
-    archive::extract("bundle.zip", "out", "bundle");
+    archive::extract("bundle.zip", "out", "bundle", #{});
 }
 fn bundle_ready(tag, dest, count) { signal("special", "").set(count); }
 fn on_archive_done(tag, dest, count) { signal("fallback", "").set(tag); }
@@ -209,7 +209,7 @@ fn a_hostile_archive_reports_on_the_error_event() {
         &dir,
         "rhai",
         r#"
-fn on_start() { archive::extract("hostile.zip", "out", "hostile"); }
+fn on_start() { archive::extract("hostile.zip", "out", "hostile", #{}); }
 fn on_archive_done(tag, dest, count) { signal("done", "").set(tag); }
 fn on_archive_error(tag, message) {
     signal("tag", "").set(tag);
@@ -250,9 +250,9 @@ fn a_refused_job_answers_false_and_reports() {
         "rhai",
         r#"
 fn on_start() {
-    signal("first", "").set(archive::extract("bundle.zip", "one", "same"));
-    signal("again", "").set(archive::extract("bundle.zip", "two", "same"));
-    signal("over", "").set(archive::extract("bundle.zip", "three", "other"));
+    signal("first", "").set(archive::extract("bundle.zip", "one", "same", #{}));
+    signal("again", "").set(archive::extract("bundle.zip", "two", "same", #{}));
+    signal("over", "").set(archive::extract("bundle.zip", "three", "other", #{}));
 }
 fn on_archive_error(tag, message) { signal("why_" + tag, "").set(message); }
 "#,
@@ -296,7 +296,7 @@ fn candela_reaches_the_module_surface_through_its_namespace() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle"));
+    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -329,6 +329,81 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `include` in the fourth argument keeps only the matching files, in every
+/// host, and the count reports what was written.
+#[test]
+fn an_include_filter_keeps_only_the_matching_files() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (engine, source) in [
+        (
+            "rhai",
+            r#"
+fn on_start() { archive::extract("natives.jar", "out", "natives", #{ include: ["*.so"] }); }
+fn on_archive_done(tag, dest, count) { signal("count", "").set(count); }
+fn on_archive_error(tag, message) { signal("failed", "").set(message); }
+"#,
+        ),
+        (
+            "candela",
+            r#"import "lumen.cdl";
+
+fn on_start() {
+    archive::extract(
+        "natives.jar",
+        "out",
+        "natives",
+        archive::ExtractOptions { include: ["*.so"] },
+    );
+}
+
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set_int("count", count);
+}
+
+fn on_archive_error(tag: string, message: string) {
+    lumen::signal_set("failed", message);
+}
+
+fn main() {}
+"#,
+        ),
+        (
+            "lua",
+            r#"
+function on_start() archive.extract("natives.jar", "out", "natives", { include = { "*.so" } }) end
+function on_archive_done(tag, dest, count) signal("count", ""):set(count) end
+function on_archive_error(tag, message) signal("failed", ""):set(message) end
+"#,
+        ),
+    ] {
+        let dir = app_dir(&format!("include-{engine}"), "bundle.zip");
+        testkit::natives_jar(&dir.join("natives.jar")).expect("jar fixture");
+        let mut app = build_app(&dir, engine, source, Some(ArchivePlugin::default()));
+
+        assert!(
+            tick_until(&mut app, 10.0, |app| signal(app, "count").is_some()),
+            "{engine}: on_archive_done must fire; failed={:?}",
+            signal(&app, "failed")
+        );
+        assert_eq!(signal(&app, "count").as_deref(), Some("1"), "{engine}");
+        assert!(
+            dir.join("out/linux/x64/org/lwjgl/liblwjgl.so").is_file(),
+            "{engine}: the library was written"
+        );
+        assert!(
+            !dir.join("out/META-INF").exists(),
+            "{engine}: the jar metadata was not"
+        );
+        assert!(
+            !dir.join("out/linux/x64/org/lwjgl/liblwjgl.so.sha1")
+                .exists(),
+            "{engine}: nor the checksum beside the library"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Without the plugin the function does not exist: the script's call fails
 /// with the host's ordinary unknown-function error, nothing is unpacked, and
 /// the app keeps ticking.
@@ -340,7 +415,7 @@ fn without_the_plugin_the_function_does_not_exist() {
         &dir,
         "rhai",
         r#"
-fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle")); }
+fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{})); }
 fn on_ready() { signal("alive", "").set("yes"); }
 "#,
         None,
