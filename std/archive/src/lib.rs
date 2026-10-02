@@ -2,9 +2,16 @@
 //!
 //! The engine has no archive code; this crate is the whole capability.
 //! Install [`ArchivePlugin`] and the app gains one function in the `archive`
-//! namespace, in every host: `archive::extract(src, dest, tag)` in Rhai and
-//! candela, `archive.extract(src, dest, tag)` in Lua. It reads zip, tar, and
-//! gzip-compressed tar.
+//! namespace, in every host: `archive::extract(src, dest, tag, opts)` in Rhai
+//! and candela, `archive.extract(src, dest, tag, opts)` in Lua. It reads zip,
+//! tar, and gzip-compressed tar.
+//!
+//! `opts` is an `archive::ExtractOptions` struct in candela and a map in Rhai
+//! and Lua. Its one field, `include`, lists glob patterns for the files to
+//! keep: `#{ include: ["*.so"] }` writes the platform libraries out of a jar
+//! and leaves the rest of the archive off the disk. `*` and `?` stay inside
+//! one path segment, `**` spans segments, and a pattern without a `/` matches
+//! the file name at any depth. Empty options keep every file.
 //!
 //! Without the module none of that exists: a script calling
 //! `archive::extract` gets its host's ordinary unknown-function error.

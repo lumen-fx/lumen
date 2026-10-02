@@ -33,8 +33,8 @@ use lumen_module::lumen_core::app_paths;
 use lumen_module::lumen_core::prelude::{IntoScheduleConfigs, TickStage};
 use lumen_module::lumen_core::task::{Spawn, SpawnService};
 use lumen_module::lumen_script::{
-    PluginEvent, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
-    push_plugin_event,
+    PluginEvent, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptStruct, ScriptTy as T,
+    ScriptValue, push_plugin_event,
 };
 
 use crate::unpack;
@@ -68,6 +68,7 @@ struct Job {
     src: PathBuf,
     dest: PathBuf,
     tag: String,
+    filter: Option<unpack::Filter>,
 }
 
 /// What the script-function body and the tick system share: the queue of
@@ -183,13 +184,24 @@ fn script_fns(shared: &Shared) -> Vec<ScriptFn> {
     vec![
         ScriptFn::new("extract")
             .ns(ScriptNs::Named(NAMESPACE.to_string()))
-            .doc("Unpack an archive into a directory; true when the job was taken.")
+            .doc(
+                "Unpack an archive into a directory; true when the job was taken. \
+                 Options: include, the glob patterns of the files to keep.",
+            )
             .param("src", T::Str)
             .param("dest", T::Str)
             .param("tag", T::Str)
+            .param("opts", T::Struct(options_type()))
             .ret(T::Bool)
             .build(move |cx| {
                 let tag = cx.str_arg(2);
+                let filter = match extract_filter(cx.arg_ref(3)) {
+                    Ok(filter) => filter,
+                    Err(why) => {
+                        report_error(&tag, &why);
+                        return Ok(ScriptValue::Bool(false));
+                    }
+                };
                 if let Err(why) = shared.accept(&tag) {
                     report_error(&tag, &why);
                     return Ok(ScriptValue::Bool(false));
@@ -198,6 +210,7 @@ fn script_fns(shared: &Shared) -> Vec<ScriptFn> {
                     src: app_paths::resolve(cx.str_arg(0)),
                     dest: app_paths::resolve(cx.str_arg(1)),
                     tag,
+                    filter,
                 };
                 if let Ok(mut queue) = shared.queue.lock() {
                     queue.push(job);
@@ -209,6 +222,38 @@ fn script_fns(shared: &Shared) -> Vec<ScriptFn> {
                 Ok(ScriptValue::Bool(true))
             }),
     ]
+}
+
+/// The name of the options struct, `archive::ExtractOptions` in candela.
+const OPTIONS: &str = "ExtractOptions";
+
+/// The fourth argument of `archive::extract`, described once for every host:
+/// a candela struct, a Rhai or Lua map. An empty `include` keeps every file.
+fn options_type() -> ScriptStruct {
+    ScriptStruct::new(OPTIONS).field("include", T::Array(Box::new(T::Str)))
+}
+
+/// The filter the options ask for, or `None` when they keep every file. The
+/// value arrives with every field present, so a field of the wrong kind is a
+/// host that did not check it; it is refused rather than guessed at.
+fn extract_filter(value: &ScriptValue) -> Result<Option<unpack::Filter>, String> {
+    let ScriptValue::Map(map) = value else {
+        return Err(format!("options must be an {OPTIONS}"));
+    };
+    let Some(ScriptValue::Array(patterns)) = map.get("include") else {
+        return Err("option `include` must be a list of strings".to_string());
+    };
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    patterns
+        .iter()
+        .map(|pattern| match pattern {
+            ScriptValue::Str(text) => Ok(text.clone()),
+            _ => Err("option `include` must be a list of strings".to_string()),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|patterns| Some(unpack::Filter::new(patterns)))
 }
 
 /// Per-tick pump: start whatever the script queued since the last tick.
@@ -234,7 +279,7 @@ fn tick_archive(jobs: Option<Res<ArchiveJobs>>, spawn: Option<Res<SpawnService>>
 /// archive of any size would otherwise stall the frame.
 fn spawn_extraction(spawn: Option<Arc<dyn Spawn>>, shared: Shared, job: Job) {
     let work = move || {
-        let outcome = unpack::extract(&job.src, &job.dest);
+        let outcome = unpack::extract(&job.src, &job.dest, job.filter.as_ref());
         shared.release(&job.tag);
         match outcome {
             Ok(unpacked) => {
@@ -273,4 +318,50 @@ fn report_error(tag: &str, message: &str) {
         fallback: ERROR_FALLBACK.to_string(),
         args: vec![ScriptValue::Str(message.to_string())],
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn options(include: Vec<ScriptValue>) -> ScriptValue {
+        ScriptValue::Map([("include".to_string(), ScriptValue::Array(include))].into())
+    }
+
+    fn text(s: &str) -> ScriptValue {
+        ScriptValue::Str(s.to_string())
+    }
+
+    /// No fields set, an empty map, and an empty Lua table all keep every
+    /// file.
+    #[test]
+    fn no_options_keep_every_file() {
+        for value in [
+            ScriptValue::Map(Default::default()),
+            ScriptValue::Array(Vec::new()),
+        ] {
+            assert_eq!(extract_filter(&options_type().complete(&value)), Ok(None));
+        }
+    }
+
+    /// The patterns read into the filter the unpacker matches with.
+    #[test]
+    fn include_reads_into_the_filter() {
+        let filter = extract_filter(&options(vec![text("*.so"), text("*.dll")]))
+            .expect("valid options")
+            .expect("a filter");
+        assert!(filter.matches(Path::new("linux/x64/liblwjgl.so")));
+        assert!(filter.matches(Path::new("lwjgl.dll")));
+        assert!(!filter.matches(Path::new("META-INF/MANIFEST.MF")));
+    }
+
+    /// A pattern that is not a string is refused rather than guessed at.
+    #[test]
+    fn a_pattern_of_the_wrong_kind_is_refused() {
+        let error = extract_filter(&options(vec![ScriptValue::I64(1)])).expect_err("refused");
+        assert!(error.contains("include"), "{error}");
+        assert!(extract_filter(&ScriptValue::Unit).is_err());
+    }
 }
