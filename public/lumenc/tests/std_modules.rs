@@ -404,7 +404,7 @@ fn on_start() {
     files::write("started.txt", "written by the module");
     print("fs: " + files::read("started.txt") + " under " + files::data_dir());
     print("download: " + str(download::to_file("http://127.0.0.1:1/none", "none.bin", "dl", "")));
-    print("archive: " + str(archive::extract("none.zip", "none", "ar")));
+    print("archive: " + str(archive::extract("none.zip", "none", "ar", Default::default())));
     print("process: " + str(process::stop("nothing")));
     let opts = process::StartOptions { ..Default::default() };
     print("process opts: " + str(opts.end_at_exit));
