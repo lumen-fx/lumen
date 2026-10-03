@@ -32,10 +32,14 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
         return;
     };
     // Some platforms own a main-thread channel, so the manager is non-send.
-    // `HotkeyPressed` and `HotkeyReleased` are registered beside every other
-    // input message, so the poll writes them with no registration here.
     app.world.insert_non_send(registry);
-    app.add_systems(TickStage::Systems, crate::poll_hotkeys);
+    // A press or release reaches the script on the tick it was polled: the
+    // poll writes plugin events ahead of the drain that delivers them.
+    lumen_script::register_plugin_event_message(&mut app.world);
+    app.add_systems(
+        TickStage::Systems,
+        crate::poll_hotkeys.before(lumen_script::collect_plugin_events),
+    );
     app.world.init_resource::<Messages<ScriptCommandEvent>>();
     app.add_systems(
         TickStage::Systems,

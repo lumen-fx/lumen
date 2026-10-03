@@ -1,15 +1,14 @@
 //! Desktop-notification host for Lumen.
 //!
-//! Wraps `notify-rust` 4 behind a [`NotificationService`] resource +
-//! [`NotificationActionInvoked`] message. Mirrors `GNotification` /
+//! Wraps `notify-rust` 4 behind a [`NotificationService`] resource.
+//! Mirrors `GNotification` /
 //! `GApplication::send_notification` and
 //! `QSystemTrayIcon::showMessage`.
 //!
 //! A notification carries a title, body, optional icon, urgency, and a
-//! list of action buttons. Pressing a button emits
-//! [`NotificationActionInvoked`], which [`poll_notification_actions`]
-//! drains each tick; scripts see it as
-//! `on_notification_action(id, action_id)`. Button presses report back
+//! list of action buttons. A button press is queued, and
+//! [`poll_notification_actions`] hands it to the script each tick as
+//! `on_notification_action(id, action_id)` ([`action_event`]). Button presses report back
 //! on freedesktop desktops only, the one backend `notify-rust` gives an
 //! activation callback for.
 //!
@@ -28,6 +27,7 @@
 pub mod capability;
 
 use bevy_ecs::prelude::*;
+use lumen_script::{PluginEvent, ScriptValue};
 use std::sync::Arc;
 
 pub use lumen_os_mime as mime;
@@ -116,12 +116,12 @@ impl From<Urgency> for notify_rust::Urgency {
 /// One notification request.
 ///
 /// Mirrors `notify_rust::Notification::{summary, body, icon, urgency,
-/// action}` plus a stable id used to route the eventual
-/// [`NotificationActionInvoked`] message back to the script.
+/// action}` plus a stable id used to route an eventual button press
+/// back to the script.
 #[derive(Clone, Debug, Default)]
 pub struct Notification {
-    /// Stable id used as the routing key for
-    /// [`NotificationActionInvoked`].
+    /// Stable id a button press is routed back by: the key of
+    /// [`action_event`].
     pub id: String,
     /// Bold title text shown above the body.
     pub title: String,
@@ -155,14 +155,17 @@ impl From<String> for NotificationId {
     }
 }
 
-/// ECS message: an action button on a previously-spawned notification
-/// fired. Routed by the scripting layer as
-/// `on_notification_action(id, action_id)`.
-///
-/// Lives in `lumen-core` so the scripting layer can dispatch it
-/// without depending on this crate; re-exported here because this
-/// crate produces it.
-pub use lumen_core::input::NotificationActionInvoked;
+/// The event an action button on notification `id` reaches the script as:
+/// `on_notification_action(id, action_id)`, with a per-notification
+/// `on("notification_action", id, fn)` winning.
+pub fn action_event(id: String, action_id: String) -> PluginEvent {
+    PluginEvent::Call {
+        event: "notification_action".to_string(),
+        key: id,
+        fallback: "on_notification_action".to_string(),
+        args: vec![ScriptValue::Str(action_id)],
+    }
+}
 
 /// Process-global queue of `(notification_id, action_id)` pairs the
 /// activation waiters have observed, drained once per tick by
@@ -185,15 +188,15 @@ fn push_action(id: String, action_id: String) {
     q.push((id, action_id));
 }
 
-/// Drain the activation queue each tick and emit one
-/// [`NotificationActionInvoked`] per observed button press.
-pub fn poll_notification_actions(mut out: MessageWriter<NotificationActionInvoked>) {
+/// Drain the activation queue each tick and hand each observed button
+/// press to the script as an [`action_event`].
+pub fn poll_notification_actions(mut out: MessageWriter<PluginEvent>) {
     let drained: Vec<(String, String)> = {
         let mut q = action_queue().lock().unwrap_or_else(|e| e.into_inner());
         std::mem::take(&mut *q)
     };
     for (id, action_id) in drained {
-        out.write(NotificationActionInvoked { id, action_id });
+        out.write(action_event(id, action_id));
     }
 }
 
@@ -224,7 +227,7 @@ impl NotificationService {
     }
 
     /// Fire a notification. Returns the id for routing the eventual
-    /// [`NotificationActionInvoked`] back to the right handler.
+    /// [`action_event`] back to the right handler.
     /// Errors log to stderr - matches the previous behaviour exactly.
     pub fn send(&self, n: &Notification) -> NotificationId {
         let mut builder = notify_rust::Notification::new();

@@ -218,8 +218,12 @@ lumen-script-rhai = { workspace = true }
 lumen-script-lua = { workspace = true }
 lumen-script-candela = { workspace = true, features = ["compiler"] }
 # os_integration.rs names the tray config / menu types directly, to assert a
-# script-supplied menu spec reaches them.
+# script-supplied menu spec reaches them, and builds each capability's script
+# event with that capability's own constructor.
 lumen-os-tray = { workspace = true }
+lumen-os-hotkey = { workspace = true }
+lumen-os-notify = { workspace = true }
+lumen-os-filedialog = { workspace = true }
 lumen-text-cosmic = { workspace = true }
 # text_geometry_pipeline.rs asserts against the shaped run the layout
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able

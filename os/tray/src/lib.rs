@@ -26,14 +26,11 @@
 pub mod capability;
 
 use bevy_ecs::prelude::*;
+use lumen_script::PluginEvent;
 use std::path::Path;
 
 pub use lumen_os_mime as mime;
 pub use lumen_os_mime::Action;
-
-/// Backwards-compatible alias for the existing `TrayClicked` message -
-/// emitted for the left / Trigger activation reason.
-pub use lumen_core::input::TrayClicked;
 
 /// Emitted when the user picks an item from a tray icon's context menu.
 /// Shared with the menu-bar host so one `on_menu(id)` handler covers
@@ -47,8 +44,8 @@ pub use lumen_core::input::MenuClicked;
 /// once and hand the raw bytes to `tray_icon::Icon::from_rgba`.
 #[derive(Clone, Debug)]
 pub struct TrayConfig {
-    /// Stable id used for the resulting [`TrayClicked`] dispatch and
-    /// for `TrayService::unregister`.
+    /// Stable id the click event carries ([`tray_click_event`]) and
+    /// `TrayService::unregister` takes.
     pub id: String,
     /// Filesystem path to a PNG (or any `image`-supported format) used
     /// as the tray icon.
@@ -270,7 +267,7 @@ fn build_muda_menu(menu: &TrayMenu) -> Box<dyn tray_icon::menu::ContextMenu> {
 }
 
 /// Drain the tray icon channel each tick: an activation becomes a
-/// [`TrayClicked`].
+/// [`tray_click_event`] on the plugin-event bus.
 ///
 /// Only the left-click / Trigger reason is surfaced today, so an
 /// existing `on_tray(id)` handler keeps working unchanged. Splitting
@@ -281,10 +278,10 @@ fn build_muda_menu(menu: &TrayMenu) -> Box<dyn tray_icon::menu::ContextMenu> {
 /// process-global channel the window backend drains into [`MenuClicked`]
 /// every tick, the same one the menu bar uses.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn poll_tray_events(mut clicks: MessageWriter<TrayClicked>) {
+pub fn poll_tray_events(mut clicks: MessageWriter<PluginEvent>) {
     while let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
         if let tray_icon::TrayIconEvent::Click { id, .. } = ev {
-            clicks.write(TrayClicked { id: id.0 });
+            clicks.write(tray_click_event(id.0));
         }
     }
 }
@@ -293,11 +290,11 @@ pub fn poll_tray_events(mut clicks: MessageWriter<TrayClicked>) {
 /// shared channel with the menu bar, so the menu half is drained here.
 #[cfg(target_os = "linux")]
 pub fn poll_tray_events(
-    mut clicks: MessageWriter<TrayClicked>,
+    mut clicks: MessageWriter<PluginEvent>,
     mut menus: MessageWriter<MenuClicked>,
 ) {
     while let Some(id) = linux::pop_click() {
-        clicks.write(TrayClicked { id });
+        clicks.write(tray_click_event(id));
     }
     while let Some(id) = linux::pop_menu_click() {
         menus.write(MenuClicked { id });
@@ -306,7 +303,18 @@ pub fn poll_tray_events(
 
 /// No-op stub on targets with no tray backend.
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub fn poll_tray_events(_clicks: MessageWriter<TrayClicked>) {}
+pub fn poll_tray_events(_clicks: MessageWriter<PluginEvent>) {}
+
+/// The event a click on the tray icon `id` reaches the script as:
+/// `on_tray(id)`, with a per-icon `on("tray", id, fn)` winning.
+pub fn tray_click_event(id: String) -> PluginEvent {
+    PluginEvent::Call {
+        event: "tray".to_string(),
+        key: id,
+        fallback: "on_tray".to_string(),
+        args: Vec::new(),
+    }
+}
 
 #[cfg(target_os = "linux")]
 mod linux {

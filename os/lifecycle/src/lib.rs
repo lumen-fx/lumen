@@ -13,8 +13,8 @@
 //!   carrying a security descriptor that grants the calling user and nobody else. The second
 //!   launch connects, sends its argv as length-prefixed JSON, and exits. The primary spawns a recv thread
 //!   that reads incoming args and pushes them into [`LifecycleService::take_secondary_args`], which
-//!   [`poll_second_instance`] drains every tick into `lumen_core::input::SecondInstanceLaunched` ECS
-//!   messages, reaching a script as `on_second_instance(args)`. The runtime gates the check itself
+//!   [`poll_second_instance`] drains every tick into plugin events ([`second_instance_event`]),
+//!   reaching a script as `on_second_instance(args)`. The runtime gates the check itself
 //!   behind `lumen.toml [app] single_instance`; this crate carries no config surface of its own.
 //!   Mirrors `GApplication`'s "unique by default" behaviour and Qt's `QSingleInstance` pattern.
 //! - [`AutostartService`] - writes a `.desktop` entry on Linux, a LaunchAgent plist on macOS, or a
@@ -40,6 +40,7 @@
 pub mod capability;
 
 use bevy_ecs::prelude::*;
+use lumen_script::{PluginEvent, ScriptValue};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -189,19 +190,58 @@ impl LifecycleService {
     }
 }
 
-/// Per-tick drain: forward argv batches a secondary launch sent this tick as
-/// [`lumen_core::input::SecondInstanceLaunched`] messages.
+/// Per-tick drain: forward argv batches a secondary launch sent this tick to
+/// the script as [`second_instance_event`]s.
 ///
 /// A no-op when [`LifecycleService::ensure_single_instance`] was never
 /// called (the inbox stays empty forever), so this is safe to register
 /// unconditionally - the same DEFAULT-ON shape the other OS host crates use
 /// for their own idle-cost-nil per-tick drains.
-pub fn poll_second_instance(
-    svc: Res<LifecycleService>,
-    mut out: MessageWriter<lumen_core::input::SecondInstanceLaunched>,
-) {
+pub fn poll_second_instance(svc: Res<LifecycleService>, mut out: MessageWriter<PluginEvent>) {
     for args in svc.take_secondary_args() {
-        out.write(lumen_core::input::SecondInstanceLaunched { args });
+        out.write(second_instance_event(&args));
+    }
+}
+
+/// The event one secondary launch reaches the script as:
+/// `on_second_instance(args)`, its argv joined by `|`. The joined argv is the
+/// key, so `on("second_instance", args, fn)` can claim one exact launch line.
+pub fn second_instance_event(args: &[String]) -> PluginEvent {
+    PluginEvent::Call {
+        event: "second_instance".to_string(),
+        key: args.join("|"),
+        fallback: "on_second_instance".to_string(),
+        args: Vec::new(),
+    }
+}
+
+/// The event an answered `list_recent_files(tag)` reaches the script as:
+/// `on_recent_files(tag, paths)`, the paths most recent first and joined by
+/// `|`, with a per-tag `on("recent_files", tag, fn)` winning.
+pub fn recent_files_event(tag: String, paths: String) -> PluginEvent {
+    PluginEvent::Call {
+        event: "recent_files".to_string(),
+        key: tag,
+        fallback: "on_recent_files".to_string(),
+        args: vec![ScriptValue::Str(paths)],
+    }
+}
+
+/// The event an answered `query_autostart(tag)` reaches the script as:
+/// `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`, with a
+/// per-tag `on("autostart_enabled", tag, fn)` or
+/// `on("autostart_disabled", tag, fn)` winning.
+pub fn autostart_event(tag: String, enabled: bool) -> PluginEvent {
+    let (event, fallback) = if enabled {
+        ("autostart_enabled", "on_autostart_enabled")
+    } else {
+        ("autostart_disabled", "on_autostart_disabled")
+    };
+    PluginEvent::Call {
+        event: event.to_string(),
+        key: tag,
+        fallback: fallback.to_string(),
+        args: Vec::new(),
     }
 }
 
@@ -1534,8 +1574,8 @@ mod tests {
     }
 
     /// [`poll_second_instance`] drains whatever a secondary launch pushed
-    /// into the inbox into a [`lumen_core::input::SecondInstanceLaunched`]
-    /// message, the half of the pipeline before script dispatch (which
+    /// into the inbox into an `on_second_instance` event, the half of the
+    /// pipeline before script dispatch (which
     /// `lumen-runtime`'s `script_fn_lifecycle_commands` integration test
     /// covers from there, since it needs a real `ScriptHost`).
     #[test]
@@ -1545,7 +1585,7 @@ mod tests {
         use bevy_ecs::world::World;
 
         let mut world = World::new();
-        world.init_resource::<Messages<lumen_core::input::SecondInstanceLaunched>>();
+        world.init_resource::<Messages<PluginEvent>>();
         let svc = LifecycleService::new();
         svc.secondary_args_inbox()
             .push(vec!["--open".to_string(), "report.pdf".to_string()]);
@@ -1554,14 +1594,23 @@ mod tests {
         world.run_system_once(poll_second_instance).unwrap();
 
         let drained: Vec<_> = world
-            .resource_mut::<Messages<lumen_core::input::SecondInstanceLaunched>>()
+            .resource_mut::<Messages<PluginEvent>>()
             .drain()
             .collect();
         assert_eq!(drained.len(), 1);
-        assert_eq!(
-            drained[0].args,
-            vec!["--open".to_string(), "report.pdf".to_string()]
-        );
+        let PluginEvent::Call {
+            event,
+            key,
+            fallback,
+            args,
+        } = &drained[0]
+        else {
+            panic!("a second launch is a handler call: {:?}", drained[0]);
+        };
+        assert_eq!(event, "second_instance");
+        assert_eq!(key, "--open|report.pdf");
+        assert_eq!(fallback, "on_second_instance");
+        assert!(args.is_empty());
     }
 
     #[test]

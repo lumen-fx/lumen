@@ -10,8 +10,9 @@
 //! `poll_global_hotkeys` helpers) per W6.5.
 //!
 //! Both `Pressed` and `Released` events are surfaced as separate
-//! messages, so one chord can drive push-to-talk. Scripts see them as
-//! `on_hotkey(name)` and `on_hotkey_release(name)`.
+//! script events, so one chord can drive push-to-talk. Scripts see them as
+//! `on_hotkey(name)` and `on_hotkey_release(name)`; [`hotkey_event`] builds
+//! the event either one travels as.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -23,21 +24,8 @@
 pub mod capability;
 
 use bevy_ecs::prelude::*;
+use lumen_script::PluginEvent;
 use std::str::FromStr;
-
-/// Backwards-compatible alias for the existing message - emitted
-/// whenever a registered hotkey fires its press event. Scripts route
-/// it as `on_hotkey(name)`.
-pub use lumen_core::input::HotkeyFired as HotkeyPressed;
-
-/// A previously-pressed hotkey was released. Scripts route it as
-/// `on_hotkey_release(name)`, the release half of the push-to-talk
-/// pair.
-///
-/// Lives in `lumen-core` beside [`HotkeyPressed`] so the scripting
-/// layer can dispatch it without depending on this crate; re-exported
-/// here because this crate produces it.
-pub use lumen_core::input::HotkeyReleased;
 
 /// OS-level global hotkey registry. `GlobalHotKeyManager` is `!Send`
 /// on some platforms (macOS NSEvent monitor), so this resource lives
@@ -145,17 +133,14 @@ fn display_env_usable(display: Option<&str>) -> bool {
     display.is_some_and(|d| !d.is_empty())
 }
 
-/// Drain the `global-hotkey` event channel each tick and re-emit
-/// matching presses + releases as separate ECS messages.
+/// Drain the `global-hotkey` event channel each tick and hand presses and
+/// releases to the script, in the order the OS reported them, through the
+/// plugin-event bus.
 ///
 /// Bug fix from the audit: pre-extract `poll_global_hotkeys` filtered
 /// to `Pressed` only, dropping the Release path so push-to-talk
 /// couldn't be built. This poll surfaces both halves.
-pub fn poll_hotkeys(
-    reg: Option<NonSend<HotkeyRegistry>>,
-    mut pressed: MessageWriter<HotkeyPressed>,
-    mut released: MessageWriter<HotkeyReleased>,
-) {
+pub fn poll_hotkeys(reg: Option<NonSend<HotkeyRegistry>>, mut out: MessageWriter<PluginEvent>) {
     let Some(reg) = reg else {
         return;
     };
@@ -164,14 +149,26 @@ pub fn poll_hotkeys(
         let Some(name) = reg.by_id.get(&ev.id) else {
             continue;
         };
-        match ev.state {
-            global_hotkey::HotKeyState::Pressed => {
-                pressed.write(HotkeyPressed { name: name.clone() });
-            }
-            global_hotkey::HotKeyState::Released => {
-                released.write(HotkeyReleased { name: name.clone() });
-            }
-        }
+        let pressed = matches!(ev.state, global_hotkey::HotKeyState::Pressed);
+        out.write(hotkey_event(name, pressed));
+    }
+}
+
+/// The event one hotkey edge reaches the script as. A press calls
+/// `on_hotkey(name)` and a release `on_hotkey_release(name)`; a per-name
+/// `on("hotkey", name, fn)` or `on("hotkey_release", name, fn)` wins over
+/// either.
+pub fn hotkey_event(name: &str, pressed: bool) -> PluginEvent {
+    let (event, fallback) = if pressed {
+        ("hotkey", "on_hotkey")
+    } else {
+        ("hotkey_release", "on_hotkey_release")
+    };
+    PluginEvent::Call {
+        event: event.to_string(),
+        key: name.to_string(),
+        fallback: fallback.to_string(),
+        args: Vec::new(),
     }
 }
 
@@ -183,11 +180,29 @@ mod tests {
     // so cover the data shapes instead.
 
     #[test]
-    fn hotkey_released_message_constructs() {
-        let r = HotkeyReleased {
-            name: "save".to_string(),
+    fn a_press_and_a_release_reach_their_own_handlers() {
+        let names = |event: PluginEvent| match event {
+            PluginEvent::Call {
+                event,
+                key,
+                fallback,
+                args,
+            } => (event, key, fallback, args.len()),
+            PluginEvent::Commands(_) => panic!("a hotkey edge is a handler call"),
         };
-        assert_eq!(r.name, "save");
+        assert_eq!(
+            names(hotkey_event("talk", true)),
+            ("hotkey".into(), "talk".into(), "on_hotkey".into(), 0)
+        );
+        assert_eq!(
+            names(hotkey_event("talk", false)),
+            (
+                "hotkey_release".into(),
+                "talk".into(),
+                "on_hotkey_release".into(),
+                0
+            )
+        );
     }
 
     #[test]

@@ -9,12 +9,11 @@
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use lumen_core::input::ClipboardRead;
 use lumen_core::warn_line;
 use lumen_os_clipboard::ClipboardHost;
 
-use crate::ScriptCommand;
 use crate::runtime::ScriptCommandEvent;
+use crate::{PluginEvent, ScriptCommand, ScriptValue};
 
 /// Reads that have an answer and have not been delivered yet.
 ///
@@ -25,7 +24,7 @@ use crate::runtime::ScriptCommandEvent;
 pub struct PendingClipboardReads {
     /// Handed to each read, which sends `(tag, text)` once it has the text.
     tx: Sender<(String, String)>,
-    /// Drained into [`ClipboardRead`] messages every run.
+    /// Drained into `on_clipboard` events every run.
     rx: Receiver<(String, String)>,
 }
 
@@ -37,12 +36,12 @@ impl Default for PendingClipboardReads {
 }
 
 /// Carry out the clipboard commands a script queued, and deliver the reads
-/// that have an answer as [`ClipboardRead`] messages.
+/// that have an answer as [`clipboard_read_event`]s.
 pub fn apply_clipboard_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     clipboard: Option<NonSend<ClipboardHost>>,
     pending: Local<PendingClipboardReads>,
-    mut out: MessageWriter<ClipboardRead>,
+    mut out: MessageWriter<PluginEvent>,
 ) {
     for ev in events.read() {
         match &ev.0 {
@@ -70,7 +69,20 @@ pub fn apply_clipboard_commands(
         }
     }
     for (tag, text) in pending.rx.try_iter() {
-        out.write(ClipboardRead { tag, text });
+        out.write(clipboard_read_event(tag, text));
+    }
+}
+
+/// The event one answered `clipboard_read(tag)` reaches the script as:
+/// `on_clipboard(tag, text)`, with a per-tag `on("clipboard", tag, fn)`
+/// winning. A clipboard holding no text answers with empty text, so a script
+/// waiting on the read can still clear its pending state.
+pub fn clipboard_read_event(tag: String, text: String) -> PluginEvent {
+    PluginEvent::Call {
+        event: "clipboard".to_string(),
+        key: tag,
+        fallback: "on_clipboard".to_string(),
+        args: vec![ScriptValue::Str(text)],
     }
 }
 
@@ -86,7 +98,7 @@ mod tests {
     fn with_no_clipboard_a_read_answers_empty_and_a_write_is_dropped() {
         let mut world = World::new();
         MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
-        MessageRegistry::register_message::<ClipboardRead>(&mut world);
+        crate::runtime::register_plugin_event_message(&mut world);
         world.write_message(ScriptCommandEvent(ScriptCommand::ClipboardWrite {
             text: "copied".to_string(),
         }));
@@ -98,11 +110,27 @@ mod tests {
         schedule.add_systems(apply_clipboard_commands);
         schedule.run(&mut world);
 
-        let reads = world.resource::<Messages<ClipboardRead>>();
-        let delivered: Vec<(String, String)> = reads
+        let reads = world.resource::<Messages<PluginEvent>>();
+        let delivered: Vec<(&str, &str, &str, &[ScriptValue])> = reads
             .iter_current_update_messages()
-            .map(|read| (read.tag.clone(), read.text.clone()))
+            .filter_map(|event| match event {
+                PluginEvent::Call {
+                    event,
+                    key,
+                    fallback,
+                    args,
+                } => Some((event.as_str(), key.as_str(), fallback.as_str(), &args[..])),
+                PluginEvent::Commands(_) => None,
+            })
             .collect();
-        assert_eq!(delivered, [("paste".to_string(), String::new())]);
+        assert_eq!(
+            delivered,
+            [(
+                "clipboard",
+                "paste",
+                "on_clipboard",
+                &[ScriptValue::Str(String::new())][..]
+            )]
+        );
     }
 }

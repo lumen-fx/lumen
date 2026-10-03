@@ -25,7 +25,13 @@ pub fn install(app: &mut App, _env: &CapabilityEnv) {
     app.world.insert_non_send(TrayService::new());
     // Every target has a `poll_tray_events`: `tray-icon` backs macOS and
     // Windows, `ksni` backs Linux, and anything else gets an inert stub.
-    app.add_systems(TickStage::Systems, crate::poll_tray_events);
+    // A click reaches the script on the tick it was polled: the poll writes
+    // plugin events ahead of the drain that delivers them.
+    lumen_script::register_plugin_event_message(&mut app.world);
+    app.add_systems(
+        TickStage::Systems,
+        crate::poll_tray_events.before(lumen_script::collect_plugin_events),
+    );
     app.world.init_resource::<Messages<ScriptCommandEvent>>();
     app.add_systems(
         TickStage::Systems,

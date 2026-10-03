@@ -1,7 +1,7 @@
 //! Native file-dialog host for Lumen.
 //!
-//! Wraps `rfd` 0.17 behind a [`FileDialogService`] resource + ECS
-//! [`FileDialogResult`] message. Mirrors `QFileDialog` (Qt) and
+//! Wraps `rfd` 0.17 behind a [`FileDialogService`] resource that hands
+//! each resolved dialog to the script. Mirrors `QFileDialog` (Qt) and
 //! `GtkFileDialog` (GTK 4) - both are spec'd as one-shot modals that
 //! emit a single result back to the application loop.
 //!
@@ -19,8 +19,11 @@
 //! 3. The spawned task ferries the resolved paths back across the
 //!    thread boundary as a [`Command::Typed`] payload of type
 //!    [`FileDialogResultCommand`] on the [`CommandQueue`].
-//! 4. The command drain applies it on the next tick and emits one
-//!    [`FilePicked`] per request.
+//! 4. The command drain applies it on the next tick and hands the script
+//!    one plugin event per request: `on_file_picked(tag, path)`,
+//!    `on_files_picked(tag, paths)` (joined by `|`), or
+//!    `on_folder_picked(tag, path)`. A cancelled dialog fires too, with an
+//!    empty path, so a script can clear a pending state.
 //!
 //! With no executor installed the same call runs the dialog inline with
 //! `pollster::block_on` and posts the identical command, so a caller sees
@@ -28,10 +31,6 @@
 //! would deadlock the run loop (`NSOpenPanel` only resolves while the run
 //! loop pumps), so there it refuses and reports an empty result: a macOS
 //! app needs an async backend for dialogs to reach the user.
-//!
-//! The legacy [`FileDialogService::open`] (`MessageWriter`-flavoured)
-//! is preserved for callers that have not migrated. It has no access to
-//! the world, so it always takes the blocking path.
 //!
 //! ## Why a request id + drain instead of a oneshot channel?
 //!
@@ -55,26 +54,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
 use lumen_core::app::{App, Plugin};
-use lumen_core::command::{Command, CommandQueue, CommandReceiver, apply_property_commands};
+use lumen_core::command::{Command, CommandQueue, apply_property_commands};
 use lumen_core::task::{BoxFuture, Spawn, SpawnService};
 use lumen_core::tick::TickStage;
+use lumen_script::{PluginEvent, ScriptValue};
 use rfd::AsyncFileDialog;
 use tracing::warn;
 
 pub use lumen_os_mime as mime;
 
-/// Reuse the message defined in lumen-core so existing scripting
-/// dispatchers keep working unchanged.
-pub use lumen_core::input::FilePicked as FileDialogResult;
-
 /// Opaque identifier returned by [`FileDialogService::open_single`].
 ///
-/// Callers that need to correlate a request with its eventual
-/// [`FilePicked`] message can read [`FilePicked::tag`] - the tag is
-/// carried verbatim from the [`FileDialogRequest`] through the async
+/// Callers that need to correlate a request with its eventual result
+/// can read [`FileDialogResultCommand::tag`] - the tag is carried verbatim from the [`FileDialogRequest`] through the async
 /// pipeline. The `RequestId` itself is exposed so script hosts can
 /// store per-request callbacks in a `HashMap<RequestId, RhaiFn>`
 /// without colliding with the user-facing tag.
@@ -113,16 +107,14 @@ pub enum FileDialogKind {
 }
 
 impl FileDialogKind {
-    /// Label embedded in [`FileDialogResult::kind`] so the scripting
-    /// dispatcher can route by dialog type. Matches the previous
-    /// lumenc strings (`"open"`, `"open_multi"`, `"save"`, `"folder"`)
-    /// for backwards compatibility.
-    pub fn label(self) -> &'static str {
+    /// The script event a resolved dialog of this kind fires, and the
+    /// handler it falls back to when no per-tag `on(event, tag, fn)` claims
+    /// it. Open and save share one: either resolves to a single path.
+    pub fn script_event(self) -> (&'static str, &'static str) {
         match self {
-            FileDialogKind::Open => "open",
-            FileDialogKind::OpenMulti => "open_multi",
-            FileDialogKind::Save => "save",
-            FileDialogKind::PickFolder => "folder",
+            FileDialogKind::Open | FileDialogKind::Save => ("file_picked", "on_file_picked"),
+            FileDialogKind::OpenMulti => ("files_picked", "on_files_picked"),
+            FileDialogKind::PickFolder => ("folder_picked", "on_folder_picked"),
         }
     }
 }
@@ -162,7 +154,7 @@ pub struct FileDialogRequest {
     /// Which of the four dialog kinds to display.
     pub kind: FileDialogKind,
     /// Identifier the caller passes through to the resolved
-    /// [`FileDialogResult::tag`] so a script can route by call-site.
+    /// [`FileDialogResultCommand::tag`] so a script can route by call-site.
     pub tag: String,
     /// Optional `(label, exts)` filter entries.
     pub filters: Vec<MimeFilter>,
@@ -170,29 +162,40 @@ pub struct FileDialogRequest {
     pub default_name: Option<String>,
 }
 
-/// Cross-thread payload the spawned dialog task posts back to the main
-/// world on the [`CommandQueue`].
+/// Cross-thread payload the task that ran a dialog pushes back to the
+/// main world on the [`CommandQueue`].
 ///
-/// [`drain_file_dialog_results`] reads `Command::Typed` of this type
-/// and emits the corresponding [`FilePicked`] message.
+/// The handler [`register_result_handler`] installs turns it into the
+/// script event it fires ([`PluginEvent`] implements `From` it).
 #[derive(Debug, Clone)]
 pub struct FileDialogResultCommand {
     /// Request id returned by [`FileDialogService::open_single`].
     pub request_id: RequestId,
-    /// `"open"` / `"open_multi"` / `"save"` / `"folder"`.
-    pub kind: &'static str,
+    /// Which kind of dialog resolved.
+    pub kind: FileDialogKind,
     /// Caller-supplied tag carried through unchanged.
     pub tag: String,
     /// Resolved paths. Empty when the user cancelled.
     pub paths: Vec<PathBuf>,
 }
 
-impl From<FileDialogResultCommand> for FileDialogResult {
+impl From<FileDialogResultCommand> for PluginEvent {
+    /// The event a resolved dialog reaches the script as, keyed by its tag:
+    /// [`FileDialogKind::script_event`] names the handler, and the paths ride
+    /// as one argument joined by `|`, empty for a cancelled dialog.
     fn from(c: FileDialogResultCommand) -> Self {
-        Self {
-            kind: c.kind,
-            tag: c.tag,
-            paths: c.paths,
+        let (event, fallback) = c.kind.script_event();
+        let joined = c
+            .paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("|");
+        PluginEvent::Call {
+            event: event.to_string(),
+            key: c.tag,
+            fallback: fallback.to_string(),
+            args: vec![ScriptValue::Str(joined)],
         }
     }
 }
@@ -230,11 +233,11 @@ impl FileDialogService {
     ///
     /// Reads the [`SpawnService`] and the [`CommandQueue`] out of `world`,
     /// starts the dialog, and returns the freshly allocated [`RequestId`]
-    /// immediately. The eventual [`FilePicked`] message arrives on the tick
-    /// after the user closes the dialog.
+    /// immediately. The script hears the result on the tick after the user
+    /// closes the dialog.
     ///
     /// With no async backend installed the dialog runs inline and the same
-    /// message arrives on the next tick; see the crate docs for the macOS
+    /// result arrives on the next tick; see the crate docs for the macOS
     /// caveat that comes with that.
     pub fn open_single(&self, world: &mut World, req: FileDialogRequest) -> RequestId {
         let spawn = world.get_resource::<SpawnService>().cloned();
@@ -262,7 +265,7 @@ impl FileDialogService {
     ) -> RequestId {
         let pending = PendingDialog {
             request_id: self.alloc_id(),
-            kind: req.kind.label(),
+            kind: req.kind,
             tag: req.tag.clone(),
         };
         let request_id = pending.request_id;
@@ -279,30 +282,13 @@ impl FileDialogService {
         );
         request_id
     }
-
-    /// Legacy `MessageWriter`-flavoured entry point kept for back-compat
-    /// with `lumenc::run::apply_script_commands`.
-    ///
-    /// This entry point has no access to the world, so it always takes the
-    /// blocking path and writes the result straight to `out`. Callers that
-    /// can reach the world should use [`Self::open_single`] or
-    /// [`Self::open_single_with`], which use an installed executor when
-    /// there is one.
-    pub fn open(&self, req: &FileDialogRequest, out: &mut MessageWriter<FileDialogResult>) {
-        let paths = blocking_resolve(build_dialog(req), req.kind);
-        out.write(FileDialogResult {
-            kind: req.kind.label(),
-            tag: req.tag.clone(),
-            paths,
-        });
-    }
 }
 
 /// A request that has been given an id but not yet resolved to paths.
 #[derive(Clone, Debug)]
 struct PendingDialog {
     request_id: RequestId,
-    kind: &'static str,
+    kind: FileDialogKind,
     tag: String,
 }
 
@@ -425,31 +411,19 @@ fn post_result(queue: &CommandQueue, result: FileDialogResultCommand) {
     }
 }
 
-/// Drain system: reads [`FileDialogResultCommand`] payloads posted by
-/// dialog tasks and emits the corresponding [`FilePicked`] message.
-///
-/// A normal `App` does not need this: [`FileDialogPlugin`] registers a
-/// typed-command handler, and the standard [`Command::Typed`] dispatch in
-/// [`TickStage::CommandDrain`] delivers the message. This system exists for
-/// a host that drains the [`CommandQueue`] itself and wants the dialog
-/// results turned into messages in [`TickStage::Systems`] instead.
-pub fn drain_file_dialog_results(
-    mut commands: ResMut<CommandReceiver>,
-    mut out: MessageWriter<FileDialogResult>,
-) {
-    for cmd in commands.drain() {
-        if let Command::Typed { type_id, payload } = cmd
-            && type_id == TypeId::of::<FileDialogResultCommand>()
-            && let Ok(p) = payload.downcast::<FileDialogResultCommand>()
-        {
-            out.write(FileDialogResult::from(*p));
-        }
-    }
+/// Register the typed-command handler that turns a
+/// [`FileDialogResultCommand`] into the script event it fires, on the tick
+/// the command drain applies it. Without it the drain discards the payload
+/// and the script's `on_file_picked` never fires.
+pub fn register_result_handler(app: &mut App) {
+    lumen_script::register_plugin_event_message(&mut app.world);
+    app.register_command::<FileDialogResultCommand, _>(|world, payload| {
+        world.write_message(PluginEvent::from(*payload));
+    });
 }
 
 /// Plugin: registers the [`FileDialogService`] resource and the typed-
-/// command handler that turns [`FileDialogResultCommand`] into
-/// [`FilePicked`] messages.
+/// command handler ([`register_result_handler`]).
 ///
 /// No plugin dependency: dialogs work on their own, and an async backend
 /// plugin (whichever the app installs) only changes whether the dialog
@@ -466,13 +440,7 @@ impl Plugin for FileDialogPlugin {
         if app.world.get_resource::<FileDialogService>().is_none() {
             app.world.insert_resource(FileDialogService::new());
         }
-        // The `Command::Typed` dispatcher handles the cross-thread
-        // payload on the main thread; we register a closure that
-        // turns it into a `FilePicked` message via the world's writer.
-        app.register_command::<FileDialogResultCommand, _>(|world, payload| {
-            let result = FileDialogResult::from(*payload);
-            world.write_message(result);
-        });
+        register_result_handler(app);
         // Make sure the property-command drain runs (needed so the
         // typed command actually reaches the registered handler).
         // Authors that already wire `apply_property_commands` in
@@ -502,11 +470,23 @@ mod tests {
     }
 
     #[test]
-    fn kind_label_matches_legacy_strings() {
-        assert_eq!(FileDialogKind::Open.label(), "open");
-        assert_eq!(FileDialogKind::OpenMulti.label(), "open_multi");
-        assert_eq!(FileDialogKind::Save.label(), "save");
-        assert_eq!(FileDialogKind::PickFolder.label(), "folder");
+    fn each_kind_fires_its_own_script_event() {
+        assert_eq!(
+            FileDialogKind::Open.script_event(),
+            ("file_picked", "on_file_picked")
+        );
+        assert_eq!(
+            FileDialogKind::Save.script_event(),
+            ("file_picked", "on_file_picked")
+        );
+        assert_eq!(
+            FileDialogKind::OpenMulti.script_event(),
+            ("files_picked", "on_files_picked")
+        );
+        assert_eq!(
+            FileDialogKind::PickFolder.script_event(),
+            ("folder_picked", "on_folder_picked")
+        );
     }
 
     #[test]
@@ -540,18 +520,40 @@ mod tests {
         assert!(a.0 < b.0 && b.0 < c.0);
     }
 
+    /// A multi-open joins its paths with `|` under the tag it was opened
+    /// with, and a cancelled dialog still fires, with an empty path.
     #[test]
-    fn result_command_to_message_conversion() {
-        let cmd = FileDialogResultCommand {
-            request_id: RequestId(42),
-            kind: "open",
-            tag: "hero".to_string(),
-            paths: vec![PathBuf::from("/tmp/x.png")],
+    fn a_result_becomes_the_event_its_kind_fires() {
+        let event = |kind, paths: &[&str]| {
+            PluginEvent::from(FileDialogResultCommand {
+                request_id: RequestId(42),
+                kind,
+                tag: "hero".to_string(),
+                paths: paths.iter().map(PathBuf::from).collect(),
+            })
         };
-        let msg: FileDialogResult = cmd.into();
-        assert_eq!(msg.kind, "open");
-        assert_eq!(msg.tag, "hero");
-        assert_eq!(msg.paths.len(), 1);
+        let fields = |event: PluginEvent| match event {
+            PluginEvent::Call {
+                event,
+                key,
+                fallback,
+                args,
+            } => (event, key, fallback, args),
+            PluginEvent::Commands(_) => panic!("a dialog result is a handler call"),
+        };
+        assert_eq!(
+            fields(event(FileDialogKind::OpenMulti, &["/a.png", "/b.png"])),
+            (
+                "files_picked".to_string(),
+                "hero".to_string(),
+                "on_files_picked".to_string(),
+                vec![ScriptValue::Str("/a.png|/b.png".to_string())]
+            )
+        );
+        assert_eq!(
+            fields(event(FileDialogKind::Open, &[])).3,
+            vec![ScriptValue::Str(String::new())]
+        );
     }
 
     /// Executor that drives the future to completion on the calling
@@ -580,23 +582,39 @@ mod tests {
     fn pending(tag: &str) -> PendingDialog {
         PendingDialog {
             request_id: RequestId(1),
-            kind: "open",
+            kind: FileDialogKind::Open,
             tag: tag.to_string(),
         }
     }
 
-    fn picked_paths(app: &mut App) -> Option<Vec<PathBuf>> {
-        let mut cursor = bevy_ecs::message::MessageCursor::<FileDialogResult>::default();
+    /// The tag, handler, and joined paths of the last result the app heard.
+    fn picked(app: &mut App) -> Option<(String, String, String)> {
+        let mut cursor = bevy_ecs::message::MessageCursor::<PluginEvent>::default();
         let messages = app
             .world
-            .resource::<bevy_ecs::message::Messages<FileDialogResult>>();
-        cursor.read(messages).last().map(|ev| ev.paths.clone())
+            .resource::<bevy_ecs::message::Messages<PluginEvent>>();
+        match cursor.read(messages).last()? {
+            PluginEvent::Call {
+                key,
+                fallback,
+                args,
+                ..
+            } => match args.as_slice() {
+                [ScriptValue::Str(paths)] => Some((key.clone(), fallback.clone(), paths.clone())),
+                other => panic!("one joined path argument, got {other:?}"),
+            },
+            PluginEvent::Commands(_) => None,
+        }
     }
 
-    /// A result posted from a worker thread reaches the app as a
-    /// `FilePicked` message on the next tick.
+    fn picked_paths(app: &mut App) -> Option<String> {
+        picked(app).map(|(_, _, paths)| paths)
+    }
+
+    /// A result posted from a worker thread reaches the app as an
+    /// `on_file_picked` event on the next tick.
     #[test]
-    fn a_posted_result_drains_into_a_filepicked_message() {
+    fn a_posted_result_drains_into_a_script_event() {
         let mut app = App::new();
         FileDialogPlugin.build(&mut app);
 
@@ -612,14 +630,14 @@ mod tests {
 
         app.tick();
 
-        let mut cursor = bevy_ecs::message::MessageCursor::<FileDialogResult>::default();
-        let messages = app
-            .world
-            .resource::<bevy_ecs::message::Messages<FileDialogResult>>();
-        let ev = cursor.read(messages).last().expect("FilePicked emitted");
-        assert_eq!(ev.kind, "open");
-        assert_eq!(ev.tag, "hero");
-        assert_eq!(ev.paths, vec![PathBuf::from("/tmp/x.png")]);
+        assert_eq!(
+            picked(&mut app),
+            Some((
+                "hero".to_string(),
+                "on_file_picked".to_string(),
+                "/tmp/x.png".to_string()
+            ))
+        );
     }
 
     /// With an executor installed the request runs on it and the blocking
@@ -644,10 +662,7 @@ mod tests {
 
         assert_eq!(spawned.load(AtomicOrdering::SeqCst), 1);
         app.tick();
-        assert_eq!(
-            picked_paths(&mut app),
-            Some(vec![PathBuf::from("/spawned.png")])
-        );
+        assert_eq!(picked_paths(&mut app), Some("/spawned.png".to_string()));
     }
 
     /// The point of the seam: no executor in the world is not an error, it
@@ -671,10 +686,7 @@ mod tests {
         );
 
         app.tick();
-        assert_eq!(
-            picked_paths(&mut app),
-            Some(vec![PathBuf::from("/blocking.png")])
-        );
+        assert_eq!(picked_paths(&mut app), Some("/blocking.png".to_string()));
     }
 
     /// `open_single` reads the world for both halves and reports the id
