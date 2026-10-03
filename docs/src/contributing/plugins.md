@@ -474,7 +474,11 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
         return;
     }
     app.world.insert_non_send(HotkeyManager::new());
-    app.add_systems(TickStage::Systems, poll_hotkeys);
+    lumen_script::register_plugin_event_message(&mut app.world);
+    app.add_systems(
+        TickStage::Systems,
+        poll_hotkeys.before(lumen_script::collect_plugin_events),
+    );
 }
 
 // The whole of the `lumen-os-hotkey-capability` crate:
@@ -520,7 +524,20 @@ there.
 
 A capability answers its own script commands: it reads the command stream
 through a cursor of its own and applies the variants it owns, so nothing in
-the runtime has to know it exists. The register symbol the macro exports is
+the runtime has to know it exists.
+
+What a capability reports back to the script travels the same plugin-event
+bus a runtime module uses, so the core defines no message type for it. A
+system on the main thread writes a `PluginEvent::Call` through
+`MessageWriter<PluginEvent>`, after calling
+`lumen_script::register_plugin_event_message` from `install`; ordered
+`.before(lumen_script::collect_plugin_events)`, the event reaches the script
+on the tick the system wrote it, in the order it was written. A worker thread
+calls `lumen_script::push_plugin_event` instead, which also wakes a parked
+app. Either way the routing is the one every plugin event gets: a per-key
+`on(event, key, fn)` registration wins, else the `fallback` handler fires,
+with the key as its first argument. The handler runs with the other event
+dispatchers, so the commands it queues apply on the same tick. The register symbol the macro exports is
 what a link selects the capability by; a plain `cargo build` links every
 capability in the graph, and the same mechanism the runtime modules use lets
 a replayed link leave one out.

@@ -22,10 +22,10 @@
 use crate::command::{Command, CommandQueue, CommandReceiver, CommandRegistry};
 use crate::input::{
     ClickEvent, CloseRequest, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-    FileDropped, FileHoverCancelled, FileHovered, FilePicked, FocusTracker, FocusedKey,
-    HotkeyFired, ImeEvent, ImeRequest, KeyPressed, KeyReleased, LongPressEvent, MenuClicked,
-    ModifiersState, MouseWheel, PendingFileDrops, PointerLeft, PointerMoved, PointerPressed,
-    PointerReleased, PointerState, ShowContextMenu, TextInputCommitted, TrayClicked,
+    FileDropped, FileHoverCancelled, FileHovered, FocusTracker, FocusedKey, ImeEvent, ImeRequest,
+    KeyPressed, KeyReleased, LongPressEvent, MenuClicked, ModifiersState, MouseWheel,
+    PendingFileDrops, PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState,
+    ShowContextMenu, TextInputCommitted,
 };
 use crate::node_ir::{PreviousScene, RetainedScene};
 use crate::property_store::PropertyStore;
@@ -347,17 +347,8 @@ impl App {
         MessageRegistry::register_message::<FileHovered>(&mut world);
         MessageRegistry::register_message::<FileHoverCancelled>(&mut world);
         MessageRegistry::register_message::<FileDropped>(&mut world);
-        MessageRegistry::register_message::<FilePicked>(&mut world);
-        MessageRegistry::register_message::<HotkeyFired>(&mut world);
-        MessageRegistry::register_message::<crate::input::HotkeyReleased>(&mut world);
-        MessageRegistry::register_message::<crate::input::NotificationActionInvoked>(&mut world);
-        MessageRegistry::register_message::<crate::input::ClipboardRead>(&mut world);
         MessageRegistry::register_message::<MenuClicked>(&mut world);
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
-        MessageRegistry::register_message::<TrayClicked>(&mut world);
-        MessageRegistry::register_message::<crate::input::RecentFilesRead>(&mut world);
-        MessageRegistry::register_message::<crate::input::AutostartRead>(&mut world);
-        MessageRegistry::register_message::<crate::input::SecondInstanceLaunched>(&mut world);
         MessageRegistry::register_message::<ShowContextMenu>(&mut world);
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's

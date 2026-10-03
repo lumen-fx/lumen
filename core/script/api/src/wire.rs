@@ -127,7 +127,7 @@ pub mod property_value {
     }
 }
 
-/// Something a portable plugin pushes at the engine outside a call.
+/// Something a plugin or a capability pushes at the engine outside a call.
 ///
 /// This is the direction a worker thread uses: a plugin that watches a file,
 /// polls a device, or waits on a socket delivers what it found without being
@@ -135,7 +135,14 @@ pub mod property_value {
 /// [`lumen_core::plugin_events`], and the script layer's per-tick drain
 /// decodes them here and routes each one
 /// ([`crate::runtime::collect_plugin_events`]).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// A system on the main thread writes one as a message instead
+/// (`MessageWriter<PluginEvent>`, registered by
+/// [`crate::runtime::register_plugin_event_message`]); ordered before
+/// [`crate::runtime::collect_plugin_events`], it is delivered on the tick it
+/// was written. That is how an OS capability (a tray click, a global hotkey,
+/// a resolved file dialog) reaches the script without the core naming it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bevy_ecs::message::Message)]
 pub enum PluginEvent {
     /// Call a handler in the app's script.
     Call {

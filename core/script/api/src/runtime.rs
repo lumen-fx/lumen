@@ -114,8 +114,9 @@ pub(crate) fn prefix(lang: &str) -> String {
 /// installed a concrete-system edge constrains that host alone and silently
 /// leaves the others outside the one-tick dirty window.
 ///
-/// The sets are pairwise disjoint, so `.after(one).before(another)` never
-/// closes a cycle.
+/// The sets are pairwise disjoint but for one nesting:
+/// [`ScriptSet::PluginEvents`] sits inside [`ScriptSet::Dispatch`]. Apart
+/// from that, `.after(one).before(another)` never closes a cycle.
 #[derive(bevy_ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScriptSet {
     /// [`sync_signals_into_host`]: store -> host mirror, per host.
@@ -138,14 +139,15 @@ pub enum ScriptSet {
     Derivations,
     /// Every event dispatcher that calls into a host
     /// ([`dispatch_clicks_and_doubles`], [`dispatch_close_to_script`], the
-    /// toggle / slider / hotkey / menu / tray / DnD / text-input fanout).
+    /// toggle / slider / menu / dialog / DnD / text-input fanout, and
+    /// [`fire_plugin_events`], which delivers what the capabilities report).
     Dispatch,
     /// [`fire_due_timers`]: `on_timer` delivery, per host.
     Timers,
     /// [`fire_fetched_responses`]: `on_fetch` / `on_http` delivery, per host.
     Fetch,
-    /// [`fire_plugin_events`]: delivery of the handler calls portable
-    /// plugins pushed, per host.
+    /// [`fire_plugin_events`]: delivery of the handler calls plugins and
+    /// capabilities pushed, per host. Nested inside [`ScriptSet::Dispatch`].
     PluginEvents,
     /// [`fire_on_ready`]: the once-per-mount `on_ready` dispatch, per host.
     /// Registered by the embedder, not by [`ScriptPlugin`].
@@ -305,6 +307,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             // portable plugin), so the pipeline exists everywhere and the
             // decoder stays out of the module a site downloads.
             app.world.insert_resource(PendingPluginEvents::default());
+            register_plugin_event_message(&mut app.world);
             lumen_core::plugin_events::init_plugin_events();
             register_script_commands(&mut app.world);
             // Toggle / slider dispatchers below read these messages. In
@@ -497,9 +500,15 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             TickStage::Systems,
             fire_fetched_responses::<H>.in_set(ScriptSet::Fetch),
         );
+        // Also a member of the dispatch set: a capability's event (a tray
+        // click, a hotkey, a resolved dialog) is input like a click, so every
+        // applier ordered after the dispatchers carries out the commands its
+        // handler queued on the tick it fired.
         app.add_systems(
             TickStage::Systems,
-            fire_plugin_events::<H>.in_set(ScriptSet::PluginEvents),
+            fire_plugin_events::<H>
+                .in_set(ScriptSet::PluginEvents)
+                .in_set(ScriptSet::Dispatch),
         );
         // Event dispatchers: forward Click / LongPress / DoubleClick to
         // the script's `on_click(id)` / `on_long_press(id)` /
@@ -523,34 +532,11 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 dispatch_file_drops_to_script::<H>,
                 dnd::dispatch_drops_to_script::<H>,
                 dnd::dispatch_drag_start_to_script::<H>,
-                dispatch_file_picks_to_script::<H>,
-                dispatch_hotkeys_to_script::<H>,
-                // Ordered after the press so a chord pressed and released
-                // inside one tick reaches the script in that order; both
-                // take `ResMut<H>`, so without the edge the schedule is
-                // free to run the release first.
-                dispatch_hotkey_releases_to_script::<H>.after(dispatch_hotkeys_to_script::<H>),
-                dispatch_notification_actions_to_script::<H>,
-                dispatch_clipboard_reads_to_script::<H>,
                 dispatch_menu_clicks_to_script::<H>,
                 dispatch_dialog_closes_to_script::<H>,
-                dispatch_tray_clicks_to_script::<H>,
                 dispatch_toggle_to_script::<H>,
                 dispatch_slider_to_script::<H>,
                 dispatch_close_to_script::<H>,
-            )
-                .in_set(ScriptSet::Dispatch),
-        );
-        // App-lifecycle dispatchers, split into their own `add_systems` call
-        // rather than folded into the tuple above: recent files, autostart,
-        // and single-instance are one family (`lumen-os-lifecycle`), and the
-        // tuple above is already sized against the systems-tuple limit.
-        app.add_systems(
-            TickStage::Systems,
-            (
-                dispatch_recent_files_to_script::<H>,
-                dispatch_autostart_to_script::<H>,
-                dispatch_second_instance_to_script::<H>,
             )
                 .in_set(ScriptSet::Dispatch),
         );
@@ -1482,46 +1468,39 @@ pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
 #[derive(Resource, Default)]
 pub struct PendingPluginEvents(Vec<PluginEvent>);
 
-/// Move the events on the cross-thread bus ([`lumen_core::plugin_events`])
-/// into [`PendingPluginEvents`]. Host-neutral and registered once, so a
-/// handler call is offered to every active host rather than taken by
-/// whichever ran first; a [`PluginEvent::Commands`] batch goes straight onto
-/// the command bus here instead, so it applies once however many hosts run.
+/// Register [`PluginEvent`] as a message, so a main-thread system can write
+/// one through `MessageWriter<PluginEvent>`. Idempotent: [`ScriptPlugin`]
+/// calls it, and so does a capability that writes events, whichever installs
+/// first.
+pub fn register_plugin_event_message(world: &mut World) {
+    if !world.contains_resource::<Messages<PluginEvent>>() {
+        MessageRegistry::register_message::<PluginEvent>(world);
+    }
+}
+
+/// Move the events plugins and capabilities pushed into
+/// [`PendingPluginEvents`]. Host-neutral and registered once, so a handler
+/// call is offered to every active host rather than taken by whichever ran
+/// first; a [`PluginEvent::Commands`] batch goes straight onto the command
+/// bus here instead, so it applies once however many hosts run.
 ///
-/// An event pushed from the engine's own address space arrives as the value;
-/// one a portable plugin pushed arrives encoded, and is decoded here. A page
-/// loads no portable plugin, so the browser build carries no decoder.
+/// Events come from two places. The cross-thread bus
+/// ([`lumen_core::plugin_events`]) carries what other threads pushed: an
+/// event pushed from the engine's own address space arrives as the value, and
+/// one a portable plugin pushed arrives encoded and is decoded here. A page
+/// loads no portable plugin, so the browser build carries no decoder. Then
+/// the [`PluginEvent`] messages main-thread systems wrote, in the order they
+/// wrote them; a writer ordered before this system is delivered on its own
+/// tick.
 pub fn collect_plugin_events(
     mut pending: ResMut<PendingPluginEvents>,
+    mut written: MessageReader<PluginEvent>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
-    use lumen_core::plugin_events::QueuedEvent;
-
-    for queued in lumen_core::plugin_events::drain_plugin_events() {
-        let event = match queued {
-            QueuedEvent::Value(value) => match value.downcast::<PluginEvent>() {
-                Ok(event) => *event,
-                Err(_) => {
-                    warn_line!("lumen-script: an event on the bus is not a script event");
-                    continue;
-                }
-            },
-            #[cfg(not(target_arch = "wasm32"))]
-            QueuedEvent::Bytes(bytes) => {
-                match lumen_plugin_abi::codec::decode::<PluginEvent>(&bytes) {
-                    Ok(event) => event,
-                    Err(e) => {
-                        warn_line!("lumen-script: a plugin event did not decode: {e}");
-                        continue;
-                    }
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            QueuedEvent::Bytes(_) => {
-                warn_line!("lumen-script: an encoded plugin event reached a page");
-                continue;
-            }
-        };
+    let from_bus = lumen_core::plugin_events::drain_plugin_events()
+        .into_iter()
+        .filter_map(script_event);
+    for event in from_bus.chain(written.read().cloned()) {
         match event {
             PluginEvent::Commands(commands) => {
                 for command in commands {
@@ -1529,6 +1508,35 @@ pub fn collect_plugin_events(
                 }
             }
             event => pending.0.push(event),
+        }
+    }
+}
+
+/// Take one event off the cross-thread bus back as the [`PluginEvent`] it was
+/// pushed as, or say why it is not one.
+fn script_event(queued: lumen_core::plugin_events::QueuedEvent) -> Option<PluginEvent> {
+    use lumen_core::plugin_events::QueuedEvent;
+
+    match queued {
+        QueuedEvent::Value(value) => match value.downcast::<PluginEvent>() {
+            Ok(event) => Some(*event),
+            Err(_) => {
+                warn_line!("lumen-script: an event on the bus is not a script event");
+                None
+            }
+        },
+        #[cfg(not(target_arch = "wasm32"))]
+        QueuedEvent::Bytes(bytes) => match lumen_plugin_abi::codec::decode::<PluginEvent>(&bytes) {
+            Ok(event) => Some(event),
+            Err(e) => {
+                warn_line!("lumen-script: a plugin event did not decode: {e}");
+                None
+            }
+        },
+        #[cfg(target_arch = "wasm32")]
+        QueuedEvent::Bytes(_) => {
+            warn_line!("lumen-script: an encoded plugin event reached a page");
+            None
         }
     }
 }
@@ -1899,92 +1907,6 @@ pub fn dispatch_file_drops_to_script<H: ScriptHost + Resource<Mutability = Mutab
     }
 }
 
-/// Forward [`lumen_core::input::HotkeyFired`] to the script as
-/// `on_hotkey(name)`, with the per-id `on("hotkey", name, fn)` router
-/// applying first.
-pub fn dispatch_hotkeys_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::HotkeyFired>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event(&mut *host, "hotkey", "on_hotkey", &ev.name, &mut out) {
-            warn_line!("{}: on_hotkey failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::HotkeyReleased`] to the script as
-/// `on_hotkey_release(name)`, with the per-id
-/// `on("hotkey_release", name, fn)` router applying first. Paired with
-/// [`dispatch_hotkeys_to_script`] so one chord drives push-to-talk.
-pub fn dispatch_hotkey_releases_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::HotkeyReleased>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event(
-            &mut *host,
-            "hotkey_release",
-            "on_hotkey_release",
-            &ev.name,
-            &mut out,
-        ) {
-            warn_line!("{}: on_hotkey_release failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::NotificationActionInvoked`] to the
-/// script as `on_notification_action(id, action_id)`, with the per-id
-/// `on("notification_action", id, fn)` router applying first.
-pub fn dispatch_notification_actions_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::NotificationActionInvoked>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event_two_args(
-            &mut *host,
-            "notification_action",
-            "on_notification_action",
-            &ev.id,
-            &ev.action_id,
-            &mut out,
-        ) {
-            warn_line!(
-                "{}: on_notification_action failed: {e}",
-                prefix(host.lang())
-            );
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::ClipboardRead`] results to the script as
-/// `on_clipboard(tag, text)`, with the per-tag
-/// `on("clipboard", tag, fn)` router applying first. A clipboard holding
-/// no text still fires once, with an empty string, so a script can clear
-/// a pending state.
-pub fn dispatch_clipboard_reads_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::ClipboardRead>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event_two_args(
-            &mut *host,
-            "clipboard",
-            "on_clipboard",
-            &ev.tag,
-            &ev.text,
-            &mut out,
-        ) {
-            warn_line!("{}: on_clipboard failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
 /// Forward [`lumen_core::input::MenuClicked`] to the script as
 /// `on_menu(id)`, with the per-id `on("menu", id, fn)` router applying
 /// first.
@@ -2018,123 +1940,6 @@ pub fn dispatch_dialog_closes_to_script<H: ScriptHost + Resource<Mutability = Mu
         };
         if let Err(e) = route_event(&mut *host, event_name, fallback, &ev.id, &mut out) {
             warn_line!("{}: {fallback} failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forwards [`lumen_core::input::TrayClicked`] as `on_tray(id)` and
-/// routes per-id handlers registered via `on("tray", "<id>", "<fn>")`.
-pub fn dispatch_tray_clicks_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::TrayClicked>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event(&mut *host, "tray", "on_tray", &ev.id, &mut out) {
-            warn_line!("{}: on_tray failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::FilePicked`] dialog results to the
-/// script. Open / Save / PickFolder fire `on_file_picked(tag, path)` /
-/// `on_folder_picked(tag, path)`; multi-open joins the path list with
-/// `|` and fires `on_files_picked(tag, joined)`. Cancellation still
-/// fires once with an empty path so scripts can clear a "loading" state.
-pub fn dispatch_file_picks_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::FilePicked>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        let (event_name, handler) = match ev.kind {
-            "open" | "save" => ("file_picked", "on_file_picked"),
-            "open_multi" => ("files_picked", "on_files_picked"),
-            "folder" => ("folder_picked", "on_folder_picked"),
-            other => {
-                warn_line!("{}: unknown FilePicked kind '{other}'", prefix(host.lang()));
-                continue;
-            }
-        };
-        let joined = ev
-            .paths
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("|");
-        if let Err(e) =
-            route_event_two_args(&mut *host, event_name, handler, &ev.tag, &joined, &mut out)
-        {
-            warn_line!("{}: {handler} failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::RecentFilesRead`] to the script as
-/// `on_recent_files(tag, paths)`, with the per-tag
-/// `on("recent_files", tag, fn)` router applying first. `paths` arrives
-/// already joined by `|`, matching [`dispatch_file_picks_to_script`].
-pub fn dispatch_recent_files_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::RecentFilesRead>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        if let Err(e) = route_event_two_args(
-            &mut *host,
-            "recent_files",
-            "on_recent_files",
-            &ev.tag,
-            &ev.paths,
-            &mut out,
-        ) {
-            warn_line!("{}: on_recent_files failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::AutostartRead`] to the script:
-/// `enabled = true` routes as `on_autostart_enabled(tag)` /
-/// `on("autostart_enabled", tag, fn)`, `enabled = false` as
-/// `on_autostart_disabled(tag)` / `on("autostart_disabled", tag, fn)` - the
-/// same accepted/rejected split [`dispatch_dialog_closes_to_script`] uses.
-pub fn dispatch_autostart_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::AutostartRead>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        let (event_name, fallback) = if ev.enabled {
-            ("autostart_enabled", "on_autostart_enabled")
-        } else {
-            ("autostart_disabled", "on_autostart_disabled")
-        };
-        if let Err(e) = route_event(&mut *host, event_name, fallback, &ev.tag, &mut out) {
-            warn_line!("{}: {fallback} failed: {e}", prefix(host.lang()));
-        }
-    }
-}
-
-/// Forward [`lumen_core::input::SecondInstanceLaunched`] to the script as
-/// `on_second_instance(args)`, args joined by `|` (matching
-/// [`dispatch_file_picks_to_script`]'s multi-path join). Fires when a
-/// second launch of a single-instance app (`[app] single_instance = true`)
-/// forwards its argv to this, the already-running primary.
-pub fn dispatch_second_instance_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut events: MessageReader<lumen_core::input::SecondInstanceLaunched>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
-    for ev in events.read() {
-        let joined = ev.args.join("|");
-        if let Err(e) = route_event(
-            &mut *host,
-            "second_instance",
-            "on_second_instance",
-            &joined,
-            &mut out,
-        ) {
-            warn_line!("{}: on_second_instance failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -2415,6 +2220,7 @@ mod http_tests {
         let mut world = World::new();
         world.insert_resource(PendingPluginEvents::default());
         MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        register_plugin_event_message(&mut world);
         let mut schedule = Schedule::default();
         schedule.add_systems(collect_plugin_events);
         schedule.run(&mut world);
@@ -2422,6 +2228,55 @@ mod http_tests {
         assert!(world.resource::<PendingPluginEvents>().0.is_empty());
         let written = world.resource::<Messages<ScriptCommandEvent>>();
         assert!(written.is_empty(), "nothing reached the command bus");
+    }
+
+    /// A main-thread system's events are collected on the tick it wrote them,
+    /// in the order it wrote them, and a command batch among them goes
+    /// straight to the command bus.
+    #[test]
+    fn events_a_system_writes_are_collected_in_order() {
+        let mut world = World::new();
+        world.insert_resource(PendingPluginEvents::default());
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        register_plugin_event_message(&mut world);
+        // A second registration is harmless, so a capability and the script
+        // plugin can both ask for it.
+        register_plugin_event_message(&mut world);
+        let call = |event: &str| PluginEvent::Call {
+            event: event.to_string(),
+            key: "talk".to_string(),
+            fallback: format!("on_{event}"),
+            args: Vec::new(),
+        };
+        world.write_message(call("hotkey"));
+        world.write_message(PluginEvent::Commands(vec![ScriptCommand::Print(
+            "from a capability".to_string(),
+        )]));
+        world.write_message(call("hotkey_release"));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(collect_plugin_events);
+        schedule.run(&mut world);
+
+        // The bus is process-global and another test may have left an event
+        // on it, so only this test's two calls are looked at.
+        let names: Vec<&str> = world
+            .resource::<PendingPluginEvents>()
+            .0
+            .iter()
+            .filter_map(|event| match event {
+                PluginEvent::Call { event, key, .. } if key == "talk" => Some(event.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["hotkey", "hotkey_release"]);
+        let commands = world.resource::<Messages<ScriptCommandEvent>>();
+        assert!(
+            commands
+                .iter_current_update_messages()
+                .any(|c| matches!(&c.0, ScriptCommand::Print(line) if line == "from a capability")),
+            "the command batch reached the command bus"
+        );
     }
 
     /// A build with no client installed answers every request with the

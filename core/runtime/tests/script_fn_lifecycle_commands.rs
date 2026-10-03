@@ -7,8 +7,7 @@
 //! builtin queues one command, `apply_os_script_commands` applies it against
 //! the `RecentFilesService` / `AutostartService` resources
 //! `register_os_lifecycle` installs, and a read (`list_recent_files` /
-//! `query_autostart`) answers back on a message the script sees as a
-//! callback.
+//! `query_autostart`) answers back on the plugin-event bus as a callback.
 //!
 //! `single_instance_gate` covering the socket / named-pipe exclusion is
 //! `lumen-os-lifecycle`'s own `second_launch_forwards_args` test; a desktop
@@ -272,9 +271,8 @@ fn on_autostart_disabled(tag) {
     let mut app = app_with(&dir, "rhai", SOURCE);
     // `on_ready` fires on mount within `app_with`'s own ticks; the first of
     // these applies its six queued commands, later ones let the resulting
-    // `RecentFilesRead` / `AutostartRead` messages dispatch to their
-    // callbacks and those callbacks' own `add_recent_file` calls apply in
-    // turn.
+    // recent-files and autostart events dispatch to their callbacks and
+    // those callbacks' own `add_recent_file` calls apply in turn.
     for _ in 0..4 {
         app.tick();
     }
@@ -322,12 +320,11 @@ fn on_autostart_disabled(tag) {
 }
 
 /// The other half of the single-instance pipeline: `lumen-os-lifecycle`'s
-/// own tests cover the socket mechanism and `poll_second_instance` draining
-/// into a `SecondInstanceLaunched` message; this covers that message
-/// reaching the script as `on_second_instance(args)`. The message is
-/// written directly rather than through a live socket - a second process
-/// forwarding real argv is what the crate-level test already exercises,
-/// headless the same way this one is.
+/// own tests cover the socket mechanism and `poll_second_instance` turning a
+/// forwarded argv into its script event; this covers that event reaching the
+/// script as `on_second_instance(args)`. The event is written directly rather
+/// than through a live socket - a second process forwarding real argv is what
+/// the crate-level test already exercises, headless the same way this one is.
 #[test]
 fn second_instance_launch_reaches_the_script_callback() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -339,9 +336,10 @@ fn on_second_instance(args) {
 "#;
     let mut app = app_with(&dir, "rhai", SOURCE);
     app.world
-        .write_message(lumen_core::input::SecondInstanceLaunched {
-            args: vec!["--open".to_string(), "report.pdf".to_string()],
-        });
+        .write_message(lumen_os_lifecycle::second_instance_event(&[
+            "--open".to_string(),
+            "report.pdf".to_string(),
+        ]));
     app.tick();
     app.tick();
 

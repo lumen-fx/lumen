@@ -1,5 +1,5 @@
 //! The `os-filedialog` capability: the dialog service, the handler that turns
-//! a resolved dialog into the `FilePicked` message, and the command that
+//! a resolved dialog into the script event it fires, and the command that
 //! opens one.
 //!
 //! The service is a single counter and opens nothing until asked, so it is
@@ -10,11 +10,10 @@ use bevy_ecs::message::{MessageReader, Messages};
 use bevy_ecs::prelude::*;
 use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
-use lumen_core::input::FilePicked;
 use lumen_core::tick::TickStage;
 use lumen_script::{ScriptCommand, ScriptCommandEvent, ScriptSet};
 
-use crate::{FileDialogKind, FileDialogRequest, FileDialogResultCommand, FileDialogService};
+use crate::{FileDialogKind, FileDialogRequest, FileDialogService};
 
 /// What a static package looks for in the app's sources before it
 /// carries this subsystem.
@@ -25,12 +24,9 @@ pub const SELECT: Select = Select::OnUse(lumen_script::FILE_DIALOG_BUILTINS);
 pub fn install(app: &mut App, _env: &CapabilityEnv) {
     app.world.insert_resource(FileDialogService::new());
     // A resolved dialog comes back as a typed command from whichever thread
-    // ran it. Without a handler for that payload the command drain discards
-    // it and the script's `on_file_picked` never fires, so this registration
-    // is what closes the loop between `pick_file(...)` and the callback.
-    app.register_command::<FileDialogResultCommand, _>(|world, payload| {
-        world.write_message(FilePicked::from(*payload));
-    });
+    // ran it; this registration is what closes the loop between
+    // `pick_file(...)` and the callback.
+    crate::register_result_handler(app);
     app.world.init_resource::<Messages<ScriptCommandEvent>>();
     app.add_systems(
         TickStage::Systems,
@@ -78,8 +74,8 @@ fn apply_dialog_commands(
                 .collect(),
             default_name: default_name.clone(),
         };
-        // The result lands as a `FileDialogResultCommand`, then `FilePicked`,
-        // through the typed-command drain the install above registered.
+        // The result lands as a `FileDialogResultCommand`, then a script
+        // event, through the typed-command drain the install above registered.
         file_dialog.open_single_with(spawn.as_ref().map(|s| s.as_spawn()), &command_queue, req);
     }
 }
