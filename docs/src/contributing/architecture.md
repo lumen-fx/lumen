@@ -667,7 +667,10 @@ cost nothing at run time and cannot drift apart by hand.
 The trait covers lifecycle (compile check, load, replace, reset), invocation
 (call a function, call a closure, evaluate a derivation), a command sink, a
 signal mirror, the handler and derivation registries, dynamic-DOM event
-dispatch, and metadata. Its associated closure type is what each engine calls a
+dispatch, and metadata. A host must implement lifecycle, `call`,
+`call_closure`, `register_script_fn`, and `lang`; the command sink, the mirror,
+the registries, and the builtin table default to empty, so a minimal host or a
+test double writes only what it uses. Its associated closure type is what each engine calls a
 callable: a function pointer in Rhai, a function value in Lua, and a function
 *name* in candela. candela has function values of its own, but the values that
 cross a host-function boundary are the marshalled ones (null, the scalars,

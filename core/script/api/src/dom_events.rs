@@ -392,37 +392,11 @@ pub(crate) mod text_event_tests {
         ) -> Result<crate::ScriptValue, crate::ScriptError> {
             unimplemented!("no host in these tests")
         }
-        fn drain_commands(&mut self) -> Vec<crate::ScriptCommand> {
-            Vec::new()
-        }
-        fn push_commands(&mut self, _cmds: Vec<crate::ScriptCommand>) {}
-        fn mirror_get(&self, _name: &str) -> Option<crate::ScriptValue> {
-            None
-        }
-        fn mirror_set(&mut self, _name: &str, _value: crate::ScriptValue) {}
-        fn mirror_sync_str(&mut self, _name: &str, _value: &str) {}
-        fn handler_for(&self, _event: &str, _key: &str) -> Option<String> {
-            None
-        }
-        fn derivations_matching(
-            &self,
-            _dirty: &std::collections::HashSet<&str>,
-            _pending: &std::collections::HashSet<String>,
-        ) -> Vec<(String, Vec<String>, Self::Closure)> {
-            Vec::new()
-        }
-        fn pending_initial(&self) -> std::collections::HashSet<String> {
-            std::collections::HashSet::new()
-        }
-        fn clear_pending(&mut self, _evaluated: &[String]) {}
         fn register_script_fn(&mut self, _f: &crate::ScriptFn) -> Result<(), crate::ScriptError> {
             unimplemented!("no host in these tests")
         }
         fn lang(&self) -> &'static str {
             "test"
-        }
-        fn builtins(&self) -> &'static [crate::BuiltinFn] {
-            &[]
         }
     }
 

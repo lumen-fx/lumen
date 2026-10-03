@@ -2446,11 +2446,11 @@ mod derivation_panic_tests {
     /// A host whose one derivation panics on every evaluation, standing in
     /// for the corrupted-VM-state panic issue #204 describes. Wraps the
     /// crate's existing "no host" test double (`NoHost`) instead of
-    /// reimplementing its unimplemented / trivial stubs a second time:
-    /// every method `apply_derivations` doesn't reach for this test just
-    /// forwards to it. `derivations_matching` and `pending_initial` are
-    /// real overrides (this test needs an actual pending derivation, which
-    /// `NoHost` never has), and `eval_derivation` is the panic under test.
+    /// reimplementing its unimplemented stubs a second time: every required
+    /// method `apply_derivations` doesn't reach forwards to it, and the
+    /// trait defaults cover the rest. `derivations_matching` and
+    /// `pending_initial` are real overrides (this test needs an actual
+    /// pending derivation), and `eval_derivation` is the panic under test.
     #[derive(Resource)]
     struct PanickingDerivationHost {
         inner: NoHost,
@@ -2495,24 +2495,6 @@ mod derivation_panic_tests {
             self.eval_calls.fetch_add(1, Ordering::SeqCst);
             panic!("simulated VM index-out-of-bounds");
         }
-        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
-            self.inner.drain_commands()
-        }
-        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
-            self.inner.push_commands(cmds)
-        }
-        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
-            self.inner.mirror_get(name)
-        }
-        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
-            self.inner.mirror_set(name, value)
-        }
-        fn mirror_sync_str(&mut self, name: &str, value: &str) {
-            self.inner.mirror_sync_str(name, value)
-        }
-        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
-            self.inner.handler_for(event, key)
-        }
         fn derivations_matching(
             &self,
             _dirty: &HashSet<&str>,
@@ -2526,17 +2508,11 @@ mod derivation_panic_tests {
         fn pending_initial(&self) -> HashSet<String> {
             [String::from("doubled")].into_iter().collect()
         }
-        fn clear_pending(&mut self, evaluated: &[String]) {
-            self.inner.clear_pending(evaluated)
-        }
         fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
             self.inner.register_script_fn(f)
         }
         fn lang(&self) -> &'static str {
             self.inner.lang()
-        }
-        fn builtins(&self) -> &'static [crate::BuiltinFn] {
-            self.inner.builtins()
         }
     }
 
@@ -2627,8 +2603,8 @@ mod frame_hook_tests {
     ///
     /// `LANG` exists to mint a second host type from one implementation: two
     /// hosts is the case where a frame has to reach both, and two hand-rolled
-    /// `ScriptHost` impls would be the same forty lines of delegation twice
-    /// over. Everything the suite does not reach forwards to `NoHost`, the
+    /// `ScriptHost` impls would be the same delegation twice over. The
+    /// required methods the suite does not reach forward to `NoHost`, the
     /// crate's existing stub, rather than being written out again here.
     #[derive(Resource)]
     struct Host<const LANG: usize> {
@@ -2717,8 +2693,8 @@ mod frame_hook_tests {
             }
         }
 
-        // Everything below is the rest of the trait, which the frame hook
-        // never reaches. It forwards rather than repeating `NoHost`'s bodies.
+        // The required methods the frame hook never reaches forward to
+        // `NoHost` rather than repeating its bodies.
         fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
             self.inner.compile_check(source, uri)
         }
@@ -2738,42 +2714,8 @@ mod frame_hook_tests {
         ) -> Result<ScriptValue, ScriptError> {
             self.inner.call_closure(closure, args)
         }
-        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
-            self.inner.drain_commands()
-        }
-        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
-            self.inner.push_commands(cmds)
-        }
-        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
-            self.inner.mirror_get(name)
-        }
-        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
-            self.inner.mirror_set(name, value)
-        }
-        fn mirror_sync_str(&mut self, name: &str, value: &str) {
-            self.inner.mirror_sync_str(name, value)
-        }
-        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
-            self.inner.handler_for(event, key)
-        }
-        fn derivations_matching(
-            &self,
-            dirty: &std::collections::HashSet<&str>,
-            pending: &std::collections::HashSet<String>,
-        ) -> Vec<(String, Vec<String>, Self::Closure)> {
-            self.inner.derivations_matching(dirty, pending)
-        }
-        fn pending_initial(&self) -> std::collections::HashSet<String> {
-            self.inner.pending_initial()
-        }
-        fn clear_pending(&mut self, evaluated: &[String]) {
-            self.inner.clear_pending(evaluated)
-        }
         fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
             self.inner.register_script_fn(f)
-        }
-        fn builtins(&self) -> &'static [crate::BuiltinFn] {
-            self.inner.builtins()
         }
     }
 
