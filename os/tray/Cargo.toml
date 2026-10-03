@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "System tray host for Lumen (tray-icon wrapper, MenuModel from lumen-os-menu, TrayClicked / TrayDoubleClicked / TrayMenuClicked messages). QSystemTrayIcon / AppIndicator analog."
+description = "System tray host for Lumen (tray-icon wrapper, MenuModel from lumen-os-menu, click and menu events for scripts). QSystemTrayIcon / AppIndicator analog."
 keywords = ["ui", "gui", "tray", "tray-icon", "lumen"]
 categories = ["os", "gui"]
 # Not published: `lumenc` and `lumenui` are the only crates.io packages.
@@ -15,7 +15,8 @@ publish = false
 [dependencies]
 # The optional-subsystem entry this crate registers itself through.
 lumen-capability = { workspace = true }
-# The command stream the scripts' builtins write, which the entry applies.
+# The command stream the scripts' builtins write, which the entry applies,
+# and the plugin-event bus the crate's events reach the script through.
 lumen-script = { workspace = true }
 lumen-core = { workspace = true }
 lumen-os-mime = { workspace = true }

@@ -14,8 +14,9 @@
 //!
 //! Everything runs headless. No window opens, and no test touches a real OS
 //! surface: nothing pops a dialog, raises a notification, or reads the system
-//! clipboard. Each test writes the message the OS layer would have produced
-//! and asserts on what the hosts did with it.
+//! clipboard. Each test writes the event the capability would have produced,
+//! built by the capability's own constructor, and asserts on what the hosts
+//! did with it.
 
 use lumen_core::prelude::App;
 use lumenc::{RunOptions, build_headless_app};
@@ -28,7 +29,16 @@ const MARKUP: &str = r#"<root>
 </root>"#;
 
 const RHAI: &str = r#"
-fn on_hotkey_release(name) { signal("rhai_release", "").set(name); }
+fn on_hotkey(name) { signal("rhai_seq", "").set("press:" + name); }
+fn on_hotkey_release(name) {
+    signal("rhai_release", "").set(name);
+    signal("rhai_seq", "").set(signal("rhai_seq", "").get() + ",release");
+}
+fn on_tray(id) { signal("rhai_tray", "").set(id); }
+fn on_files_picked(tag, paths) {
+    signal("rhai_pick_tag", "").set(tag);
+    signal("rhai_pick", "").set(paths);
+}
 fn on_notification_action(id, action) {
     signal("rhai_action_id", "").set(id);
     signal("rhai_action", "").set(action);
@@ -40,7 +50,16 @@ fn on_clipboard(tag, text) {
 "#;
 
 const LUA: &str = r#"
-function on_hotkey_release(name) signal("lua_release", ""):set(name) end
+function on_hotkey(name) signal("lua_seq", ""):set("press:" .. name) end
+function on_hotkey_release(name)
+    signal("lua_release", ""):set(name)
+    signal("lua_seq", ""):set(signal("lua_seq", ""):get() .. ",release")
+end
+function on_tray(id) signal("lua_tray", ""):set(id) end
+function on_files_picked(tag, paths)
+    signal("lua_pick_tag", ""):set(tag)
+    signal("lua_pick", ""):set(paths)
+end
 function on_notification_action(id, action)
     signal("lua_action_id", ""):set(id)
     signal("lua_action", ""):set(action)
@@ -54,7 +73,19 @@ end
 const CDL: &str = r#"
 import "lumen.cdl";
 
-fn on_hotkey_release(name) { lumen::signal_set("cdl_release", name); }
+fn on_hotkey(name) { lumen::signal_set("cdl_seq", "press:" + name); }
+
+fn on_hotkey_release(name) {
+    lumen::signal_set("cdl_release", name);
+    lumen::signal_set("cdl_seq", lumen::signal_get("cdl_seq") + ",release");
+}
+
+fn on_tray(id) { lumen::signal_set("cdl_tray", id); }
+
+fn on_files_picked(tag, paths) {
+    lumen::signal_set("cdl_pick_tag", tag);
+    lumen::signal_set("cdl_pick", paths);
+}
 
 fn on_notification_action(id, action) {
     lumen::signal_set("cdl_action_id", id);
@@ -130,23 +161,62 @@ fn assert_all_hosts(app: &App, suffix: &str, expected: &str) {
     }
 }
 
-/// `HotkeyReleased` is produced by the hotkey poll and has to reach
-/// `on_hotkey_release` in every host. Writing the message directly is the only
-/// way to drive it headlessly: the real chord needs an OS-level X11 grab.
+/// A chord pressed and released within one tick reaches `on_hotkey` and then
+/// `on_hotkey_release` in every host. Writing the poll's events directly is
+/// the only way to drive it headlessly: the real chord needs an OS-level X11
+/// grab.
 #[test]
-fn hotkey_release_dispatches_to_every_host() {
+fn hotkey_press_and_release_dispatch_to_every_host_in_order() {
     let fixture = Fixture::new("hotkey");
     let mut app = fixture.app();
 
-    app.world.write_message(lumen_core::input::HotkeyReleased {
-        name: "talk".to_string(),
-    });
-    // One tick dispatches the message, the next lets the signal writes the
+    app.world
+        .write_message(lumen_os_hotkey::hotkey_event("talk", true));
+    app.world
+        .write_message(lumen_os_hotkey::hotkey_event("talk", false));
+    // One tick dispatches the events, the next lets the signal writes the
     // handlers queued reach the property store.
     app.tick();
     app.tick();
 
     assert_all_hosts(&app, "release", "talk");
+    assert_all_hosts(&app, "seq", "press:talk,release");
+}
+
+/// A tray icon click reaches `on_tray(id)` in every host.
+#[test]
+fn tray_click_dispatches_to_every_host() {
+    let fixture = Fixture::new("tray");
+    let mut app = fixture.app();
+
+    app.world
+        .write_message(lumen_os_tray::tray_click_event("main".to_string()));
+    app.tick();
+    app.tick();
+
+    assert_all_hosts(&app, "tray", "main");
+}
+
+/// A resolved multi-file dialog reaches `on_files_picked(tag, paths)` in every
+/// host, its paths joined by `|`.
+#[test]
+fn file_picks_dispatch_to_every_host() {
+    let fixture = Fixture::new("filedialog");
+    let mut app = fixture.app();
+
+    app.world.write_message(lumen_script::PluginEvent::from(
+        lumen_os_filedialog::FileDialogResultCommand {
+            request_id: lumen_os_filedialog::RequestId(1),
+            kind: lumen_os_filedialog::FileDialogKind::OpenMulti,
+            tag: "import".to_string(),
+            paths: vec!["/a.png".into(), "/b.png".into()],
+        },
+    ));
+    app.tick();
+    app.tick();
+
+    assert_all_hosts(&app, "pick_tag", "import");
+    assert_all_hosts(&app, "pick", "/a.png|/b.png");
 }
 
 /// A notification's action button reaches `on_notification_action(id, action)`
@@ -156,11 +226,10 @@ fn notification_action_dispatches_to_every_host() {
     let fixture = Fixture::new("notify");
     let mut app = fixture.app();
 
-    app.world
-        .write_message(lumen_core::input::NotificationActionInvoked {
-            id: "export-done".to_string(),
-            action_id: "open".to_string(),
-        });
+    app.world.write_message(lumen_os_notify::action_event(
+        "export-done".to_string(),
+        "open".to_string(),
+    ));
     app.tick();
     app.tick();
 
@@ -171,7 +240,7 @@ fn notification_action_dispatches_to_every_host() {
 /// A finished `clipboard_read(tag)` reaches `on_clipboard(tag, text)` in every
 /// host with both arguments intact.
 ///
-/// The message is written directly rather than driven through
+/// The event is written directly rather than driven through
 /// `clipboard_read`, because the system clipboard is a main-thread-only API on
 /// macOS and a test runs on a worker thread. What the parity check needs is the
 /// dispatch, and that is the same either way.
@@ -180,10 +249,11 @@ fn clipboard_read_answers_every_host() {
     let fixture = Fixture::new("clipboard");
     let mut app = fixture.app();
 
-    app.world.write_message(lumen_core::input::ClipboardRead {
-        tag: "editor".to_string(),
-        text: "from the clipboard".to_string(),
-    });
+    app.world
+        .write_message(lumen_script::clipboard::clipboard_read_event(
+            "editor".to_string(),
+            "from the clipboard".to_string(),
+        ));
     app.tick();
     app.tick();
 

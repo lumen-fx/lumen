@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Global-hotkey host for Lumen (global-hotkey 0.8 wrapper, HotkeyPressed + HotkeyReleased messages). QShortcut (global) / GtkShortcutController analog."
+description = "Global-hotkey host for Lumen (global-hotkey 0.8 wrapper, press and release events for scripts). QShortcut (global) / GtkShortcutController analog."
 keywords = ["ui", "gui", "hotkey", "shortcut", "lumen"]
 categories = ["os", "gui"]
 # Not published: `lumenc` and `lumenui` are the only crates.io packages.
@@ -15,7 +15,8 @@ publish = false
 [dependencies]
 # The optional-subsystem entry this crate registers itself through.
 lumen-capability = { workspace = true }
-# The command stream the scripts' builtins write, which the entry applies.
+# The command stream the scripts' builtins write, which the entry applies,
+# and the plugin-event bus the crate's events reach the script through.
 lumen-script = { workspace = true }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true

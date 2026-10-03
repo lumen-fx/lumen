@@ -16,7 +16,7 @@ use bevy_ecs::prelude::*;
 use lumen_capability::{CapabilityEnv, Preflight, Select};
 use lumen_core::app::App;
 use lumen_core::tick::TickStage;
-use lumen_script::{ScriptCommand, ScriptCommandEvent, ScriptSet};
+use lumen_script::{PluginEvent, ScriptCommand, ScriptCommandEvent, ScriptSet};
 use serde::Deserialize;
 
 use crate::{
@@ -74,7 +74,14 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
     app.world.insert_resource(lifecycle);
     app.world.insert_resource(recent);
     app.world.insert_resource(autostart);
-    app.add_systems(TickStage::Systems, crate::poll_second_instance);
+    // A forwarded launch reaches the script on the tick it was polled, and a
+    // recent-files or autostart read on the tick after the command that asked
+    // for it: both write plugin events.
+    lumen_script::register_plugin_event_message(&mut app.world);
+    app.add_systems(
+        TickStage::Systems,
+        crate::poll_second_instance.before(lumen_script::collect_plugin_events),
+    );
     app.world.init_resource::<Messages<ScriptCommandEvent>>();
     app.add_systems(
         TickStage::Systems,
@@ -92,8 +99,7 @@ fn apply_lifecycle_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     recent_files: Res<RecentFilesService>,
     autostart: Res<AutostartService>,
-    mut recent_files_out: MessageWriter<lumen_core::input::RecentFilesRead>,
-    mut autostart_out: MessageWriter<lumen_core::input::AutostartRead>,
+    mut out: MessageWriter<PluginEvent>,
 ) {
     for ev in events.read() {
         match &ev.0 {
@@ -117,10 +123,7 @@ fn apply_lifecycle_commands(
                     .map(|e| e.path.to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
                     .join("|");
-                recent_files_out.write(lumen_core::input::RecentFilesRead {
-                    tag: tag.clone(),
-                    paths,
-                });
+                out.write(crate::recent_files_event(tag.clone(), paths));
             }
             ScriptCommand::ClearRecentFiles => recent_files.clear(),
             ScriptCommand::SetAutostart { on } => {
@@ -130,10 +133,7 @@ fn apply_lifecycle_commands(
             }
             ScriptCommand::QueryAutostart { tag } => match autostart.is_enabled() {
                 Some(enabled) => {
-                    autostart_out.write(lumen_core::input::AutostartRead {
-                        tag: tag.clone(),
-                        enabled,
-                    });
+                    out.write(crate::autostart_event(tag.clone(), enabled));
                 }
                 // The platform helper could not resolve where to look (for
                 // one, `HOME` unset). That is not the same thing as
