@@ -25,9 +25,6 @@ pub mod capability;
 use bevy_ecs::prelude::*;
 use std::str::FromStr;
 
-pub use lumen_os_mime as mime;
-pub use lumen_os_mime::KeyChord;
-
 /// Backwards-compatible alias for the existing message - emitted
 /// whenever a registered hotkey fires its press event. Scripts route
 /// it as `on_hotkey(name)`.
@@ -45,9 +42,6 @@ pub use lumen_core::input::HotkeyReleased;
 /// OS-level global hotkey registry. `GlobalHotKeyManager` is `!Send`
 /// on some platforms (macOS NSEvent monitor), so this resource lives
 /// as a `NonSend` in the ECS world.
-///
-/// Backwards-compatible shape with the previous
-/// `lumenc::run::HotkeyRegistry`.
 pub struct HotkeyRegistry {
     manager: global_hotkey::GlobalHotKeyManager,
     /// `name` -> `(id, accelerator)` so we can unregister by name and
@@ -124,12 +118,6 @@ impl HotkeyRegistry {
         self.by_id.insert(id, name.to_string());
     }
 
-    /// Register a hotkey via a [`KeyChord`] (shared with the menu
-    /// crate). Convenience over [`Self::register`].
-    pub fn register_chord(&mut self, name: &str, chord: &KeyChord) {
-        self.register(name, chord.0.as_ref());
-    }
-
     /// Remove the binding under `name`. No-op if `name` isn't
     /// registered.
     pub fn unregister(&mut self, name: &str) {
@@ -137,16 +125,6 @@ impl HotkeyRegistry {
             let _ = self.manager.unregister(key);
             self.by_id.remove(&id);
         }
-    }
-
-    /// True when `name` is currently bound.
-    pub fn is_registered(&self, name: &str) -> bool {
-        self.by_name.contains_key(name)
-    }
-
-    /// List currently-registered hotkey names.
-    pub fn list(&self) -> Vec<String> {
-        self.by_name.keys().cloned().collect()
     }
 }
 
@@ -202,13 +180,7 @@ mod tests {
     use super::*;
 
     // The real GlobalHotKeyManager refuses to init under CI (no X11),
-    // so cover the data-shape round-trips and chord wiring instead.
-
-    #[test]
-    fn key_chord_round_trips() {
-        let c: KeyChord = "Ctrl+S".into();
-        assert_eq!(c.0.as_ref(), "Ctrl+S");
-    }
+    // so cover the data shapes instead.
 
     #[test]
     fn hotkey_released_message_constructs() {

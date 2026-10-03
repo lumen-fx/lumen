@@ -25,18 +25,6 @@ use std::collections::{HashMap, HashSet};
 /// Synthetic root-window node id. Set to `u64::MAX` to sit outside the entity-bits id space.
 pub const ROOT_NODE: NodeId = NodeId(u64::MAX);
 
-/// Cache of last-emitted node hashes keyed by [`NodeId`], stored in the `World` as a [`Resource`].
-///
-/// - Read and updated by [`build_tree_update`] each tick.
-/// - A node is re-emitted only when its hash changes between ticks.
-/// - Tracked inputs that affect the hash: [`Transform`], [`TextContent`], [`TabIndex`], [`Scroll`], [`LumenId`], [`Children`].
-/// - AccessKit merges partial updates into its persistent tree.
-#[derive(Resource, Default, Debug)]
-pub struct A11ySnapshot {
-    /// Maps `node_id` to a 64-bit content hash for nodes emitted in the previous tick. Stale entries for despawned entities are pruned each tick.
-    pub hashes: HashMap<NodeId, u64>,
-}
-
 /// Converts an [`Entity`] to an accesskit [`NodeId`] by wrapping `Entity::to_bits()`.
 /// Combines the entity index and generation, producing a collision-free id across despawn/respawn cycles.
 pub fn entity_to_node(e: Entity) -> NodeId {
@@ -52,149 +40,6 @@ pub fn node_to_entity(id: NodeId) -> Option<Entity> {
     }
 }
 
-/// Builds a [`TreeUpdate`] reflecting the current ECS state.
-///
-/// - Iterates every entity with a [`Transform`] and emits a node carrying its absolute rect, role, optional label, and computed actions.
-/// - Sets each entity's `Children` as accesskit children; [`ROOT_NODE`] fans out to entities without a [`ChildOf`].
-/// - Incremental: hashes each produced node, compares against [`A11ySnapshot`], and omits unchanged nodes from the emitted update.
-/// - A stable UI emits zero entity nodes; only the root node and focus pointer.
-#[deprecated(
-    since = "0.0.1",
-    note = "Use the `sync_a11y_tree` system (registered by `A11yPlugin`) plus \
-            `take_pending_tree_update` instead. `build_tree_update` re-walks the \
-            world every redraw rather than running inside `TickStage::A11ySync`; \
-            the system path matches the audit's P1 'rebuilt every frame' fix \
-            (docs/audits/a11y.md). Scheduled for removal in the next minor version."
-)]
-pub fn build_tree_update(world: &mut World) -> TreeUpdate {
-    world.init_resource::<A11ySnapshot>();
-    let mut nodes: Vec<(NodeId, Node)> = Vec::new();
-    let mut roots: Vec<NodeId> = Vec::new();
-    let mut new_hashes: HashMap<NodeId, u64> = HashMap::new();
-    let mut seen: HashSet<NodeId> = HashSet::new();
-    seen.insert(ROOT_NODE);
-
-    let prior_hashes = world.resource::<A11ySnapshot>().hashes.clone();
-
-    let mut q = world.query::<(
-        Entity,
-        &Transform,
-        Option<&TextContent>,
-        Option<&TabIndex>,
-        Option<&TextInput>,
-        Option<&Scroll>,
-        Option<&LumenId>,
-        Option<&Children>,
-        Option<&ChildOf>,
-    )>();
-    for (entity, transform, text, tab, input, scroll, id, children, parent) in q.iter(world) {
-        let node_id = entity_to_node(entity);
-        seen.insert(node_id);
-        let role = role_for(text, tab, input, scroll, parent.is_none());
-
-        let child_ids: Vec<NodeId> = children
-            .map(|c| c.iter().map(entity_to_node).collect())
-            .unwrap_or_default();
-        let label_str = match (text, id) {
-            (Some(t), _) if !t.0.is_empty() => Some(t.0.as_str()),
-            (_, Some(i)) => Some(i.0.as_str()),
-            _ => None,
-        };
-        let hash = hash_node_inputs(transform, role, label_str, tab.map(|t| t.0), &child_ids);
-
-        if parent.is_none() {
-            roots.push(node_id);
-        }
-
-        if prior_hashes.get(&node_id) == Some(&hash) {
-            // Hash matches the previous tick; skip emission and carry the hash forward into `new_hashes`.
-            new_hashes.insert(node_id, hash);
-            continue;
-        }
-
-        let mut node = Node::new(role);
-        node.set_bounds(Rect {
-            x0: transform.absolute.x as f64,
-            y0: transform.absolute.y as f64,
-            x1: (transform.absolute.x + transform.size.x) as f64,
-            y1: (transform.absolute.y + transform.size.y) as f64,
-        });
-        if let Some(t) = text
-            && !t.0.is_empty()
-        {
-            if matches!(role, Role::TextInput) {
-                node.set_value(t.0.as_str());
-            } else {
-                node.set_label(t.0.as_str());
-            }
-        } else if let Some(id) = id {
-            node.set_label(id.0.as_str());
-        }
-        if tab.map(|t| t.0 >= 0).unwrap_or(false) {
-            node.add_action(Action::Focus);
-        }
-        if matches!(role, Role::Button) {
-            node.add_action(Action::Click);
-        }
-        if !child_ids.is_empty() {
-            node.set_children(child_ids);
-        }
-        nodes.push((node_id, node));
-        new_hashes.insert(node_id, hash);
-    }
-
-    // Hash the root node's child list and emit only when it changes.
-    let root_hash = hash_root_inputs(&roots);
-    if prior_hashes.get(&ROOT_NODE) != Some(&root_hash) {
-        let mut root = Node::new(Role::Window);
-        root.set_label("Lumen app");
-        root.set_children(roots);
-        nodes.push((ROOT_NODE, root));
-    }
-    new_hashes.insert(ROOT_NODE, root_hash);
-
-    // Drop hashes for despawned entities by not carrying them into `new_hashes`. AccessKit removes
-    // such nodes once their parent's `children` list excludes them. The `seen` set filters out any
-    // stale ids from `prior_hashes` that no longer appear in the current iteration.
-
-    world.resource_mut::<A11ySnapshot>().hashes = new_hashes;
-
-    let focus = world
-        .resource::<FocusTracker>()
-        .0
-        .map(entity_to_node)
-        .unwrap_or(ROOT_NODE);
-
-    TreeUpdate {
-        nodes,
-        tree: Some(Tree::new(ROOT_NODE)),
-        tree_id: TreeId::ROOT,
-        focus,
-    }
-}
-
-fn hash_node_inputs(
-    transform: &Transform,
-    role: Role,
-    label: Option<&str>,
-    tab: Option<i32>,
-    children: &[NodeId],
-) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    transform.absolute.x.to_bits().hash(&mut h);
-    transform.absolute.y.to_bits().hash(&mut h);
-    transform.size.x.to_bits().hash(&mut h);
-    transform.size.y.to_bits().hash(&mut h);
-    (role as u32).hash(&mut h);
-    label.unwrap_or("").hash(&mut h);
-    tab.hash(&mut h);
-    for c in children {
-        c.0.hash(&mut h);
-    }
-    h.finish()
-}
-
 fn hash_root_inputs(roots: &[NodeId]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -204,53 +49,23 @@ fn hash_root_inputs(roots: &[NodeId]) -> u64 {
     h.finish()
 }
 
-fn role_for(
-    text: Option<&TextContent>,
-    tab: Option<&TabIndex>,
-    input: Option<&TextInput>,
-    scroll: Option<&Scroll>,
-    is_root: bool,
-) -> Role {
-    if is_root {
-        return Role::Window;
-    }
-    if input.is_some() {
-        return Role::TextInput;
-    }
-    if scroll.is_some() {
-        return Role::ScrollView;
-    }
-    if tab.map(|t| t.0 >= 0).unwrap_or(false) {
-        return Role::Button;
-    }
-    if text.is_some() {
-        return Role::Label;
-    }
-    Role::GenericContainer
-}
-
 /// Re-export of the underlying `accesskit` crate, so an app that wants to
 /// emit its own nodes speaks the same version this crate translates into.
 pub use accesskit;
 
-// --- New tree-build system (lives alongside the legacy `build_tree_update`) ---
+// --- Tree-build system ---
 //
-// The legacy `build_tree_update` above is the one currently invoked by
-// `lumen-window-winit` inside the `RedrawRequested` handler. The audit in
-// `docs/audits/a11y.md` says: do not delete it yet - build the rewrite in
-// parallel so we can land it without breaking existing behaviour.
-//
-// The new `sync_a11y_tree` system below:
+// `sync_a11y_tree`:
 // - Runs inside `TickStage::A11ySync` (registered via [`A11yPlugin`]).
 // - Skips entirely when [`flag_a11y_changes`] saw no change tick on any
 //   published component, no entity carries [`DirtyA11y`], and focus has not
-//   moved (mirrors the audit's "skip when not dirty" recommendation).
+//   moved.
 // - Uses the real window-entity root rather than the synthetic
 //   `NodeId(u64::MAX)`.
-// - Maps the new `A11y*` components onto AccessKit `Node` setters via
-//   `From`/`Into` (per project rule: no `convert_x_to_y` helpers).
-// - Stores the resulting `TreeUpdate` in [`PendingA11yUpdate`] so the winit
-//   redraw handler can hand it to `Adapter::update_if_active(...)`
+// - Maps the `A11y*` components onto AccessKit `Node` setters via
+//   `From`/`Into`.
+// - Stores the resulting `TreeUpdate` in [`PendingA11yUpdate`] so the window
+//   backend's redraw handler can hand it to `Adapter::update_if_active(...)`
 //   without re-walking the world.
 
 /// Newtype wrapper around [`Role`] so the orphan rule lets us implement
@@ -563,9 +378,8 @@ pub fn flag_a11y_changes(
 
 /// Per-frame state used by [`sync_a11y_tree`] for change tracking.
 ///
-/// - Mirrors the legacy [`A11ySnapshot`] but keyed by content hash that
-///   includes the full new component surface (role, label, description,
-///   value, state, level, set-size, live, relations).
+/// - Keyed by a content hash over the full component surface (role, label,
+///   description, value, state, level, set-size, live, relations).
 /// - Tracks `last_focus` separately so a tick with no node changes but a
 ///   moved focus still emits a minimal `TreeUpdate`.
 #[derive(Resource, Default, Debug)]

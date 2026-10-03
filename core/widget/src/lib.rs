@@ -132,15 +132,6 @@ pub fn is_widget_tag_registered(tag: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Snapshot every registered tag - for diagnostics + `lumenc lint`.
-pub fn registered_widget_tags() -> Vec<&'static str> {
-    REGISTERED_WIDGET_TAGS
-        .get()
-        .and_then(|m| m.lock().ok())
-        .map(|s| s.iter().copied().collect())
-        .unwrap_or_default()
-}
-
 /// Untyped attribute bag handed to [`Widget::spawn`] by the parser.
 ///
 /// Mirrors the `roxmltree::Node::attributes()` iterator output: a flat
@@ -250,14 +241,8 @@ mod tests {
     use super::*;
 
     // The tag set is process-global and every test in the binary shares it,
-    // so a test counts the tag it registered rather than the size of the
-    // whole set, which anything running beside it can change.
-    fn times_registered(tag: &str) -> usize {
-        registered_widget_tags()
-            .into_iter()
-            .filter(|t| *t == tag)
-            .count()
-    }
+    // so a test asks about the tag it registered rather than the whole set,
+    // which anything running beside it can change.
 
     #[test]
     fn attributes_round_trip() {
@@ -283,15 +268,13 @@ mod tests {
         assert!(!is_widget_tag_registered("owned-test-tag"));
         register_widget_tag_owned(&String::from("owned-test-tag"));
         assert!(is_widget_tag_registered("owned-test-tag"));
-        // The second call must not add a second copy: the set is keyed by
-        // the string's contents, so one entry for this tag is what proves
-        // that.
+        // A second call for a tag already in the set is a no-op.
         register_widget_tag_owned("owned-test-tag");
-        assert_eq!(times_registered("owned-test-tag"), 1);
+        assert!(is_widget_tag_registered("owned-test-tag"));
     }
 
     #[test]
-    fn two_threads_registering_one_tag_leak_one_string() {
+    fn racing_registrations_of_one_tag_all_succeed() {
         // The set is checked before the lock is taken, so two callers can
         // both find the tag absent. Only one of them may put it in.
         let threads: Vec<_> = (0..8)
@@ -301,11 +284,6 @@ mod tests {
             t.join().expect("the registration does not panic");
         }
         assert!(is_widget_tag_registered("owned-race-tag"));
-        assert_eq!(
-            times_registered("owned-race-tag"),
-            1,
-            "eight callers, one tag"
-        );
     }
 
     #[test]
