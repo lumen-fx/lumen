@@ -965,8 +965,8 @@ flags [above](#lumen-server).
 | `LUMEN_HOT_RELOAD_POLL` | Forces the hot-reload watcher onto mtime polling instead of filesystem events. |
 | `LUMEN_FONT_CACHE` | `0`, `off`, `false`, or `no` disables the persistent font-metadata cache and rescans system fonts every launch. |
 | `LUMEN_BOOT_TRACE` | Prints a phase-by-phase startup breakdown on stderr. |
-| `LUMEN_GPU_INIT_TRACE` | Prints GPU adapter and device selection detail on stderr. |
-| `LUMEN_GPU_INIT_DEADLINE_MS` | GPU init deadline in milliseconds; defaults to 5000. Exceeding it aborts with a diagnostic instead of hanging. |
+| `RUST_LOG` | With `--profile`, which tracing spans are recorded, as a `tracing` filter. Defaults to `bevy_ecs=trace,lumen=trace,lumenc=trace`. GPU adapter and device bring-up report under the `lumen::render::gpu_init` target, so `RUST_LOG=lumen::render::gpu_init=trace` with `--profile stderr` shows each bring-up stage as it finishes. |
+| `LUMEN_GPU_INIT_DEADLINE_MS` | GPU init deadline in milliseconds; defaults to 5000. Exceeding it prints a diagnostic on stderr naming the likely cause. |
 | `LUMEN_TRACE_FRAME_DIRTY` | Logs which source marked each frame dirty. |
 | `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
 | `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
