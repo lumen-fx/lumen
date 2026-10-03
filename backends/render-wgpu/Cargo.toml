@@ -30,7 +30,8 @@ glam.workspace = true
 vello.workspace = true
 pollster = "1.0"
 thiserror.workspace = true
-# GPU init spans (`LUMEN_GPU_INIT_TRACE=1`) and surface-acquire diagnostics.
+# GPU init spans (the `lumen::render::gpu_init` target, shown by
+# `lumenc run --profile stderr`) and surface-acquire diagnostics.
 tracing.workspace = true
 
 # Part A (runtime-tree-shaking): ONE direct, target-scoped `wgpu` dep that
@@ -53,8 +54,9 @@ wgpu = { workspace = true, features = ["std", "parking_lot", "dx12", "wgsl"] }
 
 [features]
 # Compat build: re-add the OpenGL/GLES backend (glow + khronos-egl +
-# naga/glsl-out) and the explicit `Backends::GL` fallback instance in
-# `new_offscreen_async`. Off by default: the shipped per-OS release trims to
+# naga/glsl-out) and the explicit `Backends::GL` fallback instance GPU
+# bring-up tries, for a window and offscreen alike, when the native backend
+# has no adapter. Off by default: the shipped per-OS release trims to
 # the native backend only. Enable for ancient GPUs, GL-only VMs, or
 # Vulkan-less headless containers.
 gl-fallback = ["wgpu/gles"]

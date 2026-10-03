@@ -50,7 +50,7 @@ use bevy_ecs::message::Messages;
 use bevy_ecs::prelude::Resource;
 use lumen_core::input::CloseRequest;
 use lumen_core::prelude::*;
-use lumen_core::render_backend::{OffscreenRenderer, RenderBackend};
+use lumen_core::render_backend::{RenderBackend, install_offscreen};
 use lumen_core::render_world::{FrameDirty, SurfaceCapture};
 use lumen_core::tick::{wake_deadline, work_pending};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
@@ -302,7 +302,7 @@ pub fn run_app_headless_rendered(
         app.render_world
             .insert_non_send(ShaperService::from(shaper));
     }
-    renderer.install(&mut app);
+    install_offscreen(&mut app, renderer);
 
     // Wake plumbing: the same EventLoopWaker contract the winit backend
     // provides, backed by a condvar instead of an event-loop proxy.
@@ -489,7 +489,7 @@ pub(crate) struct OffscreenPrestart(
 );
 
 /// What starting an offscreen renderer produced.
-type OffscreenResult = Result<Box<dyn OffscreenRenderer>, String>;
+type OffscreenResult = Result<Box<dyn Renderer>, String>;
 
 impl OffscreenPrestart {
     /// Start the first of `candidates` that comes up, at `width` x `height`,
@@ -531,11 +531,12 @@ fn first_offscreen(
     candidates: &[RenderBackend],
     width: u32,
     height: u32,
-) -> Result<Box<dyn OffscreenRenderer>, String> {
+) -> Result<Box<dyn Renderer>, String> {
     let mut failures = Vec::new();
     for backend in candidates {
-        match (backend.offscreen)(width, height) {
-            Ok(renderer) => {
+        let mut renderer = (backend.renderer)();
+        match renderer.attach(FrameTarget::Offscreen { width, height }) {
+            Ok(()) => {
                 if !failures.is_empty() {
                     eprintln!(
                         "lumenc: {}; rendering with the '{}' backend",

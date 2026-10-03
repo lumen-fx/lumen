@@ -504,7 +504,7 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     // can start.
     let renderers = render_backends(&app, &cfg)?
         .iter()
-        .map(|backend| (backend.surface)())
+        .map(|backend| (backend.renderer)())
         .collect();
     let a11y: A11yBridgeFactory = Box::new(lumen_a11y_accesskit::winit_bridge);
     run(app, window.options, renderers, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))

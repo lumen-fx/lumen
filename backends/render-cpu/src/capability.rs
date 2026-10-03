@@ -3,10 +3,10 @@
 
 use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
-use lumen_core::render_backend::{OffscreenRenderer, RenderBackend, register_render_backend};
-use lumen_core::traits::SurfaceRenderer;
+use lumen_core::render_backend::{RenderBackend, register_render_backend};
+use lumen_core::traits::Renderer;
 
-use crate::{CpuRenderer, CpuRendererPlugin, CpuSurfaceRenderer};
+use crate::CpuRenderer;
 
 /// The name `[render] backend` selects this backend by.
 pub const NAME: &str = "cpu";
@@ -31,34 +31,25 @@ pub fn install(app: &mut App, _env: &CapabilityEnv) {
         RenderBackend {
             name: NAME,
             priority: PRIORITY,
-            surface,
-            offscreen,
+            renderer,
         },
     );
 }
 
-fn surface() -> Box<dyn SurfaceRenderer> {
-    Box::new(CpuSurfaceRenderer::new())
-}
-
-fn offscreen(width: u32, height: u32) -> Result<Box<dyn OffscreenRenderer>, String> {
-    Ok(Box::new(CpuRenderer::new(width, height)))
-}
-
-impl OffscreenRenderer for CpuRenderer {
-    fn install(self: Box<Self>, app: &mut App) {
-        app.add_plugin(CpuRendererPlugin::from(*self));
-    }
+fn renderer() -> Box<dyn Renderer> {
+    Box::new(CpuRenderer::new())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumen_core::render_backend::RenderBackends;
+    use lumen_core::render_backend::{RenderBackends, install_offscreen};
+    use lumen_core::render_world::SurfaceCapture;
+    use lumen_core::traits::FrameTarget;
 
     /// Installing the capability registers `cpu` at its priority, and the
-    /// constructors it registers build this backend's renderers: a detached
-    /// surface renderer and an offscreen one that paints once installed.
+    /// renderer it registers binds to an offscreen image and paints once
+    /// the launch installs it.
     #[test]
     fn the_capability_registers_a_working_cpu_backend() {
         let mut app = App::new();
@@ -74,13 +65,27 @@ mod tests {
             .expect("one");
         assert_eq!(cpu.priority, PRIORITY);
 
-        let mut surface = (cpu.surface)();
-        assert!(!surface.resize(4, 4), "nothing to resize before a window");
-
-        let offscreen = (cpu.offscreen)(4, 4).expect("the CPU always starts");
+        let mut renderer = (cpu.renderer)();
+        assert!(!renderer.resize(4, 4), "nothing to resize before a target");
+        renderer
+            .attach(FrameTarget::Offscreen {
+                width: 4,
+                height: 4,
+            })
+            .expect("the CPU always starts");
         let mut app = App::new();
-        offscreen.install(&mut app);
+        install_offscreen(&mut app, renderer);
+        let capture = SurfaceCapture::default();
+        capture.request();
+        app.render_world.insert_resource(capture.clone());
         app.tick();
-        assert_eq!(app.render_world.non_send::<CpuRenderer>().render_count(), 1);
+        let frame = capture
+            .read()
+            .expect("the first frame answered the capture");
+        assert_eq!(
+            (frame.width, frame.height),
+            (800, 600),
+            "sized to the viewport"
+        );
     }
 }

@@ -3,10 +3,10 @@
 
 use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
-use lumen_core::render_backend::{OffscreenRenderer, RenderBackend, register_render_backend};
-use lumen_core::traits::SurfaceRenderer;
+use lumen_core::render_backend::{RenderBackend, register_render_backend};
+use lumen_core::traits::Renderer;
 
-use crate::{WgpuRenderer, WgpuRendererPlugin, WgpuSurfaceRenderer};
+use crate::WgpuRenderer;
 
 /// The name `[render] backend` selects this backend by.
 pub const NAME: &str = "gpu";
@@ -30,25 +30,11 @@ pub fn install(app: &mut App, _env: &CapabilityEnv) {
         RenderBackend {
             name: NAME,
             priority: PRIORITY,
-            surface,
-            offscreen,
+            renderer,
         },
     );
 }
 
-fn surface() -> Box<dyn SurfaceRenderer> {
-    Box::new(WgpuSurfaceRenderer::new())
-}
-
-fn offscreen(width: u32, height: u32) -> Result<Box<dyn OffscreenRenderer>, String> {
-    WgpuRenderer::new_offscreen(width, height)
-        .map(|renderer| Box::new(renderer) as Box<dyn OffscreenRenderer>)
-        .map_err(|e| e.to_string())
-}
-
-impl OffscreenRenderer for WgpuRenderer {
-    fn install(self: Box<Self>, app: &mut App) {
-        let (width, height) = self.size();
-        app.add_plugin(WgpuRendererPlugin::new(width, height).with_renderer(*self));
-    }
+fn renderer() -> Box<dyn Renderer> {
+    Box::new(WgpuRenderer::new())
 }

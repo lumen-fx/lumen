@@ -135,8 +135,8 @@ pub struct CacheStats {
     pub misses: u64,
 }
 
-/// Cache of recorded, position-independent fragments, registered as a `bevy_ecs::Resource` on the render world.
-#[derive(bevy_ecs::prelude::Resource)]
+/// Cache of recorded, position-independent fragments. A renderer whose sink records fragments owns
+/// one and hands it to every frame's walk, so it survives from frame to frame.
 pub struct FragmentCache {
     entries: LruCache<FragmentKey, Fragment>,
     stats: CacheStats,
