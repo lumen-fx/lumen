@@ -495,6 +495,8 @@ fn wgpu_render_system(
     let dpr = viewport.scale_factor.max(0.01);
     let w = (viewport.size.x * dpr).max(1.0) as u32;
     let h = (viewport.size.y * dpr).max(1.0) as u32;
+    // A reallocated target holds no frame, so a resize repaints even an unchanged tree.
+    let resized = renderer.size() != (w, h);
     renderer.resize(w, h);
 
     let viewport_rect = lumen_core::render_world::Rect {
@@ -525,7 +527,7 @@ fn wgpu_render_system(
     // slice). `FrameDamage` is still populated
     // for consumers that only need the dirty-region *size*.
     let first_frame = previous.root.is_none();
-    if first_frame || !damage.is_empty() {
+    if first_frame || resized || !damage.is_empty() {
         renderer.vello_painter().reset();
         {
             let mut shaper_opt = shaper;
