@@ -1,7 +1,7 @@
 //! Lumen UI framework core crate.
 //!
 //! - Owns the tick loop, [`command`] queue, ECS components, and the two ECS worlds (main + render). See [`render_world`] for the cross-world flow.
-//! - Backend traits are marker types; concrete backends register systems via [`app::Plugin`].
+//! - Backend roles are traits in [`traits`]; concrete backends implement them and register systems via [`app::Plugin`].
 //! - Hierarchy uses [`bevy_ecs::hierarchy::ChildOf`] and [`bevy_ecs::hierarchy::Children`], re-exported from [`prelude`].
 
 #![forbid(unsafe_code)]
@@ -96,8 +96,8 @@ pub mod prelude {
     pub use crate::render_world::{
         AnimationsActive, Brush, ExtractFn, ExtractSchedule, ExtractSet, ExtractedClipBox,
         ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
-        ExtractedText, FrameDamage, FrameDirty, Rect, Render, RenderStage, ScrollbarDrawRect,
-        SurfaceCapture, SurfaceFrame, Viewport, install_extract_pipeline,
+        ExtractedText, FrameDirty, Rect, Render, RenderStage, ScrollbarDrawRect, SurfaceCapture,
+        SurfaceFrame, Viewport, install_extract_pipeline,
     };
     #[allow(deprecated)]
     pub use crate::signals::Signals;
@@ -117,8 +117,8 @@ pub mod prelude {
     };
     pub use crate::tick::{Tick, TickStage, WakeDeadline};
     pub use crate::traits::{
-        A11yBackend, Bindable, FrameRequest, LayoutEngine, RenderTarget, Renderer, Spawn,
-        SurfaceError, SurfaceRenderer, Timer, WindowBackend,
+        A11yBackend, Bindable, FrameRequest, FrameTarget, LayoutEngine, RenderError, RenderTarget,
+        Renderer, Spawn, Timer, WindowBackend,
     };
 
     // Re-export the bevy_ecs hierarchy components used across the crate.

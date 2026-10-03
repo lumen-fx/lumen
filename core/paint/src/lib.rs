@@ -17,11 +17,18 @@
 //! appearance once and replays it at every position through the
 //! [`FragmentCache`]. A sink that cannot answers `false` and the walker paints
 //! every leaf directly.
+//!
+//! The frame logic around the walk is shared too: [`wants_frame`] decides
+//! whether a frame is worth painting, [`paint_frame`] walks the render
+//! world's retained scene into a sink, and [`answer_capture`] hands a
+//! pending screenshot the result, so every renderer gates, paints, and
+//! captures the same way on every kind of target.
 
 #![warn(missing_docs)]
 
 pub mod cache;
 pub mod emit;
+pub mod frame;
 pub mod recording;
 pub mod svg;
 pub mod walker;
@@ -32,12 +39,12 @@ pub use emit::{
     emit_rect, emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, fit_box, folded,
     peniko_color,
 };
+pub use frame::{answer_capture, capture_requested, clear_color, paint_frame, wants_frame};
 pub use peniko;
 pub use peniko::kurbo;
 pub use recording::Recording;
 pub use walker::{
-    ClipStack, WalkContext, damage_union, diff_retained_scenes, scene_has_damage, walk_node,
-    walk_retained_scene,
+    ClipStack, WalkContext, diff_retained_scenes, scene_has_damage, walk_node, walk_retained_scene,
 };
 
 use lumen_text::GlyphPosition;

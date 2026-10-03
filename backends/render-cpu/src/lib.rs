@@ -1,59 +1,89 @@
 //! CPU render backend.
 //!
-//! Paints the frame through the walker in `lumen-paint` into a [`CpuPainter`]
-//! and rasterizes it with vello_cpu. No GPU, driver, or graphics API is
-//! involved, so it runs on any machine and links none of wgpu. Two entry
-//! points:
-//!
-//! - [`CpuRenderer`], an offscreen renderer that keeps the last frame as RGBA8
-//!   for headless runs, screenshots, and tests.
-//! - [`CpuSurfaceRenderer`], the on-screen path. It presents through softbuffer
-//!   into whatever window a window backend attaches, through
-//!   [`lumen_core::traits::SurfaceRenderer`].
+//! [`CpuRenderer`] paints the frame through the walker in `lumen-paint` into
+//! a [`CpuPainter`] and rasterizes it with vello_cpu. No GPU, driver, or
+//! graphics API is involved, so it runs on any machine and links none of
+//! wgpu. The rasterized frame goes to whichever target the renderer
+//! attaches to through [`lumen_core::traits::Renderer`]: an offscreen image
+//! kept as RGBA8 for headless runs, screenshots, and tests, or a window,
+//! through softbuffer.
 
 #![warn(missing_docs)]
 
 pub mod capability;
 pub mod sink;
-pub mod surface;
+mod surface;
 pub use sink::{BACKEND_ID, CpuPainter};
-pub use surface::CpuSurfaceRenderer;
 /// The vello_cpu version this backend draws with. A painter that needs it
 /// downcasts [`lumen_paint::Painter::native`] to [`CpuPainter`] and draws
 /// through [`CpuPainter::render_context`].
 pub use vello_cpu;
 
-use bevy_ecs::prelude::*;
-use bevy_ecs::system::{NonSendMut, SystemParam};
-use lumen_core::components::Color as LumenColor;
-use lumen_core::node_ir::{PreviousScene, RetainedScene};
+use bevy_ecs::world::World;
 use lumen_core::prelude::*;
-use lumen_core::render_world::{SurfaceCapture, SurfaceFrame};
-use lumen_paint::{PaintTarget, WalkContext};
-use lumen_text::{ShaperService, TextShaper};
+use lumen_core::render_backend::install_offscreen;
+use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
+use lumen_paint::PaintTarget;
+use surface::Presenter;
 use vello_cpu::Pixmap;
 
 /// The largest target the rasterizer takes on either axis, in pixels.
 pub const MAX_DIMENSION: u32 = u16::MAX as u32;
 
-/// Offscreen CPU renderer: a [`CpuPainter`] and the pixels of the last frame
-/// it rasterized.
+/// CPU renderer: a [`CpuPainter`], the pixels of the last frame it
+/// rasterized, and the window they are shown in, if any.
+///
+/// Construction is free: a window backend builds one before the window
+/// exists and attaches the window once it does, and a headless launch
+/// attaches an offscreen image (see [`Self::new_offscreen`]).
 pub struct CpuRenderer {
     painter: PaintTarget,
     pixmap: Pixmap,
+    /// `None` while detached.
+    target: Option<Target>,
+    /// Whether the pixmap holds a rasterized frame at its current size.
+    holds_frame: bool,
     render_count: u64,
 }
 
-impl CpuRenderer {
-    /// A renderer with a `width` x `height` target. Sizes clamp to
-    /// `1..=`[`MAX_DIMENSION`].
-    pub fn new(width: u32, height: u32) -> Self {
-        let (w, h) = clamp_size(width, height);
+/// What a [`CpuRenderer`] shows its frames on.
+enum Target {
+    /// Nowhere: the pixmap is the result, read back on request.
+    Offscreen,
+    /// A window, through softbuffer.
+    Window(Presenter),
+}
+
+impl Default for CpuRenderer {
+    fn default() -> Self {
         Self {
-            painter: Box::new(CpuPainter::new(w, h)),
-            pixmap: Pixmap::new(w, h),
+            painter: Box::new(CpuPainter::new(1, 1)),
+            pixmap: Pixmap::new(1, 1),
+            target: None,
+            holds_frame: false,
             render_count: 0,
         }
+    }
+}
+
+impl CpuRenderer {
+    /// A renderer bound to nothing yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A renderer attached to a `width` x `height` offscreen image. Sizes
+    /// clamp to `1..=`[`MAX_DIMENSION`]. The CPU always starts, so this
+    /// cannot fail.
+    pub fn new_offscreen(width: u32, height: u32) -> Self {
+        let mut renderer = Self::new();
+        renderer.bind_offscreen(width, height);
+        renderer
+    }
+
+    /// Whether a target is currently bound.
+    pub fn is_attached(&self) -> bool {
+        self.target.is_some()
     }
 
     /// Pixel size of the target.
@@ -64,54 +94,97 @@ impl CpuRenderer {
         )
     }
 
-    /// Resize the target. The pixels are lost until the next frame.
-    pub fn resize(&mut self, width: u32, height: u32) {
-        let (w, h) = clamp_size(width, height);
-        if (u32::from(w), u32::from(h)) != self.size() {
-            self.pixmap = Pixmap::new(w, h);
-        }
-    }
-
-    /// Frames rasterized since construction. Frames the damage gate skipped
-    /// do not count, so a static UI leaves it flat.
+    /// Frames rasterized since construction. Frames the present gate
+    /// skipped do not count, so a static UI leaves it flat.
     pub fn render_count(&self) -> u64 {
         self.render_count
-    }
-
-    /// The sink frames are painted into, as the walker takes it.
-    pub fn painter_mut(&mut self) -> &mut PaintTarget {
-        &mut self.painter
-    }
-
-    /// The sink frames are painted into, as its concrete type.
-    pub fn cpu_painter(&mut self) -> &mut CpuPainter {
-        cpu_painter(&mut self.painter)
-    }
-
-    /// Start a frame: forget the last one's drawing and fill the target with
-    /// `clear`. Paint through [`Self::painter_mut`], then call
-    /// [`Self::render_current`].
-    pub fn begin_frame(&mut self, clear: LumenColor) {
-        let (w, h) = (self.pixmap.width(), self.pixmap.height());
-        cpu_painter(&mut self.painter).begin_frame(w, h, lumen_paint::peniko_color(clear));
-    }
-
-    /// Rasterize the painted frame into the target.
-    pub fn render_current(&mut self) {
-        self.render_count += 1;
-        cpu_painter(&mut self.painter).render_into(&mut self.pixmap);
     }
 
     /// The last frame as tightly packed, straight-alpha RGBA8.
     pub fn read_rgba8(&self) -> Vec<u8> {
         straight_rgba8(&self.pixmap)
     }
+
+    fn bind_offscreen(&mut self, width: u32, height: u32) {
+        self.target = Some(Target::Offscreen);
+        self.set_size(width, height);
+    }
+
+    /// Size the pixmap to `width` x `height`, clamped. Returns `true` when
+    /// the size changed; the new pixmap holds no frame.
+    fn set_size(&mut self, width: u32, height: u32) -> bool {
+        let (w, h) = clamp_size(width, height);
+        if (u32::from(w), u32::from(h)) == self.size() {
+            return false;
+        }
+        self.pixmap = Pixmap::new(w, h);
+        self.holds_frame = false;
+        true
+    }
 }
 
-impl lumen_core::traits::Renderer for CpuRenderer {}
+impl Renderer for CpuRenderer {
+    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
+        self.target = None;
+        self.holds_frame = false;
+        match target {
+            FrameTarget::Offscreen { width, height } => self.bind_offscreen(width, height),
+            FrameTarget::Window(window) => {
+                let (width, height) = window.physical_size();
+                let mut presenter = Presenter::new(window)?;
+                self.set_size(width, height);
+                let (w, h) = self.size();
+                presenter.resize(w, h)?;
+                self.target = Some(Target::Window(presenter));
+            }
+        }
+        Ok(())
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> bool {
+        if self.target.is_none() || !self.set_size(width, height) {
+            return false;
+        }
+        let (w, h) = self.size();
+        if let Some(Target::Window(presenter)) = self.target.as_mut()
+            && let Err(e) = presenter.resize(w, h)
+        {
+            tracing::warn!(target: "lumen::render", "softbuffer resize failed: {e}");
+        }
+        true
+    }
+
+    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool {
+        self.target.is_some() && lumen_paint::wants_frame(render_world, request, self.holds_frame)
+    }
+
+    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
+        let Some(target) = self.target.as_mut() else {
+            return Err(RenderError::Detached);
+        };
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        cpu_painter(&mut self.painter).begin_frame(w, h, lumen_paint::clear_color(render_world));
+        lumen_paint::paint_frame(render_world, &mut self.painter, None);
+        cpu_painter(&mut self.painter).render_into(&mut self.pixmap);
+        self.holds_frame = true;
+        self.render_count += 1;
+        let pixmap = &self.pixmap;
+        lumen_paint::answer_capture(render_world, (u32::from(w), u32::from(h)), || {
+            Ok(straight_rgba8(pixmap))
+        });
+        match target {
+            Target::Window(presenter) => presenter.present(pixmap),
+            Target::Offscreen => Ok(()),
+        }
+    }
+
+    fn detach(&mut self) {
+        self.target = None;
+    }
+}
 
 /// The sink a [`PaintTarget`] built by this crate always is.
-pub(crate) fn cpu_painter(painter: &mut PaintTarget) -> &mut CpuPainter {
+fn cpu_painter(painter: &mut PaintTarget) -> &mut CpuPainter {
     painter
         .native()
         .downcast_mut::<CpuPainter>()
@@ -119,14 +192,14 @@ pub(crate) fn cpu_painter(painter: &mut PaintTarget) -> &mut CpuPainter {
 }
 
 /// A requested size the rasterizer can take.
-pub(crate) fn clamp_size(width: u32, height: u32) -> (u16, u16) {
+fn clamp_size(width: u32, height: u32) -> (u16, u16) {
     let clamp = |v: u32| v.clamp(1, MAX_DIMENSION) as u16;
     (clamp(width), clamp(height))
 }
 
 /// A premultiplied pixmap as straight-alpha RGBA8, the layout every readback
 /// in Lumen hands out.
-pub(crate) fn straight_rgba8(pixmap: &Pixmap) -> Vec<u8> {
+fn straight_rgba8(pixmap: &Pixmap) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixmap.data().len() * 4);
     for p in pixmap.data() {
         let unmultiply = |c: u8| -> u8 {
@@ -141,26 +214,26 @@ pub(crate) fn straight_rgba8(pixmap: &Pixmap) -> Vec<u8> {
     out
 }
 
-/// Plugin: installs the offscreen [`CpuRenderer`] into the render world and
-/// registers the render-world system in [`RenderStage::Render`].
+/// Plugin: installs an offscreen [`CpuRenderer`] into the render world,
+/// driven each frame by [`install_offscreen`]'s render-world system.
 ///
-/// Text is painted through the render world's [`ShaperService`]; without one
-/// text is skipped.
+/// Text is painted through the render world's [`lumen_text::ShaperService`];
+/// without one text is skipped.
 pub struct CpuRendererPlugin {
     renderer: CpuRenderer,
 }
 
 impl CpuRendererPlugin {
-    /// A plugin rendering into a `width` x `height` target.
+    /// A plugin rendering into a `width` x `height` image.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            renderer: CpuRenderer::new(width, height),
+            renderer: CpuRenderer::new_offscreen(width, height),
         }
     }
 }
 
 impl From<CpuRenderer> for CpuRendererPlugin {
-    /// A plugin installing an already-built renderer.
+    /// A plugin installing an already-attached renderer.
     fn from(renderer: CpuRenderer) -> Self {
         Self { renderer }
     }
@@ -168,92 +241,15 @@ impl From<CpuRenderer> for CpuRendererPlugin {
 
 impl Plugin for CpuRendererPlugin {
     fn build(self, app: &mut App) {
-        // The walker reads the retained tree; this is what builds it.
-        lumen_core::render_world::install_extract_pipeline(app);
-        app.render_world.insert_non_send(self.renderer);
-        app.add_render_systems(RenderStage::Render, cpu_render_system);
-    }
-}
-
-/// The scene state a frame reads and leaves behind: this tick's tree, the
-/// last painted one, and the damage between them.
-#[derive(SystemParam)]
-struct SceneState<'w> {
-    retained: Res<'w, RetainedScene>,
-    previous: ResMut<'w, PreviousScene>,
-    damage: ResMut<'w, FrameDamage>,
-}
-
-/// Render-world system that paints the retained scene into the offscreen
-/// [`CpuRenderer`] when it changed, and answers a pending screenshot request
-/// from the last frame.
-fn cpu_render_system(
-    mut renderer: NonSendMut<CpuRenderer>,
-    shaper: Option<NonSendMut<ShaperService>>,
-    viewport: Res<Viewport>,
-    scene: SceneState,
-    natives: Option<Res<lumen_core::native::NativePainters>>,
-    capture: Option<Res<SurfaceCapture>>,
-) {
-    let SceneState {
-        retained,
-        mut previous,
-        mut damage,
-    } = scene;
-    // The target is sized in physical pixels; the walker scales every leaf
-    // from logical to physical at emit time.
-    let dpr = viewport.scale_factor.max(0.01);
-    let w = (viewport.size.x * dpr).max(1.0) as u32;
-    let h = (viewport.size.y * dpr).max(1.0) as u32;
-    let resized = (w, h) != renderer.size();
-    renderer.resize(w, h);
-
-    damage.clear();
-    lumen_paint::diff_retained_scenes(
-        previous.root.as_ref(),
-        retained.root.as_ref(),
-        lumen_core::render_world::Rect {
-            origin: glam::Vec2::ZERO,
-            size: viewport.size,
-        },
-        &mut damage,
-    );
-
-    // Partial-repaint gate: an unchanged tree keeps the last frame.
-    let first_frame = previous.root.is_none();
-    if first_frame || resized || !damage.is_empty() {
-        renderer.begin_frame(viewport.clear);
-        {
-            let mut shaper_opt = shaper;
-            let shaper_ref: Option<&mut dyn TextShaper> = shaper_opt
-                .as_deref_mut()
-                .map(|s| &mut **s as &mut dyn TextShaper);
-            let mut ctx = WalkContext::new_with_dpr(renderer.painter_mut(), None, shaper_ref, dpr);
-            if let Some(painters) = natives.as_deref() {
-                ctx = ctx.with_native_painters(painters);
-            }
-            lumen_paint::walk_retained_scene(&mut ctx, &retained);
-        }
-        renderer.render_current();
-    }
-    previous.root = retained.root.clone();
-
-    if let Some(capture) = capture
-        && capture.is_requested()
-    {
-        let (width, height) = renderer.size();
-        capture.write(SurfaceFrame {
-            width,
-            height,
-            rgba8: renderer.read_rgba8(),
-        });
-        capture.clear_request();
+        install_offscreen(app, self.renderer);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::components::Color as LumenColor;
+    use lumen_core::render_world::SurfaceCapture;
 
     /// A premultiplied pixel reads back straight: opaque pixels unchanged,
     /// transparent ones zero, and partial ones divided back out.
@@ -324,14 +320,11 @@ mod tests {
     }
 
     /// An unchanged scene keeps the last frame, a resize repaints at the
-    /// new size, and a screenshot request is answered from the last frame
-    /// and then cleared.
+    /// new size, and a screenshot request is answered and then cleared.
     #[test]
     fn the_plugin_repaints_on_change_and_answers_a_capture() {
-        let mut renderer = CpuRenderer::new(8, 8);
-        assert_eq!(renderer.cpu_painter().size(), (8, 8));
         let mut app = App::new();
-        app.add_plugin(CpuRendererPlugin::from(renderer));
+        app.add_plugin(CpuRendererPlugin::new(8, 8));
         let capture = SurfaceCapture::default();
         app.render_world.insert_resource(capture.clone());
         let set_size = |app: &mut App, size: glam::Vec2| {
@@ -357,16 +350,42 @@ mod tests {
         assert_eq!(shot.rgba8.len(), 12 * 6 * 4);
     }
 
-    /// Resizing to the size the target already has keeps its pixels.
+    /// Resizing to the size the target already has keeps its frame; a new
+    /// size is a new, empty image.
     #[test]
     fn resizing_to_the_same_size_keeps_the_frame() {
-        let mut renderer = CpuRenderer::new(4, 4);
-        renderer.begin_frame(LumenColor::rgb(1.0, 0.0, 0.0));
-        renderer.render_current();
-        renderer.resize(4, 4);
+        let mut renderer = CpuRenderer::new_offscreen(4, 4);
+        let mut world = World::new();
+        world.insert_resource(Viewport {
+            clear: LumenColor::rgb(1.0, 0.0, 0.0),
+            ..Default::default()
+        });
+        renderer.present(&mut world).expect("offscreen present");
+        assert!(!renderer.resize(4, 4));
         assert_eq!(&renderer.read_rgba8()[..4], &[255, 0, 0, 255]);
-        renderer.resize(2, 2);
+        assert!(renderer.resize(2, 2));
         assert_eq!(renderer.size(), (2, 2));
         assert_eq!(&renderer.read_rgba8()[..4], &[0, 0, 0, 0], "a new target");
+    }
+
+    /// With no target bound the renderer answers every call without
+    /// touching a display.
+    #[test]
+    fn a_detached_renderer_has_nothing_to_present() {
+        let mut renderer = CpuRenderer::new();
+        assert!(!renderer.is_attached());
+        assert!(!renderer.resize(800, 600));
+        let mut world = World::new();
+        world.insert_resource(Viewport::default());
+        let request = FrameRequest {
+            dirty: true,
+            force_full: true,
+        };
+        assert!(!renderer.wants_present(&mut world, request));
+        assert!(matches!(
+            renderer.present(&mut world),
+            Err(RenderError::Detached)
+        ));
+        renderer.detach();
     }
 }

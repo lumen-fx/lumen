@@ -1,4 +1,5 @@
-//! The render backends a binary carries, and how a launch picks one.
+//! The render backends a binary carries, how a launch picks one, and the
+//! render-world system that drives a renderer drawing offscreen.
 //!
 //! The core names no backend. Each one registers a [`RenderBackend`] into the
 //! app's [`RenderBackends`] while the app is built, from its own crate, and a
@@ -9,37 +10,23 @@
 //! the renderer it uses.
 
 use crate::app::App;
-use crate::traits::SurfaceRenderer;
+use crate::render_world::{RenderStage, Viewport, install_extract_pipeline};
+use crate::traits::{FrameRequest, Renderer};
 use bevy_ecs::prelude::Resource;
+use bevy_ecs::world::World;
 
-/// A renderer that draws into an offscreen target, built before the app is
-/// installed into and ready to paint once it is.
-///
-/// Construction is the expensive half (a device, a rasterizer), and it needs
-/// nothing from the app, so a launch can build one on another thread while
-/// the app builds.
-pub trait OffscreenRenderer: Send {
-    /// Put this renderer into `app`. From then on its render-world system
-    /// paints the retained scene each frame at the viewport's size, and
-    /// answers [`crate::render_world::SurfaceCapture`] requests from the last
-    /// frame it painted.
-    fn install(self: Box<Self>, app: &mut App);
-}
-
-/// One render backend: how to make each kind of renderer it offers.
+/// One render backend: its name, its rank under `auto`, and how to make its
+/// renderer.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderBackend {
     /// The name an app's configuration selects it by.
     pub name: &'static str,
     /// Trial order when the configuration names no backend: higher first.
     pub priority: i32,
-    /// A renderer that presents into a window. Construction does no work;
-    /// binding to the window happens in [`SurfaceRenderer::attach`], and a
-    /// failure there is what lets a launch try the next backend.
-    pub surface: fn() -> Box<dyn SurfaceRenderer>,
-    /// A renderer that draws offscreen at `width` x `height` physical
-    /// pixels, or why this machine cannot run one.
-    pub offscreen: fn(u32, u32) -> Result<Box<dyn OffscreenRenderer>, String>,
+    /// A renderer bound to nothing yet. Construction does no work; binding
+    /// to a window or an offscreen image happens in [`Renderer::attach`],
+    /// and a failure there is what lets a launch try the next backend.
+    pub renderer: fn() -> Box<dyn Renderer>,
 }
 
 /// Main-world registry of the render backends this binary carries.
@@ -115,45 +102,108 @@ pub fn register_render_backend(app: &mut App, backend: RenderBackend) {
         .register(backend);
 }
 
+/// Put `renderer`, already attached to a
+/// [`crate::traits::FrameTarget::Offscreen`] image, into `app`.
+///
+/// The renderer becomes a non-send render-world resource of type `R`, and a
+/// system in [`RenderStage::Render`] drives it through [`Renderer`] each
+/// frame the tick renders: it resizes the image to the viewport's physical
+/// size and presents when the renderer says the frame changed. Also installs
+/// the extract pipeline the renderer reads the retained scene from.
+pub fn install_offscreen<R: Renderer>(app: &mut App, renderer: R) {
+    install_extract_pipeline(app);
+    app.render_world.insert_non_send(renderer);
+    app.add_render_systems(RenderStage::Render, present_offscreen::<R>);
+}
+
+/// The viewport's size in physical pixels, at least one each way.
+fn physical_size(viewport: &Viewport) -> (u32, u32) {
+    let dpr = viewport.scale_factor.max(0.01);
+    (
+        (viewport.size.x * dpr).max(1.0) as u32,
+        (viewport.size.y * dpr).max(1.0) as u32,
+    )
+}
+
+/// Render-world system driving the offscreen renderer installed as `R`.
+///
+/// The renderer is lifted out of the world for the call, because
+/// [`Renderer::present`] reads the same world it lives in.
+fn present_offscreen<R: Renderer>(world: &mut World) {
+    let Some(mut renderer) = world.remove_non_send::<R>() else {
+        return;
+    };
+    let (width, height) = world
+        .get_resource::<Viewport>()
+        .map(physical_size)
+        .unwrap_or((1, 1));
+    let resized = renderer.resize(width, height);
+    // The tick runs the render schedule only when its frame is dirty, so the
+    // request always is; a fresh image holds no frame and repaints in full.
+    let request = FrameRequest {
+        dirty: true,
+        force_full: resized,
+    };
+    if renderer.wants_present(world, request)
+        && let Err(e) = renderer.present(world)
+    {
+        eprintln!("lumen: offscreen render failed: {e}");
+    }
+    world.insert_non_send(renderer);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{FrameRequest, RenderTarget, Renderer, SurfaceError};
+    use crate::traits::{FrameTarget, RenderError};
     use bevy_ecs::world::World;
-    use std::sync::Arc;
 
-    struct Nothing;
-    impl Renderer for Nothing {}
-    impl SurfaceRenderer for Nothing {
-        fn attach(&mut self, _: Arc<dyn RenderTarget>) -> Result<(), SurfaceError> {
-            Ok(())
-        }
-        fn resize(&mut self, _: u32, _: u32) -> bool {
-            false
-        }
-        fn wants_present(&mut self, _: &mut World, _: FrameRequest) -> bool {
-            false
-        }
-        fn present(&mut self, _: &mut World) -> Result<(), SurfaceError> {
-            Ok(())
-        }
-        fn detach(&mut self) {}
+    /// A renderer that records what it was asked and answers `true` to
+    /// every present gate, so the offscreen driver can be watched.
+    #[derive(Default)]
+    struct Recorder {
+        attached: Option<(u32, u32)>,
+        requests: Vec<FrameRequest>,
+        presents: usize,
     }
 
-    fn surface() -> Box<dyn SurfaceRenderer> {
-        Box::new(Nothing)
+    impl Renderer for Recorder {
+        fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
+            match target {
+                FrameTarget::Offscreen { width, height } => {
+                    self.attached = Some((width, height));
+                    Ok(())
+                }
+                FrameTarget::Window(_) => Err(RenderError::Init("no windows here".into())),
+            }
+        }
+        fn resize(&mut self, width: u32, height: u32) -> bool {
+            let changed = self.attached != Some((width, height));
+            self.attached = Some((width, height));
+            changed
+        }
+        fn wants_present(&mut self, _: &mut World, request: FrameRequest) -> bool {
+            self.requests.push(request);
+            true
+        }
+        fn present(&mut self, _: &mut World) -> Result<(), RenderError> {
+            self.presents += 1;
+            Ok(())
+        }
+        fn detach(&mut self) {
+            self.attached = None;
+        }
     }
 
-    fn offscreen(_: u32, _: u32) -> Result<Box<dyn OffscreenRenderer>, String> {
-        Err("not in a test".to_string())
+    fn renderer() -> Box<dyn Renderer> {
+        Box::new(Recorder::default())
     }
 
     fn backend(name: &'static str, priority: i32) -> RenderBackend {
         RenderBackend {
             name,
             priority,
-            surface,
-            offscreen,
+            renderer,
         }
     }
 
@@ -205,26 +255,59 @@ mod tests {
     }
 
     /// What a launch gets back from the registry is the backend's own
-    /// constructors: the surface renderer it builds and the offscreen
-    /// failure it reports reach the caller unchanged.
+    /// constructor: the renderer it builds binds to the targets it supports
+    /// and refuses the ones it does not, with the reason intact.
     #[test]
-    fn a_selected_backend_builds_the_renderers_it_registered() {
+    fn a_selected_backend_builds_the_renderer_it_registered() {
         let mut backends = RenderBackends::default();
-        backends.register(backend("gpu", 1));
-        let [gpu] = backends.select(None).expect("one").try_into().expect("one");
+        backends.register(backend("test", 1));
+        let [test] = backends.select(None).expect("one").try_into().expect("one");
 
-        let mut surface = (gpu.surface)();
-        let mut world = World::new();
-        assert!(!surface.resize(8, 8));
-        let request = FrameRequest {
-            dirty: true,
-            force_full: false,
-        };
-        assert!(!surface.wants_present(&mut world, request));
-        assert!(surface.present(&mut world).is_ok());
-        surface.detach();
+        let mut renderer = (test.renderer)();
+        renderer
+            .attach(FrameTarget::Offscreen {
+                width: 8,
+                height: 8,
+            })
+            .expect("offscreen binds");
+        assert!(!renderer.resize(8, 8));
+        assert!(renderer.resize(9, 8));
+        renderer.detach();
+    }
 
-        let offscreen = (gpu.offscreen)(8, 8).err();
-        assert_eq!(offscreen.as_deref(), Some("not in a test"));
+    /// The offscreen driver sizes the image from the viewport in physical
+    /// pixels, asks for a frame on every rendered tick, and forces a full
+    /// one when the size changed.
+    #[test]
+    fn the_offscreen_driver_follows_the_viewport() {
+        let mut app = App::new();
+        let mut recorder = Recorder::default();
+        recorder
+            .attach(FrameTarget::Offscreen {
+                width: 20,
+                height: 10,
+            })
+            .expect("binds");
+        install_offscreen(&mut app, recorder);
+        for world in [&mut app.world, &mut app.render_world] {
+            let mut viewport = world.resource_mut::<Viewport>();
+            viewport.size = glam::Vec2::new(10.0, 5.0);
+            viewport.scale_factor = 2.0;
+        }
+
+        app.tick();
+        let recorder = app.render_world.non_send::<Recorder>();
+        assert_eq!(recorder.attached, Some((20, 10)));
+        assert_eq!(recorder.presents, 1);
+        assert!(recorder.requests[0].dirty);
+        assert!(!recorder.requests[0].force_full, "the size did not change");
+
+        for world in [&mut app.world, &mut app.render_world] {
+            world.resource_mut::<Viewport>().size = glam::Vec2::new(12.0, 5.0);
+        }
+        app.tick();
+        let recorder = app.render_world.non_send::<Recorder>();
+        assert_eq!(recorder.attached, Some((24, 10)));
+        assert!(recorder.requests[1].force_full, "a resize repaints in full");
     }
 }

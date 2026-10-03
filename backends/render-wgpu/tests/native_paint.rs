@@ -11,7 +11,7 @@ use lumen_paint::kurbo::{Affine, Rect as KurboRect};
 use lumen_paint::peniko::BlendMode;
 use lumen_paint::peniko::Fill as PaintFill;
 use lumen_paint::peniko::color::{AlphaColor, Srgb};
-use lumen_paint::{PaintTarget, Shape, WalkContext, walk_node};
+use lumen_paint::{PaintTarget, Shape};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use std::sync::{Arc, Mutex};
 
@@ -247,7 +247,7 @@ fn clip_to_bounds_confines_a_painter_that_draws_too_far() {
 }
 
 /// A leaf that reuses its revision costs no repaint even though its payload is a new allocation
-/// every frame, and bumping the revision repaints only the leaf's own region.
+/// every frame, and bumping the revision repaints.
 #[test]
 fn a_reused_revision_skips_the_frame_and_a_bump_repaints_the_leaf() {
     if let Some(why) = gpu_unavailable_reason() {
@@ -304,17 +304,6 @@ fn a_reused_revision_skips_the_frame_and_a_bump_repaints_the_leaf() {
         after_first + 1,
         "a new revision repaints once",
     );
-    let damage = &app.render_world.resource::<FrameDamage>().0;
-    assert!(!damage.is_empty());
-    for r in damage {
-        assert!(
-            r.origin.x >= 15.0
-                && r.origin.x + r.size.x <= 49.0
-                && r.origin.y >= 15.0
-                && r.origin.y + r.size.y <= 49.0,
-            "damage {r:?} left the leaf's bounds (16,16,32,32)"
-        );
-    }
 }
 
 /// The leaf takes its place in document order, so an extension painted over its own styled box
@@ -430,17 +419,22 @@ fn rect_node(bounds: (f32, f32, f32, f32), color: Color) -> Arc<Node> {
     })
 }
 
-/// Walks a hand-built tree straight into an offscreen renderer, so a test can place a leaf under
+/// Presents a hand-built tree through an offscreen renderer, so a test can place a leaf under
 /// nodes the tree builder does not emit yet, like opacity groups.
-fn render_tree(root: &Arc<Node>, painters: &NativePainters) -> Vec<u8> {
+fn render_tree(root: &Arc<Node>, painters: NativePainters) -> Vec<u8> {
     let mut renderer = WgpuRenderer::new_offscreen(W, H).expect("offscreen renderer");
-    renderer.vello_painter().reset();
-    {
-        let mut ctx = WalkContext::new_with_dpr(renderer.painter_mut(), None, None, 1.0)
-            .with_native_painters(painters);
-        walk_node(&mut ctx, root);
-    }
-    renderer.render_current(Color::rgb(0.0, 0.0, 0.0));
+    let mut world = World::new();
+    world.insert_resource(Viewport {
+        size: glam::Vec2::new(W as f32, H as f32),
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        ..Default::default()
+    });
+    world.insert_resource(RetainedScene {
+        root: Some(root.clone()),
+    });
+    world.insert_resource(PreviousScene::default());
+    world.insert_resource(painters);
+    renderer.present(&mut world).expect("present");
     renderer.read_rgba8().expect("readback")
 }
 
@@ -468,7 +462,7 @@ fn asking_for_a_bounds_clip_does_not_change_the_leafs_alpha() {
             alpha: 0.5,
             child: native_node((16.0, 16.0, 32.0, 32.0), clip_to_bounds),
         });
-        render_tree(&tree, &painters)
+        render_tree(&tree, painters.clone())
     };
 
     let clipped = under_half_opacity(true);
@@ -518,7 +512,7 @@ fn a_painter_that_leaves_a_layer_open_does_not_disturb_the_rest_of_the_scene() {
         ],
     });
 
-    let pixels = render_tree(&tree, &painters);
+    let pixels = render_tree(&tree, painters);
 
     let (_, g, _) = pixel(&pixels, 8, H - 8);
     assert!(

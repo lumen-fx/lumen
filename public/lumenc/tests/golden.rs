@@ -118,18 +118,22 @@ impl Backend {
 fn gpu_blocker() -> Option<&'static str> {
     static PROBE: OnceLock<Option<String>> = OnceLock::new();
     PROBE
-        .get_or_init(|| match WgpuRenderer::new_offscreen(4, 4) {
-            Ok(r) if !r.is_software_adapter() => None,
-            Ok(r)
-                if r.adapter_info().backend == lumen_render_wgpu::vello::wgpu::Backend::Vulkan =>
+        .get_or_init(|| {
+            let renderer = match WgpuRenderer::new_offscreen(4, 4) {
+                Ok(renderer) => renderer,
+                Err(e) => return Some(format!("no wgpu adapter available ({e})")),
+            };
+            let info = renderer.adapter_info().expect("an attached renderer");
+            if !renderer.is_software_adapter()
+                || info.backend == lumen_render_wgpu::vello::wgpu::Backend::Vulkan
             {
                 None
+            } else {
+                Some(format!(
+                    "adapter '{}' is a software rasterizer other than lavapipe",
+                    info.name
+                ))
             }
-            Ok(r) => Some(format!(
-                "adapter '{}' is a software rasterizer other than lavapipe",
-                r.adapter_info().name
-            )),
-            Err(e) => Some(format!("no wgpu adapter available ({e})")),
         })
         .as_deref()
 }
