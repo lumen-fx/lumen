@@ -406,9 +406,10 @@ on resize, which is why layout and rendering agree on the coordinate space.
 Each schedule runs on `bevy_ecs`'s multi-threaded executor: systems within a
 stage that touch disjoint data run across the worker pool, while systems the
 scheduler finds in conflict (same resource, same component set) still run in
-the order `.chain()` or `.after()` puts them in. Some systems take
-`NonSendMut` params, though: the layout shaper, the offscreen renderers, and
-the clipboard. Those stay pinned to the thread that calls `App::tick`, which is
+the order `.chain()` or `.after()` puts them in. Some systems are pinned,
+though: the layout shaper and the clipboard take `NonSendMut` params, and the
+system driving an offscreen renderer takes the whole render world. Those stay
+pinned to the thread that calls `App::tick`, which is
 the window backend's event-loop thread. The worker count comes from
 `App::desired_threads` (`min(cpu count, 4)` by default, raised by a plugin
 via `request_threads_at_least` or overridden by `[runtime] threads` /
@@ -468,8 +469,8 @@ change into every primitive at once.
 
 The chain, the dirty roll-up that gates it, and the `Prepare` systems below
 are installed by the render backend through `install_extract_pipeline`, not by
-`App::new`. The window backend and the offscreen renderers of both render
-backends each ask for it, and asking twice is a no-op. An app with no render
+`App::new`. The window backend and `install_offscreen`, which puts a renderer
+drawing offscreen into an app, each ask for it, and asking twice is a no-op. An app with no render
 backend never asks: the browser runtime and a server render tick the main
 world and stop, and their builds link none of the extract step.
 
@@ -589,28 +590,36 @@ implements over its own draw target: the GPU backend's sink encodes into a
 vello scene, the CPU backend's draws into a vello_cpu context. A sink that can
 record work offers fragments, and the walker then encodes each repeated
 appearance once and replays it at every position; the GPU sink does, the CPU
-sink paints every leaf in place. Both diff against the previous frame's tree,
-and an empty diff skips the frame entirely and leaves the last one on screen.
+sink paints every leaf in place. The frame logic around the walk is shared
+too, in `lumen-paint`'s `frame` module: both backends diff the tree against
+the previous frame's, skip the frame entirely when nothing visible changed
+(leaving the last one on screen), and answer a screenshot request from the
+frame they just painted.
 
 Which backend renders is the app's choice, `[render] backend` in `lumen.toml`.
 Each backend registers itself into the `RenderBackends` registry in
 `lumen-core` from its capability crate while the app builds, under a name and
-a priority, offering a window renderer and an offscreen one. The runtime asks
-the registry for the configured name, or under `auto` for every backend by
-priority, and the window backend binds the first renderer that starts, so a
-machine with no usable GPU falls through to the CPU. The core and the runtime
-name neither backend. A static package links only the backends the app's
-setting selects, through the capability's `Select::OnConfig` rule; see
+a priority, with a constructor for its renderer. The runtime asks the registry
+for the configured name, or under `auto` for every backend by priority, and
+binds the first renderer that starts, so a machine with no usable GPU falls
+through to the CPU. The core and the runtime name neither backend. A static
+package links only the backends the app's setting selects, through the
+capability's `Select::OnConfig` rule; see
 [optional subsystems](plugins.md#optional-subsystems).
 
-Presentation belongs to the renderer, behind the `SurfaceRenderer` trait. The
-window backend attaches a window to it, reports resizes, and asks for a frame;
-everything from the retained tree to the pixels stays on the renderer's side of
-that line, so no scene or device type is ever named by the window backend.
-Vello's compute pipeline pins its render target to a linear RGBA format, while
-most swap chains expose a BGRA sRGB surface, so the GPU renderer draws into an
-intermediate texture of the required format and blits that onto the surface.
-Which GPU backend is compiled is decided at the manifest level, one per
+Each backend has one renderer, behind the `Renderer` trait, and a window and
+an offscreen image are two kinds of target it attaches to. The window backend
+attaches a window, reports resizes, and asks for a frame; a headless run
+attaches an offscreen image and hands the renderer to `install_offscreen`,
+whose render-world system resizes it to the viewport and asks for a frame the
+same way. Everything from the retained tree to the pixels stays on the
+renderer's side of that line, so no scene or device type is ever named by the
+caller, and a headless run exercises the same device bring-up, frame gate,
+walk, and encode a windowed app ships. Vello's compute pipeline pins its render
+target to a linear RGBA format, while most swap chains expose a BGRA sRGB
+surface, so the GPU renderer always draws into a texture of the required
+format; a window blits that onto the surface, an offscreen target reads it
+back. Which GPU backend is compiled is decided at the manifest level, one per
 operating system. The CPU renderer hands its rasterized frame to softbuffer,
 the platform's own path for showing a CPU buffer in a window.
 
@@ -625,8 +634,8 @@ and applied on the main thread, in the tick that paints their result.
 Every backend role is a trait, and the trait lives away from any
 implementation of it. The traits in `lumen-core` name the roles: renderer,
 layout engine, window backend, accessibility bridge, task spawner, timer. Some
-are markers that only identify a role; `SurfaceRenderer` and `A11yBackend` also
-declare what a window backend calls on them each frame, which is what lets one
+are markers that only identify a role; `Renderer` and `A11yBackend` also
+declare what a caller drives them with each frame, which is what lets one
 window backend drive any renderer and any accessibility bridge. The shaping
 trait lives in `lumen-text`, the scripting trait in `lumen-script`, the parser
 trait in `lumen-runtime`.
