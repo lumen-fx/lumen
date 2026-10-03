@@ -1,9 +1,9 @@
 //! End-to-end partial-repaint measurement on the real render pipeline.
 //!
 //! Drives the full main-world -> extract -> `transform_extracted_to_nodes`
-//! (Node IR, fresh `Arc`s every frame) -> offscreen `wgpu_render_system` path
-//! and asserts that the damage-driven gate skips the GPU encode+submit when the
-//! visual tree is unchanged, while still repainting a localized change.
+//! (Node IR, fresh `Arc`s every frame) -> offscreen renderer path and asserts
+//! that the present gate skips the GPU encode+submit when the visual tree is
+//! unchanged, while still repainting a localized change or a resize.
 //!
 //! Model mirrored: Qt `QWidget::update()` - a queued repaint whose accumulated
 //! dirty region is empty performs no backing-store flush; a small dirty region
@@ -132,6 +132,48 @@ fn empty_damage_skips_encode_localized_change_repaints() {
          GPU encode/present passes across 4 ticks \
          (paint, no-op, 1-widget change, no-op) = [1, {after_noop}, {after_change}, {after_settle}]; \
          2 of 3 post-initial dirty frames did ZERO GPU work"
+    );
+}
+
+/// A resize with an unchanged tree still repaints: the target texture was
+/// reallocated at the new size and holds no frame, so the scene diff saying
+/// "nothing changed" must not keep the blank texture up.
+#[test]
+fn a_resize_with_an_unchanged_tree_repaints() {
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+
+    let mut app = App::new();
+    app.add_plugin(WgpuRendererPlugin::new(W, H));
+    let set_size = |app: &mut App, w: u32, h: u32| {
+        for world in [&mut app.world, &mut app.render_world] {
+            let mut vp = world.resource_mut::<Viewport>();
+            vp.size = glam::Vec2::new(w as f32, h as f32);
+            vp.clear = Color::rgb(0.05, 0.05, 0.07);
+        }
+    };
+    set_size(&mut app, W, H);
+    spawn_grid(&mut app);
+    app.tick();
+    assert_eq!(render_count(&app), 1, "first frame must render");
+
+    set_size(&mut app, W + 40, H);
+    app.tick();
+    assert_eq!(render_count(&app), 2, "the resized target must repaint");
+    let frame = readback(&app);
+    assert_eq!(
+        frame.len(),
+        ((W + 40) * H * 4) as usize,
+        "read at the new size"
+    );
+    // The first widget sits at x in [1,19], y in [1,27]: still painted.
+    let i = ((10 * (W + 40) + 10) * 4) as usize;
+    let (r, g, b) = (frame[i], frame[i + 1], frame[i + 2]);
+    assert!(
+        b > r && b > 60,
+        "the widget must be on the resized target, got ({r},{g},{b})"
     );
 }
 
