@@ -2,13 +2,13 @@
 //!
 //! - Converts ECS state into an [`accesskit::TreeUpdate`] each tick.
 //! - Maps each [`Entity`] to a [`NodeId`] via `Entity::to_bits()`, yielding a stable accessibility identity per ECS entity.
-//! - [`winit_bridge`] binds the translation to a live winit window and implements [`lumen_core::traits::A11yBackend`], the trait a window backend drives it through.
+//! - [`bridge_factory`] builds the bridge that binds the translation to a live winit window; the bridge implements [`lumen_core::traits::A11yBackend`], the trait a window backend drives it through.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod winit_bridge;
-pub use winit_bridge::{WinitA11yBridge, handle_action, winit_bridge};
+pub use winit_bridge::{WinitA11yBridge, bridge_factory, handle_action};
 
 use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
 use bevy_ecs::prelude::*;

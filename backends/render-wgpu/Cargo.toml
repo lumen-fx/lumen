@@ -63,5 +63,4 @@ gl-fallback = ["wgpu/gles"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
-lumen-layout-taffy = { workspace = true }
 lumen-text-cosmic = { workspace = true }

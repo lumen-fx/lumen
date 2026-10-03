@@ -1,6 +1,8 @@
 //! taffy-backed [`lumen_core::traits::LayoutEngine`] impl.
 //!
-//! The plugin registers systems in [`TickStage::LayoutSync`]:
+//! The engine registers itself into the app's layout-engine registry as the
+//! `layout-taffy` capability (see [`capability`]), and installs these systems
+//! in [`TickStage::LayoutSync`]:
 //!
 //! 1. [`sync_viewport`] - copies the viewport into the layout resource
 //!    and dirties every root on resize.
@@ -17,6 +19,8 @@
 //!    so text / image leaves report their intrinsic size via
 //!    [`TextShaper::measure`] (W2.5), writes absolute coords into
 //!    [`Transform`] for every descendant, then clears [`DirtyLayout`].
+//!    It runs in [`LayoutSolve`], the set code reading this tick's boxes
+//!    orders itself after.
 //!    The system also drops taffy nodes for entities whose [`Style`]
 //!    was removed and whose entity was despawned outright (W2.6
 //!    entity-despawn cleanup).
@@ -52,17 +56,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use taffy::prelude::*;
 
+pub mod capability;
 mod memo;
 
+use lumen_core::layout_backend::LayoutSolve;
+use lumen_core::traits::LayoutEngine;
 use memo::{Geometry, compute_layout_memoised};
 
-/// Marker for the taffy-backed [`LayoutEngine`].
-pub struct TaffyLayout;
-
-impl lumen_core::traits::LayoutEngine for TaffyLayout {}
-
-/// Plugin: install the non-send layout state + register the LayoutSync
-/// systems with explicit ordering.
+/// The taffy layout engine. As a plugin it installs the non-send layout
+/// state and registers the LayoutSync systems with explicit ordering; as a
+/// [`LayoutEngine`] it is what a launch installs from the registry.
 ///
 /// Text leaves get their intrinsic size from the [`ShaperService`] the
 /// app installed, so whoever composes the app picks the shaping backend
@@ -122,6 +125,7 @@ impl Plugin for TaffyLayoutPlugin {
         app.add_systems(
             TickStage::LayoutSync,
             sync_layout
+                .in_set(LayoutSolve)
                 .after(propagate_dirty_layout)
                 .after(resolve_layout_direction),
         );
@@ -130,6 +134,12 @@ impl Plugin for TaffyLayoutPlugin {
         // after `sync_layout` so `Transform` (hence the inner box width) is
         // final. Uses the same main-world `ShaperService` as `sync_layout`.
         app.add_systems(TickStage::LayoutSync, update_shaped_text.after(sync_layout));
+    }
+}
+
+impl LayoutEngine for TaffyLayoutPlugin {
+    fn install(self: Box<Self>, app: &mut App) {
+        app.add_plugin(*self);
     }
 }
 

@@ -17,9 +17,14 @@ lumen-core = { workspace = true }
 # Intrinsic text sizing during taffy's MeasureFunc callback goes through
 # the `TextShaper` trait, so the layout engine names no shaping backend.
 lumen-text = { workspace = true }
+# Registers this engine into the app's layout-engine registry as the
+# `layout-taffy` capability; see `capability.rs`.
+lumen-capability = { workspace = true }
 bevy_ecs.workspace = true   # needed for #[derive(Resource)] macro expansion path
 glam.workspace = true
 taffy.workspace = true
 
 [dev-dependencies]
+# The capability test builds the environment a capability is installed with.
+toml.workspace = true
 proptest.workspace = true

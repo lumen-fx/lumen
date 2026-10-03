@@ -218,8 +218,8 @@ fn render_snapshot_due(sched: Res<McpSnapshotSchedule>) -> bool {
 /// Wire [`lumen_core::app::EventLoopWaker`] into the [`SimulateQueue`] once
 /// the resource shows up. The two are inserted by different owners on
 /// different schedules - `LumenMcpPlugin::build` creates the queue at
-/// plugin-build time, but the waker only exists once
-/// `lumen_window_winit::run` constructs its `EventLoopProxy`, which
+/// plugin-build time, but the waker only exists once the
+/// window backend starts its event loop and can wake it, which
 /// happens after the `App` (and thus every plugin) is already built. This
 /// system closes that ordering gap: it runs every tick, but
 /// `SimulateQueue::set_waker` is a `OnceLock` write, so every call after

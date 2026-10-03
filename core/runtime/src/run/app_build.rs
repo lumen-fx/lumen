@@ -108,10 +108,13 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // subsystems this binary carries, at the phase each asked for. The core
     // is unconditional; an optional subsystem decides for itself whether an
     // app uses it. `build_app` names none of them.
+    // The backends the stack is built on register into their registries
+    // first, so the core stack finds the layout engine it installs.
+    lumen_capability::install_phase(&mut app, &env, Phase::Backends);
     // Text shaping first: the layout engine measures through the shaper
     // installed here, and the renderer gets the sibling returned here.
     let render_shaper = register_text(&mut app);
-    register_core(&mut app);
+    register_core(&mut app)?;
     // Host services: OS integration, the introspection server, the render
     // backends.
     lumen_capability::install_phase(&mut app, &env, Phase::Platform);

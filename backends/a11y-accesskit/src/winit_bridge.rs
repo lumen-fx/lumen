@@ -28,7 +28,7 @@ use lumen_core::components::{
     TextContent,
 };
 use lumen_core::input::{ClickEvent, FocusTracker, FocusVisible, Focused, PointerButton};
-use lumen_core::traits::A11yBackend;
+use lumen_core::traits::{A11yBackend, A11yBridgeFactory};
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 use winit::event::WindowEvent;
@@ -100,11 +100,22 @@ pub struct WinitA11yBridge {
     inbox: Inbox,
 }
 
+/// The bridge factory the winit window backend accepts, spelled the way
+/// `lumen-window-winit` spells it (`WinitA11yFactory`) so the backend
+/// recovers it from the opaque [`A11yBridgeFactory`] a launch hands over.
+type WinitFactory = Box<dyn Fn(&ActiveEventLoop, Arc<Window>, WakeFn) -> Box<dyn A11yBackend>>;
+
+/// The accessibility bridge for an app run in the winit window backend,
+/// in the form a launch hands to [`lumen_core::traits::WindowBackend::run`].
+pub fn bridge_factory() -> A11yBridgeFactory {
+    A11yBridgeFactory::new(Box::new(winit_bridge) as WinitFactory)
+}
+
 /// Bind AccessKit to a live winit window.
 ///
 /// `wake` is called whenever an assistive technology queues a request, so
 /// a parked event loop wakes up and pumps it.
-pub fn winit_bridge(
+fn winit_bridge(
     event_loop: &ActiveEventLoop,
     window: Arc<Window>,
     wake: WakeFn,

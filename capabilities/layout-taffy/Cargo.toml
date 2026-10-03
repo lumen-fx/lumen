@@ -1,0 +1,21 @@
+# The link's handle on the `layout-taffy` capability: nothing but the
+# constructor that registers it, in an object of its own. A link that names
+# the register symbol carries the taffy layout engine; one that leaves it out
+# carries none of it. The engine itself is `lumen-layout-taffy`, which nothing
+# else has to reference.
+[package]
+name = "lumen-layout-taffy-capability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Registers the layout-taffy capability of the Lumen runtime for a link to select."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-capability = { workspace = true }
+lumen-layout-taffy = { workspace = true }

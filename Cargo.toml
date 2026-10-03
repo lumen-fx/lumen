@@ -258,6 +258,8 @@ lumen-async-tokio-capability = { path = "capabilities/async" }
 lumen-devtools-capability = { path = "capabilities/devtools" }
 lumen-render-gpu-capability = { path = "capabilities/render-gpu" }
 lumen-render-cpu-capability = { path = "capabilities/render-cpu" }
+lumen-layout-taffy-capability = { path = "capabilities/layout-taffy" }
+lumen-window-winit-capability = { path = "capabilities/window-winit" }
 lumen-capability-macros = { path = "core/capability-macros" }
 lumen-module-registry = { path = "core/module-registry" }
 lumen-modules = { path = "core/modules" }

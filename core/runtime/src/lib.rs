@@ -1,4 +1,4 @@
-//! `lumen-runtime` - the "lumen.so core": the winit/ECS run loop, the default
+//! `lumen-runtime` - the "lumen.so core": the ECS run loop, the default
 //! plugin stack, script-command machinery, hot reload, file-based pages, and
 //! the AOT-artifact / from-source app loaders.
 //!
@@ -34,7 +34,7 @@ pub use lumen_scene::fragments;
 /// build/setup commands. See [`config::HookCfg`] for the schema.
 pub mod hooks;
 
-// The optional subsystems this composition ships, each through the crate
+// The backends and optional subsystems this composition ships, each through the crate
 // that registers it before `main`; the run loop installs whatever that list
 // holds. Naming a crate here is what puts it on the link line, and nothing
 // else in the runtime refers to any of them, so a link that does not ask for
@@ -46,6 +46,7 @@ use lumen_async_tokio_capability as _;
 use lumen_devtools_capability as _;
 #[cfg(feature = "http-fetch")]
 use lumen_http_ureq_capability as _;
+use lumen_layout_taffy_capability as _;
 #[cfg(feature = "mcp")]
 use lumen_mcp_capability as _;
 use lumen_os_filedialog_capability as _;
@@ -57,12 +58,13 @@ use lumen_os_power_capability as _;
 use lumen_os_tray_capability as _;
 use lumen_render_cpu_capability as _;
 use lumen_render_gpu_capability as _;
+use lumen_window_winit_capability as _;
 /// File-based pages - multi-`.lmn` discovery, `<if>`-reconciler page mount,
 /// and the navigation resolver reachable from every embedding surface.
 pub mod pages;
 /// `--profile chrome|stderr|tracy` profiler install (feature-gated).
 pub mod profile;
-/// The winit/ECS run loop, `RunOptions`/`RunError`, `build_app`, hot reload,
+/// The ECS run loop, `RunOptions`/`RunError`, `build_app`, hot reload,
 /// and the script-command machinery.
 pub mod run;
 /// Rendered offscreen headless mode (`lumenc run --headless`).

@@ -60,8 +60,9 @@ tools/             the release plumbing and the editor plugins
   tick loop and its stages, the two worlds, the command queue, the ECS
   component vocabulary, the property store, input types, the retained node IR,
   the window description a launch path resolves (size, title, clear color,
-  chrome, menu bar), every backend capability trait, and the registry the
-  render backends put themselves on. Depends on no other workspace crate.
+  chrome, menu bar), every backend capability trait, and the registries the
+  render backends, the layout engine, and the window backend put themselves
+  on. Depends on no other workspace crate.
 - **lumen-ir**: the shared data model. The layout IR that markup parses into,
   the CSS abstract syntax tree and cascade application, the shared value
   parsers, the `var()` resolver, and the compiled-artifact container.
@@ -88,9 +89,10 @@ tools/             the release plumbing and the editor plugins
 
 ### Backends
 
-- **lumen-layout-taffy**: layout. Dirty propagation, taffy style sync, text
-  intrinsic sizing through whichever shaper the app installed, and writing
-  absolute coordinates back onto entities.
+- **lumen-layout-taffy**: the layout engine. Dirty propagation, taffy style
+  sync, text intrinsic sizing through whichever shaper the app installed, and
+  writing absolute coordinates back onto entities. It registers itself as the
+  `layout-taffy` capability.
 - **lumen-text**: the shaping and measuring abstraction (`TextShaper`, and the
   `ShaperService` resource that holds the installed one) plus the rope-backed
   text editing model.
@@ -108,7 +110,8 @@ tools/             the release plumbing and the editor plugins
   translation, redraw pacing, and the close-request veto. It owns no pixels: a
   renderer and an accessibility bridge are handed to it, and it drives both
   through their traits, so it compiles without naming a graphics API or an
-  accessibility library.
+  accessibility library. It registers itself as the `window-winit`
+  capability.
 - **lumen-archive** (`std/archive`): the whole archive capability, as a
   self-contained module the engine knows nothing about. It registers the
   `archive` script namespace through the generic registry, unpacks zip, tar,
@@ -569,6 +572,16 @@ absolute coordinates. The taffy tree is a non-send resource, because taffy's
 compact length representation stores a raw pointer and is neither `Send` nor
 `Sync`.
 
+The engine is a `LayoutEngine` from the `LayoutBackends` registry in
+`lumen-core`. Its capability crate registers it in the `Backends` phase, before
+the core stack is installed, and the runtime installs the highest-priority
+engine where the stack has always put layout. The engine contributes systems
+rather than being called per node: layout is change-driven and its state is
+usually not `Send`, so the solve runs as ordinary systems the scheduler
+orders. The systems that write each entity's `Transform` go in the
+`LayoutSolve` set, and code that reads this tick's boxes, such as the caret
+keep-visible pass, orders itself after that set without naming an engine.
+
 Text shaping goes through the `TextShaper` trait: a string, a pixel size, and
 shaping options in, a shaped run out, segmented by font and bidi level.
 Measuring is on the same trait, so a text leaf's intrinsic size and its
@@ -623,6 +636,15 @@ back. Which GPU backend is compiled is decided at the manifest level, one per
 operating system. The CPU renderer hands its rasterized frame to softbuffer,
 the platform's own path for showing a CPU buffer in a window.
 
+The window backend comes from the `WindowBackends` registry the same way. An
+interactive launch hands the highest-priority backend the built app, the
+window options, the renderers to try in order, and the accessibility bridge
+factory, through `WindowBackend::run`, once for the whole run. The
+window-free half every window shares, `WindowCorePlugin` (the focus,
+occlusion, and IME messages, the `RedrawScheduler`, and the extract
+pipeline), lives in `lumen-core`, so a headless run installs it alone and
+reads the same window state with no window open.
+
 Accessibility splits along the same line. The world-side half walks the tree
 once per tick in `A11ySync` and leaves an update behind; the platform half,
 behind the `A11yBackend` trait, publishes it and carries requests the other
@@ -633,10 +655,12 @@ and applied on the main thread, in the tick that paints their result.
 
 Every backend role is a trait, and the trait lives away from any
 implementation of it. The traits in `lumen-core` name the roles: renderer,
-layout engine, window backend, accessibility bridge, task spawner, timer. Some
-are markers that only identify a role; `Renderer` and `A11yBackend` also
-declare what a caller drives them with each frame, which is what lets one
-window backend drive any renderer and any accessibility bridge. The shaping
+layout engine, window backend, accessibility bridge, task spawner, timer. Each
+declares what a caller drives it with, which is what lets one window backend
+drive any renderer and any accessibility bridge, and lets the runtime install a
+layout engine and run a window backend it never names. The renderer, layout
+engine, and window backend register into one registry shape in
+`lumen_core::backends`: a name, a priority, and a constructor. The shaping
 trait lives in `lumen-text`, the scripting trait in `lumen-script`, the parser
 trait in `lumen-runtime`.
 

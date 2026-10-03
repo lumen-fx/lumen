@@ -3,7 +3,8 @@
 
 use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
-use lumen_core::render_backend::{RenderBackend, register_render_backend};
+use lumen_core::backends::register_backend;
+use lumen_core::render_backend::RenderBackend;
 use lumen_core::traits::Renderer;
 
 use crate::WgpuRenderer;
@@ -25,7 +26,7 @@ pub const SELECT: Select = Select::OnConfig {
 /// Register the backend. What the capability crate beside this one
 /// registers.
 pub fn install(app: &mut App, _env: &CapabilityEnv) {
-    register_render_backend(
+    register_backend(
         app,
         RenderBackend {
             name: NAME,

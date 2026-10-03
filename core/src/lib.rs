@@ -9,11 +9,13 @@
 
 pub mod app;
 pub mod app_paths;
+pub mod backends;
 pub mod command;
 pub mod components;
 pub mod i18n;
 pub mod input;
 pub mod introspect;
+pub mod layout_backend;
 pub mod native;
 pub mod nav;
 pub mod net_capture;
@@ -34,6 +36,7 @@ pub mod tick;
 pub mod time;
 pub mod traits;
 pub mod window;
+pub mod window_backend;
 pub mod window_state;
 
 /// Crate prelude re-exporting the common types. Glob-import with `use lumen_core::prelude::*;`.
@@ -117,8 +120,8 @@ pub mod prelude {
     };
     pub use crate::tick::{Tick, TickStage, WakeDeadline};
     pub use crate::traits::{
-        A11yBackend, Bindable, FrameRequest, FrameTarget, LayoutEngine, RenderError, RenderTarget,
-        Renderer, Spawn, Timer, WindowBackend,
+        A11yBackend, A11yBridgeFactory, Bindable, FrameRequest, FrameTarget, LayoutEngine,
+        RenderError, RenderTarget, Renderer, Spawn, Timer, WindowBackend, WindowError,
     };
 
     // Re-export the bevy_ecs hierarchy components used across the crate.

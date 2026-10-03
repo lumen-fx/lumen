@@ -3,7 +3,8 @@
 //! The run loop installs a fixed core (layout, input, text, the reactive
 //! bindings) and then whatever optional subsystems the binary carries: a
 //! tray icon host, the HTTP client, the introspection server, the devtools
-//! overlay. It does not name any of them. Each one is a [`Capability`] that
+//! overlay. It does not name any of them, nor the backends (the layout
+//! engine, the window system, the renderers) it finds in their registries. Each one is a [`Capability`] that
 //! its own crate registers before `main` through [`lumen_capability!`], and
 //! the run loop reads the list at the [`Phase`] each entry asked for.
 //!
@@ -75,6 +76,10 @@ pub fn register_symbol(name: &str) -> String {
 /// in name order, so the sequence is the same in every process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
+    /// Before the core visual stack. A backend the stack is built on (the
+    /// layout engine, the window system) registers itself into its
+    /// registry here, so the run loop finds it when it installs the stack.
+    Backends,
     /// After the core visual stack (layout, input, text editing, the
     /// interaction primitives) and before the reactive bindings. Host
     /// services live here: OS integration, the introspection server.

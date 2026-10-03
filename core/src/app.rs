@@ -60,7 +60,7 @@ pub struct Tick;
 ///
 /// Backends that run a real OS event loop insert this as a main-world
 /// resource once they have a way to interrupt their own park/wait call
-/// (`lumen-window-winit::run` does it via a `winit::event_loop::EventLoopProxy`).
+/// (the winit window backend does it via a `winit::event_loop::EventLoopProxy`).
 /// Headless/test contexts simply never insert it, so callers must treat
 /// its absence as "no loop to wake" and no-op.
 #[derive(Clone, Resource)]
@@ -373,6 +373,9 @@ impl App {
             )
                 .chain(),
         );
+        // Where the layout engine writes this tick's boxes; see
+        // [`crate::layout_backend::LayoutSolve`].
+        schedule.configure_sets(crate::layout_backend::LayoutSolve.in_set(TickStage::LayoutSync));
         world.add_schedule(schedule);
 
         // Build the render world.

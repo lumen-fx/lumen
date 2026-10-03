@@ -10,8 +10,8 @@
 //!     main.css   # optional: stylesheet
 //! ```
 //!
-//! - Wires the default plugin stack: taffy layout, winit window, cosmic text, input, hover/press/drag/scroll primitives, optional Rhai script host, optional MCP server.
-//! - Runs winit's event loop and returns when the window closes or a fatal error occurs.
+//! - Wires the default plugin stack: the registered layout engine, cosmic text, input, hover/press/drag/scroll primitives, optional Rhai script host, optional MCP server.
+//! - Runs the registered window backend's event loop and returns when the window closes or a fatal error occurs.
 //! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `src/main.lmn`, `src/main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads the Rhai script against a fresh `Scope`. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
 //! - Script commands: `SetText` updates the matching `LumenId`'s [`TextContent`]; other variants (`Print`, `AddClicks`, `SetString`) no-op here.
 
@@ -22,8 +22,8 @@ use lumen_assets::AssetsPlugin;
 use lumen_capability::Preflight;
 use lumen_core::prelude::*;
 use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
+use lumen_core::window_backend::{WindowBackendEntry, WindowCorePlugin};
 use lumen_input::InputPlugin;
-use lumen_layout_taffy::TaffyLayoutPlugin;
 use lumen_os_clipboard::ClipboardHost;
 use lumen_primitives::{
     CheckboxPlugin, ControlsPlugin, DragPlugin, HoverTintPlugin, PressPlugin, ProgressPlugin,
@@ -47,7 +47,6 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
-use lumen_window_winit::{A11yBridgeFactory, run};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 // `Duration` / `Instant` are only used by the (gated) hot-reload poll throttle.
@@ -418,9 +417,13 @@ pub enum RunError {
     /// message names the plugin.
     #[error("{0}")]
     Plugin(String),
-    /// winit returned an error.
+    /// The window backend could not run the app, or the build carries
+    /// none.
     #[error("window: {0}")]
     Window(String),
+    /// The build carries no layout engine.
+    #[error("layout: {0}")]
+    LayoutEngine(String),
     /// Headless mode failed to initialise (offscreen renderer or
     /// signal-handler install). Raised only by
     /// [`crate::run_headless::run_app_headless_rendered`].
@@ -474,7 +477,8 @@ pub enum RunError {
 }
 
 /// Read `<dir>/src/main.lmn` + optional `<dir>/src/main.css`, build a default
-/// `App`, spawn the parsed tree, and enter winit's event loop.
+/// `App`, spawn the parsed tree, and run it in the registered window
+/// backend.
 pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     // An interactive launch runs the capabilities' preflights before any
@@ -506,8 +510,13 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
         .iter()
         .map(|backend| (backend.renderer)())
         .collect();
-    let a11y: A11yBridgeFactory = Box::new(lumen_a11y_accesskit::winit_bridge);
-    run(app, window.options, renderers, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))
+    let backend = lumen_core::backends::registered::<WindowBackendEntry>(&app)
+        .preferred()
+        .ok_or_else(|| RunError::Window(lumen_core::backends::missing::<WindowBackendEntry>()))?;
+    let a11y = lumen_a11y_accesskit::bridge_factory();
+    (backend.backend)()
+        .run(app, window.options, renderers, Some(a11y))
+        .map_err(|e| RunError::Window(e.to_string()))
 }
 
 /// The render backends a launch of `app` tries, in order: the one
@@ -517,10 +526,7 @@ pub(crate) fn render_backends(
     app: &App,
     cfg: &crate::config::LumenToml,
 ) -> Result<Vec<lumen_core::render_backend::RenderBackend>, RunError> {
-    app.world
-        .get_resource::<lumen_core::render_backend::RenderBackends>()
-        .cloned()
-        .unwrap_or_default()
+    lumen_core::backends::registered::<lumen_core::render_backend::RenderBackend>(app)
         .select(cfg.render.backend.backend_name())
         .map_err(RunError::Render)
 }
@@ -533,7 +539,7 @@ pub(crate) fn render_backends(
 /// `ticks == 0` builds-and-drops (validates the app loads). The window
 /// setup (title, size, text shaper) built alongside the app is
 /// discarded; headless ticks run the main schedule + extract + an empty
-/// render schedule (no renderer is installed off the winit path), which
+/// render schedule (no renderer is installed off the windowed path), which
 /// is sufficient to exercise signal round-trips, script
 /// execution, and `<for>` / `<if>` reconciliation.
 pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError> {
@@ -548,14 +554,12 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 }
 
 /// Shared headless plumbing: [`build_app`] plus the window-free half of
-/// the winit backend. The windowed path installs `WinitPlugin` inside
-/// `run()`; its `build` is window-free (backend messages,
-/// `RedrawScheduler`, the `A11yPlugin` resources + `sync_a11y_tree`
-/// system, and the XDG color-scheme command handler) - only the event
-/// loop and the renderer bind in `run()` need a display. Installing it here gives
-/// every headless schedule the same resource/system set so a11y-sync and
-/// any system that reads a WinitPlugin-provided resource don't fail
-/// validation. Used by [`run_app_headless`] (no renderer; FFI/test
+/// every window backend, [`WindowCorePlugin`] (the window messages, the
+/// `RedrawScheduler`, and the extract pipeline). A window backend installs
+/// the same plugin when it runs; only the event loop and the renderer bind
+/// need a display. Installing it here gives every headless schedule the
+/// same resource/system set, so a system that reads window state doesn't
+/// fail validation. Used by [`run_app_headless`] (no renderer; FFI/test
 /// contract), [`crate::run_headless::run_app_headless_rendered`] (full
 /// offscreen-render mode), and the golden-image screenshot suite
 /// (`public/lumenc/tests/golden.rs`), which installs an offscreen renderer
@@ -564,7 +568,7 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;
-    app.add_plugin(lumen_window_winit::WinitPlugin);
+    app.add_plugin(WindowCorePlugin);
     Ok((app, window))
 }
 
@@ -715,8 +719,8 @@ use subsystems::*;
 // depended on when these items lived directly in run.rs.
 // `build_app` is public so the full-pipeline integration tests (which live in
 // `lumenc`, where the injected parser is the same crate instance) can build an
-// app window-free without the extra `WinitPlugin` that `build_headless_app`
-// layers on.
+// app window-free without the extra `WindowCorePlugin` that
+// `build_headless_app` layers on.
 pub use app_build::build_app;
 pub use check::CheckReport;
 // The app's catalogue directory, so a build that resolves translations

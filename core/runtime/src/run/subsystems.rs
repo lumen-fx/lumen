@@ -118,8 +118,10 @@ pub(crate) fn register_text(app: &mut App) -> Box<dyn TextShaper> {
 /// Layout, text-editing, input, and the primitive interaction/visual plugins
 /// (scroll / press / drag / dnd / hover / cursor / controls / form controls /
 /// tooltip / tabs / transitions / validation / assets). The always-on stack.
-pub(crate) fn register_core(app: &mut App) {
-    app.add_plugin(TaffyLayoutPlugin);
+pub(crate) fn register_core(app: &mut App) -> Result<(), RunError> {
+    // The layout engine the build registered (see `Phase::Backends`),
+    // installed here, first, where the stack has always put it.
+    lumen_core::layout_backend::install_layout(app).map_err(RunError::LayoutEngine)?;
     app.add_plugin(InputPlugin::default());
     // Accessibility: the world-side half, which walks the tree once per
     // tick in `TickStage::A11ySync` and leaves an update for whatever
@@ -136,11 +138,11 @@ pub(crate) fn register_core(app: &mut App) {
     app.add_plugin(lumen_text::TextEditPlugin);
     // Caret-keep-visible: measure the caret x/y against the field box and
     // maintain the per-input scroll offset the extractor subtracts.
-    // LayoutSync stage, after `sync_layout`, so the `Transform` from this
-    // tick's layout pass is final before the offset is derived.
+    // LayoutSync stage, after the layout solve, so the `Transform` from
+    // this tick's layout pass is final before the offset is derived.
     app.add_systems(
         TickStage::LayoutSync,
-        scroll_caret_into_view.after(lumen_layout_taffy::sync_layout),
+        scroll_caret_into_view.after(lumen_core::layout_backend::LayoutSolve),
     );
     app.add_plugin(ScrollPlugin);
     app.add_plugin(PressPlugin::default());
@@ -179,6 +181,7 @@ pub(crate) fn register_core(app: &mut App) {
         Some(host) => app.world.insert_non_send(host),
         None => eprintln!("lumenc: no clipboard backend; clipboard builtins are inert"),
     }
+    Ok(())
 }
 
 /// Reactive bindings + reconcilers + dialog lifecycle + the in-app error

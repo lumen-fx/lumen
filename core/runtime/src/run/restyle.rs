@@ -674,7 +674,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
     // what the user sees from every native toolkit when the OS theme
     // flips a background window.
     let can_animate = world
-        .get_resource::<lumen_window_winit::RedrawScheduler>()
+        .get_resource::<lumen_core::window_backend::RedrawScheduler>()
         .map(|s| !s.paused)
         .unwrap_or(true);
     let mut ent = world.entity_mut(entity);
