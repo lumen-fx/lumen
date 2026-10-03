@@ -3538,7 +3538,6 @@ dependencies = [
  "lumen-core",
  "lumen-script",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3996,7 +3995,6 @@ dependencies = [
  "global-hotkey",
  "lumen-capability",
  "lumen-core",
- "lumen-os-mime",
  "lumen-script",
 ]
 

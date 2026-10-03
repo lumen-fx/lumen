@@ -170,8 +170,8 @@ pub struct FileDialogRequest {
     pub default_name: Option<String>,
 }
 
-/// Cross-thread payload pushed by the spawned tokio task back to the
-/// main world via [`AsyncCommandQueue`].
+/// Cross-thread payload the spawned dialog task posts back to the main
+/// world on the [`CommandQueue`].
 ///
 /// [`drain_file_dialog_results`] reads `Command::Typed` of this type
 /// and emits the corresponding [`FilePicked`] message.

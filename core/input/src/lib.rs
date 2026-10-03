@@ -23,16 +23,9 @@ use lumen_core::prelude::*;
 use lumen_core::text_events::TextEditRequest;
 use lumen_core::text_model::{TextBuffer, TextCursor, TextEditable, TextPos};
 use lumen_core::time::Instant;
+use lumen_os_clipboard::ClipboardHost;
 use lumen_text::{UndoStack, hit_test_text, select_line_at_byte, select_word_at_byte};
 use std::sync::Arc;
-
-/// Backwards-compatible re-export. Lives in `lumen-os-clipboard` now -
-/// extracted per the W6.1 OS-integration refactor.
-#[deprecated(
-    since = "0.0.1",
-    note = "use `lumen_os_clipboard::ClipboardHost` instead"
-)]
-pub type ClipboardResource = lumen_os_clipboard::ClipboardHost;
 
 /// Route [`ImeEvent`]s at the currently-focused entity:
 ///
@@ -141,10 +134,9 @@ fn is_named_key_string(s: &str) -> bool {
 /// keyboards that emit direct character events (ASCII on most desktop
 /// OSes when IME is idle, or systems with no IME at all).
 #[allow(clippy::type_complexity)]
-#[allow(deprecated)]
 pub fn type_into_focused(
     tracker: Res<FocusTracker>,
-    clipboard: Option<NonSendMut<ClipboardResource>>,
+    clipboard: Option<NonSendMut<ClipboardHost>>,
     mut keys: MessageReader<FocusedKey>,
     mut applied: MessageWriter<lumen_core::text_events::TextEditApplied>,
     mut inputs: Query<(
@@ -324,7 +316,7 @@ fn apply_focused_key(
     ev: &FocusedKey,
     multiline: bool,
     concealed: bool,
-    clipboard: &mut Option<NonSendMut<'_, ClipboardResource>>,
+    clipboard: &mut Option<NonSendMut<'_, ClipboardHost>>,
     b: &mut TextBuffer,
     c: &mut TextCursor,
     u: &mut UndoStack,
@@ -349,7 +341,7 @@ fn apply_focused_key_inner(
     ev: &FocusedKey,
     multiline: bool,
     concealed: bool,
-    clipboard: &mut Option<NonSendMut<'_, ClipboardResource>>,
+    clipboard: &mut Option<NonSendMut<'_, ClipboardHost>>,
     b: &mut TextBuffer,
     c: &mut TextCursor,
     u: &mut UndoStack,
@@ -604,22 +596,15 @@ fn visual_or_byte_motion(
     }
 }
 
-// `ClipboardResource` (the previous in-crate struct) now lives in
-// `lumen-os-clipboard` as `ClipboardHost`; the deprecated type alias at
-// the top of this file preserves the old name for one minor version.
-//
-// The text editor still routes copy / cut / paste through the same
-// `NonSend` resource; the helpers below adapt that API to the new
-// `ClipboardHost::{read_text, write_text}` methods.
+// The text editor routes copy / cut / paste through the `NonSend`
+// `ClipboardHost`; with no host, copy does nothing and paste reads empty.
 
-#[allow(deprecated)]
-fn write_clipboard(res: Option<&mut ClipboardResource>, text: &str) {
+fn write_clipboard(res: Option<&mut ClipboardHost>, text: &str) {
     let Some(res) = res else { return };
     let _ = res.write_text(text);
 }
 
-#[allow(deprecated)]
-fn read_clipboard(res: Option<&mut ClipboardResource>) -> String {
+fn read_clipboard(res: Option<&mut ClipboardHost>) -> String {
     let Some(res) = res else { return String::new() };
     res.read_text()
 }
@@ -953,8 +938,7 @@ impl Default for InputPlugin {
 
 impl Plugin for InputPlugin {
     fn build(self, app: &mut App) {
-        #[allow(deprecated)]
-        if let Some(cb) = self.clipboard.then(ClipboardResource::try_new).flatten() {
+        if let Some(cb) = self.clipboard.then(ClipboardHost::try_new).flatten() {
             app.world.insert_non_send(cb);
         }
         app.add_plugin(KeyDispatchPlugin);

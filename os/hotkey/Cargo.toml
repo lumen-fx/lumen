@@ -18,7 +18,6 @@ lumen-capability = { workspace = true }
 # The command stream the scripts' builtins write, which the entry applies.
 lumen-script = { workspace = true }
 lumen-core = { workspace = true }
-lumen-os-mime = { workspace = true }
 bevy_ecs.workspace = true
 
 # OS-level global hotkeys. Same crate Tauri ships under

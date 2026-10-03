@@ -305,6 +305,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn key_chord_from_str_keeps_the_accelerator() {
+        let c: KeyChord = "Ctrl+S".into();
+        assert_eq!(c.0.as_ref(), "Ctrl+S");
+    }
+
+    #[test]
     fn mime_payload_from_str_roundtrips_text() {
         let p: MimePayload = "hello".into();
         assert_eq!(p.text().as_deref(), Some("hello"));

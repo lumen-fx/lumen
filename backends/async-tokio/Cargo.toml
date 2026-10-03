@@ -20,5 +20,6 @@ lumen-script = { workspace = true }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net"] }
+
+[dev-dependencies]
 crossbeam-channel.workspace = true
-tracing.workspace = true

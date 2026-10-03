@@ -205,8 +205,8 @@ tools/             the release plumbing and the editor plugins
   AccessKit tree updates each tick, and binds them to a live window for the
   platform's screen readers.
 - **lumen-async-tokio**: the async bridge. A tokio runtime published as the
-  app's `SpawnService` and `TimerService`, plus a queue that carries results
-  from tasks back into the main world.
+  app's `SpawnService` and `TimerService`; a task reports back to the main
+  world through the shared command queue.
 - **lumen-web-dom**: the browser as a render backend. Binds each entity to a
   real element (adopting the one the prerendered page already has for it, or
   building one where the page has none), projects what the world changes onto
@@ -258,9 +258,9 @@ off leaves the artifact host and drops the front end from the graph.
 Each `os-*` crate owns one capability, so an app links only what it uses.
 
 - **lumen-os-mime**: the shared payload and action types the others exchange.
-- **lumen-os-clipboard**: clipboard read, write, and clear, including the Linux
-  primary selection. In a browser it is the page's `navigator.clipboard`, text
-  only, with reads answered asynchronously.
+- **lumen-os-clipboard**: clipboard read, write, and clear. In a browser it is
+  the page's `navigator.clipboard`, text only, with reads answered
+  asynchronously.
 - **lumen-os-dnd**: drag sources, drop targets, and inbound file drops.
 - **lumen-os-filedialog**: open, save, and folder pickers.
 - **lumen-os-menu**: native menu bar attachment and menu click delivery. The
