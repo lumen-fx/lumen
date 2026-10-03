@@ -234,11 +234,11 @@ impl PluginGroupBuilder {
 /// Identifies one slice of [`LumenDefaultPlugins`], for `disable::<T>()`.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum LumenPluginId {
-    /// Taffy flexbox layout.
+    /// The layout engine.
     Layout,
-    /// The winit window + GPU surface (`RenderPlugin` is its render half).
+    /// The window and its event loop (`RenderPlugin` is its render half).
     Window,
-    /// The wgpu/vello renderer.
+    /// The renderer.
     Render,
     /// Pointer / keyboard / focus input dispatch.
     Input,
@@ -272,11 +272,11 @@ macro_rules! constituent {
     };
 }
 
-constituent!(/// Taffy layout slice of the default stack.
+constituent!(/// Layout-engine slice of the default stack.
     LayoutPlugin => Layout);
-constituent!(/// Winit window slice of the default stack.
+constituent!(/// Window slice of the default stack.
     WindowPlugin => Window);
-constituent!(/// wgpu/vello renderer slice of the default stack.
+constituent!(/// Renderer slice of the default stack.
     RenderPlugin => Render);
 constituent!(/// Input-dispatch slice of the default stack.
     InputPlugin => Input);

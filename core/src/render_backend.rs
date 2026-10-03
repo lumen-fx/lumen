@@ -7,12 +7,13 @@
 //! backend by name, or every backend in priority order so a launch can fall
 //! through to the next one when the first cannot start. A binary that does
 //! not link a backend has no entry for it, which is how an app pays only for
-//! the renderer it uses.
+//! the renderer it uses. The registry is the one every backend kind shares;
+//! see [`crate::backends`].
 
 use crate::app::App;
+use crate::backends::{BackendEntry, Backends};
 use crate::render_world::{RenderStage, Viewport, install_extract_pipeline};
 use crate::traits::{FrameRequest, Renderer};
-use bevy_ecs::prelude::Resource;
 use bevy_ecs::world::World;
 
 /// One render backend: its name, its rank under `auto`, and how to make its
@@ -29,78 +30,22 @@ pub struct RenderBackend {
     pub renderer: fn() -> Box<dyn Renderer>,
 }
 
-/// Main-world registry of the render backends this binary carries.
-#[derive(Resource, Clone, Debug, Default)]
-pub struct RenderBackends {
-    entries: Vec<RenderBackend>,
-}
+impl BackendEntry for RenderBackend {
+    const KIND: &'static str = "render";
 
-impl RenderBackends {
-    /// Add `backend`, replacing one registered under the same name.
-    pub fn register(&mut self, backend: RenderBackend) {
-        self.entries.retain(|b| b.name != backend.name);
-        self.entries.push(backend);
+    fn name(&self) -> &'static str {
+        self.name
     }
 
-    /// The backend registered as `name`.
-    pub fn get(&self, name: &str) -> Option<&RenderBackend> {
-        self.entries.iter().find(|b| b.name == name)
-    }
-
-    /// Every backend, highest priority first; equal priorities in name order,
-    /// so the order is the same in every process.
-    pub fn by_priority(&self) -> Vec<RenderBackend> {
-        let mut list = self.entries.clone();
-        list.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.name.cmp(b.name)));
-        list
-    }
-
-    /// The registered names, sorted, for a message naming what is available.
-    pub fn names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self.entries.iter().map(|b| b.name).collect();
-        names.sort_unstable();
-        names
-    }
-
-    /// The backends a launch should try, in order: the one `choice` names,
-    /// or every backend by priority when `choice` is `None`. An error names
-    /// what was asked for and what this binary carries.
-    pub fn select(&self, choice: Option<&str>) -> Result<Vec<RenderBackend>, String> {
-        match choice {
-            Some(name) => self.get(name).map(|b| vec![*b]).ok_or_else(|| {
-                format!(
-                    "the app asks for the '{name}' render backend, and this build carries {}",
-                    describe(&self.names())
-                )
-            }),
-            None if self.entries.is_empty() => {
-                Err("this build carries no render backend".to_string())
-            }
-            None => Ok(self.by_priority()),
-        }
+    fn priority(&self) -> i32 {
+        self.priority
     }
 }
 
-/// `"none"`, `"only 'a'"`, or `"'a' and 'b'"`, for an error message.
-fn describe(names: &[&str]) -> String {
-    match names {
-        [] => "none".to_string(),
-        [one] => format!("only '{one}'"),
-        many => {
-            let quoted: Vec<String> = many.iter().map(|n| format!("'{n}'")).collect();
-            let (last, rest) = quoted.split_last().expect("at least two");
-            format!("{} and {last}", rest.join(", "))
-        }
-    }
-}
-
-/// Register `backend` into `app`'s [`RenderBackends`], creating the registry
-/// on first use.
-pub fn register_render_backend(app: &mut App, backend: RenderBackend) {
-    app.world
-        .get_resource_or_insert_with(RenderBackends::default)
-        .register(backend);
-}
+/// Main-world registry of the render backends this binary carries. A
+/// backend's capability install adds itself with
+/// [`crate::backends::register_backend`].
+pub type RenderBackends = Backends<RenderBackend>;
 
 /// Put `renderer`, already attached to a
 /// [`crate::traits::FrameTarget::Offscreen`] image, into `app`.
@@ -207,53 +152,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_name_selects_one_backend_and_none_selects_all_by_priority() {
-        let mut backends = RenderBackends::default();
-        backends.register(backend("slow", 0));
-        backends.register(backend("fast", 10));
-        backends.register(backend("also-slow", 0));
-
-        let named = backends.select(Some("slow")).expect("registered");
-        assert_eq!(named.len(), 1);
-        assert_eq!(named[0].name, "slow");
-
-        let order: Vec<&str> = backends
-            .select(None)
-            .expect("some")
-            .iter()
-            .map(|b| b.name)
-            .collect();
-        assert_eq!(order, ["fast", "also-slow", "slow"]);
-    }
-
-    #[test]
-    fn asking_for_a_backend_the_build_lacks_says_what_it_has() {
-        let mut backends = RenderBackends::default();
-        let none = backends.select(Some("cpu")).expect_err("empty");
-        assert!(none.contains("'cpu'") && none.contains("none"), "{none}");
-        assert!(backends.select(None).is_err());
-
-        backends.register(backend("gpu", 10));
-        let one = backends.select(Some("cpu")).expect_err("missing");
-        assert!(one.contains("only 'gpu'"), "{one}");
-
-        backends.register(backend("other", 0));
-        backends.register(backend("third", 0));
-        let many = backends.select(Some("cpu")).expect_err("missing");
-        assert!(many.contains("'gpu', 'other' and 'third'"), "{many}");
-    }
-
-    #[test]
-    fn registering_a_name_again_replaces_it() {
-        let mut app = App::new();
-        register_render_backend(&mut app, backend("gpu", 1));
-        register_render_backend(&mut app, backend("gpu", 5));
-        let backends = app.world.resource::<RenderBackends>();
-        assert_eq!(backends.names(), ["gpu"]);
-        assert_eq!(backends.get("gpu").map(|b| b.priority), Some(5));
-    }
-
     /// What a launch gets back from the registry is the backend's own
     /// constructor: the renderer it builds binds to the targets it supports
     /// and refuses the ones it does not, with the reason intact.
@@ -273,6 +171,19 @@ mod tests {
         assert!(!renderer.resize(8, 8));
         assert!(renderer.resize(9, 8));
         renderer.detach();
+    }
+
+    /// A render backend the app names and the build lacks is reported as a
+    /// render backend, by the name the configuration used.
+    #[test]
+    fn a_missing_render_backend_says_render() {
+        let mut backends = RenderBackends::default();
+        backends.register(backend("gpu", 1));
+        let err = backends.select(Some("cpu")).expect_err("missing");
+        assert_eq!(
+            err,
+            "the app asks for the 'cpu' render backend, and this build carries only 'gpu'"
+        );
     }
 
     /// The offscreen driver sizes the image from the viewport in physical

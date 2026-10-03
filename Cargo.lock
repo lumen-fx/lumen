@@ -3811,10 +3811,20 @@ version = "0.0.9"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
+ "lumen-capability",
  "lumen-core",
  "lumen-text",
  "proptest",
  "taffy",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "lumen-layout-taffy-capability"
+version = "0.0.9"
+dependencies = [
+ "lumen-capability",
+ "lumen-layout-taffy",
 ]
 
 [[package]]
@@ -4287,7 +4297,6 @@ dependencies = [
  "image",
  "lumen-capability",
  "lumen-core",
- "lumen-layout-taffy",
  "lumen-paint",
  "lumen-text",
  "lumen-text-cosmic",
@@ -4316,7 +4325,7 @@ dependencies = [
  "lumen-i18n",
  "lumen-input",
  "lumen-ir",
- "lumen-layout-taffy",
+ "lumen-layout-taffy-capability",
  "lumen-mcp-capability",
  "lumen-module-registry",
  "lumen-modules",
@@ -4341,7 +4350,7 @@ dependencies = [
  "lumen-script-rhai",
  "lumen-text",
  "lumen-text-cosmic",
- "lumen-window-winit",
+ "lumen-window-winit-capability",
  "lumenc-plugin",
  "mlua",
  "notify",
@@ -4622,14 +4631,24 @@ dependencies = [
  "ctrlc",
  "futures-util",
  "glam 0.33.3",
+ "lumen-a11y-accesskit",
+ "lumen-capability",
  "lumen-core",
  "lumen-os-menu",
  "pollster",
  "raw-window-handle",
  "signal-hook",
- "thiserror 2.0.19",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "winit",
+]
+
+[[package]]
+name = "lumen-window-winit-capability"
+version = "0.0.9"
+dependencies = [
+ "lumen-capability",
+ "lumen-window-winit",
 ]
 
 [[package]]

@@ -1,7 +1,10 @@
 //! winit 0.30 on-screen window + input.
 //!
 //! This crate owns the window, the event loop, and the translation of
-//! platform events into Lumen messages. It owns no pixels and no
+//! platform events into Lumen messages. It registers itself into the app's
+//! window-backend registry as the `window-winit` capability (see
+//! [`capability`]), and a launch runs the app through [`WinitBackend`]'s
+//! [`WindowBackend`] implementation. It owns no pixels and no
 //! accessibility tree: a [`Renderer`] presents frames and an
 //! [`A11yBackend`] talks to the platform accessibility API, both behind
 //! traits from `lumen-core`, so the window backend compiles without naming
@@ -19,20 +22,25 @@
 
 #![warn(missing_docs)]
 
+pub mod capability;
+
 use bevy_ecs::message::Messages;
 use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOccluded};
 use lumen_core::prelude::*;
-use lumen_core::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
+use lumen_core::text_events::ImeSurroundingResponse;
 use lumen_core::text_model::TextBuffer;
 use lumen_core::tick::{wake_deadline, work_pending};
-use lumen_core::traits::{A11yBackend, FrameRequest, FrameTarget, RenderTarget, Renderer};
+use lumen_core::traits::{
+    A11yBackend, A11yBridgeFactory, FrameRequest, FrameTarget, RenderTarget, Renderer,
+    WindowBackend, WindowError,
+};
 use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
+use lumen_core::window_backend::{RedrawScheduler, WindowCorePlugin};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 use std::any::Any;
 use std::sync::Arc;
-use thiserror::Error;
 use winit::application::ApplicationHandler;
 use winit::event::{
     ElementState, Ime as WinitIme, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
@@ -40,20 +48,6 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState as WinitModifiers, NamedKey as WinitNamed};
 use winit::window::{Window, WindowAttributes};
-
-/// Construction-time errors from [`run`].
-#[derive(Debug, Error)]
-pub enum WinitError {
-    /// winit event-loop construction failed.
-    #[error("event loop creation failed: {0}")]
-    EventLoop(String),
-    /// winit event-loop run terminated with an error.
-    #[error("event loop run error: {0}")]
-    Run(String),
-    /// [`run`] was handed no renderer to present with.
-    #[error("no renderer to present with")]
-    NoRenderer,
-}
 
 /// Minimum wall interval between two consecutive animation-driven paints
 /// (~60 Hz). Used by [`ApplicationHandler::about_to_wait`] to pace redraws
@@ -86,148 +80,24 @@ pub enum WinitError {
 /// benchmark's headless cadence predictable and the change minimal.
 const ANIM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_micros(16_667);
 
-/// Marker for the winit windowing backend.
-pub struct WinitWindow;
+/// The winit window backend. What the registry builds and a launch runs.
+pub struct WinitBackend;
 
-impl lumen_core::traits::WindowBackend for WinitWindow {}
-
-/// Redraw pacing resource read by the `about_to_wait` callback.
-///
-/// Other systems request a paint by writing `pending = true`; the backend
-/// only forwards the call to `winit::Window::request_redraw` when the
-/// window is **visible** (not occluded). This stops the uncapped vsync
-/// poll that the old "request_redraw at the end of every event" pattern
-/// produced and matches Qt's `requestUpdate` gated on `isExposed()` /
-/// GTK's `frame-clock` (see `docs/audits/window-backend.md` Bug 7).
-///
-/// The pump gates on VISIBILITY, not focus. On tiling WMs (Hyprland,
-/// sway) an unfocused window stays fully on-screen, so it must keep
-/// animating: a module's off-thread position pump, restyle tweens,
-/// and scroll inertia all ride the redraw loop, and freezing them the
-/// moment focus leaves is the "slider stops advancing while
-/// unfocused" bug. Only a truly occluded / minimized window parks
-/// (preserving the battery/idle win).
-///
-/// `paused = occluded` is recomputed from `occluded` by the
-/// `WindowEvent::Occluded` arm (and defensively by the `Focused` arm).
-/// `focused` is still tracked for the `WindowFocused` message and to
-/// force a repaint on focus-return, but it no longer gates the pump.
-/// System code outside the backend should not write `paused`,
-/// `focused`, or `occluded` directly.
-#[derive(bevy_ecs::resource::Resource, Clone, Copy, Debug)]
-pub struct RedrawScheduler {
-    /// Set to `true` to request a paint on the next `about_to_wait`.
-    /// Cleared after the redraw is dispatched.
-    pub pending: bool,
-    /// `true` when the window currently has keyboard focus. Updated by
-    /// the `WindowEvent::Focused` arm. Tracked for the `WindowFocused`
-    /// message and the focus-return repaint; deliberately not part of the
-    /// pump gate (see [`RedrawScheduler::compute_paused`]).
-    pub focused: bool,
-    /// `true` when the window is fully occluded (covered by another
-    /// window or moved off-screen). Updated by the
-    /// `WindowEvent::Occluded` arm.
-    pub occluded: bool,
-    /// Cached `occluded`; recomputed whenever `occluded` (or `focused`)
-    /// changes. The backend suppresses redraw requests while paused, i.e.
-    /// only while the window is genuinely occluded.
-    pub paused: bool,
-}
-
-impl Default for RedrawScheduler {
-    fn default() -> Self {
-        // Start focused and visible so the first frame paints. winit
-        // sends `Focused(true)` / `Occluded(false)` shortly after window
-        // creation; until then we want to render so the user sees the
-        // app rather than a black surface.
-        Self {
-            pending: true,
-            focused: true,
-            occluded: false,
-            paused: false,
-        }
-    }
-}
-
-impl RedrawScheduler {
-    fn recompute_paused(&mut self) {
-        self.paused = Self::compute_paused(self.focused, self.occluded);
-    }
-
-    /// Pure pump-gate decision: should the redraw loop park?
-    ///
-    /// Only occlusion parks the loop. `focused` is intentionally accepted
-    /// and ignored: the decision deliberately does not consider focus, so
-    /// a visible-but-unfocused window (the tiling-WM common case) keeps
-    /// animating. Extracted as a pure fn so the focus-vs-visibility policy
-    /// is unit-testable without a live event loop.
-    fn compute_paused(_focused: bool, occluded: bool) -> bool {
-        occluded
-    }
-
-    /// Pure forward-gate decision used by `about_to_wait`: forward a
-    /// `request_redraw` to winit only when a paint is pending AND the
-    /// window is not parked. Anything that wants a frame while unfocused
-    /// (a worker thread's `EventLoopWaker`, a restyle tween, scroll
-    /// inertia) sets `pending`; this gate no longer swallows it just
-    /// because focus left.
-    fn should_forward_redraw(&self) -> bool {
-        self.pending && !self.paused
-    }
-}
-
-/// Plugin that registers window-event messages and the redraw scheduler.
-///
-/// `run` installs this automatically; embedders that drive the winit
-/// loop themselves can call `app.add_plugin(WinitPlugin)` to opt in.
-///
-/// Registers [`WindowFocused`], [`WindowOccluded`], [`CloseRequest`] so
-/// `MessageReader`s can subscribe, and inserts a default
-/// [`RedrawScheduler`] resource.
-pub struct WinitPlugin;
-
-impl Plugin for WinitPlugin {
-    fn build(self, app: &mut App) {
-        // A window presents frames, so it is what asks for the pipeline that
-        // produces them; an app that is never shown installs none of it.
-        lumen_core::render_world::install_extract_pipeline(app);
-        app.add_message::<WindowFocused>();
-        app.add_message::<WindowOccluded>();
-        // NOTE: `CloseRequest` is deliberately not registered here.
-        // `lumen_core::App::new` already registers it (close hooks must
-        // work headless too), and `MessageRegistry::register_message` is
-        // not idempotent: a second registration pushes a second update
-        // entry, the buffer then cycles twice per tick, and any
-        // `CloseRequest` written by the backend before the veto tick is
-        // dropped before Systems-stage readers (script `on_close`,
-        // `lumen_app_on_close`) ever see it.
-        // W3.5: IME surrounding-text bus. Push side lives in this crate
-        // (window-winit produces a response on every Ime event); the
-        // request side is currently a no-op queue waiting for a backend
-        // that can ferry text-input-v3 / IBus surrounding-text asks.
-        app.add_message::<ImeSurroundingRequested>();
-        app.add_message::<ImeSurroundingResponse>();
-        // W3.2: text-edit request bus shared with `lumen-input` /
-        // `lumen-text-edit`. Initialized here so window-backend can
-        // also write to it (W3.5 IME commit-with-replacement).
-        app.add_message::<TextEditRequest>();
-        app.world.insert_resource(RedrawScheduler::default());
-        // Register a typed-command handler so the (Linux-only) XDG
-        // portal listener can push `XdgColorSchemeUpdate { dark }`
-        // through [`lumen_core::command::Command::Typed`] and have it
-        // applied on the main thread inside [`TickStage::CommandDrain`].
-        // Idempotent across worlds - even non-Linux builds register the
-        // handler (it just never fires).
-        app.register_command::<XdgColorSchemeUpdate, _>(|world, payload| {
-            let dark = payload.dark;
-            world.resource_mut::<StyleManager>().set_system_dark(dark);
-        });
+impl WindowBackend for WinitBackend {
+    fn run(
+        self: Box<Self>,
+        app: App,
+        options: WindowOptions,
+        renderers: Vec<Box<dyn Renderer>>,
+        a11y: Option<A11yBridgeFactory>,
+    ) -> Result<(), WindowError> {
+        run(app, options, renderers, a11y)
     }
 }
 
 /// Cross-thread payload pushed by the Linux XDG color-scheme listener.
 /// Translated to a mutation on [`lumen_core::components::StyleManager`]
-/// by the [`WinitPlugin`]-registered typed-command handler.
+/// by the typed-command handler [`run`] registers.
 pub struct XdgColorSchemeUpdate {
     /// `true` when the desktop reports a dark preference.
     pub dark: bool,
@@ -258,15 +128,16 @@ enum UserEvent {
     CloseRequested,
 }
 
-/// Builds the accessibility bridge once the window exists.
+/// The accessibility bridge factory this backend accepts, inside the
+/// [`A11yBridgeFactory`] a launch hands [`WindowBackend::run`].
 ///
 /// The window backend does not name an accessibility library: the
-/// composition point passes this factory in, and whatever it returns is
+/// composition point passes the factory in, and whatever it returns is
 /// driven through [`A11yBackend`]. The third argument wakes a parked event
 /// loop, which the bridge calls when an assistive technology queues a
-/// request from its own thread. Pass `None` to [`run`] to run without
-/// accessibility.
-pub type A11yBridgeFactory =
+/// request from its own thread. A factory of any other type is ignored with
+/// a warning, and the window runs without accessibility.
+pub type WinitA11yFactory =
     Box<dyn Fn(&ActiveEventLoop, Arc<Window>, Arc<dyn Fn() + Send + Sync>) -> Box<dyn A11yBackend>>;
 
 /// The winit window, shared with the renderer as a [`RenderTarget`].
@@ -295,6 +166,7 @@ impl RenderTarget for WinitTarget {
 }
 
 /// Run the app on a real winit window. Blocks until the window closes.
+/// [`WinitBackend`] is the public way in.
 ///
 /// `renderers` are the renderers that may present the frames, in the order
 /// to try them. Once the window exists the first is attached; one that
@@ -307,18 +179,19 @@ impl RenderTarget for WinitTarget {
 /// rather than inside it: the options are pure data every launch path
 /// resolves, while these are live backend objects the composition point
 /// chose.
-pub fn run(
+fn run(
     mut app: App,
     opts: WindowOptions,
     renderers: Vec<Box<dyn Renderer>>,
     a11y: Option<A11yBridgeFactory>,
-) -> Result<(), WinitError> {
+) -> Result<(), WindowError> {
+    let a11y = a11y.and_then(winit_a11y_factory);
     let mut renderers = renderers.into_iter();
-    let renderer = renderers.next().ok_or(WinitError::NoRenderer)?;
+    let renderer = renderers.next().ok_or(WindowError::NoRenderer)?;
     let fallbacks: Vec<Box<dyn Renderer>> = renderers.collect();
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
-        .map_err(|e| WinitError::EventLoop(e.to_string()))?;
+        .map_err(|e| WindowError::EventLoop(e.to_string()))?;
     let proxy = event_loop.create_proxy();
 
     // Expose a wakeup handle for cross-thread producers (today:
@@ -349,15 +222,24 @@ pub fn run(
     lumen_core::plugin_events::set_plugin_event_waker(waker.clone());
     app.world.insert_resource(waker);
 
-    // Install backend-side messages and the redraw scheduler before any
-    // other system can read them - unless the embedder already added the
-    // plugin. The guard matters: `add_message` re-registration is not
-    // idempotent (each call adds another per-tick buffer update, so a
-    // double-registered message type cycles twice per tick and drops
-    // pre-tick writes before Systems-stage readers run).
-    if !app.is_plugin_added::<WinitPlugin>() {
-        app.add_plugin(WinitPlugin);
+    // Install the window messages and the redraw scheduler before any
+    // other system can read them - unless the app already has them. The
+    // guard matters: `add_message` re-registration is not idempotent (each
+    // call adds another per-tick buffer update, so a double-registered
+    // message type cycles twice per tick and drops pre-tick writes before
+    // Systems-stage readers run).
+    if !app.is_plugin_added::<WindowCorePlugin>() {
+        app.add_plugin(WindowCorePlugin);
     }
+    // The (Linux-only) XDG portal listener pushes `XdgColorSchemeUpdate
+    // { dark }` through [`lumen_core::command::Command::Typed`]; this
+    // handler applies it on the main thread inside
+    // [`TickStage::CommandDrain`]. Registered on every platform; it just
+    // never fires where there is no listener.
+    app.register_command::<XdgColorSchemeUpdate, _>(|world, payload| {
+        let dark = payload.dark;
+        world.resource_mut::<StyleManager>().set_system_dark(dark);
+    });
 
     // Unix: route SIGINT / SIGTERM through the same graceful close path
     // as the window close button. A dedicated watcher thread (signals
@@ -467,7 +349,24 @@ pub fn run(
     }
     event_loop
         .run_app(&mut handler)
-        .map_err(|e| WinitError::Run(e.to_string()))
+        .map_err(|e| WindowError::Run(e.to_string()))
+}
+
+/// The factory inside `factory` when it was built for this backend. A
+/// factory of another type is reported and dropped, and the window runs
+/// without accessibility.
+fn winit_a11y_factory(factory: A11yBridgeFactory) -> Option<WinitA11yFactory> {
+    match factory.downcast::<WinitA11yFactory>() {
+        Ok(factory) => Some(factory),
+        Err(_) => {
+            tracing::warn!(
+                target: "lumen::window",
+                "the accessibility bridge was built for another window backend; \
+                 running without accessibility",
+            );
+            None
+        }
+    }
 }
 
 /// Bind `renderer` to `target`, moving on to the next of `fallbacks` each
@@ -505,7 +404,7 @@ struct WinitHandler {
     fallbacks: std::collections::VecDeque<Box<dyn Renderer>>,
     /// Builds [`Self::a11y`] once the window exists. `None` runs without
     /// accessibility.
-    a11y_factory: Option<A11yBridgeFactory>,
+    a11y_factory: Option<WinitA11yFactory>,
     /// Accessibility bridge; receives every winit `WindowEvent` and hands
     /// queued assistive-technology requests to the world each frame.
     a11y: Option<Box<dyn A11yBackend>>,
@@ -1717,7 +1616,7 @@ fn attach_menubar_via_os_menu(_window: &Arc<Window>, spec: &MenuModel) {
 /// `org.freedesktop.portal.Settings` (the standard XDG Settings portal)
 /// and translate every change into a
 /// [`lumen_core::command::Command::Typed`] carrying an
-/// [`XdgColorSchemeUpdate`] payload. The [`WinitPlugin`]-installed
+/// [`XdgColorSchemeUpdate`] payload. The [`run`]-registered
 /// handler then applies it to [`lumen_core::components::StyleManager`]
 /// during the next [`lumen_core::tick::TickStage::CommandDrain`].
 ///
@@ -1812,12 +1711,13 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedrawScheduler, attach_first, idle_control_flow, present_frame};
+    use super::{attach_first, idle_control_flow, present_frame};
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, FrameTarget, RenderError,
         RenderTarget, Renderer, Viewport,
     };
+    use lumen_core::window_backend::RedrawScheduler;
     use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
     use std::any::Any;
     use std::sync::Arc;
@@ -2053,49 +1953,14 @@ mod tests {
         assert_eq!(renderer.presents, 1);
     }
 
-    /// The pump-gate policy: only occlusion parks the loop. Focus is not a
-    /// factor, so a visible-but-unfocused window (Hyprland/sway, where an
-    /// unfocused window is still fully on-screen) keeps animating. This is
-    /// the "slider freeze while unfocused on a tiling WM" fix.
+    /// The bridge the runtime hands this backend is one it accepts, so a
+    /// windowed app gets accessibility; a factory for some other backend is
+    /// dropped instead of failing the launch.
     #[test]
-    fn visibility_not_focus_gates_the_pump() {
-        // Visible + focused -> run.
-        assert!(!RedrawScheduler::compute_paused(true, false));
-        // Visible + UNFOCUSED -> still run (the regression this fixes).
-        assert!(!RedrawScheduler::compute_paused(false, false));
-        // Occluded -> park, regardless of focus.
-        assert!(RedrawScheduler::compute_paused(true, true));
-        assert!(RedrawScheduler::compute_paused(false, true));
-    }
-
-    fn scheduler(pending: bool, focused: bool, occluded: bool) -> RedrawScheduler {
-        let mut s = RedrawScheduler {
-            pending,
-            focused,
-            occluded,
-            paused: false,
-        };
-        s.recompute_paused();
-        s
-    }
-
-    /// `about_to_wait` forwards a `request_redraw` iff `should_forward_redraw`.
-    /// A pending paint raised while UNFOCUSED-but-VISIBLE (a worker thread's
-    /// `EventLoopWaker`, a restyle tween, or scroll inertia all set `pending`)
-    /// must forward; an occluded window must not.
-    #[test]
-    fn forward_redraw_wakes_unfocused_visible_but_parks_occluded() {
-        // A pump or tween in flight while unfocused-but-visible: it set
-        // `pending = true`; the gate must forward it.
-        assert!(scheduler(true, false, false).should_forward_redraw());
-        // Focused + pending: unchanged from before the fix.
-        assert!(scheduler(true, true, false).should_forward_redraw());
-        // Nothing pending (idle) while unfocused-visible: stay damage-driven,
-        // do not busy-repaint an unchanging frame.
-        assert!(!scheduler(false, false, false).should_forward_redraw());
-        // Occluded / minimized: park even with work pending (battery win).
-        assert!(!scheduler(true, false, true).should_forward_redraw());
-        assert!(!scheduler(true, true, true).should_forward_redraw());
+    fn the_accesskit_bridge_is_the_factory_this_backend_accepts() {
+        use super::winit_a11y_factory;
+        assert!(winit_a11y_factory(lumen_a11y_accesskit::bridge_factory()).is_some());
+        assert!(winit_a11y_factory(lumen_core::traits::A11yBridgeFactory::new(7_u8)).is_none());
     }
 
     #[test]

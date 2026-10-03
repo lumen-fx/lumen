@@ -1,7 +1,7 @@
 //! True headless run mode: the full app pipeline - layout, real
 //! rendering through the app's render backend and the shared Node-IR
 //! walker, the MCP server, input simulation, hot reload, and screenshots -
-//! with zero windows. No winit event loop is created, so the desktop / compositor
+//! with zero windows. No window backend runs, so the desktop / compositor
 //! is never touched. This is the automation / CI mode behind
 //! `lumenc run <app> --headless`.
 //!
@@ -100,7 +100,7 @@ impl BootTrace {
 
     /// Under trace only: time a throwaway [`CosmicShaper::new`] so the
     /// system-font-directory scan cost is attributable in isolation
-    /// (the real scan is buried inside `TaffyLayoutPlugin::build`). The
+    /// (the real scan is buried inside the text install). The
     /// shaper is dropped immediately; it exists purely to price the
     /// `FontSystem::new` disk walk that every cold start pays once.
     fn standalone_fontscan(&self) {
@@ -277,8 +277,8 @@ pub fn run_app_headless_rendered(
 
     // Viewport: logical size from the resolved window options (CLI --size
     // beats `lumen.toml [window] size` beats the built-in default, exactly
-    // like windowed), scale factor from --dpr. Mirrors the pre-loop seed
-    // in `lumen_window_winit::run` plus the dpr reconcile `resumed` does.
+    // like windowed), scale factor from --dpr. Mirrors the viewport seed a
+    // window backend writes before its window opens, plus its dpr reconcile.
     let logical = glam::Vec2::new(window.options.size.0 as f32, window.options.size.1 as f32);
     for world in [&mut app.world, &mut app.render_world] {
         let mut vp = world.resource_mut::<Viewport>();
@@ -304,7 +304,7 @@ pub fn run_app_headless_rendered(
     }
     install_offscreen(&mut app, renderer);
 
-    // Wake plumbing: the same EventLoopWaker contract the winit backend
+    // Wake plumbing: the same EventLoopWaker contract a window backend
     // provides, backed by a condvar instead of an event-loop proxy.
     // `wire_simulate_waker` (MCP plugin) picks the resource up on the
     // first tick; the SurfaceCapture waker is shared via its OnceLock.

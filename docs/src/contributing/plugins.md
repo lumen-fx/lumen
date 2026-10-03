@@ -138,7 +138,10 @@ after the input dispatch for the same reason: otherwise the visual trails the
 state by a frame.
 
 Order against public system functions from the crate that owns them, not
-against your own guesses about stage packing.
+against your own guesses about stage packing. Layout is the exception: the
+engine is swappable, so a system that reads this tick's boxes orders itself
+`.after(lumen_core::layout_backend::LayoutSolve)` in `LayoutSync` rather than
+after a function of the engine's.
 
 ## Resources
 
@@ -208,7 +211,8 @@ encodes each repeated appearance once; a sink that cannot leaves them at
 their defaults and paints every leaf in place.
 
 A backend reaches a launch by registering into `RenderBackends` (in
-`lumen_core::render_backend`) from a capability's install: a name the app's
+`lumen_core::render_backend`, through `lumen_core::backends::register_backend`)
+from a capability's install: a name the app's
 `[render] backend` selects it by, a priority for `auto`, and a constructor
 for its renderer, bound to nothing until the launch attaches it. See
 [Optional subsystems](#optional-subsystems) for the capability itself.
@@ -520,7 +524,9 @@ pub const SELECT: Select = Select::OnConfig {
 ```
 
 An entry in the app's `[capabilities]` table settles a capability outright
-whatever its rule says. The phase says where in the build it runs: `Platform` after the core stack
+whatever its rule says. The phase says where in the build it runs: `Backends` before the core
+stack (for a backend the stack is built on, such as the layout engine, which
+registers itself there for the runtime to install), `Platform` after the core stack
 and before the reactive bindings, `BeforeScripts` ahead of the script hosts
 (for something a host binds to at construction, such as the HTTP client),
 `AfterBuild` once the document is spawned and styled (an overlay). Within a

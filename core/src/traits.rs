@@ -1,11 +1,13 @@
-//! Traits identifying backend roles, plus the [`Bindable`] trait declaring a component as a property-bus participant.
+//! The backend roles, plus the [`Bindable`] trait declaring a component as a property-bus participant.
 //!
-//! Concrete backends register systems via a [`crate::app::Plugin`] into the appropriate [`crate::tick::TickStage`].
-//! [`Renderer`] and [`A11yBackend`] declare what a caller drives them with each frame, so a window backend can drive
-//! any renderer and any accessibility bridge without naming one; [`LayoutEngine`] and [`WindowBackend`] are
-//! type-level identifiers only.
+//! Each role is a trait a caller drives without naming an implementation. A [`WindowBackend`] runs the app and
+//! drives a [`Renderer`] and an [`A11yBackend`] through their traits; a [`LayoutEngine`] installs the systems that
+//! solve layout. Implementations register themselves into the registry of their kind (see [`crate::backends`]), and
+//! the launch picks from there.
 
+use crate::app::App;
 use crate::property_store::PropertyValue;
+use crate::window::WindowOptions;
 use bevy_ecs::component::Component;
 use bevy_ecs::world::World;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -152,11 +154,91 @@ impl<R: Renderer + ?Sized> Renderer for Box<R> {
     }
 }
 
-/// Marker trait implemented by layout engines. Plugins register systems into [`crate::tick::TickStage::LayoutSync`].
-pub trait LayoutEngine: Send + Sync {}
+/// A layout engine: what turns the styled tree into absolute boxes.
+///
+/// The engine contributes systems rather than being called per node or per
+/// tick. Layout is change-driven (style, children, text, and image changes
+/// mark entities dirty) and its state is usually not `Send`, so the work
+/// belongs in ordinary systems in [`crate::tick::TickStage::LayoutSync`] the
+/// scheduler runs, with change detection, like every other system. The
+/// launch dispatches through this trait once, when it installs the engine
+/// it selected from [`crate::layout_backend::LayoutBackends`].
+///
+/// The systems that write each entity's [`crate::components::Transform`]
+/// go in [`crate::layout_backend::LayoutSolve`], so code that needs this
+/// tick's boxes orders itself after that set without naming an engine.
+pub trait LayoutEngine: 'static {
+    /// Insert the engine's state and add its systems to `app`.
+    fn install(self: Box<Self>, app: &mut App);
+}
 
-/// Marker trait implemented by window backends. Plugins register systems into [`crate::tick::TickStage::Input`].
-pub trait WindowBackend: Send + Sync {}
+/// Why a window backend could not run the app.
+#[derive(Debug, Error)]
+pub enum WindowError {
+    /// The platform event loop could not be created.
+    #[error("event loop creation failed: {0}")]
+    EventLoop(String),
+    /// The event loop ended with an error.
+    #[error("event loop run error: {0}")]
+    Run(String),
+    /// The backend was handed no renderer to present with.
+    #[error("no renderer to present with")]
+    NoRenderer,
+}
+
+/// A window backend: the OS window, the event loop, and the translation of
+/// platform events into the app's messages.
+///
+/// [`Self::run`] takes the built app and drives it until the window closes:
+/// it opens the window from [`WindowOptions`], attaches the first of
+/// `renderers` that binds to it, ticks the app on input and on the redraw
+/// requests in [`crate::window_backend::RedrawScheduler`], and presents
+/// through [`Renderer`]. The launch dispatches through this trait once, for
+/// the whole run, so nothing per event goes through a vtable it would not
+/// otherwise.
+pub trait WindowBackend: 'static {
+    /// Run `app` in a window. Blocks until the window closes.
+    ///
+    /// `renderers` are tried in order; one that fails to bind with
+    /// [`RenderError::Init`] gives way to the next. `a11y` builds the
+    /// accessibility bridge once the window exists, or is `None` for a run
+    /// without one.
+    fn run(
+        self: Box<Self>,
+        app: App,
+        options: WindowOptions,
+        renderers: Vec<Box<dyn Renderer>>,
+        a11y: Option<A11yBridgeFactory>,
+    ) -> Result<(), WindowError>;
+}
+
+/// Builds the accessibility bridge for a window once the window exists.
+///
+/// What a bridge needs from the window differs between window backends
+/// (a platform window handle, an event-loop handle, a way to wake the loop),
+/// so the factory is opaque here. Each window backend documents the factory
+/// type it accepts; [`Self::downcast`] recovers it, and a backend handed a
+/// factory built for another one runs without accessibility rather than
+/// failing.
+pub struct A11yBridgeFactory(Box<dyn Any>);
+
+impl A11yBridgeFactory {
+    /// Wrap `factory`, of the type the target window backend documents.
+    pub fn new<F: Any>(factory: F) -> Self {
+        Self(Box::new(factory))
+    }
+
+    /// The factory as `F`, or `self` back when it was built as another type.
+    pub fn downcast<F: Any>(self) -> Result<F, Self> {
+        self.0.downcast::<F>().map(|f| *f).map_err(Self)
+    }
+}
+
+impl std::fmt::Debug for A11yBridgeFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("A11yBridgeFactory").finish()
+    }
+}
 
 /// The bridge between the ECS world and the platform accessibility API.
 ///
@@ -209,7 +291,7 @@ pub trait Bindable: Component {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameRequest, FrameTarget, RenderError};
+    use super::{A11yBridgeFactory, FrameRequest, FrameTarget, RenderError, WindowError};
 
     /// The default frame request asks for nothing. A window backend fills
     /// it in from what the tick reported, so a default that leaned the
@@ -252,6 +334,36 @@ mod tests {
         assert!(
             printed.contains("320") && printed.contains("200"),
             "{printed}"
+        );
+    }
+
+    /// A window backend recovers the factory type it documents, and gets
+    /// the factory back untouched when it was built as something else.
+    #[test]
+    fn an_a11y_factory_downcasts_to_the_type_it_was_built_as() {
+        type Factory = fn() -> u8;
+        fn build() -> u8 {
+            7
+        }
+        let factory = A11yBridgeFactory::new(build as Factory);
+        let factory = factory.downcast::<String>().expect_err("not a String");
+        let build = factory
+            .downcast::<Factory>()
+            .expect("the type it was built as");
+        assert_eq!(build(), 7);
+    }
+
+    /// Window errors reach a person whose app did not open, through the
+    /// launch's `window: ...` message.
+    #[test]
+    fn window_errors_say_what_failed() {
+        assert_eq!(
+            WindowError::EventLoop("no display".into()).to_string(),
+            "event loop creation failed: no display",
+        );
+        assert_eq!(
+            WindowError::NoRenderer.to_string(),
+            "no renderer to present with",
         );
     }
 }
