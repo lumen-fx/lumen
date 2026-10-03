@@ -180,18 +180,27 @@ being suppressed.
 
 ## Render-world plugins
 
-A render backend inserts itself into `app.render_world`, registers a system
-in `RenderStage::Render`, and calls `install_extract_pipeline` so the extract
-step that feeds it exists at all. The whole of the CPU renderer's offscreen
-plugin is that call, a resource insert and one system registration; the GPU
-backend adds a fragment cache and an optional text shaper alongside. The
-install is a no-op when another backend already made it, so a test that builds
-a bare `App` and reads the render world makes the same call itself.
+A render backend implements one trait, `lumen_core::traits::Renderer`, for
+both kinds of target: `attach` binds it to a window or to an offscreen image
+(`FrameTarget`), `wants_present` answers whether the frame changed, and
+`present` paints and puts it up. A window backend drives it directly. For an
+offscreen image, `lumen_core::render_backend::install_offscreen` puts an
+attached renderer into `app.render_world`, registers the system in
+`RenderStage::Render` that drives it each frame, and calls
+`install_extract_pipeline` so the extract step that feeds it exists at all.
+The whole of the CPU renderer's offscreen plugin is that one call; the GPU
+backend's adds an optional text shaper alongside. The extract install is a
+no-op when another backend already made it, so a test that builds a bare
+`App` and reads the render world makes the same call itself.
 
-The system walks the retained tree with `lumen_paint::walk_retained_scene`
-into the backend's own `Painter`. That trait is the one definition of a frame:
-fill, stroke, clip and opacity layers, blurred rounded rects for shadows,
-images, and glyph runs, in peniko and kurbo types. A new backend implements
+A renderer builds its frame from the shared pieces in `lumen_paint`:
+`wants_frame` is the gate (a dirty tick whose retained tree differs from the
+last painted one, a fresh or resized target, or a pending screenshot),
+`paint_frame` walks the retained tree into the backend's own `Painter` and
+records it as the tree the next frame diffs against, and `answer_capture`
+hands a pending screenshot the result. The `Painter` trait is the one
+definition of a frame: fill, stroke, clip and opacity layers, blurred rounded
+rects for shadows, images, and glyph runs, in peniko and kurbo types. A new backend implements
 `Painter` over its draw target and gets every primitive the walker knows,
 drawn the way the other backends draw it. A sink that can record and replay
 encoded work also implements the fragment methods, and the walker then
@@ -200,8 +209,8 @@ their defaults and paints every leaf in place.
 
 A backend reaches a launch by registering into `RenderBackends` (in
 `lumen_core::render_backend`) from a capability's install: a name the app's
-`[render] backend` selects it by, a priority for `auto`, a constructor for
-its window renderer, and one for its offscreen renderer. See
+`[render] backend` selects it by, a priority for `auto`, and a constructor
+for its renderer, bound to nothing until the launch attaches it. See
 [Optional subsystems](#optional-subsystems) for the capability itself.
 
 Getting data across is the extract step. An extract function is a plain
