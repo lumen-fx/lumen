@@ -6,17 +6,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "OS clipboard host (arboard wrapper) for Lumen - MIME-typed read/write, optional PRIMARY selection on Linux."
+description = "OS clipboard host (arboard wrapper) for Lumen - MIME-typed read/write."
 keywords = ["ui", "gui", "clipboard", "arboard", "lumen"]
 categories = ["os", "gui"]
 # Not published: `lumenc` and `lumenui` are the only crates.io packages.
 publish = false
-
-[features]
-default = []
-# Gate the X11 PRIMARY-selection helpers. arboard 3.x exposes them only on
-# the Linux/X11 build; setting this feature requires consumers to opt in.
-linux_primary = []
 
 [dependencies]
 lumen-os-mime = { workspace = true }

@@ -6,9 +6,6 @@
 //!
 //! - [`ClipboardHost`] - `read` / `write` / `clear` for the standard
 //!   system clipboard. Owns an `arboard::Clipboard` behind a `Mutex`.
-//! - Linux PRIMARY selection: [`ClipboardHost::read_primary`] /
-//!   [`ClipboardHost::write_primary`], gated behind the
-//!   `linux_primary` feature.
 //! - [`set_rgba8_image`] / [`get_rgba8_image`] preserved for
 //!   backwards-compatible image round-trips used by lumenc's
 //!   `copy_image` / `save_clipboard_image` Rhai builtins.
@@ -21,8 +18,7 @@
 //! context: `https` or `localhost`) and reports it unavailable otherwise. A
 //! page reads the clipboard asynchronously and only with the visitor's
 //! permission, so a read goes through [`ClipboardHost::read_text_then`]; the
-//! synchronous readers, images, and PRIMARY answer as an absent clipboard
-//! does.
+//! synchronous readers and images answer as an absent clipboard does.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -242,8 +238,7 @@ impl ClipboardHost {
     }
 
     /// Write the supplied RGBA8 image (`width x height x 4` bytes) to
-    /// the system clipboard. Preserves the API the previous
-    /// `ClipboardResource` exposed for the `copy_image` Rhai builtin.
+    /// the system clipboard. Backs the `copy_image` script builtin.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_rgba8_image(&self, width: u32, height: u32, rgba: Vec<u8>) -> bool {
         let img = arboard::ImageData {
@@ -273,48 +268,6 @@ impl ClipboardHost {
     #[cfg(target_arch = "wasm32")]
     pub fn get_rgba8_image(&self) -> Option<(u32, u32, Vec<u8>)> {
         None
-    }
-
-    /// Read the X11 PRIMARY selection (Linux-only). On other platforms
-    /// (or when the `linux_primary` feature is off) returns an empty
-    /// payload.
-    #[cfg(all(feature = "linux_primary", target_os = "linux"))]
-    pub fn read_primary(&self) -> MimePayload {
-        use arboard::{GetExtLinux, LinuxClipboardKind};
-        let mut cb = self.guard();
-        if let Ok(text) = cb.get().clipboard(LinuxClipboardKind::Primary).text() {
-            return text.as_str().into();
-        }
-        MimePayload::new()
-    }
-
-    /// Read the X11 PRIMARY selection - feature-disabled stub.
-    #[cfg(not(all(feature = "linux_primary", target_os = "linux")))]
-    pub fn read_primary(&self) -> MimePayload {
-        MimePayload::new()
-    }
-
-    /// Write to the X11 PRIMARY selection (Linux-only). On other
-    /// platforms (or when the `linux_primary` feature is off) returns
-    /// `false`.
-    #[cfg(all(feature = "linux_primary", target_os = "linux"))]
-    pub fn write_primary(&self, payload: &MimePayload) -> bool {
-        use arboard::{LinuxClipboardKind, SetExtLinux};
-        let Some(bytes) = payload.get(&MimeKind::TextPlain) else {
-            return false;
-        };
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        let mut cb = self.guard();
-        cb.set()
-            .clipboard(LinuxClipboardKind::Primary)
-            .text(text)
-            .is_ok()
-    }
-
-    /// Write to the X11 PRIMARY selection - feature-disabled stub.
-    #[cfg(not(all(feature = "linux_primary", target_os = "linux")))]
-    pub fn write_primary(&self, _payload: &MimePayload) -> bool {
-        false
     }
 }
 
@@ -349,18 +302,5 @@ mod tests {
         // arboard can send).
         let p: MimePayload = vec![0u8, 1, 2].into();
         assert!(!p.has(&MimeKind::TextPlain));
-    }
-
-    #[test]
-    fn read_primary_empty_without_feature() {
-        // On a default-feature build the helper returns an empty
-        // payload regardless of platform.
-        if let Some(host) = ClipboardHost::try_new() {
-            let p = host.read_primary();
-            #[cfg(not(all(feature = "linux_primary", target_os = "linux")))]
-            assert!(p.is_empty());
-            #[cfg(all(feature = "linux_primary", target_os = "linux"))]
-            let _ = p; // contents depend on the live X11 selection
-        }
     }
 }

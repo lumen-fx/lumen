@@ -129,44 +129,6 @@ impl Launcher {
             opener::open(target).into()
         }
     }
-
-    /// Compose an email via the default mail client. Builds a
-    /// `mailto:` URI with optional subject / body query parameters
-    /// (RFC 6068).
-    pub fn compose_email(&self, to: &str, subject: Option<&str>, body: Option<&str>) -> OpenResult {
-        let mut uri = format!("mailto:{to}");
-        let mut sep = '?';
-        if let Some(s) = subject {
-            uri.push(sep);
-            uri.push_str("subject=");
-            uri.push_str(&url_escape(s));
-            sep = '&';
-        }
-        if let Some(b) = body {
-            uri.push(sep);
-            uri.push_str("body=");
-            uri.push_str(&url_escape(b));
-        }
-        self.open_url(&uri)
-    }
-}
-
-/// Minimal RFC 3986 query-component percent-encoding for `mailto:`
-/// subject / body. Conservatively escapes anything outside `[A-Za-z0-9-_.~]`.
-fn url_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -182,30 +144,5 @@ mod tests {
     fn open_result_is_ok_only_on_launched() {
         assert!(OpenResult::Launched.is_ok());
         assert!(!OpenResult::Failed("nope".to_string()).is_ok());
-    }
-
-    #[test]
-    fn url_escape_passes_unreserved() {
-        assert_eq!(url_escape("abc-XYZ_123.~"), "abc-XYZ_123.~");
-    }
-
-    #[test]
-    fn url_escape_encodes_space_and_at() {
-        assert_eq!(url_escape("hi @ world"), "hi%20%40%20world");
-    }
-
-    #[test]
-    fn compose_email_builds_mailto_uri() {
-        // Don't actually fire - only inspect via constructing the URI
-        // through the same escape path.
-        let s = format!(
-            "mailto:{}?subject={}&body={}",
-            "x@y.com",
-            url_escape("Hi"),
-            url_escape("Howdy")
-        );
-        assert!(s.starts_with("mailto:x@y.com"));
-        assert!(s.contains("subject=Hi"));
-        assert!(s.contains("body=Howdy"));
     }
 }
