@@ -5,12 +5,11 @@
 //! matching painter calls - see the `Node` doc-comments for the 1:1 mapping
 //! table to Qt SceneGraph and GTK GSK.
 //!
-//! ## Damage-rect diff
+//! ## Frame diff
 //!
 //! [`diff_retained_scenes`] compares the prior frame's tree (via `lumen_core::node_ir::PreviousScene`)
-//! against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The diff gates whether a
-//! backend repaints at all; the damage rects it leaves in `FrameDamage` are there for consumers that bound
-//! their work to the dirty region.
+//! against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The answer gates
+//! whether a backend repaints at all.
 
 use crate::cache::FragmentCache;
 use crate::emit::{
@@ -22,7 +21,7 @@ use bevy_ecs::world::World;
 use lumen_core::native::{NativePaintCtx, NativePainters};
 use lumen_core::node_ir::{Affine2, ClipShape, Node, PreviousScene, RetainedScene};
 use lumen_core::render_world::{
-    ExtractedOutline, ExtractedRect, ExtractedShadow, FrameDamage, Rect as LumenRect, Viewport,
+    ExtractedOutline, ExtractedRect, ExtractedShadow, Rect as LumenRect, Viewport,
 };
 use peniko::Fill;
 use peniko::kurbo::{Affine, Rect, RoundedRect};
@@ -477,72 +476,44 @@ pub fn walk_retained_scene(ctx: &mut WalkContext<'_>, scene: &RetainedScene) {
     }
 }
 
-/// Wave 2 structural diff - emits damage rects into `damage` covering subtrees that differ between `prev`
-/// and `curr`. Recursion proceeds in lockstep with `Arc::ptr_eq` short-circuit: identical Arc-shared subtrees
-/// contribute no damage. When a subtree was deleted, the OLD bounds are accumulated; when inserted, the NEW
-/// bounds are accumulated; when both sides exist but differ, the union of their bounds is recorded (the
-/// changed region covers both the old paint and the new paint).
+/// Whether `curr` paints differently from `prev`: the frame gate every renderer applies before
+/// repainting.
 ///
-/// Containers diff position-by-position. When lengths differ, the tail (extra children on one side) is
-/// added to damage as deletions/insertions. When child positions diverge structurally (e.g. siblings
-/// reordered around an insertion), the per-position walk overestimates - that overestimate is bounded by the
-/// involved subtrees' bounds and is still smaller than today's whole-viewport fallback.
-///
-/// Renderers read [`FrameDamage::is_empty`] to skip the frame entirely, or feed the rect list into a
-/// scissor box when the backend supports one.
+/// Recursion proceeds in lockstep and short-circuits on `Arc::ptr_eq`, so identical Arc-shared
+/// subtrees cost nothing, and stops at the first change it finds. A subtree that was deleted,
+/// inserted, or changed counts when its bounds (old or new) cover any area; one with no area paints
+/// nothing either way. Containers diff position-by-position, and an extra tail on either side
+/// counts as a deletion or an insertion.
 pub fn diff_retained_scenes(
     prev: Option<&Arc<Node>>,
     curr: Option<&Arc<Node>>,
     viewport: LumenRect,
-    damage: &mut FrameDamage,
-) {
+) -> bool {
     match (prev, curr) {
-        (None, None) => {}
-        (None, Some(c)) => {
-            // Whole new tree appeared; damage its bounds.
-            push_rect(damage, node_bounds(c, viewport, Affine::IDENTITY));
+        (None, None) => false,
+        // Whole new tree appeared, or the whole tree was removed.
+        (None, Some(node)) | (Some(node), None) => {
+            has_area(node_bounds(node, viewport, Affine::IDENTITY))
         }
-        (Some(p), None) => {
-            // Whole tree removed; damage the prior bounds.
-            push_rect(damage, node_bounds(p, viewport, Affine::IDENTITY));
-        }
-        (Some(p), Some(c)) => {
-            diff_node(p, c, viewport, Affine::IDENTITY, damage);
-        }
+        (Some(p), Some(c)) => diff_node(p, c, viewport, Affine::IDENTITY),
     }
 }
 
-/// Lockstep recursive diff. `xform` is the running ancestor transform - for nested `Node::Transform` frames
-/// the same matrix multiplies into both sides (we only enter `diff_node` for ptr-different subtrees that share
-/// transforms only if their parameters match). When parameters diverge we punt to whole-subtree damage on both
-/// sides.
-fn diff_node(
-    prev: &Arc<Node>,
-    curr: &Arc<Node>,
-    viewport: LumenRect,
-    xform: Affine,
-    damage: &mut FrameDamage,
-) {
+/// Lockstep recursive diff. `xform` is the running ancestor transform: for nested `Node::Transform`
+/// frames the same matrix multiplies into both sides. When parameters diverge, both whole subtrees
+/// count, each under its own matrix.
+fn diff_node(prev: &Arc<Node>, curr: &Arc<Node>, viewport: LumenRect, xform: Affine) -> bool {
     if Arc::ptr_eq(prev, curr) {
-        return;
+        return false;
     }
     match (prev.as_ref(), curr.as_ref()) {
         (Node::Container { children: pc }, Node::Container { children: cc }) => {
-            // Walk pair-wise; on length mismatch the extra tail damages on whichever side has it.
             let common = pc.len().min(cc.len());
-            for i in 0..common {
-                diff_node(&pc[i], &cc[i], viewport, xform, damage);
-            }
-            if pc.len() > common {
-                for child in &pc[common..] {
-                    push_rect(damage, node_bounds(child, viewport, xform));
-                }
-            }
-            if cc.len() > common {
-                for child in &cc[common..] {
-                    push_rect(damage, node_bounds(child, viewport, xform));
-                }
-            }
+            (0..common).any(|i| diff_node(&pc[i], &cc[i], viewport, xform))
+                || pc[common..]
+                    .iter()
+                    .chain(&cc[common..])
+                    .any(|child| has_area(node_bounds(child, viewport, xform)))
         }
         (
             Node::Transform {
@@ -555,19 +526,15 @@ fn diff_node(
             },
         ) => {
             if pm == cm {
-                let composed = compose_affine(xform, *cm);
-                diff_node(pchild, cchild, viewport, composed, damage);
+                diff_node(pchild, cchild, viewport, compose_affine(xform, *cm))
             } else {
-                // Matrix changed - both old and new bounds differ; damage both sides under their respective
-                // matrices.
-                push_rect(
-                    damage,
-                    node_bounds(pchild, viewport, compose_affine(xform, *pm)),
-                );
-                push_rect(
-                    damage,
-                    node_bounds(cchild, viewport, compose_affine(xform, *cm)),
-                );
+                either_has_area(
+                    pchild,
+                    cchild,
+                    viewport,
+                    compose_affine(xform, *pm),
+                    compose_affine(xform, *cm),
+                )
             }
         }
         (
@@ -581,10 +548,9 @@ fn diff_node(
             },
         ) => {
             if (pa - ca).abs() < f32::EPSILON {
-                diff_node(pchild, cchild, viewport, xform, damage);
+                diff_node(pchild, cchild, viewport, xform)
             } else {
-                push_rect(damage, node_bounds(pchild, viewport, xform));
-                push_rect(damage, node_bounds(cchild, viewport, xform));
+                either_has_area(pchild, cchild, viewport, xform, xform)
             }
         }
         (
@@ -598,34 +564,30 @@ fn diff_node(
             },
         ) => {
             if ps == cs {
-                diff_node(pchild, cchild, viewport, xform, damage);
+                diff_node(pchild, cchild, viewport, xform)
             } else {
-                push_rect(damage, node_bounds(pchild, viewport, xform));
-                push_rect(damage, node_bounds(cchild, viewport, xform));
+                either_has_area(pchild, cchild, viewport, xform, xform)
             }
         }
         // Leaves: compare appearance. The producer rebuilds every leaf as a
         // fresh `Arc` each frame, so `Arc::ptr_eq` never matches across frames
         // - a purely structural (ptr / bounds) diff would therefore mark every
-        // leaf dirty and defeat partial repaint entirely. Comparing the leaves'
-        // visual fields lets an unchanged leaf contribute no damage, so damage
-        // is proportional to what actually changed (GTK `gtk_widget_queue_draw`
-        // / Qt `QWidget::update()` region accumulation).
-        _ => {
-            if leaf_visually_eq(prev, curr) {
-                // Identical appearance and position - no damage.
-            } else {
-                let pb = node_bounds(prev, viewport, xform);
-                let cb = node_bounds(curr, viewport, xform);
-                if rect_eq(pb, cb) {
-                    push_rect(damage, pb);
-                } else {
-                    push_rect(damage, pb);
-                    push_rect(damage, cb);
-                }
-            }
-        }
+        // leaf changed and defeat partial repaint entirely. Comparing the
+        // leaves' visual fields lets an unchanged leaf count as unchanged.
+        _ => !leaf_visually_eq(prev, curr) && either_has_area(prev, curr, viewport, xform, xform),
     }
+}
+
+/// Whether the old or the new side of a changed pair covers any area, each under its own transform.
+fn either_has_area(
+    prev: &Node,
+    curr: &Node,
+    viewport: LumenRect,
+    prev_xform: Affine,
+    curr_xform: Affine,
+) -> bool {
+    has_area(node_bounds(prev, viewport, prev_xform))
+        || has_area(node_bounds(curr, viewport, curr_xform))
 }
 
 /// Returns `true` when two leaf nodes are visually identical - same
@@ -844,11 +806,11 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
                 viewport
             }
         }
-        // The seam requires bounds that enclose every pixel the painter touches, so damage from a
-        // native leaf is confined to them like any other leaf. Bounds with no area are the one
-        // exception: an empty rect is dropped from the damage list, which would leave such a leaf
-        // frozen on screen no matter how often its revision moved, so it falls back to the
-        // viewport - a repaint that costs too much beats one that never happens.
+        // The seam requires bounds that enclose every pixel the painter touches, so a native leaf
+        // reports them like any other leaf. Bounds with no area are the one exception: a change
+        // with no area counts as no change, which would leave such a leaf frozen on screen no
+        // matter how often its revision moved, so it falls back to the viewport - a repaint that
+        // costs too much beats one that never happens.
         Node::Native { bounds, .. } => {
             if bounds.size.x <= 0.0 || bounds.size.y <= 0.0 {
                 viewport
@@ -919,35 +881,17 @@ fn union(a: LumenRect, b: LumenRect) -> LumenRect {
     }
 }
 
-fn rect_eq(a: LumenRect, b: LumenRect) -> bool {
-    a.origin == b.origin && a.size == b.size
-}
-
-fn push_rect(damage: &mut FrameDamage, r: LumenRect) {
-    if r.size.x > 0.0 && r.size.y > 0.0 {
-        damage.push(r);
-    }
-}
-
-/// Returns the smallest rect that encloses every damage rect. Useful for renderers that only support a single
-/// scissor box. Returns `None` when the damage list is empty.
-pub fn damage_union(damage: &FrameDamage) -> Option<LumenRect> {
-    let mut iter = damage.0.iter();
-    let first = *iter.next()?;
-    let mut acc = first;
-    for r in iter {
-        acc = union(acc, *r);
-    }
-    Some(acc)
+/// Whether a changed subtree's bounds cover any pixels. A change with no area paints nothing.
+fn has_area(r: LumenRect) -> bool {
+    r.size.x > 0.0 && r.size.y > 0.0
 }
 
 /// Whether the retained Node IR differs visually from the last painted frame.
 ///
 /// Diffs `PreviousScene` (the last painted tree) against `RetainedScene` (this tick's freshly built
-/// tree). The first frame - `PreviousScene.root == None` - reports damage so the initial paint always
-/// runs. Conservative: the diff assumes-changed for any leaf it cannot compare (images, SVGs), so it
-/// never under-reports the dirty region, and a render world missing the scene resources (a
-/// non-standard embed) always reports damage.
+/// tree). Conservative: the diff assumes-changed for any leaf it cannot compare (images, SVGs), so it
+/// never misses a change, and a render world missing the scene resources (a non-standard embed)
+/// always reports one.
 pub fn scene_has_damage(render_world: &World) -> bool {
     let previous = render_world.get_resource::<PreviousScene>();
     let retained = render_world.get_resource::<RetainedScene>();
@@ -962,14 +906,11 @@ pub fn scene_has_damage(render_world: &World) -> bool {
         origin: glam::Vec2::ZERO,
         size,
     };
-    let mut damage = FrameDamage::default();
     diff_retained_scenes(
         previous.root.as_ref(),
         retained.root.as_ref(),
         viewport_rect,
-        &mut damage,
-    );
-    !damage.is_empty()
+    )
 }
 
 #[cfg(test)]

@@ -1,34 +1,42 @@
 //! WGPU + vello renderer backend.
 //!
-//! Both entry points paint through the walker in `lumen-paint` into a [`VelloPainter`], then hand
-//! the scene to vello:
+//! [`WgpuRenderer`] paints through the walker in `lumen-paint` into a
+//! [`VelloPainter`] and renders the scene with vello into a texture. One GPU
+//! core (device bring-up, the vello renderer, the fragment cache, the frame
+//! texture, readback) serves both kinds of target the renderer attaches to
+//! through [`lumen_core::traits::Renderer`]:
 //!
-//! - [`WgpuRenderer`], an offscreen renderer that draws into an `Rgba8Unorm` texture. Tests read the framebuffer back to CPU for cross-platform parity.
-//! - [`WgpuSurfaceRenderer`], the on-screen path. It presents into whatever window a window backend attaches, through [`lumen_core::traits::SurfaceRenderer`], so the window backend never names wgpu or vello.
+//! - an offscreen image, read back to the CPU for headless runs,
+//!   screenshots, and tests;
+//! - a window, where the frame texture is blitted onto the swap chain and
+//!   presented. A window backend drives it without naming wgpu or vello.
+//!
+//! Headless runs therefore exercise the same bring-up, gate, walk, and
+//! encode a windowed app ships.
 
 #![warn(missing_docs)]
 
 pub mod capability;
+mod gpu;
 pub mod sink;
-pub mod surface;
+mod surface;
+pub use gpu::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV};
 pub use sink::{BACKEND_ID, VelloPainter};
-pub use surface::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV, WgpuSurfaceRenderer};
 /// The vello version this backend draws with. A painter that needs vello
 /// itself downcasts [`lumen_paint::Painter::native`] to [`VelloPainter`] and
 /// encodes into its scene; it reaches vello through this re-export rather
 /// than declaring its own dependency, so both sides mean the same vello.
 pub use vello;
 
-use bevy_ecs::prelude::*;
-use bevy_ecs::system::NonSendMut;
-use lumen_core::components::Color as LumenColor;
+use bevy_ecs::world::World;
+use gpu::GpuCore;
 use lumen_core::prelude::*;
-use lumen_core::render_world::{SurfaceCapture, SurfaceFrame};
-use lumen_paint::{FragmentCache, PaintTarget, WalkContext};
+use lumen_core::render_backend::install_offscreen;
+use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
 use lumen_text::{ShaperService, TextShaper};
-use thiserror::Error;
+use surface::SurfaceFront;
+use vello::RendererOptions;
 use vello::wgpu;
-use vello::{AaConfig, RenderParams, RendererOptions};
 
 /// The single GPU backend this per-OS build compiles and probes (Part A of
 /// runtime-tree-shaking). The Cargo manifest already trims wgpu/naga to one
@@ -55,23 +63,6 @@ const NATIVE_BACKENDS: wgpu::Backends = {
     }
 };
 
-/// Errors from constructing or operating a [`WgpuRenderer`].
-#[derive(Debug, Error)]
-pub enum WgpuRendererError {
-    /// No suitable wgpu adapter is available on this machine.
-    #[error("no suitable wgpu adapter: {0}")]
-    NoAdapter(String),
-    /// wgpu device request failed.
-    #[error("request_device failed: {0}")]
-    RequestDevice(#[from] wgpu::RequestDeviceError),
-    /// vello renderer construction failed.
-    #[error("vello renderer init failed: {0}")]
-    Vello(String),
-    /// vello render call failed.
-    #[error("vello render failed: {0}")]
-    Render(String),
-}
-
 /// Why this machine cannot do GPU pixel work, or `None` when it can.
 ///
 /// Probes for an adapter and reports back: no adapter at all, or one that is a
@@ -83,7 +74,8 @@ pub fn gpu_unavailable_reason() -> Option<String> {
     match WgpuRenderer::new_offscreen(4, 4) {
         Ok(r) if r.is_software_adapter() => Some(format!(
             "adapter '{}' is a software rasterizer",
-            r.adapter_info().name
+            r.adapter_info()
+                .map_or("unknown", |info| info.name.as_str())
         )),
         Ok(_) => None,
         Err(e) => Some(format!("no wgpu adapter available ({e})")),
@@ -109,121 +101,64 @@ fn is_warp(adapter: &wgpu::AdapterInfo) -> bool {
     adapter.backend == wgpu::Backend::Dx12 && adapter.device_type == wgpu::DeviceType::Cpu
 }
 
-/// Offscreen WGPU + vello renderer.
+/// What a renderer is bound to: the GPU core, plus the swap chain when the
+/// target is a window.
 ///
-/// Holds the device, queue, vello renderer, the [`VelloPainter`] a frame is
-/// painted into, and the offscreen texture target. The render-world system
-/// paints the frame and calls [`Self::render_current`].
+/// Field order matters on teardown: the device is drained first (see
+/// [`Drop`]), then the surface drops ahead of the device it was configured
+/// for.
+struct Bound {
+    window: Option<SurfaceFront>,
+    gpu: GpuCore,
+    /// Whether the frame texture holds a painted frame at its current
+    /// size. A fresh or resized texture does not, and paints regardless of
+    /// the scene diff.
+    holds_frame: bool,
+}
+
+impl Drop for Bound {
+    fn drop(&mut self) {
+        self.gpu.drain();
+    }
+}
+
+/// WGPU + vello renderer, for a window or an offscreen image.
+///
+/// Construction is free and does no GPU work: a window backend builds one
+/// before the window exists and attaches the window once it does, and a
+/// headless launch attaches an offscreen image (see
+/// [`Self::new_offscreen`]).
+#[derive(Default)]
 pub struct WgpuRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    vello: vello::Renderer,
-    /// The sink a frame is painted into; a [`VelloPainter`], reset by the
-    /// render system each frame.
-    painter: PaintTarget,
-    width: u32,
-    height: u32,
-    texture: wgpu::Texture,
-    texture_view: wgpu::TextureView,
-    /// Number of actual GPU encode+submit passes ([`render_current`]) since
-    /// construction. Frames skipped by the empty-damage partial-repaint gate do
-    /// not increment it, so `render_count` measures real present work - a static
-    /// UI redrawn on a false-positive dirty flag leaves it flat.
+    bound: Option<Bound>,
+    /// Frames rendered since construction. Frames the present gate skipped
+    /// do not count, so a static UI redrawn on a false-positive dirty flag
+    /// leaves it flat.
     render_count: u64,
-    /// Adapter this renderer bound to. Kept so callers can tell a GPU from a
-    /// software rasterizer without re-enumerating adapters.
-    adapter_info: wgpu::AdapterInfo,
 }
 
 impl WgpuRenderer {
-    /// Construct an offscreen renderer of the given pixel size.
-    pub fn new_offscreen(width: u32, height: u32) -> Result<Self, WgpuRendererError> {
-        pollster::block_on(Self::new_offscreen_async(width, height))
+    /// A renderer bound to nothing yet.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Async constructor.
-    ///
-    /// Surface-less adapter discovery (W6 T1): `compatible_surface` stays
-    /// `None` so a host with zero display sockets (no Wayland/X) still
-    /// yields a compute-capable adapter. The instance is pinned to this OS's
-    /// single [`NATIVE_BACKENDS`] backend (Part A). If that turns up nothing
-    /// (e.g. no Vulkan ICD), a `gl-fallback` build additionally tries a GL-only
-    /// instance before surfacing a clear [`WgpuRendererError::NoAdapter`] --
-    /// callers exit with the message, never a crash. Without the `gl-fallback`
-    /// feature the GL backend is compiled out, so the error is returned
-    /// directly.
-    pub async fn new_offscreen_async(width: u32, height: u32) -> Result<Self, WgpuRendererError> {
-        let opts = wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        };
-        // No display handle: this renderer is offscreen and never presents, so
-        // there is no compositor connection to declare. wgpu 29 requires the
-        // choice to be explicit.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: NATIVE_BACKENDS,
-            ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
-        });
-        let adapter = match instance.request_adapter(&opts).await {
-            Ok(a) => a,
-            Err(primary_err) => {
-                #[cfg(feature = "gl-fallback")]
-                {
-                    let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                        backends: wgpu::Backends::GL,
-                        ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
-                    });
-                    gl_instance.request_adapter(&opts).await.map_err(|gl_err| {
-                        WgpuRendererError::NoAdapter(format!(
-                            "no adapter on the {NATIVE_BACKENDS:?} backend (primary: {primary_err}; GL fallback: {gl_err})"
-                        ))
-                    })?
-                }
-                #[cfg(not(feature = "gl-fallback"))]
-                {
-                    return Err(WgpuRendererError::NoAdapter(format!(
-                        "no adapter on the {NATIVE_BACKENDS:?} backend (primary: {primary_err}); \
-                         rebuild lumen-render-wgpu with --features gl-fallback for the GL compat path"
-                    )));
-                }
-            }
-        };
-        let adapter_info = adapter.get_info();
-        let limits = adapter.limits();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("lumen-render-wgpu device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            })
-            .await?;
-
-        let vello = vello::Renderer::new(&device, vello_options(&adapter_info))
-            .map_err(|e| WgpuRendererError::Vello(format!("{e:?}")))?;
-
-        let (texture, texture_view) = make_target(&device, width, height);
-
-        Ok(Self {
-            device,
-            queue,
-            vello,
-            painter: Box::new(VelloPainter::new()),
-            width,
-            height,
-            texture,
-            texture_view,
-            render_count: 0,
-            adapter_info,
-        })
+    /// A renderer already attached to a `width` x `height` offscreen image.
+    pub fn new_offscreen(width: u32, height: u32) -> Result<Self, RenderError> {
+        let mut renderer = Self::new();
+        renderer.attach(FrameTarget::Offscreen { width, height })?;
+        Ok(renderer)
     }
 
-    /// Name, backend, and device type of the adapter this renderer bound to.
-    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
-        &self.adapter_info
+    /// Whether a target is currently bound.
+    pub fn is_attached(&self) -> bool {
+        self.bound.is_some()
+    }
+
+    /// Name, backend, and device type of the adapter this renderer bound
+    /// to, or `None` while detached.
+    pub fn adapter_info(&self) -> Option<&wgpu::AdapterInfo> {
+        self.bound.as_ref().map(|b| &b.gpu.adapter_info)
     }
 
     /// Whether rendering runs on a software rasterizer (lavapipe, WARP,
@@ -231,161 +166,102 @@ impl WgpuRenderer {
     /// interchangeable with a hardware render, so image comparisons need to know
     /// which they got.
     pub fn is_software_adapter(&self) -> bool {
-        self.adapter_info.device_type == wgpu::DeviceType::Cpu
+        self.adapter_info()
+            .is_some_and(|info| info.device_type == wgpu::DeviceType::Cpu)
     }
 
-    /// Pixel size of the offscreen target.
-    pub fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
+    /// Pixel size of the target, or `None` while detached.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        self.bound.as_ref().map(|b| b.gpu.size())
     }
 
-    /// Resize the offscreen target. Allocates a fresh texture if needed.
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width == self.width && height == self.height {
-            return;
-        }
-        let (texture, view) = make_target(&self.device, width, height);
-        self.texture = texture;
-        self.texture_view = view;
-        self.width = width;
-        self.height = height;
-    }
-
-    /// Number of real GPU encode+submit passes since construction. Unchanged
-    /// across frames the empty-damage gate skipped - see [`Self::render_count`].
+    /// Frames rendered since construction. Unchanged across frames the
+    /// present gate skipped.
     pub fn render_count(&self) -> u64 {
         self.render_count
     }
 
-    /// The sink frames are painted into, as the walker takes it.
-    pub fn painter_mut(&mut self) -> &mut PaintTarget {
-        &mut self.painter
+    /// The last rendered frame as tightly packed RGBA8.
+    pub fn read_rgba8(&self) -> Result<Vec<u8>, RenderError> {
+        let bound = self.bound.as_ref().ok_or(RenderError::Detached)?;
+        bound.gpu.read_rgba8().map_err(RenderError::Present)
     }
+}
 
-    /// The sink frames are painted into, as its concrete type.
-    pub fn vello_painter(&mut self) -> &mut VelloPainter {
-        self.painter
-            .native()
-            .downcast_mut::<VelloPainter>()
-            .expect("the offscreen renderer paints through a VelloPainter")
-    }
-
-    /// Render the painted frame into the offscreen target.
-    pub fn render_current(&mut self, clear: LumenColor) {
-        self.render_count += 1;
-        let params = RenderParams {
-            base_color: lumen_paint::peniko_color(clear),
-            width: self.width,
-            height: self.height,
-            antialiasing_method: AaConfig::Area,
+impl Renderer for WgpuRenderer {
+    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
+        // Drop any previous binding first so an old surface releases its
+        // window before a new one claims it.
+        self.bound = None;
+        let (window, size) = match &target {
+            FrameTarget::Window(window) => (Some(window), window.physical_size()),
+            FrameTarget::Offscreen { width, height } => (None, (*width, *height)),
         };
-        let scene = self
-            .painter
-            .native()
-            .downcast_ref::<VelloPainter>()
-            .expect("the offscreen renderer paints through a VelloPainter")
-            .scene();
-        if let Err(e) = self.vello.render_to_texture(
-            &self.device,
-            &self.queue,
-            scene,
-            &self.texture_view,
-            &params,
-        ) {
-            eprintln!("lumen-render-wgpu: vello render failed: {e:?}");
-        }
+        let (gpu, surface) =
+            GpuCore::bring_up(window, size.0, size.1).map_err(RenderError::Init)?;
+        let window = match (target, surface) {
+            (FrameTarget::Window(window), Some(surface)) => {
+                Some(SurfaceFront::new(&gpu, surface, window)?)
+            }
+            _ => None,
+        };
+        self.bound = Some(Bound {
+            window,
+            gpu,
+            holds_frame: false,
+        });
+        Ok(())
     }
 
-    /// Read back the offscreen texture as RGBA8.
-    pub fn read_rgba8(&self) -> Result<Vec<u8>, WgpuRendererError> {
-        pollster::block_on(self.read_rgba8_async())
+    fn resize(&mut self, width: u32, height: u32) -> bool {
+        let Some(bound) = self.bound.as_mut() else {
+            return false;
+        };
+        if !bound.gpu.resize(width, height) {
+            return false;
+        }
+        if let Some(window) = bound.window.as_mut() {
+            window.resize(&bound.gpu);
+        }
+        bound.holds_frame = false;
+        true
     }
 
-    /// Async variant of [`read_rgba8`](Self::read_rgba8).
-    pub async fn read_rgba8_async(&self) -> Result<Vec<u8>, WgpuRendererError> {
-        let unpadded = self.width as usize * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
-        let padded = unpadded.div_ceil(align) * align;
-        let size = (padded * self.height as usize) as u64;
+    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool {
+        self.bound
+            .as_ref()
+            .is_some_and(|b| lumen_paint::wants_frame(render_world, request, b.holds_frame))
+    }
 
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("lumen wgpu readback"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("lumen wgpu readback encoder"),
-            });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded as u32),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit(Some(encoder.finish()));
-
-        let slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        rx.recv()
-            .map_err(|_| WgpuRendererError::Render("map channel dropped".into()))?
-            .map_err(|e| WgpuRendererError::Render(format!("{e:?}")))?;
-
-        let raw = slice.get_mapped_range();
-        let mut out = Vec::with_capacity(unpadded * self.height as usize);
-        for row in 0..self.height as usize {
-            let start = row * padded;
-            out.extend_from_slice(&raw[start..start + unpadded]);
+    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
+        let bound = self.bound.as_mut().ok_or(RenderError::Detached)?;
+        bound
+            .gpu
+            .render(render_world)
+            .map_err(RenderError::Present)?;
+        bound.holds_frame = true;
+        self.render_count += 1;
+        // Read back before the blit: the frame texture holds exactly what
+        // the window is about to show.
+        lumen_paint::answer_capture(render_world, bound.gpu.size(), || bound.gpu.read_rgba8());
+        if let Some(window) = bound.window.as_mut() {
+            window.present(&bound.gpu)?;
         }
-        drop(raw);
-        buffer.unmap();
-        Ok(out)
+        Ok(())
+    }
+
+    fn detach(&mut self) {
+        self.bound = None;
     }
 }
 
-/// Drain the device before the queue drops. wgpu-core's `Queue::drop` waits
-/// on the last submission with a fixed timeout and panics when it expires;
-/// a software rasterizer on a loaded machine can hold a frame past it, and
-/// a panic inside drop aborts the process. Waiting here, without a
-/// deadline, turns that abort into a quiet finish.
-impl Drop for WgpuRenderer {
-    fn drop(&mut self) {
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-    }
-}
-
-impl lumen_core::traits::Renderer for WgpuRenderer {}
-
-/// Plugin: installs the offscreen [`WgpuRenderer`] into the render world and
-/// registers the render-world system in [`RenderStage::Render`].
+/// Plugin: installs an offscreen [`WgpuRenderer`] into the render world,
+/// driven each frame by [`install_offscreen`]'s render-world system.
 ///
 /// Optionally accepts a [`TextShaper`] via
 /// [`WgpuRendererPlugin::with_text_shaper`]; without it, text draw commands
 /// are skipped. The shaper is installed as a render-world [`ShaperService`],
-/// the same holder the on-screen path reads, so both render paths find the
-/// shaper in one place.
+/// the same holder a windowed renderer reads.
 pub struct WgpuRendererPlugin {
     /// Initial offscreen target width.
     pub width: u32,
@@ -403,12 +279,7 @@ pub struct WgpuRendererPlugin {
 
 impl Default for WgpuRendererPlugin {
     fn default() -> Self {
-        Self {
-            width: 800,
-            height: 600,
-            text_shaper: None,
-            renderer: None,
-        }
+        Self::new(800, 600)
     }
 }
 
@@ -431,8 +302,7 @@ impl WgpuRendererPlugin {
 
     /// Attach an already-boxed text shaper (same effect as
     /// [`Self::with_text_shaper`]; avoids double-boxing when the caller
-    /// already holds a `Box<dyn TextShaper>` - e.g. the one built for
-    /// `WindowOptions`).
+    /// already holds a `Box<dyn TextShaper>`).
     pub fn with_boxed_text_shaper(mut self, shaper: Box<dyn TextShaper>) -> Self {
         self.text_shaper = Some(shaper);
         self
@@ -448,153 +318,17 @@ impl WgpuRendererPlugin {
 
 impl Plugin for WgpuRendererPlugin {
     fn build(self, app: &mut App) {
-        // The walker below reads the retained tree; this is what builds it.
-        lumen_core::render_world::install_extract_pipeline(app);
         let renderer = match self.renderer {
             Some(r) => r,
             None => WgpuRenderer::new_offscreen(self.width, self.height)
                 .expect("WgpuRenderer offscreen init"),
         };
-        app.render_world.insert_non_send(renderer);
-        // The fragment cache lets the walker encode each repeated appearance once.
-        app.render_world.insert_resource(FragmentCache::default());
         if let Some(shaper) = self.text_shaper {
             app.render_world
                 .insert_non_send(ShaperService::from(shaper));
         }
-        app.add_render_systems(RenderStage::Render, wgpu_render_system);
+        install_offscreen(app, renderer);
     }
-}
-
-/// Render-world system that drives the offscreen [`WgpuRenderer`] via the shared Node IR walker.
-///
-/// Walks the [`lumen_core::node_ir::RetainedScene`]; leaves route through the cached emitters when the
-/// [`FragmentCache`] resource is present.
-///
-/// Damage-driven partial repaint: the system calls [`lumen_paint::diff_retained_scenes`] against the
-/// previous frame's root and skips the entire encode + submit when the diff is empty (the visual tree is
-/// unchanged), keeping the last-rendered target on screen. A non-empty diff re-encodes the whole scene -
-/// bounding the encode to the damage rect is not pixel-safe while vello clears the whole target per call.
-///
-/// A pending [`SurfaceCapture`] request is answered from the target after the frame.
-#[allow(clippy::too_many_arguments)]
-fn wgpu_render_system(
-    mut renderer: NonSendMut<WgpuRenderer>,
-    mut cache: Option<ResMut<FragmentCache>>,
-    shaper: Option<NonSendMut<ShaperService>>,
-    viewport: Res<Viewport>,
-    retained: Res<lumen_core::node_ir::RetainedScene>,
-    mut previous: ResMut<lumen_core::node_ir::PreviousScene>,
-    mut damage: ResMut<FrameDamage>,
-    natives: Option<Res<lumen_core::native::NativePainters>>,
-    capture: Option<Res<SurfaceCapture>>,
-) {
-    // Device pixel ratio: the walker scales every leaf (and clip) from logical to physical pixels
-    // at emit time, so the target texture and the damage scissor must be sized in the same physical
-    // space. Offscreen viewports default to `scale_factor == 1.0`, making this a no-op there.
-    let dpr = viewport.scale_factor.max(0.01);
-    let w = (viewport.size.x * dpr).max(1.0) as u32;
-    let h = (viewport.size.y * dpr).max(1.0) as u32;
-    // A reallocated target holds no frame, so a resize repaints even an unchanged tree.
-    let resized = renderer.size() != (w, h);
-    renderer.resize(w, h);
-
-    let viewport_rect = lumen_core::render_world::Rect {
-        origin: glam::Vec2::ZERO,
-        size: viewport.size,
-    };
-    damage.clear();
-    lumen_paint::diff_retained_scenes(
-        previous.root.as_ref(),
-        retained.root.as_ref(),
-        viewport_rect,
-        &mut damage,
-    );
-
-    // Partial-repaint gate. The retained Node-IR diff tells us whether the
-    // visual tree actually changed this frame. When it did not (empty damage)
-    // and a previous frame already rendered into the target, skip the whole
-    // encode + submit - the offscreen texture still holds the pixel-identical
-    // last frame. Mirrors Qt `QWidget::update()` collapsing to no backing-store
-    // flush when the computed dirty region is empty, and GTK's damage-region
-    // coalescing.
-    //
-    // When the tree did change we re-encode the entire scene. A damage-bounded
-    // scissor is deliberately not applied: `render_to_texture` clears the whole
-    // target to `base_color` on every call, so clipping the encode to the
-    // damage rect would blank every untouched pixel - not pixel-identical.
-    // Pixel-safe partial *encode* needs a preserved backing store (deferred
-    // slice). `FrameDamage` is still populated
-    // for consumers that only need the dirty-region *size*.
-    let first_frame = previous.root.is_none();
-    if first_frame || resized || !damage.is_empty() {
-        renderer.vello_painter().reset();
-        {
-            let mut shaper_opt = shaper;
-            let shaper_ref: Option<&mut dyn TextShaper> = shaper_opt
-                .as_deref_mut()
-                .map(|s| &mut **s as &mut dyn TextShaper);
-            let mut ctx = WalkContext::new_with_dpr(
-                renderer.painter_mut(),
-                cache.as_deref_mut(),
-                shaper_ref,
-                dpr,
-            );
-            if let Some(painters) = natives.as_deref() {
-                ctx = ctx.with_native_painters(painters);
-            }
-            lumen_paint::walk_retained_scene(&mut ctx, &retained);
-        }
-
-        let clear = viewport.clear;
-        renderer.render_current(clear);
-    }
-
-    // Park the just-walked tree so the next frame's diff has something to compare against.
-    previous.root = retained.root.clone();
-
-    // A screenshot request is answered from the target, which holds this
-    // frame whether it was painted now or kept from an unchanged tree.
-    if let Some(capture) = capture
-        && capture.is_requested()
-    {
-        let (width, height) = renderer.size();
-        match renderer.read_rgba8() {
-            Ok(rgba8) => capture.write(SurfaceFrame {
-                width,
-                height,
-                rgba8,
-            }),
-            Err(e) => eprintln!("lumen-render-wgpu: offscreen readback failed: {e}"),
-        }
-        // Cleared either way so a persistent GPU error cannot wedge the requester.
-        capture.clear_request();
-    }
-}
-
-fn make_target(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("lumen wgpu offscreen target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
 }
 
 #[cfg(test)]
@@ -656,5 +390,34 @@ mod tests {
         let boxed: Box<dyn TextShaper> = Box::new(NullShaper);
         let with_box = WgpuRendererPlugin::new(8, 8).with_boxed_text_shaper(boxed);
         assert!(with_box.text_shaper.is_some());
+    }
+
+    /// A renderer with no target bound answers every call without touching
+    /// the GPU: nothing to resize, nothing to read, no frame wanted, and no
+    /// panic. A window backend builds one before the window exists, so
+    /// this is the state it starts in.
+    #[test]
+    fn a_detached_renderer_has_nothing_to_present() {
+        let mut renderer = WgpuRenderer::new();
+        assert!(!renderer.is_attached());
+        assert_eq!(renderer.size(), None);
+        assert!(renderer.adapter_info().is_none());
+        assert!(!renderer.is_software_adapter());
+        assert!(!renderer.resize(800, 600));
+        assert!(matches!(renderer.read_rgba8(), Err(RenderError::Detached)));
+        let mut world = World::new();
+        world.insert_resource(Viewport::default());
+        let request = FrameRequest {
+            dirty: true,
+            force_full: true,
+        };
+        assert!(!renderer.wants_present(&mut world, request));
+        assert!(matches!(
+            renderer.present(&mut world),
+            Err(RenderError::Detached)
+        ));
+        // Detaching an unattached renderer is a no-op, not an error.
+        renderer.detach();
+        assert!(!renderer.is_attached());
     }
 }

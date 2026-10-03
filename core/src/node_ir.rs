@@ -33,17 +33,14 @@
 //! ## Content sharing
 //!
 //! Children are held in `Arc<Node>` so identical subtrees can share storage across frames - the diff can
-//! short-circuit via `Arc::ptr_eq` and the leaf-encoding [`crate::render_world::SceneFragmentCache`] becomes a
-//! content-addressed layer on top.
+//! short-circuit via `Arc::ptr_eq` and a renderer's leaf-encoding fragment cache (`lumen_paint::FragmentCache`)
+//! becomes a content-addressed layer on top.
 //!
-//! ## Wave 2 status
+//! ## Producer and consumer
 //!
-//! - W2.1 ships the types + a `transform_extracted_to_nodes` system that walks the existing extract output and
-//!   produces a [`RetainedScene`] each frame. The legacy `Extracted*` components stay in place so the existing
-//!   render systems keep compiling during the migration.
-//! - W2.2 wires the renderer walker (`lumen_render_wgpu::walk_node`) to consume [`RetainedScene`].
-//! - W2.3 puts overflow clipping back on the rails via the [`Node::Clip`] variant - see the [`Clip`] doc-comment.
-//! - W2.4 lets the offscreen render path reuse the same walker (and hence the [`crate::render_world::SceneFragmentCache`]).
+//! `transform_extracted_to_nodes` walks the extract output and produces a [`RetainedScene`] each frame; the
+//! walker in `lumen-paint` consumes it for every renderer and every kind of target. Overflow clipping rides the
+//! [`Node::Clip`] variant - see the [`Clip`] doc-comment.
 
 use crate::components::{Color, ImageBlob, SvgPayload};
 use crate::native::ExtractedNative;
@@ -525,7 +522,7 @@ impl std::fmt::Debug for RetainedScene {
 }
 
 /// Snapshot of the previous tick's [`RetainedScene`]. Stored on the render world so the renderer can diff
-/// `Arc::ptr_eq` between corresponding subtrees and emit damage rects into [`crate::render_world::FrameDamage`].
+/// corresponding subtrees (short-circuiting on `Arc::ptr_eq`) and skip a frame whose tree did not change.
 ///
 /// Wave 2 stores the root only; the depth-first diff lives in the back-end walker.
 #[derive(Resource, Default)]

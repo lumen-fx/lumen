@@ -162,8 +162,9 @@ pub struct DockInsets {
 /// - Cleared by the window backend after submitting the frame.
 /// - When unset, window backends skip GPU encode and submit in `RedrawRequested`.
 ///
-/// Kept as a `bool` alias for legacy consumers (the wgpu render system).
-/// Wave 2 lands [`FrameDamage`] as the typed replacement.
+/// The flag over-approximates. A renderer refines it with the retained-scene
+/// diff (`lumen_paint::scene_has_damage`), which tells whether the painted
+/// tree really changed.
 #[derive(Resource, Debug)]
 pub struct FrameDirty {
     /// `true` when the upcoming frame needs a fresh GPU encode.
@@ -237,7 +238,7 @@ pub fn reset_animations_active(flag: Res<AnimationsActive>) {
     flag.clear();
 }
 
-/// Axis-aligned rectangle in logical pixel coordinates. Used by [`FrameDamage`].
+/// Axis-aligned rectangle in logical pixel coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     /// Top-left corner.
@@ -250,30 +251,6 @@ impl Rect {
     /// Constructs a rect from origin and size.
     pub const fn new(origin: Vec2, size: Vec2) -> Self {
         Self { origin, size }
-    }
-}
-
-/// Per-frame list of damage rectangles for partial-redraw / dirty-region rendering.
-///
-/// Will replace the boolean [`FrameDirty`] once wave 1.5 / wave 2 fills it. Foundation only installs the resource so
-/// downstream producers and consumers have a stable type to target.
-#[derive(Resource, Default, Debug)]
-pub struct FrameDamage(pub Vec<Rect>);
-
-impl FrameDamage {
-    /// Clears the damage list.
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    /// Appends `r` to the damage list. The resource keeps duplicates and lets the consumer coalesce.
-    pub fn push(&mut self, r: Rect) {
-        self.0.push(r);
-    }
-
-    /// Returns `true` when no damage rectangles are recorded.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 

@@ -30,8 +30,8 @@ use crate::input::{
 use crate::node_ir::{PreviousScene, RetainedScene};
 use crate::property_store::PropertyStore;
 use crate::render_world::{
-    ExtractFn, ExtractSchedule, ExtractSet, FrameDamage, FrameDirty, HiddenExtracts, Render,
-    RenderStage, Viewport, clear_extracted,
+    ExtractFn, ExtractSchedule, ExtractSet, FrameDirty, HiddenExtracts, Render, RenderStage,
+    Viewport, clear_extracted,
 };
 use crate::tick::TickStage;
 use crate::time::Instant;
@@ -387,8 +387,6 @@ impl App {
         // Build the render world.
         let mut render_world = World::new();
         render_world.insert_resource(Viewport::default());
-        // Per-frame damage list - foundation only installs the resource; wave 1.5 / wave 2 fill and consume it.
-        render_world.insert_resource(FrameDamage::default());
         // Insert the persistent main->render entity registry consulted by upserting extract fns.
         // [`clear_extracted`] skips entities present in this map so their identities survive across frames.
         render_world.insert_resource(crate::render_world::RenderEntityMap::default());
