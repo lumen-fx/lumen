@@ -1053,52 +1053,78 @@ pub trait ScriptHost: Send + Sync + 'static {
 
     // -- command sink --------------------------------------------------
 
-    /// Drain commands queued by builtins since the last drain.
-    fn drain_commands(&mut self) -> Vec<ScriptCommand>;
+    /// Drain commands queued by builtins since the last drain. Default: a
+    /// host with no command sink has nothing to drain.
+    fn drain_commands(&mut self) -> Vec<ScriptCommand> {
+        Vec::new()
+    }
 
     /// Put commands back into the sink so they flow through the next
-    /// tick's normal drain (the `on_start` re-stash).
-    fn push_commands(&mut self, cmds: Vec<ScriptCommand>);
+    /// tick's normal drain (the `on_start` re-stash). Default: dropped.
+    fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
+        let _ = cmds;
+    }
 
     // -- signal mirror (host-local, rich-typed) ------------------------
 
-    /// Read a mirror entry. `None` => never written.
-    fn mirror_get(&self, name: &str) -> Option<ScriptValue>;
+    /// Read a mirror entry. `None` => never written. Default: no mirror.
+    fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
+        let _ = name;
+        None
+    }
 
-    /// Write a mirror entry (host-native conversion of `value`).
-    fn mirror_set(&mut self, name: &str, value: ScriptValue);
+    /// Write a mirror entry (host-native conversion of `value`). Default:
+    /// no mirror, so the write is dropped.
+    fn mirror_set(&mut self, name: &str, value: ScriptValue) {
+        let _ = (name, value);
+    }
 
     /// section 1.3 type-preserving parse-back of a store string. The trait pins
     /// the POLICY: a mirror entry currently holding a scalar (bool / int
     /// / float) parses the string back into that SAME type; structured
     /// mirror values (arrays, maps) stay authoritative and ignore the
     /// string; unparseable strings leave the mirror untouched; absent /
-    /// string entries take the store string verbatim.
-    fn mirror_sync_str(&mut self, name: &str, value: &str);
+    /// string entries take the store string verbatim. Default: no mirror.
+    fn mirror_sync_str(&mut self, name: &str, value: &str) {
+        let _ = (name, value);
+    }
 
     // -- registries populated by host builtins, read by the runtime ----
 
     /// Per-id handler lookup (`on(event, id, fn)`), including the
     /// template-suffix fallback: a handler registered for `save` also
-    /// matches `user-card:save` via the last-`:` suffix.
-    fn handler_for(&self, event: &str, key: &str) -> Option<String>;
+    /// matches `user-card:save` via the last-`:` suffix. Default: no
+    /// handler registry.
+    fn handler_for(&self, event: &str, key: &str) -> Option<String> {
+        let _ = (event, key);
+        None
+    }
 
     /// Snapshot of derivations matching `dirty` plus `pending`
     /// `(name, deps, closure)` - taken OUTSIDE any host lock so the
-    /// driver can invoke closures re-entrantly.
+    /// driver can invoke closures re-entrantly. Default: no derivation
+    /// registry.
     fn derivations_matching(
         &self,
         dirty: &HashSet<&str>,
         pending: &HashSet<String>,
-    ) -> Vec<(String, Vec<String>, Self::Closure)>;
+    ) -> Vec<(String, Vec<String>, Self::Closure)> {
+        let _ = (dirty, pending);
+        Vec::new()
+    }
 
     /// Names of derivations registered but never successfully evaluated;
     /// they all run on the next derivation pass regardless of dirt.
-    fn pending_initial(&self) -> HashSet<String>;
+    /// Default: none.
+    fn pending_initial(&self) -> HashSet<String> {
+        HashSet::new()
+    }
 
     /// Remove successfully-evaluated names from the pending-initial set.
-    /// Erroring derivations stay pending and retry next tick.
-    fn clear_pending(&mut self, evaluated: &[String]);
+    /// Erroring derivations stay pending and retry next tick. Default: no-op.
+    fn clear_pending(&mut self, evaluated: &[String]) {
+        let _ = evaluated;
+    }
 
     // -- event handlers (phase 4) --------------------------------------
 
@@ -1166,8 +1192,10 @@ pub trait ScriptHost: Send + Sync + 'static {
     fn lang(&self) -> &'static str;
 
     /// The builtin-function metadata table feeding LSP completion /
-    /// hover and the parity test.
-    fn builtins(&self) -> &'static [BuiltinFn];
+    /// hover and the parity test. Default: none.
+    fn builtins(&self) -> &'static [BuiltinFn] {
+        &[]
+    }
 }
 
 /// Marker trait reserving the script-side state-proxy contract. Currently empty.
