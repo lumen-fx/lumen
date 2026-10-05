@@ -981,6 +981,17 @@ mod tests {
         fn layer_depth(&self) -> usize {
             self.frame.layer_depth()
         }
+        fn draw_masked(
+            &mut self,
+            kind: crate::MaskKind,
+            transform: Affine,
+            region: &Shape<'_>,
+            mask: &mut dyn FnMut(&mut dyn Painter),
+            content: &mut dyn FnMut(&mut dyn Painter),
+        ) {
+            self.target()
+                .draw_masked(kind, transform, region, mask, content);
+        }
         fn draw_blurred_rounded_rect(
             &mut self,
             transform: Affine,

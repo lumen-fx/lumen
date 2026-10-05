@@ -202,7 +202,7 @@ last painted one, a fresh or resized target, or a pending screenshot),
 `paint_frame` walks the retained tree into the backend's own `Painter` and
 records it as the tree the next frame diffs against, and `answer_capture`
 hands a pending screenshot the result. The `Painter` trait is the one
-definition of a frame: fill, stroke, clip and opacity layers, blurred rounded
+definition of a frame: fill, stroke, clip and opacity layers, masks, blurred rounded
 rects for shadows, images, and glyph runs, in peniko and kurbo types. A new backend implements
 `Painter` over its draw target and gets every primitive the walker knows,
 drawn the way the other backends draw it. A sink that can record and replay

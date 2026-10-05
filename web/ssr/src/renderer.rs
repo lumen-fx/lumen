@@ -1,6 +1,6 @@
 //! Rendering a document for a request.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -64,7 +64,9 @@ pub struct RenderOptions {
     /// queue grow as long as callers keep asking; a server facing the public
     /// names a number, so [`Renderer::try_render`] can turn a request away
     /// with [`SsrError::Busy`] instead of making it wait behind all the
-    /// others.
+    /// others. A renderer with nothing to do takes a request at any depth, so
+    /// `Some(0)` renders one request at a time and turns away only those that
+    /// arrive while it does.
     pub queue: Option<usize>,
 }
 
@@ -151,8 +153,16 @@ enum Reply {
 /// What the callers and the renderer's thread both read.
 #[derive(Default)]
 struct Shared {
-    /// A render is in progress.
-    busy: AtomicBool,
+    /// Requests handed over and not answered yet: the ones in the queue plus
+    /// the one being rendered.
+    ///
+    /// A caller counts its request before the request enters the queue, and
+    /// the thread lets go of it before answering, so this is never less than
+    /// what the queue holds plus the render in progress. That is what a full
+    /// queue is judged by, rather than by the queue alone: a request the
+    /// thread has taken but not started yet is still counted, and the moment
+    /// a caller hears its answer there is room for the next one.
+    pending: AtomicUsize,
     /// A render ran past its limit and has not come back, so nothing queued
     /// behind it will run.
     wedged: AtomicBool,
@@ -173,17 +183,25 @@ impl Drop for Finished {
         self.shared.stopped.store(true, Ordering::SeqCst);
         // A request that arrived while the thread was going would otherwise
         // wait for an answer nobody is left to give.
-        answer_waiting(&self.requests, &SsrError::Stopped);
+        answer_waiting(&self.requests, &self.shared, &SsrError::Stopped);
         RENDERING.store(false, Ordering::SeqCst);
     }
 }
 
 /// Answer every request still in the queue with `error`.
-fn answer_waiting(requests: &Receiver<Job>, error: &SsrError) {
+fn answer_waiting(requests: &Receiver<Job>, shared: &Shared, error: &SsrError) {
     while let Ok(job) = requests.try_recv() {
+        shared.pending.fetch_sub(1, Ordering::SeqCst);
         let _ = job.reply.send(Reply::Done(Err(error.clone())));
     }
 }
+
+/// Lets a unit test hold the renderer's thread just before it takes each
+/// request from the queue, so a test can ask for a page while nothing is
+/// rendering and the thread is not yet waiting for one. The thread waits for
+/// one message per request it takes.
+#[cfg(test)]
+static HOLD: Mutex<Option<Receiver<()>>> = Mutex::new(None);
 
 /// A running renderer.
 ///
@@ -193,6 +211,9 @@ fn answer_waiting(requests: &Receiver<Job>, error: &SsrError) {
 /// time.
 pub struct Renderer {
     jobs: Option<Sender<Job>>,
+    /// How many requests may be handed over at once: the queue's depth plus
+    /// the one being rendered. `None` has no bound.
+    room: Option<usize>,
     /// The queue's other end, which a caller that finds the renderer wedged
     /// empties so nobody waits behind a render that is not coming back.
     waiting: Receiver<Job>,
@@ -212,8 +233,12 @@ impl Renderer {
         if RENDERING.swap(true, Ordering::SeqCst) {
             return Err(SsrError::AlreadyRunning);
         }
-        let (jobs, requests) = match options.queue {
-            Some(depth) => bounded::<Job>(depth),
+        let room = options.queue.map(|depth| depth.saturating_add(1));
+        // The queue has room for the render in progress as well, because the
+        // thread takes a request off it a moment before that request starts.
+        // Whether a request may join is [`Shared::pending`]'s to say.
+        let (jobs, requests) = match room {
+            Some(room) => bounded::<Job>(room),
             None => unbounded::<Job>(),
         };
         let shared = Arc::new(Shared::default());
@@ -222,7 +247,9 @@ impl Renderer {
             requests: requests.clone(),
         };
         let waiting = requests.clone();
-        let busy = Arc::clone(&shared);
+        let counted = Arc::clone(&shared);
+        #[cfg(test)]
+        let hold = HOLD.lock().ok().and_then(|mut hold| hold.take());
         let worker = std::thread::Builder::new()
             .name("lumen-ssr".to_string())
             .spawn(move || {
@@ -236,8 +263,14 @@ impl Renderer {
                     vec![None; site.locales().len()];
                 // Every app this thread builds is also dropped here, before
                 // the next request is taken.
-                for job in requests {
-                    busy.busy.store(true, Ordering::SeqCst);
+                loop {
+                    #[cfg(test)]
+                    if let Some(hold) = &hold {
+                        let _ = hold.recv();
+                    }
+                    let Ok(job) = requests.recv() else {
+                        break;
+                    };
                     let _ = job.reply.send(Reply::Started);
                     let route = site.route(&job.request);
                     let mut answer = match route.page {
@@ -251,8 +284,8 @@ impl Renderer {
                     if let Ok(response) = &mut answer {
                         response.warnings.extend(route.warnings);
                     }
+                    counted.pending.fetch_sub(1, Ordering::SeqCst);
                     let _ = job.reply.send(Reply::Done(answer));
-                    busy.busy.store(false, Ordering::SeqCst);
                 }
             });
         let worker = match worker {
@@ -263,6 +296,7 @@ impl Renderer {
         };
         Ok(Self {
             jobs: Some(jobs),
+            room,
             waiting,
             shared,
             worker: Mutex::new(Some(worker)),
@@ -277,9 +311,12 @@ impl Renderer {
     /// carry on drops this one and starts another.
     pub fn render(&self, request: SsrRequest) -> Result<SsrResponse, SsrError> {
         let (reply, answer) = unbounded();
-        self.usable()?
-            .send(Job { request, reply })
-            .map_err(|_| SsrError::Stopped)?;
+        let jobs = self.usable()?;
+        self.shared.pending.fetch_add(1, Ordering::SeqCst);
+        if jobs.send(Job { request, reply }).is_err() {
+            self.shared.pending.fetch_sub(1, Ordering::SeqCst);
+            return Err(SsrError::Stopped);
+        }
         self.after_sending();
         loop {
             match answer.recv() {
@@ -310,10 +347,20 @@ impl Renderer {
         limit: Duration,
     ) -> Result<SsrResponse, SsrError> {
         let (reply, answer) = unbounded();
-        match self.usable()?.try_send(Job { request, reply }) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => return Err(SsrError::Busy),
-            Err(TrySendError::Disconnected(_)) => return Err(SsrError::Stopped),
+        let jobs = self.usable()?;
+        if !self.admit() {
+            return Err(SsrError::Busy);
+        }
+        // A request counted above always fits the queue, unless callers of
+        // `render` are already waiting for a place in it.
+        let refused = match jobs.try_send(Job { request, reply }) {
+            Ok(()) => None,
+            Err(TrySendError::Full(_)) => Some(SsrError::Busy),
+            Err(TrySendError::Disconnected(_)) => Some(SsrError::Stopped),
+        };
+        if let Some(error) = refused {
+            self.shared.pending.fetch_sub(1, Ordering::SeqCst);
+            return Err(error);
         }
         self.after_sending();
         // The wait for a turn has no limit of its own. The render ahead is
@@ -329,7 +376,7 @@ impl Renderer {
             Ok(Reply::Started) | Err(RecvTimeoutError::Disconnected) => Err(SsrError::Stopped),
             Err(RecvTimeoutError::Timeout) => {
                 self.shared.wedged.store(true, Ordering::SeqCst);
-                answer_waiting(&self.waiting, &SsrError::Stopped);
+                answer_waiting(&self.waiting, &self.shared, &SsrError::Stopped);
                 Err(SsrError::TimedOut)
             }
         }
@@ -339,11 +386,25 @@ impl Renderer {
     /// it is taken, so the next [`Self::try_render`] answers
     /// [`SsrError::Busy`]. An unbounded queue is never full.
     pub fn is_saturated(&self) -> bool {
-        let Some(jobs) = &self.jobs else {
+        if self.jobs.is_none() {
+            return true;
+        }
+        self.room
+            .is_some_and(|room| self.shared.pending.load(Ordering::SeqCst) >= room)
+    }
+
+    /// Count one more request handed over, if there is room for it.
+    fn admit(&self) -> bool {
+        let Some(room) = self.room else {
+            self.shared.pending.fetch_add(1, Ordering::SeqCst);
             return true;
         };
-        self.shared.busy.load(Ordering::SeqCst)
-            && jobs.capacity().is_some_and(|depth| jobs.len() >= depth)
+        self.shared
+            .pending
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |pending| {
+                (pending < room).then_some(pending + 1)
+            })
+            .is_ok()
     }
 
     /// Whether this renderer will not answer again: a render ran past its
@@ -366,7 +427,7 @@ impl Renderer {
     /// queue, so what arrived after that is answered here.
     fn after_sending(&self) {
         if self.shared.stopped.load(Ordering::SeqCst) {
-            answer_waiting(&self.waiting, &SsrError::Stopped);
+            answer_waiting(&self.waiting, &self.shared, &SsrError::Stopped);
         }
     }
 
@@ -627,6 +688,108 @@ fn note_dom_commands(
     for event in events.read() {
         if event.0.builds_nodes() {
             built.0 = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use lumen_ir::artifact::CompiledApp;
+    use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
+    use lumen_web::WebSpec;
+
+    use super::*;
+
+    /// A process has one renderer, so the tests that start one take turns.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+    /// A page of one label and no script.
+    fn site() -> Arc<SsrSite> {
+        let app = CompiledApp {
+            ir: LayoutIR {
+                root: Element {
+                    tag: "root".to_string(),
+                    children: vec![Element {
+                        tag: "label".to_string(),
+                        attrs: Attributes {
+                            text: Some("rendered".to_string()),
+                            ..Attributes::default()
+                        },
+                        ..Element::default()
+                    }],
+                    ..Element::default()
+                },
+                ..LayoutIR::default()
+            },
+            ..CompiledApp::default()
+        };
+        Arc::new(SsrSite::new(app, WebSpec::default()).expect("the entry is the page"))
+    }
+
+    /// A renderer with no queue behind the render in progress, whose thread
+    /// takes a request from the queue only when the returned sender says so.
+    fn held() -> (Arc<Renderer>, Sender<()>) {
+        let (step, hold) = unbounded();
+        *HOLD.lock().unwrap_or_else(|e| e.into_inner()) = Some(hold);
+        let options = RenderOptions {
+            queue: Some(0),
+            ..RenderOptions::default()
+        };
+        let renderer = Renderer::start(site(), options).expect("nothing else is rendering");
+        (Arc::new(renderer), step)
+    }
+
+    /// Ask for a page on another thread, and return once the request is
+    /// either in the queue or answered.
+    fn ask(renderer: &Arc<Renderer>) -> JoinHandle<Result<SsrResponse, SsrError>> {
+        let asking = Arc::clone(renderer);
+        let caller = std::thread::spawn(move || {
+            asking.try_render(SsrRequest::get("/"), Duration::from_secs(60))
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !caller.is_finished() && renderer.waiting.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the request neither queued nor was answered"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        caller
+    }
+
+    fn rendered(caller: JoinHandle<Result<SsrResponse, SsrError>>, what: &str) {
+        let answer = caller.join().expect("the caller's thread");
+        let response = answer.unwrap_or_else(|e| panic!("{what} was answered {e:?}"));
+        assert!(response.body.contains("rendered"), "{}", response.body);
+    }
+
+    #[test]
+    fn a_renderer_with_no_queue_takes_a_request_before_its_thread_is_ready() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let (renderer, step) = held();
+        // The thread has not reached the queue yet, and nothing is rendering.
+        assert!(!renderer.is_saturated());
+        let first = ask(&renderer);
+        let _ = step.send(());
+        rendered(first, "a request to a renderer just started");
+    }
+
+    #[test]
+    fn a_renderer_with_no_queue_takes_requests_back_to_back() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let (renderer, step) = held();
+        // The first request goes to a thread already waiting for one.
+        let _ = step.send(());
+        rendered(ask(&renderer), "the first request");
+        for _ in 0..2 {
+            // The thread has answered the last request and not yet come back
+            // for the next one.
+            assert!(!renderer.is_saturated());
+            let next = ask(&renderer);
+            let _ = step.send(());
+            rendered(next, "a request right after another");
         }
     }
 }

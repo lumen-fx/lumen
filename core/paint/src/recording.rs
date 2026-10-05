@@ -6,7 +6,7 @@
 //! geometry, brushes, images, and glyphs, so it can cross into the render
 //! world and outlive the call that made it.
 
-use crate::{GlyphRun, Painter, Shape};
+use crate::{GlyphRun, MaskKind, Painter, Shape};
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
 use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush};
@@ -75,6 +75,14 @@ pub enum Command {
     },
     /// [`Painter::pop_layer`].
     PopLayer,
+    /// [`Painter::draw_masked`], with what each callback painted.
+    Masked {
+        kind: MaskKind,
+        transform: Affine,
+        region: OwnedShape,
+        mask: Recording,
+        content: Recording,
+    },
     /// [`Painter::draw_blurred_rounded_rect`].
     BlurredRoundedRect {
         transform: Affine,
@@ -184,6 +192,19 @@ impl Recording {
                         opened -= 1;
                     }
                 }
+                Command::Masked {
+                    kind,
+                    transform: t,
+                    region,
+                    mask,
+                    content,
+                } => painter.draw_masked(
+                    *kind,
+                    transform * *t,
+                    &region.as_shape(),
+                    &mut |p| mask.replay(p, transform),
+                    &mut |p| content.replay(p, transform),
+                ),
                 Command::BlurredRoundedRect {
                     transform: t,
                     rect,
@@ -297,6 +318,27 @@ impl Painter for Recording {
         self.depth
     }
 
+    fn draw_masked(
+        &mut self,
+        kind: MaskKind,
+        transform: Affine,
+        region: &Shape<'_>,
+        mask: &mut dyn FnMut(&mut dyn Painter),
+        content: &mut dyn FnMut(&mut dyn Painter),
+    ) {
+        let mut mask_drawing = Recording::default();
+        mask(&mut mask_drawing);
+        let mut content_drawing = Recording::default();
+        content(&mut content_drawing);
+        self.commands.push(Command::Masked {
+            kind,
+            transform,
+            region: OwnedShape::from_shape(region),
+            mask: mask_drawing,
+            content: content_drawing,
+        });
+    }
+
     fn draw_blurred_rounded_rect(
         &mut self,
         transform: Affine,
@@ -402,6 +444,58 @@ mod tests {
 
         assert_eq!(frame.layer_depth(), 0);
         assert_eq!(frame.len(), 2, "the push and the closing pop");
+    }
+
+    /// A masked draw keeps what its mask and its content painted, and a
+    /// replay hands both on as one masked draw under the replay's transform.
+    #[test]
+    fn a_masked_draw_records_both_halves_and_replays_them_moved() {
+        let red = Color::new([1.0, 0.0, 0.0, 1.0]);
+        let mut drawing = Recording::default();
+        drawing.draw_masked(
+            MaskKind::Alpha,
+            Affine::translate((1.0, 0.0)),
+            &square(),
+            &mut |p| p.fill(Fill::NonZero, Affine::IDENTITY, red.into(), None, &square()),
+            &mut |p| {
+                p.push_layer(
+                    Fill::NonZero,
+                    BlendMode::default(),
+                    1.0,
+                    Affine::IDENTITY,
+                    &square(),
+                );
+                p.fill(Fill::NonZero, Affine::IDENTITY, red.into(), None, &square());
+            },
+        );
+        assert_eq!(drawing.len(), 1);
+        assert_eq!(drawing.layer_depth(), 0);
+
+        let mut copy = Recording::default();
+        drawing.replay(&mut copy, Affine::translate((10.0, 0.0)));
+        let Command::Masked {
+            kind,
+            transform,
+            region,
+            mask,
+            content,
+        } = &copy.commands()[0]
+        else {
+            panic!("expected a masked draw, got {:?}", copy.commands());
+        };
+        assert_eq!(*kind, MaskKind::Alpha);
+        assert_eq!(transform.translation(), (11.0, 0.0).into());
+        assert_eq!(*region, OwnedShape::from_shape(&square()));
+        assert!(
+            matches!(&mask.commands()[0], Command::Fill { transform, .. } if transform.translation() == (10.0, 0.0).into())
+        );
+        assert_eq!(
+            content.len(),
+            3,
+            "the layer the content left open is closed: {:?}",
+            content.commands(),
+        );
+        assert_eq!(copy.layer_depth(), 0);
     }
 
     /// Popping with nothing open is ignored rather than recorded, so a

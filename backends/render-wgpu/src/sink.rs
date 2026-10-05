@@ -5,12 +5,12 @@
 //! scene, and replaying one is a `Scene::append`, so a repeated appearance is
 //! encoded once and appended at every position it takes.
 
-use lumen_paint::{Fragment, GlyphRun, Painter, Shape};
+use lumen_paint::{Fragment, GlyphRun, MaskKind, Painter, Shape};
 use std::any::Any;
 use std::sync::Arc;
 use vello::Scene;
 use vello::kurbo::{Affine, Rect, Stroke};
-use vello::peniko::{BlendMode, BrushRef, Color, Fill, ImageBrush};
+use vello::peniko::{BlendMode, BrushRef, Color, Compose, Fill, ImageBrush, Mix};
 
 /// Names this backend in [`Painter::backend_id`] and
 /// [`lumen_core::native::NativePaintCtx::backend_id`]. [`Painter::native`]
@@ -110,6 +110,53 @@ impl Painter for VelloPainter {
         self.target().pop_layer();
     }
 
+    /// The content paints first, in a layer of its own so the mask touches
+    /// nothing under it. The mask then paints in a nested layer that
+    /// multiplies into the content when it closes: vello's luminance mask
+    /// layer for luminance, a destination-in composite for alpha.
+    fn draw_masked(
+        &mut self,
+        kind: MaskKind,
+        transform: Affine,
+        region: &Shape<'_>,
+        mask: &mut dyn FnMut(&mut dyn Painter),
+        content: &mut dyn FnMut(&mut dyn Painter),
+    ) {
+        let outer = self.layer_depth();
+        self.push_layer(Fill::NonZero, BlendMode::default(), 1.0, transform, region);
+        content(self);
+        while self.layer_depth() > outer + 1 {
+            self.pop_layer();
+        }
+        match kind {
+            MaskKind::Luminance => {
+                let scene = self.target();
+                match region {
+                    Shape::Rect(r) => {
+                        scene.push_luminance_mask_layer(Fill::NonZero, 1.0, transform, r)
+                    }
+                    Shape::RoundedRect(r) => {
+                        scene.push_luminance_mask_layer(Fill::NonZero, 1.0, transform, r)
+                    }
+                    Shape::Path(p) => {
+                        scene.push_luminance_mask_layer(Fill::NonZero, 1.0, transform, *p)
+                    }
+                }
+            }
+            MaskKind::Alpha => self.push_layer(
+                Fill::NonZero,
+                BlendMode::new(Mix::Normal, Compose::DestIn),
+                1.0,
+                transform,
+                region,
+            ),
+        }
+        mask(self);
+        while self.layer_depth() > outer {
+            self.pop_layer();
+        }
+    }
+
     fn layer_depth(&self) -> usize {
         self.recording
             .last()
@@ -205,6 +252,38 @@ mod tests {
         let fragment = painter.end_fragment().expect("a fragment was open");
         assert!(painter.append_fragment(&fragment, Affine::translate((8.0, 8.0))));
         assert!(!painter.scene().encoding().is_empty());
+    }
+
+    /// A masked draw inside a fragment encodes into the fragment, the way an
+    /// SVG asset is recorded, and closes every layer it opened, including
+    /// one its content left open.
+    #[test]
+    fn a_masked_draw_records_into_the_open_fragment_and_balances() {
+        let mut painter = VelloPainter::new();
+        assert!(painter.begin_fragment());
+        let red = Color::new([1.0, 0.0, 0.0, 1.0]);
+        for kind in [MaskKind::Luminance, MaskKind::Alpha] {
+            painter.draw_masked(
+                kind,
+                Affine::IDENTITY,
+                &square(),
+                &mut |p| p.fill(Fill::NonZero, Affine::IDENTITY, red.into(), None, &square()),
+                &mut |p| {
+                    p.push_layer(
+                        Fill::NonZero,
+                        BlendMode::default(),
+                        1.0,
+                        Affine::IDENTITY,
+                        &square(),
+                    )
+                },
+            );
+            assert_eq!(painter.layer_depth(), 0);
+        }
+        assert!(painter.scene().encoding().is_empty());
+        let fragment = painter.end_fragment().expect("a fragment was open");
+        let scene = fragment.downcast::<Scene>().expect("a vello fragment");
+        assert!(!scene.encoding().is_empty());
     }
 
     /// Layer depth follows the scene encoding takes, so the walker can close
