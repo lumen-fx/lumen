@@ -15,6 +15,7 @@ them rather than anyone typing them.
 | `lumen-macos-x86_64.tar.gz`    | GitHub Actions, `macos-26-intel`       |
 | `lumen-modules-<target>.tar.gz` | the same Unix legs, one each           |
 | `lumen-linkkit-<target>.tar.gz` | every leg, one each                    |
+| `lumen-enginekit-<target>.tar.gz` | every leg, one each                  |
 | `lumen-windows-x86_64.msi`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-x86_64.zip`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-aarch64.msi`    | GitHub Actions, `windows-11-arm`       |
@@ -38,6 +39,13 @@ toolchain, so unlike the modules archive it is published on every platform.
 it, the way it downloads the browser runtime.
 `docs/src/contributing/building-lumen.md` says what the kit holds and why it
 is the size it is.
+
+`lumen-enginekit-<target>.tar.gz` carries the engine kit: the recorded link of
+the engine's shared library (`liblumen_engine` on Linux and macOS, `lumen.dll`
+on Windows) and every file that link read. `lumenc package` replays it to give
+each app an engine carrying only the capabilities the app uses. Like the link
+kit it is published on every platform, `install.sh` never fetches it, and
+`lumenc` downloads it the first time a package needs it.
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches

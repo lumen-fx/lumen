@@ -56,6 +56,11 @@
 #                             it is what lumenc downloads on its own for
 #                             `lumenc package --static`, the way it downloads
 #                             the browser runtime.
+#   lumen-enginekit-<target>.tar.gz
+#                             the engine kit for the same target, published on
+#                             every platform. This script never fetches it
+#                             either: lumenc downloads it when `lumenc
+#                             package` links an engine for an app.
 #   lumen-windows-<arch>.msi  the Windows installer. This script never
 #                             fetches or runs it; the windows branch below
 #                             prints its URL and stops.
@@ -335,9 +340,9 @@ published_targets() {
   # published_targets -> one target per line the release has a lumen-*.tar.gz
   # asset for, read off the checksum lines rather than a separate list. The
   # browser runtime is named the same way and is not a platform, so it is
-  # skipped rather than reported as one; so are the two per-target assets
+  # skipped rather than reported as one; so are the three per-target assets
   # that are not the toolchain, or a release would report each platform
-  # three times.
+  # four times.
   awk '
     NF >= 2 {
       name = $2
@@ -345,6 +350,7 @@ published_targets() {
       if (name == "lumen-web.tar.gz") { next }
       if (index(name, "lumen-modules-") == 1) { next }
       if (index(name, "lumen-linkkit-") == 1) { next }
+      if (index(name, "lumen-enginekit-") == 1) { next }
       if (index(name, "lumen-") != 1) { next }
       if (name !~ /\.tar\.gz$/) { next }
       t = substr(name, length("lumen-") + 1)

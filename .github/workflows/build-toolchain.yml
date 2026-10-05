@@ -47,6 +47,13 @@ name: build-toolchain
 # kit and a lumenc that reads it exist together nowhere else until this run
 # publishes both.
 #
+# And every leg produces lumen-enginekit-<target>.tar.gz: the recorded link
+# of the engine's shared library, which `lumenc package` replays to give each
+# app an engine carrying only the capabilities it uses. On Linux and macOS
+# that is liblumen_engine, recorded by the very build that ships it; on
+# Windows it is lumen.dll, recorded by the static launcher's build, which
+# links it too. The leg packages apps against it before anything uploads.
+#
 # It also builds one artifact that belongs to no platform: lumen-web.tar.gz,
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
@@ -132,9 +139,9 @@ jobs:
     # The release profile (fat LTO, one codegen unit) is slower to build
     # than the dev-ish builds in ci.yml's test job, hence the longer budget.
     # A leg compiles the graph three times and shares nothing between them:
-    # once for the shipped binaries, once for the link kit (its own RUSTFLAGS,
-    # LTO off), and once unoptimized for the test that links an app from the
-    # kit.
+    # once for the shipped binaries (on Linux and macOS also the engine kit's
+    # recorded build), once for the link kit (its own RUSTFLAGS, LTO off), and
+    # once unoptimized for the test that links an app from the kit.
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -227,6 +234,14 @@ jobs:
       # Windows keeps the fully-static shape - its import-library format
       # cannot describe the engine's export count, so no engine dylib exists
       # there (see public/lumen-dylib/Cargo.toml).
+      #
+      # The link recorder stands in for the linker here, the way it does for
+      # the static launcher further down: it runs `cc` with the arguments it
+      # was given and keeps a copy of the line and of every file it read. The
+      # engine's link out of that record is the engine kit. Recording this
+      # build rather than a second one is what makes the kit's inputs the
+      # shipped engine's own, so a replay keeps the build id every bundled
+      # module here was compiled against.
       - name: Build lumenc + liblumen (dynamic engine, Unix)
         if: runner.os != 'Windows'
         env:
@@ -262,7 +277,13 @@ jobs:
           # of the shipped binaries' panic strings: smaller .rodata, and the
           # bytes stop varying with the runner's home directory.
           remap="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$PWD=/lumen"
-          export RUSTFLAGS="-C prefer-dynamic -C link-arg=-Wl,-rpath,$rpath $icf $remap"
+          cargo build --release -p link-recorder
+          export LUMEN_REAL_LINKER="$(command -v cc)"
+          export LUMEN_LINK_RECORD="$PWD/engine-record.jsonl"
+          export LUMEN_LINK_STAGE="$PWD/engine-stage"
+          rm -rf engine-stage engine-record.jsonl
+          recorder="-Clinker=$PWD/target/release/link-recorder"
+          export RUSTFLAGS="-C prefer-dynamic -C link-arg=-Wl,-rpath,$rpath $icf $remap $recorder"
           # LTO cannot cross a dynamic-library boundary (rustc refuses
           # prefer-dynamic under LTO outright), so the dynamic shape trades
           # the release profile's fat LTO away. opt-level 3 recovers part of
@@ -564,6 +585,14 @@ jobs:
           fi
           echo "recording links through ${LUMEN_REAL_LINKER}"
           rm -rf link-stage link-record.jsonl
+          # Windows has no engine library, so its engine kit is the link of
+          # lumen.dll, which carries the engine compiled in. The launcher's
+          # static shape links the same library already; naming it here makes
+          # that link part of what this build is asked for.
+          engine=()
+          if [ "$RUNNER_OS" = Windows ]; then
+            engine=(-p lumen)
+          fi
           # The messages are kept because a build script is the only place
           # that says which package asked the linker for which system library,
           # and rustc has forgotten it by the time the line is classified.
@@ -571,7 +600,7 @@ jobs:
           LUMEN_LINK_STAGE="$root/link-stage" \
           RUSTFLAGS="-Clinker=$recorder" \
             cargo build --release --target "$triple" \
-              -p lumen-launcher --features lumen-launcher/static-run \
+              -p lumen-launcher --features lumen-launcher/static-run "${engine[@]}" \
               --config 'profile.release.lto="off"' \
               --message-format=json-render-diagnostics > "$root/link-build.jsonl"
 
@@ -662,6 +691,65 @@ jobs:
           du -sh linkkit
           ls -l lumen-linkkit-${{ matrix.target }}.tar.gz
 
+      # The engine kit: the engine library's link out of the record its build
+      # left, classified the same way, with its export list as the slot a
+      # replay fills. The same two size levers as the link kit. The count of
+      # staged files the two kits share is printed, since a file both carry
+      # is a download a user pays twice.
+      - name: Package the engine kit
+        shell: bash
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+          triple="$linkkit_triple"
+          sysroot="$(rustc --print sysroot | tr '\\' '/')"
+          driver=()
+          if [ "$RUNNER_OS" = Windows ]; then
+            root="$(pwd -W)"
+            lumenc=dist/bin/lumenc.exe
+            record="$root/link-record.jsonl"
+            stage="$root/link-stage"
+            driver=(--driver-path "$sysroot/lib/rustlib/$triple/bin/rust-lld.exe")
+          else
+            root="$PWD"
+            lumenc=dist/bin/lumenc
+            record="$root/engine-record.jsonl"
+            stage="$root/engine-stage"
+          fi
+          rm -rf enginekit
+          "$lumenc" link-kit emit --artifact shared-engine \
+            --record "$record" \
+            --stage "$stage" \
+            --out "$root/enginekit" \
+            --target ${{ matrix.target }} \
+            --target-dir "$root/target" \
+            --rustc "$(rustc --version)" \
+            "${driver[@]}"
+
+          bin="$sysroot/lib/rustlib/$triple/bin"
+          kept=0
+          for archive in enginekit/stage/*.rlib; do
+            "$bin/llvm-ar" d "$archive" lib.rmeta
+            "$bin/llvm-objcopy" --strip-debug "$archive" 2>/dev/null ||
+              kept=$((kept + 1))
+          done
+          for object in enginekit/stage/*.o enginekit/stage/*.a; do
+            "$bin/llvm-objcopy" --strip-debug "$object" 2>/dev/null ||
+              kept=$((kept + 1))
+          done
+          echo "kept whole rather than stripped: $kept"
+
+          shared=0
+          for file in enginekit/stage/*; do
+            [ -f "linkkit/stage/$(basename "$file")" ] && shared=$((shared + 1))
+          done
+          echo "staged files the link kit carries too: $shared of $(ls enginekit/stage | wc -l)"
+
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES enginekit/
+          tar -czf lumen-enginekit-${{ matrix.target }}.tar.gz -C enginekit .
+          du -sh enginekit
+          ls -l lumen-enginekit-${{ matrix.target }}.tar.gz
+
       # The kit is what `lumenc package --static` consumes, and the only place
       # a kit and a lumenc that can read it exist together is right here: the
       # release channel has neither until this run publishes them. So the
@@ -672,6 +760,22 @@ jobs:
         env:
           LUMEN_LINK_KIT_DIR: ${{ github.workspace }}/linkkit
         run: cargo test -p lumenc --test package_static
+
+      # The same for the engine kit and `lumenc package`: apps are packaged
+      # from the archives this leg built, each against an engine linked for
+      # it, and run headless against that engine. See the script for what
+      # each package has to show.
+      - name: Package apps against the engine kit
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            .github/scripts/engine-kit-smoke.sh "$PWD/enginekit" \
+              lumen-${{ matrix.target }}.zip
+          else
+            .github/scripts/engine-kit-smoke.sh "$PWD/enginekit" \
+              lumen-${{ matrix.target }}.tar.gz \
+              lumen-modules-${{ matrix.target }}.tar.gz
+          fi
 
       # The MSI payload is staged separately from dist\, and only after the
       # zip is closed, because the two differ by one file. The MSI installs a
@@ -720,6 +824,7 @@ jobs:
             lumen-${{ matrix.target }}.tar.gz
             lumen-modules-${{ matrix.target }}.tar.gz
             lumen-linkkit-${{ matrix.target }}.tar.gz
+            lumen-enginekit-${{ matrix.target }}.tar.gz
             lumen-${{ matrix.target }}.zip
             lumen-${{ matrix.target }}.msi
           if-no-files-found: error
