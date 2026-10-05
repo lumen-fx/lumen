@@ -291,6 +291,9 @@ pub fn compile_app_with_skin(
         fragments: loaded.fragments,
         i18n,
         addons: deps.addons.clone(),
+        // Filled by `lumenc package`, which is what decides the engine an app
+        // ships with; a compile alone links none.
+        unlinked: Vec::new(),
     })
 }
 

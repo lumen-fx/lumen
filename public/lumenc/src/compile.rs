@@ -367,6 +367,8 @@ fn compile_dir(
         // This path links no runtime and resolves no dependency, so it knows
         // of no add-on; `lumenc build` is what compiles one in.
         addons: Vec::new(),
+        // Only a package knows which engine the app ships with.
+        unlinked: Vec::new(),
     })
 }
 

@@ -905,10 +905,14 @@ impl ScriptFn {
     /// forwards those commands and then raises, which is what the runtime has
     /// always done with a partially-completed call.
     ///
+    /// A call to a builtin whose subsystem the engine was linked without
+    /// warns once (see [`crate::unlinked`]) and then runs as it always does.
+    ///
     /// # Errors
     ///
     /// Whatever the body reported, verbatim.
     pub fn invoke_into(&self, args: &[ScriptValue], out: &mut Vec<ScriptCommand>) -> ScriptResult {
+        crate::unlinked::warn_if_unlinked(&self.name);
         let completed = self.sig.complete_args(args);
         let args = completed.as_deref().unwrap_or(args);
         let mut cx = ScriptFnCx::new(args, out);

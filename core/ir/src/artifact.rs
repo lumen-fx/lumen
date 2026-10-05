@@ -119,11 +119,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`crate::layout_ir::Attributes`] gains `bg_fit`, so `bg` can name an
 /// image and say how it fills the box.
 ///
+/// `14`: [`CompiledApp::unlinked`] lists the optional subsystems the engine
+/// shipped beside the app was linked without, so a script calling one of
+/// their builtins is told why nothing happens.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 13;
+pub const FORMAT_VERSION: u16 = 14;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -235,6 +239,24 @@ pub struct CompiledApp {
     /// module libraries it loads register the same functions. Empty for an
     /// app that declares none.
     pub addons: Vec<crate::addon::Addon>,
+    /// The optional subsystems the engine packaged with this app was linked
+    /// without, each with the builtin names that reach it. `lumenc package`
+    /// fills it when it relinks the engine for the app; every other build
+    /// leaves it empty. The names are opaque here: the runtime warns once
+    /// when a script calls a builtin one of them names, and reads nothing
+    /// else into them.
+    pub unlinked: Vec<UnlinkedCapability>,
+}
+
+/// One optional subsystem an app's engine was linked without.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnlinkedCapability {
+    /// The name the app's `[capabilities]` table keys it by.
+    pub name: String,
+    /// The text a call to one of its builtins contains, the same markers the
+    /// package step scanned the sources for. One ending in `(` names the
+    /// builtin itself; one without names every builtin it is part of.
+    pub markers: Vec<String>,
 }
 
 /// Errors from (de)serializing or reading/writing an artifact.
@@ -453,6 +475,10 @@ mod tests {
                     void: false,
                 }],
             }],
+            unlinked: vec![UnlinkedCapability {
+                name: "os-tray".to_string(),
+                markers: vec!["tray_icon".to_string()],
+            }],
         }
     }
 
@@ -476,6 +502,10 @@ mod tests {
         assert_eq!(pages.keys.len(), 2);
         assert_eq!(back.i18n, app.i18n);
         assert_eq!(back.addons, app.addons);
+        assert_eq!(
+            back.unlinked, app.unlinked,
+            "the subsystems the engine was linked without travel with the app"
+        );
     }
 
     #[test]

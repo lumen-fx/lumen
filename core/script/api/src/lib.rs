@@ -45,6 +45,10 @@ pub mod dom_events;
 /// `on_drag_start`). See the module docs.
 pub mod dnd;
 
+/// Builtins whose subsystem the running engine was linked without, and the
+/// once-per-builtin warning a call to one of them prints.
+pub mod unlinked;
+
 /// The HTTP seam behind `fetch()` / `http()`: the
 /// [`HttpClient`](http::HttpClient) trait and its request and response types,
 /// plus the [`HttpDispatch`](http::HttpDispatch) trait that decides who runs a
