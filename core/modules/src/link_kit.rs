@@ -9,6 +9,12 @@
 //! left out, or its register symbol forced in, is how one prebuilt kit turns
 //! into any of the executables its modules can spell.
 //!
+//! A second kind of kit records the link of the engine's shared library
+//! instead ([`ArtifactKind::SharedEngine`]): `liblumen_engine` on Linux and
+//! macOS, `lumen.dll` on Windows. Replaying it with only the capabilities an
+//! app uses, and with the export list cut down to what the files shipped
+//! beside it resolve, gives each packaged app an engine of its own.
+//!
 //! Two things about the recorded line are not obvious and are why the
 //! manifest is typed rather than a list of strings:
 //!
@@ -36,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::{REGISTER_PREFIX, entry_symbol};
 
 /// The manifest version this build writes and accepts.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// One target's link kit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +71,12 @@ pub struct Manifest {
     pub capabilities: Vec<KitCapability>,
     /// How the app's compiled artifact reaches the executable.
     pub artifact: Artifact,
+    /// The engine build the recorded inputs are, as `lumen_engine_build_id`
+    /// reports it. A shared-engine kit records it so a replay can check it is
+    /// relinking the engine the rest of the toolchain was built against;
+    /// absent where the recorded binary carries no engine build id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_id: Option<String>,
 }
 
 /// What replays the line.
@@ -136,6 +148,17 @@ pub enum LinkArg {
         /// Whether the kit carries this directory.
         staged: bool,
     },
+    /// The list of symbols a library exports, which rustc writes for every
+    /// library link: a version script for the GNU linkers, an exported-symbols
+    /// list for ld64, a module-definition file for MSVC. The kit carries the
+    /// recorded list; a replay either passes it on or puts its own in its
+    /// place, which is what decides what the relinked library keeps.
+    ExportList {
+        /// The flag the path is joined to, such as `-Wl,--version-script=`.
+        prefix: String,
+        /// The recorded list, relative to the kit's `stage` directory.
+        path: String,
+    },
     /// A native library the linker resolves by name.
     #[serde(rename = "syslib")]
     SysLib {
@@ -190,7 +213,7 @@ pub struct KitCapability {
     pub select: KitSelect,
 }
 
-/// When a static package carries a capability the app did not name.
+/// When a package carries a capability the app did not name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KitSelect {
@@ -214,10 +237,12 @@ pub enum KitSelect {
 
 impl KitSelect {
     /// Whether an app with these sources and this `lumen.toml` gets the
-    /// capability.
-    fn selects(&self, sources: &str, config: &toml::Table) -> bool {
+    /// capability. `opaque` says the sources are not all the app runs, so
+    /// every use rule answers yes.
+    fn selects(&self, sources: &str, config: &toml::Table, opaque: bool) -> bool {
         match self {
             KitSelect::Always => true,
+            KitSelect::OnUse(_) if opaque => true,
             KitSelect::OnUse(markers) => markers.iter().any(|m| sources.contains(m.as_str())),
             KitSelect::OnRequest => false,
             KitSelect::OnConfig {
@@ -267,13 +292,26 @@ impl From<&lumen_capability::Capability> for KitCapability {
     }
 }
 
-/// The capabilities a static package of one app carries, out of the ones a
-/// kit offers.
+impl KitCapability {
+    /// The markers its use rule scans sources for; empty for any other rule.
+    pub fn markers(&self) -> &[String] {
+        match &self.select {
+            KitSelect::OnUse(markers) => markers,
+            _ => &[],
+        }
+    }
+}
+
+/// The capabilities a package of one app carries, out of the ones a kit
+/// offers.
 ///
 /// `requested` is the app's `[capabilities]` table, and an entry there
 /// settles that capability outright. Every other one follows its own rule
 /// against `sources`, the app's markup, scripts, styles and config read into
-/// one haystack, and `config`, the app's parsed `lumen.toml`. A requested
+/// one haystack, and `config`, the app's parsed `lumen.toml`. `opaque` says
+/// the app runs code the scan cannot read (a C++ or Python program driving
+/// the engine), so every use rule answers yes and only the table, a
+/// request-only rule, or a config rule leaves a capability out. A requested
 /// name the kit does not carry is an error naming what it does, so a
 /// misspelling is caught rather than ignored.
 pub fn select_capabilities<'a>(
@@ -281,6 +319,7 @@ pub fn select_capabilities<'a>(
     sources: &str,
     config: &toml::Table,
     requested: &BTreeMap<String, bool>,
+    opaque: bool,
 ) -> Result<Vec<&'a KitCapability>, String> {
     if let Some(unknown) = requested
         .keys()
@@ -301,9 +340,32 @@ pub fn select_capabilities<'a>(
         .iter()
         .filter(|capability| match requested.get(&capability.name) {
             Some(wanted) => *wanted,
-            None => capability.select.selects(sources, config),
+            None => capability.select.selects(sources, config, opaque),
         })
         .collect())
+}
+
+/// The capabilities `requested` turns off although `sources` mention their
+/// builtins, each with the markers found. An app that says `os-tray = false`
+/// and calls `tray_icon` packages without the tray, and the call does
+/// nothing; this is what the package step warns about.
+pub fn dropped_but_used<'a>(
+    kit: &'a [KitCapability],
+    sources: &str,
+    requested: &BTreeMap<String, bool>,
+) -> Vec<(&'a KitCapability, Vec<&'a str>)> {
+    kit.iter()
+        .filter(|capability| requested.get(&capability.name) == Some(&false))
+        .filter_map(|capability| {
+            let found: Vec<&str> = capability
+                .markers()
+                .iter()
+                .map(String::as_str)
+                .filter(|m| sources.contains(m))
+                .collect();
+            (!found.is_empty()).then_some((capability, found))
+        })
+        .collect()
 }
 
 /// How the app's compiled artifact reaches the executable a replay produces.
@@ -313,7 +375,8 @@ pub struct Artifact {
     pub kind: ArtifactKind,
 }
 
-/// The two ways a launcher finds the artifact it runs.
+/// How a replay's output carries the app: the two ways a launcher finds the
+/// artifact it runs, and the shared engine, which carries none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
@@ -325,6 +388,11 @@ pub enum ArtifactKind {
     /// file, so anything added after the link invalidates it. The launcher
     /// names the segment and section it reads, so the manifest does not.
     MachoSection,
+    /// The kit links the engine's shared library rather than an executable,
+    /// and the app's artifact goes into the launcher beside it the way an
+    /// unlinked package does. Nothing is appended and nothing is put on the
+    /// line.
+    SharedEngine,
 }
 
 /// One line of the link recorder's JSON Lines output.
@@ -400,6 +468,7 @@ mod tests {
             "fn on_start() { tray_icon(\"app\", \"icon.png\", \"\"); }",
             &toml::Table::new(),
             &BTreeMap::new(),
+            false,
         )
         .expect("nothing was requested");
         assert_eq!(names(&selected), ["os-tray", "core-ish"]);
@@ -413,9 +482,56 @@ mod tests {
             capability("mcp", KitSelect::OnRequest),
         ];
         let requested = BTreeMap::from([("os-tray".to_string(), false), ("mcp".to_string(), true)]);
-        let selected = select_capabilities(&kit, "tray_icon(", &toml::Table::new(), &requested)
-            .expect("both are known");
+        let selected =
+            select_capabilities(&kit, "tray_icon(", &toml::Table::new(), &requested, false)
+                .expect("both are known");
         assert_eq!(names(&selected), ["mcp"]);
+    }
+
+    /// Sources the scan cannot read in full answer yes to every use rule; a
+    /// request-only rule and the app's own table still decide.
+    #[test]
+    fn opaque_sources_keep_every_capability_a_use_rule_could_want() {
+        let kit = vec![
+            capability("os-tray", KitSelect::OnUse(vec!["tray_icon".to_string()])),
+            capability("os-power", KitSelect::OnUse(vec!["keep_awake".to_string()])),
+            capability("mcp", KitSelect::OnRequest),
+        ];
+        let requested = BTreeMap::from([("os-power".to_string(), false)]);
+        let selected = select_capabilities(&kit, "", &toml::Table::new(), &requested, true)
+            .expect("all known");
+        assert_eq!(names(&selected), ["os-tray"]);
+        let scanned = select_capabilities(&kit, "", &toml::Table::new(), &requested, false)
+            .expect("all known");
+        assert!(
+            scanned.is_empty(),
+            "nothing is mentioned: {:?}",
+            names(&scanned)
+        );
+    }
+
+    /// A capability the table turns off while the sources call into it is
+    /// reported with the markers found, and only that one.
+    #[test]
+    fn a_capability_turned_off_while_used_is_reported_with_its_markers() {
+        let kit = vec![
+            capability(
+                "os-tray",
+                KitSelect::OnUse(vec!["tray_icon".to_string(), "tray_menu".to_string()]),
+            ),
+            capability("os-power", KitSelect::OnUse(vec!["keep_awake".to_string()])),
+            capability("mcp", KitSelect::OnRequest),
+        ];
+        let requested = BTreeMap::from([
+            ("os-tray".to_string(), false),
+            ("os-power".to_string(), false),
+            ("mcp".to_string(), false),
+        ]);
+        let reported =
+            super::dropped_but_used(&kit, "tray_icon(\"id\", \"a.png\", \"\")", &requested);
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].0.name, "os-tray");
+        assert_eq!(reported[0].1, ["tray_icon"]);
     }
 
     /// A name the kit does not carry is refused, naming what it does carry.
@@ -423,7 +539,7 @@ mod tests {
     fn a_requested_capability_the_kit_lacks_is_an_error_naming_the_offer() {
         let kit = vec![capability("os-tray", KitSelect::Always)];
         let requested = BTreeMap::from([("os-trey".to_string(), true)]);
-        let error = select_capabilities(&kit, "", &toml::Table::new(), &requested)
+        let error = select_capabilities(&kit, "", &toml::Table::new(), &requested, false)
             .expect_err("a misspelling");
         assert!(error.contains("'os-trey'"), "{error}");
         assert!(error.contains("os-tray"), "{error}");
@@ -449,7 +565,7 @@ mod tests {
                 .iter()
                 .map(|(n, w)| (n.to_string(), *w))
                 .collect::<BTreeMap<_, _>>();
-            names(&select_capabilities(&kit, "", &config, &requested).expect("known"))
+            names(&select_capabilities(&kit, "", &config, &requested, false).expect("known"))
         };
         assert_eq!(pick("[render]\nbackend = \"cpu\"\n", &[]), ["render-cpu"]);
         assert_eq!(pick("[render]\nbackend = \"gpu\"\n", &[]), ["render-gpu"]);
@@ -513,11 +629,16 @@ mod tests {
                 name: "asound".to_string(),
                 module: None,
             },
+            LinkArg::ExportList {
+                prefix: "-Wl,--version-script=".to_string(),
+                path: "eeff0011-list".to_string(),
+            },
         ];
         let json = serde_json::to_string(&args).expect("the arguments encode");
         assert!(json.contains(r#"{"kind":"out","prefix":""}"#), "{json}");
         assert!(json.contains(r#""kind":"sysdir""#), "{json}");
         assert!(json.contains(r#""kind":"syslib""#), "{json}");
+        assert!(json.contains(r#""kind":"export_list""#), "{json}");
         // An unattributed entry writes no `module` key at all, so a manifest
         // reads as the short list of what is attributed.
         assert!(!json.contains(r#""module":null"#), "{json}");
@@ -532,6 +653,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ArtifactKind::MachoSection).expect("encodes"),
             r#""macho_section""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ArtifactKind::SharedEngine).expect("encodes"),
+            r#""shared_engine""#
         );
     }
 

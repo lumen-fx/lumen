@@ -45,6 +45,8 @@ use lumen_modules::Target as BuildTarget;
 use lumen_runtime::modules::{DependenciesCfg, ModuleSource, library_spellings};
 
 use crate::app_kind::AppKind;
+use crate::link::engine::{Engine, EngineJob};
+use crate::link::kit::{CapabilityChoice, KitKind};
 use crate::package::release;
 
 /// Conventional extension for a compiled-app artifact, matching
@@ -352,6 +354,16 @@ impl Target {
     pub(crate) fn linkkit_archive_name(self) -> String {
         format!("lumen-linkkit-{}.tar.gz", self.name)
     }
+
+    /// Release asset holding this target's engine kit: the recorded link of
+    /// the engine's shared library (`lumen.dll` on Windows) and every file
+    /// that link read. `lumenc package` replays it to give a folder package
+    /// an engine carrying only the capabilities the app uses. Its own asset
+    /// rather than part of the link kit, so neither download carries the
+    /// other.
+    pub(crate) fn enginekit_archive_name(self) -> String {
+        format!("lumen-enginekit-{}.tar.gz", self.name)
+    }
 }
 
 /// Entry: `lumenc package <app_dir> [<out_dir>] [--name <n>] [--target <t>]
@@ -368,7 +380,9 @@ Assembles the app executable, the Lumen runtime library, and the app's
 files into a folder that runs on a machine with no Lumen installation. A
 markup app is compiled into the executable, pages and all; an SDK app is
 built by its own toolchain and the folder assembled around what that
-produced. <out_dir> defaults to <app_dir>/dist/<name>.
+produced. The engine in the folder is linked for the app from the release's
+engine kit, carrying only the capabilities it uses ([capabilities] in
+lumen.toml settles any). <out_dir> defaults to <app_dir>/dist/<name>.
 
     --name N          Package name (default: the app directory's name).
     --target T        Package for another platform (linux-x86_64 |
@@ -564,6 +578,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             &declared,
+            &cfg,
         ),
         _ => package_sdk(
             &src_path,
@@ -573,6 +588,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             lib_dir.as_deref(),
             kind,
             &declared,
+            &cfg,
         ),
     };
     let summary = match assembled {
@@ -738,23 +754,28 @@ fn package_static(
     let linked_deps = DependenciesCfg(bundled);
     let beside = DependenciesCfg(beside);
 
-    let compiled = compile_for_desktop(src, lib_dir)?;
+    let mut compiled = compile_for_desktop(src, lib_dir)?;
+    let (kit, manifest) = crate::link::kit::open(KitKind::Static, target, lib_dir)?;
+    let sources = crate::config::app_sources(src);
+    let selected = CapabilityChoice {
+        requested: &cfg.capabilities.0,
+        sources: &sources,
+        config: &cfg.raw,
+        opaque: false,
+    }
+    .select(&manifest.capabilities)?;
+    compiled.unlinked = crate::link::kit::unlinked(&manifest.capabilities, &selected);
     let artifact = build_artifact(compiled, src)?;
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
     let exe_path = out.join(target.exe_name(app_name));
-    let sources = crate::config::app_sources(src);
     let linked = crate::link::kit::link_app(
+        &kit,
+        &manifest,
         &exe_path,
         &artifact,
-        target,
-        lib_dir,
         &linked_deps,
-        &crate::link::kit::CapabilityChoice {
-            requested: &cfg.capabilities.0,
-            sources: &sources,
-            config: &cfg.raw,
-        },
+        &selected,
     )?;
     let modules = linked.modules;
     // `--static` is this machine's own platform, so the installation's own
@@ -840,6 +861,7 @@ fn unknown_target(name: &str) -> ExitCode {
 ///
 /// All three read their markup, stylesheet, and scripts at run time, so unlike
 /// a markup app those files travel.
+#[allow(clippy::too_many_arguments)]
 fn package_sdk(
     src: &Path,
     out: &Path,
@@ -848,6 +870,7 @@ fn package_sdk(
     lib_dir: Option<&Path>,
     kind: AppKind,
     declared: &Declared<'_>,
+    cfg: &crate::LumenToml,
 ) -> Result<String, String> {
     let built = match kind {
         AppKind::Rust => build_rust_app(src, target)?,
@@ -862,21 +885,39 @@ fn package_sdk(
 
     // A Rust app's engine comes out of its own cargo build, so the standard
     // library that build staged is the one that belongs beside it; the other
-    // two open the toolchain's engine and take the toolchain's copy.
-    let (carried, library_dirs) = if kind == AppKind::Rust {
-        (copy_linked_engine(&built, out, target)?, build_dirs(&built))
+    // two open the toolchain's engine and take the toolchain's copy, relinked
+    // for the app where an engine kit can be replayed. Their program is C++ or
+    // Python the source scan cannot read, so every capability a use rule
+    // could want stays in unless `[capabilities]` says otherwise.
+    let (carried, library_dirs, modules, engine) = if kind == AppKind::Rust {
+        if !cfg.capabilities.0.is_empty() {
+            eprintln!(
+                "lumenc package: a Rust app links the engine its own cargo build produced, so \
+                 [capabilities] does not trim it; the package carries what that build linked"
+            );
+        }
+        let carried = copy_linked_engine(&built, out, target)?;
+        let modules = stage_modules(src, out, target, lib_dir, declared)?;
+        (carried, build_dirs(&built), modules, None)
     } else {
         let toolchain = locate_toolchain(target, lib_dir)?;
-        copy_c_engine(out, target, &toolchain)?;
+        let sources = crate::config::app_sources(src);
+        let choice = CapabilityChoice {
+            requested: &cfg.capabilities.0,
+            sources: &sources,
+            config: &cfg.raw,
+            opaque: true,
+        };
+        let shipped = ship_runtime(src, out, target, lib_dir, &toolchain, declared, &choice)?;
         (
-            1 + copy_dynamic_runtime(out, target, &toolchain, declared.needs_shared_engine())?,
+            shipped.carried,
             vec![toolchain.dir],
+            shipped.modules,
+            Some(shipped.engine),
         )
     };
     stage_script_library(&library_dirs, out)?;
     stage_license_files(&library_dirs, out)?;
-
-    let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -886,7 +927,7 @@ fn package_sdk(
 
     let copied = copy_app_files(src, out, CopyRules::sdk(kind))?;
     Ok(format!(
-        "wrote {} from the {} build ({} app file{} beside it, {}{})",
+        "wrote {} from the {} build ({} app file{} beside it, {}{}{})",
         exe_path.display(),
         language_of(kind),
         copied,
@@ -899,7 +940,113 @@ fn package_sdk(
             0 => String::new(),
             n => format!(", {n} module{}", if n == 1 { "" } else { "s" }),
         },
+        engine.map(|e| e.summary()).unwrap_or_default(),
     ))
+}
+
+/// What [`ship_runtime`] put beside the executable.
+struct Shipped {
+    /// How many shared libraries travel: the C library, the engine and the
+    /// standard library where those are separate files.
+    carried: usize,
+    /// How many runtime modules were staged.
+    modules: usize,
+    /// The engine the package carries.
+    engine: Engine,
+}
+
+/// Put the runtime an app opens beside its executable: the C library, and on
+/// Linux and macOS the shared engine and the standard library, with the
+/// app's runtime modules staged into `modules/`.
+///
+/// The engine is the app's own when an engine kit can be replayed here (see
+/// [`crate::link::engine`]): of the optional capabilities, it carries the
+/// ones `choice` selects, and it keeps only what the files beside it resolve
+/// against it, which is why the modules are staged first. Otherwise the
+/// toolchain's engine travels whole, and a line says why.
+///
+/// A toolchain whose `liblumen` carries the engine compiled in rather than
+/// beside it (older releases, a trimmed `--lib-dir`) has no engine to relink
+/// on Linux and macOS, and its `liblumen` needs nothing beside it, so the
+/// engine and standard library are absent there unless the app declares a
+/// runtime module: one read off disk loads only into the shared engine, and a
+/// package that quietly shipped without it would refuse every module at
+/// startup.
+fn ship_runtime(
+    src: &Path,
+    out: &Path,
+    target: Target,
+    lib_dir: Option<&Path>,
+    toolchain: &Toolchain,
+    declared: &Declared<'_>,
+    choice: &CapabilityChoice<'_>,
+) -> Result<Shipped, String> {
+    let lib = out.join(target.lib_name());
+    let mut consumers = Vec::new();
+    let mut carried = 1;
+    let full = if target.os == Os::Windows {
+        // The engine is compiled into the C library there, so the library
+        // is what gets relinked.
+        toolchain.lib.clone()
+    } else {
+        copy_c_engine(out, target, toolchain)?;
+        consumers.push(lib.clone());
+        let engine = toolchain.dir.join(target.linked_engine_name());
+        if !engine.is_file() {
+            if declared.needs_shared_engine() {
+                return Err(format!(
+                    "this app declares a runtime module, but the toolchain in {} has no {} to \
+                     ship beside it, and runtime modules need the shared engine. Use a \
+                     toolchain built with the dynamic engine (any current release), or pass \
+                     --lib-dir at one.",
+                    toolchain.dir.display(),
+                    target.linked_engine_name()
+                ));
+            }
+            let modules = stage_modules(src, out, target, lib_dir, declared)?;
+            let engine = crate::link::engine::without_kit(
+                choice,
+                format!(
+                    "the toolchain in {} has the engine compiled into {}",
+                    toolchain.dir.display(),
+                    target.lib_name()
+                ),
+            )?;
+            say_full(&engine);
+            return Ok(Shipped {
+                carried,
+                modules,
+                engine,
+            });
+        }
+        consumers.push(copy_shared_std(out, target, toolchain)?);
+        carried += 2;
+        engine
+    };
+
+    let modules = stage_modules(src, out, target, lib_dir, declared)?;
+    if let Ok(entries) = std::fs::read_dir(out.join("modules")) {
+        consumers.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_file()));
+    }
+    let engine_out = if target.os == Os::Windows {
+        lib
+    } else {
+        out.join(target.linked_engine_name())
+    };
+    let engine = crate::link::engine::engine_for_app(&EngineJob {
+        target,
+        lib_dir,
+        full: &full,
+        out: &engine_out,
+        consumers: &consumers,
+        choice,
+    })?;
+    say_full(&engine);
+    Ok(Shipped {
+        carried,
+        modules,
+        engine,
+    })
 }
 
 /// Copy the shared engine a Rust app just linked, and the standard library
@@ -969,55 +1116,28 @@ fn copy_c_engine(out: &Path, target: Target, toolchain: &Toolchain) -> Result<()
         })
 }
 
-/// Copy the shared engine and standard library a dynamic `liblumen` opens
-/// its process with, from the toolchain directory beside it. Returns how
-/// many files travelled.
-///
-/// A toolchain whose `liblumen` links the engine dynamically (the Linux and
-/// macOS release shape) ships `liblumen_engine` and the Rust standard
-/// library beside it, and a package assembled from it must carry both or the
-/// app will not start. A toolchain without them is the static shape - older
-/// releases, a trimmed `--lib-dir` - and its `liblumen` needs nothing
-/// beside it, so their absence only matters when `needs_engine` says the app
-/// declares a runtime module: one read off disk loads only into the shared
-/// engine, and a package that quietly shipped without it would refuse every
-/// module at startup.
-///
-/// The standard library is matched by its `libstd-<hash>` name in the same
-/// directory; when the directory holds none (a source tree running against
-/// `target/release`), the compiler that built it is asked. That fallback is
-/// meaningful only when packaging for this machine's own target: a
-/// cross-target engine was built by the release's compiler, not the local
-/// one, and a locally resolved libstd would fail symbol resolution at the
-/// app's first start rather than here. Cross-target packaging therefore
-/// requires the libstd staged beside the fetched engine, and reports the
-/// missing file now instead.
-fn copy_dynamic_runtime(
-    out: &Path,
-    target: Target,
-    toolchain: &Toolchain,
-    needs_engine: bool,
-) -> Result<usize, String> {
-    if target.os == Os::Windows {
-        return Ok(0);
+/// The one line a package that carries the full engine prints, saying why.
+fn say_full(engine: &Engine) {
+    if let Engine::Full { why } = engine {
+        eprintln!("lumenc package: the package carries the full engine: {why}");
     }
-    let engine = target.linked_engine_name();
-    let engine_src = toolchain.dir.join(engine);
-    if !engine_src.is_file() {
-        if !needs_engine {
-            return Ok(0);
-        }
-        return Err(format!(
-            "this app declares a runtime module, but the toolchain in {} has no {engine} to \
-             ship beside it, and runtime modules need the shared engine. Use a toolchain \
-             built with the dynamic engine (any current release), or pass --lib-dir at one.",
-            toolchain.dir.display()
-        ));
-    }
-    std::fs::copy(&engine_src, out.join(engine))
-        .map_err(|e| format!("copy {} -> {}: {e}", engine_src.display(), out.display()))?;
-    let mut carried = 1;
+}
 
+/// Copy the standard library the shared engine was built against, from the
+/// toolchain directory beside it.
+///
+/// It is matched by its `libstd-<hash>` name in that directory; when the
+/// directory holds none (a source tree running against `target/release`),
+/// the compiler that built it is asked. That fallback is meaningful only when
+/// packaging for this machine's own target: a cross-target engine was built
+/// by the release's compiler, not the local one, and a locally resolved
+/// libstd would fail symbol resolution at the app's first start rather than
+/// here. Cross-target packaging therefore requires the libstd staged beside
+/// the fetched engine, and reports the missing file now instead.
+///
+/// Returns the copy's path.
+fn copy_shared_std(out: &Path, target: Target, toolchain: &Toolchain) -> Result<PathBuf, String> {
+    let engine = target.linked_engine_name();
     let (prefix, ext) = match target.os {
         Os::Macos => ("libstd-", "dylib"),
         _ => ("libstd-", "so"),
@@ -1035,18 +1155,15 @@ fn copy_dynamic_runtime(
             let dest = out.join(std_lib.file_name().unwrap_or_default());
             std::fs::copy(&std_lib, &dest)
                 .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))?;
-            carried += 1;
+            Ok(dest)
         }
-        None => {
-            return Err(format!(
-                "the toolchain in {} ships {engine} but no libstd beside it, and the \
-                 dynamic engine cannot start without the standard library it was built \
-                 against",
-                toolchain.dir.display()
-            ));
-        }
+        None => Err(format!(
+            "the toolchain in {} ships {engine} but no libstd beside it, and the \
+             dynamic engine cannot start without the standard library it was built \
+             against",
+            toolchain.dir.display()
+        )),
     }
-    Ok(carried)
 }
 
 /// Copy the script standard library into the package, from the first of
@@ -1776,6 +1893,9 @@ fn compile_for_desktop(
 
 /// Compile the app, gather the toolchain files, and write the folder.
 /// Returns the one-line summary to print.
+///
+/// The runtime goes in before the executable: which engine the app ships
+/// with decides what its artifact records about the capabilities left out.
 fn package(
     src: &Path,
     out: &Path,
@@ -1783,13 +1903,31 @@ fn package(
     target: Target,
     lib_dir: Option<&Path>,
     declared: &Declared<'_>,
+    cfg: &crate::LumenToml,
 ) -> Result<String, String> {
-    let compiled = compile_for_desktop(src, lib_dir)?;
-    let artifact = build_artifact(compiled, src)?;
+    let mut compiled = compile_for_desktop(src, lib_dir)?;
 
     let toolchain = locate_toolchain(target, lib_dir)?;
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
+
+    let sources = crate::config::app_sources(src);
+    let shipped = ship_runtime(
+        src,
+        out,
+        target,
+        lib_dir,
+        &toolchain,
+        declared,
+        &CapabilityChoice {
+            requested: &cfg.capabilities.0,
+            sources: &sources,
+            config: &cfg.raw,
+            opaque: false,
+        },
+    )?;
+    compiled.unlinked = shipped.engine.unlinked();
+    let artifact = build_artifact(compiled, src)?;
 
     let exe_path = out.join(target.exe_name(app_name));
     let mut sidecar = false;
@@ -1810,10 +1948,8 @@ fn package(
         }
     }
 
-    copy_c_engine(out, target, &toolchain)?;
-    copy_dynamic_runtime(out, target, &toolchain, declared.needs_shared_engine())?;
     stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
-    let modules = stage_modules(src, out, target, lib_dir, declared)?;
+    let modules = shipped.modules;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`
@@ -1828,7 +1964,7 @@ fn package(
         );
     }
     Ok(format!(
-        "wrote {} for {} ({} app file{} beside it{})",
+        "wrote {} for {} ({} app file{} beside it{}{})",
         exe_path.display(),
         target.name,
         copied,
@@ -1836,7 +1972,8 @@ fn package(
         match modules {
             0 => String::new(),
             n => format!(", {n} module{}", if n == 1 { "" } else { "s" }),
-        }
+        },
+        shipped.engine.summary(),
     ))
 }
 

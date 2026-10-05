@@ -1,6 +1,11 @@
 //! Linking a runtime-module link kit into one executable, writing the kit a
 //! release ships, and dlopening it for the link-not-embed launcher.
 
+/// Relinking the engine's shared library for one app out of the engine kit a
+/// release publishes, so a folder package carries only the capabilities the
+/// app uses. Gated with `package::cli`, whose folder assembly calls it.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+pub mod engine;
 /// `lumenc package --static` - link one executable out of the per-target link
 /// kit a release publishes, with the app's declared runtime modules compiled
 /// in. Gated with `package::cli`, whose folder assembly it is one arm of.

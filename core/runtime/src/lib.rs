@@ -38,8 +38,9 @@ pub mod hooks;
 // that registers it before `main`; the run loop installs whatever that list
 // holds. Naming a crate here is what puts it on the link line, and nothing
 // else in the runtime refers to any of them, so a link that does not ask for
-// one (`lumenc package --static` replaying a link kit, one day the shared
-// engine too) carries none of it.
+// one carries none of it: `lumenc package` relinking the shared engine for an
+// app from the engine kit, and `lumenc package --static` replaying the link
+// kit.
 #[cfg(feature = "async")]
 use lumen_async_tokio_capability as _;
 #[cfg(feature = "devtools")]

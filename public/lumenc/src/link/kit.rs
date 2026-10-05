@@ -29,6 +29,11 @@
 //! drop it: keeping it would have linked every module the kit carries, which
 //! is the one thing selection cannot survive.
 //!
+//! The same replay links the engine's shared library from the other kind of
+//! kit (see [`crate::link::engine`]). There the line additionally gets its
+//! export list replaced, a forced symbol per name the files beside the library
+//! resolve, and the section garbage collection a library link leaves off.
+//!
 //! The app's own compiled artifact reaches the executable the way the target
 //! does it: appended past the end on Linux and Windows, and written into a
 //! Mach-O section by the link itself on macOS, where a signature covers the
@@ -39,26 +44,66 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use lumen_ir::artifact::UnlinkedCapability;
 use lumen_modules::link_kit::{
     ArtifactKind, Driver, DriverKind, KitCapability, LinkArg, Manifest, SCHEMA_VERSION,
-    select_capabilities,
+    dropped_but_used, select_capabilities,
 };
 use lumen_runtime::modules::DependenciesCfg;
 
 use crate::package::cli::{
-    EVERY_MEMBER, Members, Target, Unpack, append_artifact, cannot_fetch, component_cache,
-    fetch_release_files, first_dir_with, search_dirs, set_executable,
+    EVERY_MEMBER, Members, Target, Unpack, append_artifact, component_cache, fetch_release_files,
+    first_dir_with, search_dirs, set_executable,
 };
 
 /// The manifest at the root of a kit, and the only member [`locate`] insists
 /// on: a directory holding it is a kit, and one that does not is not.
 const MANIFEST: &str = "manifest.json";
 
-/// Directory to take the kit from instead of looking one up. What CI and the
-/// static-packaging tests point at the kit they just built.
-const KIT_DIR_ENV: &str = "LUMEN_LINK_KIT_DIR";
+/// Which of the two kits a release publishes per target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KitKind {
+    /// The static launcher's link, which `--static` replays into one
+    /// executable.
+    Static,
+    /// The engine's shared library's link, which a folder package replays
+    /// into the engine it ships.
+    SharedEngine,
+}
 
-/// What decides which of a kit's capabilities an app's executable carries.
+impl KitKind {
+    /// Directory to take the kit from instead of looking one up. What CI and
+    /// the packaging tests point at the kit they just built.
+    pub(crate) fn dir_env(self) -> &'static str {
+        match self {
+            KitKind::Static => "LUMEN_LINK_KIT_DIR",
+            KitKind::SharedEngine => "LUMEN_ENGINE_KIT_DIR",
+        }
+    }
+
+    /// The release asset holding this kind of kit for `target`.
+    fn archive_name(self, target: Target) -> String {
+        match self {
+            KitKind::Static => target.linkkit_archive_name(),
+            KitKind::SharedEngine => target.enginekit_archive_name(),
+        }
+    }
+
+    /// The cache directory's component name for this kind of kit.
+    fn component(self, target: Target) -> String {
+        match self {
+            KitKind::Static => format!("linkkit-{}", target.name()),
+            KitKind::SharedEngine => format!("enginekit-{}", target.name()),
+        }
+    }
+
+    /// Whether a manifest's artifact kind is this kind of kit's.
+    fn holds(self, artifact: ArtifactKind) -> bool {
+        (artifact == ArtifactKind::SharedEngine) == (self == KitKind::SharedEngine)
+    }
+}
+
+/// What decides which of a kit's capabilities an app's package carries.
 pub(crate) struct CapabilityChoice<'a> {
     /// The app's `[capabilities]` table, which settles a capability it names.
     pub(crate) requested: &'a BTreeMap<String, bool>,
@@ -66,32 +111,84 @@ pub(crate) struct CapabilityChoice<'a> {
     pub(crate) sources: &'a str,
     /// The app's parsed `lumen.toml`.
     pub(crate) config: &'a toml::Table,
+    /// Whether the app runs code the scan cannot read, so every use rule
+    /// answers yes: a C++ or Python program driving the engine.
+    pub(crate) opaque: bool,
 }
 
-/// Link `exe` from the kit for `target`, with the modules `deps` declares
-/// compiled in, the capabilities `choice` selects, and `artifact` inside the
-/// file.
+impl CapabilityChoice<'_> {
+    /// The capabilities of `kit` this app gets, after warning about any the
+    /// app turns off while its sources still call into them.
+    pub(crate) fn select<'k>(
+        &self,
+        kit: &'k [KitCapability],
+    ) -> Result<Vec<&'k KitCapability>, String> {
+        let selected =
+            select_capabilities(kit, self.sources, self.config, self.requested, self.opaque)?;
+        for (capability, markers) in dropped_but_used(kit, self.sources, self.requested) {
+            eprintln!(
+                "lumenc package: warning: [capabilities] leaves {} out, and the app calls {}. \
+                 Those calls will do nothing in the package.",
+                capability.name,
+                markers
+                    .iter()
+                    .map(|m| format!("`{}`", m.trim_end_matches('(')))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        Ok(selected)
+    }
+
+    /// Whether the table turns any capability off, which a package that
+    /// cannot leave anything out has to refuse rather than ignore.
+    pub(crate) fn turns_any_off(&self) -> Option<&str> {
+        self.requested
+            .iter()
+            .find(|(_, on)| !**on)
+            .map(|(name, _)| name.as_str())
+    }
+}
+
+/// What an app's artifact records about the capabilities its package left
+/// out: each one a script can reach by name, with the names it answers to.
+/// One with no builtins (a renderer, a dev server) has nothing to record.
+pub(crate) fn unlinked(
+    kit: &[KitCapability],
+    selected: &[&KitCapability],
+) -> Vec<UnlinkedCapability> {
+    kit.iter()
+        .filter(|c| !selected.iter().any(|s| s.name == c.name))
+        .filter(|c| !c.markers().is_empty())
+        .map(|c| UnlinkedCapability {
+            name: c.name.clone(),
+            markers: c.markers().to_vec(),
+        })
+        .collect()
+}
+
+/// Link `exe` from the static kit at `kit`, with the modules `deps` declares
+/// compiled in, `capabilities` forced in, and `artifact` inside the file.
 pub(crate) fn link_app(
+    kit: &Path,
+    manifest: &Manifest,
     exe: &Path,
     artifact: &[u8],
-    target: Target,
-    lib_dir: Option<&Path>,
     deps: &DependenciesCfg,
-    choice: &CapabilityChoice<'_>,
+    capabilities: &[&KitCapability],
 ) -> Result<Linked, String> {
-    let kit = locate(target, lib_dir)?;
-    let manifest = read_manifest(&kit, target)?;
-    let capabilities = select_capabilities(
-        &manifest.capabilities,
-        choice.sources,
-        choice.config,
-        choice.requested,
-    )?;
-
     // Written before the line is planned, because macOS puts it on the line.
     let scratch = exe.with_extension("lmna-staging");
     std::fs::write(&scratch, artifact).map_err(|e| format!("write {}: {e}", scratch.display()))?;
-    let planned = plan(&kit, &manifest, deps, &capabilities, exe, &scratch);
+    let planned = plan(
+        kit,
+        manifest,
+        deps,
+        capabilities,
+        &Library::default(),
+        exe,
+        &scratch,
+    );
     let result = planned.and_then(|plan| {
         link(&plan)?;
         finish(&plan, artifact)?;
@@ -104,32 +201,75 @@ pub(crate) fn link_app(
     result
 }
 
-/// The kit for `target` on this machine, fetched from the release channel
-/// when it is not there yet.
+/// The kit of `kind` for `target`, located (and fetched when it has to be)
+/// and its manifest read and checked.
+pub(crate) fn open(
+    kind: KitKind,
+    target: Target,
+    lib_dir: Option<&Path>,
+) -> Result<(PathBuf, Manifest), String> {
+    let kit = locate(kind, target, lib_dir)?;
+    let manifest = read_manifest(&kit, target)?;
+    if !kind.holds(manifest.artifact.kind) {
+        return Err(format!(
+            "the kit in {} links {}, and this package needs one that links {}",
+            kit.display(),
+            describe(manifest.artifact.kind == ArtifactKind::SharedEngine),
+            describe(kind == KitKind::SharedEngine),
+        ));
+    }
+    Ok((kit, manifest))
+}
+
+fn describe(shared: bool) -> &'static str {
+    if shared {
+        "the engine's shared library"
+    } else {
+        "the static launcher"
+    }
+}
+
+/// The kit of `kind` for `target` on this machine, fetched from the release
+/// channel when it is not there yet.
 ///
-/// [`KIT_DIR_ENV`] wins outright and is never fetched over: a caller that
-/// names a directory has already decided which kit it wants. Otherwise the
-/// search is the one the toolchain files take - `--lib-dir`, the directory
-/// holding this `lumenc`, `LUMEN_LIB_DIR` - and then the cache for the
-/// release [`crate::package::release::resolve`] names.
-pub(crate) fn locate(target: Target, lib_dir: Option<&Path>) -> Result<PathBuf, String> {
-    if let Some(dir) = std::env::var_os(KIT_DIR_ENV).filter(|v| !v.is_empty()) {
-        return named_kit(&PathBuf::from(dir));
+/// The kind's directory variable wins outright and is never fetched over: a
+/// caller that names a directory has already decided which kit it wants.
+/// Otherwise a static kit is looked for where the toolchain files are -
+/// `--lib-dir`, the directory holding this `lumenc`, `LUMEN_LIB_DIR` - and
+/// then in the cache for the release [`crate::package::release::resolve`]
+/// names. An engine kit never ships with the toolchain, so only the cache
+/// and the release hold one.
+pub(crate) fn locate(
+    kind: KitKind,
+    target: Target,
+    lib_dir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let env = kind.dir_env();
+    if let Some(dir) = std::env::var_os(env).filter(|v| !v.is_empty()) {
+        return named_kit(&PathBuf::from(dir), env);
     }
 
     let wanted = [MANIFEST.to_string()];
-    let dirs = search_dirs(lib_dir, target == Target::host());
+    let dirs = match kind {
+        KitKind::Static => search_dirs(lib_dir, target == Target::host()),
+        KitKind::SharedEngine => Vec::new(),
+    };
     if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(dir);
     }
 
-    let component = format!("linkkit-{}", target.name());
-    let (version, dir) = component_cache(&component)
-        .map_err(|why| cannot_fetch(&wanted, Some(target.name()), &dirs, &why))?;
+    let archive = kind.archive_name(target);
+    let (version, dir) = component_cache(&kind.component(target)).map_err(|why| {
+        format!(
+            "no {archive} on this machine, and it could not be fetched: {why}. Point {env} \
+             at a kit for {} instead.",
+            target.name()
+        )
+    })?;
     if !dir.join(MANIFEST).is_file() {
         fetch_release_files(
             &version,
-            &target.linkkit_archive_name(),
+            &archive,
             &Members {
                 wanted: &wanted,
                 optional: &[EVERY_MEMBER.to_string()],
@@ -138,8 +278,8 @@ pub(crate) fn locate(target: Target, lib_dir: Option<&Path>) -> Result<PathBuf, 
             },
             &dir,
             &format!(
-                "A release older than static packaging ships no link kit; build the {} kit \
-                 yourself and point {KIT_DIR_ENV} at it instead.",
+                "A release older than this lumenc ships no {archive}; build the {} kit \
+                 yourself and point {env} at it instead.",
                 target.name()
             ),
         )?;
@@ -147,13 +287,14 @@ pub(crate) fn locate(target: Target, lib_dir: Option<&Path>) -> Result<PathBuf, 
     Ok(dir)
 }
 
-/// The kit a caller named outright, checked for being one at all. A directory
-/// handed in by name is used as it is: a caller that says where the kit is has
-/// already decided which one it wants, so nothing is fetched over it.
-fn named_kit(dir: &Path) -> Result<PathBuf, String> {
+/// The kit a caller named outright in `env`, checked for being one at all. A
+/// directory handed in by name is used as it is: a caller that says where the
+/// kit is has already decided which one it wants, so nothing is fetched over
+/// it.
+fn named_kit(dir: &Path, env: &str) -> Result<PathBuf, String> {
     if !dir.join(MANIFEST).is_file() {
         return Err(format!(
-            "{KIT_DIR_ENV} points at {}, which holds no {MANIFEST}, so it is not a link kit",
+            "{env} points at {}, which holds no {MANIFEST}, so it is not a link kit",
             dir.display()
         ));
     }
@@ -225,7 +366,21 @@ pub(crate) struct Linked {
     pub capabilities: Vec<String>,
 }
 
-/// Turn the recorded line into the one that produces this app's executable.
+/// What a replay of a shared library changes beyond which modules and
+/// capabilities it carries. An executable's replay changes none of it.
+#[derive(Debug, Default)]
+pub(crate) struct Library<'a> {
+    /// The export list that takes the recorded one's place; `None` passes the
+    /// recorded list on.
+    pub(crate) exports: Option<&'a Path>,
+    /// The symbols the library keeps, each forced onto the line the way a
+    /// capability's register symbol is: with rustc's `symbols.o` left off,
+    /// nothing else asks the linker to read the archives defining them.
+    pub(crate) keep: &'a [String],
+}
+
+/// Turn the recorded line into the one that produces this app's executable,
+/// or, from a shared-engine kit, this app's engine.
 ///
 /// `scratch` is the app's compiled artifact on disk, which only the Mach-O
 /// arm puts on the line; every other target appends it afterwards.
@@ -234,6 +389,7 @@ pub(crate) fn plan(
     manifest: &Manifest,
     deps: &DependenciesCfg,
     capabilities: &[&KitCapability],
+    library: &Library<'_>,
     exe: &Path,
     scratch: &Path,
 ) -> Result<Plan, String> {
@@ -247,7 +403,9 @@ pub(crate) fn plan(
         modules.push(module);
     }
 
-    let mut args = Vec::with_capacity(manifest.args.len() + modules.len() + capabilities.len() + 1);
+    let mut args = Vec::with_capacity(
+        manifest.args.len() + modules.len() + capabilities.len() + library.keep.len() + 3,
+    );
     // Ahead of the archives: a forced symbol is what makes the linker read a
     // module's rlib at all, and GNU ld only looks for one in an archive it
     // has not passed yet. A capability is pulled the same way; the producer
@@ -263,6 +421,9 @@ pub(crate) fn plan(
             &manifest.driver,
             &capability.register_symbol,
         )?));
+    }
+    for symbol in library.keep {
+        args.push(OsString::from(force_include(&manifest.driver, symbol)?));
     }
 
     let declared = |module: &Option<String>| match module {
@@ -300,11 +461,29 @@ pub(crate) fn plan(
                     args.push(OsString::from(format!("{prefix}{name}")));
                 }
             }
+            LinkArg::ExportList { prefix, path } => match library.exports {
+                Some(list) => args.push(joined(prefix, list)),
+                None => args.push(joined(prefix, &stage.join(path))),
+            },
         }
     }
 
-    if manifest.artifact.kind == ArtifactKind::MachoSection {
-        args.push(sectcreate(&manifest.driver, scratch)?);
+    match manifest.artifact.kind {
+        ArtifactKind::MachoSection => args.push(sectcreate(&manifest.driver, scratch)?),
+        // rustc leaves section garbage collection off a library link, so the
+        // export list decides nothing until it is on; and what the library
+        // ships to is a package, which has no use for debug info.
+        ArtifactKind::SharedEngine => {
+            for flag in library_flags(&manifest.driver)? {
+                if !args
+                    .iter()
+                    .any(|a| a.to_str().is_some_and(|a| same_flag(a, flag)))
+                {
+                    args.push(OsString::from(flag));
+                }
+            }
+        }
+        ArtifactKind::Append => {}
     }
 
     let (program, lead) = program(kit, &manifest.driver)?;
@@ -319,6 +498,30 @@ pub(crate) fn plan(
         modules: modules.iter().map(|m| m.name.clone()).collect(),
         capabilities: capabilities.iter().map(|c| c.name.clone()).collect(),
     })
+}
+
+/// The flags a library replay adds when the line does not already carry them:
+/// section garbage collection, and on the Unix linkers no symbol table or debug
+/// info: the dynamic symbols are what a library is used through.
+fn library_flags(driver: &Driver) -> Result<&'static [&'static str], String> {
+    match (driver.kind, driver.flavor.as_str()) {
+        (DriverKind::Cc, "gnu") => Ok(&["-Wl,--gc-sections", "-Wl,--strip-all"]),
+        (DriverKind::Cc, "darwin") => Ok(&["-Wl,-dead_strip", "-Wl,-S"]),
+        (DriverKind::Lld, "link") => Ok(&["/OPT:REF"]),
+        (kind, flavor) => Err(unknown_driver(kind, flavor)),
+    }
+}
+
+/// Whether recorded argument `arg` is `flag`, in MSVC's case-blind spelling
+/// where that is the rule. `/OPT:REF,ICF` already asks for `/OPT:REF`.
+fn same_flag(arg: &str, flag: &str) -> bool {
+    if let Some(wanted) = flag.strip_prefix("/OPT:") {
+        return arg
+            .get(..5)
+            .is_some_and(|head| head.eq_ignore_ascii_case("/OPT:"))
+            && arg[5..].split(',').any(|o| o.eq_ignore_ascii_case(wanted));
+    }
+    arg == flag
 }
 
 /// A module the app declared and the kit does not carry. Naming what the kit
@@ -542,14 +745,38 @@ fn link_failed(plan: &Plan, stderr: &str) -> String {
 }
 
 /// Everything the executable still needs once the link has written it.
-fn finish(plan: &Plan, artifact: &[u8]) -> Result<(), String> {
+pub(crate) fn finish(plan: &Plan, artifact: &[u8]) -> Result<(), String> {
     match plan.artifact {
         ArtifactKind::Append => append_artifact(&plan.exe, artifact)?,
         // The link already wrote it into a section; what is left is the
         // signature, which has to be the last thing done to the file.
         ArtifactKind::MachoSection => sign(&plan.exe)?,
+        // A library carries no artifact. A Mach-O one is signed like an
+        // executable; a Windows one leaves its debug database behind, which a
+        // package has no use for.
+        ArtifactKind::SharedEngine => {
+            if is_mach_o(&plan.exe) {
+                sign(&plan.exe)?;
+            }
+            let _ = std::fs::remove_file(plan.exe.with_extension("pdb"));
+            return Ok(());
+        }
     }
     set_executable(&plan.exe)
+}
+
+/// Whether the file at `path` is a Mach-O image, which is the one a library
+/// replay has to sign.
+fn is_mach_o(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && matches!(
+            u32::from_le_bytes(magic),
+            0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe
+        )
 }
 
 /// Strip and ad-hoc sign a Mach-O executable.
@@ -649,6 +876,7 @@ mod tests {
             modules: vec![KitModule::new("lumen-audio"), KitModule::new("lumen-fs")],
             capabilities: Vec::new(),
             artifact: Artifact { kind: artifact },
+            build_id: None,
         }
     }
 
@@ -692,6 +920,7 @@ mod tests {
             &manifest,
             &deps(&["lumen-fs"]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/Demo.lmna-staging"),
         )
@@ -735,6 +964,7 @@ mod tests {
             &manifest,
             &deps(&[]),
             &selected,
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -746,6 +976,108 @@ mod tests {
         assert_eq!(plan.capabilities, vec!["os-tray".to_string()]);
     }
 
+    /// A shared-engine replay puts the app's own export list in the recorded
+    /// one's slot, forces every kept name and the selected capability in
+    /// ahead of the archives, and turns on the section garbage collection a
+    /// library link leaves off.
+    #[test]
+    fn a_shared_engine_replay_substitutes_the_export_list_and_collects_garbage() {
+        let mut manifest = manifest(unix(), ArtifactKind::SharedEngine);
+        manifest.args.push(LinkArg::ExportList {
+            prefix: "-Wl,--version-script=".to_string(),
+            path: "aabbccdd-list".to_string(),
+        });
+        let tray = KitCapability {
+            name: "os-tray".to_string(),
+            register_symbol: lumen_capability::register_symbol("os-tray"),
+            select: lumen_modules::link_kit::KitSelect::Always,
+        };
+        let keep = vec!["lumen_engine_build_id".to_string(), "_ZN1a1bE".to_string()];
+        let exports = Path::new("/out/liblumen_engine.exports");
+        let plan = plan(
+            Path::new("/kit"),
+            &manifest,
+            &deps(&[]),
+            &[&tray],
+            &Library {
+                exports: Some(exports),
+                keep: &keep,
+            },
+            Path::new("/out/liblumen_engine.so"),
+            Path::new("/out/liblumen_engine.so"),
+        )
+        .expect("the kit replays");
+        let args = args(&plan);
+        assert_eq!(
+            args[..3],
+            [
+                "-Wl,-u,lumen_capability_register_os_tray".to_string(),
+                "-Wl,-u,lumen_engine_build_id".to_string(),
+                "-Wl,-u,_ZN1a1bE".to_string(),
+            ]
+        );
+        assert!(
+            args.contains(&format!("-Wl,--version-script={}", exports.display())),
+            "{args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("aabbccdd-list")),
+            "{args:?}"
+        );
+        assert_eq!(
+            args[args.len() - 2..],
+            [
+                "-Wl,--gc-sections".to_string(),
+                "-Wl,--strip-all".to_string()
+            ]
+        );
+        assert_eq!(plan.artifact, ArtifactKind::SharedEngine);
+
+        // With no list of its own, the replay passes the recorded one on.
+        let recorded = Path::new("/kit").join("stage").join("aabbccdd-list");
+        let passed = args_of_default(&manifest);
+        assert!(
+            passed.contains(&format!("-Wl,--version-script={}", recorded.display())),
+            "{passed:?}"
+        );
+    }
+
+    /// The flags a library replay adds are not doubled when the recorded
+    /// line carries them, and MSVC's combined spelling counts.
+    #[test]
+    fn a_library_flag_the_line_already_carries_is_not_added_again() {
+        assert!(same_flag("/OPT:REF,ICF", "/OPT:REF"));
+        assert!(same_flag("/opt:icf,ref", "/OPT:REF"));
+        assert!(!same_flag("/OPT:NOREF", "/OPT:REF"));
+        assert!(same_flag("-Wl,--gc-sections", "-Wl,--gc-sections"));
+
+        let mut manifest = manifest(unix(), ArtifactKind::SharedEngine);
+        manifest.args.push(LinkArg::Lit {
+            value: "-Wl,--gc-sections".to_string(),
+        });
+        let args = args_of_default(&manifest);
+        assert_eq!(
+            args.iter().filter(|a| *a == "-Wl,--gc-sections").count(),
+            1,
+            "{args:?}"
+        );
+    }
+
+    /// The line a manifest replays to with nothing of the app's own.
+    fn args_of_default(manifest: &Manifest) -> Vec<String> {
+        let plan = plan(
+            Path::new("/kit"),
+            manifest,
+            &deps(&[]),
+            &[],
+            &Library::default(),
+            Path::new("/out/lib.so"),
+            Path::new("/out/lib.so"),
+        )
+        .expect("the kit replays");
+        args(&plan)
+    }
+
     /// An app declaring nothing links the launcher and the engine alone.
     #[test]
     fn declaring_no_module_forces_no_symbol() {
@@ -755,6 +1087,7 @@ mod tests {
             &manifest,
             &deps(&[]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -778,6 +1111,7 @@ mod tests {
             &manifest,
             &deps(&["shape-tools"]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -803,6 +1137,7 @@ mod tests {
             &manifest,
             &deps(&["lumen-fs"]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/app.lmna"),
         )
@@ -837,6 +1172,7 @@ mod tests {
             &manifest,
             &deps(&["lumen-audio"]),
             &[],
+            &Library::default(),
             Path::new("C:/out/Demo.exe"),
             Path::new("C:/out/scratch"),
         )
@@ -946,12 +1282,16 @@ mod tests {
         let kit = std::env::temp_dir().join(format!("lumen-kit-env-{}", std::process::id()));
         std::fs::create_dir_all(&kit).expect("kit dir");
 
-        let error = named_kit(&kit).expect_err("the directory holds no manifest");
+        let error =
+            named_kit(&kit, "LUMEN_LINK_KIT_DIR").expect_err("the directory holds no manifest");
         assert!(error.contains(MANIFEST), "{error}");
-        assert!(error.contains(KIT_DIR_ENV), "{error}");
+        assert!(error.contains("LUMEN_LINK_KIT_DIR"), "{error}");
 
         write_manifest(&kit, &manifest(unix(), ArtifactKind::Append));
-        assert_eq!(named_kit(&kit).expect("the kit is there"), kit);
+        assert_eq!(
+            named_kit(&kit, "LUMEN_LINK_KIT_DIR").expect("the kit is there"),
+            kit
+        );
 
         let _ = std::fs::remove_dir_all(&kit);
     }
@@ -973,6 +1313,7 @@ mod tests {
             &manifest(driver, ArtifactKind::Append),
             &deps(&["lumen-fs"]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -991,6 +1332,7 @@ mod tests {
             &manifest,
             &deps(&["lumen-fs"]),
             &[],
+            &Library::default(),
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )

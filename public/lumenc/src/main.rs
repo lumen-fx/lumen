@@ -1066,7 +1066,9 @@ USAGE:
                           Lumen installation. A markup app is compiled into
                           the executable, pages and all; an SDK app is built
                           by its own toolchain (cargo / CMake) and the folder
-                          assembled around what that produced.
+                          assembled around what that produced. The engine
+                          beside it is linked for the app, carrying only the
+                          capabilities it uses.
                           <out_dir> defaults to <app_dir>/dist/<name>, and
                           --name defaults to the app directory's name.
                           --target packages a markup app for another platform

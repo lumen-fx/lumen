@@ -77,9 +77,10 @@ lumen-dylib = { workspace = true, optional = true }
 
 [features]
 # The DEFAULT shared/static library is FULL-featured: one shared library serves
-# every app (the whole point of link-not-embed). Per-app trimming applies ONLY
-# to the static `--bundle` path, built `--no-default-features --features
-# "<resolved capabilities>"` by lumenc.
+# every app (the whole point of link-not-embed). Per-app trimming by feature
+# applies ONLY to the static `--bundle` path, built `--no-default-features
+# --features "<resolved capabilities>"` by lumenc; `lumenc package` trims at
+# the link instead, by replaying the release's engine kit.
 default = [
     "embed-parser",
     "runtime-parse",

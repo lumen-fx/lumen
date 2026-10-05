@@ -478,14 +478,16 @@ pub struct RuntimeCfg {
 /// `[capabilities]` block: which optional subsystems a build of this app
 /// carries, keyed by capability name (`os-tray`, `http-fetch`, `mcp`, ...).
 ///
-/// Read by the two builds that trim: `lumenc bundle --static`, which compiles
-/// a runtime from source and maps the names it knows to cargo features, and
-/// `lumenc package --static`, which replays a link kit and forces the named
-/// capabilities into the executable. An entry settles its capability outright;
+/// Read by the builds that trim: `lumenc package`, which relinks the shared
+/// engine a folder package ships from the release's engine kit, `lumenc
+/// package --static`, which replays a link kit into one executable, and
+/// `lumenc bundle --static`, which compiles a runtime from source and maps the
+/// names it knows to cargo features. An entry settles its capability outright;
 /// a capability the table leaves out follows its own rule against the app's
-/// sources. The shared runtime and `lumenc run` carry everything and ignore
-/// the table. Script hosts come from the script files' extensions (or
-/// `[script] engine`), not from here.
+/// sources. A package that cannot relink its engine carries the full one and
+/// refuses a table that turns anything off. `lumenc run` carries everything
+/// and ignores the table. Script hosts come from the script files' extensions
+/// (or `[script] engine`), not from here.
 ///
 /// ```toml
 /// [capabilities]

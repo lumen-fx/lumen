@@ -8,7 +8,11 @@
 # because the member owns its whole subtree, and being excluded is the point.
 #
 # The dependency list below IS the engine: the runtime with every shipped
-# subsystem turned on, plus the crates the SDK surface re-exports. It names
+# subsystem turned on, plus the crates the SDK surface re-exports. The engine
+# the toolchain ships carries every capability; `lumenc package` relinks it
+# per app from the release's engine kit, which is the recorded link of this
+# crate's dylib, so trimming happens at the link and never through features
+# here. It names
 # the engine's pieces directly - never the root `lumen` crate or `lumenc` -
 # because those two are consumers of this library: `liblumen` and the `lumenc`
 # binary link it under their `dynamic-engine` feature, and a dependency in
