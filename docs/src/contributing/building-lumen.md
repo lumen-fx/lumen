@@ -275,6 +275,43 @@ target directory that built it passes on the runner and fails everywhere else,
 which is what `.github/scripts/check-toolchain-archive.sh` exists to stop.
 `tools/release/release-checklist.md` describes the rest of what a leg does.
 
+### The engine kit
+
+The other kit a leg publishes, `lumen-enginekit-<target>.tar.gz`, is the
+recorded link of the engine's shared library: `liblumen_engine` on Linux and
+macOS, `lumen.dll` on Windows. `lumenc package` replays it to give a folder
+package an engine of its own. It is the same shape as the link kit, written by
+`lumenc link-kit emit --artifact shared-engine`, with three differences.
+
+- The export list is a slot. The manifest records rustc's version script,
+  exported-symbols list or module-definition file as an `export_list`
+  argument, and a replay puts its own list there: on Linux and macOS the names
+  the files shipped beside the engine resolve against it, each also forced
+  onto the line, and on Windows the recorded list less the register symbols of
+  the capabilities left out. Section garbage collection, which rustc leaves
+  off a library link, is added, and that is what turns a shorter export list
+  into a smaller library.
+- The manifest records the engine build id the staged objects carry, and a
+  replay refuses a kit whose id is not the one in the toolchain's engine. The
+  runtime modules beside the engine were compiled against that id.
+- On Linux and macOS the record comes from the build that ships the engine:
+  the dynamic-engine step runs with the recorder in the linker's place, so
+  the kit's inputs are the shipped engine's own. Windows has no engine
+  library; its kit is the link of `lumen.dll` out of the static launcher's
+  recorded build, which links it too.
+
+Rust's metadata object (`rmeta.o`) is left off the line along with
+`symbols.o`: nothing compiles against a relinked engine.
+
+To try the consumer against a kit you built, build the dynamic-engine step's
+command with `RUSTFLAGS` carrying `-Clinker=<path to link-recorder>` and
+`LUMEN_LINK_RECORD` / `LUMEN_LINK_STAGE` / `LUMEN_REAL_LINKER` set the way the
+workflow sets them, run `lumenc link-kit emit --artifact shared-engine` on the
+record, and point `LUMEN_ENGINE_KIT_DIR` at the result.
+`.github/scripts/engine-kit-smoke.sh <kit> <toolchain archive>...` is what the
+leg runs against its own kit: it packages apps, checks which capabilities
+each engine exports, and runs them headless.
+
 ## Debug info in dev builds
 
 Dev builds keep line tables for the workspace crates, so panic backtraces
@@ -327,9 +364,10 @@ available.
 **`lumen-runtime`** defaults to every subsystem on: `mcp`,
 `async`, `host-rhai`, `host-lua`, `host-candela`, `http-fetch`,
 `runtime-parse`. Each script host is its own feature, so a build can carry
-exactly the languages its app ships. Per-app trimming happens only on the
-static bundle path, where `lumenc` selects the exact feature set an app needs;
-the development path stays full featured.
+exactly the languages its app ships. Per-app trimming by feature happens only
+on the static bundle path, where `lumenc` selects the exact feature set an app
+needs; the development path stays full featured. `lumenc package` trims
+capabilities at the link instead (see [the engine kit](#the-engine-kit)).
 
 **`lumen-script-candela`** has `compiler`, on by default. It carries the
 candela compiler, and with it source compilation, hot reload, `lumenc check`,

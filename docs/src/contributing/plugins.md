@@ -507,7 +507,8 @@ other than the constructor: a generic instantiated there and reused by a
 crate compiled later. In an object of its own the constructor is reached by
 its register symbol and by nothing else.
 
-`select` says when a static package carries the capability: `Select::Always`,
+`select` says when a package carries the capability, in the engine linked for
+a folder package and in a `--static` executable alike: `Select::Always`,
 `Select::OnUse(&[...])` for an app whose sources mention one of the listed
 names, `Select::OnRequest` for a development subsystem an app has to name
 in `[capabilities]`, or `Select::OnConfig` for one of several
@@ -524,7 +525,13 @@ pub const SELECT: Select = Select::OnConfig {
 ```
 
 An entry in the app's `[capabilities]` table settles a capability outright
-whatever its rule says. The phase says where in the build it runs: `Backends` before the core
+whatever its rule says. A C++ or Python app is packaged as if every
+`Select::OnUse` rule matched, because its program is not in the scanned
+sources. The `OnUse` names double as what a packaged app warns about: when a
+package leaves the capability out, its artifact records the names, and a
+script calling a builtin they match prints a warning on the first call. The
+check sits in `ScriptFn::invoke_into`, which every host goes through, and
+reads the names as plain strings, so the runtime still names no capability. The phase says where in the build it runs: `Backends` before the core
 stack (for a backend the stack is built on, such as the layout engine, which
 registers itself there for the runtime to install), `Platform` after the core stack
 and before the reactive bindings, `BeforeScripts` ahead of the script hosts
