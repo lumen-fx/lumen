@@ -17,7 +17,8 @@ name: coverage
 # nested build inherits the rustc wrapper and builds into the measured
 # target tree), so their lines grade too. The browser crates run as wasm32
 # in a browser, where the host run cannot reach them, so their suites run a
-# second time instrumented for wasm32 and upload beside the host report;
+# second time, in a job of their own, instrumented for wasm32 and upload
+# beside the host report;
 # Codecov merges the two, and a line either run reaches counts as covered.
 # Code the runner cannot execute - the device-bound half of the wgpu surface -
 # grades at whatever the suite reaches.
@@ -52,6 +53,13 @@ permissions:
   contents: read
 
 jobs:
+  # The host suite and the browser suites measure in two jobs side by side, and
+  # a third uploads both reports in one Codecov call once they are done. Run in
+  # one job they took the sum of both; they share no build, since the browser
+  # run is a wasm32 build with its own flags. Keeping them apart also keeps
+  # each cache valid: the browser run sets RUSTC_BOOTSTRAP, which proc-macro2's
+  # build script watches, and in a shared target dir that rebuilt every proc
+  # macro and everything above it on the next host run.
   coverage:
     name: llvm-cov
     runs-on: ubuntu-latest
@@ -74,10 +82,12 @@ jobs:
         run: .github/scripts/linux-deps.sh
 
       # Instrumented builds share nothing with the ordinary CI build, so this
-      # cache is its own key.
+      # cache is its own key. Only main writes it, for the reason ci.yml gives.
       - uses: Swatinem/rust-cache@v2
         with:
           key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -90,10 +100,38 @@ jobs:
       - name: Collect coverage
         run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
 
-      # The browser suites, as the `web` job in ci.yml runs them, instrumented
-      # for wasm32. The runner ships Chrome and a matching chromedriver; the
-      # command-line tool has to match the workspace's `wasm-bindgen`, and
-      # minicov compiles its profiling runtime with the runner's clang.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error
+
+  # The browser suites, as the `web` job in ci.yml runs them, instrumented for
+  # wasm32. The runner ships Chrome and a matching chromedriver; the
+  # command-line tool has to match the workspace's `wasm-bindgen`, and minicov
+  # compiles its profiling runtime with the runner's clang.
+  browser:
+    name: llvm-cov (browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add llvm-tools-preview
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-browser
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen-cli@0.2.127
@@ -102,6 +140,28 @@ jobs:
         run: |
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
           .github/scripts/wasm-coverage.sh lcov-wasm.info
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov-wasm
+          path: lcov-wasm.info
+          if-no-files-found: error
+
+  upload:
+    name: upload
+    needs: [coverage, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Codecov maps the report's paths onto the files of this checkout.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lcov*
+          merge-multiple: true
 
       # The upload is unconditional. codecov/patch is a required check, so a
       # run that uploads nothing leaves the check pending and the pull request
@@ -115,12 +175,3 @@ jobs:
           files: lcov.info,lcov-wasm.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
-
-      - name: Upload lcov.info as an artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lcov
-          path: |
-            lcov.info
-            lcov-wasm.info
-          if-no-files-found: error

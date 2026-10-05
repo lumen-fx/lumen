@@ -31,6 +31,12 @@ env:
   # across runners.
   CARGO_INCREMENTAL: 0
 
+# Only runs on main save a build cache (`save-if` on every rust-cache step);
+# pull requests and merge-queue entries restore main's. Repository caches are
+# capped, and a queue entry's cache can be read by no later run, so saving
+# from every ref pushed main's own caches out and left nearly every run
+# compiling from scratch.
+
 # Every job here checks the tree out, builds it, and reports through the check
 # run GitHub creates on its own. None of them writes to the repository.
 permissions:
@@ -112,6 +118,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: engine-graph
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: python3 tools/verify-engine-crate-graph.py
 
   clippy:
@@ -131,6 +138,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -159,6 +167,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red test on main still leaves a sound build behind.
+          cache-on-failure: true
       # The `lumenc new` templates, each downloaded from the repository it is
       # maintained in. A release ships them beside the toolchain and the suite
       # reads them from disk the way an installed lumenc does, so a run
@@ -251,6 +262,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: needs.changes.outputs.rust == 'true'
         run: |
           cargo check --target wasm32-unknown-unknown \
@@ -307,6 +319,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: web
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The same recipe a release runs, so the module measured here is the
       # module a site downloads.
       - name: Build the browser runtime

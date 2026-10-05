@@ -227,6 +227,8 @@ jobs:
         with:
           key: zed
           workspaces: tools/zed-lumen
+          # main writes, everything else reads; see ci.yml
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo check --manifest-path tools/zed-lumen/Cargo.toml --target wasm32-wasip1
 
