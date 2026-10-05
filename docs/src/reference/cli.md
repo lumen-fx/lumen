@@ -457,6 +457,28 @@ its runtime library needs nothing beside it - unless the app declares a
 runtime module, which exits 1 naming the gap, because runtime modules need
 the shared engine. Candela packages and portable plugins need nothing from it.
 
+The engine a markup, C++ or Python package carries is linked for the app:
+`liblumen_engine` on Linux and macOS, `lumen.dll` on Windows, replayed from
+the engine kit published for the target with only the capabilities the app
+uses and, on Linux and macOS, only the exports the files beside it resolve.
+A capability is in when `[capabilities]` says so, or when the table leaves it
+out and its own rule picks it from the app's sources; a C++ or Python app's
+program cannot be scanned, so for those every capability a program could call
+is in unless the table says otherwise. The summary line names the
+capabilities linked and the ones left out. The kit is downloaded from
+[the release this toolchain uses](#which-release-toolchain-files-come-from)
+and cached, or taken from `$LUMEN_ENGINE_KIT_DIR`, and only a `lumenc` that
+is that release's build fetches one. The replay needs the linker `--static`
+needs, plus on Linux the development files of the system libraries the
+engine links (GTK 3). When there is no kit, the kit is not the toolchain's
+engine, the package is for another platform, or the link fails, the full
+engine travels and one line on stderr says why; a `[capabilities]` entry
+turning anything off then exits 1, since that engine leaves nothing out. A
+`[capabilities]` key that names no capability exits 1 either way. A
+capability left out while the sources call into it gets a warning, here and
+on the app's first call to it at run time. A Rust app's engine comes from
+its own build, and `[capabilities]` does not change it.
+
 The candela standard library travels in a `libs/` subfolder of the package,
 whatever the kind and whatever links the engine: scripts read it off disk as
 they compile, so a package without it fails every `import "std/..."` and every
@@ -847,10 +869,10 @@ The check never changes the command's exit code.
 
 ## Which release toolchain files come from
 
-`package --target`, `package --static`, and `web` download files that were
-published with a release: another platform's launcher stub and runtime
-library, a platform's link kit (`lumen-linkkit-<target>.tar.gz`), and the
-browser runtime. Which release they come from is read from the releases page,
+`package`, `package --target`, `package --static`, and `web` download files
+that were published with a release: another platform's launcher stub and
+runtime library, a platform's engine kit (`lumen-enginekit-<target>.tar.gz`)
+and link kit (`lumen-linkkit-<target>.tar.gz`), and the browser runtime. Which release they come from is read from the releases page,
 never from the version `lumenc --version` prints. A version number on its own says
 what a copy of `lumenc` is, and a copy can be newer than anything published.
 
@@ -873,8 +895,8 @@ Downloads are cached per release and per component under the platform cache
 directory (`~/.cache/lumen/toolchain/<release>/<component>` on Linux), so
 resolving a different release downloads into a different directory and never
 reuses files from another one. The component is the target name for a
-platform's toolchain files, `linkkit-<target>` for its link kit, and `web` for
-the browser runtime. Old directories are left in place; they are a
+platform's toolchain files, `enginekit-<target>` for its engine kit,
+`linkkit-<target>` for its link kit, and `web` for the browser runtime. Old directories are left in place; they are a
 cache and can be deleted at any time.
 
 A repository that has published no releases and a releases page that cannot be
@@ -971,6 +993,7 @@ flags [above](#lumen-server).
 | `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
 | `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
 | `LUMEN_LINK_KIT_DIR` | Link kit `package --static` replays, instead of the one published for the target. |
+| `LUMEN_ENGINE_KIT_DIR` | Engine kit `package` replays to link an app's engine, instead of the one published for the target. |
 | `LUMEN_GH_REPO` | Repository, as `owner/name`, whose releases toolchain downloads and the update check read. Defaults to `lumen-fx/lumen`. |
 | `LPM_BIN` | The `lpm` executable to resolve registry packages with. Searched first, ahead of `PATH` and the shared install path. |
 | `LPM_GH_REPO` | Repository, as `owner/name`, `lpm` is downloaded from. Defaults to `lumen-fx/registry`. |

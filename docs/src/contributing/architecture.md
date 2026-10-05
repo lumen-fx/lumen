@@ -310,7 +310,9 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   the list at three points of the build and installs what it finds; a
   capability decides for itself whether an app uses it. Each one exports a
   symbol the linker can select it by, which is what lets a link leave a
-  subsystem out with no compiler involved.
+  subsystem out with no compiler involved: `lumenc package` relinks the
+  shared engine for each app that way from the release's engine kit, and
+  `--static` links the executable from the link kit.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
   `check` / `run` / `build` / `bundle` / `package` subcommands.

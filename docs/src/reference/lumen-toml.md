@@ -120,8 +120,9 @@ a window and in a headless run alike, and prints which one it fell back to.
 `gpu` and `cpu` are hard choices: when the named renderer cannot start, or the
 build does not carry it, the launch fails with an error naming this key.
 
-`lumenc package --static` links only the renderers this key selects: a `cpu`
-app carries no GPU code, and a `gpu` app no CPU rasterizer. Pick one for a
+`lumenc package` links only the renderers this key selects, into the engine
+beside the executable or, with `--static`, into the executable: a `cpu` app
+carries no GPU code, and a `gpu` app no CPU rasterizer. Pick one for a
 small app that draws a static UI and should pay for one renderer only; leave
 `auto` for an app that has to start on any machine. The `render-gpu` and
 `render-cpu` entries under `[capabilities]` override the choice for the link.
@@ -192,17 +193,29 @@ subsystem out of a build, use `[capabilities]`.
 ## [capabilities]
 
 Which optional subsystems a build of this app carries, one key per
-capability name. Two builds read it: `lumenc package --static`, which links
-the app from a prebuilt kit and takes only the capabilities the app needs,
-and `lumenc bundle --static`, which compiles a runtime from source. The
-shared runtime and `lumenc run` always carry everything, and ignore this
-section.
+capability name. `lumenc package` reads it for the engine it links for the
+app, whether that engine sits beside the executable in a folder package or
+inside it with `--static`, and `lumenc bundle --static` reads it for the
+runtime it compiles from source. `lumenc run` always carries everything and
+ignores this section.
 
 An entry settles its capability outright. A capability the section leaves
 out follows its own rule: most are carried when the app's sources (markup,
 scripts, styles, this file) mention the builtins they answer, and the
-development ones only when asked for here. A key naming a capability the
-kit does not carry stops the package and lists what it does.
+development ones only when asked for here. A C++ or Python app's program is
+not something the sources show, so for one of those every capability a
+program could call is carried unless an entry here says otherwise. A Rust
+app ships the engine its own cargo build linked, and packaging one with
+this section set prints a line saying the section does not apply. A key
+naming a capability the kit does not carry stops the package and lists what
+it does.
+
+When a package cannot link an engine for the app (no engine kit for this
+release, another platform's package, a failed link), it carries the full
+engine, and an entry here that turns a capability off stops the package
+rather than being ignored. A capability left out while the app's sources
+call into it is warned about when packaging, and the first call to each of
+its builtins prints a warning when the app runs.
 
 | Key | Carried by default when | Effect |
 |-----|-------------------------|--------|

@@ -33,6 +33,49 @@ A candela package needs no staging: its scripts compiled into the executable
 with the app's own. All of it belongs to the app; keep the folder together
 when you move it.
 
+### The engine is the app's own
+
+The engine in the folder carries only the optional subsystems the app uses.
+Of the tray, notifications, file dialogs, hotkeys, the HTTP client, the
+renderers, the developer tools and the rest, a package keeps the ones the
+app's sources call into and leaves the others out, and
+[`[capabilities]`](../reference/lumen-toml.md#capabilities) names any it
+should keep or leave out regardless. The summary line lists both sets:
+
+```
+lumenc package: wrote myapp/dist/myapp/myapp for linux-x86_64 (5 app files
+beside it, engine linked for the app with 4 capabilities (layout-taffy,
+window-winit, render-cpu, render-gpu) and without 11 capabilities (...))
+```
+
+The engine is linked for the app on the machine doing the packaging, from the
+release's engine kit: the recorded link of the toolchain's own engine, which
+is replayed with only the app's subsystems on it and without the exports
+nothing in the folder uses. No compiler is involved, and the link is quick.
+It needs a linker, the same one `--static` needs: a C toolchain on
+Linux, plus the development files of GTK 3 that the engine links against,
+the Xcode Command Line Tools on macOS, and the Visual Studio Build Tools with
+the "Desktop development with C++" workload on Windows. The first package for
+a platform downloads its engine kit and caches it.
+
+When the engine cannot be linked here, the folder carries the toolchain's
+full engine and the package says why in one line: no kit was published or
+could be downloaded, this `lumenc` is a build from source rather than the
+release the kit belongs to, the package is for another platform, or the link
+itself failed (the line quotes the linker). An app whose `[capabilities]`
+turns a subsystem off is stopped instead, since the full engine could not
+leave it out.
+
+A subsystem the package leaves out is gone from the folder. If the app's
+sources call one of its builtins while `[capabilities]` turns it off, the
+package step warns, and the running app prints a warning the first time the
+script makes that call:
+
+```
+lumen: warning: `tray_icon` does nothing here: this package was built without
+os-tray. Name it in lumen.toml [capabilities] to package it in.
+```
+
 A Windows package stays one library plus the executable, with any portable
 plugins the app declares in `modules/` and its candela packages compiled in.
 Runtime modules do not load beside it, because there is no shared engine
@@ -121,10 +164,11 @@ lumenc package myapp --static
 This writes the same folder with one difference: the app is a single
 executable. The engine is inside it, and so is every runtime module the app
 declares, so there is no runtime library beside it and no `modules/`
-subfolder. The engine inside is the app's own: of the optional subsystems
-the kit offers (tray, notifications, dialogs, hotkeys, the HTTP client and
-the rest), the executable carries the ones the app's sources show it uses,
-and [`[capabilities]`](../reference/lumen-toml.md#capabilities) names any it
+subfolder. The engine inside is the app's own, chosen the way a folder
+package's is: of the optional subsystems the kit offers (tray,
+notifications, dialogs, hotkeys, the HTTP client and the rest), the
+executable carries the ones the app's sources show it uses, and
+[`[capabilities]`](../reference/lumen-toml.md#capabilities) names any it
 should carry or leave out regardless. The renderer follows
 [`[render] backend`](../reference/lumen-toml.md#render): `cpu` or `gpu` links
 that one renderer and none of the other, which is the way to keep a small app
@@ -257,8 +301,9 @@ stops the run rather than quietly falling back to the directory.
 ## Trim the runtime
 
 An app that makes no network calls and opens no file dialogs does not need
-the code for either. `lumenc bundle --static` works out which subsystems an
-app uses and builds a runtime library carrying only those.
+the code for either. `lumenc package` already leaves such subsystems out of
+the engine it ships; `lumenc bundle --static` instead compiles a runtime
+library from Lumen's source with only the app's subsystems in it.
 
 ```sh
 lumenc bundle --static myapp out/
@@ -348,7 +393,9 @@ same as for a markup app. How the executable is produced is what differs:
   in under your app's name. On Linux and macOS a Rust app links the engine
   rather than compiling a copy into itself, so the executable is small and the
   engine travels beside it, out of the same build. On Windows the runtime is
-  inside the executable and nothing travels with it.
+  inside the executable and nothing travels with it. That engine is whatever
+  the app's own cargo build linked, so `[capabilities]` does not trim it, and
+  a package of a Rust app with the table set says so.
 - **C++.** CMake configures and builds, and the executable from the build tree
   is copied in. If the project builds more than one executable, the most recent
   one is packaged and the others are named on the way past; give the app its
@@ -360,6 +407,13 @@ same as for a markup app. How the executable is produced is what differs:
 Unlike a markup app, an SDK app reads its markup, stylesheet, and scripts at
 run time, so those files travel with it. What stays behind is the source it was
 compiled from and the build tree that compile left.
+
+A C++ or Python app gets an engine linked for it the way a markup app does,
+with one difference: its program can drive any subsystem through the C ABI,
+and the source scan cannot read it, so the engine keeps every subsystem an
+app's code could call. Only the development ones and the renderer
+`[render] backend` does not pick are left out, and `[capabilities]` decides
+the rest.
 
 ### Cross-packaging an SDK app
 
