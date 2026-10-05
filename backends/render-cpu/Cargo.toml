@@ -37,3 +37,5 @@ tracing.workspace = true
 lumen-paint = { workspace = true }
 # The capability test builds the environment a capability is installed with.
 toml.workspace = true
+# The SVG compositing test parses the drawings it paints.
+usvg.workspace = true

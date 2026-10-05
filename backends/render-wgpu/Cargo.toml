@@ -64,3 +64,5 @@ gl-fallback = ["wgpu/gles"]
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 lumen-text-cosmic = { workspace = true }
+# The SVG compositing test parses the drawings it paints.
+usvg.workspace = true

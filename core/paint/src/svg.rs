@@ -1,13 +1,15 @@
 //! Painting a parsed SVG through a [`Painter`].
 //!
 //! - Walks groups and emits fills and strokes for paths.
-//! - Honors `<clipPath>` with a clip layer.
+//! - Honors `<clipPath>` with a clip layer, group `opacity` with an alpha
+//!   layer, and `<mask>` (luminance and alpha, a mask on a mask included)
+//!   with [`Painter::draw_masked`].
 //! - Supports linear and radial gradients; pattern paints are dropped with a `tracing::warn!`.
 //! - Embedded raster images and SVG text nodes are dropped with a `tracing::warn!` rather than panicking.
 
-use crate::{Painter, Shape};
+use crate::{MaskKind, Painter, Shape};
 use peniko::color::{AlphaColor, Srgb};
-use peniko::kurbo::{Affine, BezPath, Point, Stroke};
+use peniko::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use peniko::{Brush, BrushRef, Color, ColorStop, Fill, Gradient};
 
 /// Paint every node of `tree` under `transform`.
@@ -18,9 +20,23 @@ pub fn paint_svg(painter: &mut dyn Painter, tree: &usvg::Tree, transform: Affine
 fn render_group(painter: &mut dyn Painter, group: &usvg::Group, parent_xform: Affine) {
     let xform = parent_xform * to_affine(group.transform());
 
+    // Group opacity fades the children as one picture, so overlapping
+    // children do not show through each other: a layer around them, not a
+    // factor on each paint. The layer is bounded by everything the group
+    // can paint.
+    let opacity = group.opacity().get();
+    let faded = opacity < 1.0;
+    if faded {
+        painter.push_layer(
+            Fill::NonZero,
+            peniko::BlendMode::default(),
+            opacity,
+            xform,
+            &Shape::Rect(to_rect(group.layer_bounding_box())),
+        );
+    }
+
     // When the group carries a clip-path, wrap its children in a clip layer.
-    // Masks are not handled here: alpha-mask composition needs a luminance
-    // pass the painter does not expose.
     let clip_pushed = if let Some(clip) = group.clip_path() {
         let path = clip_path_to_bezpath(clip);
         painter.push_layer(
@@ -35,6 +51,22 @@ fn render_group(painter: &mut dyn Painter, group: &usvg::Group, parent_xform: Af
         false
     };
 
+    match group.mask() {
+        Some(mask) => render_masked(painter, mask, xform, &mut |p| {
+            render_children(p, group, xform)
+        }),
+        None => render_children(painter, group, xform),
+    }
+
+    if clip_pushed {
+        painter.pop_layer();
+    }
+    if faded {
+        painter.pop_layer();
+    }
+}
+
+fn render_children(painter: &mut dyn Painter, group: &usvg::Group, xform: Affine) {
     for node in group.children() {
         match node {
             usvg::Node::Group(g) => render_group(painter, g, xform),
@@ -45,10 +77,45 @@ fn render_group(painter: &mut dyn Painter, group: &usvg::Group, parent_xform: Af
             }
         }
     }
+}
 
-    if clip_pushed {
-        painter.pop_layer();
+/// Paint what `content` draws through `mask`, and through the mask's own
+/// `mask` when it has one. Masks multiply, so a mask on a mask masks the
+/// content a second time. The mask's body paints in the user space of the
+/// element it masks, clipped to the mask's region.
+fn render_masked(
+    painter: &mut dyn Painter,
+    mask: &usvg::Mask,
+    xform: Affine,
+    content: &mut dyn FnMut(&mut dyn Painter),
+) {
+    // A mask with nothing in it hides everything it masks.
+    if !mask.root().has_children() {
+        return;
     }
+    let kind = match mask.kind() {
+        usvg::MaskType::Luminance => MaskKind::Luminance,
+        usvg::MaskType::Alpha => MaskKind::Alpha,
+    };
+    painter.draw_masked(
+        kind,
+        xform,
+        &Shape::Rect(to_rect(mask.rect())),
+        &mut |p| render_group(p, mask.root(), xform),
+        &mut |p| match mask.mask() {
+            Some(inner) => render_masked(p, inner, xform, content),
+            None => content(p),
+        },
+    );
+}
+
+fn to_rect(r: usvg::NonZeroRect) -> Rect {
+    Rect::new(
+        r.left() as f64,
+        r.top() as f64,
+        r.right() as f64,
+        r.bottom() as f64,
+    )
 }
 
 /// Walks every path inside a `<clipPath>` body and unions them into a single [`BezPath`].
@@ -428,6 +495,135 @@ mod tests {
             clip.bounding_box(),
             peniko::kurbo::Rect::new(0.0, 0.0, 6.0, 6.0),
             "both the direct rect and the used one are in the clip",
+        );
+    }
+
+    /// Group opacity fades the group's children together, in one layer
+    /// bounded by the group and composited at the group's opacity, rather
+    /// than being dropped or folded into each child's paint.
+    #[test]
+    fn a_faded_group_paints_its_children_in_one_alpha_layer() {
+        let drawing = paint(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+              <g opacity="0.5">
+                <rect width="10" height="10" fill="#ff0000"/>
+                <rect x="5" width="10" height="10" fill="#ff0000"/>
+              </g>
+            </svg>"##,
+            Affine::translate((100.0, 0.0)),
+        );
+        let commands = drawing.commands();
+        assert_eq!(commands.len(), 4, "{commands:?}");
+        let Command::PushLayer {
+            alpha,
+            transform,
+            clip,
+            ..
+        } = &commands[0]
+        else {
+            panic!("expected the fade layer first, got {:?}", commands[0]);
+        };
+        assert_eq!(*alpha, 0.5);
+        assert_eq!(transform.translation(), (100.0, 0.0).into());
+        assert_eq!(*clip, OwnedShape::Rect(Rect::new(0.0, 0.0, 15.0, 10.0)));
+        for fill in &commands[1..3] {
+            assert!(
+                matches!(fill, Command::Fill { brush, .. } if solid_alpha(brush) == [1.0, 0.0, 0.0, 1.0]),
+                "children paint at full alpha inside the layer: {fill:?}",
+            );
+        }
+        assert!(matches!(commands[3], Command::PopLayer));
+    }
+
+    fn masked(command: &Command) -> (MaskKind, &OwnedShape, &Recording, &Recording) {
+        let Command::Masked {
+            kind,
+            region,
+            mask,
+            content,
+            ..
+        } = command
+        else {
+            panic!("expected a masked draw, got {command:?}");
+        };
+        (*kind, region, mask, content)
+    }
+
+    /// A masked group paints its children through its mask, read as
+    /// luminance unless `mask-type` says alpha, clipped to the mask region.
+    #[test]
+    fn a_masked_group_paints_through_its_mask() {
+        for (mask_type, kind) in [
+            ("luminance", MaskKind::Luminance),
+            ("alpha", MaskKind::Alpha),
+        ] {
+            let drawing = paint(
+                &format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+                      <mask id="m" mask-type="{mask_type}" maskUnits="userSpaceOnUse"
+                            x="0" y="0" width="20" height="20">
+                        <rect width="10" height="20" fill="#ffffff"/>
+                      </mask>
+                      <g mask="url(#m)"><rect width="20" height="20" fill="#ff0000"/></g>
+                    </svg>"##
+                ),
+                Affine::IDENTITY,
+            );
+            assert_eq!(drawing.len(), 1, "{:?}", drawing.commands());
+            let (got, region, mask, content) = masked(&drawing.commands()[0]);
+            assert_eq!(got, kind);
+            assert_eq!(*region, OwnedShape::Rect(Rect::new(0.0, 0.0, 20.0, 20.0)));
+            assert!(
+                matches!(&mask.commands()[0], Command::Fill { brush, .. } if solid_alpha(brush) == [1.0, 1.0, 1.0, 1.0]),
+                "{:?}",
+                mask.commands(),
+            );
+            assert!(
+                matches!(&content.commands()[0], Command::Fill { brush, .. } if solid_alpha(brush) == [1.0, 0.0, 0.0, 1.0]),
+                "{:?}",
+                content.commands(),
+            );
+        }
+    }
+
+    /// A mask with a mask of its own masks the content twice: the outer
+    /// masked draw's content is the inner masked draw. A mask with no body
+    /// hides what it masks.
+    #[test]
+    fn a_mask_on_a_mask_masks_twice_and_an_empty_mask_hides() {
+        let drawing = paint(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+              <mask id="inner" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="20" height="20">
+                <rect width="10" height="20" fill="#000000"/>
+              </mask>
+              <mask id="outer" mask="url(#inner)" maskUnits="userSpaceOnUse" x="0" y="0" width="20" height="20">
+                <rect width="20" height="20" fill="#ffffff"/>
+              </mask>
+              <g mask="url(#outer)"><rect width="20" height="20" fill="#ff0000"/></g>
+            </svg>"##,
+            Affine::IDENTITY,
+        );
+        assert_eq!(drawing.len(), 1, "{:?}", drawing.commands());
+        let (kind, _, _, content) = masked(&drawing.commands()[0]);
+        assert_eq!(kind, MaskKind::Luminance);
+        assert_eq!(content.len(), 1, "{:?}", content.commands());
+        let (kind, _, _, content) = masked(&content.commands()[0]);
+        assert_eq!(kind, MaskKind::Alpha);
+        assert!(matches!(&content.commands()[0], Command::Fill { .. }));
+
+        let drawing = paint(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+              <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="20" height="20"/>
+              <g mask="url(#m)"><rect width="20" height="20" fill="#ff0000"/></g>
+              <rect width="1" height="1" fill="#0000ff"/>
+            </svg>"##,
+            Affine::IDENTITY,
+        );
+        assert_eq!(drawing.len(), 1, "{:?}", drawing.commands());
+        assert!(
+            matches!(&drawing.commands()[0], Command::Fill { brush, .. } if solid_alpha(brush) == [0.0, 0.0, 1.0, 1.0]),
+            "only the unmasked rect paints: {:?}",
+            drawing.commands(),
         );
     }
 }

@@ -5,12 +5,12 @@
 //! fill rule, and paint it needs, then draws. It has no fragments, so the
 //! walker paints every leaf in place.
 
-use lumen_paint::{GlyphRun, Painter, Shape};
+use lumen_paint::{GlyphRun, MaskKind, Painter, Shape};
 use std::any::Any;
 use std::collections::HashMap;
 use vello_cpu::kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use vello_cpu::peniko::{BlendMode, Brush, BrushRef, Color, Fill, ImageBrush};
-use vello_cpu::{Image, ImageSource, PaintType, Pixmap, RenderContext, Resources};
+use vello_cpu::{Image, ImageSource, Mask, PaintType, Pixmap, RenderContext, Resources};
 
 /// Names this backend in [`Painter::backend_id`] and
 /// [`lumen_core::native::NativePaintCtx::backend_id`]. [`Painter::native`]
@@ -194,6 +194,49 @@ impl Painter for CpuPainter {
 
     fn layer_depth(&self) -> usize {
         self.depth
+    }
+
+    /// vello_cpu masks with a pixmap the size of the target, so the mask is
+    /// rasterized on its own first, by a second painter that borrows this
+    /// one's decoded images and glyph caches, then the content paints in a
+    /// layer that applies it.
+    fn draw_masked(
+        &mut self,
+        kind: MaskKind,
+        transform: Affine,
+        region: &Shape<'_>,
+        mask: &mut dyn FnMut(&mut dyn Painter),
+        content: &mut dyn FnMut(&mut dyn Painter),
+    ) {
+        let (width, height) = self.size();
+        let region = to_path(region);
+        let mut aside = CpuPainter::new(width, height);
+        std::mem::swap(&mut aside.resources, &mut self.resources);
+        std::mem::swap(&mut aside.images, &mut self.images);
+        aside.ctx.set_transform(transform);
+        aside.ctx.set_fill_rule(Fill::NonZero);
+        aside.ctx.push_clip_layer(&region);
+        aside.depth = 1;
+        mask(&mut aside);
+        let mut pixels = Pixmap::new(width, height);
+        aside.render_into(&mut pixels);
+        std::mem::swap(&mut aside.resources, &mut self.resources);
+        std::mem::swap(&mut aside.images, &mut self.images);
+        let coverage = match kind {
+            MaskKind::Luminance => Mask::new_luminance(&pixels),
+            MaskKind::Alpha => Mask::new_alpha(&pixels),
+        };
+
+        self.ctx.set_transform(transform);
+        self.ctx.set_fill_rule(Fill::NonZero);
+        self.ctx
+            .push_layer(Some(&region), None, None, Some(coverage), None);
+        self.depth += 1;
+        let depth = self.depth;
+        content(self);
+        while self.depth >= depth {
+            self.pop_layer();
+        }
     }
 
     fn draw_blurred_rounded_rect(
@@ -486,6 +529,52 @@ mod tests {
         let target = frame(&mut painter, 16, 16);
         assert_eq!(target.sample(2, 2).r, 255);
         assert_eq!(target.sample(14, 14).r, 0);
+    }
+
+    /// The mask rasterizes aside: what it paints never lands in the frame,
+    /// the images it decodes stay with this painter, and the layers the
+    /// content leaves open are closed with the masked draw.
+    #[test]
+    fn a_mask_paints_aside_and_the_masked_draw_balances() {
+        use vello_cpu::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
+        let white = ImageBrush::new(ImageData {
+            data: Blob::new(std::sync::Arc::new(vec![255u8; 4 * 16 * 8])),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: 16,
+            height: 8,
+        });
+        let mut painter = CpuPainter::new(16, 16);
+        painter.begin_frame(16, 16, black());
+        painter.draw_masked(
+            MaskKind::Luminance,
+            Affine::IDENTITY,
+            &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+            &mut |p| p.draw_image(&white, Affine::IDENTITY),
+            &mut |p| {
+                p.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::new([1.0, 0.0, 0.0, 1.0]).into(),
+                    None,
+                    &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+                );
+                p.push_layer(
+                    Fill::NonZero,
+                    BlendMode::default(),
+                    1.0,
+                    Affine::IDENTITY,
+                    &Shape::Rect(Rect::new(0.0, 0.0, 1.0, 1.0)),
+                );
+            },
+        );
+        assert_eq!(painter.layer_depth(), 0);
+        assert_eq!(painter.images.len(), 1, "the mask's image is kept");
+        let target = frame(&mut painter, 16, 16);
+        let top = target.sample(8, 4);
+        let bottom = target.sample(8, 12);
+        assert_eq!((top.r, top.g, top.b), (255, 0, 0), "under the white mask");
+        assert_eq!((bottom.r, bottom.g, bottom.b), (0, 0, 0), "under no mask");
     }
 
     /// A box shadow is dense at its middle and fades out past its edge.
