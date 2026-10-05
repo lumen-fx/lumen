@@ -137,6 +137,15 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Pa
         .map(|s| (ScriptEngine::from_name(&s.engine), s.source))
         .collect();
     let pages = compiled.pages;
+    // A package whose engine was relinked for it records what the link left
+    // out, so a builtin reaching one of those subsystems says why it does
+    // nothing instead of doing nothing quietly.
+    lumen_script::unlinked::record_unlinked(
+        compiled
+            .unlinked
+            .into_iter()
+            .map(|capability| (capability.name, capability.markers)),
+    );
     LoadResult {
         ir,
         fragments: compiled.fragments,
