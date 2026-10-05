@@ -645,7 +645,6 @@ fn golden_text_input() {
 /// Dropdown closed: header button shows the placeholder, content below
 /// is unobscured.
 #[test]
-#[ignore = "the baseline predates the current dropdown layout and awaits a reviewed re-baseline"]
 fn golden_dropdown_closed() {
     run_case("dropdown_closed", DROPDOWN_MARKUP, "", &no_drive);
 }
@@ -653,7 +652,6 @@ fn golden_dropdown_closed() {
 /// Dropdown open: options panel overlays the content band below the
 /// header (paint-order + popup regression).
 #[test]
-#[ignore = "the baseline predates the current dropdown layout and awaits a reviewed re-baseline"]
 fn golden_dropdown_open() {
     run_case("dropdown_open", DROPDOWN_MARKUP, "", &|app| {
         set_signal(app, "__dropdown_open:choice", "true");
