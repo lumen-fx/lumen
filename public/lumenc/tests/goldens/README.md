@@ -20,8 +20,9 @@ The cases run with the rest of the suite, on CI too. A few are `#[ignore]`d,
 each with its reason in the attribute; run those with `-- --ignored`.
 
 Text is shaped with the font files in `fonts/` and nothing installed on the
-machine, so every machine draws the same glyphs. `fonts/NotoSans-Regular.ttf`
-is Noto Sans cut down to Latin text; `fonts/OFL.txt` is its license.
+machine, so every machine draws the same glyphs, and a machine with no fonts
+installed runs the suite too. `fonts/NotoSans-Regular.ttf` is Noto Sans cut
+down to Latin text; `fonts/OFL.txt` is its license.
 
 Each case captures twice per backend from two independent app builds and
 fails as nondeterministic if the two frames disagree, before any golden

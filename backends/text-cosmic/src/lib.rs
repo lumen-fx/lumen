@@ -269,9 +269,12 @@ impl CosmicShaper {
     /// Wrap an already-built [`FontSystem`]. The shared body of the
     /// public constructors, and the seam the unit tests build a shaper
     /// over a hand-made font database through.
-    fn from_font_system(mut font_system: FontSystem) -> Self {
+    fn from_font_system(font_system: FontSystem) -> Self {
         let metrics = Metrics::new(16.0, 20.0);
-        let buffer = Buffer::new(&mut font_system, metrics);
+        // Empty until the first shape sets its text. `Buffer::new` shapes an
+        // empty line straight away, which panics on a machine with no fonts
+        // installed even when nothing ever asks this shaper for text.
+        let buffer = Buffer::new_empty(metrics);
         Self {
             font_system,
             buffer,
@@ -1279,6 +1282,17 @@ mod tests {
 
         assert!(CosmicShaper::from_fonts(Vec::new()).is_none());
         assert!(CosmicShaper::from_fonts([b"not a font".to_vec()]).is_none());
+    }
+
+    /// A machine with no fonts installed still builds a shaper: building
+    /// one shapes nothing, so an app that swaps in its own shaper before
+    /// any text is laid out never touches the empty system set.
+    #[test]
+    fn a_shaper_over_no_fonts_builds() {
+        let font_system =
+            FontSystem::new_with_locale_and_db(String::from("en-US"), fontdb::Database::new());
+        let shaper = CosmicShaper::from_font_system(font_system);
+        assert_eq!(shaper.font_system.db().faces().count(), 0);
     }
 
     /// The sans-serif alias resolves to the family the database holds,
