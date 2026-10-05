@@ -192,6 +192,9 @@ ctrlc = { workspace = true, optional = true }
 lumen-ssr = { workspace = true }
 # example_apps.rs fingerprints the std library a crashed run loaded.
 sha2 = { workspace = true }
+# The engine relink's tests write the small ELF and Mach-O libraries whose
+# symbols the keep list is computed from.
+object = { workspace = true, features = ["write"] }
 # The compiler-plugin fixture builder for tests/compiler_plugins.rs.
 lumenc-plugin = { workspace = true, features = ["host", "testing"] }
 lumen-render-wgpu = { workspace = true }
@@ -282,8 +285,9 @@ bundle = ["dep:lumen-assets"]
 # The dev path stays FULL-featured (owner decision): `dev-run` turns on every
 # runtime subsystem so `lumenc run` / `build` / `check` and the integration
 # tests keep MCP, the async bridge, and all three script hosts.
-# Per-app trimming is exclusive to `lumenc bundle --static` (which builds
-# `lumen` with its own trimmed feature set), never the dev path.
+# Per-app trimming by feature is exclusive to `lumenc bundle --static` (which
+# builds `lumen` with its own trimmed feature set), never the dev path;
+# `lumenc package` trims at the link, from the release's engine kit.
 # `package` rides along: running or building an app resolves whatever it names
 # in the registry, and resolving means downloading, which is where the fetch
 # and the archive readers live.

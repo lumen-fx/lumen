@@ -11,6 +11,14 @@
 //! release workflow, and the kit it writes is a release asset that a later
 //! `lumenc` consumes.
 //!
+//! `--artifact shared-engine` writes the other kind of kit from the same kind
+//! of record: the link of the engine's shared library (`liblumen_engine` on
+//! Linux and macOS, `lumen.dll` on Windows), which `lumenc package` replays to
+//! give each app an engine carrying only the capabilities it uses. Its export
+//! list becomes a slot the replay fills, and on macOS its install name is
+//! pinned to `@rpath/<file name>`, the name the toolchain's own engine ships
+//! under and the one every library beside it asks for.
+//!
 //! Two arguments of the recorded line are decided here rather than by the
 //! consumer, because they are properties of the kit and not choices:
 //!
@@ -20,6 +28,8 @@
 //!   a line that kept it would link every module the kit carries and there
 //!   would be nothing to select. What the launcher itself calls, it references
 //!   directly, so the file is dead weight once selection is the point.
+//!   `rmeta.o`, the Rust metadata a library link carries so rustc can compile
+//!   against the library, goes too: nothing compiles against a replay.
 //! - The toolchain's own choice of linker is left off a line a `cc` driver
 //!   replays. rustc points `cc` at the LLD inside the Rust installation with
 //!   `-fuse-ld=lld` and a `-B` prefix, and that LLD is a wrapper around a
@@ -45,6 +55,7 @@ const USAGE: &str = "lumenc link-kit emit - write a link kit from a recorded lin
 USAGE:
     lumenc link-kit emit --record <file> --stage <dir> --out <dir>
                          --target <name> --target-dir <dir>
+                         [--artifact static|shared-engine]
                          [--binary <stem>] [--rustc <version>]
                          [--driver-path <file>]
                          [--module <name>=<lib>]...
@@ -58,8 +69,12 @@ USAGE:
                       path. A library search path under it was produced by
                       the build and travels with the kit; one outside it
                       belongs to the machine and does not.
+    --artifact KIND   What the recorded link produced: `static`, the
+                      launcher with the engine compiled in (the default),
+                      or `shared-engine`, the engine's shared library.
     --binary STEM     File stem of the recorded binary to build the kit from
-                      (default: lumen_launcher).
+                      (default: lumen_launcher, or for a shared-engine kit
+                      liblumen_engine, and lumen on Windows).
     --rustc VERSION   `rustc --version` of the toolchain that built the
                       inputs, recorded for a replay that fails.
     --driver-path F   A linker to ship in the kit and replay through, for a
@@ -108,6 +123,7 @@ struct Options {
     out: PathBuf,
     target: Target,
     target_dir: PathBuf,
+    artifact: KitArtifact,
     binary: String,
     rustc: String,
     driver_path: Option<PathBuf>,
@@ -117,13 +133,50 @@ struct Options {
     module_libs: BTreeMap<String, Vec<String>>,
 }
 
+/// The two kinds of recorded link a kit is written from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KitArtifact {
+    /// The static launcher: an executable with the engine compiled in.
+    Static,
+    /// The engine's shared library.
+    SharedEngine,
+}
+
+impl KitArtifact {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "static" => Some(Self::Static),
+            "shared-engine" => Some(Self::SharedEngine),
+            _ => None,
+        }
+    }
+
+    /// The stem of the binary this kind of kit is written from, when the
+    /// caller names none.
+    fn default_binary(self, target: Target) -> &'static str {
+        match self {
+            Self::Static => "lumen_launcher",
+            // No engine library exists on Windows; the C library carrying
+            // the engine compiled in is what an app there loads.
+            Self::SharedEngine if is_windows(target) => "lumen",
+            Self::SharedEngine => "liblumen_engine",
+        }
+    }
+}
+
+/// Whether `target` is a Windows one, whose engine is `lumen.dll`.
+fn is_windows(target: Target) -> bool {
+    target.rust_triple().contains("-windows-")
+}
+
 fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut record = None;
     let mut stage = None;
     let mut out = None;
     let mut target = None;
     let mut target_dir = None;
-    let mut binary = "lumen_launcher".to_string();
+    let mut artifact = KitArtifact::Static;
+    let mut binary = None;
     let mut rustc = "unknown".to_string();
     let mut driver_path = None;
     let mut modules = BTreeMap::new();
@@ -147,7 +200,13 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
                 );
             }
             "--target-dir" => target_dir = Some(PathBuf::from(value()?)),
-            "--binary" => binary = value()?,
+            "--artifact" => {
+                let kind = value()?;
+                artifact = KitArtifact::parse(&kind).ok_or_else(|| {
+                    format!("--artifact takes `static` or `shared-engine`, not `{kind}`")
+                })?;
+            }
+            "--binary" => binary = Some(value()?),
             "--rustc" => rustc = value()?,
             "--driver-path" => driver_path = Some(PathBuf::from(value()?)),
             "--module" => {
@@ -175,13 +234,18 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
     }
 
     let missing = |what: &str| format!("{what} is required\n\n{USAGE}");
+    let record = record.ok_or_else(|| missing("--record"))?;
+    let stage = stage.ok_or_else(|| missing("--stage"))?;
+    let out = out.ok_or_else(|| missing("--out"))?;
+    let target = target.ok_or_else(|| missing("--target"))?;
     Ok(Options {
-        record: record.ok_or_else(|| missing("--record"))?,
-        stage: stage.ok_or_else(|| missing("--stage"))?,
-        out: out.ok_or_else(|| missing("--out"))?,
-        target: target.ok_or_else(|| missing("--target"))?,
+        record,
+        stage,
+        out,
+        target,
         target_dir: target_dir.ok_or_else(|| missing("--target-dir"))?,
-        binary,
+        artifact,
+        binary: binary.unwrap_or_else(|| artifact.default_binary(target).to_string()),
         rustc,
         driver_path,
         modules,
@@ -216,12 +280,16 @@ fn emit(args: impl Iterator<Item = String>) -> Result<String, String> {
     let kit = classify(record, &options)?;
     write_kit(&kit, &options)?;
     Ok(format!(
-        "wrote {} for {}: {} arguments, {} staged files, {} modules",
+        "wrote {} for {}: {} arguments, {} staged files, {} modules, {} capabilities",
         options.out.join("manifest.json").display(),
-        options.target.linkkit_archive_name(),
+        match options.artifact {
+            KitArtifact::Static => options.target.linkkit_archive_name(),
+            KitArtifact::SharedEngine => options.target.enginekit_archive_name(),
+        },
         kit.args.len(),
         kit.staged.len(),
         kit.modules.len(),
+        kit.capabilities.len(),
     ))
 }
 
@@ -229,7 +297,8 @@ fn emit(args: impl Iterator<Item = String>) -> Result<String, String> {
 ///
 /// A build links several binaries and cargo writes each one under a hashed
 /// name in `deps/`, so the stem is what identifies one; the last match is the
-/// one the build finished with.
+/// one the build finished with. A library is named by its stem and its
+/// platform's extension.
 fn pick<'a>(records: &'a [Record], stem: &str) -> Option<&'a Record> {
     records.iter().rev().find(|r| {
         r.out.as_deref().is_some_and(|out| {
@@ -237,7 +306,11 @@ fn pick<'a>(records: &'a [Record], stem: &str) -> Option<&'a Record> {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| {
-                    n == stem || n.starts_with(&format!("{stem}-")) || n == format!("{stem}.exe")
+                    n == stem
+                        || n.starts_with(&format!("{stem}-"))
+                        || ["exe", "so", "dylib", "dll"]
+                            .iter()
+                            .any(|ext| n == format!("{stem}.{ext}"))
                 })
         })
     })
@@ -253,8 +326,10 @@ struct Kit {
     libdirs: BTreeMap<String, PathBuf>,
     modules: Vec<KitModule>,
     /// The optional subsystems the staged files carry, with the rule a
-    /// static package selects each by.
+    /// package selects each by.
     capabilities: Vec<KitCapability>,
+    /// The engine build the staged objects are, when they carry one.
+    build_id: Option<String>,
 }
 
 /// Turn the recorded arguments into manifest entries.
@@ -283,7 +358,11 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
             .map(KitModule::new)
             .collect(),
         capabilities: Vec::new(),
+        build_id: None,
     };
+    let darwin = options.target.rust_triple().contains("-apple-");
+    let shared = options.artifact == KitArtifact::SharedEngine;
+    let mut install_name = false;
 
     let mut i = 0;
     while i < record.argv.len() {
@@ -345,6 +424,29 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
         if arg.starts_with("-fuse-ld=") {
             continue;
         }
+        // A shared library's name on macOS: the engine ships as
+        // `@rpath/<file name>`, and every library beside it asks for that.
+        if darwin && shared && arg.starts_with("-Wl,-install_name,") {
+            install_name = true;
+            kit.args.push(LinkArg::Lit {
+                value: rpath_install_name(record)?,
+            });
+            continue;
+        }
+        // The import library rustc asks the MSVC linker to write beside a
+        // DLL is for programs linking against it at build time; a package's
+        // launcher opens the DLL at run time. The recorded path is the build
+        // machine's, so a replay writes none.
+        if msvc
+            && shared
+            && (strip_prefix_fold(arg, "/IMPLIB:").is_some()
+                || strip_prefix_fold(arg, "-IMPLIB:").is_some())
+        {
+            kit.args.push(LinkArg::Lit {
+                value: "/NOIMPLIB".to_string(),
+            });
+            continue;
+        }
         // The MSVC linker takes either lead character on every flag.
         if msvc
             && let Some(dir) =
@@ -356,12 +458,26 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
             continue;
         }
 
+        // The export list: a file the recorder staged, inside the flag that
+        // names it. The replay decides what goes in this slot.
+        if staged != arg
+            && let Some(prefix) = export_list_flag(arg)
+            && let Some(path) = staged.get(prefix.len()..)
+        {
+            kit.staged.push(path.to_string());
+            kit.args.push(LinkArg::ExportList {
+                prefix: prefix.to_string(),
+                path: path.to_string(),
+            });
+            continue;
+        }
+
         // A file the recorder staged. The two lists agree everywhere else.
         if staged != arg {
-            // See the module docs: the line is replayed without it.
+            // See the module docs: the line is replayed without them.
             if staged
                 .rsplit_once('-')
-                .is_some_and(|(_, n)| n == "symbols.o")
+                .is_some_and(|(_, n)| n == "symbols.o" || n == "rmeta.o")
             {
                 continue;
             }
@@ -433,7 +549,70 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
     }
 
     kit.capabilities = carried_capabilities(&kit.staged)?;
+    if darwin && shared && !install_name {
+        kit.args.push(LinkArg::Lit {
+            value: rpath_install_name(record)?,
+        });
+    }
+    if shared {
+        kit.build_id = staged_build_id(&kit.staged, &options.stage)?;
+        if kit.build_id.is_none() && !is_windows(options.target) {
+            return Err(format!(
+                "none of the objects the link read carries an engine build id, so the {} \
+                 link is not the engine's: a replay could not check it against the toolchain \
+                 it is shipped with",
+                options.binary
+            ));
+        }
+    }
     Ok(kit)
+}
+
+/// The flags rustc joins an export list's path to, in the spellings the
+/// recorder stages them under. MSVC's is matched without regard to case.
+const EXPORT_LIST_FLAGS: [&str; 4] = [
+    "-Wl,--version-script=",
+    "-Wl,-exported_symbols_list,",
+    "/DEF:",
+    "-DEF:",
+];
+
+/// The export-list flag `arg` starts with, as `arg` spells it.
+fn export_list_flag(arg: &str) -> Option<&str> {
+    EXPORT_LIST_FLAGS.iter().find_map(|flag| {
+        arg.get(..flag.len())
+            .filter(|head| head.eq_ignore_ascii_case(flag) && arg.len() > flag.len())
+    })
+}
+
+/// `-install_name @rpath/<the recorded output's file name>`, as one `cc`
+/// argument.
+fn rpath_install_name(record: &Record) -> Result<String, String> {
+    let name = record
+        .out
+        .as_deref()
+        .and_then(|out| Path::new(out).file_name())
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "the recorded link names no output file".to_string())?;
+    Ok(format!("-Wl,-install_name,@rpath/{name}"))
+}
+
+/// The engine build id the staged objects carry: the string
+/// `lumen_engine_build_id` returns, compiled into the engine crate's own
+/// object. Only plain objects are read; an archive holds the engine's
+/// dependencies, which carry none.
+fn staged_build_id(staged: &[String], stage: &Path) -> Result<Option<String>, String> {
+    for name in staged
+        .iter()
+        .filter(|n| n.ends_with(".o") || n.ends_with(".obj"))
+    {
+        let path = stage.join(name);
+        let bytes = fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if let Some(id) = crate::link::engine::build_id_in(&bytes) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
 }
 
 /// `/OUT:` and `-out:`, the MSVC spellings of `-o`.
@@ -640,8 +819,12 @@ fn write_kit(kit: &Kit, options: &Options) -> Result<(), String> {
         modules: kit.modules.clone(),
         capabilities: kit.capabilities.clone(),
         artifact: Artifact {
-            kind: artifact_kind(options.target),
+            kind: match options.artifact {
+                KitArtifact::Static => artifact_kind(options.target),
+                KitArtifact::SharedEngine => ArtifactKind::SharedEngine,
+            },
         },
+        build_id: kit.build_id.clone(),
     };
     let json = serde_json::to_string_pretty(&manifest)
         .map_err(|e| format!("cannot encode the manifest: {e}"))?;
@@ -796,6 +979,7 @@ mod tests {
             out: PathBuf::new(),
             target: Target::parse(target).expect("known target"),
             target_dir: PathBuf::from(target_dir),
+            artifact: super::KitArtifact::Static,
             binary: "lumen_launcher".to_string(),
             rustc: "rustc 1.97.0".to_string(),
             driver_path: None,
@@ -952,9 +1136,9 @@ mod tests {
     }
 
     #[test]
-    fn the_exported_symbol_list_is_left_off_the_line() {
-        let argv = ["/tmp/rustcXX/symbols.o", "-lm"];
-        let staged = ["aabbccdd-symbols.o", "-lm"];
+    fn the_exported_symbol_list_and_the_metadata_are_left_off_the_line() {
+        let argv = ["/tmp/rustcXX/symbols.o", "/tmp/rustcXX/rmeta.o", "-lm"];
+        let staged = ["aabbccdd-symbols.o", "eeff0011-rmeta.o", "-lm"];
         let kit = classify(&record(&argv, &staged), &no_modules("linux-x86_64"))
             .expect("the record classifies");
         assert_eq!(kit.staged, Vec::<String>::new());
@@ -1087,8 +1271,13 @@ mod tests {
             ..Default::default()
         };
         let launcher = record(&[], &[]);
-        let records = vec![other.clone(), launcher.clone()];
+        let engine = Record {
+            out: Some("/b/target/release/deps/liblumen_engine.so".to_string()),
+            ..Default::default()
+        };
+        let records = vec![other.clone(), launcher.clone(), engine.clone()];
         assert_eq!(pick(&records, "lumen_launcher"), Some(&launcher));
+        assert_eq!(pick(&records, "liblumen_engine"), Some(&engine));
         assert_eq!(pick(&records, "lumenc"), None);
     }
 
@@ -1457,6 +1646,219 @@ mod tests {
                 kind: ArtifactKind::MachoSection
             }
         );
+    }
+
+    /// The engine's own link: its export list becomes a slot the replay
+    /// fills, the kit records the engine build the objects are, and on macOS
+    /// the library is named `@rpath/<file>` whatever the line said.
+    #[test]
+    fn an_engine_link_becomes_a_shared_engine_kit() {
+        let id = "lumen-engine 0.0.9 git:v0.0.9 rustc:0123456789abcdef";
+        for (target, list_flag) in [
+            ("linux-x86_64", "-Wl,--version-script="),
+            ("macos-aarch64", "-Wl,-exported_symbols_list,"),
+        ] {
+            let macos = target.starts_with("macos");
+            let root = scratch(&format!("engine-{target}"));
+            let stage = root.join("stage");
+            let mut object = b"\x7fELF other data ".to_vec();
+            object.extend_from_slice(id.as_bytes());
+            write(
+                &stage.join("11223344-lumen_engine.lumen_engine.rcgu.o"),
+                &object,
+            );
+            write(&stage.join("55667788-list"), b"{ global: *; };");
+
+            let out_lib = if macos {
+                "/b/deps/liblumen_engine.dylib"
+            } else {
+                "/b/deps/liblumen_engine.so"
+            };
+            let argv: Vec<String> = [
+                "/b/deps/lumen_engine.lumen_engine.rcgu.o".to_string(),
+                format!("{list_flag}/tmp/rustcXX/list"),
+                "-Wl,-install_name,/b/deps/liblumen_engine.dylib".to_string(),
+                "-o".to_string(),
+                out_lib.to_string(),
+            ]
+            .to_vec();
+            let mut staged = argv.clone();
+            staged[0] = "11223344-lumen_engine.lumen_engine.rcgu.o".to_string();
+            staged[1] = format!("{list_flag}55667788-list");
+            let record_path = root.join("record.jsonl");
+            write(&record_path, line(out_lib, &argv, &staged).as_bytes());
+
+            let out = root.join("kit");
+            let args: Vec<String> = [
+                "--record",
+                &text(&record_path),
+                "--stage",
+                &text(&stage),
+                "--out",
+                &text(&out),
+                "--target",
+                target,
+                "--target-dir",
+                &text(&root.join("target")),
+                "--artifact",
+                "shared-engine",
+            ]
+            .iter()
+            .map(|a| (*a).to_string())
+            .collect();
+            let message = run_emit(&args).expect("the engine's link is in the record");
+            assert!(message.contains("lumen-enginekit-"), "{message}");
+
+            let manifest = manifest_at(&out);
+            assert_eq!(manifest.artifact.kind, ArtifactKind::SharedEngine);
+            assert_eq!(manifest.build_id.as_deref(), Some(id));
+            assert!(
+                manifest.args.contains(&LinkArg::ExportList {
+                    prefix: list_flag.to_string(),
+                    path: "55667788-list".to_string(),
+                }),
+                "{:?}",
+                manifest.args
+            );
+            assert!(
+                out.join("stage/55667788-list").is_file(),
+                "the list travels"
+            );
+            let rpath = LinkArg::Lit {
+                value: "-Wl,-install_name,@rpath/liblumen_engine.dylib".to_string(),
+            };
+            // Only a macOS line has its library's name rewritten; a Linux one
+            // passes what it recorded through untouched.
+            assert_eq!(manifest.args.contains(&rpath), macos, "{:?}", manifest.args);
+        }
+    }
+
+    /// On Windows the engine is `lumen.dll`: its module-definition file
+    /// becomes the export-list slot, its import library is not written by a
+    /// replay, and it carries no build id to check, which is not refused.
+    #[test]
+    fn a_windows_engine_link_becomes_a_shared_engine_kit() {
+        let root = scratch("engine-windows");
+        let stage = root.join("stage");
+        write(&stage.join("11223344-lumen.lumen.rcgu.o"), b"an object");
+        write(
+            &stage.join("55667788-lib.def"),
+            b"LIBRARY\nEXPORTS\n    lumen_app_new\n",
+        );
+        let argv: Vec<String> = [
+            "C:\\b\\deps\\lumen.lumen.rcgu.o",
+            "/DEF:C:\\t\\rustcXX\\lib.def",
+            "/DLL",
+            "/IMPLIB:C:\\b\\deps\\lumen.dll.lib",
+            "/OPT:REF,ICF",
+            "/OUT:C:\\b\\deps\\lumen.dll",
+        ]
+        .iter()
+        .map(|a| (*a).to_string())
+        .collect();
+        let mut staged = argv.clone();
+        staged[0] = "11223344-lumen.lumen.rcgu.o".to_string();
+        staged[1] = "/DEF:55667788-lib.def".to_string();
+        let record_path = root.join("record.jsonl");
+        write(
+            &record_path,
+            line("C:/b/deps/lumen.dll", &argv, &staged).as_bytes(),
+        );
+        let linker = root.join("rust-lld.exe");
+        write(&linker, b"the linker the kit ships");
+        let out = root.join("kit");
+        let args: Vec<String> = [
+            "--record",
+            &text(&record_path),
+            "--stage",
+            &text(&stage),
+            "--out",
+            &text(&out),
+            "--target",
+            "windows-x86_64",
+            "--target-dir",
+            &text(&root.join("target")),
+            "--artifact",
+            "shared-engine",
+            "--driver-path",
+            &text(&linker),
+        ]
+        .iter()
+        .map(|a| (*a).to_string())
+        .collect();
+        run_emit(&args).expect("lumen.dll's link is in the record");
+
+        let manifest = manifest_at(&out);
+        assert_eq!(manifest.artifact.kind, ArtifactKind::SharedEngine);
+        assert_eq!(manifest.build_id, None);
+        assert_eq!(
+            manifest.args,
+            vec![
+                LinkArg::File {
+                    path: "11223344-lumen.lumen.rcgu.o".to_string(),
+                    module: None,
+                },
+                LinkArg::ExportList {
+                    prefix: "/DEF:".to_string(),
+                    path: "55667788-lib.def".to_string(),
+                },
+                LinkArg::Lit {
+                    value: "/DLL".to_string()
+                },
+                LinkArg::Lit {
+                    value: "/NOIMPLIB".to_string()
+                },
+                LinkArg::Lit {
+                    value: "/OPT:REF,ICF".to_string()
+                },
+                LinkArg::Out {
+                    prefix: "/OUT:".to_string()
+                },
+            ]
+        );
+    }
+
+    /// An engine kit is checked against the toolchain by its build id, so a
+    /// link that does not carry one is not the engine's.
+    #[test]
+    fn a_shared_engine_link_without_a_build_id_is_refused() {
+        let root = scratch("engine-no-id");
+        let stage = root.join("stage");
+        write(&stage.join("11223344-other.rcgu.o"), b"no id in here");
+        let argv = vec![
+            "/b/other.rcgu.o".to_string(),
+            "-o".to_string(),
+            "/b/deps/liblumen_engine.so".to_string(),
+        ];
+        let mut staged = argv.clone();
+        staged[0] = "11223344-other.rcgu.o".to_string();
+        let record_path = root.join("record.jsonl");
+        write(
+            &record_path,
+            line("/b/deps/liblumen_engine.so", &argv, &staged).as_bytes(),
+        );
+        let args: Vec<String> = [
+            "--record",
+            &text(&record_path),
+            "--stage",
+            &text(&stage),
+            "--out",
+            &text(&root.join("kit")),
+            "--target",
+            "linux-x86_64",
+            "--target-dir",
+            &text(&root.join("target")),
+            "--artifact",
+            "shared-engine",
+        ]
+        .iter()
+        .map(|a| (*a).to_string())
+        .collect();
+        let error = run_emit(&args).expect_err("no build id");
+        assert!(error.contains("build id"), "{error}");
+        let error = run_emit(&["--artifact".to_string(), "dynamic".to_string()])
+            .expect_err("not a kind of kit");
+        assert!(error.contains("shared-engine"), "{error}");
     }
 
     /// Every request an emit cannot answer, and what it says instead.

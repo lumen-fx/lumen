@@ -145,9 +145,10 @@ ctrlc.workspace = true
 [features]
 # The DEFAULT set is FULL: it is what `cargo test -p lumen-runtime`
 # exercises. The shipped shared engine takes the pinned list in
-# public/lumen-dylib instead. Per-app trimming happens
+# public/lumen-dylib instead. Per-app trimming by feature happens
 # ONLY on the static `--bundle` path, where lumenc selects
-# `--no-default-features --features "<resolved capabilities>"`.
+# `--no-default-features --features "<resolved capabilities>"`; `lumenc
+# package` trims at the link, from the release's engine kit.
 default = [
     "http-fetch",
     "runtime-parse",

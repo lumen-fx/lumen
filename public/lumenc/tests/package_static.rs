@@ -520,6 +520,7 @@ fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
         artifact: Artifact {
             kind: ArtifactKind::Append,
         },
+        build_id: None,
     }
 }
 
