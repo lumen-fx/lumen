@@ -85,6 +85,16 @@ impl<'a> From<&'a BezPath> for Shape<'a> {
     }
 }
 
+/// How the pixels a mask paints become the coverage of what it masks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskKind {
+    /// Coverage is the luminance of the mask's colour times its alpha: white
+    /// shows, black and transparent hide. The SVG and CSS default.
+    Luminance,
+    /// Coverage is the mask's alpha alone, whatever its colour.
+    Alpha,
+}
+
 /// One run of glyphs from one font face, positioned on a shared baseline.
 #[derive(Clone, Copy, Debug)]
 pub struct GlyphRun<'a> {
@@ -171,6 +181,23 @@ pub trait Painter: Send + 'static {
 
     /// Close the innermost open layer.
     fn pop_layer(&mut self);
+
+    /// Paint what `content` draws, scaled by the coverage of what `mask`
+    /// draws, read as `kind`. Both are clipped to `region` under
+    /// `transform`.
+    ///
+    /// Each callback paints into the sink it is handed, in the same
+    /// coordinates as every other call, and closes the layers it opens. A
+    /// sink may call them in either order, and may hand them a different
+    /// sink than itself: one that keeps the mask apart from the frame.
+    fn draw_masked(
+        &mut self,
+        kind: MaskKind,
+        transform: Affine,
+        region: &Shape<'_>,
+        mask: &mut dyn FnMut(&mut dyn Painter),
+        content: &mut dyn FnMut(&mut dyn Painter),
+    );
 
     /// How many layers are open. Lets a caller close exactly the layers a
     /// callee opened and no others.
