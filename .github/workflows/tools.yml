@@ -142,11 +142,13 @@ jobs:
         with:
           lfs: false
 
+      # No gradle cache: this job runs on every merge-queue entry, whose cache
+      # no later run can read, and saving the IDE dependencies from each one
+      # crowded the Rust build caches out of the repository's cache space.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
 
       - run: ./gradlew --no-daemon buildPlugin verifyPluginProjectConfiguration verifyPluginStructure
 
