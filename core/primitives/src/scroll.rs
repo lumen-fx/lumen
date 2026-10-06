@@ -496,25 +496,39 @@ pub fn clamp_scroll_offsets(
     }
 }
 
+/// Overshoot (px) below which a rubber-banded offset comes to rest on its
+/// bound. The pullback alone only approaches the bound, so without a rest
+/// point an offset left past the edge keeps moving by ever smaller amounts
+/// on every tick, repainting forever and resting wherever the last tick
+/// happened to leave it.
+const RUBBER_BAND_REST_PX: f32 = 0.5;
+
 /// Apply a soft (rubber-band) or hard clamp to a single axis. With
 /// `stiffness == 0` the function degenerates to `value.clamp(lo, hi)`.
 /// With `stiffness > 0`, overflow past a bound is pulled back via the
 /// Hooke approximation `bound + overflow / (1 + stiffness * |overflow|)`;
 /// this is the same shape Cocoa's `NSScrollView` uses for its
-/// rubber-band overshoot. The pullback is asymptotic: a 100 px
-/// overshoot at stiffness 0.55 lands ~98% of the way back to the bound
-/// on the same tick, the residual decays the next.
+/// rubber-band overshoot. A 100 px overshoot at stiffness 0.55 lands
+/// ~98% of the way back to the bound on the same tick, the residual
+/// shrinks on the ticks after, and once it is under
+/// [`RUBBER_BAND_REST_PX`] the offset lands on the bound.
 fn apply_bound(value: f32, lo: f32, hi: f32, stiffness: f32) -> f32 {
     if stiffness <= 0.0 {
         return value.clamp(lo, hi);
     }
+    let pull = |overflow: f32| {
+        let rest = overflow / (1.0 + stiffness * overflow);
+        if rest < RUBBER_BAND_REST_PX {
+            0.0
+        } else {
+            rest
+        }
+    };
     if value < lo {
-        let overflow = lo - value; // positive
-        return lo - overflow / (1.0 + stiffness * overflow);
+        return lo - pull(lo - value);
     }
     if value > hi {
-        let overflow = value - hi; // positive
-        return hi + overflow / (1.0 + stiffness * overflow);
+        return hi + pull(value - hi);
     }
     value
 }
@@ -1096,5 +1110,59 @@ mod scroll_key_tests {
             Vec2::ZERO,
             "a focused TextInput's arrows must not also scroll its scroll-container ancestor"
         );
+    }
+}
+
+#[cfg(test)]
+mod rubber_band_tests {
+    use super::apply_bound;
+
+    const STIFFNESS: f32 = 0.55;
+
+    /// Ticks until an offset released `overshoot` px past the upper bound
+    /// stops moving, or `None` when it still moves after 50 ticks.
+    fn ticks_to_rest(overshoot: f32) -> Option<usize> {
+        let hi = 100.0;
+        let mut value = hi + overshoot;
+        for tick in 0..50 {
+            let next = apply_bound(value, 0.0, hi, STIFFNESS);
+            if next == value {
+                return Some(tick);
+            }
+            value = next;
+        }
+        None
+    }
+
+    #[test]
+    fn a_released_overshoot_comes_to_rest_on_the_bound() {
+        for overshoot in [0.1, 1.0, 5.0, 100.0, 10_000.0] {
+            let ticks = ticks_to_rest(overshoot)
+                .unwrap_or_else(|| panic!("a {overshoot} px overshoot never came to rest"));
+            assert!(ticks <= 8, "a {overshoot} px overshoot took {ticks} ticks");
+        }
+        assert_eq!(apply_bound(100.0, 0.0, 100.0, STIFFNESS), 100.0);
+    }
+
+    #[test]
+    fn an_overshoot_past_the_start_rests_on_zero() {
+        let mut value = -5.0;
+        for _ in 0..8 {
+            value = apply_bound(value, 0.0, 100.0, STIFFNESS);
+        }
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn a_large_overshoot_still_stretches_past_the_bound() {
+        let pulled = apply_bound(200.0, 0.0, 100.0, STIFFNESS);
+        assert!(pulled > 100.0 && pulled < 102.0, "pulled to {pulled}");
+    }
+
+    #[test]
+    fn zero_stiffness_clamps_at_the_edge() {
+        assert_eq!(apply_bound(105.0, 0.0, 100.0, 0.0), 100.0);
+        assert_eq!(apply_bound(-3.0, 0.0, 100.0, 0.0), 0.0);
+        assert_eq!(apply_bound(42.0, 0.0, 100.0, 0.0), 42.0);
     }
 }

@@ -24,8 +24,16 @@ velocity *= decay;
 ## `RUBBER_BAND_STIFFNESS: f32`
 
 Stiffness coefficient pulling `ScrollOffset` back toward content bounds
-when the user has scrolled past the edge. Not yet wired in the
-integrator (Phase 3 stops at decay).
+when it is past the edge. `clamp_scroll_offsets` applies the pullback once
+per tick, after layout:
+
+```rust
+offset = bound + overflow / (1.0 + RUBBER_BAND_STIFFNESS * overflow);
+```
+
+The pullback only approaches the bound, so once the remaining overshoot is
+under half a pixel the offset lands on the bound and stops moving. A value
+of 0 clamps at the edge on the first tick.
 
 | Target | Value | Source                                                                              |
 |--------|-------|-------------------------------------------------------------------------------------|
