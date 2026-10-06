@@ -177,12 +177,11 @@ fn goldens_dir() -> PathBuf {
         .join("goldens")
 }
 
-/// Scratch directory for actual/diff PNGs on mismatch.
+/// Scratch directory for the images a failed case leaves behind: Cargo's
+/// per-target scratch dir, which sits inside the target dir wherever that
+/// is, so CI can upload it from a fixed path.
 fn failure_dir() -> PathBuf {
-    let base = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("lumen-golden-failures")
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lumen-golden-failures")
 }
 
 fn update_mode() -> bool {
@@ -453,16 +452,25 @@ fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
         // Determinism audit: two fully independent builds must agree.
         let first = capture_once(name, 0, backend, markup, css, drive);
         let second = capture_once(name, 1, backend, markup, css, drive);
-        let (self_stats, _) = diff_images(&first, &second, &SELF_TOLERANCE);
-        assert!(
-            self_stats.within(&SELF_TOLERANCE),
-            "golden[{label}]: NONDETERMINISTIC capture - two in-process runs differ by \
-             {} px ({:.4}%), max channel delta {}. Fix the case (unfinished animation, \
-             wall-clock leak) before comparing to a golden.",
-            self_stats.differing,
-            self_stats.fraction() * 100.0,
-            self_stats.max_delta,
-        );
+        let (self_stats, self_heat) = diff_images(&first, &second, &SELF_TOLERANCE);
+        if !self_stats.within(&SELF_TOLERANCE) {
+            let out = failure_dir().join(name).join(backend.name());
+            std::fs::create_dir_all(&out).expect("create failure dir");
+            first.save(out.join("run0.png")).expect("write first run");
+            second.save(out.join("run1.png")).expect("write second run");
+            self_heat
+                .save(out.join("self-diff.png"))
+                .expect("write self diff heatmap");
+            panic!(
+                "golden[{label}]: NONDETERMINISTIC capture - two in-process runs differ by \
+                 {} px ({:.4}%), max channel delta {}. Fix the case (unfinished animation, \
+                 wall-clock leak) before comparing to a golden.\n  runs and diff: {}",
+                self_stats.differing,
+                self_stats.fraction() * 100.0,
+                self_stats.max_delta,
+                out.display(),
+            );
+        }
 
         if update_mode() {
             // The first backend is the reference: the GPU where there is

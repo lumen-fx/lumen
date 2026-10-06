@@ -51,8 +51,10 @@ uses a tighter pair than the golden comparison.
 
 On mismatch the test writes `actual.png` and `diff.png` (a heatmap where
 yellow and red mark pixels past the delta) under
-`$CARGO_TARGET_DIR/lumen-golden-failures/<case>/<backend>/` and prints the
-paths.
+`<target dir>/tmp/lumen-golden-failures/<case>/<backend>/` and prints the
+paths. When the two runs of the self-consistency pass disagree, the same
+directory gets `run0.png`, `run1.png`, and `self-diff.png`. CI uploads the
+directory as the `golden-failures-<os>` artifact of a failed test job.
 
 ## What the harness pins
 

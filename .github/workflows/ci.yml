@@ -237,6 +237,14 @@ jobs:
           path: ${{ runner.temp }}/crash-evidence/
           if-no-files-found: ignore
           retention-days: 7
+      # A failed screenshot golden leaves its captures and diff heatmaps here.
+      - if: failure() && needs.changes.outputs.rust == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures-${{ matrix.os }}
+          path: target/tmp/lumen-golden-failures/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The crates the browser runtime shares with the desktop build must keep
   # compiling for the web. A native-only API reintroduced into any of them
