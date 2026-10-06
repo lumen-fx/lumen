@@ -500,7 +500,8 @@ Golden images are regenerated, not hand-edited. `LUMEN_GOLDEN_UPDATE=1`
 rewrites the screenshot baselines in `lumenc`, from the GPU capture where there
 is a GPU and from the CPU one otherwise; look at the new images before
 committing them. On a mismatch the suite writes the actual and diff images
-under `lumen-golden-failures/<case>/<backend>/` inside `CARGO_TARGET_DIR`.
+under `tmp/lumen-golden-failures/<case>/<backend>/` inside the target
+directory, and CI uploads them as the `golden-failures-<os>` artifact.
 
 ## Measuring how long an app takes to start
 
