@@ -377,6 +377,13 @@ pub(crate) struct Library<'a> {
     /// capability's register symbol is: with rustc's `symbols.o` left off,
     /// nothing else asks the linker to read the archives defining them.
     pub(crate) keep: &'a [String],
+    /// Whether the archives of a module the app does not run on stay on the
+    /// line, unforced. A library's own code can call into a module it links:
+    /// with shared generics, rustc points an instantiation the library needs
+    /// at whichever upstream crate already exported one, and that can be a
+    /// module's. The archive then has to be there for the linker to read
+    /// when something asks; when nothing does, it adds nothing.
+    pub(crate) unforced_modules_stay: bool,
 }
 
 /// Turn the recorded line into the one that produces this app's executable,
@@ -427,7 +434,9 @@ pub(crate) fn plan(
     }
 
     let declared = |module: &Option<String>| match module {
-        Some(name) => modules.iter().any(|kept| &kept.name == name),
+        Some(name) => {
+            library.unforced_modules_stay || modules.iter().any(|kept| &kept.name == name)
+        }
         None => true,
     };
     let stage = kit.join("stage");
@@ -948,6 +957,39 @@ mod tests {
         assert_eq!(plan.modules, vec!["lumen-fs".to_string()]);
     }
 
+    /// A library replay that keeps its unforced modules forces only the one
+    /// the app runs on, and leaves the other's archive and system library on
+    /// the line for the library's own code to reach.
+    #[test]
+    fn an_unforced_module_stays_on_a_library_line() {
+        let manifest = manifest(unix(), ArtifactKind::Append);
+        let plan = plan(
+            Path::new("/kit"),
+            &manifest,
+            &deps(&["lumen-fs"]),
+            &[],
+            &Library {
+                unforced_modules_stay: true,
+                ..Library::default()
+            },
+            Path::new("/out/Demo"),
+            Path::new("/out/Demo.lmna-staging"),
+        )
+        .expect("the app declares a module the kit carries");
+
+        let args = args(&plan);
+        let forced: Vec<&String> = args.iter().filter(|a| a.starts_with("-Wl,-u,")).collect();
+        assert_eq!(forced, ["-Wl,-u,lumen_module_register_lumen_fs"]);
+        let staged = Path::new("/kit")
+            .join("stage")
+            .join("cc-liblumen_audio.rlib")
+            .display()
+            .to_string();
+        assert!(args.contains(&staged), "{args:?}");
+        assert!(args.contains(&"-lasound".to_string()), "{args:?}");
+        assert_eq!(plan.modules, vec!["lumen-fs".to_string()]);
+    }
+
     /// A capability the app is packaged with is forced onto the line the
     /// way a module is, by its register symbol, ahead of the archives.
     #[test]
@@ -1002,6 +1044,7 @@ mod tests {
             &Library {
                 exports: Some(exports),
                 keep: &keep,
+                unforced_modules_stay: false,
             },
             Path::new("/out/liblumen_engine.so"),
             Path::new("/out/liblumen_engine.so"),

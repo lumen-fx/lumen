@@ -278,6 +278,7 @@ fn relink(job: &EngineJob<'_>) -> Result<Engine, Stop> {
     let library = Library {
         exports: Some(&exports),
         keep: &keep,
+        unforced_modules_stay: true,
     };
     let linked_in = DependenciesCfg(
         job.modules
