@@ -1,5 +1,7 @@
 use super::*;
 use crate::app_layout::AppLayout;
+use lumen_modules::language::{Form, LanguageTable, ScriptGrouping};
+use lumen_script::{ScriptCompile, ScriptLanguages};
 
 /// Summary returned by [`check_app`].
 #[derive(Debug, Clone, Copy)]
@@ -208,6 +210,18 @@ pub fn compile_app_with_skin(
     let css_path = layout.css_path;
     let asset_roots = cfg.resolved_asset_roots(dir);
     let skin_override = skin.map(str::to_string).or_else(|| cfg.skin.name.clone());
+    let table = language_table()?;
+    let grouping = ScriptGrouping {
+        table: &table,
+        engine: cfg.script.engine(),
+    };
+    // The hosts that read the scripts' markup blocks and compile them: the
+    // source-form provider of each language the markup names.
+    let registered = language_hosts(
+        dir,
+        &table,
+        &source_languages(parser, grouping, &html_path, None, Some(&plan)),
+    );
     let loaded = load_ir(
         parser,
         plugins,
@@ -221,34 +235,73 @@ pub fn compile_app_with_skin(
             plan: Some(&plan),
             ..SourceOverrides::default()
         },
+        &Languages {
+            grouping,
+            registered: &registered,
+        },
     )?;
-    // Concatenate inline + external `<script>` sources once, then strip both
-    // from the IR: the artifact carries the combined string in its own field
-    // so the parser-free runtime never re-reads `.rhai` files.
-    let script_source = combined_script_source(&loaded.ir, dir)?;
-    // Which engine runs which part of the program is decided here, at compile
-    // time, from the script files' own extensions. The runtime cannot
-    // rediscover it later: a shipped app carries no `.lua` / `.rhai` files for
-    // the directory scan to read, and the flattened source above has no
-    // language boundary left in it.
+    // Which language runs which part of the program, and which module runs
+    // it in a shipped app, is decided here, at compile time, from the script
+    // files' own extensions and the language descriptors. The runtime cannot
+    // rediscover it later: a shipped app carries no script files to read.
+    //
+    // A language with a bytecode form compiles here, and its source is
+    // dropped: a shipped app runs the image on a host with no compiler. The
+    // others ship their source, run by the one module they have.
     let uri = html_path.display().to_string();
     let mut scripts = Vec::new();
-    for (engine, source) in grouped_script_sources(&loaded.ir, dir, &cfg)? {
+    for (language, source) in grouped_script_sources(&loaded.ir, dir, grouping)? {
+        let Some(shipped) = table.shipped_provider(&language) else {
+            warnings.push(format!(
+                "no script host module provides the `{language}` language, so its script \
+                 will not run"
+            ));
+            scripts.push(lumen_ir::artifact::CompiledScript {
+                engine: language,
+                module: String::new(),
+                source,
+                bytecode: None,
+            });
+            continue;
+        };
+        let module = shipped.module.clone();
+        if shipped.form != Form::Bytecode {
+            scripts.push(lumen_ir::artifact::CompiledScript {
+                engine: language,
+                module,
+                source,
+                bytecode: None,
+            });
+            continue;
+        }
+        let compile = registered
+            .get(&language)
+            .and_then(|l| l.compile)
+            .ok_or_else(|| {
+                RunError::Script(format!(
+                    "no compiler for the `{language}` language is loaded; its host module \
+                     ({}) did not load",
+                    table
+                        .source_provider(&language)
+                        .map_or("none in reach", |p| p.module.as_str())
+                ))
+            })?;
+        let flags = deps.target.cfg_flags();
+        let against = ScriptCompile {
+            uri: &uri,
+            lib_dir: Some(&layout.lib_dir),
+            import_roots: &deps.import_roots,
+            cfg_flags: flags,
+            fns: &stubs,
+            preludes: &deps.modules.preludes,
+        };
+        let (image, raised) = compile(&source, &against).map_err(RunError::Script)?;
+        warnings.extend(raised);
         scripts.push(lumen_ir::artifact::CompiledScript {
-            engine: engine.name().to_string(),
-            // An engine with an ahead-of-time form compiles here, so the
-            // artifact carries the program a compiler-free runtime can run.
-            // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(
-                engine,
-                &source,
-                &uri,
-                &layout.lib_dir,
-                deps,
-                &stubs,
-                warnings,
-            )?,
-            source,
+            engine: language,
+            module,
+            source: String::new(),
+            bytecode: Some(image),
         });
     }
     // Routing data for a multi-page app. The pages themselves are already in
@@ -282,7 +335,6 @@ pub fn compile_app_with_skin(
     };
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
-        script_source,
         scripts,
         pages,
         // Every fragment the app declares, whether or not this build
@@ -297,102 +349,93 @@ pub fn compile_app_with_skin(
     })
 }
 
-/// The compiled bytecode image for one engine's program, or `None` for an
-/// engine that has no ahead-of-time form.
-///
-/// candela is the one that does: its `.cdlb` image is what `candela-vm` runs
-/// where the compiler is absent. A build without the candela host trimmed in
-/// cannot produce one, and writes the source alone.
-///
-/// `fns` are declared to the compile the way a live run declares a module's
-/// functions, so the image names them and a runtime that binds the same
-/// names can load it. Their bodies are never called here.
-///
-/// What the compiler warned about is added to `warnings`, one line each.
+/// The language descriptors in reach, or the reason they disagree.
 #[cfg(feature = "runtime-parse")]
-fn compiled_bytecode(
-    engine: crate::config::ScriptEngine,
-    source: &str,
-    uri: &str,
-    lib_dir: &Path,
-    deps: &CompileDeps,
-    fns: &[lumen_script::ScriptFn],
-    warnings: &mut Vec<String>,
-) -> Result<Option<Vec<u8>>, RunError> {
-    #[cfg(feature = "host-candela")]
-    if engine == crate::config::ScriptEngine::Candela {
-        let host = candela_compiler(lib_dir, deps, fns)?;
-        let (image, raised) = host
-            .compile_bytecode(source, uri)
-            .map_err(|e| RunError::Script(e.to_string()))?;
-        warnings.extend(raised);
-        return Ok(Some(image));
-    }
-    #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri, lib_dir, deps, fns, warnings);
-    Ok(None)
+fn language_table() -> Result<LanguageTable, RunError> {
+    LanguageTable::discover(None).map_err(RunError::Script)
 }
 
-/// A candela compiler set up the way every compile path sets it up: the
-/// app's library directory, the packages it imports, the compile-time flags
-/// of the target it compiles for, `fns` declared, and the candela sources the
-/// modules register staged ahead of the program.
-#[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
-fn candela_compiler(
-    lib_dir: &Path,
-    deps: &CompileDeps,
-    fns: &[lumen_script::ScriptFn],
-) -> Result<CandelaHost, RunError> {
-    let mut host = CandelaHost::new();
-    host.set_library_dir(lib_dir);
-    for (name, dir) in &deps.import_roots {
-        host.add_import_root(name.clone(), dir.clone());
+/// The languages registered by the source-form host modules of `languages`,
+/// installed into a scratch app the way a run installs them. A module that
+/// does not load prints the loader's banner and registers nothing.
+#[cfg(all(feature = "runtime-parse", feature = "modules"))]
+fn language_hosts(dir: &Path, table: &LanguageTable, languages: &[String]) -> ScriptLanguages {
+    let modules: Vec<String> = languages
+        .iter()
+        .filter_map(|language| table.source_provider(language))
+        .map(|provider| provider.module.clone())
+        .collect();
+    hosts_of(dir, &modules)
+}
+
+#[cfg(all(feature = "runtime-parse", not(feature = "modules")))]
+fn language_hosts(_dir: &Path, _table: &LanguageTable, _languages: &[String]) -> ScriptLanguages {
+    ScriptLanguages::default()
+}
+
+/// The languages the host modules `modules` register, read by installing
+/// each into a scratch app in headless mode.
+#[cfg(feature = "modules")]
+fn hosts_of(dir: &Path, modules: &[String]) -> ScriptLanguages {
+    if modules.is_empty() {
+        return ScriptLanguages::default();
     }
-    host.set_cfg_flags(deps.target.cfg_flags());
-    let lang = host.lang();
-    for f in fns.iter().filter(|f| f.visible_to(lang)) {
-        host.register_script_fn(f)
-            .map_err(|e| RunError::Script(e.to_string()))?;
-    }
-    for prelude in deps.modules.preludes.iter().filter(|p| p.lang == lang) {
-        host.add_prelude(&prelude.ns, &prelude.source);
-    }
-    Ok(host)
+    let mut app = App::new();
+    app.world
+        .insert_resource(lumen_core::app::RunMode { headless: true });
+    let env = crate::modules::InitEnv {
+        app_dir: dir.to_path_buf(),
+        app_id: lumen_capability::derive_app_id(dir),
+        headless: true,
+        hot_reload: false,
+    };
+    let deps =
+        lumen_modules::language::with_implied(&lumen_modules::DependenciesCfg::default(), modules);
+    crate::modules::load_modules(
+        &mut app,
+        dir,
+        &deps,
+        &lumen_modules::ResolvedModules::default(),
+        &env,
+    );
+    app.world
+        .get_resource::<ScriptLanguages>()
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// The names a compiled program can be called by.
 ///
-/// `None` for a program with no ahead-of-time form, and for a build with no
-/// host that can read one back: neither knows what the program exports, and
-/// neither can say anything is missing from it.
+/// `None` for a program with no ahead-of-time form, and for one whose
+/// language has no host in reach that can read an image back: neither knows
+/// what the program exports, and neither can say anything is missing from it.
 ///
 /// A build tool asks this to tell a function the app calls by name from one
 /// it will only appear to call: candela exports a function only when every
 /// parameter it takes is annotated, and a shipped runtime carries no compiler
 /// to fall back on.
 ///
-/// `addons` are the browser add-ons the app was compiled against; their
-/// functions are declared in the program, so reading it back binds them too.
-#[cfg(feature = "runtime-parse")]
+/// `dir` is the app the program belongs to. `addons` are the browser add-ons
+/// the app was compiled against; their functions are declared in the program,
+/// so reading it back binds them too.
+#[cfg(all(feature = "runtime-parse", feature = "modules"))]
 #[must_use]
 pub fn script_exports(
+    dir: &Path,
     script: &lumen_ir::artifact::CompiledScript,
     addons: &[lumen_ir::addon::Addon],
 ) -> Option<Result<Vec<String>, String>> {
     let bytecode = script.bytecode.as_deref()?;
-    #[cfg(feature = "host-candela")]
-    {
-        let fns = match addon_stubs(addons) {
-            Ok(fns) => fns,
-            Err(e) => return Some(Err(e.to_string())),
-        };
-        Some(lumen_script_candela::image_exports(bytecode, &fns).map_err(|e| e.to_string()))
+    if script.module.is_empty() {
+        return None;
     }
-    #[cfg(not(feature = "host-candela"))]
-    {
-        let _ = (bytecode, addons);
-        None
-    }
+    let hosts = hosts_of(dir, std::slice::from_ref(&script.module));
+    let read = hosts.get(&script.engine)?.image_exports?;
+    let fns = match addon_stubs(addons) {
+        Ok(fns) => fns,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    Some(read(bytecode, &fns))
 }
 
 /// Parse `<dir>/src/main.lmn` + optional `<dir>/src/main.css` and validate
@@ -436,6 +479,16 @@ pub fn check_app(
     // would falsely fail `check`.
     let plan = crate::pages::discover(&layout.src_dir, &cfg);
     let entry_path = plan.entry_file.clone();
+    let table = language_table()?;
+    let grouping = ScriptGrouping {
+        table: &table,
+        engine: cfg.script.engine(),
+    };
+    let registered = language_hosts(
+        dir,
+        &table,
+        &source_languages(parser, grouping, &entry_path, None, Some(&plan)),
+    );
     let LoadResult { ir, .. } = load_ir(
         parser,
         plugins,
@@ -449,6 +502,10 @@ pub fn check_app(
             plan: Some(&plan),
             ..SourceOverrides::default()
         },
+        &Languages {
+            grouping,
+            registered: &registered,
+        },
     )?;
     // Parse-time lint findings already went to stderr from `load_ir`,
     // which every compile path shares.
@@ -459,41 +516,22 @@ pub fn check_app(
     // error, expression-depth overflow, ...) fails the check instead of
     // false-passing while `run` shows a window whose every handler is dead.
     //
-    // Check each language's program with its own compiler, on the same
-    // grouping `build_app` runs: the Rhai checker false-fails on the other
-    // languages' syntax (a candela `host "lumen" { ... }` block is not valid
-    // Rhai), so a mixed app checked as one blob could never pass. A host the
-    // current build trimmed out falls back to a compiled one, the same way the
-    // run path folds it (`remap_trimmed_hosts`).
+    // Check each language's program with its own host's checker, on the
+    // same grouping `build_app` runs: one language's checker false-fails on
+    // another's syntax, so a mixed app checked as one blob could never pass.
     let uri = entry_path.display().to_string();
-    let grouped = super::app_build::remap_trimmed_hosts(grouped_script_sources(&ir, dir, &cfg)?)?;
-    for (engine, source) in grouped {
-        match engine {
-            // The one host with compile-time conditions, so the one checked
-            // per target.
-            #[cfg(feature = "host-candela")]
-            crate::config::ScriptEngine::Candela => {
-                check_candela_per_target(&source, &uri, &layout.lib_dir, targets)?;
-            }
-            #[cfg(feature = "host-lua")]
-            crate::config::ScriptEngine::Lua => {
-                LuaHost::new()
-                    .compile_check(&source, &uri)
-                    .map_err(|e| RunError::Script(e.to_string()))?;
-            }
-            #[cfg(feature = "host-rhai")]
-            crate::config::ScriptEngine::Rhai => {
-                RhaiHost::new()
-                    .compile_check(&source)
-                    .map_err(|e| RunError::Script(e.to_string()))?;
-            }
-            #[cfg(not(all(
-                feature = "host-rhai",
-                feature = "host-lua",
-                feature = "host-candela"
-            )))]
-            _ => unreachable!("a trimmed script host is remapped before this match"),
-        }
+    for (language, source) in grouped_script_sources(&ir, dir, grouping)? {
+        let Some(check) = registered.get(&language).and_then(|l| l.check) else {
+            return Err(RunError::Script(format!(
+                "{uri}: no script host for the `{language}` language is loaded to check its \
+                 script with; install {}",
+                table.source_provider(&language).map_or(
+                    "a module that provides it".to_string(),
+                    |p| format!("the `{}` module", p.module)
+                )
+            )));
+        };
+        check_per_target(check, &source, &uri, &layout.lib_dir, targets)?;
     }
     Ok(CheckReport {
         element_count: count_elements(&ir.root),
@@ -501,13 +539,15 @@ pub fn check_app(
     })
 }
 
-/// Compile-check a candela program once for each of `targets`.
+/// Compile-check a program once for each of `targets`, each against that
+/// target's functions, script libraries, and compile-time conditions.
 ///
 /// Where every target rejects the program the same way, the error is the
-/// compiler's own, as it is for an app with no target-specific code. Where
+/// checker's own, as it is for an app with no target-specific code. Where
 /// they disagree, the error names the target whose build it breaks.
-#[cfg(all(feature = "runtime-parse", feature = "host-candela"))]
-fn check_candela_per_target(
+#[cfg(feature = "runtime-parse")]
+fn check_per_target(
+    check: lumen_script::language::CheckFn,
     source: &str,
     uri: &str,
     lib_dir: &Path,
@@ -516,9 +556,16 @@ fn check_candela_per_target(
     let mut failures = Vec::new();
     for deps in targets {
         let stubs = declared_fns(deps)?;
-        let checked = candela_compiler(lib_dir, deps, &stubs)?.compile_check(source, uri);
-        if let Err(e) = checked {
-            failures.push((deps.target, e.to_string()));
+        let against = ScriptCompile {
+            uri,
+            lib_dir: Some(lib_dir),
+            import_roots: &deps.import_roots,
+            cfg_flags: deps.target.cfg_flags(),
+            fns: &stubs,
+            preludes: &deps.modules.preludes,
+        };
+        if let Err(e) = check(source, &against) {
+            failures.push((deps.target, e));
         }
     }
     let Some((target, first)) = failures.first() else {

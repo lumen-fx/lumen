@@ -6,6 +6,7 @@
 //! back through `on_ws_close` with the code, and a refused connection reports
 //! an error and an unclean close, all as the events a page gets.
 
+use lumen_candela_dev as _;
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
@@ -57,9 +58,9 @@ fn app(source: &str) -> EcsApp {
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],

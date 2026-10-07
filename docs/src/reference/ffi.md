@@ -535,9 +535,9 @@ installs it before the script hosts load, which is the window a registration has
 to arrive in. See [Writing plugins](../contributing/plugins.md) for what a plugin
 can expose and how each language spells a namespace.
 
-`rhai_extension` on the same builder takes a `rhai::Engine` and so reaches the
-Rhai host alone. It is behind the crate's `host-rhai` feature, on by default;
-turning defaults off drops the Rhai dependency and leaves `native_fn` as the
-way to expose a function.
+The builder has no hook into one language's engine: `AppBuilder::rhai_extension`
+and the crate's `host-rhai` feature were removed when the script hosts became
+runtime modules, and `script_fn` and `native_fn` above replace them, reaching
+every language the app runs.
 
 Runnable examples live in `sdk/rust/examples`.

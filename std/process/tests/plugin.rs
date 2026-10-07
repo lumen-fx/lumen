@@ -3,32 +3,35 @@
 //!
 //! What these prove, once per concern:
 //!
-//! - `process::start` reaches a script through the generic `ScriptFnRegistry`,
-//!   in Rhai, Lua, and candela, with its options as a map on Rhai and Lua and
-//!   as `process::StartOptions` on candela;
+//! - `process::start` reaches a candela script through the generic
+//!   `ScriptFnRegistry`, with its options as the `process::StartOptions`
+//!   struct the module declares;
 //! - a child runs in the app directory, and a `cmd` carrying a separator names
 //!   a program the app ships;
 //! - output and exit arrive over the generic plugin-event bus, with the exit
 //!   last, and a per-tag `on("process_exit", tag, fn)` registration winning
 //!   over the `on_process_exit` fallback;
 //! - a program that cannot start answers false and fires nothing at all, and
-//!   a start with an option the struct does not declare is a script error that
-//!   starts nothing;
+//!   a start with an option the struct does not declare, or one of the wrong
+//!   kind, is a compile error that starts nothing;
 //! - the options set the child's directory, relative to the app, and its
 //!   environment;
 //! - `process::stop` ends a running child, whose exit still arrives, and
 //!   answers false once nothing runs under the tag;
 //! - dropping the app ends the children started with `end_at_exit: true` and
 //!   leaves the others running;
-//! - without the plugin the function does not exist, and the app keeps running
-//!   after the script's own unknown-function error.
+//! - without the plugin the function does not exist: the script fails to
+//!   compile, and the app keeps running without it.
 
+// The candela host, compiled into the test binary: there is no shared engine
+// to open the host module beside.
+use lumen_candela_dev as _;
 use lumen_core::app::App as EcsApp;
 use lumen_core::plugin_events::{QueuedEvent, drain_plugin_events};
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
-use lumen_module::lumen_script::{PluginEvent, ScriptValue};
+use lumen_module::lumen_script::{PluginEvent, ScriptLoadFailure, ScriptValue};
 use lumen_process::ProcessPlugin;
 use lumen_runtime::{RunOptions, build_headless_app};
 
@@ -68,13 +71,9 @@ fn app_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Build a headless app in `dir` running one script, with the given plugin.
-fn build_app(
-    dir: &std::path::Path,
-    engine: &str,
-    source: &str,
-    plugin: Option<ProcessPlugin>,
-) -> EcsApp {
+/// Build a headless app in `dir` running one candela script, with the given
+/// plugin.
+fn build_app(dir: &std::path::Path, source: &str, plugin: Option<ProcessPlugin>) -> EcsApp {
     lumen_core::plugin_events::discard_plugin_events();
     // `<child>` in a script stands for the program the app ships.
     let source = &source.replace("<child>", &format!("./{CHILD_IN_APP}"));
@@ -86,9 +85,9 @@ fn build_app(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -133,26 +132,31 @@ fn tick_until(app: &mut EcsApp, secs: f64, pred: impl Fn(&EcsApp) -> bool) -> bo
     }
 }
 
-/// The whole surface from Rhai: a program the app ships runs in the app
-/// directory, its arguments reach it, both pipes arrive as lines, and the exit
-/// comes last.
+/// The whole surface: a program the app ships runs in the app directory, its
+/// arguments reach it, both pipes arrive as lines, and the exit comes last.
+/// `Default::default()` builds the options, and every handler takes the tag
+/// and the value the event carries.
 #[test]
-fn rhai_runs_a_program_the_app_ships() {
+fn a_script_runs_a_program_the_app_ships() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("rhai");
+    let dir = app_dir("ships");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("started", "").set(process::start("<child>", ["0", "one", "two"], "job", #{}));
+    lumen::signal_set_bool("started", process::start("<child>", ["0", "one", "two"], "job", Default::default()));
 }
-fn on_process_stdout(tag, line) {
-    let s = signal("out", "");
-    s.set(s.get() + tag + "/" + line + ";");
+
+fn on_process_stdout(tag: string, line: string) {
+    lumen::signal_set("out", lumen::signal_get("out") + tag + "/" + line + ";");
 }
-fn on_process_stderr(tag, line) { signal("err", "").set(tag + "/" + line); }
-fn on_process_exit(tag, code) { signal("exit", "").set(tag + "/" + code); }
+
+fn on_process_stderr(tag: string, line: string) { lumen::signal_set("err", tag + "/" + line); }
+
+fn on_process_exit(tag: string, code: int) { lumen::signal_set("exit", tag + "/" + str(code)); }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -183,19 +187,22 @@ fn the_exit_is_the_last_event_for_a_tag() {
     let dir = app_dir("order");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    process::start("<child>", ["4", "--lines", "40"], "flood", #{});
+    process::start("<child>", ["4", "--lines", "40"], "flood", Default::default());
 }
-fn on_process_stdout(tag, line) {
-    let seen = signal("lines", 0);
-    seen.set(seen.get() + 1);
+
+fn on_process_stdout(tag: string, line: string) {
+    lumen::signal_set_int("lines", lumen::signal_get_int("lines") + 1);
 }
-fn on_process_exit(tag, code) {
-    signal("at_exit", "").set(signal("lines", 0).get());
-    signal("code", "").set(code);
+
+fn on_process_exit(tag: string, code: int) {
+    lumen::signal_set_int("at_exit", lumen::signal_get_int("lines"));
+    lumen::signal_set_int("code", code);
 }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -227,14 +234,18 @@ fn a_per_tag_handler_wins_over_the_fallback() {
     let dir = app_dir("routing");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    on("process_exit", "job", "job_ended");
-    process::start("<child>", ["7"], "job", #{});
+    lumen::on("process_exit", "job", "job_ended");
+    process::start("<child>", ["7"], "job", Default::default());
 }
-fn job_ended(tag, code) { signal("special", "").set(tag + "/" + code); }
-fn on_process_exit(tag, code) { signal("fallback", "").set(tag + "/" + code); }
+
+fn job_ended(tag: string, code: int) { lumen::signal_set("special", tag + "/" + str(code)); }
+
+fn on_process_exit(tag: string, code: int) { lumen::signal_set("fallback", tag + "/" + str(code)); }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -257,13 +268,17 @@ fn a_bare_command_is_looked_up_on_the_path() {
     let dir = app_dir("path");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("started", "").set(process::start("sh", ["-c", "echo found"], "sh", #{}));
+    lumen::signal_set_bool("started", process::start("sh", ["-c", "echo found"], "sh", Default::default()));
 }
-fn on_process_stdout(tag, line) { signal("out", "").set(line); }
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+
+fn on_process_stdout(tag: string, line: string) { lumen::signal_set("out", line); }
+
+fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code); }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -286,14 +301,19 @@ fn a_program_that_cannot_start_answers_false_and_fires_nothing() {
     let dir = app_dir("missing");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone", #{}));
+    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", Default::default()));
 }
-fn on_process_stdout(tag, line) { signal("out", "").set(line); }
-fn on_process_stderr(tag, line) { signal("err", "").set(line); }
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+
+fn on_process_stdout(tag: string, line: string) { lumen::signal_set("out", line); }
+
+fn on_process_stderr(tag: string, line: string) { lumen::signal_set("err", line); }
+
+fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code); }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -314,63 +334,24 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// candela reaches the same function through the `host "process"` block the
-/// host synthesizes from what the plugin registered, `Default::default()`
-/// builds the options, and its handlers take the tag and the value the event
-/// carries.
-#[test]
-fn candela_reaches_the_module_surface_through_its_namespace() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("candela");
-    let mut app = build_app(
-        &dir,
-        "candela",
-        r#"import "lumen.cdl";
-
-fn on_start() {
-    lumen::signal_set_bool("started", process::start("<child>", ["5", "hi"], "job", Default::default()));
-}
-
-fn on_process_stdout(tag: string, line: string) {
-    lumen::signal_set("out", lumen::signal_get("out") + tag + "/" + line + ";");
-}
-
-fn on_process_exit(tag: string, code: int) {
-    lumen::signal_set("exit", tag);
-    lumen::signal_set_int("code", code);
-}
-
-fn main() {}
-"#,
-        Some(ProcessPlugin),
-    );
-
-    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
-    assert!(
-        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
-        "the exit must reach candela; out={:?}",
-        signal(&app, "out")
-    );
-    assert_eq!(signal(&app, "out").as_deref(), Some("job/5;job/hi;"));
-    assert_eq!(signal(&app, "code").as_deref(), Some("5"));
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Without the plugin the function does not exist: the script's call fails
-/// with the host's ordinary unknown-function error, no child runs, and the app
-/// keeps ticking.
+/// Without the plugin the function does not exist: there is no `process`
+/// namespace to declare, so the program fails to compile and the failure names
+/// it. No child runs, and the app keeps ticking without its script.
 #[test]
 fn without_the_plugin_the_function_does_not_exist() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir("absent");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
-fn on_start() { signal("started", "").set(process::start("<child>", [], "job", #{})); }
-fn on_ready() { signal("alive", "").set("yes"); }
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set_bool("started", process::start("<child>", ["0"], "job", process::StartOptions::default()));
+}
+
+fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code); }
+
+fn main() {}
 "#,
         None,
     );
@@ -379,10 +360,14 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
         app.tick();
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    assert_eq!(
-        signal(&app, "alive").as_deref(),
-        Some("yes"),
-        "the app went on running past the failed call"
+    let failure = app
+        .world
+        .get_resource::<ScriptLoadFailure>()
+        .expect("the program failed to load");
+    assert!(
+        failure.0.contains("no `process::"),
+        "the failure names the missing namespace: {}",
+        failure.0
     );
     assert_eq!(
         signal(&app, "started"),
@@ -394,8 +379,10 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The options map reaches the child: a relative `cwd` is a directory inside
-/// the app, and `env` is laid over the inherited environment.
+/// The options reach the child, written as the struct the module declares: a
+/// relative `cwd` is a directory inside the app, `env` is laid over the
+/// inherited environment, and the fields the script leaves out come from
+/// `..Default::default()`, so `end_at_exit` keeps its default.
 #[test]
 fn the_options_set_the_directory_and_the_environment() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -403,51 +390,6 @@ fn the_options_set_the_directory_and_the_environment() {
     std::fs::create_dir_all(dir.join("instances/a")).expect("instance dir");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
-fn on_start() {
-    signal("started", "").set(process::start(
-        "<child>",
-        ["0", "--cwd", "--env", "LUMEN_PROCESS_INSTANCE"],
-        "job",
-        #{ cwd: "instances/a", env: #{ LUMEN_PROCESS_INSTANCE: "a" } },
-    ));
-}
-fn on_process_stdout(tag, line) {
-    if line.starts_with("cwd=") { signal("cwd", "").set(line.sub_string(4)); }
-    if line.starts_with("env=") { signal("env", "").set(line.sub_string(4)); }
-}
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
-"#,
-        Some(ProcessPlugin),
-    );
-
-    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
-    assert!(
-        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
-        "the exit must arrive"
-    );
-    let cwd = signal(&app, "cwd").expect("the child reported its directory");
-    assert_eq!(
-        std::fs::canonicalize(cwd).expect("reported dir"),
-        std::fs::canonicalize(dir.join("instances/a")).expect("instance dir"),
-    );
-    assert_eq!(signal(&app, "env").as_deref(), Some("a"));
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The same options from candela, written as the struct the module declares:
-/// the fields the script names, the rest from `..Default::default()`, and an
-/// `end_at_exit` left at its default so the child outlives nothing here.
-#[test]
-fn candela_sets_the_options_through_the_struct() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("candela-options");
-    std::fs::create_dir_all(dir.join("instances/a")).expect("instance dir");
-    let mut app = build_app(
-        &dir,
-        "candela",
         r#"import "lumen.cdl";
 
 fn on_start() {
@@ -492,75 +434,56 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Lua passes the options as a table and leaves out what it does not set.
-#[test]
-fn lua_sets_the_options_through_a_table() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("lua-options");
-    std::fs::create_dir_all(dir.join("instances/b")).expect("instance dir");
-    let mut app = build_app(
-        &dir,
-        "lua",
-        r#"
-function on_start()
-    signal("started", ""):set(process.start(
-        "<child>", {"0", "--cwd"}, "job", { cwd = "instances/b" }))
-end
-function on_process_stdout(tag, line)
-    if line:sub(1, 4) == "cwd=" then signal("cwd", ""):set(line:sub(5)) end
-end
-function on_process_exit(tag, code) signal("exit", ""):set(code) end
-"#,
-        Some(ProcessPlugin),
-    );
-
-    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
-    assert!(
-        tick_until(&mut app, 10.0, |app| signal(app, "exit").is_some()),
-        "the exit must arrive"
-    );
-    let cwd = signal(&app, "cwd").expect("the child reported its directory");
-    assert_eq!(
-        std::fs::canonicalize(cwd).expect("reported dir"),
-        std::fs::canonicalize(dir.join("instances/b")).expect("instance dir"),
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// An option the struct does not declare, or one of the wrong kind, is a
-/// script error before anything starts: the call raises, no child runs, and no
+/// compile error naming it: the program never loads, no child runs, and no
 /// event fires.
 #[test]
 fn a_bad_option_is_a_script_error_and_starts_nothing() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("bad-option");
-    let mut app = build_app(
-        &dir,
-        "rhai",
-        r#"
-fn on_start() {
-    signal("started", "").set(process::start("<child>", ["0"], "job", #{ cdw: "x" }));
-}
-fn on_ready() {
-    signal("bad_value", "").set(process::start("<child>", ["0"], "job", #{ end_at_exit: "never" }));
-}
-fn on_process_stdout(tag, line) { signal("out", "").set(line); }
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
-"#,
-        Some(ProcessPlugin),
-    );
+    for (name, options, needle) in [
+        ("bad-option", r#"cdw: "x""#, "no field cdw"),
+        ("bad-value", r#"end_at_exit: "never""#, "end_at_exit"),
+    ] {
+        let dir = app_dir(name);
+        let mut app = build_app(
+            &dir,
+            &format!(
+                r#"import "lumen.cdl";
 
-    for _ in 0..20 {
-        app.tick();
-        std::thread::sleep(std::time::Duration::from_millis(2));
+fn on_start() {{
+    let opts = process::StartOptions {{ {options}, ..Default::default() }};
+    lumen::signal_set_bool("started", process::start("<child>", ["0"], "job", opts));
+}}
+
+fn on_process_stdout(tag: string, line: string) {{ lumen::signal_set("out", line); }}
+
+fn on_process_exit(tag: string, code: int) {{ lumen::signal_set_int("exit", code); }}
+
+fn main() {{}}
+"#
+            ),
+            Some(ProcessPlugin),
+        );
+
+        for _ in 0..20 {
+            app.tick();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let failure = app
+            .world
+            .get_resource::<ScriptLoadFailure>()
+            .expect("the program failed to load");
+        assert!(
+            failure.0.contains(needle),
+            "the failure names the option: {}",
+            failure.0
+        );
+        assert_eq!(signal(&app, "started"), None, "the call never ran");
+        assert_eq!(signal(&app, "out"), None);
+        assert_eq!(signal(&app, "exit"), None, "nothing started, nothing ended");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    assert_eq!(signal(&app, "started"), None, "the call raised");
-    assert_eq!(signal(&app, "bad_value"), None, "the call raised");
-    assert_eq!(signal(&app, "out"), None);
-    assert_eq!(signal(&app, "exit"), None, "nothing started, nothing ended");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `process::stop` ends a child mid-sleep; its exit still arrives, and once it
@@ -571,19 +494,23 @@ fn stop_ends_a_running_child_and_its_exit_still_arrives() {
     let dir = app_dir("stop");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("unknown", "").set(process::stop("sleeper"));
-    process::start("<child>", ["0", "--sleep", "60000"], "sleeper", #{});
+    lumen::signal_set_bool("unknown", process::stop("sleeper"));
+    process::start("<child>", ["0", "--sleep", "60000"], "sleeper", Default::default());
 }
-fn on_process_stdout(tag, line) {
-    if line == "0" { signal("stopped", "").set(process::stop(tag)); }
+
+fn on_process_stdout(tag: string, line: string) {
+    if line == "0" { lumen::signal_set_bool("stopped", process::stop(tag)); }
 }
-fn on_process_exit(tag, code) {
-    signal("code", "").set(code);
-    signal("again", "").set(process::stop(tag));
+
+fn on_process_exit(tag: string, code: int) {
+    lumen::signal_set_int("code", code);
+    lumen::signal_set_bool("again", process::stop(tag));
 }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );
@@ -645,13 +572,17 @@ fn the_app_exit_ends_the_children_that_asked_for_it() {
     let dir = app_dir("on-exit");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    process::start("<child>", ["0", "--sleep", "60000"], "helper", #{ end_at_exit: true });
-    process::start("<child>", ["0", "--sleep", "1500"], "keeper", #{});
+    process::start("<child>", ["0", "--sleep", "60000"], "helper",
+        process::StartOptions { end_at_exit: true, ..Default::default() });
+    process::start("<child>", ["0", "--sleep", "1500"], "keeper", Default::default());
 }
-fn on_process_stdout(tag, line) { signal(tag, "").set("running"); }
+
+fn on_process_stdout(tag: string, line: string) { lumen::signal_set(tag, "running"); }
+
+fn main() {}
 "#,
         Some(ProcessPlugin),
     );

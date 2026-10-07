@@ -1,4 +1,5 @@
-//! Ahead-of-time extraction of the `lmn!` blocks a candela script writes.
+//! Ahead-of-time compilation of the markup blocks a script writes (candela's
+//! `lmn!`).
 //!
 //! A shipped app parses no markup, so every block a script can instantiate is
 //! compiled here and travels in the artifact's fragment table. Extraction runs
@@ -6,37 +7,37 @@
 //! check`, and each hot reload, so a malformed block fails the check rather
 //! than the window.
 //!
-//! What a block means is decided in one place,
-//! [`lumen_script_candela::lmn`], which the macro expander inside the candela
-//! compiler reads as well. This module adds the half that needs the markup
-//! front-end: the block body becomes a
+//! Which text in a script is a block, and what its key, arguments and
+//! component are, is the script language's to say: its host module reads the
+//! blocks (see `lumen_script::MarkupBlock`). This module adds the half that
+//! needs the markup front-end: each block's markup becomes a
 //! [`Fragment`](lumen_ir::fragment::Fragment) through the same element builder
 //! a `<template>` goes through.
 
-use lumen_ir::fragment::{FragmentComponent, FragmentOrigin, FragmentTable};
+use lumen_ir::fragment::{FragmentOrigin, FragmentTable};
 use lumen_ir::layout_ir::ParseError;
-use lumen_script_candela::lmn;
+use lumen_script::MarkupBlock;
 
-/// Read every `lmn!` block in one candela source into a fragment table.
+/// Build the fragments the markup blocks read out of one script declare.
 ///
-/// `uri` is where the source came from, and lands on each fragment's origin so
-/// a later collision can name the file and line.
-///
-/// A block written as the whole body of a capitalized function carries that
-/// function's name, which is what lets a use site write the function as a tag,
-/// and whether instantiating the block is the same as calling the function.
+/// `uri` is where the script came from, and lands on each fragment's origin
+/// (at the line `source` holds the block on) so a later collision can name the
+/// file and line. A block that is the whole body of a component function
+/// carries that function, which is what lets a use site write the function as
+/// a tag.
 ///
 /// # Errors
 ///
-/// A rendered message when a block is malformed, naming the file, line, and
-/// column the block was written at.
-pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String> {
+/// A rendered message when a block's markup does not parse, naming the file,
+/// line, and column the block was written at.
+pub fn block_fragments(
+    source: &str,
+    uri: &str,
+    blocks: Vec<MarkupBlock>,
+) -> Result<FragmentTable, String> {
     let mut table = FragmentTable::new();
-    let index = lmn::FnIndex::scan(source);
-    for region in lmn::regions(source) {
-        let at = region.body_start;
-        let block = lmn::analyze(region.body)
-            .map_err(|e| located(source, at + e.offset, uri, &e.message))?;
+    for block in blocks {
+        let at = block.offset;
         let (line, col) = crate::parse::html::line_col_of(source, at);
         let origin = FragmentOrigin {
             file: uri.to_string(),
@@ -50,12 +51,8 @@ pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String
             origin,
         )
         .map_err(|e| located(source, at, uri, &render(&e)))?;
-        if let Some(component) = lmn::component_at(source, &region.span, &index, &block.args) {
-            fragment.components.push(FragmentComponent {
-                name: component.name,
-                params: component.params,
-                inlinable: component.inlinable,
-            });
+        if let Some(component) = block.component {
+            fragment.components.push(component);
         }
         table
             .insert(fragment)
@@ -77,12 +74,23 @@ fn render(error: &ParseError) -> String {
 /// Render a message with the file and position it is about.
 fn located(source: &str, offset: usize, uri: &str, message: &str) -> String {
     let (line, col) = crate::parse::html::line_col_of(source, offset);
-    format!("{uri}:{line}:{col}: lmn!: {message}")
+    format!("{uri}:{line}:{col}: markup block: {message}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_candela::lmn;
+
+    /// The fragments a candela source declares, read the way an app reads
+    /// them: the language finds the blocks, this module compiles them.
+    fn script_fragments(src: &str, uri: &str) -> Result<FragmentTable, String> {
+        let blocks = lumen_candela_dev::markup::markup_blocks(src).map_err(|e| {
+            let (line, col) = crate::parse::html::line_col_of(src, e.offset);
+            format!("{uri}:{line}:{col}: {}", e.message)
+        })?;
+        block_fragments(src, uri, blocks)
+    }
 
     #[test]
     fn a_block_becomes_a_fragment_keyed_by_its_body() {

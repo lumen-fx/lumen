@@ -110,6 +110,7 @@ fn boot(compiled: &CompiledApp, report: &mut Report) -> App {
     // signals the markup binds to. Only the bytecode form: a request that
     // compiled its own scripts would be measuring the compiler.
     let start = Instant::now();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     for script in &compiled.scripts {
         if let Some(bytecode) = &script.bytecode {
             hosts::install(&mut app, &script.engine, bytecode, SCRIPT_URI)

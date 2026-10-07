@@ -1,0 +1,52 @@
+# The candela development host as a library: the candela compiler on top of
+# `lumen-candela-host`, hot reload, the ahead-of-time checks and builds, and
+# the `lmn!` markup reader. The `lumen-candela-dev` module packages it. A
+# library with no `cdylib` target, so a build script can depend on it in the
+# same cargo run that builds the module: the web crates compile their test
+# fixtures to `.cdlb` with it.
+[package]
+name = "lumen-candela-dev-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's candela development host as a library: the candela compiler, hot reload, and ahead-of-time checks and builds."
+keywords = ["ui", "gui", "scripting", "candela", "lumen"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+# The bytecode host, the builtin surface, the prelude, and the `lmn!` analysis
+# this crate compiles against.
+lumen-candela-host = { workspace = true }
+lumen-script = { workspace = true, features = ["json", "markdown"] }
+lumen-core = { workspace = true }
+lumen-scene = { workspace = true }
+lumen-ir = { workspace = true }
+bevy_ecs.workspace = true
+# The candela compiler. The package on the candela side is named
+# `candela-lang` (the bare `candela` name on crates.io is an unrelated 2020
+# crate); its library keeps the `candela` import name.
+candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", tag = "v0.1.5", version = "0.1.5" }
+candela-vm = { git = "https://github.com/lumen-fx/candela", tag = "v0.1.5", version = "0.1.5" }
+# Reads the `entry` key out of a dependency package's `candela.toml`. The
+# ahead-of-time build assembles its own import resolver, with no engine to read
+# the manifest for it, and a package is entered through the file that key names.
+toml = { workspace = true }
+
+[build-dependencies]
+# Reads the resolved dependency graph, the only place a dependency's own source
+# directory is named, so the build script can stage the standard library out of
+# the candela source this crate compiles against.
+serde_json.workspace = true
+# Names the C compiler and the flags for the target. The build script drives
+# the command itself, because candela opens the C-backed standard library
+# modules as shared libraries and `cc` builds static archives.
+cc.workspace = true
+
+[dev-dependencies]
+# tests/std_library.rs opens the staged `time` library directly and calls its
+# C entry point, apart from the compiler that normally binds it.
+libloading.workspace = true

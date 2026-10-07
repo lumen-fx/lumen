@@ -16,11 +16,10 @@ to write into a directory that already exists.
 Every template writes `lumen.toml` and a README at the app root and the app's
 code under `src/`, starting with `src/main.lmn`. Most also ship a
 `src/main.css` and a script beside it. Scripts are written in candela, the
-default host, except for two
-that show what the other hosts look like: `dashboard` is Lua and `hotkeys` is
-Rhai. The three read closely enough that any of them is a fine starting point,
-and an app can mix them, since a script file picks its host from its own
-extension.
+default host, except for two that show what the deprecated hosts look like:
+`dashboard` is Lua and `hotkeys` is Rhai, and both run only on Linux and macOS,
+where the modules archive carries those hosts. A script file picks its host
+from its own extension, so an app can mix them.
 
 Each template is also a repository of its own under the
 [lumen-fx](https://github.com/lumen-fx) organisation, named after the template:

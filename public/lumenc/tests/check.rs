@@ -43,11 +43,9 @@ fn missing_main_lumen_errors() {
     assert!(msg.contains("main.lmn"), "error mentions main.lmn: {msg}");
 }
 
-/// `check` dispatches the script compile by `[script] engine`. The candela
-/// fixture pins `engine = "candela"` and its `main.cdl` uses candela syntax
-/// (a prelude import + `fn on_start()`), which the Rhai checker cannot parse.
-/// Before the dispatch fix `check` always ran the Rhai checker and this app
-/// false-failed with a bogus Rhai parse error even though it loads and runs.
+/// `check` compiles the script with the language its file selects. The
+/// candela fixture's `main.cdl` (a prelude import + `fn on_start()`) checks
+/// clean under the candela compiler.
 #[test]
 fn candela_app_checks_clean() {
     let dir = workspace_root().join("fixtures").join("candela-smoke");
@@ -140,9 +138,8 @@ fn templates_present() -> bool {
 
 /// Every scaffold template checks clean as written. `check` compiles the
 /// markup, the CSS, and the script under the host the script's extension
-/// selects, so this is what proves a template a user scaffolds runs: the
-/// candela ones type-check against the real host surface, the Lua and Rhai
-/// ones parse on theirs.
+/// selects, so this is what proves a template a user scaffolds runs: its
+/// candela program type-checks against the real host surface.
 #[test]
 fn every_template_checks_clean() {
     if !templates_present() {
@@ -185,8 +182,8 @@ fn every_template_checks_clean() {
 /// image itself is wrong.
 #[test]
 fn every_candela_template_builds_an_image_the_vm_accepts() {
-    use lumen_script_candela::CandelaHost;
-    use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
+    use lumen_candela_dev::CandelaHost;
+    use lumen_candela_dev::candela::{HostRegistry, LoadError, load_program};
 
     if !templates_present() {
         return;

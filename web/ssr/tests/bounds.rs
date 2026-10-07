@@ -62,6 +62,7 @@ fn app() -> CompiledApp {
         },
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(FETCHES.to_vec()),
         }],

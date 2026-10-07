@@ -12,7 +12,7 @@
 //! `wasm-bindgen-test-runner` drives Chrome through `chromedriver`; point
 //! `CHROMEDRIVER` at the binary if it is not on `PATH`.
 
-#![cfg(all(target_arch = "wasm32", feature = "host-candela"))]
+#![cfg(target_arch = "wasm32")]
 
 use lumen_web_runtime::LumenWebApp;
 use wasm_bindgen::JsValue;

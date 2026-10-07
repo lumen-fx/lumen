@@ -77,7 +77,6 @@ fn a_cached_image_paints_in_the_first_frame_of_a_new_page() {
     };
     let bytes = artifact::serialize(&CompiledApp {
         ir,
-        script_source: String::new(),
         pages: Some(CompiledPages {
             entry: "index".to_string(),
             keys: vec!["index".to_string(), "other".to_string()],

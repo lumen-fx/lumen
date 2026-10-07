@@ -1,0 +1,556 @@
+//! Integration tests for the candela [`ScriptHost`] backend.
+//!
+//! Mirrors the shape of the other hosts' tests: compile a small candela
+//! script, drive a handler / lifecycle fn, and assert the scalar builtins and
+//! host-neutral registries round-trip. candela reaches builtins through a typed
+//! `host "lumen" { ... }` block, so every script here declares the builtins it
+//! calls.
+
+use lumen_candela::BUILTINS;
+use lumen_candela_dev::CandelaHost;
+use lumen_script::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
+
+/// A script header declaring the handful of builtins the tests below call.
+const HOST_BLOCK: &str = r#"
+host "lumen" {
+    string signal_get(string);
+    signal_set(string, string);
+    int signal_get_int(string);
+    signal_set_int(string, int);
+    add_clicks(int);
+    on(string, string, string);
+    open_url(string);
+    set_class(string, string);
+    set_timeout(string, int);
+}
+"#;
+
+fn load(host: &mut CandelaHost, body: &str) {
+    let src = format!("{HOST_BLOCK}\n{body}\n");
+    host.load(&src, "test.cdl")
+        .unwrap_or_else(|e| panic!("script should compile: {e}"));
+}
+
+#[test]
+fn on_start_dispatches_and_drains_commands() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn on_start() {
+    lumen::add_clicks(3);
+    lumen::signal_set("greeting", "hi");
+    lumen::open_url("https://lumenfx.dev");
+    lumen::set_class("box", "active");
+}
+fn main() {}
+"#,
+    );
+
+    let CallOutcome {
+        commands,
+        found,
+        ret,
+    } = host.call("on_start", &[]).expect("on_start ok");
+
+    assert!(found, "on_start exists so found must be true");
+    assert_eq!(ret, Some(ScriptValue::Unit));
+
+    // Every scalar builtin enqueued its command.
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, ScriptCommand::AddClicks(3)))
+    );
+    assert!(commands.iter().any(|c| matches!(
+        c,
+        ScriptCommand::OpenUrl { url } if url == "https://lumenfx.dev"
+    )));
+    assert!(commands.iter().any(|c| matches!(
+        c,
+        ScriptCommand::SetClasses { target_id, classes } if target_id == "box" && classes == "active"
+    )));
+    assert!(commands.iter().any(|c| matches!(
+        c,
+        ScriptCommand::SetSignal { name, value } if name == "greeting" && value == "hi"
+    )));
+}
+
+#[test]
+fn missing_handler_is_silent_success() {
+    let mut host = CandelaHost::new();
+    load(&mut host, "fn main() {}");
+
+    let outcome = host
+        .call("on_definitely_not_here", &[])
+        .expect("a missing fn is not an error");
+    assert!(!outcome.found, "missing fn reports found = false");
+    assert!(outcome.ret.is_none());
+    assert!(outcome.commands.is_empty());
+}
+
+#[test]
+fn signal_scalar_roundtrips_through_the_mirror() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn seed() {
+    lumen::signal_set("greeting", "hello");
+    lumen::signal_set_int("count", 41);
+}
+fn greeting() { return lumen::signal_get("greeting"); }
+fn bumped() { return lumen::signal_get_int("count") + 1; }
+fn main() {}
+"#,
+    );
+
+    host.call("seed", &[]).expect("seed ok");
+
+    let g = host.call("greeting", &[]).expect("greeting ok");
+    assert_eq!(g.ret, Some(ScriptValue::Str("hello".to_owned())));
+
+    let b = host.call("bumped", &[]).expect("bumped ok");
+    assert_eq!(b.ret, Some(ScriptValue::I64(42)));
+
+    // The host-side mirror sees the writes too.
+    assert_eq!(
+        host.mirror_get("greeting"),
+        Some(ScriptValue::Str("hello".to_owned()))
+    );
+    assert_eq!(host.mirror_get("count"), Some(ScriptValue::I64(41)));
+}
+
+#[test]
+fn handler_registration_and_suffix_fallback() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn on_start() {
+    lumen::on("click", "save", "handle_save");
+}
+fn main() {}
+"#,
+    );
+    // Nothing registered until on_start runs.
+    assert_eq!(host.handler_for("click", "save"), None);
+
+    host.call("on_start", &[]).expect("on_start ok");
+
+    assert_eq!(
+        host.handler_for("click", "save"),
+        Some("handle_save".to_owned())
+    );
+    // Template-suffix fallback: `user-card:save` matches the `save` handler.
+    assert_eq!(
+        host.handler_for("click", "user-card:save"),
+        Some("handle_save".to_owned())
+    );
+    assert_eq!(host.handler_for("click", "other"), None);
+}
+
+#[test]
+fn handler_call_receives_string_arg() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn handle_save(id) {
+    lumen::signal_set("last_saved", id);
+}
+fn main() {}
+"#,
+    );
+
+    // The runtime dispatches a handler with the element id as a string arg.
+    let outcome = host
+        .call("handle_save", &[ScriptValue::Str("doc-1".to_owned())])
+        .expect("handler ok");
+    assert!(outcome.found);
+    assert!(outcome.commands.iter().any(|c| matches!(
+        c,
+        ScriptCommand::SetSignal { name, value } if name == "last_saved" && value == "doc-1"
+    )));
+}
+
+#[test]
+fn timer_command_carries_delay_and_repeat() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn arm() { lumen::set_timeout("tick", 250); }
+fn main() {}
+"#,
+    );
+    let outcome = host.call("arm", &[]).expect("arm ok");
+    assert!(outcome.commands.iter().any(|c| matches!(
+        c,
+        ScriptCommand::SetTimer { name, millis, repeat }
+            if name == "tick" && *millis == 250 && !*repeat
+    )));
+}
+
+#[test]
+fn mirror_sync_str_parses_back_into_scalar_type() {
+    let mut host = CandelaHost::new();
+    // Seed a typed int mirror entry, then push a store string: it must parse
+    // back into an i64, not overwrite with a string (the section 1.3 policy).
+    host.mirror_set("count", ScriptValue::I64(1));
+    host.mirror_sync_str("count", "5");
+    assert_eq!(host.mirror_get("count"), Some(ScriptValue::I64(5)));
+
+    // An unparseable string leaves the scalar untouched.
+    host.mirror_sync_str("count", "not-a-number");
+    assert_eq!(host.mirror_get("count"), Some(ScriptValue::I64(5)));
+
+    // An absent entry takes the string verbatim.
+    host.mirror_sync_str("fresh", "verbatim");
+    assert_eq!(
+        host.mirror_get("fresh"),
+        Some(ScriptValue::Str("verbatim".to_owned()))
+    );
+}
+
+#[test]
+fn reset_drops_program_and_state() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn on_start() { lumen::on("click", "save", "h"); }
+fn main() {}
+"#,
+    );
+    host.call("on_start", &[]).expect("on_start ok");
+    assert!(host.handler_for("click", "save").is_some());
+
+    host.reset();
+    assert!(host.handler_for("click", "save").is_none());
+    // With no program loaded, calls are silent misses.
+    let outcome = host.call("on_start", &[]).expect("miss ok");
+    assert!(!outcome.found);
+}
+
+#[test]
+fn compile_error_is_structured() {
+    let mut host = CandelaHost::new();
+    let err = host
+        .load("fn main( { }", "broken.cdl")
+        .expect_err("malformed source must fail");
+    match err {
+        ScriptError::Compile { uri, .. } => assert_eq!(uri, "broken.cdl"),
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+}
+
+#[test]
+fn compile_check_is_side_effect_free() {
+    let mut host = CandelaHost::new();
+    load(&mut host, "fn main() {}");
+
+    // A check compiles + runs `main` on a throwaway engine, so a builtin call
+    // inside `main` must not leak commands into the live sink.
+    host.compile_check(
+        &format!("{HOST_BLOCK}\nfn main() {{ lumen::add_clicks(9); }}\n"),
+        "check.cdl",
+    )
+    .expect("valid source checks");
+    assert!(
+        host.drain_commands().is_empty(),
+        "compile_check must not touch the live command sink"
+    );
+}
+
+/// #383: a check runs no build hook, so an app whose native library a hook
+/// produces has none on disk when its script is checked. The block's own
+/// declarations are what the calls are checked against, and a check keeps no
+/// program, so no library is opened for one.
+#[test]
+fn compile_check_needs_no_library_for_a_dylib_block() {
+    let host = CandelaHost::new();
+    let src = "dylib \"lumen_no_such_library\" {\n    \
+               string shout(string);\n}\n\n\
+               fn loud(word: string) -> string {\n    \
+               return lumen_no_such_library::shout(word);\n}\n\n\
+               fn main() {}\n";
+    host.compile_check(src, "dylib.cdl")
+        .expect("a dylib block checks against its own declarations");
+}
+
+/// The body of a handler, as an author writes it: the two lines from #191,
+/// which call a string method on an int.
+const BROKEN_BODY: &str = "    let n = 1;\n    n.uppercase();";
+
+/// A whole program whose only handler carries `body`, registered from `main`
+/// so nothing in the script itself ever calls it.
+fn handler_program(signature: &str, body: &str) -> String {
+    format!(
+        "{HOST_BLOCK}\nfn {signature} {{\n{body}\n}}\n\nfn main() {{\n    \
+         lumen::on(\"click\", \"bump\", \"handle_bump\");\n}}\n"
+    )
+}
+
+/// The 1-based line `BROKEN_BODY`'s failing call sits on in `src`.
+fn line_of_uppercase(src: &str) -> u32 {
+    src.lines()
+        .position(|l| l.contains("n.uppercase()"))
+        .map(|i| i as u32 + 1)
+        .expect("the program carries the failing call")
+}
+
+/// #191: only the runtime calls a handler, so the body of one used to reach
+/// the compiler for the first time on the click that ran it, and `check`
+/// passed a program that died on its first event.
+///
+/// candela compiles an entry point for every function in the app's own source
+/// that annotates all of its parameters, at those declared types, so a handler
+/// nothing in the script calls is type-checked with everything else and the
+/// check refuses it here.
+#[test]
+fn compile_check_rejects_a_body_error_in_a_handler_nothing_calls() {
+    let host = CandelaHost::new();
+    let src = handler_program("handle_bump(id: any)", BROKEN_BODY);
+    let err = host
+        .compile_check(&src, "handler.cdl")
+        .expect_err("a handler body that cannot compile fails the check");
+    match err {
+        ScriptError::Compile {
+            uri, line, message, ..
+        } => {
+            assert_eq!(uri, "handler.cdl");
+            assert_eq!(
+                line,
+                line_of_uppercase(&src),
+                "the error points at the author's own line"
+            );
+            assert!(
+                message.contains("uppercase"),
+                "the message names the failing call: {message}"
+            );
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+
+    // The shape is fine; it is the body that is wrong. The same handler with a
+    // working body still checks clean.
+    CandelaHost::new()
+        .compile_check(
+            &handler_program("handle_bump(id: any)", "    lumen::add_clicks(1);"),
+            "handler.cdl",
+        )
+        .expect("a handler whose body compiles is accepted");
+}
+
+/// Where the check stops: a function with a bare parameter has no declared
+/// type to compile its body against, so candela specialises it at the call
+/// that reaches it. For a handler that call comes from the runtime, so the
+/// diagnostic arrives on the first event instead of at check time. Annotating
+/// the parameter, `any` included, moves it back to the check.
+#[test]
+fn a_bare_parameter_handler_reports_its_body_error_on_the_first_call() {
+    let mut host = CandelaHost::new();
+    let src = handler_program("handle_bump(id)", BROKEN_BODY);
+    host.compile_check(&src, "handler.cdl")
+        .expect("a bare parameter leaves the body for the call that reaches it");
+    host.load(&src, "handler.cdl").expect("and it loads");
+
+    let err = host
+        .call("handle_bump", &[ScriptValue::Str("bump".into())])
+        .expect_err("the call that reaches the body is where it fails");
+    assert!(
+        err.to_string().contains("uppercase"),
+        "the deferred diagnostic names the failing call: {err}"
+    );
+}
+
+/// Parity guard: synthesize a `host \"lumen\" { ... }` block from every entry in
+/// [`BUILTINS`] and compile it. candela validates each declared host fn against
+/// its registered closure (arity, types, and fixed-versus-variadic), so a clean
+/// compile proves the table and the registrations agree - the candela analogue
+/// of the Rhai host's `gen_fn_signatures` parity test. An entry naming `any` is
+/// registered variadically and declares a `...` argument list.
+#[test]
+fn builtins_parity() {
+    let mut block = String::from("host \"lumen\" {\n");
+    for b in BUILTINS {
+        let args = if lumen_candela::builtins::is_variadic(b) {
+            "...".to_owned()
+        } else {
+            b.params.iter().map(|p| p.ty).collect::<Vec<_>>().join(", ")
+        };
+        if b.ret == "()" {
+            block.push_str(&format!("    {}({});\n", b.name, args));
+        } else {
+            block.push_str(&format!("    {} {}({});\n", b.ret, b.name, args));
+        }
+    }
+    block.push_str("}\nfn main() {}\n");
+
+    let mut host = CandelaHost::new();
+    host.load(&block, "parity.cdl").unwrap_or_else(|e| {
+        panic!("every BUILTINS entry must be a registered host fn: {e}\n{block}")
+    });
+}
+
+/// The other direction: every builtin the host registers under the `lumen`
+/// namespace must have a [`BUILTINS`] entry, so the LSP and the reference page
+/// see the whole surface. `builtins_parity` above proves the table is a subset
+/// of the registrations; this proves it is not a strict one.
+///
+/// The registrations come from two places and so does this list. The shared
+/// table is read structurally, by name, which is exact. What is left in the
+/// host's own source is found by scanning it for the forms it registers
+/// through: a `register_host_fn` / `register_host_fn_variadic` call whose
+/// namespace argument is `HOST_NAMESPACE`, and a `mutate!` invocation. Both
+/// name the builtin with a string literal. Because that half reads source
+/// text, a registration form added later is invisible to it: extend
+/// `registered_names` when one appears.
+#[test]
+fn every_registered_lumen_fn_is_tabled() {
+    /// The builtin list, scanned for registration sites. One file: both hosts
+    /// register from it.
+    const SRC: &str = include_str!("../../candela/host/src/host_fns.rs");
+
+    /// Builtins registered from a loop over a `fname` variable rather than a
+    /// string literal, so the scan cannot see them.
+    const LOOP_REGISTERED: &[&str] = &["event_on", "event_on_capture"];
+
+    /// The contents of the first string literal at or after `at`, or `None`
+    /// when the argument in that position is not a literal.
+    fn literal_at(src: &str, at: usize) -> Option<&str> {
+        let rest = src.get(at..)?;
+        let open = rest.find('"')?;
+        // A `)` or `;` before the quote means this argument was a variable.
+        if rest[..open].contains(')') || rest[..open].contains(';') {
+            return None;
+        }
+        let body = &rest[open + 1..];
+        let close = body.find('"')?;
+        Some(&body[..close])
+    }
+
+    /// The offset just past the next non-whitespace character, when it is `c`.
+    fn skip_to(src: &str, from: usize, c: char) -> Option<usize> {
+        let rest = src.get(from..)?;
+        let off = rest.find(|ch: char| !ch.is_whitespace())?;
+        (rest[off..].starts_with(c)).then_some(from + off + c.len_utf8())
+    }
+
+    let mut names: Vec<String> = LOOP_REGISTERED.iter().map(|n| (*n).to_string()).collect();
+
+    // The shared table and the host's own entries, read by name rather than
+    // scanned: these bind through the shape adapter, which takes the name from
+    // the entry.
+    names.extend(lumen_candela::builtin_fns().iter().map(|f| f.name.clone()));
+
+    // `register_host_fn(HOST_NAMESPACE, "name", ..)` and its variadic sibling.
+    // Every other occurrence of the constant (its own declaration, the macro
+    // bodies that take the name as `$name`) fails one of the two shape checks.
+    for (idx, _) in SRC.match_indices("HOST_NAMESPACE") {
+        let after = idx + "HOST_NAMESPACE".len();
+        let Some(comma) = skip_to(SRC, after, ',') else {
+            continue;
+        };
+        if let Some(name) = literal_at(SRC, comma) {
+            names.push(name.to_string());
+        }
+    }
+
+    // `mutate!("name", ..)`: the first literal in the invocation is the name.
+    for (idx, _) in SRC.match_indices("mutate!(") {
+        if let Some(name) = literal_at(SRC, idx + "mutate!(".len()) {
+            names.push(name.to_string());
+        }
+    }
+
+    assert!(
+        names.len() > 100,
+        "the source scan found only {} registrations - the registration form \
+         probably changed and the scan needs updating",
+        names.len()
+    );
+
+    let tabled: std::collections::HashSet<&str> = BUILTINS.iter().map(|b| b.name).collect();
+    let mut missing: Vec<String> = names
+        .into_iter()
+        .filter(|n| !tabled.contains(n.as_str()))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    missing.sort_unstable();
+    assert!(
+        missing.is_empty(),
+        "these builtins are registered on the engine but absent from \
+         builtins::BUILTINS: {missing:?}"
+    );
+}
+
+/// A panic out of the VM stays inside the host.
+///
+/// A diagnostic raised while a handler is being specialized (here: a call into
+/// a `lumen::` function nothing declared) can leave values behind on the VM
+/// stack, and the next call into the program then dies on an internal type
+/// assertion instead of returning an error. That panic used to cross the host
+/// boundary and kill the process - a music app whose audio module could not
+/// load died this way on its second lifecycle hook. The host must hand back
+/// errors, never abort.
+///
+/// Both hooks take a parameter with no type on it, which is what keeps them
+/// out of the load-time pass: candela compiles the body of every function it
+/// can type from that function's own declaration, and the undeclared call
+/// would otherwise fail the load rather than the call.
+#[test]
+fn a_vm_panic_is_contained_and_disables_the_program() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+struct Track { id: string, title: string }
+fn mk(id, title) { return Track { id: id, title: title }; }
+fn tracks() {
+    let l = [];
+    l.push(mk("a", "b"));
+    l.push(mk("c", "d"));
+    return l;
+}
+fn set_meta(t: Track) { lumen::signal_set("now_title", t.title); }
+fn started(tag) {
+    lumen::signal_set("x", "1");
+    let list = tracks();
+    set_meta(list[0]);
+    lumen::no_such_builtin(0.7);
+}
+fn ready(tag) {
+    let list = tracks();
+    let i = 0;
+    while i < list.len() {
+        lumen::signal_set("y", list[i].title);
+        i = i + 1;
+    }
+}
+fn main() {}
+"#,
+    );
+
+    // The first hook fails on the undeclared call; candela reports it as an
+    // ordinary diagnostic.
+    let started = host.call("started", &[ScriptValue::Str("go".to_owned())]);
+    assert!(started.is_err(), "the undeclared call errors: {started:?}");
+
+    // The next hook must come back as a value, never abort the process. On
+    // the current candela pin the corrupted VM panics and the host reports
+    // it; a candela with the corruption fixed returns Ok, and both are fine.
+    match host.call("ready", &[ScriptValue::Str("go".to_owned())]) {
+        Ok(_) => {}
+        Err(ScriptError::Runtime(msg)) => {
+            assert!(msg.contains("candela VM panicked"), "{msg}");
+        }
+        Err(other) => panic!("unexpected error shape: {other}"),
+    }
+
+    // Whatever happened above, later probes still answer instead of dying.
+    let after = host.call("on_ready", &[]).expect("a later probe answers");
+    let _ = after.found;
+}

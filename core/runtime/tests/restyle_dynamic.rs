@@ -13,11 +13,15 @@
 //! components.
 
 use lumen_core::components::{Fill, Visuals};
-use lumen_ir::artifact::{self, CompiledApp};
+use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::css::{Declaration, Origin, Rule, Stylesheet};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::node_query::{self, push_external_dom_command};
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The DOM snapshot and the external command bus are process-global, so the
 /// headless apps that read and write them run one at a time.
@@ -63,7 +67,8 @@ struct Harness {
 
 impl Harness {
     /// Build a two-element app (`root` > `tile#box`) styled by `rules`, with
-    /// `script` baked in as the app's Rhai source.
+    /// `script` baked in as the app's candela source. An empty `script` builds
+    /// an app with no script at all.
     fn new(rules: Vec<Rule>, script: &str) -> Self {
         let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _ = node_query::drain_external_dom_commands();
@@ -72,13 +77,8 @@ impl Harness {
             SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         }));
         std::fs::create_dir_all(&dir).unwrap();
-        // Pin the engine: the baked source below is Rhai, and the default is
-        // candela. Port 0 keeps parallel test binaries off a shared socket.
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        // Port 0 keeps parallel test binaries off a shared socket.
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
         let mut ir = LayoutIR {
             root: el(
@@ -87,7 +87,6 @@ impl Harness {
                 &[],
                 vec![el("tile", Some("box"), &["cold"], vec![])],
             ),
-            script_source: script.to_string(),
             combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet {
                 rules,
                 ..Default::default()
@@ -100,9 +99,19 @@ impl Harness {
         if let Some(sheet) = ir.combined_stylesheet.clone() {
             lumen_ir::css::apply_css(&mut ir, &sheet).expect("cascade");
         }
+        let scripts = if script.is_empty() {
+            Vec::new()
+        } else {
+            vec![CompiledScript {
+                engine: "candela".to_string(),
+                module: "lumen-candela-dev".to_string(),
+                source: script.to_string(),
+                bytecode: None,
+            }]
+        };
         let bytes = artifact::serialize(&CompiledApp {
             ir,
-            script_source: script.to_string(),
+            scripts,
             ..Default::default()
         })
         .unwrap();
@@ -280,7 +289,14 @@ fn global_set_class_recascades_a_non_root_element() {
             rule(".cold", &[("bg", "#112233")], 0),
             rule(".hot", &[("bg", "#ff0000")], 1),
         ],
-        r#"fn on_start() { set_class("box", "hot"); }"#,
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::set_class("box", "hot");
+}
+
+fn main() {}
+"#,
     );
     h.settle();
 

@@ -31,12 +31,13 @@
 # This installs the Lumen toolchain: lumenc, liblumen, the app launcher stub,
 # and lumen-server, the production server for server-rendered sites. There is
 # nothing else to choose - no component flag, no candela
-# option. Candela is a scripting engine linked into liblumen (the
-# lumen-script-candela crate, compiled in - see the `host-candela` feature on
-# lumen / lumen-runtime), not an external binary this installer runs or
-# manages; a Lumen app never shells out to a candela executable. Someone who
-# wants the standalone candela language outside a Lumen app installs it from
-# candela's own release channel (lumen-fx/candela), independent of this script.
+# option. Candela is the scripting engine Lumen's script host modules link
+# (lumen-candela runs compiled bytecode, lumen-candela-dev compiles source),
+# shipped in the modules archive below, not an external binary this installer
+# runs or manages; a Lumen app never shells out to a candela executable.
+# Someone who wants the standalone candela language outside a Lumen app
+# installs it from candela's own release channel (lumen-fx/candela),
+# independent of this script.
 #
 # The asset naming below is the contract between the release process and
 # this script:
@@ -46,7 +47,10 @@
 #   lumen-modules-<target>.tar.gz
 #                             the bundled runtime modules for the same
 #                             targets, installed into the same bin/ beside
-#                             the engine unless --no-modules is given.
+#                             the engine unless --no-modules is given. The
+#                             script hosts are among them, so a toolchain
+#                             installed without them runs and builds no
+#                             script.
 #                             Optional per release; absent for Windows,
 #                             where only `lumenc package --static` carries
 #                             the capabilities, compiled into the executable.
@@ -141,9 +145,10 @@ Options:
                        shell rc file unless --no-modify-path is also given.
   --no-modify-path     Never write a PATH line to a shell rc file.
   --no-modules         Skip the bundled runtime modules (the standard module
-                       library apps name with `bundled = true`); install the
-                       toolchain alone. --uninstall still removes previously
-                       installed modules through the receipt.
+                       library apps name with `bundled = true`, and the
+                       script hosts); install the toolchain alone, which then
+                       runs and builds no script. --uninstall still removes
+                       previously installed modules through the receipt.
   --no-lpm             Skip lpm, the registry client. An app that names a
                        registry package then installs it on first use.
   --force              Reinstall even if already at the target version.

@@ -25,10 +25,6 @@ lumen-i18n = { workspace = true }
 lumen-input = { workspace = true }
 lumen-primitives = { workspace = true }
 lumen-script = { workspace = true }
-# The candela host, behind `host-candela`. The artifact half only: this
-# assembly runs precompiled `.cdlb` bytecode, so the candela compiler never
-# reaches whatever loads it.
-lumen-script-candela = { workspace = true, optional = true }
 bevy_ecs.workspace = true
 
 # The browser's own `fetch`, behind the scripts' HTTP builtins. Target-gated
@@ -45,10 +41,13 @@ lumen-os-clipboard = { workspace = true }
 # Compiles the test fixtures to `.cdlb` at build time, on the host, so the
 # artifact a host loads is always the one this toolchain produces. Build
 # dependencies are resolved for the host and never linked into the library, so
-# the compiler feature here does not reach a shipped runtime.
-lumen-script-candela = { workspace = true, default-features = true }
+# the compiler does not reach a shipped runtime.
+lumen-candela-dev-host = { workspace = true }
 
 [dev-dependencies]
+# The host the fixtures run on, installed the way a page's assembly installs
+# it.
+lumen-candela-host = { workspace = true }
 # The compiled app the boot benchmark reads. A running app never needs the
 # artifact container, only what came out of it.
 lumen-ir = { workspace = true }
@@ -62,10 +61,3 @@ name = "boot"
 # harness would swallow as filters.
 harness = false
 
-[features]
-# The script hosts this assembly carries. A host is a language, and each one is
-# a feature, so a build pays for the languages its app ships and nothing else.
-# candela is on by default because it is the only host that runs from bytecode
-# alone: rhai and lua have yet to be wired up here.
-default = ["host-candela"]
-host-candela = ["dep:lumen-script-candela"]

@@ -444,7 +444,7 @@ fn with_hooks(
 
 /// Remove `<script>...</script>` blocks from markup. Used when
 /// [`ScriptPlugin`](crate::plugins::ScriptPlugin) is disabled so the lumenc
-/// pipeline never installs the Rhai host. Case-insensitive on the tag name;
+/// pipeline never installs a script host. Case-insensitive on the tag name;
 /// leaves all other markup untouched.
 fn strip_script_blocks(src: &str) -> String {
     let bytes = src.as_bytes();
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn strip_script_handles_self_closing_and_attrs() {
-        let src = "<root><script src=\"a.rhai\" /><label/></root>";
+        let src = "<root><script src=\"a.cdl\" /><label/></root>";
         assert_eq!(strip_script_blocks(src), "<root><label/></root>");
     }
 

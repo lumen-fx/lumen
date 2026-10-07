@@ -399,20 +399,22 @@ jobs:
             *)      cp "$libdir"/libstd-*.so dist/bin/ ;;
           esac
           # The candela standard library, staged beside the binaries by
-          # lumen-script-candela's build script. candela reads `import
-          # "std/..."` (and the array methods) out of `libs/` next to the
-          # running executable, so it belongs beside lumenc, not in share/.
+          # lumen-candela-dev-host's build script. The candela compiler reads
+          # `import "std/..."` (and the array methods) out of `libs/` next to
+          # the running executable, so it belongs beside lumenc, not in share/.
           cp -R "target/$triple/release/libs" dist/bin/libs
           # The app templates, beside lumenc for the same reason: `lumenc new`
           # reads them from next to its own executable
           # (public/lumenc/src/cli/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
-          # The web halves of the first-party modules, which are text files
-          # and the same on every platform. `lumenc web` reads the web half of
-          # a `bundled = true` module from modules/<name>/web beside its own
-          # executable.
-          .github/scripts/stage-web-halves.sh dist/bin
+          # The web halves and language descriptors of the first-party
+          # modules, which are text files and the same on every platform.
+          # `lumenc web` reads the web half of a `bundled = true` module from
+          # modules/<name>/web beside its own executable, and every run and
+          # build reads which module runs a script language from
+          # modules/<name>/lumen-language.toml.
+          .github/scripts/stage-module-data.sh dist/bin
           # macOS records the path a dylib was written to, in the dylib and in
           # everything that links it, and an rpath cannot redirect an absolute
           # name. So each Mach-O here is given an @rpath install name before
@@ -436,10 +438,11 @@ jobs:
           cp public/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
           cp public/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
 
-          # The archive carries the engine, and the engine carries candela,
-          # which is Apache-2.0. That license asks whoever distributes it to
-          # hand the recipient the license text and the attribution, so both
-          # travel in the archive rather than only in the repository.
+          # The archive carries candela (the standard library beside lumenc,
+          # and the script hosts in the modules archive), which is Apache-2.0.
+          # That license asks whoever distributes it to hand the recipient the
+          # license text and the attribution, so both travel in the archive
+          # rather than only in the repository.
           cp LICENSE NOTICE THIRD-PARTY-LICENSES dist/
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
 
@@ -486,13 +489,13 @@ jobs:
           cp LICENSE NOTICE THIRD-PARTY-LICENSES modules-dist/
           tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
-      # The web halves first, from bash: the staging script is the one the
-      # Unix legs run, and the shell that runs it is named rather than left to
-      # whichever `bash` pwsh would find on PATH.
-      - name: Stage the web halves (Windows)
+      # The web halves and language descriptors first, from bash: the staging
+      # script is the one the Unix legs run, and the shell that runs it is
+      # named rather than left to whichever `bash` pwsh would find on PATH.
+      - name: Stage the module data (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: .github/scripts/stage-web-halves.sh dist/bin
+        run: .github/scripts/stage-module-data.sh dist/bin
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -628,8 +631,10 @@ jobs:
             lumenc=dist/bin/lumenc
           fi
           # Read and checked before the loop, so a list that failed to build
-          # cannot pass as a kit with no modules in it.
-          list="$(.github/scripts/first-party-modules.sh)"
+          # cannot pass as a kit with no modules in it. Only the modules an app
+          # links in: a compiler, or a module that ships in the modules
+          # archive alone, is not on the static launcher's line.
+          list="$(.github/scripts/first-party-modules.sh --linked)"
           test -n "$list"
           modules=()
           while IFS=$'\t' read -r name _package lib; do
@@ -696,6 +701,12 @@ jobs:
       # replay fills. The same two size levers as the link kit. The count of
       # staged files the two kits share is printed, since a file both carry
       # is a download a user pays twice.
+      #
+      # On Windows the engine is lumen.dll, which links the candela script
+      # hosts in (no file beside it could be opened), so a replay has to be
+      # able to force them in; named every first-party module, the kit offers
+      # the ones the recorded line read. On Linux and macOS the modules ship
+      # beside the engine and the line reads none.
       - name: Package the engine kit
         shell: bash
         run: |
@@ -716,6 +727,12 @@ jobs:
             record="$root/engine-record.jsonl"
             stage="$root/engine-stage"
           fi
+          list="$(.github/scripts/first-party-modules.sh)"
+          test -n "$list"
+          modules=()
+          while IFS=$'\t' read -r name _package lib; do
+            modules+=(--module "$name=$lib")
+          done <<<"$list"
           rm -rf enginekit
           "$lumenc" link-kit emit --artifact shared-engine \
             --record "$record" \
@@ -724,7 +741,7 @@ jobs:
             --target ${{ matrix.target }} \
             --target-dir "$root/target" \
             --rustc "$(rustc --version)" \
-            "${driver[@]}"
+            "${driver[@]}" "${modules[@]}"
 
           bin="$sysroot/lib/rustlib/$triple/bin"
           kept=0

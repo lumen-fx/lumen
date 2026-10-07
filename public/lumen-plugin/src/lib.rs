@@ -49,7 +49,7 @@ pub use lumen_plugin_abi::codec;
 /// with. Data types, from the engine's own crate, so a value a plugin builds
 /// decodes into the one the script layer routes.
 pub use lumen_script::{
-    HostSet, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptField, ScriptNs, ScriptParam, ScriptPrelude,
+    SCRIPT_WIRE_VERSION, ScriptCommand, ScriptField, ScriptNs, ScriptParam, ScriptPrelude,
     ScriptSig, ScriptStruct, ScriptTy, ScriptValue,
 };
 
@@ -153,12 +153,11 @@ pub type PluginFnBody = Box<dyn Fn(&mut Cx<'_>) -> Result<ScriptValue, String> +
 /// One function a plugin offers to the app's scripts.
 ///
 /// Describes the same thing `lumen_script::ScriptFn` does in-process: a name,
-/// a namespace, a signature, the languages that may see it, and a body.
+/// a namespace, a signature, and a body.
 pub struct PluginFn {
     name: String,
     ns: ScriptNs,
     sig: ScriptSig,
-    hosts: HostSet,
     body: PluginFnBody,
 }
 
@@ -183,7 +182,6 @@ impl PluginFn {
             name: name.into(),
             ns: ScriptNs::Extension,
             sig: ScriptSig::default(),
-            hosts: HostSet::ALL,
         }
     }
 
@@ -203,7 +201,6 @@ impl PluginFn {
             name: self.name.clone(),
             ns: self.ns.clone(),
             sig: self.sig.clone(),
-            hosts: self.hosts,
         }
     }
 }
@@ -213,7 +210,6 @@ pub struct PluginFnBuilder {
     name: String,
     ns: ScriptNs,
     sig: ScriptSig,
-    hosts: HostSet,
 }
 
 impl PluginFnBuilder {
@@ -252,15 +248,6 @@ impl PluginFnBuilder {
         self
     }
 
-    /// Choose the languages. Defaults to every host; the empty set is
-    /// refused at load, since a function no language sees is a mistake
-    /// rather than a choice.
-    #[must_use]
-    pub fn hosts(mut self, hosts: HostSet) -> Self {
-        self.hosts = hosts;
-        self
-    }
-
     /// Make the trailing parameters optional: a call may pass as few as
     /// `min_arity` arguments, and the body reads the rest as
     /// [`ScriptValue::Unit`].
@@ -289,7 +276,6 @@ impl PluginFnBuilder {
             name: self.name,
             ns: self.ns,
             sig: self.sig,
-            hosts: self.hosts,
             body: Box::new(body),
         }
     }
@@ -570,7 +556,6 @@ mod tests {
             .ret(ScriptTy::Bool)
             .doc("Read a GPIO pin.")
             .ns(ScriptNs::Named("gpio".to_string()))
-            .hosts(HostSet::RHAI | HostSet::LUA)
             .min_arity(0)
             .variadic()
             .build(|cx| Ok(ScriptValue::Bool(cx.int_arg(0) > 0)));
@@ -583,13 +568,11 @@ mod tests {
         assert_eq!(decl.sig.doc, "Read a GPIO pin.");
         assert_eq!(decl.sig.min_arity, 0);
         assert!(decl.sig.variadic);
-        assert!(!decl.hosts.contains(HostSet::CANDELA));
 
         let default = PluginFn::new("plain")
             .build(|_| Ok(ScriptValue::Unit))
             .decl();
         assert_eq!(default.ns, ScriptNs::Extension);
-        assert!(default.hosts.contains(HostSet::CANDELA));
     }
 
     #[test]

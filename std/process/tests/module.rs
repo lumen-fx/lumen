@@ -174,18 +174,24 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, and the
-/// given `[dependencies]` block.
+/// Write an app dir: markup with a candela script, the script itself, and the
+/// given `[dependencies]` block. `script` is the script's handlers; the
+/// `lumen.cdl` import and the empty `main` every candela program needs are
+/// added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[app]\nid = \"lumen-process-module-{case}\"\n\n[dependencies]\n{dependencies}"),
@@ -230,14 +236,13 @@ fn the_bundled_module_runs_a_child_end_to_end() {
         &format!(
             r#"
 fn on_start() {{
-    signal("started", "").set(process::start("{CHILD}", ["6", "hello"], "job", #{{}}));
+    lumen::signal_set_bool("started", process::start("{CHILD}", ["6", "hello"], "job", Default::default()));
 }}
-fn on_process_stdout(tag, line) {{
-    let s = signal("out", "");
-    s.set(s.get() + tag + "/" + line + ";");
+fn on_process_stdout(tag: string, line: string) {{
+    lumen::signal_set("out", lumen::signal_get("out") + tag + "/" + line + ";");
 }}
-fn on_process_stderr(tag, line) {{ signal("err", "").set(tag + "/" + line); }}
-fn on_process_exit(tag, code) {{ signal("exit", "").set(tag + "/" + code); }}
+fn on_process_stderr(tag: string, line: string) {{ lumen::signal_set("err", tag + "/" + line); }}
+fn on_process_exit(tag: string, code: int) {{ lumen::signal_set("exit", tag + "/" + str(code)); }}
 "#
         ),
     );
@@ -274,9 +279,9 @@ fn a_program_that_cannot_start_reports_and_leaves_the_app_running() {
         "lumen-process = { bundled = true }\n",
         r#"
 fn on_start() {
-    signal("started", "").set(process::start("no-such-program-8f2c", [], "gone", #{}));
+    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", Default::default()));
 }
-fn on_process_exit(tag, code) { signal("exit", "").set(code); }
+fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code); }
 "#,
     );
     let (stdout, stderr) = run_host(f, &dir, 40, "started,exit");
@@ -290,9 +295,11 @@ fn on_process_exit(tag, code) { signal("exit", "").set(code); }
     assert!(!stdout.contains("HOST tick-panic-caught"), "{stdout}");
 }
 
-/// Without the module the function does not exist: the script's call fails
-/// with the host's ordinary unknown-namespace error, the app survives its run,
-/// and nothing was started.
+/// Without the module the function does not exist: the script fails to
+/// compile with candela's ordinary undeclared-namespace error, the app
+/// survives its run, and nothing was started. The options are spelled out as
+/// a struct literal, because `Default::default()` would fail first on the
+/// missing struct type rather than on the missing namespace.
 #[test]
 fn without_the_module_the_function_does_not_exist() {
     let f = fixtures();
@@ -301,12 +308,15 @@ fn without_the_module_the_function_does_not_exist() {
         "process-absent",
         "",
         &format!(
-            r#"fn on_start() {{ signal("started", "").set(process::start("{CHILD}", [], "job", #{{}})); }}"#
+            r#"fn on_start() {{ lumen::signal_set_bool("started", process::start("{CHILD}", [], "job", process::StartOptions {{ cwd: "", env: {{}}, end_at_exit: false }})); }}"#
         ),
     );
     let (stdout, stderr) = run_host(f, &dir, 40, "started");
 
-    assert!(stderr.contains("Module not found: process"), "{stderr}");
+    assert!(
+        stderr.contains("no `process` namespace is declared here"),
+        "{stderr}"
+    );
     assert!(!stdout.contains("HOST tick-panic-caught"), "{stdout}");
     assert!(stdout.contains("HOST signal started=<unset>"), "{stdout}");
     assert!(!stderr.contains("lumen-process:"), "{stderr}");

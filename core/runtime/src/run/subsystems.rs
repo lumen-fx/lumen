@@ -40,31 +40,34 @@ pub(crate) fn capability_env(
     // every query a subsystem makes. Skipped for an artifact (nothing to read).
     let mut hay = opts.markup.clone().unwrap_or_default();
     if !no_source {
-        let mut budget: usize = 128;
-        scan_sources(dir, &mut hay, &mut budget, 0);
+        hay.push_str(&scan_app_sources(dir));
     }
     CapabilityEnv::new(dir, cfg.raw.clone(), hay, no_source).headless(opts.bounded)
 }
 
-/// Bounded read of an app's `.lmn` / `.rhai` / `.lua` / `.cdl` / `.css` source
-/// tree into a single haystack. Shared by [`capability_env`] and lumenc's
-/// compile-time bundle capability inference
-/// ([`crate::config::BundleCapabilities::resolve`]) so both apply the same
-/// conservative marker scan.
+/// Bounded read of an app's markup, script, and CSS source tree into a single
+/// haystack. Shared by [`capability_env`] and lumenc's compile-time bundle
+/// capability inference ([`crate::config::BundleCapabilities::resolve`]) so
+/// both apply the same conservative marker scan.
+///
+/// A script file is one whose extension a language descriptor in reach
+/// claims; see [`lumen_modules::language`].
 pub(crate) fn scan_app_sources(dir: &Path) -> String {
+    let table = lumen_modules::language::LanguageTable::discover(None).unwrap_or_default();
+    let mut exts: Vec<&str> = vec!["lmn", "css", "toml"];
+    exts.extend(table.extensions());
     let mut hay = String::new();
     let mut budget: usize = 128;
-    scan_sources(dir, &mut hay, &mut budget, 0);
+    scan_sources(dir, &exts, &mut hay, &mut budget, 0);
     hay
 }
 
-/// Bounded recursive read of the app's `.lmn` / `.rhai` / `.lua` / `.cdl` /
-/// `.css` source files, and its `.toml` config, into `hay` for marker
-/// scanning. The config counts because a subsystem can be asked for by a
-/// key there as well as by a builtin. Depth- and
-/// file-count-capped so a huge asset tree can't turn detection into a slow
-/// directory crawl.
-fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
+/// Bounded recursive read of the app's files whose extension is one of
+/// `exts` (markup, scripts, `.css`, and its `.toml` config) into `hay` for
+/// marker scanning. The config counts because a subsystem can be asked for
+/// by a key there as well as by a builtin. Depth- and file-count-capped so a
+/// huge asset tree can't turn detection into a slow directory crawl.
+fn scan_sources(dir: &Path, exts: &[&str], hay: &mut String, budget: &mut usize, depth: u8) {
     if depth > 4 || *budget == 0 {
         return;
     }
@@ -78,11 +81,12 @@ fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
         let p = entry.path();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
-            scan_sources(&p, hay, budget, depth + 1);
-        } else if matches!(
-            p.extension().and_then(|e| e.to_str()),
-            Some("lmn" | "rhai" | "lua" | "cdl" | "css" | "toml")
-        ) && let Ok(s) = std::fs::read_to_string(&p)
+            scan_sources(&p, exts, hay, budget, depth + 1);
+        } else if p
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| exts.contains(&e))
+            && let Ok(s) = std::fs::read_to_string(&p)
         {
             hay.push('\n');
             hay.push_str(&s);

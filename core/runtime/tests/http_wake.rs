@@ -3,7 +3,7 @@
 //! between ticks and tick again only when woken; this drives the app the same
 //! way, against a local server whose reply the test releases on cue.
 
-#![cfg(all(feature = "http-fetch", feature = "host-rhai"))]
+#![cfg(feature = "http-fetch")]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -16,6 +16,10 @@ use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The wake flag a parked loop waits on.
 #[derive(Default)]
@@ -75,9 +79,18 @@ fn a_reply_that_lands_while_idle_wakes_the_loop() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp app dir");
     let source = format!(
-        r#"
-fn on_start() {{ http(#{{ url: "http://127.0.0.1:{port}/x", tag: "t" }}); }}
-fn on_http(tag, response) {{ signal("got", "").set(tag + ":" + response.body); }}
+        r#"import "lumen.cdl";
+
+fn on_start() {{
+    lumen::http({{"url": "http://127.0.0.1:{port}/x", "tag": "t"}});
+}}
+
+fn on_http(tag: string, response: any) {{
+    let r = as_map(response);
+    lumen::signal_set("got", tag + ":" + as_str(r.get("body")));
+}}
+
+fn main() {{}}
 "#
     );
     let bytes = artifact::serialize(&CompiledApp {
@@ -88,9 +101,9 @@ fn on_http(tag, response) {{ signal("got", "").set(tag + ":" + response.body); }
             },
             ..Default::default()
         },
-        script_source: source.clone(),
         scripts: vec![CompiledScript {
-            engine: "rhai".to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source,
             bytecode: None,
         }],

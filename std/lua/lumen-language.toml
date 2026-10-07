@@ -1,0 +1,6 @@
+# The language this module runs, read by the app assembly to pick a script
+# host for each script file. See lumen_modules::language.
+[language]
+name = "lua"
+extensions = ["lua"]
+form = "source"

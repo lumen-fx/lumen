@@ -165,14 +165,10 @@ pub mod simple {
 // cannot produce one for a graph this size - so there the same items come
 // straight from the engine crate and the runtime is linked in. Either way
 // these are the same crates and the same types.
-#[cfg(all(windows, feature = "host-rhai"))]
-pub use lumen::sdk::rhai;
 #[cfg(windows)]
 pub use lumen::sdk::{
     bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
 };
-#[cfg(not(windows))]
-pub use lumen_engine::sdk::rhai;
 #[cfg(not(windows))]
 pub use lumen_engine::sdk::{
     bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros,

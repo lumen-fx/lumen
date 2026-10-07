@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use lumen_script::{HostSet, ScriptCommand, ScriptNs, ScriptPrelude, ScriptSig, ScriptValue};
+use lumen_script::{ScriptCommand, ScriptNs, ScriptPrelude, ScriptSig, ScriptValue};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -88,8 +88,6 @@ pub struct FnDecl {
     pub ns: ScriptNs,
     /// Its declared signature.
     pub sig: ScriptSig,
-    /// The languages that may see it.
-    pub hosts: HostSet,
 }
 
 /// One call into a plugin.

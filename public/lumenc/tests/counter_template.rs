@@ -106,7 +106,7 @@ fn run_case() {
     // `[script] engine` line in lumen.toml.
     assert!(
         app.world
-            .get_resource::<lumen_script_candela::CandelaHost>()
+            .get_resource::<lumen_candela_dev::CandelaHost>()
             .is_some(),
         "the counter template's main.cdl did not select the candela host"
     );

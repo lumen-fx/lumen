@@ -66,13 +66,15 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub mod addon;
+pub mod language;
 pub mod link_kit;
 
 #[cfg(feature = "loader")]
 mod loader;
 #[cfg(feature = "loader")]
 pub use loader::{
-    InitEnv, LoadedKind, LoadedModule, LoadedModules, ModuleFailure, PortablePlugins, load_modules,
+    InitEnv, LoadedKind, LoadedModule, LoadedModules, ModuleFailure, PortablePlugins, engine_dir,
+    load_modules,
 };
 
 /// The C-ABI entry a portable plugin exports. One name for every plugin: a

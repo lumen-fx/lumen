@@ -1,0 +1,9 @@
+# The language this module runs, read by the app assembly to pick a script
+# host for each script file. See lumen_modules::language.
+[language]
+name = "candela"
+extensions = ["cdl"]
+# Precompiled `.cdlb` images: what a shipped app runs.
+form = "bytecode"
+# An inline `<script>` block is read as candela.
+default = true

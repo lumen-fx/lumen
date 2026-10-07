@@ -19,7 +19,6 @@ use lumen_core::app::App;
 use lumen_core::components::LumenId;
 use lumen_core::input::{ClickEvent, PointerButton};
 use lumen_script::ScriptCommand;
-use lumen_script_rhai::RhaiHost;
 use lumenc::run::{ErrorBanner, build_app, build_headless_app};
 use lumenc::{RunError, RunOptions};
 use std::path::PathBuf;
@@ -65,11 +64,7 @@ mod pipeline_integration_tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Disable the MCP server so the test doesn't spawn a thread that
         // binds a TCP port (parallel tests would collide on 7878).
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
@@ -184,17 +179,18 @@ mod pipeline_integration_tests {
     </row>
   </for>
   <script>
+    import "lumen.cdl";
+    fn greet(who: any) { return "hi, " + str(who); }
     fn on_start() {
-        let who = signal("who", "");
-        signal("who", "").set("world");
-        derive("greeting", [who], |s| "hi, " + s);
-        let todos = signal_array("todos");
-        todos.set([
-            #{ id: "1", label: "alpha" },
-            #{ id: "2", label: "beta" },
-            #{ id: "3", label: "gamma" },
+        lumen::signal_set("who", "world");
+        lumen::derive("greeting", ["who"], "greet");
+        lumen::signal_array_set("todos", [
+            {"id": "1", "label": "alpha"},
+            {"id": "2", "label": "beta"},
+            {"id": "3", "label": "gamma"}
         ]);
     }
+    fn main() {}
   </script>
 </root>
 "#;
@@ -285,6 +281,7 @@ mod pipeline_integration_tests {
   </scroll>
   <script>
     fn on_start() {}
+    fn main() {}
   </script>
 </root>
 "#;
@@ -307,11 +304,7 @@ mod pipeline_integration_tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
             .with_markup(markup)
@@ -425,16 +418,17 @@ mod pipeline_integration_tests {
     </tab>
   </tabs>
   <script>
+    import "lumen.cdl";
+    fn greet(who: any) { return "hi, " + str(who); }
     fn on_start() {
-        let who = signal("who", "");
-        signal("who", "").set("world");
-        derive("greeting", [who], |s| "hi, " + s);
-        let todos = signal_array("todos");
-        todos.set([
-            #{ id: "1", label: "alpha" },
-            #{ id: "2", label: "beta" },
+        lumen::signal_set("who", "world");
+        lumen::derive("greeting", ["who"], "greet");
+        lumen::signal_array_set("todos", [
+            {"id": "1", "label": "alpha"},
+            {"id": "2", "label": "beta"}
         ]);
     }
+    fn main() {}
   </script>
 </root>
 "#;
@@ -476,9 +470,11 @@ mod pipeline_integration_tests {
   <dialog open="$open"><label text="dollar dialog"/></dialog>
   <dialog open="open"><label text="bare dialog"/></dialog>
   <script>
+    import "lumen.cdl";
     fn on_start() {
-        signal("open", "").set("1");
+        lumen::signal_set("open", "1");
     }
+    fn main() {}
   </script>
 </root>
 "#;
@@ -544,17 +540,21 @@ mod pipeline_integration_tests {
   <label id="derived" bind-text="click_label" />
   <label id="derived2" bind-text="click_label2" />
   <script>
+    import "lumen.cdl";
+    fn count_label(n: any) { return "clicks: " + str(n); }
+    fn bang(s: any) { return str(s) + "!"; }
     fn on_start() {
-        signal("count", 0);
-        derive("click_label", ["count"], |n| "clicks: " + n);
-        derive("click_label2", ["click_label"], |s| s + "!");
+        lumen::signal_set_int("count", 0);
+        lumen::derive("click_label", ["count"], "count_label");
+        lumen::derive("click_label2", ["click_label"], "bang");
     }
-    fn on_click(id) {
+    fn on_click(id: string) {
         if id == "bump" || id == "bump2" {
-            let c = signal("count", 0);
-            c.set(c.get() + 1);
+            let c = lumen::signal_get_int("count");
+            lumen::signal_set_int("count", c + 1);
         }
     }
+    fn main() {}
   </script>
 </root>
 "#;
@@ -622,78 +622,12 @@ mod pipeline_integration_tests {
         );
     }
 
-    // --- RC7: signal(name, default) publishes its default ----------------
-    #[test]
-    fn declared_but_never_set_signal_renders_its_default() {
-        let _serial = crate::serial();
-        let markup = r#"
-<root>
-  <label id="vol" bind-text="volume" />
-  <label id="weight" bind-text="weight" />
-  <script>
-    fn on_start() {
-        signal("volume", 42);
-        signal("weight", "medium");
-    }
-  </script>
-</root>
-"#;
-        let mut app = build_and_tick(markup, 4);
-        let texts = all_texts(&mut app);
-        assert!(
-            texts.iter().any(|t| t == "42"),
-            "bind-text of a declared-but-never-set int signal is blank; \
-             TextContents = {texts:?}"
-        );
-        assert!(
-            texts.iter().any(|t| t == "medium"),
-            "bind-text of a declared-but-never-set string signal is blank; \
-             TextContents = {texts:?}"
-        );
-    }
-
-    #[test]
-    fn signal_default_does_not_clobber_preexisting_external_value() {
-        let _serial = crate::serial();
-        // The SDK / FFI path: a value pushed onto the external property
-        // bus BEFORE the script declares the signal must win over the
-        // declaration default. Host-level (no App) so the assertion
-        // doesn't depend on which parallel test's tick drains the
-        // process-global bus.
-        use lumen_script::{ScriptContext, ScriptValue};
-        lumen_core::property_store::init_external_properties();
-        lumen_core::property_store::push_external_property(
-            lumen_core::property_store::PropertyKey::Global(std::sync::Arc::from(
-                "prewritten_volume_rc7",
-            )),
-            lumen_core::property_store::PropertyValue::I64(77),
-        );
-        let mut host = RhaiHost::new();
-        host.load(r#"fn on_start() { signal("prewritten_volume_rc7", 42); }"#)
-            .expect("load");
-        let cmds = host.call_event_no_args("on_start").expect("on_start");
-        assert!(
-            !cmds.iter().any(|c| matches!(
-                c,
-                ScriptCommand::SetSignal { name, .. } if name == "prewritten_volume_rc7"
-            )),
-            "signal() published its default over a pre-existing external write; cmds = {cmds:?}"
-        );
-        // The host mirror is seeded from the pre-existing value, not the
-        // declaration default.
-        assert_eq!(
-            host.root_context().get("prewritten_volume_rc7"),
-            Some(ScriptValue::I64(77)),
-            "host mirror not seeded from the pre-existing external value"
-        );
-    }
-
     // --- RC6: `lumenc check` compiles the script; run + check agree ------
 
     /// A script whose single expression nests `depth` parenthesised adds.
     fn nested_expr_script_markup(depth: usize) -> String {
         format!(
-            "<root>\n  <label text=\"hi\" />\n  <script>\n    fn on_start() {{ let x = {}1{}; print(x); }}\n  </script>\n</root>\n",
+            "<root>\n  <label text=\"hi\" />\n  <script>\n    fn on_start() {{ let x = {}1{}; print(x); }}\n    fn main() {{}}\n  </script>\n</root>\n",
             "(1+".repeat(depth),
             ")".repeat(depth),
         )
@@ -708,11 +642,7 @@ mod pipeline_integration_tests {
                 SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             }));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src").join("main.lmn"), markup).unwrap();
         dir
@@ -721,7 +651,7 @@ mod pipeline_integration_tests {
     #[test]
     fn check_rejects_script_that_would_die_at_load_and_run_agrees() {
         let _serial = crate::serial();
-        // 600 nested exprs > the deliberate 512 cap: load would fail.
+        // 600 nested exprs, past the compiler's nesting cap: load would fail.
         let dir = write_app_dir(&nested_expr_script_markup(600));
         let check = lumenc::check_app(&dir);
         assert!(
@@ -734,7 +664,7 @@ mod pipeline_integration_tests {
             .expect("build_app");
         assert!(
             app.world
-                .get_resource::<lumen_script_rhai::ScriptLoadFailure>()
+                .get_resource::<lumen_script::ScriptLoadFailure>()
                 .is_some(),
             "run did not record the script load failure"
         );
@@ -746,18 +676,17 @@ mod pipeline_integration_tests {
     }
 
     #[test]
-    fn check_accepts_script_deeper_than_rhai_default_limits() {
+    fn check_and_run_accept_a_deeply_nested_script() {
         let _serial = crate::serial();
-        // 100 nested exprs: over Rhai's old default cap (64) that used to
-        // kill real apps, under our deliberate 512. Both check and run
-        // must accept it.
+        // 100 nested exprs, under the compiler's nesting cap. Both check and
+        // run must accept it, so the two cannot diverge on the limit.
         let dir = write_app_dir(&nested_expr_script_markup(100));
         lumenc::check_app(&dir).expect("check should accept a 100-deep expression");
         let (app, _window) = build_app(RunOptions::new(&dir).with_parser(lumenc::default_parser()))
             .expect("build_app");
         assert!(
             app.world
-                .get_resource::<lumen_script_rhai::ScriptLoadFailure>()
+                .get_resource::<lumen_script::ScriptLoadFailure>()
                 .is_none(),
             "run rejected a script check accepted (limits diverged)"
         );
@@ -779,10 +708,16 @@ mod pipeline_integration_tests {
   <toggle id="dark-toggle" bind-checked="dark" bg="#334455" />
   <label id="status" bind-text="toggle_status" />
   <script>
-    fn on_start() {
-        let dark = signal("dark", true);
-        derive("toggle_status", [dark], |v| if v == "true" || v == true { "dark mode" } else { "light mode" });
+    import "lumen.cdl";
+    fn dark_label(v: any) {
+        if str(v) == "true" { return "dark mode"; }
+        return "light mode";
     }
+    fn on_start() {
+        lumen::signal_set_bool("dark", true);
+        lumen::derive("toggle_status", ["dark"], "dark_label");
+    }
+    fn main() {}
   </script>
 </root>"##;
         let mut app = build_and_tick(markup, 3);
@@ -853,11 +788,7 @@ mod feel_wave_tests {
             SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         }));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
             .with_markup(markup.to_string())
@@ -997,7 +928,7 @@ mod virtualization_tests {
     use lumen_core::signals::{ArrayItem, ArraySignals};
 
     /// Build a virtualized 5k-row app headlessly. The array is seeded
-    /// directly into `ArraySignals` (not via Rhai) so setup cost stays out
+    /// directly into `ArraySignals` (not via a script) so setup cost stays out
     /// of the measurements.
     fn build_virtual_grid(rows: usize) -> App {
         let dir = std::env::temp_dir().join(format!("lumenc_virt_{}_{}", std::process::id(), {
@@ -1005,11 +936,7 @@ mod virtualization_tests {
             SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         }));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         let markup = r#"
 <root>
   <scroll height="600" width="800">
@@ -1418,11 +1345,7 @@ mod aot_roundtrip_tests {
         }));
         std::fs::create_dir_all(&dir).unwrap();
         // MCP off so parallel tests don't collide on a TCP port.
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         let src = dir.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("main.lmn"), markup).unwrap();
@@ -1586,15 +1509,15 @@ mod aot_roundtrip_tests {
         );
     }
 
-    /// A compiled candela app carries the bytecode image beside its source,
-    /// and that image is what a runtime without the compiler loads. The load
+    /// A compiled candela app carries its program as a bytecode image, which
+    /// is what a runtime without the compiler loads. The load
     /// here registers only what the fixture calls, so it fails - but it must
     /// fail on the rest of the host surface, which proves the image decoded
     /// and bound the ones that were there.
     #[test]
     fn a_compiled_candela_app_carries_a_loadable_image() {
-        use lumen_script_candela::HOST_NAMESPACE;
-        use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
+        use lumen_candela_dev::HOST_NAMESPACE;
+        use lumen_candela_dev::candela::{HostRegistry, LoadError, load_program};
 
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/candela-smoke")

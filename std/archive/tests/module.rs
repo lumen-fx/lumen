@@ -171,18 +171,24 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, an archive
-/// to unpack, and the given `[dependencies]` block.
+/// Write an app dir: markup with a candela script, the script itself, an
+/// archive to unpack, and the given `[dependencies]` block. `script` is the
+/// script's handlers; the `lumen.cdl` import and the empty `main` every
+/// candela program needs are added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[app]\nid = \"lumen-archive-module-{case}\"\n\n[dependencies]\n{dependencies}"),
@@ -227,13 +233,13 @@ fn the_bundled_module_unpacks_an_archive() {
         "lumen-archive = { bundled = true }\n",
         r#"
 fn on_start() {
-    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{}));
+    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
 }
-fn on_archive_done(tag, dest, count) {
-    signal("done", "").set(tag);
-    signal("count", "").set(count);
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set("done", tag);
+    lumen::signal_set_int("count", count);
 }
-fn on_archive_error(tag, message) { signal("failed", "").set(message); }
+fn on_archive_error(tag: string, message: string) { lumen::signal_set("failed", message); }
 "#,
     );
     let (stdout, stderr) = run_host(f, &dir, 60, "taken,done,count,failed");
@@ -260,9 +266,11 @@ fn on_archive_error(tag, message) { signal("failed", "").set(message); }
     }
 }
 
-/// Without the module the function does not exist: the script's call fails
-/// with the host's ordinary unknown-namespace error, the app survives its
-/// run, and nothing is unpacked.
+/// Without the module the function does not exist: the script fails to
+/// compile with candela's ordinary undeclared-namespace error, the app
+/// survives its run, and nothing is unpacked. The options are spelled as a
+/// struct literal, because `Default::default()` would fail first on the
+/// missing struct type rather than on the missing namespace.
 #[test]
 fn without_the_module_the_function_does_not_exist() {
     let f = fixtures();
@@ -270,11 +278,14 @@ fn without_the_module_the_function_does_not_exist() {
         f,
         "archive-absent",
         "",
-        r#"fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{})); }"#,
+        r#"fn on_start() { lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", archive::ExtractOptions { include: [] })); }"#,
     );
     let (stdout, stderr) = run_host(f, &dir, 20, "taken");
 
-    assert!(stderr.contains("Module not found: archive"), "{stderr}");
+    assert!(
+        stderr.contains("no `archive` namespace is declared here"),
+        "{stderr}"
+    );
     assert!(!stdout.contains("HOST tick-panic-caught"), "{stdout}");
     assert!(stdout.contains("HOST signal taken=<unset>"), "{stdout}");
     assert!(!dir.join("out").exists(), "nothing was unpacked");

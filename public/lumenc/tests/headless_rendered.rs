@@ -29,11 +29,7 @@ fn temp_app_dir(name: &str) -> std::path::PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp app dir");
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .expect("write lumen.toml");
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
     dir
 }
 
@@ -92,11 +88,6 @@ fn an_idle_app_wakes_for_its_timer() {
         return;
     }
     let dir = temp_app_dir("timer");
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"candela\"\n",
-    )
-    .expect("write lumen.toml");
     std::fs::create_dir_all(dir.join("src")).expect("create src");
     std::fs::write(
         dir.join("src/main.lmn"),

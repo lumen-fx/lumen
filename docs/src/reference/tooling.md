@@ -93,9 +93,9 @@ Completion triggers on `<`, space, `"`, and `.`; signature help on `(` and
 `,`.
 
 The markup, CSS, and cross-file id features do not depend on a script language.
-The `.rhai` column is the `lang-rhai` build feature, which is on by default; a
-server built without it keeps every other column and answers script requests
-with nothing. candela (`.cdl`) and Lua (`.lua`) buffers have no intelligence
+The `.rhai` column is the `lang-rhai` build feature, which is off by default,
+the way the deprecated Rhai host is; a server built without it keeps every
+other column and answers script requests with nothing. candela (`.cdl`) and Lua (`.lua`) buffers have no intelligence
 yet.
 
 ### VS Code extension

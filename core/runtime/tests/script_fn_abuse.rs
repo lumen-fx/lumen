@@ -4,16 +4,16 @@
 //! Every case calls a [`ScriptFn`] in a way its signature does not admit: the
 //! wrong argument count, the wrong argument types, more arguments than a
 //! variadic binding covers, a structured value where a scalar is expected, a
-//! unit return read as a value. The three hosts refuse differently, and the
-//! difference is pinned per host rather than smoothed over: Rhai resolves a
-//! call by argument type and fails to find the function, Lua checks the
-//! arguments in its adapter and raises, candela checks the call against the
+//! unit return read as a value. candela checks the call against the
 //! declaration the host synthesized and refuses the whole program before a
 //! handler ever runs. After every case the app still ticks, and where a
 //! handler does run a well-formed call still reaches the property store.
 
 use std::sync::{Arc, Mutex};
 
+// The candela host, compiled in: the module registry answers the program's
+// implied host dependency from it.
+use lumen_candela_dev as _;
 use lumen_core::app::{App as EcsApp, Plugin};
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
@@ -74,8 +74,8 @@ impl Plugin for ProbePlugin {
         let log = self.log;
 
         // Typed and non-variadic. `(string, int) -> unit` is a shape candela's
-        // adapter binds typed, so all three hosts have a declaration to check a
-        // call against rather than a variadic catch-all.
+        // adapter binds typed, so the host has a declaration to check a call
+        // against rather than a variadic catch-all.
         let l = log.clone();
         app.add_script_fn(
             ScriptFn::new("mark")
@@ -121,10 +121,10 @@ impl Plugin for ProbePlugin {
         );
 
         // Structured values in and out. Both are untyped one-argument
-        // functions, so every host passes whatever the script built through.
+        // functions, so the host passes whatever the script built through.
         // What they hand back is uniform: a candela list holds one element type
         // and a candela map one value type, so a mixed collection could not be
-        // read back on that host.
+        // read back.
         let l = log.clone();
         app.add_script_fn(ScriptFn::value("shape_map", 1, move |args| {
             l.lock()
@@ -171,27 +171,16 @@ struct Outcome {
     load_failure: Option<String>,
 }
 
-impl Outcome {
-    /// The single message the script caught, without the `report:caught: `
-    /// prefix. Panics when the script caught nothing, which is itself the
-    /// interesting failure.
-    fn caught(&self) -> &str {
-        self.calls
-            .iter()
-            .find_map(|c| c.strip_prefix("report:caught: "))
-            .expect("the script caught an error and reported it")
-    }
-}
-
-/// Build a headless app from `source` in `engine` with the probe plugin
-/// installed, tick it past construction, and read off what happened.
+/// Build a headless app running `source` as its candela program with the
+/// probe plugin installed, tick it past construction, and read off what
+/// happened.
 ///
 /// Four ticks. The first two are what `on_start` needs: its commands are
 /// re-stashed into the host sink and drained on the first, and the applier
 /// commits them during it. `on_ready` fires on the first tick after the DOM
 /// index is published. The rest are the wedge check, so an app the abuse left
 /// in a broken state panics here rather than in an assertion about a signal.
-fn run(engine: &str, source: &str) -> Outcome {
+fn run(source: &str) -> Outcome {
     let log: Log = Arc::default();
     let dir = std::env::temp_dir().join(format!(
         "lumen_script_fn_abuse_{}_{}",
@@ -210,9 +199,9 @@ fn run(engine: &str, source: &str) -> Outcome {
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -250,55 +239,6 @@ fn signal(app: &EcsApp, name: &str) -> Option<String> {
 
 // -- a) fewer arguments than the signature declares --------------------------
 
-/// Rhai resolves a call by name and argument types, so a short call finds no
-/// registration at all: the body never runs, and what the script catches is a
-/// missing function rather than a bad argument list.
-#[test]
-fn rhai_cannot_resolve_a_call_that_passes_too_few_arguments() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "rhai",
-        r#"
-fn on_start() {
-    try { mark("short"); } catch (e) { report("caught: " + e.error); }
-    control();
-}
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        ["report:caught: ErrorFunctionNotFound", "control"],
-        "the body never ran, and the call after the failure did"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
-/// Lua binds one variadic closure per function, so the adapter is what checks
-/// the arguments; the script sees the mismatch named.
-#[test]
-fn lua_raises_on_a_call_that_passes_too_few_arguments() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "lua",
-        r#"
-function on_start()
-    local ok, err = pcall(mark, "short")
-    if not ok then report("caught: " .. tostring(err):match("mark: [^\n]*")) end
-    control()
-end
-"#,
-    );
-
-    assert_eq!(
-        out.caught(),
-        "mark: expected at least 2 argument(s), got 1",
-        "the adapter raised before the body saw a padded argument list"
-    );
-    assert_eq!(out.calls.last().map(String::as_str), Some("control"));
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
 /// candela checks the call against the declaration the host synthesized from
 /// the signature, and refuses the whole program: no handler runs at all.
 ///
@@ -309,9 +249,7 @@ end
 #[test]
 fn candela_refuses_a_call_that_passes_too_few_arguments() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "candela",
-        r#"
+    let out = run(r#"
 fn on_start() {
     native::mark("short");
     native::report("after");
@@ -322,8 +260,7 @@ fn on_ready() {
 }
 
 fn main() {}
-"#,
-    );
+"#);
 
     assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
     let failure = out.load_failure.expect("the program did not compile");
@@ -335,57 +272,12 @@ fn main() {}
 
 // -- b) more arguments than the signature declares ---------------------------
 
-/// An extra argument is one more shape, and a non-variadic signature is bound
-/// at its declared arity only.
-#[test]
-fn rhai_cannot_resolve_a_call_that_passes_too_many_arguments() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "rhai",
-        r#"
-fn on_start() {
-    try { mark("over", 1, 2); } catch (e) { report("caught: " + e.error); }
-    control();
-}
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        ["report:caught: ErrorFunctionNotFound", "control"],
-        "a non-variadic signature is bound at its own arity only"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
-/// The adapter counts the arguments against the declared parameters, and a
-/// signature that is not variadic has an upper bound to report.
-#[test]
-fn lua_raises_on_a_call_that_passes_too_many_arguments() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "lua",
-        r#"
-function on_start()
-    local ok, err = pcall(mark, "over", 1, 2)
-    if not ok then report("caught: " .. tostring(err):match("mark: [^\n]*")) end
-    control()
-end
-"#,
-    );
-
-    assert_eq!(out.caught(), "mark: expected at most 2 argument(s), got 3");
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
 /// The synthesized declaration fixes the argument count, so the extra one
 /// costs the program the same way a missing one does.
 #[test]
 fn candela_refuses_a_call_that_passes_too_many_arguments() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "candela",
-        r#"
+    let out = run(r#"
 fn on_start() {
     native::mark("over", 1, 2);
     native::report("after");
@@ -396,8 +288,7 @@ fn on_ready() {
 }
 
 fn main() {}
-"#,
-    );
+"#);
 
     assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
     let failure = out.load_failure.expect("the program did not compile");
@@ -406,61 +297,12 @@ fn main() {}
 
 // -- c) the wrong argument types ---------------------------------------------
 
-/// Rhai narrows a declared parameter to its own Rust type, so swapped
-/// arguments are one more shape nothing is registered under. The script is
-/// told the function was not found, not that an argument had the wrong type.
-#[test]
-fn rhai_reports_the_wrong_argument_types_as_a_missing_function() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "rhai",
-        r#"
-fn on_start() {
-    try { mark(1, "two"); } catch (e) { report("caught: " + e.error); }
-    control();
-}
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        ["report:caught: ErrorFunctionNotFound", "control"],
-        "the mismatch is a resolution failure on this host, not a type error"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
-/// Lua's adapter names the parameter and both types, which is the message
-/// `ScriptSig::check_args` produces.
-#[test]
-fn lua_names_the_parameter_when_an_argument_has_the_wrong_type() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "lua",
-        r#"
-function on_start()
-    local ok, err = pcall(mark, 1, "two")
-    if not ok then report("caught: " .. tostring(err):match("mark: [^\n]*")) end
-    control()
-end
-"#,
-    );
-
-    assert_eq!(
-        out.caught(),
-        "mark: argument 1 (`label`) expects string, got int"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
 /// The declaration carries the parameter types too, so a swapped pair is
 /// refused with the same reach as a wrong count: the whole program.
 #[test]
 fn candela_refuses_a_call_whose_argument_has_the_wrong_type() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "candela",
-        r#"
+    let out = run(r#"
 fn on_start() {
     native::mark(1, "two");
     native::report("after");
@@ -471,85 +313,21 @@ fn on_ready() {
 }
 
 fn main() {}
-"#,
-    );
+"#);
 
     assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
     let failure = out.load_failure.expect("the program did not compile");
     assert!(failure.contains("mark"), "{failure}");
 }
 
-// -- d) variadic calls, including past the bound -----------------------------
-
-/// Rhai has no native variadics, so a variadic signature is one registration
-/// per argument count up to `MAX_VARIADIC_ARITY`. A call past the bound is a
-/// shape nothing is registered under, and the script is told so.
-#[test]
-fn rhai_binds_a_variadic_function_up_to_the_arity_bound_and_no_further() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "rhai",
-        r#"
-fn on_start() {
-    blend();
-    blend(1);
-    try { blend(1, 2, 3, 4, 5, 6, 7, 8, 9); } catch (e) { report("caught: " + e.error); }
-    control();
-}
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        [
-            "blend/0()",
-            "blend/1(int:1)",
-            "report:caught: ErrorFunctionNotFound",
-            "control",
-        ],
-        "nine arguments is one past the eight a variadic signature binds for"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
-
-/// Lua's binding is natively variadic and the signature declares no parameter
-/// to check, so every argument reaches the body however many there are.
-#[test]
-fn lua_passes_every_argument_to_a_variadic_function() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "lua",
-        r#"
-function on_start()
-    blend()
-    blend(1)
-    blend(1, 2, 3, 4, 5, 6, 7, 8, 9)
-    control()
-end
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        [
-            "blend/0()",
-            "blend/1(int:1)",
-            "blend/9(int:1|int:2|int:3|int:4|int:5|int:6|int:7|int:8|int:9)",
-            "control",
-        ],
-        "the arity bound is a Rhai registration cost, not a limit on the API"
-    );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-}
+// -- d) variadic calls -------------------------------------------------------
 
 /// candela binds a variadic signature as one host function taking a slice, so
-/// it too takes a call past the Rhai bound.
+/// every argument reaches the body however many there are.
 #[test]
 fn candela_passes_every_argument_to_a_variadic_function() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "candela",
-        r#"
+    let out = run(r#"
 fn on_start() {
     native::blend();
     native::blend(1);
@@ -558,8 +336,7 @@ fn on_start() {
 }
 
 fn main() {}
-"#,
-    );
+"#);
 
     assert_eq!(
         out.calls,
@@ -575,45 +352,17 @@ fn main() {}
 
 // -- e) maps and lists, in and out -------------------------------------------
 
-/// A map and a list survive the crossing in both directions on every host: the
-/// body sees the same entries whichever language built them, and the
-/// collection it returns is indexable in the script that called it.
+/// A map and a list survive the crossing in both directions: the body sees the
+/// entries the script built, and the collection it returns is indexable in the
+/// script that called it.
 ///
-/// The candela source spells its own collections a little differently. A map
-/// literal there holds one value type, and a value handed back from a variadic
-/// host function arrives as `any`, so it is read through the `as_map` /
-/// `as_list` downcasts.
+/// A map literal holds one value type, and a value handed back from a
+/// variadic host function arrives as `any`, so it is read through the
+/// `as_map` / `as_list` downcasts.
 #[test]
 fn a_map_and_a_list_cross_the_boundary_in_both_directions() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source) in [
-        (
-            "rhai",
-            r#"
-fn on_start() {
-    let out = shape_map(#{ "a": "1", "b": "two" });
-    report(out.tag);
-    let l = shape_list(["one", "two"]);
-    report(l[0]);
-    control();
-}
-"#,
-        ),
-        (
-            "lua",
-            r#"
-function on_start()
-    local out = shape_map({ a = "1", b = "two" })
-    report(out.tag)
-    local l = shape_list({ "one", "two" })
-    report(l[1])
-    control()
-end
-"#,
-        ),
-        (
-            "candela",
-            r#"
+    let out = run(r#"
 fn on_start() {
     let m = {"a": "1", "b": "two"};
     let out = as_map(native::shape_map(m));
@@ -625,57 +374,29 @@ fn on_start() {
 }
 
 fn main() {}
-"#,
-        ),
-    ] {
-        let out = run(engine, source);
-        assert_eq!(
-            out.calls,
-            [
-                "shape_map({a=str:1,b=str:two})",
-                "report:map-out",
-                "shape_list([str:one,str:two])",
-                "report:list-out",
-                "control",
-            ],
-            "{engine}: the collections arrived whole and came back indexable"
-        );
-        assert_eq!(out.control.as_deref(), Some("ok"), "{engine}");
-    }
+"#);
+    assert_eq!(
+        out.calls,
+        [
+            "shape_map({a=str:1,b=str:two})",
+            "report:map-out",
+            "shape_list([str:one,str:two])",
+            "report:list-out",
+            "control",
+        ],
+        "the collections arrived whole and came back indexable"
+    );
+    assert_eq!(out.control.as_deref(), Some("ok"));
 }
 
 // -- f) a unit return read as a value ----------------------------------------
 
-/// Binding the result of a unit-returning function is legal on all three
-/// hosts, and each spells the absent value its own way: `()` in Rhai, `nil` in
-/// Lua, `null` in candela. None of them refuse the program.
+/// Binding the result of a unit-returning function is legal: the absent value
+/// reads as `null`, and the program is not refused.
 #[test]
-fn a_unit_return_binds_to_a_variable_on_every_host() {
+fn a_unit_return_binds_to_a_variable() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source, expected) in [
-        (
-            "rhai",
-            r#"
-fn on_start() {
-    let x = control();
-    report("x is " + type_of(x));
-}
-"#,
-            "report:x is ()",
-        ),
-        (
-            "lua",
-            r#"
-function on_start()
-    local x = control()
-    report("x is " .. type(x))
-end
-"#,
-            "report:x is nil",
-        ),
-        (
-            "candela",
-            r#"
+    let out = run(r#"
 fn on_start() {
     let x = native::control();
     if x == null {
@@ -684,18 +405,13 @@ fn on_start() {
 }
 
 fn main() {}
-"#,
-            "report:x is null",
-        ),
-    ] {
-        let out = run(engine, source);
-        assert_eq!(
-            out.calls,
-            ["control", expected],
-            "{engine}: the call ran and its absent return was readable"
-        );
-        assert_eq!(out.control.as_deref(), Some("ok"), "{engine}");
-    }
+"#);
+    assert_eq!(
+        out.calls,
+        ["control", "report:x is null"],
+        "the call ran and its absent return was readable"
+    );
+    assert_eq!(out.control.as_deref(), Some("ok"));
 }
 
 // -- an error nobody catches -------------------------------------------------
@@ -703,61 +419,38 @@ fn main() {}
 /// An error the script does not catch stops its handler and discards what the
 /// handler had already queued, so a half-applied batch never reaches the app.
 /// The next handler still fires, which is what says the app is not wedged.
-#[test]
-fn an_uncaught_lua_error_discards_what_the_handler_had_queued() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "lua",
-        r#"
-function on_start()
-    control()
-    mark("short")
-end
-
-function on_ready()
-    report("ready")
-end
-"#,
-    );
-
-    assert_eq!(
-        out.calls,
-        ["control", "report:ready"],
-        "on_start stopped at the bad call, and on_ready still ran"
-    );
-    assert_eq!(
-        out.control, None,
-        "the command the handler queued before it failed was dropped"
-    );
-}
-
-/// The same script on Rhai, where the partial batch is dropped too.
 ///
-/// The failure a short call raises here is "function not found", which is also
-/// how Rhai answers a probe for a handler the script never defined. Telling the
-/// two apart is what keeps this case an error rather than a silent miss that
-/// leaves the handler half-applied with nothing on stderr.
+/// Every call candela can check is checked before the program runs, so the
+/// error here is one only a run can find: an index past the end of a list,
+/// computed from a signal no one set.
 #[test]
-fn an_uncaught_rhai_error_discards_what_the_handler_had_queued() {
+fn an_uncaught_error_discards_what_the_handler_had_queued() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let out = run(
-        "rhai",
-        r#"
+    let out = run(r#"
+import "lumen.cdl";
+
 fn on_start() {
-    control();
-    mark("short");
+    native::control();
+    let xs = ["only"];
+    let i = lumen::signal_get_int("never-set") + 5;
+    native::report(xs[i]);
 }
 
 fn on_ready() {
-    report("ready");
+    native::report("ready");
 }
-"#,
-    );
 
+fn main() {}
+"#);
+
+    assert_eq!(
+        out.load_failure, None,
+        "the program compiled; the error is a run-time one"
+    );
     assert_eq!(
         out.calls,
         ["control", "report:ready"],
-        "on_start stopped at the bad call, and on_ready still ran"
+        "on_start stopped at the bad index, and on_ready still ran"
     );
     assert_eq!(
         out.control, None,
@@ -765,46 +458,30 @@ fn on_ready() {
     );
 }
 
-/// A name the script misspells is the same failure as a call the signature
-/// does not admit: the handler stops, its queued commands are dropped, and the
-/// app carries on. Neither host reads it as the handler itself being absent.
+/// A name the script misspells is refused like a call the signature does not
+/// admit: the whole program, before any handler queues anything. It is never
+/// read as an optional handler or function that is simply absent.
 #[test]
-fn a_misspelled_function_name_stops_its_handler_on_every_host() {
+fn a_misspelled_function_name_refuses_the_program() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source) in [
-        (
-            "rhai",
-            r#"
+    let out = run(r#"
 fn on_start() {
-    control();
-    marc("typo");
+    native::control();
+    native::marc("typo");
 }
 
 fn on_ready() {
-    report("ready");
+    native::report("ready");
 }
-"#,
-        ),
-        (
-            "lua",
-            r#"
-function on_start()
-    control()
-    marc("typo")
-end
 
-function on_ready()
-    report("ready")
-end
-"#,
-        ),
-    ] {
-        let out = run(engine, source);
-        assert_eq!(
-            out.calls,
-            ["control", "report:ready"],
-            "{engine}: the handler stopped at the typo and the next one still ran"
-        );
-        assert_eq!(out.control, None, "{engine}: the partial batch was dropped");
-    }
+fn main() {}
+"#);
+
+    assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
+    assert_eq!(out.control, None, "nothing the program queued was applied");
+    let failure = out.load_failure.expect("the program did not compile");
+    assert!(
+        failure.contains("marc"),
+        "the failure names the misspelled call: {failure}"
+    );
 }

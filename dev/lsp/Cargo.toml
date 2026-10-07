@@ -31,7 +31,7 @@ lumenc = { workspace = true, features = ["runtime-parse"] }
 # Source of truth for the Rhai builtins table + a fully-registered
 # engine to compile `.rhai` buffers against. Optional: only a `lang-rhai`
 # build analyses `.rhai` buffers (see [features]).
-lumen-script-rhai = { workspace = true, default-features = true, optional = true }
+lumen-rhai = { workspace = true, optional = true }
 rhai = { workspace = true, optional = true }
 tower-lsp.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "io-util", "io-std", "macros", "sync"] }
@@ -41,9 +41,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
-default = ["lang-rhai"]
+default = []
 # Rhai script intelligence: compile-error diagnostics, builtin completion,
 # hover, and signature help for `.rhai` buffers, which need the Rhai engine
-# and the host's builtin table. Everything the server does for markup, CSS,
-# and the cross-file id features is script-language-neutral and stays.
-lang-rhai = ["dep:lumen-script-rhai", "dep:rhai"]
+# and the host's builtin table. Off by default, the way the deprecated Rhai
+# host is: everything the server does for markup, CSS, and the cross-file id
+# features is script-language-neutral and stays.
+lang-rhai = ["dep:lumen-rhai", "dep:rhai"]

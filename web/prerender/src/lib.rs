@@ -249,6 +249,7 @@ pub fn boot(
     // refused: what it would have published is missing from the page, which
     // is a page written with less state, not a build that cannot happen.
     let mut unsupported_engines = Vec::new();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     for script in &compiled.scripts {
         let Some(bytecode) = &script.bytecode else {
             continue;

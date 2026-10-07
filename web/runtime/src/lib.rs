@@ -9,10 +9,10 @@
 //! No layout backend is installed and the extract list is emptied, because the
 //! page's own CSS engine is the layout engine and the DOM is the scene.
 //!
-//! Scripts run on the host for the engine the app's manifest names. Each host
-//! is a feature (`host-candela`), and candela is the one on by default: it runs
-//! as precompiled bytecode, so no compiler reaches the page. An engine no
-//! compiled-in host answers for is reported when the app boots.
+//! Scripts run on the host for the engine the app's manifest names. The
+//! module installs the candela host, which runs precompiled bytecode, so no
+//! compiler reaches the page. An engine no installed host answers for is
+//! reported when the app boots.
 //!
 //! A page starts an app with [`boot`], which is what every document
 //! `lumenc web` emits calls and the only thing it needs to know:
@@ -82,7 +82,7 @@ impl LumenWebApp {
     ///
     /// # Errors
     ///
-    /// This runtime was built with no host for `engine`.
+    /// No host this runtime installs runs `engine`.
     #[wasm_bindgen(constructor)]
     pub fn new(engine: &str, program: &[u8]) -> Result<LumenWebApp, JsError> {
         Self::with_uri(engine, program, DEFAULT_SCRIPT_URI)
@@ -92,10 +92,11 @@ impl LumenWebApp {
     ///
     /// # Errors
     ///
-    /// This runtime was built with no host for `engine`.
+    /// No host this runtime installs runs `engine`.
     #[wasm_bindgen(js_name = withUri)]
     pub fn with_uri(engine: &str, program: &[u8], uri: &str) -> Result<LumenWebApp, JsError> {
         let mut app = App::new();
+        app.add_plugin(lumen_candela_host::CandelaPlugin);
         let host = hosts::install(&mut app, engine, program, uri)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(Self { app, host })
@@ -202,7 +203,7 @@ impl LumenWebApp {
     /// app with no script has none, and the accessors answer with nothing.
     pub(crate) fn from_parts(app: App, engine: Option<String>) -> Self {
         let host = engine
-            .and_then(|engine| hosts::access(&engine))
+            .and_then(|engine| hosts::access(&app.world, &engine))
             .unwrap_or_else(ScriptHostAccess::absent);
         Self { app, host }
     }

@@ -3,15 +3,18 @@
 //!
 //! What these prove, once per concern:
 //!
-//! - the `files` functions reach a script through the generic
-//!   `ScriptFnRegistry`, in Rhai and in candela;
+//! - the `files` functions reach a candela script through the generic
+//!   `ScriptFnRegistry`, under the `files` namespace;
 //! - every path resolves against the app directory rather than the process
 //!   working directory, so a script names a file the same way wherever the
 //!   app was started from;
 //! - `read_bytes` honours the cap the app configured;
-//! - without the plugin the functions do not exist, and the app keeps running
-//!   after the script's own unknown-function error.
+//! - without the plugin the functions do not exist: the script fails to
+//!   compile, and the app keeps running without it.
 
+// The candela host, compiled into the test binary: there is no shared engine
+// to open the host module beside.
+use lumen_candela_dev as _;
 use lumen_core::app::App as EcsApp;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_fs::FsPlugin;
@@ -37,13 +40,9 @@ fn app_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Build a headless app in `dir` running one script, with the given plugin.
-fn build_app(
-    dir: &std::path::Path,
-    engine: &str,
-    source: &str,
-    plugin: Option<FsPlugin>,
-) -> EcsApp {
+/// Build a headless app in `dir` running one candela script, with the given
+/// plugin.
+fn build_app(dir: &std::path::Path, source: &str, plugin: Option<FsPlugin>) -> EcsApp {
     let bytes = artifact::serialize(&CompiledApp {
         ir: LayoutIR {
             root: Element {
@@ -52,9 +51,9 @@ fn build_app(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -83,39 +82,41 @@ fn signal(app: &EcsApp, name: &str) -> Option<String> {
     }
 }
 
-/// The whole surface from Rhai, against the app directory: every path in the
-/// script is relative, and every file it names lands beside the app.
+/// The whole surface, against the app directory: every path in the script is
+/// relative, and every file it names lands beside the app.
 #[test]
-fn rhai_drives_the_whole_surface_against_the_app_directory() {
+fn a_script_drives_the_whole_surface_against_the_app_directory() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("rhai");
+    let dir = app_dir("surface");
     let app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("wrote", "").set(files::write("notes.txt", "hello"));
-    signal("read", "").set(files::read("notes.txt"));
-    signal("absent_read", "").set(files::read("never-saved.txt"));
-    signal("exists", "").set(files::exists("notes.txt"));
-    signal("absent", "").set(files::exists("never-saved.txt"));
-    signal("made", "").set(files::mkdir("sub/deep"));
-    signal("is_dir", "").set(files::is_dir("sub/deep"));
-    signal("file_is_dir", "").set(files::is_dir("notes.txt"));
-    signal("copied", "").set(files::copy("notes.txt", "sub/deep/copy.txt"));
+    lumen::signal_set_bool("wrote", files::write("notes.txt", "hello"));
+    lumen::signal_set("read", files::read("notes.txt"));
+    lumen::signal_set("absent_read", files::read("never-saved.txt"));
+    lumen::signal_set_bool("exists", files::exists("notes.txt"));
+    lumen::signal_set_bool("absent", files::exists("never-saved.txt"));
+    lumen::signal_set_bool("made", files::mkdir("sub/deep"));
+    lumen::signal_set_bool("is_dir", files::is_dir("sub/deep"));
+    lumen::signal_set_bool("file_is_dir", files::is_dir("notes.txt"));
+    lumen::signal_set_bool("copied", files::copy("notes.txt", "sub/deep/copy.txt"));
     let names = files::list("sub/deep");
-    signal("listed", "").set(names.len());
-    signal("first", "").set(names[0]);
-    signal("wrote_bytes", "").set(files::write_bytes("raw.bin", [104, 105]));
-    signal("read_back", "").set(files::read("raw.bin"));
+    lumen::signal_set_int("listed", names.len());
+    lumen::signal_set("first", names[0]);
+    lumen::signal_set_bool("wrote_bytes", files::write_bytes("raw.bin", [104, 105]));
+    lumen::signal_set("read_back", files::read("raw.bin"));
     let bytes = files::read_bytes("notes.txt");
-    signal("byte_count", "").set(bytes.len());
-    signal("first_byte", "").set(bytes[0]);
-    signal("removed", "").set(files::remove("raw.bin"));
-    signal("remove_absent", "").set(files::remove("raw.bin"));
-    signal("remove_full", "").set(files::remove("sub/deep"));
-    signal("data", "").set(files::data_dir());
+    lumen::signal_set_int("byte_count", bytes.len());
+    lumen::signal_set_int("first_byte", bytes[0]);
+    lumen::signal_set_bool("removed", files::remove("raw.bin"));
+    lumen::signal_set_bool("remove_absent", files::remove("raw.bin"));
+    lumen::signal_set_bool("remove_full", files::remove("sub/deep"));
+    lumen::signal_set("data", files::data_dir());
 }
+
+fn main() {}
 "#,
         Some(FsPlugin::default()),
     );
@@ -157,7 +158,7 @@ fn on_start() {
         "{data} was not created"
     );
     assert!(
-        data.ends_with("lumen-fs-plugin-rhai") || data == dir.to_string_lossy(),
+        data.ends_with("lumen-fs-plugin-surface") || data == dir.to_string_lossy(),
         "the data directory carries the app id: {data}"
     );
     if data != dir.to_string_lossy() {
@@ -169,7 +170,7 @@ fn on_start() {
 
 /// A host path, spelled the way a script has to spell it.
 ///
-/// A backslash starts an escape sequence in every host's string syntax, so a
+/// A backslash starts an escape sequence in a candela string, so a
 /// Windows path spliced into a literal as it comes off `Path` (`C:\Users\..`)
 /// is a parse error and the whole script fails to load. Windows takes a
 /// forward slash in a path just as well, so that is what goes in.
@@ -192,13 +193,15 @@ fn an_absolute_path_is_left_alone() {
     let spelled = as_script_path(&target);
     let app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    signal("wrote", "").set(files::write("{spelled}", "kept"));
-    signal("read", "").set(files::read("{spelled}"));
+    lumen::signal_set_bool("wrote", files::write("{spelled}", "kept"));
+    lumen::signal_set("read", files::read("{spelled}"));
 }}
+
+fn main() {{}}
 "#
         ),
         Some(FsPlugin::default()),
@@ -232,19 +235,17 @@ fn the_configured_cap_bounds_what_read_bytes_hands_back() {
     let size = usize::try_from(lumen_fs::MIN_READ_BYTES_CAP).expect("the cap fits a usize");
     std::fs::write(dir.join("small.bin"), vec![1u8; size]).expect("small file");
     std::fs::write(dir.join("large.bin"), vec![1u8; size + 1]).expect("large file");
-    let source = r#"
+    let source = r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("small", "").set(files::read_bytes("small.bin").len());
-    signal("large", "").set(files::read_bytes("large.bin").len());
+    lumen::signal_set_int("small", files::read_bytes("small.bin").len());
+    lumen::signal_set_int("large", files::read_bytes("large.bin").len());
 }
+
+fn main() {}
 "#;
 
-    let app = build_app(
-        &dir,
-        "rhai",
-        source,
-        Some(FsPlugin::with_read_bytes_cap(cap)),
-    );
+    let app = build_app(&dir, source, Some(FsPlugin::with_read_bytes_cap(cap)));
     assert_eq!(
         signal(&app, "small").as_deref(),
         Some(size.to_string().as_str()),
@@ -257,7 +258,7 @@ fn on_start() {
     );
 
     // The default cap is far above either file, so both read.
-    let app = build_app(&dir, "rhai", source, Some(FsPlugin::default()));
+    let app = build_app(&dir, source, Some(FsPlugin::default()));
     assert_eq!(
         signal(&app, "small").as_deref(),
         Some(size.to_string().as_str())
@@ -279,8 +280,10 @@ fn a_cap_outside_the_range_is_clamped() {
     std::fs::write(dir.join("blob.bin"), vec![2u8; 900]).expect("file");
     let app = build_app(
         &dir,
-        "rhai",
-        r#"fn on_start() { signal("count", "").set(files::read_bytes("blob.bin").len()); }"#,
+        r#"import "lumen.cdl";
+fn on_start() { lumen::signal_set_int("count", files::read_bytes("blob.bin").len()); }
+fn main() {}
+"#,
         Some(FsPlugin::with_read_bytes_cap(0)),
     );
 
@@ -293,15 +296,15 @@ fn a_cap_outside_the_range_is_clamped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// candela reaches the same functions through the `host "files"` block the host
-/// synthesizes from what the plugin registered.
+/// The `host "files"` block the host synthesizes from what the plugin
+/// registered carries every function, `digest` included, and a listing of the
+/// app directory names the app's own files.
 #[test]
-fn candela_reaches_the_module_surface_through_its_namespace() {
+fn the_namespace_carries_digest_and_lists_the_app_directory() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir("candela");
     let app = build_app(
         &dir,
-        "candela",
         r#"import "lumen.cdl";
 
 fn on_start() {
@@ -355,19 +358,20 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Without the plugin the functions do not exist: the script's call fails
-/// with the host's ordinary unknown-function error, nothing is written, and
-/// the app keeps ticking.
+/// Without the plugin the functions do not exist: there is no `files`
+/// namespace to declare, so the program fails to compile and the failure names
+/// it. Nothing is written, and the app keeps ticking without its script.
 #[test]
 fn without_the_plugin_the_functions_do_not_exist() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir("absent");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
-fn on_start() { signal("read", "").set(files::read("notes.txt")); }
-fn on_ready() { signal("alive", "").set("yes"); }
+        r#"import "lumen.cdl";
+
+fn on_start() { lumen::signal_set("read", files::read("notes.txt")); }
+
+fn main() {}
 "#,
         None,
     );
@@ -375,10 +379,14 @@ fn on_ready() { signal("alive", "").set("yes"); }
     for _ in 0..10 {
         app.tick();
     }
-    assert_eq!(
-        signal(&app, "alive").as_deref(),
-        Some("yes"),
-        "the app went on running past the failed call"
+    let failure = app
+        .world
+        .get_resource::<lumen_script::ScriptLoadFailure>()
+        .expect("the program failed to load");
+    assert!(
+        failure.0.contains("no `files` namespace"),
+        "the failure names the missing namespace: {}",
+        failure.0
     );
     assert_eq!(
         signal(&app, "read"),

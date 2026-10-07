@@ -19,10 +19,14 @@ use lumen_core::components::{
     DefaultLayoutDirection, LayoutDirection, LumenId, ResolvedDirection, TextContent,
 };
 use lumen_core::input::{FocusTracker, Focused};
-use lumen_ir::artifact::{self, CompiledApp, CompiledI18n};
+use lumen_ir::artifact::{self, CompiledApp, CompiledI18n, CompiledScript};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, TooltipSpec};
 use lumen_runtime::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The script-side translator and formatter hooks are process-global
 /// singletons, so apps that install them run one at a time.
@@ -75,7 +79,6 @@ fn build(dir: &Path, root: Element) -> lumen_core::app::App {
     };
     let bytes = artifact::serialize(&CompiledApp {
         ir,
-        script_source: String::new(),
         ..Default::default()
     })
     .expect("serialize artifact");
@@ -520,7 +523,6 @@ fn a_bad_catalogue_filename_fails_the_load() {
     let ir = LayoutIR::default();
     let bytes = artifact::serialize(&CompiledApp {
         ir,
-        script_source: String::new(),
         ..Default::default()
     })
     .unwrap();
@@ -612,24 +614,28 @@ fn authored_dir_still_beats_the_locale() {
 }
 
 /// Build an app that ships a script, so the command applier and the locale
-/// rebuild are registered. The engine is pinned because the baked sources
-/// below are Rhai and the default is candela; port 0 keeps parallel test
-/// binaries off a shared socket.
+/// rebuild are registered. `script` holds the candela program's functions;
+/// the prelude import and the empty `main` are added around it. Port 0 keeps
+/// parallel test binaries off a shared socket.
 fn build_with_script(dir: &Path, root: Element, script: &str) -> lumen_core::app::App {
     std::fs::write(
         dir.join("lumen.toml"),
         "[app]\nlocale = \"en-US\"\nfallback_locale = \"en-US\"\n\n\
-         [mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+         [mcp]\nport = 0\n",
     )
     .unwrap();
     let ir = LayoutIR {
         root,
-        script_source: script.to_string(),
         ..Default::default()
     };
     let bytes = artifact::serialize(&CompiledApp {
         ir,
-        script_source: script.to_string(),
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
+            source: format!("import \"lumen.cdl\";\n\n{script}\n\nfn main() {{}}\n"),
+            bytecode: None,
+        }],
         ..Default::default()
     })
     .expect("serialize artifact");
@@ -742,7 +748,7 @@ fn a_script_switches_the_locale_while_the_app_runs() {
     let mut app = build_with_script(
         &dir,
         switchable_tree(),
-        "fn on_start() { set_locale(\"de-DE\"); }",
+        "fn on_start() { lumen::set_locale(\"de-DE\"); }",
     );
     // What the app spawned in, before the script ran.
     let spawned = texts(&mut app);
@@ -802,7 +808,7 @@ fn a_switch_to_an_rtl_locale_mirrors_the_running_tree() {
     let mut app = build_with_script(
         &dir,
         root_with_dir(None),
-        "fn on_start() { set_locale(\"ar-EG\"); }",
+        "fn on_start() { lumen::set_locale(\"ar-EG\"); }",
     );
     assert_eq!(
         app.world.resource::<DefaultLayoutDirection>().0,
@@ -837,7 +843,7 @@ fn a_tag_that_is_not_a_locale_leaves_the_app_where_it_was() {
             children: vec![label(Some("Good morning"), Some("greet"))],
             ..Default::default()
         },
-        "fn on_start() { set_locale(\"not a tag at all\"); }",
+        "fn on_start() { lumen::set_locale(\"not a tag at all\"); }",
     );
     for _ in 0..3 {
         app.tick();

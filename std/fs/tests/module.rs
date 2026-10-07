@@ -169,18 +169,24 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, and the
-/// given `[dependencies]` block.
+/// Write an app dir: markup with a candela script, the script itself, and the
+/// given `[dependencies]` block. `script` is the script's handlers; the
+/// `lumen.cdl` import and the empty `main` every candela program needs are
+/// added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[app]\nid = \"lumen-fs-module-{case}\"\n\n[dependencies]\n{dependencies}"),
@@ -224,14 +230,14 @@ fn the_bundled_module_supplies_the_file_surface() {
         "lumen-fs = { bundled = true }\n",
         r#"
 fn on_start() {
-    signal("wrote", "").set(files::write("notes.txt", "saved"));
-    signal("read", "").set(files::read("notes.txt"));
-    signal("exists", "").set(files::exists("notes.txt"));
-    signal("made", "").set(files::mkdir("sub"));
-    signal("copied", "").set(files::copy("notes.txt", "sub/copy.txt"));
-    signal("listed", "").set(files::list("sub")[0]);
-    signal("bytes", "").set(files::read_bytes("notes.txt").len());
-    signal("removed", "").set(files::remove("sub/copy.txt"));
+    lumen::signal_set_bool("wrote", files::write("notes.txt", "saved"));
+    lumen::signal_set("read", files::read("notes.txt"));
+    lumen::signal_set_bool("exists", files::exists("notes.txt"));
+    lumen::signal_set_bool("made", files::mkdir("sub"));
+    lumen::signal_set_bool("copied", files::copy("notes.txt", "sub/copy.txt"));
+    lumen::signal_set("listed", files::list("sub")[0]);
+    lumen::signal_set_int("bytes", files::read_bytes("notes.txt").len());
+    lumen::signal_set_bool("removed", files::remove("sub/copy.txt"));
 }
 "#,
     );
@@ -283,8 +289,8 @@ fn a_refusal_reports_on_stderr_and_leaves_the_app_running() {
 fn on_start() {
     files::mkdir("full");
     files::write("full/kept.txt", "kept");
-    signal("removed", "").set(files::remove("full"));
-    signal("still_there", "").set(files::exists("full/kept.txt"));
+    lumen::signal_set_bool("removed", files::remove("full"));
+    lumen::signal_set_bool("still_there", files::exists("full/kept.txt"));
 }
 "#,
     );
@@ -311,11 +317,11 @@ fn the_config_table_sets_the_byte_cap() {
         r#"
 fn on_start() {
     let big = "";
-    while big.len < 1100 { big += "0123456789"; }
+    while big.len() < 1100 { big = big + "0123456789"; }
     files::write("big.txt", big);
     files::write("small.txt", "tiny");
-    signal("big", "").set(files::read_bytes("big.txt").len());
-    signal("small", "").set(files::read_bytes("small.txt").len());
+    lumen::signal_set_int("big", files::read_bytes("big.txt").len());
+    lumen::signal_set_int("small", files::read_bytes("small.txt").len());
 }
 "#,
     );
@@ -332,8 +338,8 @@ fn on_start() {
     );
 }
 
-/// Without the module the functions do not exist: the script's call fails
-/// with the host's ordinary unknown-namespace error, the app survives its
+/// Without the module the functions do not exist: the script fails to compile
+/// with candela's ordinary undeclared-namespace error, the app survives its
 /// run, and nothing is written.
 #[test]
 fn without_the_module_the_functions_do_not_exist() {
@@ -342,11 +348,14 @@ fn without_the_module_the_functions_do_not_exist() {
         f,
         "fs-absent",
         "",
-        r#"fn on_start() { signal("read", "").set(files::read("notes.txt")); }"#,
+        r#"fn on_start() { lumen::signal_set("read", files::read("notes.txt")); }"#,
     );
     let (stdout, stderr) = run_host(f, &dir, 20, "read");
 
-    assert!(stderr.contains("Module not found: files"), "{stderr}");
+    assert!(
+        stderr.contains("no `files` namespace is declared here"),
+        "{stderr}"
+    );
     assert!(!stdout.contains("HOST tick-panic-caught"), "{stdout}");
     assert!(stdout.contains("HOST signal read=<unset>"), "{stdout}");
     assert!(!stderr.contains("lumen-fs:"), "{stderr}");

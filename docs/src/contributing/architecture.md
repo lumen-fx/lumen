@@ -185,9 +185,9 @@ tools/             the release plumbing and the editor plugins
 
   Every web half is found at `web/` under the module's root, for any source.
   The toolchain archive carries the first-party ones as
-  `bin/modules/<name>/web` (`.github/scripts/stage-web-halves.sh` stages
-  them), and a `lumenc` built from a checkout reads them from `std/` in
-  place. Every compile, the desktop's included, declares the descriptor's
+  `bin/modules/<name>/web` (`.github/scripts/stage-module-data.sh` stages
+  them, with the language descriptors beside them), and a `lumenc` built from
+  a checkout reads them from `std/` in place. Every compile, the desktop's included, declares the descriptor's
   functions and elements to the app (`lumenc::addons::target_deps`); a
   desktop run then binds those calls to the functions the loaded library
   registers. A module with no web half has no descriptor, so a desktop
@@ -242,19 +242,28 @@ tools/             the release plumbing and the editor plugins
 
 - **lumen-script**: the host-neutral scripting layer. The `ScriptHost` trait,
   the script command vocabulary, the host-generic systems, the DOM query
-  surface, and the `HttpClient` and `HttpDispatch` traits the HTTP builtins run
-  on: one says how a request is performed, the other who performs it.
-- **lumen-script-candela**, **lumen-script-rhai**, **lumen-script-lua**: the
-  three hosts. Each implements `ScriptHost` and ships a plugin.
+  surface, the `ScriptLanguage` registry a host module registers its language
+  in, and the `HttpClient` and `HttpDispatch` traits the HTTP builtins run on:
+  one says how a request is performed, the other who performs it.
+- The hosts are runtime modules under `std/`, and the engine names none of
+  them: **lumen-candela** (`std/candela`), **lumen-candela-dev**
+  (`std/candela-dev`), and the deprecated **lumen-rhai** (`std/rhai`) and
+  **lumen-lua** (`std/lua`). Each implements `ScriptHost` and registers a
+  `ScriptLanguage` when it installs. The two candela modules are thin module
+  entries over library crates, **lumen-candela-host** (`std/candela/host`) and
+  **lumen-candela-dev-host** (`std/candela-dev/host`), so a build script can
+  compile a fixture to bytecode without building a module: cargo writes a
+  module's library under one file name, and a build-time copy beside the
+  regular one would overwrite it.
 
-The candela crate carries two hosts, because a candela program reaches Lumen
-two ways. One compiles source and can reload it while the app runs; the other
-loads a precompiled `.cdlb` image and carries no compiler, which is what a
-shipped app and the browser want. Both register the same builtin list, written
+candela is two modules, because a candela program reaches Lumen two ways.
+`lumen-candela` loads a precompiled `.cdlb` image and carries no compiler,
+which is what a shipped app, a page and a server render run. `lumen-candela-dev`
+builds on it with the compiler: it compiles source, reloads it while the app
+runs, checks it, compiles the image a shipped app carries, and reads the `lmn!`
+markup blocks a script writes. Both register the same builtin list, written
 once against a registration sink the compiler's engine and the runtime's host
-registry each implement, so a builtin added for one is bound by the other. The
-compiler half sits behind the crate's default-on `compiler` feature; turning it
-off leaves the artifact host and drops the front end from the graph.
+registry each implement, so a builtin added for one is bound by the other.
 
 ### Operating system surfaces
 
@@ -693,11 +702,9 @@ conversion layer, and a plugin whose `build` does little more than hand the
 host to the generic plugin.
 
 The metadata describing every builtin, which the LSP reads for completion and
-hover, is not per host. It lives once in `core/script/api/builtins.ron`,
-listing for each builtin the hosts that expose it and, where a host spells a
-signature or a doc line differently, that host's override. A build script turns
-that file into the per-host tables each host crate re-exports, so the tables
-cost nothing at run time and cannot drift apart by hand.
+hover, is per host: each host crate keeps a table of the builtins it registers,
+spelled the way its language names their types, and candela's suite checks its
+table against what it binds.
 
 The trait covers lifecycle (compile check, load, replace, reset), invocation
 (call a function, call a closure, evaluate a derivation), a command sink, a
@@ -712,11 +719,30 @@ cross a host-function boundary are the marshalled ones (null, the scalars,
 arrays, maps, and enums), and a function is not among them, so a candela script
 names the callable and the host looks it up.
 
-One host runs per language the app ships. Each script file picks its engine
-from its own extension, and the files of one language concatenate into a single
-program. An inline `<script>` has no extension to read, so it joins the app's
-one external language when there is exactly one and falls to the default,
-candela, otherwise.
+One host runs per language the app ships. Which module runs which language is
+data: each host module carries a `lumen-language.toml` descriptor naming its
+language, the extensions it owns, the form it runs (`source` or `bytecode`),
+and whether it is the default for an inline `<script>`
+(`core/modules/src/language.rs` reads them; the toolchain ships them under
+`bin/modules/<name>/`, a checkout reads them from `std/`). Each script file
+belongs to the language its extension names, and the files of one language
+concatenate into a single program. An inline `<script>` has no extension to
+read, so it joins the app's one external language when there is exactly one and
+falls to the default language otherwise.
+
+`build_app` reads the `<script>` elements before the parse, loads the module
+that runs each language as an implied `[dependencies]` entry (the source form
+from source, so a run can reload; the module a compiled artifact names
+otherwise), then installs each part of the program through the language its
+module registered. A language with no loaded module is a banner and the app
+carries on. `lumenc check` and `build` load the same modules into a scratch
+app and call the language's check and compile entries; a language with a
+bytecode form ships the bytecode and drops the source.
+
+DOM events reach the hosts through one dispatcher: each event is read once,
+walks its propagation path once, and a handler token is offered to each host
+until the one that owns it runs it, so a native handler fires once however
+many languages the app runs.
 
 Two languages mean two hosts running side by side, each driving its own copy of
 the generic systems, so lifecycle and event callbacks reach every host that
@@ -729,9 +755,10 @@ again inside that window, or the write would be invisible to the other language
 forever.
 
 `[script] engine` in `lumen.toml` overrides all of it and puts every script on
-one host, whatever the extensions say. A precompiled artifact carries the
-per-engine split the compiler recorded, and is the only source of it, since an
-app's script files do not travel beside its compiled form.
+one language, whatever the extensions say. A precompiled artifact carries the
+per-language split the compiler recorded, with the module that runs each part,
+and is the only source of it, since an app's script files do not travel beside
+its compiled form.
 
 Each host is monomorphised into the scheduling edges it drives. That is
 load-bearing: an ordering constraint naming a different host type resolves

@@ -20,10 +20,11 @@
 # top (the C ABI, the parser and CLI) is compiled into them, not into the
 # shared engine.
 #
-# The feature set of `lumen-runtime` (and the `compiler` default of
-# `lumen-script-candela`) is pinned to the union the shipped binaries enable.
-# A runtime module is only loadable against an engine built from the same
-# graph, so this list changing is an engine-ABI event, not a tidy-up.
+# The feature set of `lumen-runtime` is pinned to the union the shipped
+# binaries enable. A runtime module is only loadable against an engine built
+# from the same graph, so this list changing is an engine-ABI event, not a
+# tidy-up. No script host is part of the engine: each language is a runtime
+# module that loads into it.
 #
 # Deliberately NOT a member of the workspace, and reached only through
 # `cfg(not(windows))` dependencies. Both facts are load-bearing:
@@ -80,14 +81,17 @@ lumen-runtime = { path = "../../core/runtime", default-features = false, feature
     "mcp",
     "async",
     "modules",
-    "host-rhai",
-    "host-lua",
-    "host-candela",
     "devtools",
 ] }
 # The rest of the SDK surface, re-exported through `sdk` below.
 lumen-core = { path = "../../core" }
-lumen-script = { path = "../../core/script/api", default-features = false }
+# `json` and `markdown` carry the `parse_json` / `parse_markdown` walks the
+# shared builtin table binds. The candela host modules enable them and link
+# against this engine's copy, so the engine pins them on.
+lumen-script = { path = "../../core/script/api", default-features = false, features = [
+    "json",
+    "markdown",
+] }
 lumen-widget = { path = "../../core/widget" }
 lumen-widget-macros = { path = "../../core/widget-macros" }
 # Same spec as the workspace pin; spelled out because this manifest cannot
@@ -97,8 +101,3 @@ bevy_ecs = { version = "0.19", default-features = false, features = [
     "multi_threaded",
     "std",
 ] }
-rhai = { version = "1.24", features = ["sync"] }
-# Not re-exported: named to pin its `compiler` default into the engine build,
-# because the `lumenc` binary enables it and a module built against an engine
-# without it would resolve nothing. See the feature-pinning note above.
-lumen-script-candela = { path = "../../core/script/candela", default-features = true }

@@ -81,7 +81,10 @@ USAGE:
                       platform whose consumers have none.
     --module N=LIB    A runtime module the kit carries: the name an app
                       declares it under, and its cargo library name, which
-                      is what its rlib is called. Repeatable.
+                      is what its rlib is called. Repeatable. A static kit
+                      refuses a module its recorded line never read; a
+                      shared-engine kit keeps the ones its line read and
+                      drops the rest.
     --module-libs N=A,B
                       Native libraries only that module's crate graph asked
                       for, so a replay without the module drops them too.
@@ -520,6 +523,23 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
     // the size of the line it was looked for on. Those two separate a launcher
     // built without the module from a library name that arrived carrying a
     // character nobody meant to send, and the two look identical otherwise.
+    //
+    // An engine library carries only the modules its composition root links
+    // in (a script host, on Windows), so of the modules named for an engine
+    // kit it offers the ones its line read, and the rest load from beside it.
+    if shared {
+        let read: Vec<String> = kit
+            .args
+            .iter()
+            .filter_map(|arg| match arg {
+                LinkArg::File {
+                    module: Some(m), ..
+                } => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        kit.modules.retain(|module| read.contains(&module.name));
+    }
     let unlinked: Vec<String> = kit
         .modules
         .iter()

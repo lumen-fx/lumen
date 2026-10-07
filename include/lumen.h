@@ -237,9 +237,9 @@ typedef int (*LumenCloseFn)(void* user_data);
  * `func` writes its result through the LumenValue out-pointer it
  * receives as its first argument; see LumenFn for the full contract.
  *
- * Every script host the app runs gets the registration. Rhai and Lua
- * scripts call it as a plain global; a candela script declares
- * `host "native" { any <name>(...); }` and calls `native::<name>(...)`.
+ * Every script host the app runs gets the registration. A candela
+ * script declares `host "native" { any <name>(...); }` and calls
+ * `native::<name>(...)`; a host with global functions calls it by name.
  */
 LumenStatus lumen_app_expose(LumenApp* app,
                              const char* name,

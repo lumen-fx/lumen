@@ -1,0 +1,31 @@
+# The candela bytecode host as a library: `CandelaVmHost`, the builtin table,
+# the prelude, and the `lmn!` source analysis. The `lumen-candela` module
+# packages it; `lumen-candela-dev` builds the compiler on it. A library with no
+# `cdylib` target, so a build script can depend on it (through
+# `lumen-candela-dev-host`) in the same cargo run that builds the module.
+[package]
+name = "lumen-candela-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's candela bytecode host as a library: runs precompiled .cdlb images on candela-vm."
+keywords = ["ui", "gui", "scripting", "candela", "lumen"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+# The script seam this host implements: `ScriptHost`, the builtin table, the
+# language registry. `json` and `markdown` pull in the shared `parse_json` /
+# `parse_markdown` walks the builtin table carries.
+lumen-script = { workspace = true, features = ["json", "markdown"] }
+lumen-core = { workspace = true }
+# The per-host half of the script wiring (`on_ready`, component fills, DOM
+# event delivery).
+lumen-scene = { workspace = true }
+lumen-ir = { workspace = true }
+bevy_ecs.workspace = true
+# The executor, the value marshalling, and the `.cdlb` load/call API.
+candela-vm = { git = "https://github.com/lumen-fx/candela", tag = "v0.1.5", version = "0.1.5" }

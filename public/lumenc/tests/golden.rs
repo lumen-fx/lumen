@@ -217,11 +217,7 @@ fn capture_once(
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp app dir");
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .expect("write lumen.toml");
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
 
     let mut opts = RunOptions::new(&dir).with_markup(markup).with_css(css);
     opts.hot_reload = false;

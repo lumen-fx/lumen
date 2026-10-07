@@ -1,9 +1,7 @@
-# Proof fixture for runtime script-host selection. `engine = "candela"` makes
-# lumenc load the app's script through the candela-backed `CandelaHost` instead of
-# the default Rhai host. The external `main.cdl` exercises `.cdl` script loading
-# plus the scalar `host "lumen" { ... }` builtin surface (signal_set / on).
-[script]
-engine = "candela"
+# Proof fixture for runtime script-host selection: the external `main.cdl` is
+# run by the candela host module the runtime loads for a `.cdl` file, and
+# exercises `.cdl` script loading plus the scalar `host "lumen" { ... }`
+# builtin surface (signal_set / on).
 
 # No introspection server - keeps `--headless` CI runs from binding a port.
 [mcp]

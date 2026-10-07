@@ -29,9 +29,11 @@ modules](../reference/lumen-toml.md#dependencies) the app declares are
 staged into a `modules/` subfolder: `path` and `bundled` modules are copied
 from where the declaration points, and a `version` module comes from the
 registry, so the shipped folder carries the exact library `lumen.lock` pins.
-A candela package needs no staging: its scripts compiled into the executable
-with the app's own. All of it belongs to the app; keep the folder together
-when you move it.
+The script host the app runs on is staged there too: `lumen-candela`, which
+runs the bytecode the package compiled the app's candela scripts to, with no
+compiler in the folder. A candela package needs no staging: its scripts
+compiled into the executable with the app's own. All of it belongs to the app;
+keep the folder together when you move it.
 
 ### The engine is the app's own
 
@@ -77,7 +79,9 @@ os-tray. Name it in lumen.toml [capabilities] to package it in.
 ```
 
 A Windows package stays one library plus the executable, with any portable
-plugins the app declares in `modules/` and its candela packages compiled in.
+plugins the app declares in `modules/` and its candela packages compiled in;
+the candela host is linked into the library. Rhai and Lua scripts do not run
+in a Windows package.
 Runtime modules do not load beside it, because there is no shared engine
 there for one to load into, so an app that declares one of the modules that
 ship with the toolchain is packaged with
@@ -163,8 +167,9 @@ lumenc package myapp --static
 
 This writes the same folder with one difference: the app is a single
 executable. The engine is inside it, and so is every runtime module the app
-declares, so there is no runtime library beside it and no `modules/`
-subfolder. The engine inside is the app's own, chosen the way a folder
+declares and the candela host its scripts run on, so there is no runtime
+library beside it and no `modules/` subfolder. Rhai and Lua scripts do not run
+in one. The engine inside is the app's own, chosen the way a folder
 package's is: of the optional subsystems the kit offers (tray,
 notifications, dialogs, hotkeys, the HTTP client and the rest), the
 executable carries the ones the app's sources show it uses, and
@@ -223,10 +228,11 @@ lumenc build myapp myapp.lmna
 ```
 
 It parses `src/main.lmn` and the stylesheet, runs the whole cascade, splices
-includes and imports, records which engine runs each part of the script, and
-writes one artifact. A candela script is compiled to bytecode as well, and both
-forms go in: the artifact runs the same either way, and the bytecode is what a
-runtime shipped without the candela compiler loads. Run it back with:
+includes and imports, records which language each part of the script is in and
+which runtime module runs it, and writes one artifact. A candela script is
+compiled to bytecode, and only the bytecode goes in: a shipped app runs it on
+the bytecode host, with no compiler and no source. A Rhai or Lua script goes
+in as source. Run it back with:
 
 ```sh
 lumenc run myapp --artifact myapp.lmna

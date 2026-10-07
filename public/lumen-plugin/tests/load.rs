@@ -158,7 +158,6 @@ fn a_manifest_claiming_what_it_may_not_is_refused() {
             "declare_builtin_ns = true",
             "builtin namespace",
         ),
-        ("load-empty-hosts", "empty_hosts = true", "no language"),
         (
             "load-duplicate",
             "duplicate_name = true",

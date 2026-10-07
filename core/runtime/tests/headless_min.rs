@@ -7,7 +7,7 @@
 //! never opening a real window:
 //!
 //! ```text
-//! # minimal (no mcp/async/host-lua/host-candela):
+//! # minimal (no mcp, no async):
 //! cargo test -p lumen-runtime --no-default-features --features runtime-parse --test headless_min
 //! # full:
 //! cargo test -p lumen-runtime --test headless_min
@@ -29,7 +29,6 @@ fn minimal_artifact_ticks_headless() {
 
     let app = CompiledApp {
         ir: LayoutIR::default(),
-        script_source: String::new(),
         ..Default::default()
     };
     let bytes = artifact::serialize(&app).expect("serialize trivial artifact");

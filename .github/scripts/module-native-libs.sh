@@ -35,8 +35,9 @@ triple="${2:?usage: module-native-libs.sh <build-messages.jsonl> <triple>}"
 
 cd "$(dirname "$0")/../.."
 
-# The module list comes from the tree, the same file every other step reads.
-modules="$(.github/scripts/first-party-modules.sh)"
+# The module list comes from the tree, the same file every other step reads:
+# the modules the launcher links, which are the ones a kit offers.
+modules="$(.github/scripts/first-party-modules.sh --linked)"
 test -n "$modules"
 
 packages="$(while IFS=$'\t' read -r name package _lib; do

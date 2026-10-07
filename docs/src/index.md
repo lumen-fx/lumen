@@ -47,11 +47,11 @@ look, and `transition` animates a property change without a line of script.
 mounts and unmounts a subtree. Writing a signal is the whole update; nothing
 imperatively pokes at elements.
 
-**Scripting.** candela is the default language, with Rhai and Lua available as
-alternatives. Each script file's extension picks the host that runs it, and an
-app can use more than one language, sharing state across them through signals.
-Scripts respond to lifecycle events, input, timers, and network replies, and can
-build and edit the element tree directly.
+**Scripting.** Scripts are written in candela, compiled from source with hot
+reload while you work and shipped as bytecode. Rhai and Lua remain as
+deprecated modules on Linux and macOS; an app can mix languages, sharing state
+across them through signals. Scripts respond to lifecycle events, input,
+timers, and network replies, and can build and edit the element tree directly.
 
 **Multi-page apps.** Every `.lmn` file in the directory is a page, reachable by
 its filename. `<a href="settings">` navigates, a shared `layout.lmn` wraps every

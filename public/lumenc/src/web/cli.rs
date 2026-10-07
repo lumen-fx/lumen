@@ -571,7 +571,7 @@ fn build(options: &Options) -> Result<Report, String> {
         .collect();
 
     let scripts = script_refs(&compiled, &mut warnings);
-    check_exports(&compiled, &browser_filled, &mut warnings);
+    check_exports(dir, &compiled, &browser_filled, &mut warnings);
     let css_mode = match cfg.web.css {
         WebCssMode::Sheet => CssMode::Sheet,
         WebCssMode::Computed => CssMode::Computed,
@@ -1439,6 +1439,7 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
 /// candela exports every function a host calls by name, and one it cannot is
 /// a warning the compile already raised.
 fn check_exports(
+    dir: &Path,
     compiled: &CompiledApp,
     browser_filled: &BTreeSet<String>,
     warnings: &mut Vec<String>,
@@ -1446,7 +1447,8 @@ fn check_exports(
     let mut exported: BTreeSet<String> = BTreeSet::new();
     let mut read_any = false;
     for script in &compiled.scripts {
-        let Some(read_back) = lumen_runtime::run::script_exports(script, &compiled.addons) else {
+        let Some(read_back) = lumen_runtime::run::script_exports(dir, script, &compiled.addons)
+        else {
             continue;
         };
         match read_back {

@@ -1,7 +1,7 @@
 //! One description of a native function every script host can bind.
 //!
 //! A [`ScriptFn`] says what a function is called, what it takes, what it
-//! returns, which namespace it lives in, and which languages may see it. Each
+//! returns, and which namespace it lives in. Each
 //! host implements [`ScriptHost::register_script_fn`](crate::ScriptHost::register_script_fn)
 //! once and gets every function an app, a plugin, the C ABI, or the Rust SDK
 //! describes.
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use bevy_ecs::prelude::Resource;
 use lumen_core::app::App;
 use lumen_core::warn_line;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::{ScriptCommand, ScriptValue};
 
@@ -535,86 +535,6 @@ pub enum ScriptNs {
     Named(String),
 }
 
-/// Which languages may see a function.
-///
-/// Some functions exist for one host only. The runtime's own `page` family, for
-/// instance, is declared in candela's prelude under the `lumen` namespace, so
-/// registering it again would give candela a second spelling backed by a
-/// different bus; it ships as `RHAI | LUA`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostSet(u8);
-
-impl HostSet {
-    /// The Rhai host.
-    pub const RHAI: Self = Self(1 << 0);
-    /// The Lua host.
-    pub const LUA: Self = Self(1 << 1);
-    /// Both candela hosts (compiler and artifact).
-    pub const CANDELA: Self = Self(1 << 2);
-    /// Every host.
-    pub const ALL: Self = Self(0b111);
-
-    /// Whether `other`'s languages are all in this set. The empty set is in
-    /// none: a host that names a language Lumen does not know is not one of
-    /// the languages any function was described for.
-    pub fn contains(self, other: Self) -> bool {
-        !other.is_empty() && self.0 & other.0 == other.0
-    }
-
-    /// Whether this set names no language.
-    pub fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    /// The set for a [`ScriptHost::lang`](crate::ScriptHost::lang) tag. An
-    /// unknown tag is the empty set, so a host Lumen does not ship sees nothing
-    /// until it names itself.
-    pub fn from_lang(lang: &str) -> Self {
-        match lang {
-            "rhai" => Self::RHAI,
-            "lua" => Self::LUA,
-            "candela" => Self::CANDELA,
-            _ => Self(0),
-        }
-    }
-}
-
-impl Default for HostSet {
-    fn default() -> Self {
-        Self::ALL
-    }
-}
-
-impl std::ops::BitOr for HostSet {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitOrAssign for HostSet {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-
-/// A set travels as its bits, so it stays one byte on the wire.
-impl Serialize for HostSet {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(s)
-    }
-}
-
-/// A bit no language claims is dropped rather than refused: a peer built
-/// against a later Lumen may name a host this one does not ship, and the set
-/// that reaches it here is the languages both sides know.
-impl<'de> Deserialize<'de> for HostSet {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(Self(u8::deserialize(d)? & Self::ALL.0))
-    }
-}
-
 /// The call a [`ScriptFn`] body receives: its arguments, and the sink it emits
 /// commands into.
 ///
@@ -722,8 +642,6 @@ pub struct ScriptFn {
     pub ns: ScriptNs,
     /// Its declared signature.
     pub sig: ScriptSig,
-    /// The languages that may see it.
-    pub hosts: HostSet,
     /// The function body.
     pub body: ScriptFnBody,
 }
@@ -744,7 +662,7 @@ impl ScriptFn {
     ///
     /// [`ScriptFn::from_fn`] takes a plain Rust closure instead and reads the
     /// signature off its types; the builder is for a function that also wants
-    /// a doc line, optional arguments, a host set, or the command sink.
+    /// a doc line, optional arguments, or the command sink.
     // A `ScriptFn` is not complete until it has a body, so the entry point
     // hands back the builder that collects one.
     #[allow(clippy::new_ret_no_self)]
@@ -753,7 +671,6 @@ impl ScriptFn {
             name: name.into(),
             ns: ScriptNs::Extension,
             sig: ScriptSig::default(),
-            hosts: HostSet::ALL,
         }
     }
 
@@ -768,7 +685,6 @@ impl ScriptFn {
             name: name.into(),
             ns: ScriptNs::Extension,
             sig: any_sig(arity),
-            hosts: HostSet::ALL,
             body: Arc::new(move |cx: &mut ScriptFnCx<'_>| Ok(f(cx.args()))),
         }
     }
@@ -822,7 +738,6 @@ impl ScriptFn {
                 min_arity: arity,
                 doc: String::new(),
             },
-            hosts: HostSet::ALL,
             body,
         }
     }
@@ -854,7 +769,6 @@ impl ScriptFn {
                 ret: ScriptTy::Unit,
                 ..any_sig(arity)
             },
-            hosts: HostSet::ALL,
             body: Arc::new(move |cx: &mut ScriptFnCx<'_>| {
                 f(cx);
                 Ok(ScriptValue::Unit)
@@ -869,24 +783,12 @@ impl ScriptFn {
         self
     }
 
-    /// Restrict (or widen) the languages that see it.
-    #[must_use]
-    pub fn with_hosts(mut self, hosts: HostSet) -> Self {
-        self.hosts = hosts;
-        self
-    }
-
     /// Accept fewer arguments than the signature declares; the trailing
     /// parameters become optional.
     #[must_use]
     pub fn with_min_arity(mut self, min_arity: usize) -> Self {
         self.sig.min_arity = min_arity;
         self
-    }
-
-    /// Whether `lang` may see this function.
-    pub fn visible_to(&self, lang: &str) -> bool {
-        self.hosts.contains(HostSet::from_lang(lang))
     }
 
     /// Run the body over `args`, appending whatever it emitted to `out`.
@@ -998,7 +900,6 @@ impl fmt::Debug for ScriptFn {
             .field("name", &self.name)
             .field("ns", &self.ns)
             .field("sig", &self.sig)
-            .field("hosts", &self.hosts)
             .finish_non_exhaustive()
     }
 }
@@ -1008,7 +909,6 @@ pub struct ScriptFnBuilder {
     name: String,
     ns: ScriptNs,
     sig: ScriptSig,
-    hosts: HostSet,
 }
 
 impl ScriptFnBuilder {
@@ -1046,13 +946,6 @@ impl ScriptFnBuilder {
         self
     }
 
-    /// Choose the languages. Defaults to every host.
-    #[must_use]
-    pub fn hosts(mut self, hosts: HostSet) -> Self {
-        self.hosts = hosts;
-        self
-    }
-
     /// Make the trailing parameters optional: a call may pass as few as
     /// `min_arity` arguments, and the body reads the rest as
     /// [`ScriptValue::Unit`].
@@ -1081,7 +974,6 @@ impl ScriptFnBuilder {
             name: self.name,
             ns: self.ns,
             sig: self.sig,
-            hosts: self.hosts,
             body: Arc::new(body),
         }
     }
@@ -1373,8 +1265,7 @@ impl fmt::Debug for ScriptFnStore {
 /// it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptPrelude {
-    /// The language tag the source is written in (`"candela"`, `"rhai"`,
-    /// `"lua"`).
+    /// The language tag the source is written in, such as `"candela"`.
     pub lang: String,
     /// The namespace the functions it wraps are registered under.
     pub ns: String,
@@ -1441,15 +1332,6 @@ impl ScriptFnRegistry {
     /// registration order.
     pub fn preludes_for_lang(&self, lang: &str) -> Vec<&ScriptPrelude> {
         self.preludes.iter().filter(|p| p.lang == lang).collect()
-    }
-
-    /// The functions `lang` may see, cloned for handing to a host.
-    pub fn for_lang(&self, lang: &str) -> Vec<ScriptFn> {
-        self.fns
-            .iter()
-            .filter(|f| f.visible_to(lang))
-            .cloned()
-            .collect()
     }
 
     /// Close the channel. Every host has bound what it is going to bind.
@@ -1628,19 +1510,6 @@ mod tests {
         let (ret, cmds) = f.invoke(&[ScriptValue::Str("hi".into())]);
         assert_eq!(ret, Ok(ScriptValue::Unit));
         assert!(matches!(&cmds[..], [ScriptCommand::Print(s)] if s == "HI"));
-    }
-
-    #[test]
-    fn a_host_set_hides_a_function_from_the_languages_it_excludes() {
-        let f = ScriptFn::value("page", 1, |_| ScriptValue::Unit)
-            .with_hosts(HostSet::RHAI | HostSet::LUA);
-        assert!(f.visible_to("rhai"));
-        assert!(f.visible_to("lua"));
-        assert!(!f.visible_to("candela"));
-        assert!(
-            !ScriptFn::value("f", 0, |_| ScriptValue::Unit).visible_to("prolog"),
-            "a language Lumen does not know is not one of the languages `ALL` names"
-        );
     }
 
     #[test]

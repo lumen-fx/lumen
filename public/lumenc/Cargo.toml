@@ -37,8 +37,7 @@ lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 # The runtime core (run loop, plugin stack, hot reload, config, pages, spawn,
 # app-kind, skins, profiler) plus every heavy backend it drags in
-# (wgpu / vello / winit / cosmic-text / taffy / rodio / mlua / the script
-# hosts). OPTIONAL and pulled in only by the default-on `dev-run` feature so
+# (wgpu / vello / winit / cosmic-text / taffy). OPTIONAL and pulled in only by the default-on `dev-run` feature so
 # the compiler LIBRARY built `--no-default-features` (which is what
 # `lumen-lsp` links) stays thin. The `lumenc` BINARY keeps it for the CLI
 # `run` / `build` / `check` / `mcp` dev paths and injects its own parser
@@ -66,13 +65,16 @@ bincode.workspace = true
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
 lumen-widget = { workspace = true }
-# The candela host, for the one module that decides what an `lmn!` block
-# means: the fragment key, the argument sites, the component elements, and the
-# candela the macro expands to. `lumenc` reads the same module the expander
-# does, so the ahead-of-time extraction and the compiled call cannot disagree.
-# OPTIONAL and pulled in by `runtime-parse`, which is the feature that carries
-# the markup front-end each block body compiles through.
-lumen-script-candela = { workspace = true, default-features = true, optional = true }
+# The script seam: the markup blocks a script's language reads out of it,
+# which the parser here compiles into fragments. Pulled in by `dev-run`, with
+# the runtime it belongs to.
+lumen-script = { workspace = true, optional = true }
+# The candela hosts, compiled in where this build has no shared engine to open
+# them beside (see the anchors in `src/lib.rs`): the compiler host a run from
+# source and a build need, and the bytecode host a run of a compiled app
+# needs. Pulled in by `dev-run`.
+lumen-candela = { workspace = true, optional = true }
+lumen-candela-dev = { workspace = true, optional = true }
 
 # `lumenc web` - the static-site emitter and the HTML contract it writes
 # against. OPTIONAL behind the default-on `web` feature; both are small and
@@ -102,9 +104,6 @@ zip = { workspace = true, optional = true }
 # runtime module, and the file may be another platform's build.
 object = { workspace = true, optional = true }
 
-# Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
-# wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
-rhai = { workspace = true, optional = true }
 # link-not-embed launcher: dlopen the shared liblumen and
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
 # is the whole point of the thin launcher: it pulls NO backend crate, only
@@ -205,11 +204,10 @@ lumen-os-dnd = { workspace = true }
 # ToggleStyle, TabStripButton, DropdownButton, transition/wake systems. Test
 # -only, so it stays out of the thin compiler library's link graph.
 lumen-primitives = { workspace = true }
-# Script-host and renderer crates named DIRECTLY by the integration tests
-# (run_pipeline / *_host_selection / golden / devtools_mount). They reach the
-# binary transitively through lumen-runtime, but a test can only *name*
-# `lumen_script_rhai::RhaiHost` etc. if the crate is a direct dependency - so
-# they live here (test-only) rather than in the thin library's `[dependencies]`.
+# Script and renderer crates named DIRECTLY by the integration tests
+# (run_pipeline / multi_host / golden / devtools_mount): a test can only
+# *name* a type if its crate is a direct dependency, so they live here
+# (test-only) rather than in the thin library's `[dependencies]`.
 lumen-script = { workspace = true }
 # counter_template.rs names the scene applier so it can assert the edge that
 # pins it after the DOM dispatch, which is a claim about the schedule rather
@@ -217,9 +215,12 @@ lumen-script = { workspace = true }
 lumen-scene = { workspace = true }
 # bg_image.rs asserts the background image's decode and marker components.
 lumen-assets = { workspace = true }
-lumen-script-rhai = { workspace = true }
-lumen-script-lua = { workspace = true }
-lumen-script-candela = { workspace = true, features = ["compiler"] }
+lumen-candela = { workspace = true }
+lumen-candela-dev = { workspace = true }
+# The deprecated hosts, for the tests of an app that runs more than one
+# language. Compiled into those test binaries only.
+lumen-lua = { workspace = true }
+lumen-rhai = { workspace = true }
 # os_integration.rs names the tray config / menu types directly, to assert a
 # script-supplied menu spec reaches them, and builds each capability's script
 # event with that capability's own constructor.
@@ -284,7 +285,9 @@ bundle = ["dep:lumen-assets"]
 # they only augment it when `dev-run` has already pulled it.
 # The dev path stays FULL-featured (owner decision): `dev-run` turns on every
 # runtime subsystem so `lumenc run` / `build` / `check` and the integration
-# tests keep MCP, the async bridge, and all three script hosts.
+# tests keep MCP and the async bridge. Script hosts are runtime modules: the
+# candela ones are compiled in here where there is no shared engine, and the
+# deprecated rhai and lua ones only ever load from the modules archive.
 # Per-app trimming by feature is exclusive to `lumenc bundle --static` (which
 # builds `lumen` with its own trimmed feature set), never the dev path;
 # `lumenc package` trims at the link, from the release's engine kit.
@@ -297,13 +300,12 @@ bundle = ["dep:lumen-assets"]
 dev-run = [
     "package",
     "dep:lumen-runtime",
-    "dep:rhai",
+    "dep:lumen-script",
+    "dep:lumen-candela",
+    "dep:lumen-candela-dev",
     "lumen-runtime/mcp",
     "lumen-runtime/async",
     "lumen-runtime/modules",
-    "lumen-runtime/host-rhai",
-    "lumen-runtime/host-lua",
-    "lumen-runtime/host-candela",
     "dep:lumen-archive",
     "dep:lumen-audio",
     "dep:lumen-browser",
@@ -359,7 +361,6 @@ profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
 # and Slint's compile-.slint-to-Rust model.
 runtime-parse = [
     "dep:roxmltree",
-    "dep:lumen-script-candela",
     "dep:lumen-i18n",
     "lumen-runtime?/runtime-parse",
 ]

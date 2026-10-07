@@ -19,11 +19,6 @@ use std::path::Path;
 const FIXTURES: &[&str] = &["smoke", "unbound"];
 
 fn main() {
-    // The fixtures are candela, and the suite that loads them runs only when
-    // that host is compiled in.
-    if env::var_os("CARGO_FEATURE_HOST_CANDELA").is_none() {
-        return;
-    }
     let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     for stem in FIXTURES {
         let source_path = Path::new("fixtures").join(format!("{stem}.cdl"));
@@ -32,7 +27,7 @@ fn main() {
             .unwrap_or_else(|e| panic!("reading {}: {e}", source_path.display()));
         // These fixtures import no native library and register no module or
         // plugin function, so a bare host with nothing folded in is enough.
-        let image = lumen_script_candela::CandelaHost::new()
+        let image = lumen_candela_dev_host::CandelaHost::new()
             .compile_bytecode(&source, &source_path.to_string_lossy())
             .unwrap_or_else(|e| panic!("compiling {}: {e}", source_path.display()))
             .0;

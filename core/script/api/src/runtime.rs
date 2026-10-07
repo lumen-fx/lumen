@@ -7,9 +7,9 @@
 //! policy driver, timers, HTTP fetch plumbing, the load-failure banner
 //! protocol, and the [`ScriptPlugin`] that wires it all into the tick.
 //!
-//! Concrete hosts (`lumen-script-candela`, `lumen-script-rhai`,
-//! `lumen-script-lua`) provide engine + builtins + conversion and hand a
-//! built host to [`ScriptPlugin::new`].
+//! Concrete hosts, each a runtime module (`lumen-candela` and the others
+//! under `std/`), provide engine + builtins + conversion and hand a built
+//! host to [`ScriptPlugin::new`].
 //!
 //! ## Ordering contract (7bfc0f2 - do not regress)
 //!
@@ -95,11 +95,10 @@ pub struct ScriptLoadFailure(pub String);
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct ScriptStartedAt(pub Instant);
 
-/// Per-call diagnostics prefix: `lumen-script-<lang>`. Reproduces the
-/// historical `lumen-script-rhai:` stderr prefixes exactly for the Rhai
-/// host.
+/// Per-call diagnostics prefix: `lumen-<lang>`, the name of the module that
+/// runs the language.
 pub(crate) fn prefix(lang: &str) -> String {
-    format!("lumen-script-{lang}")
+    format!("lumen-{lang}")
 }
 
 // ---------------------------------------------------------------------
@@ -155,13 +154,13 @@ pub enum ScriptSet {
     /// [`fill_components`]: the use sites the build left for the script.
     /// Registered by the embedder, not by [`ScriptPlugin`].
     Fill,
-    /// The embedder's DOM propagation of raw input
-    /// ([`crate::dom_events::dispatch_pointer_and_key_events`]), per host.
+    /// The DOM propagation of raw input
+    /// ([`crate::dom_events::deliver_input_events`]), once for every host.
     /// A `node.on("click", ...)` listener runs here, so this set produces
     /// script commands and every applier of them orders after it.
     DomInput,
-    /// The embedder's DOM propagation of derived state
-    /// ([`crate::dom_events::dispatch_state_events`]), per host. Kept
+    /// The DOM propagation of derived state
+    /// ([`crate::dom_events::deliver_state_events`]), once for every host. Kept
     /// apart from [`ScriptSet::DomInput`] because it runs at the far end
     /// of the tick, after the text edits that script commands produce;
     /// one set covering both could not be ordered against the appliers
@@ -194,8 +193,8 @@ struct ScriptSharedInstalled;
 ///
 /// Host construction (engine limits, builtin registration, embedder
 /// extensions) happens BEFORE this plugin: build the host, apply any
-/// host-specific extensions, then hand it over. `lumen-script-rhai`'s
-/// `ScriptRhaiPlugin` is a thin wrapper doing exactly that.
+/// host-specific extensions, then hand it over. A host module's own plugin is
+/// a thin wrapper doing exactly that.
 pub struct ScriptPlugin<H: ScriptHost + Resource<Mutability = Mutable>> {
     host: H,
     source: String,
@@ -230,7 +229,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         // program already failed to resolve. Sealing after the drain turns a
         // late registration into a warning instead of a silent miss.
         if app.world.contains_resource::<ScriptFnRegistry>() {
-            let fns = app.world.resource::<ScriptFnRegistry>().for_lang(lang);
+            let fns = app.world.resource::<ScriptFnRegistry>().fns().to_vec();
             for f in &fns {
                 if let Err(e) = self.host.register_script_fn(f) {
                     warn_line!(
@@ -262,7 +261,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             warn_line!(
                 "\n\
                  ================================================================\n\
-                 lumen-script-{lang}: SCRIPT LOAD FAILED\n\
+                 lumen-{lang}: SCRIPT LOAD FAILED\n\
                  \n\
                    {e}\n\
                  \n\

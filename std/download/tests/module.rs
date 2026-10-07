@@ -174,18 +174,24 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, and the
-/// given `[dependencies]` block.
+/// Write an app dir: markup with a candela script, the script itself, and the
+/// given `[dependencies]` block. `script` is the script's handlers; the
+/// `lumen.cdl` import and the empty `main` every candela program needs are
+/// added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[app]\nid = \"lumen-download-module-{case}\"\n\n[dependencies]\n{dependencies}"),
@@ -241,13 +247,13 @@ fn the_bundled_module_downloads_a_verified_file() {
         &format!(
             r#"
 fn on_start() {{
-    signal("started", "").set(download::to_file("{url}", "payload.bin", "art", "sha256:{sum}"));
+    lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", "sha256:{sum}"));
 }}
-fn on_download_progress(tag, received, total) {{
-    signal("progress", "").set(tag + ":" + received + "/" + total);
+fn on_download_progress(tag: string, received: int, total: int) {{
+    lumen::signal_set("progress", tag + ":" + str(received) + "/" + str(total));
 }}
-fn on_download_done(tag, path) {{ signal("done", "").set(tag); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", tag); }}
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
 "#
         ),
     );
@@ -294,10 +300,10 @@ fn a_missing_file_reports_and_leaves_the_app_running() {
         &format!(
             r#"
 fn on_start() {{ download::to_file("{url}", "payload.bin", "art", ""); }}
-fn on_download_progress(tag, received, total) {{}}
-fn on_download_done(tag, path) {{ signal("done", "").set(path); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
-fn on_ready() {{ signal("alive", "").set("yes"); }}
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", path); }}
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
+fn on_ready() {{ lumen::signal_set("alive", "yes"); }}
 "#
         ),
     );
@@ -327,9 +333,9 @@ fn the_config_table_bounds_the_body() {
         &format!(
             r#"
 fn on_start() {{ download::to_file("{url}", "payload.bin", "art", ""); }}
-fn on_download_progress(tag, received, total) {{}}
-fn on_download_done(tag, path) {{ signal("done", "").set(path); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", path); }}
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
 "#
         ),
     );
@@ -346,9 +352,9 @@ fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
     );
 }
 
-/// Without the module the function does not exist: the script's call fails
-/// with the host's ordinary unknown-namespace error, the app survives its
-/// run, and nothing is downloaded.
+/// Without the module the function does not exist: the script fails to
+/// compile with candela's ordinary undeclared-namespace error, the app
+/// survives its run, and nothing is downloaded.
 #[test]
 fn without_the_module_the_function_does_not_exist() {
     let f = fixtures();
@@ -359,12 +365,15 @@ fn without_the_module_the_function_does_not_exist() {
         "download-absent",
         "",
         &format!(
-            r#"fn on_start() {{ signal("started", "").set(download::to_file("{url}", "payload.bin", "art", "")); }}"#
+            r#"fn on_start() {{ lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", "")); }}"#
         ),
     );
     let (stdout, stderr) = run_host(f, &dir, 20, "started");
 
-    assert!(stderr.contains("Module not found: download"), "{stderr}");
+    assert!(
+        stderr.contains("no `download` namespace is declared here"),
+        "{stderr}"
+    );
     assert!(!stdout.contains("HOST tick-panic-caught"), "{stdout}");
     assert!(stdout.contains("HOST signal started=<unset>"), "{stdout}");
     assert!(!dir.join("payload.bin").exists(), "{stdout}");

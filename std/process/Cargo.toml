@@ -57,6 +57,8 @@ engine-dylib = ["lumen-module/engine-dylib"]
 # loader end to end over a subprocess. The shipping crate stays on
 # `lumen-module` alone.
 [dev-dependencies]
+# The candela host the in-process tests run their scripts on.
+lumen-candela-dev = { workspace = true }
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }

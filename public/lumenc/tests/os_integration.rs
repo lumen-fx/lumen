@@ -4,106 +4,59 @@
 // of failing on the missing symbol.
 #![cfg(feature = "dev-run")]
 
-//! OS-integration surfaces reach the script, in every host.
+//! OS-integration surfaces reach the script.
 //!
-//! The fixture is one app carrying a `.rhai`, a `.lua`, and a `.cdl` program
-//! that each register the same OS handlers and record their arguments in
-//! per-language signals. Driving one event and asserting three signals is what
-//! keeps the hosts at parity: a builtin or dispatcher wired in one language and
-//! missed in another fails here rather than in someone's app.
+//! The fixture is one candela app that registers every OS handler and records
+//! its arguments in signals. Driving one event and asserting its signals is
+//! what proves a capability's dispatcher reaches the script with its arguments
+//! intact.
 //!
 //! Everything runs headless. No window opens, and no test touches a real OS
 //! surface: nothing pops a dialog, raises a notification, or reads the system
 //! clipboard. Each test writes the event the capability would have produced,
-//! built by the capability's own constructor, and asserts on what the hosts
+//! built by the capability's own constructor, and asserts on what the script
 //! did with it.
 
 use lumen_core::prelude::App;
 use lumenc::{RunOptions, build_headless_app};
 
 const MARKUP: &str = r#"<root>
-  <label id="hotkey-label" bind-text="rhai_release" text="waiting" />
-  <script src="a.rhai" />
-  <script src="b.lua" />
-  <script src="c.cdl" />
+  <label id="hotkey-label" bind-text="release" text="waiting" />
+  <script src="main.cdl" />
 </root>"#;
 
-const RHAI: &str = r#"
-fn on_hotkey(name) { signal("rhai_seq", "").set("press:" + name); }
-fn on_hotkey_release(name) {
-    signal("rhai_release", "").set(name);
-    signal("rhai_seq", "").set(signal("rhai_seq", "").get() + ",release");
-}
-fn on_tray(id) { signal("rhai_tray", "").set(id); }
-fn on_files_picked(tag, paths) {
-    signal("rhai_pick_tag", "").set(tag);
-    signal("rhai_pick", "").set(paths);
-}
-fn on_notification_action(id, action) {
-    signal("rhai_action_id", "").set(id);
-    signal("rhai_action", "").set(action);
-}
-fn on_clipboard(tag, text) {
-    signal("rhai_clip_tag", "").set(tag);
-    signal("rhai_clip", "").set(text);
-}
-"#;
-
-const LUA: &str = r#"
-function on_hotkey(name) signal("lua_seq", ""):set("press:" .. name) end
-function on_hotkey_release(name)
-    signal("lua_release", ""):set(name)
-    signal("lua_seq", ""):set(signal("lua_seq", ""):get() .. ",release")
-end
-function on_tray(id) signal("lua_tray", ""):set(id) end
-function on_files_picked(tag, paths)
-    signal("lua_pick_tag", ""):set(tag)
-    signal("lua_pick", ""):set(paths)
-end
-function on_notification_action(id, action)
-    signal("lua_action_id", ""):set(id)
-    signal("lua_action", ""):set(action)
-end
-function on_clipboard(tag, text)
-    signal("lua_clip_tag", ""):set(tag)
-    signal("lua_clip", ""):set(text)
-end
-"#;
-
-const CDL: &str = r#"
+const SCRIPT: &str = r#"
 import "lumen.cdl";
 
-fn on_hotkey(name) { lumen::signal_set("cdl_seq", "press:" + name); }
+fn on_hotkey(name) { lumen::signal_set("seq", "press:" + name); }
 
 fn on_hotkey_release(name) {
-    lumen::signal_set("cdl_release", name);
-    lumen::signal_set("cdl_seq", lumen::signal_get("cdl_seq") + ",release");
+    lumen::signal_set("release", name);
+    lumen::signal_set("seq", lumen::signal_get("seq") + ",release");
 }
 
-fn on_tray(id) { lumen::signal_set("cdl_tray", id); }
+fn on_tray(id) { lumen::signal_set("tray", id); }
 
 fn on_files_picked(tag, paths) {
-    lumen::signal_set("cdl_pick_tag", tag);
-    lumen::signal_set("cdl_pick", paths);
+    lumen::signal_set("pick_tag", tag);
+    lumen::signal_set("pick", paths);
 }
 
 fn on_notification_action(id, action) {
-    lumen::signal_set("cdl_action_id", id);
-    lumen::signal_set("cdl_action", action);
+    lumen::signal_set("action_id", id);
+    lumen::signal_set("action", action);
 }
 
 fn on_clipboard(tag, text) {
-    lumen::signal_set("cdl_clip_tag", tag);
-    lumen::signal_set("cdl_clip", text);
+    lumen::signal_set("clip_tag", tag);
+    lumen::signal_set("clip", text);
 }
 
 fn main() {}
 "#;
 
-const LANGS: [&str; 3] = ["rhai", "lua", "cdl"];
-
-/// A throwaway app directory holding the three script files. Named per process
-/// and per nanosecond so tests running concurrently never share one.
+/// A throwaway app directory holding the script. Named per process and per
+/// nanosecond so tests running concurrently never share one.
 struct Fixture(std::path::PathBuf);
 
 impl Fixture {
@@ -118,13 +71,11 @@ impl Fixture {
         ));
         let src = dir.join("src");
         std::fs::create_dir_all(&src).expect("create fixture dir");
-        std::fs::write(src.join("a.rhai"), RHAI).expect("write rhai");
-        std::fs::write(src.join("b.lua"), LUA).expect("write lua");
-        std::fs::write(src.join("c.cdl"), CDL).expect("write candela");
+        std::fs::write(src.join("main.cdl"), SCRIPT).expect("write main.cdl");
         Self(dir)
     }
 
-    /// Build the app and settle it, so every host is loaded and ready to
+    /// Build the app and settle it, so the script is loaded and ready to
     /// receive an event by the time a test writes one.
     fn app(&self) -> App {
         let opts = RunOptions::new(&self.0).with_markup(MARKUP.to_string());
@@ -149,24 +100,20 @@ fn signal(app: &App, name: &str) -> Option<String> {
         .map(|v| v.to_string())
 }
 
-/// Assert every host recorded `expected` under its own `<lang>_<suffix>`.
-fn assert_all_hosts(app: &App, suffix: &str, expected: &str) {
-    for lang in LANGS {
-        let name = format!("{lang}_{suffix}");
-        assert_eq!(
-            signal(app, &name).as_deref(),
-            Some(expected),
-            "the {lang} host must have handled the event"
-        );
-    }
+/// Assert the script recorded `expected` under `name`.
+fn assert_handled(app: &App, name: &str, expected: &str) {
+    assert_eq!(
+        signal(app, name).as_deref(),
+        Some(expected),
+        "the script must have handled the event (signal `{name}`)"
+    );
 }
 
 /// A chord pressed and released within one tick reaches `on_hotkey` and then
-/// `on_hotkey_release` in every host. Writing the poll's events directly is
-/// the only way to drive it headlessly: the real chord needs an OS-level X11
-/// grab.
+/// `on_hotkey_release`. Writing the poll's events directly is the only way to
+/// drive it headlessly: the real chord needs an OS-level X11 grab.
 #[test]
-fn hotkey_press_and_release_dispatch_to_every_host_in_order() {
+fn hotkey_press_and_release_dispatch_in_order() {
     let fixture = Fixture::new("hotkey");
     let mut app = fixture.app();
 
@@ -179,13 +126,13 @@ fn hotkey_press_and_release_dispatch_to_every_host_in_order() {
     app.tick();
     app.tick();
 
-    assert_all_hosts(&app, "release", "talk");
-    assert_all_hosts(&app, "seq", "press:talk,release");
+    assert_handled(&app, "release", "talk");
+    assert_handled(&app, "seq", "press:talk,release");
 }
 
-/// A tray icon click reaches `on_tray(id)` in every host.
+/// A tray icon click reaches `on_tray(id)`.
 #[test]
-fn tray_click_dispatches_to_every_host() {
+fn tray_click_dispatches_to_the_script() {
     let fixture = Fixture::new("tray");
     let mut app = fixture.app();
 
@@ -194,13 +141,13 @@ fn tray_click_dispatches_to_every_host() {
     app.tick();
     app.tick();
 
-    assert_all_hosts(&app, "tray", "main");
+    assert_handled(&app, "tray", "main");
 }
 
-/// A resolved multi-file dialog reaches `on_files_picked(tag, paths)` in every
-/// host, its paths joined by `|`.
+/// A resolved multi-file dialog reaches `on_files_picked(tag, paths)`, its
+/// paths joined by `|`.
 #[test]
-fn file_picks_dispatch_to_every_host() {
+fn file_picks_dispatch_to_the_script() {
     let fixture = Fixture::new("filedialog");
     let mut app = fixture.app();
 
@@ -215,14 +162,14 @@ fn file_picks_dispatch_to_every_host() {
     app.tick();
     app.tick();
 
-    assert_all_hosts(&app, "pick_tag", "import");
-    assert_all_hosts(&app, "pick", "/a.png|/b.png");
+    assert_handled(&app, "pick_tag", "import");
+    assert_handled(&app, "pick", "/a.png|/b.png");
 }
 
 /// A notification's action button reaches `on_notification_action(id, action)`
 /// with both arguments intact.
 #[test]
-fn notification_action_dispatches_to_every_host() {
+fn notification_action_dispatches_to_the_script() {
     let fixture = Fixture::new("notify");
     let mut app = fixture.app();
 
@@ -233,19 +180,19 @@ fn notification_action_dispatches_to_every_host() {
     app.tick();
     app.tick();
 
-    assert_all_hosts(&app, "action_id", "export-done");
-    assert_all_hosts(&app, "action", "open");
+    assert_handled(&app, "action_id", "export-done");
+    assert_handled(&app, "action", "open");
 }
 
-/// A finished `clipboard_read(tag)` reaches `on_clipboard(tag, text)` in every
-/// host with both arguments intact.
+/// A finished `clipboard_read(tag)` reaches `on_clipboard(tag, text)` with
+/// both arguments intact.
 ///
 /// The event is written directly rather than driven through
 /// `clipboard_read`, because the system clipboard is a main-thread-only API on
-/// macOS and a test runs on a worker thread. What the parity check needs is the
-/// dispatch, and that is the same either way.
+/// macOS and a test runs on a worker thread. What this checks is the dispatch,
+/// and that is the same either way.
 #[test]
-fn clipboard_read_answers_every_host() {
+fn clipboard_read_answers_the_script() {
     let fixture = Fixture::new("clipboard");
     let mut app = fixture.app();
 
@@ -257,8 +204,8 @@ fn clipboard_read_answers_every_host() {
     app.tick();
     app.tick();
 
-    assert_all_hosts(&app, "clip_tag", "editor");
-    assert_all_hosts(&app, "clip", "from the clipboard");
+    assert_handled(&app, "clip_tag", "editor");
+    assert_handled(&app, "clip", "from the clipboard");
 }
 
 /// A script-supplied tray menu spec reaches `TrayConfig::menu` instead of being

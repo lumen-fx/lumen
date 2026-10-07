@@ -15,11 +15,15 @@ use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
+
 /// Nav, the DOM snapshot, and the property and event buses are
 /// process-global, so the headless apps here run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Build a headless app running `source` under rhai, with the portable
+/// Build a headless app running the candela `source`, with the portable
 /// fixture plugin declared in the app's `lumen.toml` with `config`.
 fn app_with_plugin(tag: &str, config: &str, source: &str) -> EcsApp {
     let dir =
@@ -43,9 +47,9 @@ fn app_with_plugin(tag: &str, config: &str, source: &str) -> EcsApp {
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: "rhai".to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -95,7 +99,14 @@ fn a_threaded_event_reaches_the_fallback_handler() {
     let mut app = app_with_plugin(
         "thread",
         "thread_events = 1",
-        r#"fn on_any(key, n) { signal("plugin_event", "").set(key + ":" + n); }"#,
+        r#"import "lumen.cdl";
+
+fn on_any(key: string, n: int) {
+    lumen::signal_set("plugin_event", key + ":" + str(n));
+}
+
+fn main() {}
+"#,
     );
     assert_eq!(
         tick_until_signal(&mut app, "plugin_event", Duration::from_secs(10)).as_deref(),
@@ -113,14 +124,23 @@ fn a_per_key_registration_wins_over_the_fallback() {
     let mut app = app_with_plugin(
         "per-key",
         "",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    on("on_fixture", "special", "on_special");
-    fixture_event("special");
-    fixture_event("plain");
+    lumen::on("on_fixture", "special", "on_special");
+    native::fixture_event("special");
+    native::fixture_event("plain");
 }
-fn on_special(key, arg) { signal("special_route", "").set("per-key:" + key); }
-fn on_any(key, arg) { signal("fallback_route", "").set("fallback:" + key); }
+
+fn on_special(key: string, arg: string) {
+    lumen::signal_set("special_route", "per-key:" + key);
+}
+
+fn on_any(key: string, arg: string) {
+    lumen::signal_set("fallback_route", "fallback:" + key);
+}
+
+fn main() {}
 "#,
     );
     assert_eq!(
@@ -142,7 +162,10 @@ fn a_command_batch_mutates_the_app_without_a_handler() {
     let mut app = app_with_plugin(
         "commands",
         "",
-        r#"fn on_start() { fixture_push_signal("from_plugin", "yes"); }"#,
+        r#"fn on_start() { native::fixture_push_signal("from_plugin", "yes"); }
+
+fn main() {}
+"#,
     );
     assert_eq!(
         tick_until_signal(&mut app, "from_plugin", Duration::from_secs(10)).as_deref(),

@@ -1,5 +1,5 @@
 //! `.lpak` resource bundle: a zip-like archive that ships an entire
-//! Lumen app's assets (main.lmn, main.css, main.rhai, images, fonts)
+//! Lumen app's assets (main.lmn, main.css, scripts, images, fonts)
 //! as a single file. Mirrors Qt's `qrc` and GTK's `GResource`.
 //!
 //! The on-disk format is intentionally tiny - no compression, no

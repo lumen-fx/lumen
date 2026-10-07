@@ -10,12 +10,11 @@
 //!     main.css   # optional: stylesheet
 //! ```
 //!
-//! - Wires the default plugin stack: the registered layout engine, cosmic text, input, hover/press/drag/scroll primitives, optional Rhai script host, optional MCP server.
+//! - Wires the default plugin stack: the registered layout engine, cosmic text, input, hover/press/drag/scroll primitives, the script host module for each language the app ships, optional MCP server.
 //! - Runs the registered window backend's event loop and returns when the window closes or a fatal error occurs.
-//! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `src/main.lmn`, `src/main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads the Rhai script against a fresh `Scope`. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
+//! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `src/main.lmn`, `src/main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads each script host's program in place. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
 //! - Script commands: `SetText` updates the matching `LumenId`'s [`TextContent`]; other variants (`Print`, `AddClicks`, `SetString`) no-op here.
 
-use bevy_ecs::component::Mutable;
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_assets::AssetsPlugin;
@@ -30,21 +29,10 @@ use lumen_primitives::{
     RadioPlugin, ScrollPlugin, TabsPlugin, TooltipPlugin, TransitionPlugin, ValidationPlugin,
 };
 use lumen_script::ScriptCommand;
-use lumen_script::ScriptHost;
-#[cfg(feature = "host-candela")]
-use lumen_script_candela::{CandelaHost, ScriptCandelaPlugin};
-#[cfg(feature = "host-lua")]
-use lumen_script_lua::{LuaHost, ScriptLuaPlugin};
-#[cfg(feature = "host-rhai")]
-use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
-// The host-generic script systems live in `lumen-script` and are
-// re-exported by both host crates. Importing them from the runtime crate
-// means a single generic `::<H>` path resolves for whichever `ScriptHost`
-// the `[script] engine` key selects (Rhai or Lua).
-// `ScriptSet` is how the host-neutral half orders against them: with several
-// hosts installed, an edge naming one host's system leaves the others outside
-// the one-tick dirty window.
-use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet, fire_on_ready, reload_script};
+// `ScriptSet` is how the host-neutral half orders against the hosts' own
+// systems: with several hosts installed, an edge naming one host's system
+// leaves the others outside the one-tick dirty window.
+use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 use std::path::{Path, PathBuf};
@@ -56,19 +44,13 @@ use std::time::{Duration, Instant};
 use crate::source_parser::SourceParser;
 use lumen_ir::layout_ir::{Attributes, Element};
 
-/// A single `rhai::Engine` extension callback; factored into an alias to
-/// keep clippy's `type_complexity` lint quiet.
-#[cfg(feature = "host-rhai")]
-type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
-
 /// An embedder callback invoked on the fully-built [`App`] right before
 /// the window event loop starts. Every default plugin and system is
 /// already registered at that point, so a hook can insert resources and
 /// add systems ordered against the default stack's public systems (for
 /// example `.before(lumen_core::signals::apply_text_bindings)`).
 ///
-/// This is the native-Rust counterpart of [`RunOptions::rhai_extensions`]:
-/// the Rust SDK (`sdk/rust`, crate `lumen`) uses it to wire Rust-closure
+/// The Rust SDK (`sdk/rust`, crate `lumenui`) uses it to wire Rust-closure
 /// event handlers and whole `bevy_ecs` systems into the tick without lumenc
 /// knowing about them.
 ///
@@ -115,17 +97,6 @@ pub struct RunOptions {
     pub clear: Color,
     /// Watch source files and reload on change. On by default.
     pub hot_reload: bool,
-    /// Native Rhai extensions installed before script compile. Each
-    /// closure receives the inner `rhai::Engine` and can `register_fn`
-    /// app-specific builtins backed by Rust crates / FFI. Lumen ships
-    /// only UI primitives; OS-level integrations live in the embedding
-    /// binary (see `apps/sysmon` for a worked example using
-    /// `sysinfo`).
-    ///
-    /// Rhai-typed, so these bind to the Rhai host only. Use
-    /// [`Self::native_fns`] for a function every host can call.
-    #[cfg(feature = "host-rhai")]
-    pub rhai_extensions: Vec<RhaiExtension>,
     /// Plugins installed on the [`App`] before the script hosts load. See
     /// [`Self::with_plugin`].
     pub plugins: Vec<PluginInstaller>,
@@ -136,7 +107,7 @@ pub struct RunOptions {
     ///
     /// candela resolves host calls through a declared block, so a candela
     /// script reaches these as `native::<name>(...)` after declaring
-    /// `host "native" { any <name>(...); }`; Rhai and Lua see plain globals.
+    /// `host "native" { any <name>(...); }`.
     pub native_fns: Vec<ScriptFn>,
     /// In-memory markup source. When `Some`, the runtime parses this
     /// string instead of reading `<dir>/src/main.lmn` from disk, and hot
@@ -226,8 +197,6 @@ impl RunOptions {
             // app or its active skin defines one.
             clear: DEFAULT_CLEAR,
             hot_reload: true,
-            #[cfg(feature = "host-rhai")]
-            rhai_extensions: Vec::new(),
             plugins: Vec::new(),
             native_fns: Vec::new(),
             markup: None,
@@ -273,17 +242,6 @@ impl RunOptions {
     /// bytes instead of a file path. See [`Self::artifact_bytes`].
     pub fn with_artifact_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.artifact_bytes = Some(bytes.into());
-        self
-    }
-
-    /// Builder: install a callback that registers native Rhai
-    /// builtins from the embedding binary. See [`RunOptions`].
-    #[cfg(feature = "host-rhai")]
-    pub fn with_rhai_extension<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut rhai::Engine) + Send + 'static,
-    {
-        self.rhai_extensions.push(Box::new(f));
         self
     }
 
@@ -372,32 +330,6 @@ fn install_assets(app: &mut App, lpak: Option<&Path>, dir: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Convenience entry point for embedding apps. Wraps [`run_app`] with
-/// a single closure that registers native Rhai functions on top of
-/// Lumen's defaults - the minimal-boilerplate path for shipping a
-/// custom Lumen app that links one extra Rust crate (sysinfo, hyper,
-/// rusqlite, anything).
-///
-/// Note: the bare `lumen_runtime::run_with` links no markup parser - a
-/// from-source run needs one injected via [`RunOptions::with_parser`]. The
-/// compiler (`lumenc::run_with`) and the SDKs wire the default parser for you.
-///
-/// ```no_run
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     lumen_runtime::run_with(env!("CARGO_MANIFEST_DIR"), |engine| {
-///         engine.register_fn("now_ms", || 42_i64);
-///     })?;
-///     Ok(())
-/// }
-/// ```
-#[cfg(feature = "host-rhai")]
-pub fn run_with<F>(dir: impl Into<PathBuf>, extend: F) -> Result<(), RunError>
-where
-    F: FnOnce(&mut rhai::Engine) + Send + 'static,
-{
-    run_app(RunOptions::new(dir).with_rhai_extension(extend))
-}
-
 /// Errors raised while preparing the app.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -466,14 +398,6 @@ pub enum RunError {
     /// The `.lpak` archive named by [`RunOptions::assets`] could not be read.
     #[error("read asset bundle {0}: {1}")]
     Assets(PathBuf, String),
-    /// The app ships a script but this build compiled no script host at all
-    /// (`--no-default-features` with none of `host-rhai` / `host-lua` /
-    /// `host-candela`). Rebuild with the host the app's language needs.
-    #[error(
-        "this runtime was built with no script host; rebuild with one of \
-         --features host-rhai / host-lua / host-candela"
-    )]
-    NoScriptHostAvailable,
 }
 
 /// Read `<dir>/src/main.lmn` + optional `<dir>/src/main.css`, build a default
@@ -727,10 +651,10 @@ pub use check::CheckReport;
 // ahead of time reads them from where the runtime would.
 #[cfg(all(feature = "runtime-parse", feature = "modules"))]
 pub use check::module_surface;
+#[cfg(all(feature = "runtime-parse", feature = "modules"))]
+pub use check::script_exports;
 #[cfg(feature = "runtime-parse")]
-pub use check::{
-    CompileDeps, ModuleSurface, check_app, compile_app, compile_app_with_skin, script_exports,
-};
+pub use check::{CompileDeps, ModuleSurface, check_app, compile_app, compile_app_with_skin};
 #[cfg(feature = "runtime-parse")]
 pub(crate) use hot_reload::HotReloadDriver;
 pub use i18n::locale_dir;

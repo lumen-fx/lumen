@@ -12,8 +12,8 @@
 //! current-event cell; a handler reads target / position / key / modifiers /
 //! button / delta / value from it and mutates its `prevent_default` /
 //! `stop_propagation` / `stop_immediate_propagation` flags through the free
-//! functions here. rhai / lua wrap those in a registered `Event` handle;
-//! candela and the C-ABI call them procedurally.
+//! functions here. A host may wrap those in a registered `Event` handle or
+//! call them procedurally, as the C-ABI does.
 //!
 //! Propagation follows the DOM contract: capture from the root down to the
 //! target, dispatch at the target, then bubble back up (for events that

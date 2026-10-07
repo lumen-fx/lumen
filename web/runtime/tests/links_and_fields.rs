@@ -10,7 +10,7 @@
 //! `wasm-bindgen-test-runner` drives Chrome through `chromedriver`; point
 //! `CHROMEDRIVER` at the binary if it is not on `PATH`.
 
-#![cfg(all(target_arch = "wasm32", feature = "host-candela"))]
+#![cfg(target_arch = "wasm32")]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -92,12 +92,14 @@ fn boot() -> (Rc<RefCell<App>>, ScriptHostAccess, DomElement) {
     let root = container.first_element_child().expect("the page root");
 
     let mut app = assemble::portable_app();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     let host = hosts::install(&mut app, "candela", PROGRAM, "link_and_field.cdlb")
         .expect("this build carries the candela host");
     let compiled = CompiledApp {
         ir,
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(PROGRAM.to_vec()),
         }],

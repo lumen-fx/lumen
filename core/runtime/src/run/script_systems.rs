@@ -1,6 +1,5 @@
 use super::*;
 
-use lumen_scene::dom::{build_dom_index, install_dom_events};
 use lumen_scene::i18n::install_retranslate;
 use lumen_scene::script_commands::apply_scene_script_commands;
 
@@ -47,9 +46,12 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // cascade inputs `computed_style` consumes, alongside the DomIndex so a
     // read from a handler sees this tick's tree. Unconditional (works for a
     // script-less app queried over the C-ABI).
+    // In the set a host's lifecycle dispatches order after, so `on_ready`
+    // reads the tree it mounted into.
     app.add_systems(
         TickStage::Systems,
         crate::run::introspection::publish_node_details
+            .in_set(lumen_scene::script_host::PublishNodeDetails)
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
@@ -65,31 +67,13 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
-    if !has_script {
-        // No host means `register_script_host_systems` never runs, so install
-        // the DOM-event dispatchers here against whichever host this build
-        // carries. They take an optional host and deliver to C-ABI / SDK
-        // native handlers, so any compiled host serves; a build with none
-        // installs nothing and delivers no DOM events to native handlers.
-        #[cfg(feature = "host-rhai")]
-        install_dom_events::<RhaiHost>(app);
-        #[cfg(all(not(feature = "host-rhai"), feature = "host-candela"))]
-        install_dom_events::<CandelaHost>(app);
-        #[cfg(all(
-            not(feature = "host-rhai"),
-            not(feature = "host-candela"),
-            feature = "host-lua"
-        ))]
-        install_dom_events::<LuaHost>(app);
-    }
     app.add_systems(
         TickStage::Systems,
         lumen_core::property_store::commit_external_properties
             .after(ScriptSet::Dispatch)
             // A host that writes signals through the typed bus rather than
-            // the command stream (Rhai's `signal(..).set(..)`) needs this
-            // edge for the same reason: an `on_frame` write binds on the
-            // tick the callback ran.
+            // the command stream needs this edge for the same reason: an
+            // `on_frame` write binds on the tick the callback ran.
             .after(ScriptSet::Frame)
             .before(ScriptSet::Derivations),
     );
@@ -206,8 +190,8 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // W6 T6: `bind-scroll` push half - the settled scroll offset mirrors
     // back into the signal (throttled to scroll-settle inside the system,
     // never per-frame). `.before(ScriptSet::Derivations)` per the 7bfc0f2 push
-    // rules; the `.before(sync_signals_into_host)` edge lives in
-    // lumen-script-rhai's registration (expressed as its
+    // rules; the `.before(sync_signals_into_host)` edge lives in the generic
+    // script plugin's registration (expressed as its
     // `.after(push_scroll_to_signal)`).
     app.add_systems(
         TickStage::Systems,
@@ -323,73 +307,4 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         // takes one click.
         install_retranslate(app);
     }
-}
-
-/// Install the per-host half of the script wiring, once for each active
-/// [`ScriptHost`]. Every system here joins a [`lumen_script::ScriptSet`], so
-/// the host-neutral edges in [`register_script_common`] cover it without
-/// naming its concrete type.
-pub(crate) fn register_script_host_systems<
-    H: lumen_script::ScriptHost + Resource<Mutability = Mutable>,
->(
-    app: &mut App,
-    multi_host: bool,
-) {
-    // RC6: a script that failed to load at plugin build leaves
-    // `ScriptLoadFailure` behind. Mirror it into the in-app error banner so the
-    // failure is visible in the window itself, not only in the stderr banner
-    // the plugin printed. Read here, right after this host's plugin installed.
-    if let Some(fail) = app.world.get_resource::<lumen_script::ScriptLoadFailure>() {
-        let msg = format!("script load failed: {}", fail.0);
-        app.world.resource_mut::<ErrorBanner>().0 = Some(msg);
-    }
-    // Cross-host signal reads. A host keeps its own mirror current as its
-    // builtins run, so with one host the early `ScriptSet::SyncSignals` pass
-    // is all that is needed and this stays unregistered. With two, a signal
-    // written in one language reaches `PropertyStore` only when
-    // `apply_scene_script_commands` runs, and its dirty flag is cleared at
-    // end of tick - so the other host's mirror must be refreshed here, inside
-    // that one-tick window, or the write is invisible to it forever.
-    if multi_host {
-        app.add_systems(
-            TickStage::Systems,
-            lumen_script::sync_signals_into_host::<H>
-                .in_set(ScriptSet::SyncSignalsLate)
-                .after(apply_scene_script_commands)
-                .before(ScriptSet::Derivations),
-        );
-    }
-    // Post-mount lifecycle: dispatch `on_ready` once per host, after the first
-    // `build_dom_index` publish so a DOM query inside it sees the mounted
-    // static tree, and before `collect_dom_commands` so any tree the handler
-    // builds is materialized on the same first tick. A missing `on_ready` is a
-    // no-op, so `on_start`-only apps are unaffected.
-    //
-    // `.after(ScriptSet::SyncSignals)`: both write the host's signal mirror on
-    // the tick where a value is still dirty, and the sync rewrites entries from
-    // the store. Unordered, the sync can run after the dispatch and overwrite
-    // the values `on_ready` just wrote with the pre-dispatch store state,
-    // leaving the mirror stale for every later handler read.
-    app.add_systems(
-        TickStage::Systems,
-        fire_on_ready::<H>
-            .in_set(ScriptSet::Ready)
-            .after(build_dom_index)
-            .after(crate::run::introspection::publish_node_details)
-            .after(ScriptSet::SyncSignals),
-    );
-    // The use sites the build left for the script to fill, on the same terms
-    // as `on_ready`: after the tree is queryable, before the command collector,
-    // so what the call builds lands on the tick the call ran. Every tick, not
-    // once - a subtree spawned while the app runs can carry a marker too.
-    app.add_systems(
-        TickStage::Systems,
-        lumen_script::fill_components::<H>
-            .in_set(ScriptSet::Fill)
-            .after(ScriptSet::Ready)
-            .after(build_dom_index)
-            .after(crate::run::introspection::publish_node_details)
-            .after(ScriptSet::SyncSignals),
-    );
-    install_dom_events::<H>(app);
 }

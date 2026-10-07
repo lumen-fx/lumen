@@ -170,14 +170,20 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, and the
-/// given `[dependencies]` block.
+/// Write an app dir: markup naming a candela script, the script itself, and
+/// the given `[dependencies]` block. `script` is the script's handlers; the
+/// `lumen.cdl` import and the empty `main` every candela program needs are
+/// added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, markup: &str, script: &str) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
     std::fs::write(dir.join("src/main.lmn"), markup).expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[dependencies]\n{dependencies}"),
@@ -230,12 +236,12 @@ fn the_bundled_module_supplies_the_canvas_element_and_its_functions() {
         "canvas-bundled",
         "lumen-canvas = { bundled = true, tags = [\"canvas\"] }\n",
         "<root><canvas id=\"chart\" width=\"200\" height=\"120\" />\
-         <script src=\"main.rhai\" /></root>\n",
+         <script src=\"main.cdl\" /></root>\n",
         // The drawing space is the element's, so it is known once the
         // element is mounted: `on_ready`, not `on_start`.
         "fn on_ready() {\n\
-         signals.w.set(canvas::width(\"chart\"));\n\
-         signals.h.set(canvas::height(\"chart\"));\n\
+         lumen::signal_set_int(\"w\", canvas::width(\"chart\"));\n\
+         lumen::signal_set_int(\"h\", canvas::height(\"chart\"));\n\
          canvas::fill_rect(\"chart\", 0.0, 0.0, 10.0, 10.0);\n\
          }\n",
     );
@@ -265,8 +271,8 @@ fn the_run_path_accepts_the_tag_the_module_registers() {
         "canvas-no-tags-key",
         "lumen-canvas = { bundled = true }\n",
         "<root><canvas id=\"chart\" width=\"64\" height=\"64\" />\
-         <script src=\"main.rhai\" /></root>\n",
-        "fn on_ready() { signals.w.set(canvas::width(\"chart\")); }\n",
+         <script src=\"main.cdl\" /></root>\n",
+        "fn on_ready() { lumen::signal_set_int(\"w\", canvas::width(\"chart\")); }\n",
     );
     let (stdout, stderr) = run_host(f, &dir, 20, "w");
 
@@ -293,16 +299,16 @@ fn a_frame_loop_advances_and_then_parks() {
         "canvas-frames",
         "lumen-canvas = { bundled = true, tags = [\"canvas\"] }\n",
         "<root><canvas id=\"chart\" width=\"64\" height=\"64\" />\
-         <script src=\"main.rhai\" /></root>\n",
+         <script src=\"main.cdl\" /></root>\n",
         "fn on_ready() {\n\
-         signals.frames.set(0);\n\
-         request_frame();\n\
+         lumen::signal_set_int(\"frames\", 0);\n\
+         lumen::request_frame();\n\
          }\n\
-         fn on_frame(dt) {\n\
-         let n = signals.frames.get() + 1;\n\
-         signals.frames.set(n);\n\
-         canvas::fill_rect(\"chart\", n * 1.0, 0.0, 1.0, 1.0);\n\
-         if n < 5 { request_frame(); }\n\
+         fn on_frame(dt: float) {\n\
+         let n = lumen::signal_get_int(\"frames\") + 1;\n\
+         lumen::signal_set_int(\"frames\", n);\n\
+         canvas::fill_rect(\"chart\", float(n), 0.0, 1.0, 1.0);\n\
+         if n < 5 { lumen::request_frame(); }\n\
          }\n",
     );
     // Far more ticks than frames asked for: the count stops where the script
@@ -325,7 +331,7 @@ fn without_the_module_the_element_is_an_unknown_tag() {
         f,
         "canvas-absent",
         "",
-        "<root><canvas id=\"chart\" /><script src=\"main.rhai\" /></root>\n",
+        "<root><canvas id=\"chart\" /><script src=\"main.cdl\" /></root>\n",
         "fn on_start() {}\n",
     );
     let joined = std::env::join_paths(&f.lib_dirs).expect("lib dirs join");

@@ -1,7 +1,7 @@
 //! Host-neutral read side of the dynamic DOM API: selector queries,
 //! `get_by_id`, and traversal over the per-tick [`DomIndex`] snapshot.
 //!
-//! Script hosts (`rhai` / `lua` / `candela`) and the C-ABI all funnel
+//! Script hosts and the C-ABI all funnel
 //! through these functions. Handles cross the boundary as a packed `u64`
 //! ([`NodeHandle::pack`]); candela, whose value type is `i32`, interns the
 //! handle into the process-global side-table instead (see

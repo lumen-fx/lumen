@@ -245,7 +245,6 @@ impl PluginSet {
                     name: decl.name.clone(),
                     ns: decl.ns.clone(),
                     sig: decl.sig.clone(),
-                    hosts: decl.hosts,
                     body: Arc::new(move |cx: &mut ScriptFnCx<'_>| target.call(index, cx)),
                 });
             }
@@ -486,12 +485,6 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
                 decl.name
             ));
         }
-        if decl.hosts.is_empty() {
-            return Err(format!(
-                "function '{}' is visible to no language",
-                decl.name
-            ));
-        }
         if seen.contains(&(&decl.ns, decl.name.as_str())) {
             return Err(format!("declares '{}' twice", decl.name));
         }
@@ -571,7 +564,7 @@ unsafe extern "C" fn wake(ctx: *mut c_void) {
 #[cfg(test)]
 mod tests {
     use lumen_plugin_abi::raw::{fill, free_buf};
-    use lumen_script::{HostSet, ScriptCommand, ScriptSig};
+    use lumen_script::{ScriptCommand, ScriptSig};
 
     use super::*;
     use crate::abi::ABI_VERSION;
@@ -698,7 +691,6 @@ mod tests {
             name: name.to_string(),
             ns: ScriptNs::Extension,
             sig: ScriptSig::default(),
-            hosts: HostSet::ALL,
         }
     }
 
@@ -733,11 +725,6 @@ mod tests {
         builtin.ns = ScriptNs::Builtin;
         let err = validate(&with(vec![builtin], Vec::new())).unwrap_err();
         assert!(err.contains("builtin namespace"), "{err}");
-
-        let mut nobody = decl("hidden");
-        nobody.hosts = HostSet::from_lang("prolog");
-        let err = validate(&with(vec![nobody], Vec::new())).unwrap_err();
-        assert!(err.contains("no language"), "{err}");
 
         let err = validate(&with(vec![decl("twice"), decl("twice")], Vec::new())).unwrap_err();
         assert!(err.contains("declares 'twice' twice"), "{err}");

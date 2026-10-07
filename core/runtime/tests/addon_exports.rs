@@ -1,9 +1,13 @@
 //! Reading a compiled program's exports back when the app was compiled against
 //! a browser add-on: the add-on's functions are declared in the program, so the
 //! read binds them the way a desktop run does.
+//!
+//! The read goes through the host module the program names, which this test
+//! binary links in.
 
-#![cfg(all(feature = "runtime-parse", feature = "host-candela"))]
+#![cfg(all(feature = "runtime-parse", feature = "modules"))]
 
+use lumen_candela as _;
 use lumen_ir::addon::{Addon, AddonFunction, AddonParam};
 use lumen_ir::artifact::CompiledScript;
 use lumen_runtime::run::script_exports;
@@ -11,14 +15,20 @@ use lumen_runtime::run::script_exports;
 fn script(bytecode: Option<Vec<u8>>) -> CompiledScript {
     CompiledScript {
         engine: "candela".to_string(),
+        module: "lumen-candela".to_string(),
         source: String::new(),
         bytecode,
     }
 }
 
+/// Where the program's app lives; nothing is read from it.
+fn dir() -> std::path::PathBuf {
+    std::env::temp_dir()
+}
+
 #[test]
 fn a_script_with_no_compiled_form_has_nothing_to_read_back() {
-    assert!(script_exports(&script(None), &[]).is_none());
+    assert!(script_exports(&dir(), &script(None), &[]).is_none());
 }
 
 #[test]
@@ -38,8 +48,8 @@ fn an_addon_whose_types_no_host_reads_fails_the_read_back_by_name() {
         }],
         elements: Vec::new(),
     };
-    let read =
-        script_exports(&script(Some(vec![0])), &[addon]).expect("a compiled program is read back");
+    let read = script_exports(&dir(), &script(Some(vec![0])), &[addon])
+        .expect("a compiled program is read back");
     let err = read.expect_err("the add-on's signature does not bind");
     assert!(err.contains("echo::shout"), "{err}");
 }

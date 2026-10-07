@@ -33,19 +33,16 @@ lumen-i18n = { workspace = true }
 lumen-web = { workspace = true }
 # The HTTP seam, so a run answers a request without one leaving the machine.
 lumen-script = { workspace = true }
+# The candela host, which runs the app's precompiled bytecode. A run installs
+# its plugin before the program goes in.
+lumen-candela-host = { workspace = true }
 
 [build-dependencies]
 # Compiles the test fixture to `.cdlb` on the host, so the program a run loads
 # is always the one this toolchain produces.
-lumen-script-candela = { workspace = true, default-features = true }
+lumen-candela-dev-host = { workspace = true }
 
 [dev-dependencies]
 # The tests build an app of their own to settle, which means writing a system.
 bevy_ecs.workspace = true
 
-[features]
-# The script hosts a run can carry, forwarded to the assembly that installs
-# them. An app whose scripts this build has no host for still runs: it renders
-# from what the markup and the seed declare.
-default = ["host-candela"]
-host-candela = ["lumen-portable/host-candela"]

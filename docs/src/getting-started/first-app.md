@@ -160,8 +160,9 @@ scripts can call: [scripting guide](../guides/scripting.md) and the
 [candela reference](../reference/scripting-candela.md).
 
 !!! note "Other languages"
-    Rhai and Lua work the same way. Name the file `main.rhai` or `main.lua` and
-    Lumen picks the matching host from the extension.
+    Rhai and Lua are deprecated and run only on Linux and macOS, from the
+    modules archive. Name the file `main.rhai` or `main.lua` and Lumen picks the
+    matching host from the extension.
 
 ## The config
 

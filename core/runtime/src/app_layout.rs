@@ -11,6 +11,7 @@
 //! `lumen.toml` into the paths the rest of the runtime reads, and the one place
 //! that rejects an app whose code is still at its root.
 
+use lumen_modules::language::LanguageTable;
 use std::path::{Path, PathBuf};
 
 use crate::config::LumenToml;
@@ -27,8 +28,9 @@ const DEFAULT_ENTRY: &str = "main.lmn";
 /// The app stylesheet, always beside the entry.
 const STYLESHEET: &str = "main.css";
 
-/// Extensions that make a file code rather than an asset.
-const CODE_EXTS: [&str; 5] = ["lmn", "css", "rhai", "lua", "cdl"];
+/// Extensions that make a file code rather than an asset, besides the script
+/// extensions the language descriptors in reach declare.
+const CODE_EXTS: [&str; 2] = ["lmn", "css"];
 
 /// How many offending names the flat-layout message lists before it stops.
 const LISTED_FILES: usize = 3;
@@ -115,13 +117,15 @@ fn code_files(dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
+    let table = LanguageTable::discover(None).unwrap_or_default();
+    let script_exts = table.extensions();
     let mut found: Vec<String> = rd
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
-                .is_some_and(|e| CODE_EXTS.contains(&e))
+                .is_some_and(|e| CODE_EXTS.contains(&e) || script_exts.contains(&e))
         })
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .collect();

@@ -66,8 +66,6 @@ pub use network::{NetEntry, NetworkCapture};
 pub const OVERLAY_LMN: &str = include_str!("assets/overlay.lmn");
 /// Embedded overlay stylesheet (authored `.css`).
 pub const OVERLAY_CSS: &str = include_str!("assets/overlay.css");
-/// Embedded overlay interaction script (authored `.rhai`, reference form).
-pub const OVERLAY_RHAI: &str = include_str!("assets/overlay.rhai");
 
 /// `LumenId` of the text-blob body entity (Signals / Network tabs, and the
 /// Elements empty-state hint).
@@ -362,8 +360,7 @@ pub fn toggle_devtools_on_f12(
 }
 
 /// System: route overlay clicks. Tab buttons switch the active tab (and
-/// mirror it into the `dt_tab` signal, parity with the reference
-/// `overlay.rhai`); the Pick button arms pick mode; an Elements row selects
+/// mirror it into the `dt_tab` signal); the Pick button arms pick mode; an Elements row selects
 /// its element; while picking, a click anywhere on the app selects the
 /// clicked element and disarms the mode (the click still reaches the app);
 /// and the inspect-pane actions edit the selected element in the running

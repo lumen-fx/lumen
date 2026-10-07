@@ -22,7 +22,6 @@ use lumen_portable::portable_app;
 /// The image the build script compiled, a program that publishes a signal and
 /// registers a derivation, so the host is carrying state of its own when the
 /// app is dropped.
-#[cfg(feature = "host-candela")]
 const SMOKE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/smoke.cdlb"));
 
 /// Every non-send slot in `world` that something was put into.
@@ -43,9 +42,9 @@ fn thread_bound(world: &World) -> Vec<ComponentId> {
 /// Build the app a request would, script and all.
 fn booted() -> App {
     let mut app = portable_app();
-    #[cfg(feature = "host-candela")]
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     lumen_portable::hosts::install(&mut app, "candela", SMOKE, "smoke.cdlb")
-        .expect("this build carries the candela host");
+        .expect("the plugin registered candela");
     app
 }
 

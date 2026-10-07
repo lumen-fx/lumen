@@ -3,8 +3,9 @@
 //!
 //! What these prove, once per concern:
 //!
-//! - `archive::extract` reaches a script through the generic
-//!   `ScriptFnRegistry`, in Rhai and in candela;
+//! - `archive::extract` reaches a candela script through the generic
+//!   `ScriptFnRegistry`, as the `host "archive"` block the host synthesizes
+//!   from what the plugin registered;
 //! - both paths resolve against the app directory, so an archive the app
 //!   ships unpacks the same wherever the app was started from;
 //! - the outcome arrives over the plugin-event bus: `on_archive_done` fires
@@ -12,14 +13,18 @@
 //!   `on("archive_done", tag, fn)` registration wins over it;
 //! - a refused archive reports on `archive_error` instead, and so does a job
 //!   the module would not take;
-//! - without the plugin the function does not exist, and the app keeps
-//!   running after the script's own unknown-function error.
+//! - without the plugin the function does not exist: the program fails to
+//!   compile against the missing namespace, and the app keeps running.
 //!
 //! Every path a script here names is relative and spelled with forward
 //! slashes. A host path put into script text would carry backslashes on
 //! Windows, where a script lexer reads them as escape sequences and refuses
 //! the whole program; keep paths out of the script and let the module resolve
 //! them.
+
+// The candela host, compiled in: the module registry answers the script's
+// implied host dependency from it.
+use lumen_candela_dev as _;
 
 use lumen_archive::{ArchivePlugin, testkit};
 use lumen_core::app::App as EcsApp;
@@ -50,13 +55,9 @@ fn app_dir(name: &str, archive: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Build a headless app in `dir` running one script, with the given plugin.
-fn build_app(
-    dir: &std::path::Path,
-    engine: &str,
-    source: &str,
-    plugin: Option<ArchivePlugin>,
-) -> EcsApp {
+/// Build a headless app in `dir` running one candela script, with the given
+/// plugin.
+fn build_app(dir: &std::path::Path, source: &str, plugin: Option<ArchivePlugin>) -> EcsApp {
     lumen_core::plugin_events::discard_plugin_events();
     let bytes = artifact::serialize(&CompiledApp {
         ir: LayoutIR {
@@ -66,9 +67,9 @@ fn build_app(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -115,25 +116,32 @@ fn tick_until(app: &mut EcsApp, secs: f64, pred: impl Fn(&EcsApp) -> bool) -> bo
     }
 }
 
-/// Rhai takes the job, the archive lands beside the app, and the fallback
-/// handler is called with the tag, the destination, and the file count.
+/// The script takes the job, the archive lands beside the app, and the
+/// fallback handler is called with the tag, the destination, and the file
+/// count.
 #[test]
-fn rhai_unpacks_into_the_app_directory() {
+fn a_script_unpacks_into_the_app_directory() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("rhai", "bundle.zip");
+    let dir = app_dir("unpack", "bundle.zip");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{}));
+    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
 }
-fn on_archive_done(tag, dest, count) {
-    signal("done", "").set(tag);
-    signal("count", "").set(count);
-    signal("dest", "").set(dest);
+
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set("done", tag);
+    lumen::signal_set_int("count", count);
+    lumen::signal_set("dest", dest);
 }
-fn on_archive_error(tag, message) { signal("failed", "").set(message); }
+
+fn on_archive_error(tag: string, message: string) {
+    lumen::signal_set("failed", message);
+}
+
+fn main() {}
 "#,
         Some(ArchivePlugin::default()),
     );
@@ -176,14 +184,22 @@ fn a_per_tag_handler_wins_over_the_fallback() {
     let dir = app_dir("per-tag", "bundle.zip");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    on("archive_done", "bundle", "bundle_ready");
-    archive::extract("bundle.zip", "out", "bundle", #{});
+    lumen::on("archive_done", "bundle", "bundle_ready");
+    archive::extract("bundle.zip", "out", "bundle", Default::default());
 }
-fn bundle_ready(tag, dest, count) { signal("special", "").set(count); }
-fn on_archive_done(tag, dest, count) { signal("fallback", "").set(tag); }
+
+fn bundle_ready(tag: string, dest: string, count: int) {
+    lumen::signal_set_int("special", count);
+}
+
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set("fallback", tag);
+}
+
+fn main() {}
 "#,
         Some(ArchivePlugin::default()),
     );
@@ -207,14 +223,22 @@ fn a_hostile_archive_reports_on_the_error_event() {
     testkit::escaping_zip(&dir.join("hostile.zip")).expect("hostile fixture");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
-fn on_start() { archive::extract("hostile.zip", "out", "hostile", #{}); }
-fn on_archive_done(tag, dest, count) { signal("done", "").set(tag); }
-fn on_archive_error(tag, message) {
-    signal("tag", "").set(tag);
-    signal("message", "").set(message);
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    archive::extract("hostile.zip", "out", "hostile", Default::default());
 }
+
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set("done", tag);
+}
+
+fn on_archive_error(tag: string, message: string) {
+    lumen::signal_set("tag", tag);
+    lumen::signal_set("message", message);
+}
+
+fn main() {}
 "#,
         Some(ArchivePlugin::default()),
     );
@@ -247,14 +271,19 @@ fn a_refused_job_answers_false_and_reports() {
     let dir = app_dir("refused", "bundle.zip");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
+        r#"import "lumen.cdl";
+
 fn on_start() {
-    signal("first", "").set(archive::extract("bundle.zip", "one", "same", #{}));
-    signal("again", "").set(archive::extract("bundle.zip", "two", "same", #{}));
-    signal("over", "").set(archive::extract("bundle.zip", "three", "other", #{}));
+    lumen::signal_set_bool("first", archive::extract("bundle.zip", "one", "same", Default::default()));
+    lumen::signal_set_bool("again", archive::extract("bundle.zip", "two", "same", Default::default()));
+    lumen::signal_set_bool("over", archive::extract("bundle.zip", "three", "other", Default::default()));
 }
-fn on_archive_error(tag, message) { signal("why_" + tag, "").set(message); }
+
+fn on_archive_error(tag: string, message: string) {
+    lumen::signal_set("why_" + tag, message);
+}
+
+fn main() {}
 "#,
         // One at a time, so the third call is one past the limit while the
         // first is still queued.
@@ -284,68 +313,16 @@ fn on_archive_error(tag, message) { signal("why_" + tag, "").set(message); }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// candela reaches the same function through the `host "archive"` block the
-/// host synthesizes from what the plugin registered.
-#[test]
-fn candela_reaches_the_module_surface_through_its_namespace() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = app_dir("candela", "bundle.zip");
-    let mut app = build_app(
-        &dir,
-        "candela",
-        r#"import "lumen.cdl";
-
-fn on_start() {
-    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
-}
-
-fn on_archive_done(tag: string, dest: string, count: int) {
-    lumen::signal_set("done", tag);
-    lumen::signal_set_int("count", count);
-}
-
-fn on_archive_error(tag: string, message: string) {
-    lumen::signal_set("failed", message);
-}
-
-fn main() {}
-"#,
-        Some(ArchivePlugin::default()),
-    );
-
-    assert_eq!(signal(&app, "taken").as_deref(), Some("true"));
-    assert!(
-        tick_until(&mut app, 10.0, |app| signal(app, "done").is_some()),
-        "on_archive_done must fire; failed={:?}",
-        signal(&app, "failed")
-    );
-    assert_eq!(signal(&app, "done").as_deref(), Some("bundle"));
-    assert_eq!(signal(&app, "count").as_deref(), Some("3"));
-    assert_eq!(
-        std::fs::read_to_string(dir.join("out/top.txt")).ok(),
-        Some("top".to_string())
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// `include` in the fourth argument keeps only the matching files, in every
-/// host, and the count reports what was written.
+/// `include` in the options keeps only the matching files, and the count
+/// reports what was written.
 #[test]
 fn an_include_filter_keeps_only_the_matching_files() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source) in [
-        (
-            "rhai",
-            r#"
-fn on_start() { archive::extract("natives.jar", "out", "natives", #{ include: ["*.so"] }); }
-fn on_archive_done(tag, dest, count) { signal("count", "").set(count); }
-fn on_archive_error(tag, message) { signal("failed", "").set(message); }
-"#,
-        ),
-        (
-            "candela",
-            r#"import "lumen.cdl";
+    let dir = app_dir("include", "bundle.zip");
+    testkit::natives_jar(&dir.join("natives.jar")).expect("jar fixture");
+    let mut app = build_app(
+        &dir,
+        r#"import "lumen.cdl";
 
 fn on_start() {
     archive::extract(
@@ -366,57 +343,51 @@ fn on_archive_error(tag: string, message: string) {
 
 fn main() {}
 "#,
-        ),
-        (
-            "lua",
-            r#"
-function on_start() archive.extract("natives.jar", "out", "natives", { include = { "*.so" } }) end
-function on_archive_done(tag, dest, count) signal("count", ""):set(count) end
-function on_archive_error(tag, message) signal("failed", ""):set(message) end
-"#,
-        ),
-    ] {
-        let dir = app_dir(&format!("include-{engine}"), "bundle.zip");
-        testkit::natives_jar(&dir.join("natives.jar")).expect("jar fixture");
-        let mut app = build_app(&dir, engine, source, Some(ArchivePlugin::default()));
+        Some(ArchivePlugin::default()),
+    );
 
-        assert!(
-            tick_until(&mut app, 10.0, |app| signal(app, "count").is_some()),
-            "{engine}: on_archive_done must fire; failed={:?}",
-            signal(&app, "failed")
-        );
-        assert_eq!(signal(&app, "count").as_deref(), Some("1"), "{engine}");
-        assert!(
-            dir.join("out/linux/x64/org/lwjgl/liblwjgl.so").is_file(),
-            "{engine}: the library was written"
-        );
-        assert!(
-            !dir.join("out/META-INF").exists(),
-            "{engine}: the jar metadata was not"
-        );
-        assert!(
-            !dir.join("out/linux/x64/org/lwjgl/liblwjgl.so.sha1")
-                .exists(),
-            "{engine}: nor the checksum beside the library"
-        );
+    assert!(
+        tick_until(&mut app, 10.0, |app| signal(app, "count").is_some()),
+        "on_archive_done must fire; failed={:?}",
+        signal(&app, "failed")
+    );
+    assert_eq!(signal(&app, "count").as_deref(), Some("1"));
+    assert!(
+        dir.join("out/linux/x64/org/lwjgl/liblwjgl.so").is_file(),
+        "the library was written"
+    );
+    assert!(
+        !dir.join("out/META-INF").exists(),
+        "the jar metadata was not"
+    );
+    assert!(
+        !dir.join("out/linux/x64/org/lwjgl/liblwjgl.so.sha1")
+            .exists(),
+        "nor the checksum beside the library"
+    );
 
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Without the plugin the function does not exist: the script's call fails
-/// with the host's ordinary unknown-function error, nothing is unpacked, and
-/// the app keeps ticking.
+/// Without the plugin the function does not exist: the program fails to
+/// compile against the missing `archive` namespace, nothing is unpacked, and
+/// the app keeps ticking with the failure on record.
 #[test]
 fn without_the_plugin_the_function_does_not_exist() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir("absent", "bundle.zip");
     let mut app = build_app(
         &dir,
-        "rhai",
-        r#"
-fn on_start() { signal("taken", "").set(archive::extract("bundle.zip", "out", "bundle", #{})); }
-fn on_ready() { signal("alive", "").set("yes"); }
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set_bool(
+        "taken",
+        archive::extract("bundle.zip", "out", "bundle", archive::ExtractOptions { include: [] }),
+    );
+}
+
+fn main() {}
 "#,
         None,
     );
@@ -424,10 +395,14 @@ fn on_ready() { signal("alive", "").set("yes"); }
     for _ in 0..10 {
         app.tick();
     }
-    assert_eq!(
-        signal(&app, "alive").as_deref(),
-        Some("yes"),
-        "the app went on running past the failed call"
+    let failure = app
+        .world
+        .get_resource::<lumen_script::ScriptLoadFailure>()
+        .expect("the program that names a missing namespace fails to load");
+    assert!(
+        failure.0.contains("`archive`"),
+        "the failure names the namespace: {}",
+        failure.0
     );
     assert_eq!(
         signal(&app, "taken"),

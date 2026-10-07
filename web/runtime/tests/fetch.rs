@@ -13,7 +13,7 @@
 //! `wasm-bindgen-test-runner` drives Chrome through `chromedriver`; point
 //! `CHROMEDRIVER` at the binary if it is not on `PATH`.
 
-#![cfg(all(target_arch = "wasm32", feature = "host-candela"))]
+#![cfg(target_arch = "wasm32")]
 
 use lumen_web_runtime::{assemble, hosts};
 use wasm_bindgen_futures::JsFuture;
@@ -31,6 +31,7 @@ const FETCH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetch.cdlb"));
 #[wasm_bindgen_test]
 async fn a_reply_reaches_the_handler_the_script_declared() {
     let mut app = assemble::portable_app();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     let host = hosts::install(&mut app, ENGINE, FETCH, "fetch.cdlb")
         .expect("this build carries the candela host");
 

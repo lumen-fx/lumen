@@ -25,9 +25,3 @@ proc-macro = true
 syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-
-[features]
-# Turned on by `lumen-module`'s feature of the same name; off here on its own
-# so a build that drops the engine dylib drops the entries that need it. See
-# the crate docs for what each shape emits.
-engine-dylib = []

@@ -21,13 +21,22 @@ use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
 
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
+
 /// An app publishes process-global registries, so these run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const APP_ID: &str = "lumen-script-app-paths-test";
 
-const SOURCE: &str = r#"
-fn on_start() { signal("started", "").set("yes"); }
+const SOURCE: &str = r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set("started", "yes");
+}
+
+fn main() {}
 "#;
 
 /// A temp app directory carrying `lumen.toml` with the id under test.
@@ -53,9 +62,9 @@ fn build_app_in(dir: &Path) {
             },
             ..Default::default()
         },
-        script_source: SOURCE.to_string(),
         scripts: vec![CompiledScript {
-            engine: "rhai".to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: SOURCE.to_string(),
             bytecode: None,
         }],

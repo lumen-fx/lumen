@@ -34,6 +34,9 @@ lumen-assets = { workspace = true }
 # registry extension trait, the ordering sets, and the plugin-event wire.
 # Re-exported below so a module crate needs no dependency of its own.
 lumen-script = { workspace = true }
+# The scene, for a module that runs a script language: the per-host half of
+# the script wiring it installs once its host is in place.
+lumen-scene = { workspace = true }
 # The markup-tag registry. A module that brings an element registers its tag
 # from `Plugin::build`, which is what makes a run accept the markup; the
 # `tags` key in `lumen.toml` is the same claim for a compile, where nothing is
@@ -71,7 +74,7 @@ default = ["engine-dylib"]
 # after opening a module's library. A module that is only ever linked into a
 # binary drops the feature and stops anchoring the engine dylib; what it
 # registers before `main` is unaffected.
-engine-dylib = ["dep:lumen-dylib", "lumen-module-macros/engine-dylib"]
+engine-dylib = ["dep:lumen-dylib"]
 
 # Painting: the paint target a native painter draws into, and the text shaper
 # it shapes through. Off by default, because most modules never paint.

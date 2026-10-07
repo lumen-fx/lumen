@@ -41,9 +41,9 @@ what counts as valid.
 
 Everything the server does for markup, CSS, and the cross-file id features is
 independent of which language an app's scripts are written in. The `.rhai`
-features come from the `lang-rhai` cargo feature, on by default, which carries
-the Rhai engine and the host's builtin table. A `--no-default-features` build
-keeps all the rest and answers script requests with nothing.
+features come from the `lang-rhai` cargo feature, off by default since Rhai is
+deprecated, which carries the Rhai engine and the host's builtin table. A build
+without it keeps all the rest and answers script requests with nothing.
 
 ## File extensions
 

@@ -78,6 +78,8 @@ engine-dylib = ["lumen-module/engine-dylib"]
 # `lumen-module` alone.
 [dev-dependencies]
 lumen-assets = { workspace = true }
+# The candela host the in-process tests run their scripts on, compiled in.
+lumen-candela-dev = { workspace = true }
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }

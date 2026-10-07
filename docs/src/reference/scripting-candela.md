@@ -27,7 +27,7 @@ language when there is exactly one, and candela otherwise.
 
 ```toml
 [script]
-engine = "candela"   # "candela" (default) | "rhai" | "lua"
+engine = "candela"
 ```
 
 ## Reaching the builtins

@@ -5,11 +5,11 @@
 //! drain the [`ScriptCommand`]s the host produced this tick and forward
 //! them onto the ECS message bus for the embedder's applier.
 //!
-//! Concrete implementations (`lumen-script-candela`, `lumen-script-rhai`,
-//! `lumen-script-lua`) provide a [`ScriptHost`] that compiles + executes
-//! whatever source language they speak, exposing the host-neutral registries
-//! (command sink, signal mirror, per-id handlers, derivations) the generic
-//! runtime drives.
+//! Concrete implementations live in runtime modules (`lumen-candela` and the
+//! other hosts under `std/`). Each provides a [`ScriptHost`] that runs
+//! whatever language it speaks, exposing the host-neutral registries (command
+//! sink, signal mirror, per-id handlers, derivations) the generic runtime
+//! drives, and registers its language through [`language::ScriptLanguage`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -37,9 +37,14 @@ pub mod event;
 /// serialization, and global runtime state.
 pub mod introspect;
 
-/// Host-generic runtime event dispatch (phase 4): input messages ->
-/// DOM events -> propagation. See [`dom_events::dispatch_pointer_and_key_events`].
+/// Runtime event dispatch (phase 4): input messages -> DOM events ->
+/// propagation, one pass per event over every installed host. See
+/// [`dom_events::deliver_input_events`].
 pub mod dom_events;
+
+/// Script languages as host modules register them, and the table that
+/// reaches an installed host. See [`language::ScriptLanguage`].
+pub mod language;
 
 /// Script-facing drag-and-drop event dispatchers (`on_drop` /
 /// `on_drag_start`). See the module docs.
@@ -72,10 +77,6 @@ pub mod builtin_fns;
 /// each gated by its own Cargo feature. See the module docs.
 pub mod text_parse;
 
-/// The DOM and event surface a language without receiver methods reaches
-/// through free functions over an interned node id.
-mod node_fns;
-
 /// The encoded form of the script surface: the version the shapes below are
 /// pinned at, and the adapters for the two property-store types
 /// [`ScriptCommand::SetProperty`] carries.
@@ -92,17 +93,25 @@ use crate::runtime::prefix;
 pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
-pub use dom_events::{dispatch_pointer_and_key_events, dispatch_state_events};
+pub use dom_events::{
+    EventHosts, PendingDomEvents, deliver_input_events, deliver_state_events,
+    queue_pointer_and_key_events, queue_state_events, register_dom_event_messages,
+    register_event_host,
+};
 pub use http::{
     Credentials, DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpHook, HttpRequest,
     HttpResponse, ThreadDispatch, UnknownCredentials,
 };
+pub use language::{
+    MarkupBlock, MarkupBlockError, ScriptCompile, ScriptHostAccess, ScriptLanguage,
+    ScriptLanguageAppExt, ScriptLanguages, ScriptProgram, UnknownLanguage, install_program,
+};
 pub use runtime::*;
 pub use script_fn::{
-    Arity0, CallScratch, HostSet, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptField, ScriptFn,
-    ScriptFnAppExt, ScriptFnBody, ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore,
-    ScriptNs, ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptStruct,
-    ScriptTy, ScriptType, with_call_scratch,
+    Arity0, CallScratch, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptField, ScriptFn, ScriptFnAppExt,
+    ScriptFnBody, ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs,
+    ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptStruct, ScriptTy,
+    ScriptType, with_call_scratch,
 };
 pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION, push_plugin_event};
 
@@ -118,7 +127,7 @@ pub enum ScriptError {
     /// Source failed to parse / compile.
     #[error("script compile error at {uri}:{line}:{col}: {message}")]
     Compile {
-        /// Origin URI (e.g. `"main.rhai"` or `"lumen://app/main.rhai"`);
+        /// Origin URI (e.g. `"main.cdl"` or `"lumen://app/main.cdl"`);
         /// `"<inline>"` when the source has no associated URI.
         uri: String,
         /// 1-based line number reported by the parser. `0` when the
@@ -796,8 +805,8 @@ pub enum FileDialogKind {
 
 /// Typed sum the script-host trait understands across the boundary.
 ///
-/// Mirrors what `rhai::Dynamic` would carry - scalars, arrays, maps -
-/// without leaking the Rhai type into the trait. Backends translate
+/// Mirrors what a dynamic script value carries - scalars, arrays, maps -
+/// without leaking any host's value type into the trait. Backends translate
 /// to / from their native value type.
 ///
 /// Variants are append-only; see [`SCRIPT_WIRE_VERSION`].
@@ -882,8 +891,7 @@ impl ScriptValue {
 /// the host keeps internally so callers don't have to thread an
 /// `Engine` or a per-backend `Dynamic` type through.
 ///
-/// Concrete impls (e.g. `RhaiScriptContext` in `lumen-script-rhai`)
-/// own the underlying signal store. The trait is intentionally small:
+/// Concrete impls own the underlying signal store. The trait is intentionally small:
 /// every method maps to one host-side write so backends can rebuild
 /// their internal mirror without re-implementing scalar/array policy
 /// on top of `Dynamic`.
@@ -963,9 +971,8 @@ pub fn carry_forward<K, V>(
 /// registry, and the derivation registry.
 ///
 /// `Send + Sync` bound: hosts sit in a plain bevy `Resource` and
-/// participate in parallel scheduling. `RhaiHost` qualifies because the
-/// workspace pins rhai's `sync` feature. A future host that cannot be
-/// `Send` will need a `NonSend` plugin variant in the runtime crate.
+/// participate in parallel scheduling. A host that cannot be `Send` needs a
+/// `NonSend` variant of the install path.
 ///
 /// One script-side callable the generic runtime can re-invoke is modeled
 /// by [`Self::Closure`] - Rhai: `FnPtr`; candela: a function handle once its
@@ -1158,10 +1165,8 @@ pub trait ScriptHost: Send + Sync + 'static {
     ///
     /// The host maps [`ScriptNs`] onto its own name space, binds the
     /// signature's arity range, and retains `f` in a [`ScriptFnStore`] so
-    /// [`Self::reset`] can put it back. Host-specific escape hatches
-    /// (`RhaiHost::engine_mut`, `LuaHost::lua_mut`,
-    /// `CandelaHost::engine_mut`) remain available for anything this shape
-    /// cannot express.
+    /// [`Self::reset`] can put it back. A host's own engine accessors
+    /// remain available for anything this shape cannot express.
     ///
     /// # Errors
     ///
@@ -1191,8 +1196,8 @@ pub trait ScriptHost: Send + Sync + 'static {
 
     // -- metadata ------------------------------------------------------
 
-    /// Language tag (`"candela"`, `"rhai"`, `"lua"`). Used in diagnostics prefixes
-    /// (`lumen-script-<lang>: ...`).
+    /// Language tag, such as `"candela"`. Used in diagnostics prefixes
+    /// (`lumen-<lang>: ...`).
     fn lang(&self) -> &'static str;
 
     /// The builtin-function metadata table feeding LSP completion /

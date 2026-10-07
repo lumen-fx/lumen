@@ -5,9 +5,8 @@
 //! it lives here as a [`ScriptFn`] rather than three times over in the host
 //! crates. Each host binds this table through its own
 //! [`ScriptHost::register_script_fn`](crate::ScriptHost::register_script_fn)
-//! when it is constructed, filtered by the entry's [`HostSet`], so a bare host
-//! in a test, in `lumenc check`, or in a server render carries the same
-//! builtins a windowed app does.
+//! when it is constructed, so a bare host in a test, in `lumenc check`, or in a
+//! server render carries the same builtins a windowed app does.
 //!
 //! What stays in a host crate is what a host cannot share: the signal mirror
 //! and its handle types, closure registries (`on`, `derive`, event handlers),
@@ -15,9 +14,7 @@
 //! surfaces (`node.set_text(..)`) each engine spells its own way.
 
 use crate::ScriptValue;
-use crate::{
-    FileDialogKind, HostSet, ScriptCommand, ScriptFn, ScriptFnCx, ScriptNs, ScriptTy as T,
-};
+use crate::{FileDialogKind, ScriptCommand, ScriptFn, ScriptFnCx, ScriptNs, ScriptTy as T};
 
 /// Describe a builtin whose whole effect is one queued [`ScriptCommand`].
 fn emit<F>(name: &str, doc: &str, params: &[(&str, T)], build: F) -> ScriptFn
@@ -65,7 +62,6 @@ pub fn builtin_script_fns() -> Vec<ScriptFn> {
     fns.extend(request_fns());
     fns.extend(misc_fns());
     fns.extend(text_fns());
-    fns.extend(crate::node_fns::node_script_fns());
     fns
 }
 
@@ -478,98 +474,20 @@ pub fn parse_dialog_filter_spec(spec: &str) -> Vec<(String, Vec<String>)> {
     out
 }
 
-/// File-based pages. Every entry rides the `lumen_core::nav` bus, the one an
+/// File-based pages: the reader. It rides the `lumen_core::nav` bus, the one an
 /// `<a href>` click, the C ABI, and the Rust SDK write.
 ///
-/// The shapes differ by language and so do the entries. Rhai and Lua resolve
-/// `page()` with no argument as the reader and take the boolean a history step
-/// reports; a candela host function is neither arity-overloaded nor allowed to
-/// return a value its declaration does not name, so candela gets the
-/// single-argument writer, the separate `page_current` reader, and unit-valued
-/// steps.
+/// The writer (`page`) and the history steps are shaped by the language
+/// calling them (whether a call can be arity-overloaded, whether a step
+/// reports a result), so each host registers its own over the same bus.
 fn navigation_fns() -> Vec<ScriptFn> {
-    let read_or_navigate = |cx: &ScriptFnCx<'_>| match cx.arg(0) {
-        ScriptValue::Unit => ScriptValue::Str(lumen_core::nav::current()),
-        path => {
-            lumen_core::nav::navigate(path.stringify());
-            ScriptValue::Unit
-        }
-    };
-    vec![
-        ScriptFn::new("page")
-            .ns(ScriptNs::Builtin)
-            .param("path", T::Str)
-            .min_arity(0)
-            // The current path when read, nothing when navigating: a result
-            // whose shape depends on how the call was written.
-            .ret(T::Dynamic)
-            .doc("Navigate to a page, or read the current one when called with no argument.")
-            .hosts(HostSet::RHAI | HostSet::LUA)
-            .build(move |cx| Ok(read_or_navigate(cx))),
-        ScriptFn::new("page")
-            .ns(ScriptNs::Builtin)
-            .param("path", T::Str)
-            .ret(T::Unit)
-            .doc("Navigate to a page.")
-            .hosts(HostSet::CANDELA)
-            .build(move |cx| Ok(read_or_navigate(cx))),
-        value(
-            "page_current",
-            "The page the app is on.",
-            &[],
-            T::Str,
-            |_| ScriptValue::Str(lumen_core::nav::current()),
-        ),
-        step(
-            "page_back",
-            "Step back through the page history.",
-            lumen_core::nav::back,
-        ),
-        step(
-            "page_forward",
-            "Step forward through the page history.",
-            lumen_core::nav::forward,
-        ),
-    ]
-    .into_iter()
-    .chain(
-        [
-            ("page_back", "Step back through the page history."),
-            ("page_forward", "Step forward through the page history."),
-        ]
-        .into_iter()
-        .map(|(name, doc)| {
-            let forward = name == "page_forward";
-            ScriptFn::new(name)
-                .ns(ScriptNs::Builtin)
-                .ret(T::Unit)
-                .doc(doc)
-                .hosts(HostSet::CANDELA)
-                .build(move |_| {
-                    if forward {
-                        lumen_core::nav::forward();
-                    } else {
-                        lumen_core::nav::back();
-                    }
-                    Ok(ScriptValue::Unit)
-                })
-        }),
-    )
-    .collect()
-}
-
-/// A history step for the hosts that read its result: it reports whether the
-/// request reached the navigation bus, so a script can branch on it.
-fn step<F>(name: &str, doc: &str, go: F) -> ScriptFn
-where
-    F: Fn() -> bool + Send + Sync + 'static,
-{
-    ScriptFn::new(name)
-        .ns(ScriptNs::Builtin)
-        .ret(T::Bool)
-        .doc(doc)
-        .hosts(HostSet::RHAI | HostSet::LUA)
-        .build(move |_| Ok(ScriptValue::Bool(go())))
+    vec![value(
+        "page_current",
+        "The page the app is on.",
+        &[],
+        T::Str,
+        |_| ScriptValue::Str(lumen_core::nav::current()),
+    )]
 }
 
 /// The request being rendered for, and the response being built.
@@ -830,10 +748,9 @@ mod tests {
     /// a return left at `Any` is a forgotten declaration, which is what this
     /// asserts against, for every entry and not only the ones candela has to
     /// name. A result that has no shape narrower than `any` declares
-    /// `Dynamic` and says so in the signature itself: a parsed document, or
-    /// the Rhai and Lua `page` entry, whose result depends on whether the
-    /// script read the path or navigated. candela names such a return the way
-    /// it already names a variadic binding, `any name(...);`.
+    /// `Dynamic` and says so in the signature itself, as a parsed document
+    /// does. candela names such a return the way it already names a variadic
+    /// binding, `any name(...);`.
     #[test]
     fn every_entry_is_a_documented_builtin() {
         for f in builtin_script_fns() {
@@ -858,21 +775,18 @@ mod tests {
         }
     }
 
-    /// A name may appear twice only when the two entries reach different
-    /// languages, which is how the navigation family carries one shape for
-    /// Rhai and Lua and another for candela.
+    /// Every name appears once: an entry whose shape depends on the language
+    /// belongs to that language's host.
     #[test]
-    fn a_repeated_name_splits_by_language() {
+    fn every_name_is_registered_once() {
         let fns = builtin_script_fns();
-        for lang in ["rhai", "lua", "candela"] {
-            let mut seen: HashSet<&str> = HashSet::new();
-            for f in fns.iter().filter(|f| f.visible_to(lang)) {
-                assert!(
-                    seen.insert(f.name.as_str()),
-                    "{lang}: `{}` is registered twice",
-                    f.name
-                );
-            }
+        let mut seen: HashSet<&str> = HashSet::new();
+        for f in &fns {
+            assert!(
+                seen.insert(f.name.as_str()),
+                "`{}` is registered twice",
+                f.name
+            );
         }
     }
 

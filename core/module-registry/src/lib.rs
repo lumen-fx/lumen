@@ -51,6 +51,27 @@ pub struct StaticModule {
 /// against; the cost lands nowhere a frame can see it.
 static REGISTERED: Mutex<Vec<StaticModule>> = Mutex::new(Vec::new());
 
+/// The language descriptors compiled-in modules carry: the module's declared
+/// name and the text of its `lumen-language.toml`.
+static LANGUAGES: Mutex<Vec<(&'static str, &'static str)>> = Mutex::new(Vec::new());
+
+/// Record that the module `module` runs a script language, described by the
+/// `lumen-language.toml` text `descriptor`.
+///
+/// A module that is opened from disk has its descriptor beside it; one linked
+/// into the binary has no file to read, so its constructor leaves the text
+/// here, the way it leaves its install entry. Called from the same
+/// constructor, so it must not panic on a poisoned lock either.
+pub fn register_language(module: &'static str, descriptor: &'static str) {
+    let mut list = LANGUAGES.lock().unwrap_or_else(|e| e.into_inner());
+    list.push((module, descriptor));
+}
+
+/// The language descriptors registered so far, copied out.
+pub fn languages() -> Vec<(&'static str, &'static str)> {
+    LANGUAGES.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Add a module to the list.
 ///
 /// Called from a module's pre-main constructor, so it must not panic on a
@@ -74,6 +95,16 @@ mod tests {
 
     fn ok(_app: &mut App, _config_toml: &str) -> u32 {
         0
+    }
+
+    #[test]
+    fn a_registered_language_descriptor_is_readable() {
+        register_language("registry-test-language", "[language]\nname = \"toy\"\n");
+        assert!(
+            languages()
+                .iter()
+                .any(|(module, text)| *module == "registry-test-language" && text.contains("toy"))
+        );
     }
 
     #[test]

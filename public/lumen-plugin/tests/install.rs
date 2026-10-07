@@ -5,7 +5,7 @@
 mod common;
 
 use common::install_fixture;
-use lumen_script::{HostSet, ScriptNs, ScriptTy};
+use lumen_script::{ScriptNs, ScriptTy};
 
 #[test]
 fn the_functions_land_in_manifest_order_with_what_they_declared() {
@@ -35,11 +35,9 @@ fn the_functions_land_in_manifest_order_with_what_they_declared() {
     assert_eq!(echo.sig.params.len(), 1);
     assert_eq!(echo.sig.params[0].name, "value");
     assert_eq!(echo.sig.params[0].ty, ScriptTy::Any);
-    assert!(echo.hosts.contains(HostSet::ALL));
 
     let shape = &registry.fns()[1];
     assert_eq!(shape.sig.params[0].ty, ScriptTy::Str);
-    assert!(shape.visible_to("candela"));
 }
 
 #[test]

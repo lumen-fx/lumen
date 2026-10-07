@@ -14,7 +14,7 @@ pub(crate) struct HotReloadState {
     pub(crate) css_path: PathBuf,
     pub(crate) html_mtime: Option<SystemTime>,
     pub(crate) css_mtime: Option<SystemTime>,
-    /// Resolved paths of every external `.rhai` script the markup
+    /// Resolved paths of every external script the markup
     /// referenced via `<script src="...">`.
     pub(crate) script_paths: Vec<PathBuf>,
     /// mtime of each `script_paths` entry, in the same order. `None`
@@ -137,23 +137,28 @@ pub(crate) fn spawn_hot_reload_watcher(
     Ok(watcher)
 }
 
-/// Swaps a live host's loaded program: [`lumen_script::reload_script`]
-/// monomorphised for one host, held as a plain fn pointer so the hot-reload
-/// system can walk every active host without being generic itself.
-pub(crate) type ReloadFn =
-    fn(&mut World, &str, &str) -> Option<Result<(), lumen_script::ScriptError>>;
+/// Swaps a live host's loaded program: the reload entry the host's language
+/// registered, held as a plain fn pointer so the hot-reload system can walk
+/// every active host without being generic itself.
+pub(crate) type ReloadFn = lumen_script::language::ReloadFn;
 
 /// The active hosts' reload entry points, in the order [`build_app`] installed
-/// them. One entry per script language the app ships.
+/// them, keyed by language. One entry per script language the app ships whose
+/// host can reload.
 #[derive(Resource, Default)]
-pub(crate) struct ScriptReloaders(Vec<(crate::config::ScriptEngine, ReloadFn)>);
+pub(crate) struct ScriptReloaders(Vec<(String, ReloadFn)>);
 
 impl ScriptReloaders {
     /// Record a host's reload entry point.
-    pub(crate) fn push(&mut self, engine: crate::config::ScriptEngine, reload: ReloadFn) {
-        self.0.push((engine, reload));
+    pub(crate) fn push(&mut self, language: String, reload: ReloadFn) {
+        self.0.push((language, reload));
     }
 }
+
+/// The language descriptors a run from source grouped its scripts by, kept so
+/// a hot reload regroups them the same way.
+#[derive(Resource, Default, Clone)]
+pub(crate) struct ScriptLanguageTable(pub(crate) lumen_modules::language::LanguageTable);
 
 #[cfg(feature = "runtime-parse")]
 pub(crate) fn hot_reload(world: &mut World) {
@@ -246,6 +251,21 @@ pub(crate) fn hot_reload(world: &mut World) {
     // Re-apply against the live OS theme / viewport so a hot edit lands
     // with the same context the running window is showing.
     let media = media_context_from_world(world);
+    // The languages the scripts are grouped by and the hosts that read their
+    // markup blocks: the ones the build loaded.
+    let table = world
+        .get_resource::<ScriptLanguageTable>()
+        .cloned()
+        .unwrap_or_default();
+    let registered = world
+        .get_resource::<lumen_script::ScriptLanguages>()
+        .cloned()
+        .unwrap_or_default();
+    let cfg = crate::config::LumenToml::load_or_default(&dir).unwrap_or_default();
+    let grouping = lumen_modules::language::ScriptGrouping {
+        table: &table.0,
+        engine: cfg.script.engine(),
+    };
     let LoadResult {
         ir,
         html_mtime,
@@ -274,6 +294,10 @@ pub(crate) fn hot_reload(world: &mut World) {
         SourceOverrides {
             plan: page_plan.as_ref(),
             ..SourceOverrides::default()
+        },
+        &Languages {
+            grouping,
+            registered: &registered,
         },
     ) {
         Ok(v) => v,
@@ -332,26 +356,22 @@ pub(crate) fn hot_reload(world: &mut World) {
         // Regrouped per language and applied host by host: each host gets
         // exactly the source its own language contributes, so an edit to one
         // language's file never feeds the other language's compiler.
-        let cfg = crate::config::LumenToml::load_or_default(&dir).unwrap_or_default();
-        let grouped = grouped_script_sources(&ir, &dir, &cfg).unwrap_or_default();
-        let reloaders: Vec<(crate::config::ScriptEngine, ReloadFn)> = world
+        let grouped = grouped_script_sources(&ir, &dir, grouping).unwrap_or_default();
+        let reloaders: Vec<(String, ReloadFn)> = world
             .get_resource::<ScriptReloaders>()
             .map(|r| r.0.clone())
             .unwrap_or_default();
-        for (engine, reload) in reloaders {
+        for (language, reload) in reloaders {
             let source = grouped
                 .iter()
-                .find(|(e, _)| *e == engine)
+                .find(|(l, _)| *l == language)
                 .map(|(_, s)| s.as_str())
                 .unwrap_or("");
             if source.trim().is_empty() {
                 continue;
             }
             if let Some(Err(e)) = reload(world, source, "<inline>") {
-                eprintln!(
-                    "lumenc hot-reload: {} script load failed: {e}",
-                    engine.name()
-                );
+                eprintln!("lumenc hot-reload: {language} script load failed: {e}");
             }
         }
     }
