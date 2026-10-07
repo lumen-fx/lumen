@@ -10,6 +10,11 @@
 //! product is the state a page is written with, and what these check is that
 //! the subtrees exist to have state read out of them at all.
 
+// The bytecode host a run loads, compiled into this test binary: an unnamed
+// dependency puts nothing on the link line, and the module registers itself
+// before `main` only when it is there.
+use lumen_candela as _;
+
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy_ecs::entity::Entity;

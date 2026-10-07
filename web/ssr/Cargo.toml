@@ -33,6 +33,9 @@ lumen-web = { workspace = true }
 # The command stream a script answers a request through, and the HTTP seam the
 # in-flight counter wraps.
 lumen-script = { workspace = true }
+# The bytecode host a render's program runs on, compiled in (see the anchor in
+# src/lib.rs). Without defaults, so it anchors no engine dylib.
+lumen-candela = { workspace = true }
 # The response state is a resource, and reading the command stream is a system.
 bevy_ecs.workspace = true
 # The queue a caller hands a request across and gets its answer back on.
