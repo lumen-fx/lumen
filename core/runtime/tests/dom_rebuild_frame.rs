@@ -14,11 +14,15 @@
 use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenId, TextStyle};
 use lumen_core::input::{FocusTracker, Focused, Key, KeyPressed, Modifiers};
-use lumen_ir::artifact::{self, CompiledApp};
+use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::css::{Declaration, Origin, Rule, Stylesheet};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::node_query;
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The DOM snapshot and the external command bus are process-global, so the
 /// headless apps that read and write them run one at a time.
@@ -45,8 +49,9 @@ fn el(tag: &str, id: Option<&str>, children: Vec<Element>) -> Element {
     }
 }
 
-const SCRIPT: &str = r#"
-fn on_text_input(id, text) {
+const SCRIPT: &str = r#"import "lumen.cdl";
+
+fn on_text_input(id: string, text: string) {
     if id != "field" { return; }
     let list = get_by_id("list");
     if !list.exists() { return; }
@@ -56,6 +61,8 @@ fn on_text_input(id, text) {
     row.set_text(text);
     list.append(row);
 }
+
+fn main() {}
 "#;
 
 struct Harness {
@@ -70,13 +77,8 @@ impl Harness {
         let _ = node_query::drain_external_dom_commands();
         let dir = std::env::temp_dir().join(format!("lumen_rebuild_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Pin the engine: the baked source is Rhai, and the default is
-        // candela. Port 0 keeps parallel test binaries off a shared socket.
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        // Port 0 keeps parallel test binaries off a shared socket.
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
         let rules = vec![Rule {
             selectors: lumen_ir::css::parse_selector_list(".row").expect("selector parses"),
@@ -100,7 +102,6 @@ impl Harness {
                     el("column", Some("list"), vec![]),
                 ],
             ),
-            script_source: SCRIPT.to_string(),
             combined_stylesheet: Some(Stylesheet {
                 rules,
                 ..Default::default()
@@ -112,7 +113,12 @@ impl Harness {
         }
         let bytes = artifact::serialize(&CompiledApp {
             ir,
-            script_source: SCRIPT.to_string(),
+            scripts: vec![CompiledScript {
+                engine: "candela".to_string(),
+                module: "lumen-candela-dev".to_string(),
+                source: SCRIPT.to_string(),
+                bytecode: None,
+            }],
             ..Default::default()
         })
         .unwrap();

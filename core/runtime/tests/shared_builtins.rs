@@ -1,4 +1,4 @@
-//! The shared builtin table, called from a real app script in each language.
+//! The shared builtin table, called from a real app script.
 //!
 //! `lumen-script`'s own suite drives the bodies directly. This one goes through
 //! the host: the script names the builtin, the engine resolves it, and the
@@ -11,11 +11,15 @@ use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
+
 /// An app publishes process-global registries, so these run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Build and tick a headless app whose script is `source` in `engine`.
-fn run(engine: &str, source: &str) -> EcsApp {
+/// Build and tick a headless app whose candela script is `source`.
+fn run(source: &str) -> EcsApp {
     let dir = std::env::temp_dir().join(format!(
         "lumen_shared_builtins_{}_{}",
         std::process::id(),
@@ -45,9 +49,9 @@ fn run(engine: &str, source: &str) -> EcsApp {
             root,
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -88,58 +92,13 @@ fn label_text(app: &mut EcsApp) -> Option<String> {
     found.into_iter().next()
 }
 
-/// Rhai: a command builtin reaches the element, and a value builtin reads back
-/// into a signal through the host's own signal handle.
-#[test]
-fn a_rhai_script_calls_the_shared_builtins() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut app = run(
-        "rhai",
-        r#"
-        fn on_start() {
-            set_text("out", "rhai says " + t("hello"));
-            let where_am_i = signal("page", "");
-            where_am_i.set(page_current());
-            set_root_class("themed");
-        }
-        "#,
-    );
-
-    assert_eq!(label_text(&mut app).as_deref(), Some("rhai says hello"));
-    assert!(
-        signal(&app, "page").is_some(),
-        "page_current() reached the store"
-    );
-}
-
-/// Lua: same builtins, same commands.
-#[test]
-fn a_lua_script_calls_the_shared_builtins() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut app = run(
-        "lua",
-        r#"
-        function on_start()
-            set_text("out", "lua says " .. t("hello"))
-            signal("page", ""):set(page_current())
-            set_timeout("tick", 5)
-        end
-        "#,
-    );
-
-    assert_eq!(label_text(&mut app).as_deref(), Some("lua says hello"));
-    assert!(signal(&app, "page").is_some());
-}
-
-/// candela: the same builtins, reached through the prelude's typed
-/// declarations. `node_get_by_id` proves the typed shape adapter binds an
+/// A command builtin reaches the element, and a value builtin reads back into
+/// a signal, through the prelude's typed declarations. `node_get_by_id` proves the typed shape adapter binds an
 /// int-returning builtin, not just the unit-returning ones.
 #[test]
-fn a_candela_script_calls_the_shared_builtins() {
+fn a_script_calls_the_shared_builtins() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut app = run(
-        "candela",
-        r#"
+    let mut app = run(r#"
 import "lumen.cdl";
 
 fn on_start() {
@@ -164,8 +123,7 @@ fn on_ready() {
 }
 
 fn main() {}
-"#,
-    );
+"#);
 
     assert_eq!(label_text(&mut app).as_deref(), Some("candela says hello"));
     assert!(signal(&app, "page").is_some());

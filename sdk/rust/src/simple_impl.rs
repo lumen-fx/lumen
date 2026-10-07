@@ -2,8 +2,6 @@
 
 // The engine's copy of each crate this module names. The re-export block in
 // lib.rs says why they come from there rather than from a dependency.
-#[cfg(feature = "host-rhai")]
-use crate::rhai;
 use crate::{lumen_core, lumen_runtime, lumen_script, lumenc};
 
 use crate::error::{Error, Result};
@@ -16,10 +14,6 @@ use std::path::PathBuf;
 
 /// Callback applied to the fully-built ECS app before the event loop.
 type ConfigureHook = Box<dyn FnOnce(&mut EcsApp) + Send + 'static>;
-
-/// Rhai engine extension callback.
-#[cfg(feature = "host-rhai")]
-type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 
 /// Entry point for building a Lumen application in Rust.
 ///
@@ -69,8 +63,6 @@ pub struct AppBuilder {
     seeds: Vec<(String, PropertyValue)>,
     handlers: Vec<HandlerEntry>,
     native_fns: Vec<ScriptFn>,
-    #[cfg(feature = "host-rhai")]
-    rhai_extensions: Vec<RhaiExtension>,
     configure: Vec<ConfigureHook>,
 }
 
@@ -262,20 +254,6 @@ impl AppBuilder {
         self
     }
 
-    /// Install native functions into the Rhai script engine:
-    /// `engine.register_fn("now_ms", || 42_i64)`.
-    ///
-    /// Rhai-typed, so these reach the Rhai host only. [`Self::native_fn`] is
-    /// the host-neutral path and is what an app mixing languages wants.
-    #[cfg(feature = "host-rhai")]
-    pub fn rhai_extension<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut rhai::Engine) + Send + 'static,
-    {
-        self.rhai_extensions.push(Box::new(f));
-        self
-    }
-
     /// Full-power escape hatch: run a closure against the built ECS
     /// [`lumen_core::app::App`] (add [`lumen_core::app::Plugin`]s,
     /// register systems, insert resources) after the default stack is
@@ -323,10 +301,6 @@ impl AppBuilder {
         opts.css = self.css;
         opts.hot_reload = self.hot_reload.unwrap_or(!in_memory);
         opts.native_fns.extend(self.native_fns);
-        #[cfg(feature = "host-rhai")]
-        for ext in self.rhai_extensions {
-            opts.rhai_extensions.push(ext);
-        }
 
         let seeds = self.seeds;
         let handlers = self.handlers;

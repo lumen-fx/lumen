@@ -1,0 +1,11 @@
+# Proof fixture for a page whose script is in a language no host in the
+# browser runtime runs: the build leaves the program out with a warning, and
+# the page still boots and shows its markup.
+#
+# It lives here rather than under fixtures/ because it is a web-only app: its
+# Lua script runs on the desktop only where the deprecated Lua module is
+# installed, and every app under fixtures/ is run on the desktop.
+
+# No introspection server, so a `--headless` run binds no port.
+[mcp]
+port = 0

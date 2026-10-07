@@ -103,7 +103,7 @@ pub struct LayoutIR {
     /// Concatenated body text of every inline `<script>` tag found in
     /// the markup, in source order, separated by `\n`. Empty if none.
     ///
-    /// Use `<script src="foo.rhai"/>` instead when the script contains
+    /// Use `<script src="foo.cdl"/>` instead when the script contains
     /// characters that confuse the XML parser (`<`, `<=`, `&`) - those
     /// references land in [`external_scripts`].
     pub script_source: String,

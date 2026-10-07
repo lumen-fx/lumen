@@ -73,16 +73,16 @@ script at all:
 **A class change from a script.** Add, remove, or toggle a class on a node and
 the cascade re-runs for it:
 
-```rhai
-fn on_click(id) {
+```rust
+fn on_click(id: string) {
     get_by_id("panel").toggle_class("open");
 }
 ```
 
-`add_class`, `remove_class`, and `toggle_class` are the names in every host;
-Lua calls them with the colon form, `node:toggle_class(name)`. candela also
-reaches the same effect on a raw handle through `lumen::node_class_toggle(n,
-name)` and its siblings. See [scripting](scripting.md).
+`add_class`, `remove_class`, and `toggle_class` are the `Node` methods the
+prelude gives you; on a raw handle the same effect is
+`lumen::node_class_toggle(n, name)` and its siblings. See
+[scripting](scripting.md).
 
 Replacing the whole list with `set_class` triggers the same re-run, whether you
 call it on a node or by element id.
@@ -91,8 +91,8 @@ call it on a node or by element id.
 style layer, which sits above every rule, and tweens the same way a class
 change does:
 
-```rhai
-fn on_click(id) {
+```rust
+fn on_click(id: string) {
     get_by_id("panel").set_style("bg", "#37405020");
 }
 ```
@@ -180,12 +180,13 @@ A transition moves a property from one setting to another. Something that
 moves continuously - a clock hand, a game loop, a chart that redraws as data
 arrives - needs a callback per frame instead, and `request_frame()` is it:
 
-```rhai
-fn on_ready() { request_frame(); }
+```rust
+fn on_ready() { lumen::request_frame(); }
 
-fn on_frame(dt) {
-    signals.angle.set(signals.angle.get() + dt);
-    request_frame();
+fn on_frame(dt: float) {
+    let angle = signal<float>("angle");
+    angle.set(angle.get() + dt);
+    lumen::request_frame();
 }
 ```
 
@@ -209,7 +210,7 @@ which is where a script draws something CSS cannot describe:
 ```lmn
 <root>
   <canvas id="dial" width="120" height="120" />
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 ```
 

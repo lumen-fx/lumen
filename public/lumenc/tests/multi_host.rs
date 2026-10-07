@@ -8,20 +8,134 @@
 //! joins its extension's host, the hosts run side by side, and they reach each
 //! other only through the shared signal bus.
 //!
-//! `fixtures/multi-host` pairs `model.cdl` (writes the `shared` signal) with
+//! The two-language app pairs `model.cdl` (writes the `shared` signal) with
 //! `report.lua` (derives `seen_by_lua` from it without ever writing it), so a
 //! passing run proves both hosts loaded, both dispatched their lifecycle
-//! callbacks, and a value crossed from one language to the other.
+//! callbacks, and a value crossed from one language to the other. Lua is not
+//! compiled into anything by default; this file links its module so the
+//! second host is there to load.
 
 use lumen_core::prelude::App;
+use lumen_lua as _;
 use lumenc::{RunOptions, build_headless_app};
 
+/// The two-language app: a candela program that owns the `shared` signal and
+/// a Lua program that reads it without ever writing it.
+const MULTI_HOST: &[(&str, &str)] = &[
+    ("lumen.toml", "[mcp]\nport = 0\n"),
+    (
+        "src/main.lmn",
+        r#"<root>
+  <label id="shared-label" width="100%" padding="24 0 8 0"
+         bind-text="shared" text="waiting" />
+  <label id="seen-label" width="100%" padding="0 0 24 0"
+         bind-text="seen_by_lua" text="waiting" />
+  <script src="model.cdl" />
+  <script src="report.lua" />
+</root>
+"#,
+    ),
+    (
+        "src/model.cdl",
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set("shared", "candela");
+}
+
+fn on_ready() {
+    lumen::signal_set("candela_ready", "1");
+}
+
+fn main() {}
+"#,
+    ),
+    (
+        "src/report.lua",
+        r#"-- `shared` is named as a string dep so this program never seeds it; the
+-- value comes from model.cdl through the signal bus.
+
+function on_start()
+    derive("seen_by_lua", { "shared" }, function(v)
+        return tostring(v) .. "+lua"
+    end)
+end
+
+function on_ready()
+    signal("lua_ready", ""):set("1")
+end
+"#,
+    ),
+];
+
+/// A one-file Lua app whose `[script] engine` pins the Lua host for its
+/// inline script.
+const LUA_SMOKE: &[(&str, &str)] = &[
+    (
+        "lumen.toml",
+        "[script]\nengine = \"lua\"\n\n[mcp]\nport = 0\n",
+    ),
+    (
+        "src/main.lmn",
+        r#"<root>
+  <label id="counter-label" width="100%" height="100%" padding="30 0 24 0"
+         bind-text="counter_label"
+         text="Lua host - waiting" />
+  <script>
+    function bump(by)
+        local clicks = signal("clicks", 0)
+        clicks:set(clicks:get() + by)
+    end
+
+    function handle_reset_click(id)
+        signal("clicks", 0):set(0)
+    end
+
+    function on_start()
+        local clicks = signal("clicks", 0)
+        derive("counter_label", { clicks }, function(n)
+            return "Lua host - clicks: " .. n
+        end)
+        on("click", "reset", "handle_reset_click")
+    end
+
+    function on_click(id)
+        bump(1)
+    end
+  </script>
+</root>
+"#,
+    ),
+];
+
+/// The app named `name`: the two apps above are written into a fresh temp
+/// directory, anything else is read from the in-repo `fixtures/`.
 fn app_dir(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures")
-        .join(name)
-        .canonicalize()
-        .unwrap_or_else(|e| panic!("fixtures/{name} must exist: {e}"))
+    let files = match name {
+        "multi-host" => MULTI_HOST,
+        "lua-smoke" => LUA_SMOKE,
+        _ => {
+            return std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures")
+                .join(name)
+                .canonicalize()
+                .unwrap_or_else(|e| panic!("fixtures/{name} must exist: {e}"));
+        }
+    };
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "lumen_multi_host_{name}_{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (path, body) in files {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().expect("a file sits in a directory"))
+            .expect("create app dir");
+        std::fs::write(&path, body).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+    }
+    dir
 }
 
 fn run_ticks(dir: std::path::PathBuf, ticks: u32) -> App {
@@ -130,7 +244,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
     // the other language's source is a compile error, which is what a
     // single-blob reload produced for every mixed app.
     assert!(
-        lumen_script::reload_script::<lumen_script_candela::CandelaHost>(
+        lumen_script::reload_script::<lumen_candela_dev::CandelaHost>(
             &mut app.world,
             &lua_src,
             "<inline>",
@@ -143,7 +257,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
     let reloads = [
         (
             "candela",
-            lumen_script::reload_script::<lumen_script_candela::CandelaHost>(
+            lumen_script::reload_script::<lumen_candela_dev::CandelaHost>(
                 &mut app.world,
                 &candela_src,
                 "<inline>",
@@ -151,11 +265,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
         ),
         (
             "lua",
-            lumen_script::reload_script::<lumen_script_lua::LuaHost>(
-                &mut app.world,
-                &lua_src,
-                "<inline>",
-            ),
+            lumen_script::reload_script::<lumen_lua::LuaHost>(&mut app.world, &lua_src, "<inline>"),
         ),
     ];
     for (name, result) in reloads {
@@ -194,7 +304,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
     );
 }
 
-/// `[script] engine` still collapses an app onto one host. `fixtures/lua-smoke`
+/// `[script] engine` still collapses an app onto one host. The Lua smoke app
 /// keeps its script inline and declares `engine = "lua"`, so exactly the Lua
 /// host runs and the single-host tick order is unchanged.
 #[test]
@@ -230,74 +340,92 @@ fn single_language_app_is_unchanged() {
     );
 }
 
-/// `set_color_scheme` is a runtime built-in, not a per-language one: an app
-/// gets it whatever language it is written in, and the intent lands on the
-/// same [`StyleManager`] either way.
-///
-/// Rhai and Lua receive it as a host-neutral native function the runtime
-/// registers; candela carries it in its own prelude under the `lumen`
-/// namespace. Three one-file apps, one assertion each, so a host losing the
+/// `set_color_scheme` reaches the [`StyleManager`] from a script. candela
+/// carries it in its prelude under the `lumen` namespace, so a host losing the
 /// registration fails here rather than in a themed app.
 #[test]
-fn set_color_scheme_applies_on_every_host() {
+fn set_color_scheme_applies_from_a_script() {
     use lumen_core::components::{ColorScheme, StyleManager};
 
-    let scripts = [
-        (
-            "rhai",
-            "main.rhai",
-            "fn on_ready() { set_color_scheme(\"force-dark\"); }",
-        ),
-        (
-            "lua",
-            "main.lua",
-            "function on_ready() set_color_scheme(\"force-dark\") end",
-        ),
-        (
-            "candela",
-            "main.cdl",
-            "import \"lumen.cdl\";\n\
-             fn on_ready() { lumen::set_color_scheme(\"force-dark\"); }\n\
-             fn main() {}\n",
-        ),
-    ];
+    let dir = std::env::temp_dir().join(format!("lumen_scheme_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        src.join("main.lmn"),
+        "<root>\n  <label id=\"only\" text=\"scheme\"/>\n  \
+         <script src=\"main.cdl\"/>\n</root>",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("main.cdl"),
+        "import \"lumen.cdl\";\n\
+         fn on_ready() { lumen::set_color_scheme(\"force-dark\"); }\n\
+         fn main() {}\n",
+    )
+    .unwrap();
 
-    for (engine, script_name, script) in scripts {
-        let dir =
-            std::env::temp_dir().join(format!("lumen_scheme_{engine}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let src = dir.join("src");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-        std::fs::write(
-            src.join("main.lmn"),
-            format!(
-                "<root>\n  <label id=\"only\" text=\"scheme\"/>\n  \
-                 <script src=\"{script_name}\"/>\n</root>"
-            ),
-        )
-        .unwrap();
-        std::fs::write(src.join(script_name), script).unwrap();
-
-        let mut opts = RunOptions::new(&dir);
-        opts.hot_reload = false;
-        let (mut app, _winit) =
-            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
-        for _ in 0..6 {
-            app.tick();
-        }
-
-        let style = *app.world.resource::<StyleManager>();
-        assert_eq!(
-            style.scheme,
-            ColorScheme::ForceDark,
-            "{engine}: set_color_scheme should reach StyleManager"
-        );
-        assert!(
-            style.effective_dark,
-            "{engine}: forcing dark should light up effective_dark"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    for _ in 0..6 {
+        app.tick();
     }
+
+    let style = *app.world.resource::<StyleManager>();
+    assert_eq!(
+        style.scheme,
+        ColorScheme::ForceDark,
+        "set_color_scheme should reach StyleManager"
+    );
+    assert!(
+        style.effective_dark,
+        "forcing dark should light up effective_dark"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A handler bound from native code (the C ABI, the Rust SDK) runs once per
+/// event, however many script hosts the app runs. The DOM event dispatch is
+/// one pass over the binding registry; the hosts are reached from inside it.
+#[test]
+fn a_native_handler_fires_once_per_event_with_two_hosts() {
+    use lumen_core::components::LumenId;
+    use lumen_core::prelude::{ClickEvent, PointerButton};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut app = run_ticks(app_dir("multi-host"), 5);
+    let target = {
+        let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenId)>();
+        q.iter(&app.world)
+            .find(|(_, id)| id.0.as_str() == "shared-label")
+            .map(|(e, _)| e)
+            .expect("the fixture has a shared-label")
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let token = lumen_script::event::register_native_binding(
+        lumen_core::node::NodeHandle::new(target).pack(),
+        "click".to_string(),
+        false,
+        Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }),
+    );
+    app.world.write_message(ClickEvent {
+        entity: target,
+        position: glam::Vec2::new(4.0, 4.0),
+        button: PointerButton::Primary,
+        local: None,
+    });
+    app.tick();
+    lumen_script::event::unregister_binding(token);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "one click reaches a native handler once, not once per script host"
+    );
 }

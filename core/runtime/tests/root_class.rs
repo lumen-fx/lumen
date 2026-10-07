@@ -8,10 +8,14 @@
 //! declared one, and a root that declared none had nothing to write onto.
 
 use lumen_core::components::{ColorScheme, StyleManager};
-use lumen_ir::artifact::{self, CompiledApp};
+use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::{ScriptCommand, ScriptCommandEvent, introspect, node_query};
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The DOM snapshot is process-global, so the headless apps that read it run
 /// one at a time.
@@ -24,8 +28,8 @@ struct Harness {
 }
 
 impl Harness {
-    /// A `root#app.shell > tile#box` app with `script` baked in as its Rhai
-    /// source.
+    /// A `root#app.shell > tile#box` app with `script` baked in as its candela
+    /// source. An empty `script` builds an app with no script at all.
     fn new(script: &str) -> Self {
         let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir =
@@ -34,13 +38,8 @@ impl Harness {
                 SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             }));
         std::fs::create_dir_all(&dir).unwrap();
-        // Pin the engine: the baked source below is Rhai, and the default is
-        // candela. Port 0 keeps parallel test binaries off a shared socket.
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        // Port 0 keeps parallel test binaries off a shared socket.
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
         let ir = LayoutIR {
             root: Element {
@@ -60,12 +59,21 @@ impl Harness {
                 }],
                 ..Default::default()
             },
-            script_source: script.to_string(),
             ..Default::default()
+        };
+        let scripts = if script.is_empty() {
+            Vec::new()
+        } else {
+            vec![CompiledScript {
+                engine: "candela".to_string(),
+                module: "lumen-candela-dev".to_string(),
+                source: script.to_string(),
+                bytecode: None,
+            }]
         };
         let bytes = artifact::serialize(&CompiledApp {
             ir,
-            script_source: script.to_string(),
+            scripts,
             ..Default::default()
         })
         .unwrap();
@@ -107,7 +115,7 @@ impl Drop for Harness {
 fn set_root_class_replaces_the_root_class_list() {
     // An app with no script at all installs no command applier, so the
     // harness carries an empty handler.
-    let mut h = Harness::new("fn on_start() {}");
+    let mut h = Harness::new("fn on_start() {}\n\nfn main() {}\n");
     assert!(
         h.root_classes().contains(&"shell".to_string()),
         "the markup class is there to start with: {:?}",
@@ -134,7 +142,16 @@ fn set_root_class_replaces_the_root_class_list() {
 /// The same call through a script, which is how an app makes it.
 #[test]
 fn a_script_can_set_the_root_class() {
-    let h = Harness::new(r#"fn on_start() { set_root_class("app compact"); }"#);
+    let h = Harness::new(
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::set_root_class("app compact");
+}
+
+fn main() {}
+"#,
+    );
     let classes = h.root_classes();
     assert!(classes.contains(&"app".to_string()), "{classes:?}");
     assert!(classes.contains(&"compact".to_string()), "{classes:?}");

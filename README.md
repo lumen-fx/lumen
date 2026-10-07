@@ -65,7 +65,9 @@ the app runs and the window updates.
   properties, transitions, and platform skins.
 - **Reactive by default.** Named signals hold state; `bind-*`, `<for>`, and
   `<if>` keep the UI in step. Writing a signal is the whole update.
-- **Scripting in candela, Rhai, or Lua.** The file extension picks the host.
+- **Scripting in candela.** Compiled from source with hot reload while you
+  work, shipped as bytecode. Rhai and Lua remain as deprecated modules on Linux
+  and macOS.
 - **Multi-page apps.** Every `.lmn` file in `src/` is a page, reachable by its
   filename, with `<a href>` links.
 - **The desktop around your app.** Menus, tray icons, notifications, global

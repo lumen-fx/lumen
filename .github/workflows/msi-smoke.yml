@@ -22,7 +22,7 @@ on:
       - "tools/release/msi/**"
       - ".github/workflows/msi-smoke.yml"
       - ".github/workflows/build-toolchain.yml"
-      - ".github/scripts/stage-web-halves.sh"
+      - ".github/scripts/stage-module-data.sh"
 
 permissions:
   contents: read
@@ -72,11 +72,11 @@ jobs:
       # Mirrors build-toolchain.yml: the zip closes first, and only then does
       # the MSI stage gain the receipt. Step "the portable zip carries no
       # receipt" below is what holds that order in place.
-      # The web halves come from the script build-toolchain.yml runs, in the
-      # shell it runs it with.
-      - name: Stage the web halves
+      # The web halves and language descriptors come from the script
+      # build-toolchain.yml runs, in the shell it runs it with.
+      - name: Stage the module data
         shell: bash
-        run: .github/scripts/stage-web-halves.sh dist/bin
+        run: .github/scripts/stage-module-data.sh dist/bin
 
       - name: Stage the payload
         shell: pwsh

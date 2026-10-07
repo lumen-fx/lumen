@@ -6,10 +6,11 @@
 //! and none of that is here. This crate assembles the part that does not
 //! differ, so a platform adds its own backends to it rather than restating it.
 //!
-//! [`portable_app`] builds that app, [`hosts::install`] puts the host for an
-//! engine into it, [`install_i18n`] gives it the catalogues for the locale it
-//! is answering in, and [`apply_seed`] applies the state a rendered document
-//! was produced from.
+//! [`portable_app`] builds that app, [`hosts::install`] hands its program to
+//! the host its manifest names (the platform installs the host modules it
+//! runs scripts with), [`install_i18n`] gives it the catalogues for the locale
+//! it is answering in, and [`apply_seed`] applies the state a rendered
+//! document was produced from.
 //!
 //! Nothing here is `!Send`, which is what makes the assembly usable from a
 //! thread that is not the process's main one: bevy's non-send resources may

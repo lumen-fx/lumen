@@ -55,7 +55,7 @@ Root with a class and a nested label (sdk/cpp/examples/apps/hello/main.lmn)
       (tag_name))))
 
 ================================================================================
-Attributes wrapped over several lines (fixtures/multi-host/main.lmn)
+Attributes wrapped over several lines
 ================================================================================
 
 <root>

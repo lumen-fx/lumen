@@ -1,0 +1,4 @@
+<root>
+  <label id="greeting" bind-text="greeting" text="markup only" />
+  <script src="main.lua" />
+</root>

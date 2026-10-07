@@ -24,7 +24,6 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::component::Mutable;
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
@@ -42,7 +41,8 @@ use lumen_script::event::{register_host_binding, unregister_binding};
 use lumen_script::node_query::drain_external_dom_commands;
 use lumen_script::runtime::{ScriptCommandEvent, register_script_commands};
 use lumen_script::{
-    ScriptCommand, ScriptHost, ScriptSet, dispatch_pointer_and_key_events, dispatch_state_events,
+    EventHosts, PendingDomEvents, ScriptCommand, ScriptSet, deliver_input_events,
+    deliver_state_events, queue_pointer_and_key_events, queue_state_events,
 };
 
 use crate::fragments::{
@@ -98,11 +98,16 @@ pub fn install_dom(app: &mut App) {
         TickStage::Systems,
         apply_dom_commands.after(collect_dom_commands),
     );
+    // The handlers bound with `on(type, handler)`, for an app with a script
+    // and for one queried and driven over the C ABI alike.
+    install_dom_events(app);
 }
 
 /// Deliver DOM events to the handlers bound with `on(type, handler)`: turn the
 /// input messages into DOM events and run capture -> target -> bubble
-/// propagation over the binding registry, for host `H`.
+/// propagation over the binding registry, once per event. A handler runs
+/// natively (the C ABI, the SDKs) or in the script host that bound it; each
+/// host joins through [`lumen_script::register_event_host`] when it installs.
 ///
 /// The same on every platform: the desktop's window backend and a page's
 /// event listeners write the same input messages, and these read them.
@@ -112,14 +117,14 @@ pub fn install_dom(app: &mut App) {
 /// same tick. Before [`navigate_on_anchor_click`](crate::routing::navigate_on_anchor_click),
 /// so a `prevent_default` on a link click is seen before the anchor-navigation
 /// executor runs.
-///
-/// Both dispatchers take an optional host, so a script-less app still installs
-/// them (against any host the build compiled) and delivers to C-ABI and SDK
-/// native handlers.
-pub fn install_dom_events<H: ScriptHost + Resource<Mutability = Mutable>>(app: &mut App) {
+fn install_dom_events(app: &mut App) {
+    lumen_script::register_dom_event_messages(&mut app.world);
+    app.world.init_resource::<PendingDomEvents>();
+    app.world.init_resource::<EventHosts>();
     app.add_systems(
         TickStage::Systems,
-        dispatch_pointer_and_key_events::<H>
+        (queue_pointer_and_key_events, deliver_input_events)
+            .chain()
             .in_set(ScriptSet::DomInput)
             .after(build_dom_index)
             .after(lumen_input::dispatch_clicks)
@@ -128,7 +133,8 @@ pub fn install_dom_events<H: ScriptHost + Resource<Mutability = Mutable>>(app: &
     );
     app.add_systems(
         TickStage::Systems,
-        dispatch_state_events::<H>
+        (queue_state_events, deliver_state_events)
+            .chain()
             .in_set(ScriptSet::DomState)
             .after(build_dom_index)
             // `input` is derived from the edit stream, so this reads the

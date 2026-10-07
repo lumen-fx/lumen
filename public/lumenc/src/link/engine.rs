@@ -22,7 +22,10 @@
 //!   being kept alive.
 //! - On Windows `lumen.dll` exports the C ABI and nothing more, so its own
 //!   export list stays, less the register symbols of the capabilities left
-//!   out.
+//!   out. The script host modules the app's program runs on are forced in
+//!   the way a capability is, since no file beside `lumen.dll` could be
+//!   opened; on Linux and macOS they ship beside the engine and count among
+//!   the consumers instead.
 //!
 //! The engine build id is untouched by a relink, so the runtime modules
 //! shipped beside the engine still pass the loader's handshake.
@@ -60,6 +63,11 @@ pub(crate) struct EngineJob<'a> {
     /// `liblumen`, the Rust standard library, each runtime module. Empty on
     /// Windows, where nothing does.
     pub(crate) consumers: &'a [PathBuf],
+    /// The runtime modules the app needs that an engine kit can link in: on
+    /// Windows, the script hosts its program runs on, which nothing beside
+    /// `lumen.dll` could load. A kit links the ones its record carries and
+    /// leaves the rest to the files staged beside the engine.
+    pub(crate) modules: &'a DependenciesCfg,
     /// What decides the capabilities.
     pub(crate) choice: &'a CapabilityChoice<'a>,
 }
@@ -271,14 +279,16 @@ fn relink(job: &EngineJob<'_>) -> Result<Engine, Stop> {
         exports: Some(&exports),
         keep: &keep,
     };
+    let linked_in = DependenciesCfg(
+        job.modules
+            .0
+            .iter()
+            .filter(|dep| manifest.modules.iter().any(|m| m.name == dep.name))
+            .cloned()
+            .collect(),
+    );
     let linked = kit::plan(
-        &kit,
-        &manifest,
-        &DependenciesCfg::default(),
-        &selected,
-        &library,
-        job.out,
-        job.out,
+        &kit, &manifest, &linked_in, &selected, &library, job.out, job.out,
     )
     .and_then(|plan| {
         kit::link(&plan)?;

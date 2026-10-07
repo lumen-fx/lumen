@@ -4,7 +4,13 @@
 //! The tree is hand-built rather than parsed, so these cases say nothing
 //! about the markup front-end and everything about what the plugin does with
 //! a `<canvas>` element once one exists: it adopts it, gives it a box, keeps
-//! its drawing, and answers the script.
+//! its drawing, and answers the script. The scripts are candela, reaching
+//! the module through the `canvas` namespace its registered functions fold
+//! into.
+
+// The candela host, compiled in: the module registry answers the script's
+// implied host dependency from it.
+use lumen_candela_dev as _;
 
 use lumen_canvas::{Canvas, CanvasPlugin, UA_SIZE};
 use lumen_core::app::App as EcsApp;
@@ -48,10 +54,12 @@ fn canvas_element(id: &str, size: Option<(f32, f32)>) -> Element {
     }
 }
 
-/// Build a headless app whose tree is `children`, running one script.
+/// A candela program that does nothing, for a case about the element alone.
+const NO_SCRIPT: &str = "fn main() {}\n";
+
+/// Build a headless app whose tree is `children`, running one candela script.
 fn build_app(
     dir: &std::path::Path,
-    engine: &str,
     source: &str,
     children: Vec<Element>,
     plugin: Option<CanvasPlugin>,
@@ -65,9 +73,9 @@ fn build_app(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -112,8 +120,7 @@ fn the_element_is_adopted_and_sized_from_its_declared_drawing_space() {
     let dir = app_dir("adopt");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_start() {}\n",
+        NO_SCRIPT,
         vec![canvas_element("chart", Some((200.0, 120.0)))],
         Some(CanvasPlugin::default()),
     );
@@ -141,8 +148,7 @@ fn a_canvas_with_no_declared_size_takes_the_long_standing_default() {
     let dir = app_dir("default-size");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_start() {}\n",
+        NO_SCRIPT,
         vec![canvas_element("plain", None)],
         Some(CanvasPlugin::default()),
     );
@@ -154,18 +160,23 @@ fn a_canvas_with_no_declared_size_takes_the_long_standing_default() {
 }
 
 #[test]
-fn rhai_draws_and_the_canvas_says_it_changed() {
+fn a_script_draws_and_the_canvas_says_it_changed() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     lumen_canvas::store::reset();
-    let dir = app_dir("rhai-draw");
+    let dir = app_dir("draw");
     let mut app = build_app(
         &dir,
-        "rhai",
         r##"
+import "lumen.cdl";
+
 fn on_start() {
     canvas::set_fill_style("chart", "#3b82f6");
     canvas::fill_rect("chart", 10.0, 10.0, 40.0, 20.0);
+    canvas::set_fill_rgba("chart", 1.0, 0.0, 0.0, 1.0);
+    canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0);
 }
+
+fn main() {}
 "##,
         vec![canvas_element("chart", Some((200.0, 120.0)))],
         Some(CanvasPlugin::default()),
@@ -178,65 +189,12 @@ fn on_start() {
 }
 
 #[test]
-fn lua_reaches_the_same_surface_through_its_table() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    lumen_canvas::store::reset();
-    let dir = app_dir("lua");
-    let mut app = build_app(
-        &dir,
-        "lua",
-        r#"
-function on_start()
-  canvas.resize("chart", 64, 32)
-  canvas.fill_rect("chart", 0, 0, 8, 8)
-end
-"#,
-        vec![canvas_element("chart", Some((200.0, 120.0)))],
-        Some(CanvasPlugin::default()),
-    );
-    app.tick();
-
-    let (_, logical) = canvas_of(&mut app, "chart").expect("adopted");
-    assert_eq!(logical, (64.0, 32.0), "the script resized the canvas");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn candela_reaches_the_module_surface_through_its_folded_block() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    lumen_canvas::store::reset();
-    let dir = app_dir("candela");
-    let mut app = build_app(
-        &dir,
-        "candela",
-        r#"
-import "lumen.cdl";
-
-fn on_start() {
-    canvas::set_fill_rgba("chart", 1.0, 0.0, 0.0, 1.0);
-    canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0);
-}
-
-fn main() {}
-"#,
-        vec![canvas_element("chart", Some((200.0, 120.0)))],
-        Some(CanvasPlugin::default()),
-    );
-    app.tick();
-
-    let (revision, _) = canvas_of(&mut app, "chart").expect("adopted");
-    assert!(revision > 0, "candela's calls reached the same surface");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn a_resize_empties_the_canvas_and_its_drawing_state() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     lumen_canvas::store::reset();
     let dir = app_dir("resize-clears");
     let mut app = build_app(
         &dir,
-        "rhai",
         r#"
 fn on_start() {
     canvas::set_global_alpha("chart", 0.25);
@@ -244,6 +202,8 @@ fn on_start() {
     canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0);
     canvas::resize("chart", 64.0, 32.0);
 }
+
+fn main() {}
 "#,
         vec![canvas_element("chart", Some((200.0, 120.0)))],
         Some(CanvasPlugin::default()),
@@ -276,13 +236,16 @@ fn the_canvas_reports_the_size_a_pending_resize_asked_for() {
     let dir = app_dir("size-readback");
     let mut app = build_app(
         &dir,
-        "rhai",
         r#"
+import "lumen.cdl";
+
 fn on_start() {
     canvas::resize("chart", 64.0, 32.0);
-    signal("w", "").set(canvas::width("chart"));
-    signal("h", "").set(canvas::height("chart"));
+    lumen::signal_set_int("w", canvas::width("chart"));
+    lumen::signal_set_int("h", canvas::height("chart"));
 }
+
+fn main() {}
 "#,
         vec![canvas_element("chart", Some((200.0, 120.0)))],
         Some(CanvasPlugin::default()),
@@ -301,9 +264,10 @@ fn a_drawing_with_no_element_is_reported_once() {
     let dir = app_dir("orphan");
     let mut app = build_app(
         &dir,
-        "rhai",
         r#"
 fn on_start() { canvas::fill_rect("typo", 0.0, 0.0, 4.0, 4.0); }
+
+fn main() {}
 "#,
         vec![canvas_element("chart", Some((40.0, 40.0)))],
         Some(CanvasPlugin::default()),
@@ -334,9 +298,10 @@ fn a_canvas_whose_element_goes_away_is_forgotten() {
     let dir = app_dir("retire");
     let mut app = build_app(
         &dir,
-        "rhai",
         r#"
 fn on_ready() { canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0); }
+
+fn main() {}
 "#,
         vec![canvas_element("chart", Some((40.0, 40.0)))],
         Some(CanvasPlugin::default()),
@@ -373,8 +338,7 @@ fn a_drawing_call_wakes_a_parked_loop() {
     let dir = app_dir("waker");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\n",
+        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\nfn main() {}\n",
         vec![canvas_element("chart", Some((40.0, 40.0)))],
         Some(CanvasPlugin::default()),
     );
@@ -410,8 +374,7 @@ fn a_resize_moves_the_drawing_space_and_leaves_the_box_where_css_put_it() {
     let dir = app_dir("natural-size");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_ready() { canvas::resize(\"chart\", 64.0, 32.0); }\n",
+        "fn on_ready() { canvas::resize(\"chart\", 64.0, 32.0); }\nfn main() {}\n",
         vec![canvas_element("chart", Some((200.0, 120.0)))],
         Some(CanvasPlugin::default()),
     );
@@ -450,8 +413,7 @@ fn a_canvas_drawn_at_forever_is_bounded() {
     let dir = app_dir("bounded");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_ready() {}\n",
+        "fn on_ready() {}\nfn main() {}\n",
         vec![canvas_element("chart", Some((40.0, 40.0)))],
         Some(CanvasPlugin::default()),
     );
@@ -483,8 +445,7 @@ fn a_canvas_whose_surface_went_is_left_alone() {
     let dir = app_dir("no-surface");
     let mut app = build_app(
         &dir,
-        "rhai",
-        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\n",
+        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\nfn main() {}\n",
         vec![canvas_element("chart", Some((40.0, 40.0)))],
         Some(CanvasPlugin::default()),
     );
@@ -547,9 +508,10 @@ fn without_the_plugin_there_is_no_canvas_and_the_app_still_runs() {
     let dir = app_dir("absent");
     let mut app = build_app(
         &dir,
-        "rhai",
         r#"
 fn on_start() { canvas::fill_rect("chart", 0.0, 0.0, 4.0, 4.0); }
+
+fn main() {}
 "#,
         // The element is still in the tree; nothing adopts it.
         vec![canvas_element("chart", Some((40.0, 40.0)))],
@@ -561,6 +523,15 @@ fn on_start() { canvas::fill_rect("chart", 0.0, 0.0, 4.0, 4.0); }
     assert!(
         canvas_of(&mut app, "chart").is_none(),
         "no plugin, no canvas component"
+    );
+    let failure = app
+        .world
+        .get_resource::<lumen_script::ScriptLoadFailure>()
+        .expect("the program that names a missing namespace fails to load");
+    assert!(
+        failure.0.contains("`canvas`"),
+        "the failure names the namespace: {}",
+        failure.0
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

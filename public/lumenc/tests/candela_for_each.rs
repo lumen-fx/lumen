@@ -75,9 +75,7 @@ fn removing_a_record_despawns_its_element() {
     // prelude's ArraySignal handle.
     {
         use lumen_script::ScriptHost;
-        let mut host = app
-            .world
-            .resource_mut::<lumen_script_candela::CandelaHost>();
+        let mut host = app.world.resource_mut::<lumen_candela_dev::CandelaHost>();
         let outcome = host.call("drop_first", &[]).expect("drop_first ok");
         assert!(outcome.found, "the fixture defines drop_first");
         host.push_commands(outcome.commands);
@@ -121,9 +119,7 @@ fn a_rewritten_array_reaches_the_rows_in_one_tick_with_extra_systems_installed()
 
     {
         use lumen_script::ScriptHost;
-        let mut host = app
-            .world
-            .resource_mut::<lumen_script_candela::CandelaHost>();
+        let mut host = app.world.resource_mut::<lumen_candela_dev::CandelaHost>();
         let outcome = host.call("drop_first", &[]).expect("drop_first ok");
         assert!(outcome.found, "the fixture defines drop_first");
         host.push_commands(outcome.commands);

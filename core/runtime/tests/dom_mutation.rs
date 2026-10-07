@@ -59,7 +59,6 @@ impl Harness {
         };
         let bytes = artifact::serialize(&CompiledApp {
             ir,
-            script_source: String::new(),
             ..Default::default()
         })
         .unwrap();

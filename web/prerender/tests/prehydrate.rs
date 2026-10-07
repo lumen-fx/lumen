@@ -67,6 +67,7 @@ fn app_with(program: &[u8]) -> CompiledApp {
     CompiledApp {
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(program.to_vec()),
         }],
@@ -334,6 +335,7 @@ fn an_engine_this_build_cannot_run_is_named() {
     let compiled = CompiledApp {
         scripts: vec![CompiledScript {
             engine: "elvish".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(vec![0]),
         }],

@@ -4,12 +4,11 @@ Markup describes the interface and CSS styles it. A script supplies the
 behaviour: it reacts to events, writes signals, builds elements at runtime, and
 talks to the OS.
 
-## Choosing a host
+## The script language
 
-Three hosts are available, and an app can use more than one.
-
-**candela** is the default. It is Lumen's own language, statically checked, and
-the one most scaffolds are written in. One import gives you the whole surface:
+Scripts are written in **candela**, Lumen's own language, statically checked,
+and the one every scaffold is written in. One import gives you the whole
+surface:
 
 ```rust
 import "lumen.cdl";
@@ -39,59 +38,40 @@ and the array methods work in an app script the way they do anywhere else; see
 [the candela reference](../reference/scripting-candela.md#the-candela-standard-library)
 for where the modules are read from and how they reach a browser.
 
-**Rhai** and **Lua** expose the same capabilities as plain globals:
+A script reaches the app through `<script src="main.cdl"/>`, or an inline
+`<script>` block, which is read as candela. Files of the same language join
+into one program, so two `.cdl` files share their functions the way two halves
+of one file would, and each still opens with its own `import "lumen.cdl";`.
 
-```rhai
-// Rhai
-fn on_start() {
-    let clicks = signal("clicks", 0);
-    derive("counter_label", [clicks], |n| "clicks: " + n);
-}
-fn on_click(id) { let c = signal("clicks", 0); c.set(c.get() + 1); }
-```
+### How a script runs
 
-```lua
--- Lua
-function on_start()
-    local clicks = signal("clicks", 0)
-    derive("counter_label", { clicks }, function(n) return "clicks: " .. n end)
-end
-function on_click(id)
-    local c = signal("clicks", 0)
-    c:set(c:get() + 1)
-end
-```
+The host that runs a script is a runtime module the toolchain ships, loaded for
+you: an app declares nothing for it. While you work (`lumenc run`), the script
+is compiled from source when the app starts and again on every save, which is
+what hot reload rides on. When you ship (`lumenc build`, `lumenc package`), the
+build compiles it to bytecode and the shipped app runs that bytecode without a
+compiler, so its source does not travel with it. A script that does not
+compile fails the build rather than the shipped app.
 
-Each script file picks its own host from its extension: `.cdl` runs under
-candela, `.lua` under Lua, `.rhai` under Rhai.
+When the module that runs a language is not installed, the app still starts:
+a banner on stderr and in the window says which script did not run.
 
-```html
-<script src="model.cdl"/>
-<script src="report.lua"/>
-```
+### Rhai and Lua
 
-An app written this way runs both hosts at once. Files of the same language
-join into one program, so two `.cdl` files share their functions the way two
-halves of one file would, and each still opens with its own
-`import "lumen.cdl";`. Two different languages stay separate programs and
-cannot call each other. What they do share is signals: they read and write the
-same signal bus, and a value one host writes is visible to the other on the
-same tick. Lifecycle and event callbacks reach every host, so `on_start`,
-`on_ready`, `on_click` and the rest run in each language that defines them.
-
-An inline `<script>` block has no extension to read. It joins the app's one
-external language when there is exactly one, and candela otherwise.
-
-To put the whole app on one engine regardless of extensions, declare it in
-`lumen.toml`:
+Rhai and Lua are deprecated, kept as runtime modules in the Linux and macOS
+modules archive and nowhere else; new scripting features land in candela only,
+and their reference pages ([Rhai](../reference/scripting-rhai.md),
+[Lua](../reference/scripting-lua.md)) are not extended. A `.rhai` or `.lua`
+file runs on its module the way a `.cdl` file runs on candela's, side by side
+with a candela program: the languages do not call each other, but they read
+and write the same signal bus, and lifecycle and event callbacks reach every
+language that defines them. To put every script, inline ones included, on one
+language, name it in `lumen.toml`:
 
 ```toml
 [script]
-engine = "rhai"
+engine = "lua"
 ```
-
-That is also the answer for an app whose only script is an inline block written
-in something other than candela.
 
 ## Lifecycle
 

@@ -21,7 +21,6 @@
 /// [`ScriptParam`](crate::script_fn::ScriptParam),
 /// [`ScriptSig`](crate::script_fn::ScriptSig),
 /// [`ScriptNs`](crate::script_fn::ScriptNs),
-/// [`HostSet`](crate::script_fn::HostSet),
 /// [`ScriptPrelude`](crate::script_fn::ScriptPrelude), and [`PluginEvent`].
 ///
 /// Enum variants are append-only. The encoding writes a variant by its index,
@@ -29,7 +28,7 @@
 /// as a different command. Add new variants at the end of their enum. Any other
 /// change to a shape listed above (a renamed or retyped field, a removed
 /// variant) bumps this constant.
-pub const SCRIPT_WIRE_VERSION: u16 = 3;
+pub const SCRIPT_WIRE_VERSION: u16 = 4;
 
 /// [`PropertyKey`](lumen_core::property_store::PropertyKey) on the wire.
 ///

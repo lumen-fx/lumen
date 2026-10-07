@@ -37,6 +37,8 @@ lumen = { workspace = true, optional = true }
 lumen-archive = { workspace = true, optional = true }
 lumen-audio = { workspace = true, optional = true }
 lumen-browser = { workspace = true, optional = true }
+# The script host a compiled app's bytecode runs on.
+lumen-candela = { workspace = true, optional = true }
 lumen-canvas = { workspace = true, optional = true }
 lumen-cookie = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
@@ -56,6 +58,7 @@ static-run = [
     "dep:lumen-archive",
     "dep:lumen-audio",
     "dep:lumen-browser",
+    "dep:lumen-candela",
     "dep:lumen-canvas",
     "dep:lumen-cookie",
     "dep:lumen-download",

@@ -52,13 +52,21 @@ one by name under [`[dependencies]`](../reference/lumen-toml.md#dependencies)
 in `lumen.toml`, which lists the modules and their config keys;
 [scripting](../guides/scripting.md) covers the calls each one adds.
 
+The script hosts are modules too: candela's compiler, which `lumenc run`,
+`check` and `build` compile scripts with, and the bytecode host a packaged app
+runs its scripts on, plus the deprecated Rhai and Lua hosts. An app never
+declares them; Lumen loads the one each script needs.
+
 The installer downloads them with the toolchain, from the module archive
 published with the same release, and unpacks them into the same tree, so the
 libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
-looks for them. `--no-modules` installs the toolchain without them. The web halves of the
-modules, which `lumenc web` puts into a site, come with the toolchain itself
-under `~/.lumen/bin/modules`, so a web build does not need the module
-archive. The
+looks for them. `--no-modules` installs the toolchain without them, and such a
+toolchain runs and builds no script. The web halves of the modules, which
+`lumenc web` puts into a site, and the descriptors that say which module runs
+which script language, come with the toolchain itself under
+`~/.lumen/bin/modules`, so a web build does not need the module archive. On
+Windows there is no module archive: the candela hosts are compiled into
+`lumenc.exe` and `lumen.dll`, and Rhai and Lua are not available. The
 setup-lumen action installs them the same way on Linux and macOS runners; see
 [Continuous integration](#continuous-integration).
 
@@ -84,7 +92,7 @@ curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --force
 | `--version VERSION` | Install a specific release and pin to it. |
 | `--no-confirm` | Accept the defaults without prompting. |
 | `--no-modify-path` | Never write to a shell startup file. |
-| `--no-modules` | Skip the bundled runtime modules and install the toolchain alone. |
+| `--no-modules` | Skip the bundled runtime modules, script hosts included, and install the toolchain alone. |
 | `--no-lpm` | Skip `lpm`, the package-registry client. |
 | `--force` | Reinstall even when already at the target version. |
 | `--uninstall` | Remove every file the installer wrote. |

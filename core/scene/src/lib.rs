@@ -24,5 +24,6 @@ pub mod fragments;
 pub mod i18n;
 pub mod routing;
 pub mod script_commands;
+pub mod script_host;
 pub mod source_parser;
 pub mod spawn;

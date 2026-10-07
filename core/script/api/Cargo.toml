@@ -47,13 +47,6 @@ lumen-plugin-abi.workspace = true
 [dev-dependencies]
 bincode.workspace = true
 
-[build-dependencies]
-# Reads `builtins.ron` when this crate compiles, so the builtin metadata
-# tables are generated rather than hand-maintained per host. A build
-# dependency, so the parser never reaches a shipped binary.
-ron.workspace = true
-serde.workspace = true
-
 [features]
 # The `parse_json` builtin. Every script host crate enables this; a build
 # that links none of them carries neither the feature nor `serde_json`.

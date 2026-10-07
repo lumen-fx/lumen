@@ -11,11 +11,14 @@
 //! - `lumen_module_register_<n>`, and a `#[used]` pointer to it in the
 //!   platform's pre-main constructor section (`.init_array`,
 //!   `__DATA,__mod_init_func`, `.CRT$XCU`). Always emitted: this is how a
-//!   module linked into a binary reaches the registry.
+//!   module linked into a binary reaches the registry. With
+//!   `language = <text>` it also records the module's language descriptor
+//!   there.
 //! - `lumen_module_probe_<n>` and `lumen_module_install_<n>`, the pair the
-//!   loader looks up after opening a shared library. Emitted only with the
-//!   `engine-dylib` feature and only off Windows, the two conditions under
-//!   which a module can be opened rather than linked.
+//!   loader looks up after opening a shared library. Emitted only with
+//!   `lumen-module`'s `engine-dylib` feature and only off Windows, the two
+//!   conditions under which a module can be opened rather than linked; the
+//!   expansion hands them to a `lumen-module` macro that decides.
 //!
 //! The names are the loader's contract, not the author's: `core/modules`
 //! builds the same strings from the name the app declares in `lumen.toml`,
@@ -29,10 +32,12 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, LitStr, Token, parse_macro_input};
 
-/// `lumen_module!("<declared name>", <constructor>)`.
+/// `lumen_module!("<declared name>", <constructor>)`, optionally followed by
+/// `, language = <descriptor text>`.
 struct ModuleEntry {
     name: LitStr,
     ctor: Expr,
+    language: Option<Expr>,
 }
 
 impl Parse for ModuleEntry {
@@ -46,11 +51,30 @@ impl Parse for ModuleEntry {
         })?;
         input.parse::<Token![,]>()?;
         let ctor: Expr = input.parse()?;
+        let mut language = None;
         // A trailing comma reads naturally after a multi-line constructor.
         if input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
         }
-        Ok(ModuleEntry { name, ctor })
+        if input.peek(syn::Ident) {
+            let key: syn::Ident = input.parse()?;
+            if key != "language" {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "lumen_module! takes `language = <descriptor text>` after the constructor",
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            language = Some(input.parse()?);
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(ModuleEntry {
+            name,
+            ctor,
+            language,
+        })
     }
 }
 
@@ -60,7 +84,11 @@ impl Parse for ModuleEntry {
 /// crate's docs for what the expansion contains.
 #[proc_macro]
 pub fn lumen_module(input: TokenStream) -> TokenStream {
-    let ModuleEntry { name, ctor } = parse_macro_input!(input as ModuleEntry);
+    let ModuleEntry {
+        name,
+        ctor,
+        language,
+    } = parse_macro_input!(input as ModuleEntry);
 
     let declared = name.value();
     if declared.trim().is_empty() {
@@ -75,31 +103,22 @@ pub fn lumen_module(input: TokenStream) -> TokenStream {
     let register_fn = Ident::new(&format!("register_{suffix}"), Span::call_site());
 
     // The dlopen half. A module that is linked in has no probe to answer and
-    // no shared engine to answer for.
-    let dylib_entries = if cfg!(feature = "engine-dylib") {
-        quote! {
-            // Naming the engine dylib from the module's own crate is what
-            // records its dependency on the shared engine, so an author
-            // cannot build a module that forgot it.
-            #[cfg(not(windows))]
-            use ::lumen_module::lumen_dylib as _;
+    // no shared engine to answer for. Whether it exists is `lumen-module`'s
+    // `engine-dylib` feature, decided by the copy of `lumen-module` the module
+    // crate compiles against: a module used as a build dependency compiles for
+    // the build machine with its own feature set, and this macro is one crate
+    // shared by both.
+    let dylib_entries = quote! {
+        ::lumen_module::__lumen_module_dylib_entries!(#probe_name, #install_name, install_module);
+    };
 
-            #[cfg(not(windows))]
-            #[unsafe(export_name = #probe_name)]
-            extern "C" fn probe() -> *const ::std::os::raw::c_char {
-                ::lumen_module::BUILD_ID_C.as_ptr() as *const ::std::os::raw::c_char
-            }
-
-            // Rust ABI: the loader calls this only after the probe proved
-            // both sides are one build.
-            #[cfg(not(windows))]
-            #[unsafe(export_name = #install_name)]
-            fn install(app: &mut ::lumen_module::App, config_toml: &str) -> u32 {
-                install_module(app, config_toml)
-            }
-        }
-    } else {
-        quote! {}
+    // A module that runs a script language says so, for a binary it is
+    // linked into, where no descriptor file sits beside it.
+    let language_entry = match language {
+        Some(descriptor) => quote! {
+            ::lumen_module::registry::register_language(#name, #descriptor);
+        },
+        None => quote! {},
     };
 
     quote! {
@@ -116,6 +135,7 @@ pub fn lumen_module(input: TokenStream) -> TokenStream {
                     name: #name,
                     install: install_module,
                 });
+                #language_entry
             }
 
             // The pre-main constructor. `#[used]` keeps the pointer in the

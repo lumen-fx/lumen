@@ -1,0 +1,59 @@
+# The candela script host the edit loop runs: the candela compiler on top of
+# `lumen-candela`'s bytecode host. It compiles `.cdl` source when a program
+# loads and again on every edit, checks a program without running it, compiles
+# the `.cdlb` image a shipped app carries, and reads the `lmn!` markup blocks a
+# script writes. `lumenc` opens it as the bundled `lumen-candela-dev` module
+# beside a shared engine and compiles it in where there is none; a shipped app
+# never loads it. The host itself is `lumen-candela-dev-host` (host/); this
+# package is its module entry.
+[package]
+name = "lumen-candela-dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's candela development host: the candela compiler, hot reload, and ahead-of-time checks and builds, as a runtime module or compiled in."
+keywords = ["ui", "gui", "scripting", "candela", "lumen"]
+categories = ["gui"]
+publish = false
+
+[package.metadata.lumen]
+# Where this module is compiled in: the dev toolchain only (`lumenc` and the
+# libraries a from-source run goes through). A shipped app runs bytecode on
+# `lumen-candela`, so the static launcher and its link kit leave the compiler
+# out. See .github/scripts/first-party-modules.sh.
+link = "toolchain"
+
+[lib]
+name = "lumen_candela_dev"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-candela-dev-host = { workspace = true }
+lumen-module = { workspace = true }
+
+[dev-dependencies]
+# The suites drive the host the way an app does: through the script seam, the
+# scene and the runtime, with the bytecode module beside it.
+lumen-candela = { workspace = true }
+lumen-script = { workspace = true, features = ["json", "markdown"] }
+lumen-core = { workspace = true }
+lumen-scene = { workspace = true }
+lumen-ir = { workspace = true }
+bevy_ecs.workspace = true
+# tests/script_fn_*.rs build whole apps through the runtime, so a plugin's
+# script function is seen surviving a reload, a reset, and the OS command
+# round trip in this host. The loader answers the host module's name from the
+# modules compiled into the test binary.
+lumen-runtime = { workspace = true, features = ["modules"] }
+lumen-os-lifecycle = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape. A
+# binary that links the `lib` target in drops the feature and links no engine
+# dylib.
+engine-dylib = ["lumen-module/engine-dylib"]

@@ -230,18 +230,17 @@ fn compile_dir(
         resolution.output
     };
 
-    // The `lmn!` blocks the app's candela scripts write, read before the tree:
-    // markup names a candela component by writing the function as a tag, so
-    // the blocks are in the table this parse instantiates against.
-    // Reads the (possibly rewritten) entry text, so its errors carry the
-    // same attribution as the other markup errors.
-    let scripted = script_fragments(&spliced, &html_path, &src_dir).map_err(|e| match e {
-        CompileError::ParseHtml(msg) => CompileError::ParseHtml(attribute(msg)),
-        other => other,
-    })?;
     // Includes are already spliced away, so the string-only parser suffices.
-    let parsed = crate::parse_markup(&spliced, &html_path, None, &scripted)
-        .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
+    // A script's markup blocks are read by its language's host module, which
+    // this path does not load (see the module doc comment), so a component a
+    // script declares is not known here.
+    let parsed = crate::parse_markup(
+        &spliced,
+        &html_path,
+        None,
+        &lumen_ir::fragment::FragmentTable::new(),
+    )
+    .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
     let mut fragments = parsed.fragments;
     let mut ir = parsed.ir;
     ir.included_files = include_paths;
@@ -331,10 +330,9 @@ fn compile_dir(
         eprintln!("{line}");
     }
 
-    // Bake inline + external `<script>` into one string; strip both from the IR
-    // so the parser-free runtime reconstructs the exact script-host input.
-    let script_source = combined_script_source(&ir, &src_dir)?;
-    let scripts = grouped_script_sources(&ir, &src_dir)?;
+    // The program, split by language and stripped from the IR, so the
+    // parser-free runtime reconstructs the exact script-host input.
+    let scripts = grouped_script_sources(&ir, dir, &src_dir)?;
     // Expand the use sites the fragment bodies hold against each other, so
     // every body the artifact carries is the whole subtree it stands for.
     crate::parse::fragments::link(&mut fragments)
@@ -357,7 +355,6 @@ fn compile_dir(
 
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
-        script_source,
         scripts,
         // This path covers the single entry page (see the module comment);
         // `lumenc build` and `lumenc package` are what compile a page set.
@@ -372,107 +369,57 @@ fn compile_dir(
     })
 }
 
-/// The fragments the app's candela scripts declare through `lmn!`: the inline
-/// `<script>` block plus every `.cdl` file the markup names.
-///
-/// Read from the markup text rather than from a parsed tree, because the parse
-/// needs the result: markup names a candela component by writing the function
-/// as a tag.
-fn script_fragments(
-    html: &str,
-    html_path: &Path,
-    src_dir: &Path,
-) -> Result<lumen_ir::fragment::FragmentTable, CompileError> {
-    let refs = crate::collect_script_refs(html, html_path, None)
-        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
-    let mut table = lumen_ir::fragment::FragmentTable::new();
-    let mut fold = |source: &str, uri: &str| -> Result<(), CompileError> {
-        let declared =
-            crate::parse::lmn::script_fragments(source, uri).map_err(CompileError::ParseHtml)?;
-        table
-            .merge(declared)
-            .map_err(|e| CompileError::ParseHtml(e.to_string()))
-    };
-    if !refs.inline.trim().is_empty() {
-        fold(&refs.inline, &html_path.display().to_string())?;
-    }
-    for rel in &refs.external {
-        if engine_for(Path::new(rel)) != Some("candela") {
-            continue;
-        }
-        let path = src_dir.join(rel);
-        let body =
-            std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
-        fold(&body, &path.display().to_string())?;
-    }
-    Ok(table)
-}
-
-/// The engine name a script file's extension selects. Mirror of
-/// `lumen_runtime::config::ScriptEngine::from_extension`, which this path
-/// cannot reach (see the module doc comment).
-fn engine_for(path: &Path) -> Option<&'static str> {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("cdl") => Some("candela"),
-        Some("lua") => Some("lua"),
-        Some("rhai") => Some("rhai"),
-        _ => None,
-    }
-}
-
-/// Split the app's script by the engine that runs each part, so an app that
-/// mixes languages keeps one host per language after compilation. Each
-/// `<script src>` file joins its extension's engine; the inline block joins
-/// the app's one external language when there is exactly one, and candela
-/// otherwise. Mirror of `lumen_runtime::run::loading::grouped_script_sources`
-/// without the `[script] engine` override, which the runtime applies itself.
+/// Split the app's script by the language that runs each part, so an app that
+/// mixes languages keeps one host per language after compilation, the same
+/// grouping the runtime applies (`lumen_modules::language::ScriptGrouping`),
+/// read against the language descriptors in reach of this compiler. Each part
+/// names the module that runs it from source: this path compiles no bytecode.
 fn grouped_script_sources(
     ir: &lumen_ir::layout_ir::LayoutIR,
+    dir: &Path,
     src_dir: &Path,
 ) -> Result<Vec<lumen_ir::artifact::CompiledScript>, CompileError> {
-    let externals: Vec<(&'static str, &String)> = ir
-        .external_scripts
-        .iter()
-        .map(|rel| (engine_for(Path::new(rel)).unwrap_or("candela"), rel))
-        .collect();
-    let mut engines: Vec<&'static str> = Vec::new();
-    for (engine, _) in &externals {
-        if !engines.contains(engine) {
-            engines.push(engine);
-        }
-    }
-    let inline_engine = match engines.as_slice() {
-        [only] => *only,
-        _ => "candela",
+    let table =
+        lumen_modules::language::LanguageTable::discover(None).map_err(CompileError::Artifact)?;
+    let engine = script_engine(dir);
+    let grouping = lumen_modules::language::ScriptGrouping {
+        table: &table,
+        engine: engine.as_deref(),
     };
-
-    let mut out: Vec<lumen_ir::artifact::CompiledScript> = Vec::new();
-    let mut push = |engine: &str, body: &str| {
-        if body.trim().is_empty() {
-            return;
-        }
-        match out.iter_mut().find(|s| s.engine == engine) {
-            Some(entry) => {
-                entry.source.push('\n');
-                entry.source.push_str(body);
-            }
-            None => out.push(lumen_ir::artifact::CompiledScript {
-                engine: engine.to_string(),
-                source: body.to_string(),
-                // This path has no script host to compile with (see the module
-                // doc comment); the runtime runs it from source.
-                bytecode: None,
-            }),
-        }
-    };
-    push(inline_engine, &ir.script_source);
-    for (engine, rel) in &externals {
+    let mut externals: Vec<(&str, String)> = Vec::with_capacity(ir.external_scripts.len());
+    for rel in &ir.external_scripts {
         let path = src_dir.join(rel);
         let body =
             std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
-        push(engine, &body);
+        externals.push((rel.as_str(), body));
     }
-    Ok(out)
+    Ok(grouping
+        .group(&ir.script_source, &externals)
+        .into_iter()
+        .map(|(language, source)| lumen_ir::artifact::CompiledScript {
+            module: table
+                .source_provider(&language)
+                .map(|p| p.module.clone())
+                .unwrap_or_default(),
+            engine: language,
+            source,
+            bytecode: None,
+        })
+        .collect())
+}
+
+/// The `[script] engine` key from `lumen.toml`, read directly, the same way
+/// [`entry_name`] reads `[app] entry`.
+fn script_engine(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("lumen.toml")).ok()?;
+    let value: toml::Value = toml::from_str(&text).ok()?;
+    value
+        .get("script")?
+        .get("engine")?
+        .as_str()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
 }
 
 /// The directory `dir`'s code lives in, rejecting an app whose code is still
@@ -482,6 +429,8 @@ fn grouped_script_sources(
 /// cannot reach (see the module doc comment), down to the message: an author
 /// gets the same migration hint whichever tool found the flat directory.
 fn resolve_src_dir(dir: &Path) -> Result<PathBuf, CompileError> {
+    let table = lumen_modules::language::LanguageTable::discover(None).unwrap_or_default();
+    let script_exts = table.extensions();
     let code = |d: &Path| -> Vec<String> {
         let Ok(rd) = std::fs::read_dir(d) else {
             return Vec::new();
@@ -492,7 +441,7 @@ fn resolve_src_dir(dir: &Path) -> Result<PathBuf, CompileError> {
             .filter(|p| {
                 p.extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|e| matches!(e, "lmn" | "css" | "rhai" | "lua" | "cdl"))
+                    .is_some_and(|e| matches!(e, "lmn" | "css") || script_exts.contains(&e))
             })
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .collect();
@@ -588,26 +537,6 @@ fn register_declared_tags(dir: &Path) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// Concatenate the inline `<script>` body with every external script file
-/// referenced via `<script src="...">`, separated by newlines. Mirror of
-/// `lumen_runtime::run::combined_script_source`.
-fn combined_script_source(
-    ir: &lumen_ir::layout_ir::LayoutIR,
-    src_dir: &Path,
-) -> Result<String, CompileError> {
-    let mut combined = ir.script_source.clone();
-    for rel in &ir.external_scripts {
-        let path = src_dir.join(rel);
-        let body =
-            std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(&body);
-    }
-    Ok(combined)
-}
-
 /// Parse a CSS source and extract its `:root { --name: value; ... }`
 /// declarations via [`lumen_ir::css::Stylesheet::root_vars`] (parity with
 /// the runtime loader, `lumen_runtime::run::loading::extract_root_vars`). A
@@ -679,7 +608,10 @@ mod tests {
 
         let bytes = compile_dir_to_lmna(&tmp).expect("compile");
         let app = lumen_ir::artifact::read_bytes(&bytes).expect("decode");
-        assert!(app.script_source.contains("let x = 1;"));
+        assert!(
+            app.scripts.iter().any(|s| s.source.contains("let x = 1;")),
+            "the inline script travels in the artifact's program"
+        );
         assert_eq!(app.ir.root.tag, "root");
         assert!(app.ir.combined_stylesheet.is_some());
 

@@ -1,10 +1,10 @@
 //! A plugin registers a script function, and the app's script calls it.
 //!
-//! The round trip goes plugin -> `ScriptFnRegistry` -> host -> script, once per
-//! language, on a headless app built the way `lumenc run` builds one. What each
-//! case proves is that the plugin phase happens early enough: candela binds its
-//! `host` declarations while the program compiles, so a registration that
-//! arrived any later would have nothing to bind to.
+//! The round trip goes plugin -> `ScriptFnRegistry` -> host -> script, on a
+//! headless app built the way `lumenc run` builds one. What each case proves is
+//! that the plugin phase happens early enough: candela binds its `host`
+//! declarations while the program compiles, so a registration that arrived any
+//! later would have nothing to bind to.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +14,10 @@ use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::{ScriptCommand, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// Nav, the DOM snapshot, and the property store are process-global, so the
 /// headless apps here run one at a time.
@@ -32,8 +36,7 @@ impl Plugin for GreeterPlugin {
     fn build(self, app: &mut EcsApp) {
         let calls = self.calls;
         // The greeting rides back as a signal so one assertion covers the
-        // whole path in every language, without each script spelling its own
-        // host's signal builtin.
+        // whole path, without the script spelling a signal builtin.
         app.add_script_fn(
             ScriptFn::new("greet")
                 .param("who", ScriptTy::Str)
@@ -79,29 +82,27 @@ impl Plugin for GpioPlugin {
     }
 }
 
-/// A plugin that registers a name the runtime already provides, to prove the
-/// later registration is the one the script reaches.
+/// A plugin that registers a name the runtime already provides, in the
+/// runtime's own `lumen` namespace, to prove the later registration is the one
+/// the script reaches.
 struct ShadowPlugin;
 
 impl Plugin for ShadowPlugin {
     fn build(self, app: &mut EcsApp) {
-        app.add_script_fn(ScriptFn::commands("page_current", 0, |cx| {
-            cx.emit(ScriptCommand::SetSignal {
-                name: "shadowed".to_string(),
-                value: "yes".to_string(),
-            });
-        }));
+        app.add_script_fn(
+            ScriptFn::commands("page_current", 0, |cx| {
+                cx.emit(ScriptCommand::SetSignal {
+                    name: "shadowed".to_string(),
+                    value: "yes".to_string(),
+                });
+            })
+            .with_ns(ScriptNs::Builtin),
+        );
     }
 }
 
-/// Build a headless app from a script in `engine`, with `plugin` installed.
-fn app_with(engine: &str, source: &str, plugin: impl Plugin + Send + 'static) -> EcsApp {
-    app_with_scripts(&[(engine, source)], plugin)
-}
-
-/// Build a headless app running one script per language, with `plugin`
-/// installed. Every host drains the same registry as it loads.
-fn app_with_scripts(scripts: &[(&str, &str)], plugin: impl Plugin + Send + 'static) -> EcsApp {
+/// Build a headless app running the candela `source`, with `plugin` installed.
+fn app_with(source: &str, plugin: impl Plugin + Send + 'static) -> EcsApp {
     let dir = std::env::temp_dir().join(format!(
         "lumen_plugin_script_fn_{}_{}",
         std::process::id(),
@@ -119,18 +120,12 @@ fn app_with_scripts(scripts: &[(&str, &str)], plugin: impl Plugin + Send + 'stat
             },
             ..Default::default()
         },
-        script_source: scripts
-            .first()
-            .map(|(_, s)| (*s).to_string())
-            .unwrap_or_default(),
-        scripts: scripts
-            .iter()
-            .map(|(engine, source)| CompiledScript {
-                engine: (*engine).to_string(),
-                source: (*source).to_string(),
-                bytecode: None,
-            })
-            .collect(),
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
+            source: source.to_string(),
+            bytecode: None,
+        }],
         ..Default::default()
     })
     .expect("serialize artifact");
@@ -157,46 +152,13 @@ fn signal(app: &EcsApp, name: &str) -> Option<String> {
     }
 }
 
-#[test]
-fn a_plugin_function_is_callable_from_rhai() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let calls: Calls = Arc::default();
-    let app = app_with(
-        "rhai",
-        r#"fn on_start() { greet("rhai"); }"#,
-        GreeterPlugin {
-            calls: calls.clone(),
-        },
-    );
-
-    assert_eq!(calls.lock().unwrap().as_slice(), ["rhai".to_owned()]);
-    assert_eq!(signal(&app, "greeting").as_deref(), Some("hello rhai"));
-}
-
-#[test]
-fn a_plugin_function_is_callable_from_lua() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let calls: Calls = Arc::default();
-    let app = app_with(
-        "lua",
-        r#"function on_start() greet("lua") end"#,
-        GreeterPlugin {
-            calls: calls.clone(),
-        },
-    );
-
-    assert_eq!(calls.lock().unwrap().as_slice(), ["lua".to_owned()]);
-    assert_eq!(signal(&app, "greeting").as_deref(), Some("hello lua"));
-}
-
 /// candela resolves a host call through a declared block, and the host writes
 /// that block from what the plugin registered, so the app declares nothing.
 #[test]
-fn a_plugin_function_is_callable_from_candela() {
+fn a_plugin_function_is_callable_from_a_script() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let calls: Calls = Arc::default();
     let app = app_with(
-        "candela",
         r#"
 fn on_start() {
     let msg = native::greet("candela");
@@ -221,7 +183,6 @@ fn a_candela_app_may_declare_the_namespace_itself() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let calls: Calls = Arc::default();
     let app = app_with(
-        "candela",
         r#"
 host "native" {
     any greet(...);
@@ -242,26 +203,20 @@ fn main() {}
     assert_eq!(signal(&app, "greeting").as_deref(), Some("hello by hand"));
 }
 
-/// A plugin's own namespace is reachable from every language, each spelling it
-/// the way that language spells a namespace.
+/// A plugin's own namespace is reachable from a script, which calls the
+/// function through it.
 #[test]
-fn a_plugin_namespace_is_callable_from_every_language() {
+fn a_plugin_namespace_is_callable_from_a_script() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source) in [
-        ("rhai", "fn on_start() { gpio::level(21); }"),
-        ("lua", "function on_start() gpio.level(21) end"),
-        (
-            "candela",
-            "fn on_start() { let v = gpio::level(21); }\nfn main() {}\n",
-        ),
-    ] {
-        let app = app_with(engine, source, GpioPlugin { wrapper: None });
-        assert_eq!(
-            signal(&app, "reading").as_deref(),
-            Some("42"),
-            "{engine}: the plugin's namespaced function ran"
-        );
-    }
+    let app = app_with(
+        "fn on_start() { let v = gpio::level(21); }\nfn main() {}\n",
+        GpioPlugin { wrapper: None },
+    );
+    assert_eq!(
+        signal(&app, "reading").as_deref(),
+        Some("42"),
+        "the plugin's namespaced function ran"
+    );
 }
 
 /// A plugin can ship candela sugar over its namespace, so the script calls the
@@ -270,7 +225,6 @@ fn a_plugin_namespace_is_callable_from_every_language() {
 fn a_candela_plugin_wrapper_offers_the_method_form() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let app = app_with(
-        "candela",
         "fn on_start() { let v = pin(21).level(); }\nfn main() {}\n",
         GpioPlugin {
             wrapper: Some(
@@ -288,22 +242,23 @@ impl Pin {
     assert_eq!(signal(&app, "reading").as_deref(), Some("42"));
 }
 
-/// The runtime's own functions go into the registry first, so a plugin that
-/// takes one of their names wins.
+/// The host binds the runtime's own functions first, so a plugin that takes
+/// one of their names in the same namespace wins.
+///
+/// The script declares nothing and imports no prelude, so the `lumen` block it
+/// compiles against is the one the host writes from the plugin's registration.
 #[test]
 fn a_plugin_function_shadows_a_runtime_builtin() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source) in [
-        ("rhai", "fn on_start() { page_current(); }"),
-        ("lua", "function on_start() page_current() end"),
-    ] {
-        let app = app_with(engine, source, ShadowPlugin);
-        assert_eq!(
-            signal(&app, "shadowed").as_deref(),
-            Some("yes"),
-            "{engine}: the plugin's `page_current` is the one the script reached"
-        );
-    }
+    let app = app_with(
+        "fn on_start() { lumen::page_current(); }\nfn main() {}\n",
+        ShadowPlugin,
+    );
+    assert_eq!(
+        signal(&app, "shadowed").as_deref(),
+        Some("yes"),
+        "the plugin's `page_current` is the one the script reached"
+    );
 }
 
 /// Hot reload swaps the program, not the engine, so a registered function is
@@ -313,19 +268,29 @@ fn a_plugin_function_survives_a_reload() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let calls: Calls = Arc::default();
     let mut app = app_with(
-        "rhai",
-        r#"fn on_start() { greet("first"); }"#,
+        "fn on_start() { let msg = native::greet(\"first\"); }\nfn main() {}\n",
         GreeterPlugin {
             calls: calls.clone(),
         },
     );
 
     {
-        use lumen_script::ScriptHost;
-        let mut host = app.world.resource_mut::<lumen_script_rhai::RhaiHost>();
-        host.replace(r#"fn on_start() { greet("second"); }"#, "reload.rhai")
-            .expect("the reloaded script compiles");
-        host.call("on_start", &[]).expect("on_start runs again");
+        // Through the language the host module registered, the way hot
+        // reload reaches it.
+        let candela = *app
+            .world
+            .resource::<lumen_script::ScriptLanguages>()
+            .get("candela")
+            .expect("the candela module registered its language");
+        let reload = candela.reload.expect("the source host reloads");
+        reload(
+            &mut app.world,
+            "fn on_start() { let msg = native::greet(\"second\"); }\nfn main() {}\n",
+            "reload.cdl",
+        )
+        .expect("the host is installed")
+        .expect("the reloaded script compiles");
+        ((candela.access)().call)(&mut app.world, "on_start").expect("on_start runs again");
     }
 
     assert_eq!(
@@ -334,94 +299,35 @@ fn a_plugin_function_survives_a_reload() {
     );
 }
 
-/// One app, two languages, one plugin function.
-///
-/// Each host drains the registry as it loads and seals it afterwards, so the
-/// second host to load would see a closed channel if sealing meant emptying it.
-/// It does not: sealing refuses later writes and leaves the reads alone.
-#[test]
-fn two_languages_in_one_app_both_reach_the_plugin_function() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let calls: Calls = Arc::default();
-    let app = app_with_scripts(
-        &[
-            ("lua", "function on_start() greet(\"lua\") end"),
-            (
-                "candela",
-                "fn on_start() { let msg = native::greet(\"candela\"); }\nfn main() {}\n",
-            ),
-        ],
-        GreeterPlugin {
-            calls: calls.clone(),
-        },
-    );
-
-    let mut seen = calls.lock().unwrap().clone();
-    seen.sort();
-    assert_eq!(
-        seen,
-        ["candela".to_owned(), "lua".to_owned()],
-        "both hosts bound the function and both scripts called it"
-    );
-    // Whichever ran last owns the signal; the point is that neither host was
-    // left without the function.
-    assert!(signal(&app, "greeting").is_some_and(|g| g == "hello lua" || g == "hello candela"));
-}
-
 /// A plugin function that fails is a script error, not a dead app.
 ///
-/// Every language raises it the way it raises its own failures, and the tick
-/// loop keeps going, so the window an author is looking at stays up. Rhai and
-/// Lua hand the message to the catch clause; candela catches by kind, so its
-/// script reports having caught rather than what it caught.
+/// The script raises it the way it raises its own failures, and the tick loop
+/// keeps going, so the window an author is looking at stays up. candela
+/// catches by kind, so the script reports having caught rather than what it
+/// caught.
 #[test]
 fn a_failing_plugin_function_leaves_the_app_running() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (engine, source, expected) in [
-        (
-            "rhai",
-            "fn on_start() { try { refuse(\"x\"); } catch (e) { noted(\"\" + e); } }",
-            Some("`x` is not available"),
-        ),
-        (
-            "lua",
-            "function on_start()\n\
-             \x20 local ok, err = pcall(refuse, \"x\")\n\
-             \x20 if not ok then noted(tostring(err)) end\n\
-             end",
-            Some("`x` is not available"),
-        ),
-        (
-            "candela",
-            "fn on_start() {\n\
-             \x20   try { native::refuse(\"x\"); }\n\
-             \x20   catch \"host_fn_error\" { native::noted(\"raised\"); }\n\
-             }\n\
-             fn main() {}\n",
-            None,
-        ),
-    ] {
-        let caught: Calls = Arc::default();
-        let mut app = app_with(
-            engine,
-            source,
-            RefusingPlugin {
-                caught: caught.clone(),
-            },
-        );
-        // A few more ticks: a dead host would stop answering here.
-        app.tick();
-        app.tick();
-        let caught = caught.lock().unwrap();
-        assert_eq!(caught.len(), 1, "{engine}: the script caught the failure");
-        if let Some(text) = expected {
-            assert!(
-                caught[0].contains("refuse") && caught[0].contains(text),
-                "{engine}: the message names the function and carries its text: {}",
-                caught[0]
-            );
-        }
-    }
+    let caught: Calls = Arc::default();
+    let mut app = app_with(
+        "fn on_start() {\n\
+         \x20   try { native::refuse(\"x\"); }\n\
+         \x20   catch \"host_fn_error\" { native::noted(\"raised\"); }\n\
+         }\n\
+         fn main() {}\n",
+        RefusingPlugin {
+            caught: caught.clone(),
+        },
+    );
+    // A few more ticks: a dead host would stop answering here.
+    app.tick();
+    app.tick();
+    let caught = caught.lock().unwrap();
+    assert_eq!(
+        caught.as_slice(),
+        ["raised".to_owned()],
+        "the script caught the failure"
+    );
 }
 
 /// A plugin whose one function always refuses, plus a second that records what

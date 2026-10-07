@@ -172,8 +172,10 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-/// Write an app dir: markup with a rhai script, the script itself, a
-/// generated wav under `wav_name`, and the given `[dependencies]` block.
+/// Write an app dir: markup with a candela script, the script itself, a
+/// generated wav named `tone.wav`, and the given `[dependencies]` block.
+/// `script` is the script's handlers; the `lumen.cdl` import and the empty
+/// `main` every candela program needs are added around them.
 fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str, wav_secs: f32) -> PathBuf {
     let dir = f.scratch.join(case);
     let _ = std::fs::remove_dir_all(&dir);
@@ -181,10 +183,14 @@ fn write_app(f: &Fixtures, case: &str, dependencies: &str, script: &str, wav_sec
     synth::write_wav(&dir.join("tone.wav"), &synth::sine(440.0, wav_secs)).expect("wav");
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
-    std::fs::write(dir.join("src/main.rhai"), script).expect("script");
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        format!("import \"lumen.cdl\";\n{script}\nfn main() {{}}\n"),
+    )
+    .expect("script");
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[dependencies]\n{dependencies}"),
@@ -237,7 +243,7 @@ fn the_bundled_module_supplies_the_audio_surface() {
         f,
         "audio-bundled",
         "lumen-audio = { bundled = true }\n",
-        "fn on_start() { audio_volume(0.0); audio_play(\"tone.wav\"); }\n",
+        "fn on_start() { lumen::audio_volume(0.0); lumen::audio_play(\"tone.wav\"); }\n",
         5.0,
     );
     let (stdout, stderr) = run_host(f, &dir, 250, "audio_duration,audio_playing,audio_position");
@@ -280,12 +286,12 @@ fn end_of_track_reaches_the_script_through_the_event_bus() {
         "lumen-audio = { bundled = true }\n",
         r#"
 fn on_start() {
-    audio_volume(0.0);
-    on("audio_end", "tone.wav", "special_end");
-    audio_play("tone.wav");
+    lumen::audio_volume(0.0);
+    lumen::on("audio_end", "tone.wav", "special_end");
+    lumen::audio_play("tone.wav");
 }
-fn special_end(path) { signal("special", "").set(path); }
-fn on_audio_end(path) { signal("fallback", "").set(path); }
+fn special_end(path: string) { lumen::signal_set("special", path); }
+fn on_audio_end(path: string) { lumen::signal_set("fallback", path); }
 "#,
         0.2,
     );
@@ -310,7 +316,7 @@ fn a_missing_track_reports_on_stderr() {
         f,
         "audio-missing",
         "lumen-audio = { bundled = true }\n",
-        "fn on_start() { audio_play(\"no-such-track.wav\"); }\n",
+        "fn on_start() { lumen::audio_play(\"no-such-track.wav\"); }\n",
         0.5,
     );
     let (stdout, stderr) = run_host(f, &dir, 150, "audio_playing,audio_duration");
@@ -330,9 +336,9 @@ fn a_missing_track_reports_on_stderr() {
     );
 }
 
-/// Without the module the functions do not exist: the script's call fails
-/// with the host's ordinary unknown-function error, the app survives its
-/// run, and the engine prints nothing audio-named.
+/// Without the module the functions do not exist: the script fails to compile
+/// with candela's ordinary unknown-function error, the app survives its run,
+/// and the engine prints nothing audio-named.
 #[test]
 fn without_the_module_the_functions_do_not_exist() {
     let f = fixtures();
@@ -340,14 +346,14 @@ fn without_the_module_the_functions_do_not_exist() {
         f,
         "audio-absent",
         "",
-        "fn on_start() { audio_play(\"tone.wav\"); }\n",
+        "fn on_start() { lumen::audio_play(\"tone.wav\"); }\n",
         0.5,
     );
     let (stdout, stderr) = run_host(f, &dir, 50, "audio_duration,audio_playing");
 
-    // The host's own unknown-function error, nothing more.
+    // candela's own unknown-function error, nothing more.
     assert!(
-        stderr.contains("Function not found: audio_play"),
+        stderr.contains("the `lumen` namespace has no `audio_play`"),
         "{stderr}"
     );
     // The app survived the whole run (`HOST done` is asserted in run_host)

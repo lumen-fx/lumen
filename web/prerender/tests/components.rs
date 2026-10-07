@@ -142,6 +142,7 @@ fn compiled() -> CompiledApp {
         fragments: fragments(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(COMPONENTS.to_vec()),
         }],

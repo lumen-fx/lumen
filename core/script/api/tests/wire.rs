@@ -604,7 +604,7 @@ const EVENT_GOLDEN: &[(&str, &str)] = &[
 
 #[test]
 fn wire_version_is_pinned() {
-    assert_eq!(SCRIPT_WIRE_VERSION, 3);
+    assert_eq!(SCRIPT_WIRE_VERSION, 4);
 }
 
 #[test]

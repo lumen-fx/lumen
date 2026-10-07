@@ -13,10 +13,11 @@ pub mod fragments;
 /// parser-free runtime builds via the `runtime-parse` feature.
 #[cfg(feature = "runtime-parse")]
 pub mod html;
-/// Ahead-of-time extraction of `lmn!` markup blocks from candela scripts, so
-/// a shipped app carries the fragments they name and parses no markup at run
-/// time. Gated with the parser stack it compiles bodies through.
-#[cfg(feature = "runtime-parse")]
+/// Ahead-of-time compilation of the markup blocks a script writes, so a
+/// shipped app carries the fragments they name and parses no markup at run
+/// time. Gated with the parser stack it compiles bodies through and the
+/// runtime whose language registry reads the blocks.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod lmn;
 /// `<include>` / `@import` resolution - parser-side only.
 #[cfg(feature = "runtime-parse")]

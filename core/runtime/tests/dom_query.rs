@@ -53,7 +53,6 @@ fn dom_query_read_side_headless() {
     };
     let bytes = artifact::serialize(&CompiledApp {
         ir,
-        script_source: String::new(),
         ..Default::default()
     })
     .expect("serialize fixture artifact");

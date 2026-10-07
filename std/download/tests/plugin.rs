@@ -4,9 +4,9 @@
 //!
 //! What these prove, once per concern:
 //!
-//! - `download::to_file` reaches a script through the generic
-//!   `ScriptFnRegistry`, in Rhai and in candela, and the file it names lands
-//!   beside the app;
+//! - `download::to_file` reaches a candela script through the generic
+//!   `ScriptFnRegistry`, under the `download` namespace, and the file it names
+//!   lands beside the app;
 //! - progress, completion, and failure arrive over the plugin-event bus, and a
 //!   per-tag `on("download_done", tag, fn)` registration wins over the
 //!   `on_download_done` fallback;
@@ -14,9 +14,12 @@
 //!   error page;
 //! - a tag with a transfer already running is refused rather than superseded,
 //!   and a call past the configured concurrency is refused too;
-//! - without the plugin the function does not exist, and the app keeps running
-//!   after the script's own unknown-function error.
+//! - without the plugin the function does not exist: the script fails to
+//!   compile, and the app keeps running without it.
 
+// The candela host, compiled into the test binary: there is no shared engine
+// to open the host module beside.
+use lumen_candela_dev as _;
 use lumen_core::app::App as EcsApp;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_download::DownloadPlugin;
@@ -46,14 +49,9 @@ fn app_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Build a headless app in `dir` running one script, with or without the
-/// plugin.
-fn build_app(
-    dir: &std::path::Path,
-    engine: &str,
-    source: &str,
-    plugin: Option<DownloadPlugin>,
-) -> EcsApp {
+/// Build a headless app in `dir` running one candela script, with or without
+/// the plugin.
+fn build_app(dir: &std::path::Path, source: &str, plugin: Option<DownloadPlugin>) -> EcsApp {
     lumen_core::plugin_events::discard_plugin_events();
     let bytes = artifact::serialize(&CompiledApp {
         ir: LayoutIR {
@@ -63,9 +61,9 @@ fn build_app(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -115,14 +113,14 @@ fn tick_until(app: &mut EcsApp, secs: f64, pred: impl Fn(&EcsApp) -> bool) -> bo
     }
 }
 
-/// The whole good path from Rhai: the call is accepted, progress reports the
-/// declared size, the file lands beside the app, and `on_download_done`
-/// carries the path it was written to.
+/// The whole good path: the call is accepted, progress reports the declared
+/// size, the file lands beside the app, and `on_download_done` carries the
+/// path it was written to.
 #[test]
-fn rhai_downloads_a_verified_file_beside_the_app() {
+fn a_script_downloads_a_verified_file_beside_the_app() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let server = TestServer::start();
-    let dir = app_dir("rhai");
+    let dir = app_dir("verified");
     let sum = {
         use sha2::{Digest, Sha256};
         lumen_download::transfer::hex(Sha256::digest(BODY).as_slice())
@@ -130,17 +128,22 @@ fn rhai_downloads_a_verified_file_beside_the_app() {
     let url = server.url("/fixed");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    signal("started", "").set(download::to_file("{url}", "payload.bin", "art", "sha256:{sum}"));
+    lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", "sha256:{sum}"));
 }}
-fn on_download_progress(tag, received, total) {{
-    signal("progress", "").set(tag + ":" + received + "/" + total);
+
+fn on_download_progress(tag: string, received: int, total: int) {{
+    lumen::signal_set("progress", tag + ":" + str(received) + "/" + str(total));
 }}
-fn on_download_done(tag, path) {{ signal("done", "").set(tag + ":" + path); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", tag + ":" + path); }}
+
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::default()),
@@ -189,16 +192,21 @@ fn a_per_tag_handler_wins_over_the_fallback() {
     let url = server.url("/fixed");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    on("download_done", "art", "art_arrived");
+    lumen::on("download_done", "art", "art_arrived");
     download::to_file("{url}", "payload.bin", "art", "");
 }}
-fn art_arrived(tag, path) {{ signal("routed", "").set(tag); }}
-fn on_download_done(tag, path) {{ signal("fallback", "").set(tag); }}
-fn on_download_progress(tag, received, total) {{}}
+
+fn art_arrived(tag: string, path: string) {{ lumen::signal_set("routed", tag); }}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("fallback", tag); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::default()),
@@ -224,13 +232,18 @@ fn a_missing_file_reaches_the_error_handler() {
     let url = server.url("/missing");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{ download::to_file("{url}", "payload.bin", "art", ""); }}
-fn on_download_done(tag, path) {{ signal("done", "").set(path); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(tag + ":" + message); }}
-fn on_download_progress(tag, received, total) {{}}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", path); }}
+
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", tag + ":" + message); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::default()),
@@ -267,16 +280,21 @@ fn a_tag_already_downloading_is_refused() {
     let slow = server.url("/drip");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    signal("first", "").set(download::to_file("{slow}", "payload.bin", "art", ""));
-    signal("second", "").set(download::to_file("{slow}", "other.bin", "art", ""));
+    lumen::signal_set_bool("first", download::to_file("{slow}", "payload.bin", "art", ""));
+    lumen::signal_set_bool("second", download::to_file("{slow}", "other.bin", "art", ""));
 }}
-fn on_download_done(tag, path) {{ signal("done", "").set(path); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
-fn on_download_progress(tag, received, total) {{}}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", path); }}
+
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::default()),
@@ -324,16 +342,21 @@ fn the_configured_concurrency_bounds_what_runs_at_once() {
     let slow = server.url("/drip");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    signal("first", "").set(download::to_file("{slow}", "one.bin", "a", ""));
-    signal("second", "").set(download::to_file("{slow}", "two.bin", "b", ""));
+    lumen::signal_set_bool("first", download::to_file("{slow}", "one.bin", "a", ""));
+    lumen::signal_set_bool("second", download::to_file("{slow}", "two.bin", "b", ""));
 }}
-fn on_download_done(tag, path) {{ signal("done", "").set(tag); }}
-fn on_download_error(tag, message) {{ signal("error", "").set(tag + ":" + message); }}
-fn on_download_progress(tag, received, total) {{}}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", tag); }}
+
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", tag + ":" + message); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::with_limits(Limits::default(), 1)),
@@ -383,14 +406,18 @@ fn an_unreadable_checksum_is_refused_before_the_request() {
     let url = server.url("/fixed");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
+            r#"import "lumen.cdl";
+
 fn on_start() {{
-    signal("started", "").set(download::to_file("{url}", "payload.bin", "art", "md5:abcdef"));
+    lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", "md5:abcdef"));
 }}
-fn on_download_error(tag, message) {{ signal("error", "").set(message); }}
-fn on_download_progress(tag, received, total) {{}}
+
+fn on_download_error(tag: string, message: string) {{ lumen::signal_set("error", message); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
 "#
         ),
         Some(DownloadPlugin::default()),
@@ -413,73 +440,10 @@ fn on_download_progress(tag, received, total) {{}}
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// candela reaches the same function through the `host "download"` block the
-/// host synthesizes from what the plugin registered.
-#[test]
-fn candela_reaches_the_module_surface_through_its_namespace() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let server = TestServer::start();
-    let dir = app_dir("candela");
-    let url = server.url("/fixed");
-    let mut app = build_app(
-        &dir,
-        "candela",
-        &format!(
-            r#"import "lumen.cdl";
-
-fn on_start() {{
-    lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", ""));
-}}
-
-fn on_download_progress(tag: string, received: int, total: int) {{
-    lumen::signal_set_int("received", received);
-    lumen::signal_set_int("total", total);
-}}
-
-fn on_download_done(tag: string, path: string) {{
-    lumen::signal_set("done", tag);
-}}
-
-fn on_download_error(tag: string, message: string) {{
-    lumen::signal_set("error", message);
-}}
-
-fn main() {{}}
-"#
-        ),
-        Some(DownloadPlugin::default()),
-    );
-
-    assert_eq!(
-        signal(&app, "started").as_deref(),
-        Some("true"),
-        "candela declares the namespace and the call is typed"
-    );
-    assert!(
-        tick_until(&mut app, 30.0, |app| signal(app, "done").is_some()),
-        "on_download_done must fire; error={:?}",
-        signal(&app, "error")
-    );
-    assert_eq!(signal(&app, "done").as_deref(), Some("art"));
-    assert_eq!(
-        signal(&app, "received").as_deref(),
-        Some(BODY.len().to_string().as_str())
-    );
-    assert_eq!(
-        signal(&app, "total").as_deref(),
-        Some(BODY.len().to_string().as_str())
-    );
-    assert_eq!(
-        std::fs::read(dir.join("payload.bin")).expect("the file"),
-        BODY
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Without the plugin the function does not exist: the script's call fails
-/// with the host's ordinary unknown-namespace error, nothing is downloaded,
-/// and the app keeps ticking.
+/// Without the plugin the function does not exist: there is no `download`
+/// namespace to declare, so the program fails to compile and the failure
+/// names it. Nothing is downloaded, and the app keeps ticking without its
+/// script.
 #[test]
 fn without_the_plugin_the_function_does_not_exist() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -488,11 +452,14 @@ fn without_the_plugin_the_function_does_not_exist() {
     let url = server.url("/fixed");
     let mut app = build_app(
         &dir,
-        "rhai",
         &format!(
-            r#"
-fn on_start() {{ signal("started", "").set(download::to_file("{url}", "payload.bin", "art", "")); }}
-fn on_ready() {{ signal("alive", "").set("yes"); }}
+            r#"import "lumen.cdl";
+
+fn on_start() {{
+    lumen::signal_set_bool("started", download::to_file("{url}", "payload.bin", "art", ""));
+}}
+
+fn main() {{}}
 "#
         ),
         None,
@@ -501,10 +468,14 @@ fn on_ready() {{ signal("alive", "").set("yes"); }}
     for _ in 0..10 {
         app.tick();
     }
-    assert_eq!(
-        signal(&app, "alive").as_deref(),
-        Some("yes"),
-        "the app went on running past the failed call"
+    let failure = app
+        .world
+        .get_resource::<lumen_script::ScriptLoadFailure>()
+        .expect("the program failed to load");
+    assert!(
+        failure.0.contains("no `download` namespace"),
+        "the failure names the missing namespace: {}",
+        failure.0
     );
     assert_eq!(
         signal(&app, "started"),

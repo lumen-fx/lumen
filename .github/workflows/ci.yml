@@ -280,7 +280,7 @@ jobs:
             -p lumen-portable \
             -p lumen-scene \
             -p lumen-script \
-            -p lumen-script-candela \
+            -p lumen-candela-host \
             -p lumen-web-dom \
             -p lumen-web-http
 

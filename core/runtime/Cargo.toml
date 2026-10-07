@@ -81,16 +81,9 @@ lumen-http-ureq-capability = { workspace = true, optional = true }
 # PNG decode and encode for the scripts' clipboard image round-trips.
 image.workspace = true
 
-
-# Script hosts. Every host is a Part B tree-shaking knob, OPTIONAL behind
-# `host-rhai` / `host-lua` / `host-candela`, so a bundle links exactly the
-# languages its app ships.
+# The script seam. The hosts are runtime modules that register their language
+# through it; the runtime names none of them.
 lumen-script = { workspace = true }
-lumen-script-rhai = { workspace = true, optional = true }
-rhai = { workspace = true, optional = true }
-lumen-script-lua = { workspace = true, optional = true }
-lumen-script-candela = { workspace = true, optional = true, features = ["compiler"] }
-mlua = { workspace = true, optional = true }
 
 lumen-text-cosmic = { workspace = true }
 lumen-text = { workspace = true }
@@ -133,6 +126,12 @@ lumenc-plugin = { workspace = true, features = ["testing"] }
 # The same list a compiled-in module's constructor writes to, so the loader
 # tests can put one there without linking a module crate.
 lumen-module-registry = { workspace = true }
+# The candela hosts, compiled into the test binaries: a test has no shared
+# engine to open the host modules beside, so the module registry answers the
+# script language's implied dependency from these. The dev host runs a program
+# carried as source; the bytecode host runs a precompiled `.cdlb` image.
+lumen-candela = { workspace = true }
+lumen-candela-dev = { workspace = true }
 
 # Headless mode graceful shutdown (SIGINT/SIGTERM). Unix-only.
 [target.'cfg(unix)'.dependencies]
@@ -155,19 +154,11 @@ default = [
     "mcp",
     "async",
     "modules",
-    "host-rhai",
-    "host-lua",
-    "host-candela",
 ]
 # MCP introspection server. Part B tree-shaking knob (dev-only capability).
 mcp = ["dep:lumen-mcp-capability"]
 # Async spawn/timer (tokio) bridge. Part B tree-shaking knob.
 async = ["dep:lumen-async-tokio-capability"]
-# Script hosts. Each one ADDS a language, so a bundle can carry exactly the
-# hosts its app uses. All three are on by default.
-host-rhai = ["dep:lumen-script-rhai", "dep:rhai"]
-host-lua = ["dep:lumen-script-lua", "dep:mlua"]
-host-candela = ["dep:lumen-script-candela"]
 # Dev-only in-window devtools overlay (F12). OFF by default.
 devtools = ["dep:lumen-devtools-capability"]
 # Runtime modules: load the prebuilt engine-linked dylibs an app declares in

@@ -38,15 +38,6 @@ lumenc = { workspace = true, features = ["runtime-parse", "dev-run"] }
 [target.'cfg(windows)'.dependencies]
 lumen = { workspace = true }
 
-[features]
-default = ["host-rhai"]
-# The `AppBuilder::rhai_extension` passthrough, which takes a `rhai::Engine`
-# and so binds to one host. `AppBuilder::native_fn` exposes a function to
-# every host the app runs and needs no feature. The shared engine library
-# always carries the Rhai host, so off Windows there is nothing to forward;
-# the Windows static engine still takes the flag. A feature naming a
-# dependency the platform does not carry is ignored rather than an error.
-host-rhai = ["lumen/host-rhai"]
 
 [dev-dependencies]
 # Tests construct `ClickEvent { position: Vec2, .. }` directly.

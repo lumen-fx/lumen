@@ -88,7 +88,6 @@ pub fn script_fns(
             name: function.name.clone(),
             ns: ScriptNs::Named(addon.namespace.clone()),
             sig: signature(addon, function)?,
-            hosts: Default::default(),
             body: body(index, function),
         });
     }

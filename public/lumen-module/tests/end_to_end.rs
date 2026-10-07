@@ -467,18 +467,24 @@ fn both_kinds_load_side_by_side_and_the_script_reaches_both() {
         ),
     );
     // The script calls one function from each kind; both prints land on the
-    // same warn stream through the ordinary command applier.
+    // same warn stream through the ordinary command applier. Both kinds
+    // register into the extension namespace, which candela declares as
+    // `native` from what was registered, so the script declares nothing.
     std::fs::write(
         dir.join("src/main.lmn"),
-        "<root><label>hello</label><script src=\"main.rhai\" /></root>\n",
+        "<root><label>hello</label><script src=\"main.cdl\" /></root>\n",
     )
     .expect("markup");
     std::fs::write(
-        dir.join("src/main.rhai"),
-        r#"fn on_start() {
-    print("module says " + module_double(21));
-    print("plugin says " + fixture_echo("hi"));
+        dir.join("src/main.cdl"),
+        r#"import "lumen.cdl";
+
+fn on_start() {
+    lumen::print("module says " + str(native::module_double(21)));
+    lumen::print("plugin says " + str(native::fixture_echo("hi")));
 }
+
+fn main() {}
 "#,
     )
     .expect("script");

@@ -41,6 +41,8 @@ engine-dylib = ["lumen-module/engine-dylib"]
 # Tests only: the compiled-in-shape tests build a headless app around the
 # plugin the way `lumenc run` would.
 [dev-dependencies]
+# The candela host the tests' scripts run on, compiled into the test binary.
+lumen-candela-dev = { workspace = true }
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }

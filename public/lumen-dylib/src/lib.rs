@@ -29,11 +29,7 @@ pub mod sdk {
     pub use lumen_script;
     pub use lumen_widget;
     pub use lumen_widget_macros;
-    pub use rhai;
 }
-
-// Feature pinning only; see the note in Cargo.toml.
-use lumen_script_candela as _;
 
 include!(concat!(env!("OUT_DIR"), "/build_id.rs"));
 

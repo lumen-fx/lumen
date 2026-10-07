@@ -25,14 +25,7 @@ fn build_and_tick(markup: &str, ticks: u32) -> App {
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
     std::fs::create_dir_all(&dir).unwrap();
-    // The markup below carries an inline Rhai `<script>`, and the fixture
-    // directory holds no script file for host inference to read, so the host
-    // has to be named here rather than left to the default.
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     let opts = RunOptions::new(&dir)
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string());
@@ -50,8 +43,10 @@ const MARKUP: &str = r##"<root>
   <textarea id="ed" text="" width="400" height="200" bg="#223344" font-size="16" />
   <label id="mirror" bind-text="mirror" />
   <script>
-    fn on_start() { signal("mirror", "").set("EMPTY"); }
-    fn on_text_input(id, text) { signal("mirror", "").set("GOT:" + text); }
+    import "lumen.cdl";
+    fn on_start() { lumen::signal_set("mirror", "EMPTY"); }
+    fn on_text_input(id: string, text: string) { lumen::signal_set("mirror", "GOT:" + text); }
+    fn main() {}
   </script>
 </root>"##;
 

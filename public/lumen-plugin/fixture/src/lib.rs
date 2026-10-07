@@ -8,7 +8,7 @@
 //!   so a manifest's order and a call's index are checked past index zero.
 //! - `prelude`: candela source registered under the same namespace.
 //! - `fail_in_init` / `panic_in_init`: registration fails, or panics.
-//! - `empty_hosts` / `declare_builtin_ns` / `duplicate_name`: a manifest the
+//! - `declare_builtin_ns` / `duplicate_name`: a manifest the
 //!   host must refuse.
 //! - `thread_events` / `thread_commands`: spawn a thread that pushes that
 //!   many events at the app and stops.
@@ -36,7 +36,7 @@ use std::collections::HashMap;
 
 use lumen_plugin::abi::LogLevel;
 use lumen_plugin::{
-    Error, HostSet, InitCx, PluginFn, Registrar, RuntimePlugin, ScriptCommand, ScriptNs, ScriptTy,
+    Error, InitCx, PluginFn, Registrar, RuntimePlugin, ScriptCommand, ScriptNs, ScriptTy,
     ScriptValue, lumen_plugin,
 };
 use serde::Deserialize;
@@ -49,7 +49,6 @@ struct Cfg {
     prelude: Option<String>,
     fail_in_init: bool,
     panic_in_init: bool,
-    empty_hosts: bool,
     declare_builtin_ns: bool,
     duplicate_name: bool,
     thread_events: u32,
@@ -203,15 +202,6 @@ impl RuntimePlugin for FixturePlugin {
             r.script_fn(
                 PluginFn::new("fixture_builtin")
                     .ns(ScriptNs::Builtin)
-                    .build(|_| Ok(ScriptValue::Unit)),
-            );
-        }
-        if cfg.empty_hosts {
-            r.script_fn(
-                PluginFn::new("fixture_hidden")
-                    // A language Lumen does not ship is the empty set.
-                    .hosts(HostSet::from_lang("nonesuch"))
-                    .ns(ns.clone())
                     .build(|_| Ok(ScriptValue::Unit)),
             );
         }

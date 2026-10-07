@@ -123,11 +123,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// shipped beside the app was linked without, so a script calling one of
 /// their builtins is told why nothing happens.
 ///
+/// `15`: [`CompiledScript`] gains `module`, the runtime module that runs the
+/// program, and a program compiled to bytecode carries no source; the
+/// flattened `script_source` field is gone.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 14;
+pub const FORMAT_VERSION: u16 = 15;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -174,27 +178,24 @@ impl CompiledI18n {
     }
 }
 
-/// One engine's whole program, as baked at build time.
+/// One language's whole program, as baked at build time.
 ///
-/// A script file picks its engine from its own extension, so an app that
-/// mixes languages compiles to one entry per engine. The engine is stored by
-/// name (`candela`, `lua`, `rhai`) rather than as a typed enum because the
-/// enum lives in the runtime's config layer, which this crate sits below.
+/// A script file belongs to the language its extension names, so an app that
+/// mixes languages compiles to one entry per language. The language is stored
+/// by name, the one its host module registers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompiledScript {
-    /// Engine name: `candela`, `lua`, or `rhai`. A name the loading runtime
-    /// does not recognise falls back to the default engine.
+    /// The language's name.
     pub engine: String,
-    /// Every source file that engine owns, concatenated in source order.
+    /// The runtime module that runs the program: the host a shipped app
+    /// loads for it. Empty when the build knew of none.
+    pub module: String,
+    /// Every source file the language owns, concatenated in source order.
+    /// Empty for a program compiled to [`Self::bytecode`], which a shipped app
+    /// runs without its source.
     pub source: String,
-    /// The same program compiled to bytecode, for an engine that has an
-    /// ahead-of-time form. Today that is candela, whose `.cdlb` image the
-    /// compiler-free `candela-vm` runtime loads directly; every other engine
-    /// leaves this `None` and is run from [`Self::source`].
-    ///
-    /// The source is kept beside it rather than replaced. A host that links
-    /// the full compiler still runs from source so scripts stay reloadable,
-    /// and the bytecode is what a host that ships without one uses.
+    /// The program compiled ahead of time, for a language that has a bytecode
+    /// form; `None` for one that runs from [`Self::source`].
     pub bytecode: Option<Vec<u8>>,
 }
 
@@ -208,17 +209,8 @@ pub struct CompiledApp {
     /// directives spliced away. A relative `<image src>` resolves against the
     /// directory the artifact is run with; an absolute one is used as written.
     pub ir: LayoutIR,
-    /// Combined script source (inline `<script>` body + every external
-    /// `<script src="...">` file, concatenated in source order). Baked at build
-    /// time so the parser-free runtime never reads `.rhai` files from disk to
-    /// reconstruct the script host input. Empty when the app ships no script.
-    ///
-    /// This is the flattened form, which is what `[script] engine` runs when
-    /// an app puts every language on one host. The per-engine split in
-    /// [`Self::scripts`] is what a multi-language app runs.
-    pub script_source: String,
-    /// The same program split by the engine that runs each part, in the
-    /// runtime's fixed host order. Empty when the app ships no script.
+    /// The app's program split by the language that runs each part, sorted by
+    /// language name. Empty when the app ships no script.
     pub scripts: Vec<CompiledScript>,
     /// The page set, for an app with more than one page. `None` for a
     /// single-page app, which needs no routing at all.
@@ -431,16 +423,17 @@ mod tests {
         }];
         CompiledApp {
             ir,
-            script_source: "let x = 1;".to_string(),
             scripts: vec![
                 CompiledScript {
-                    engine: "rhai".to_string(),
+                    engine: "toy".to_string(),
+                    module: "toy-host".to_string(),
                     source: "let x = 1;".to_string(),
                     bytecode: None,
                 },
                 CompiledScript {
                     engine: "candela".to_string(),
-                    source: "fn main() {}".to_string(),
+                    module: "lumen-candela".to_string(),
+                    source: String::new(),
                     bytecode: Some(vec![0xCD, 0x1B, 0x00, 0xFF]),
                 },
             ],
@@ -488,10 +481,12 @@ mod tests {
         let bytes = serialize(&app).expect("serialize");
         assert_eq!(&bytes[0..4], &MAGIC);
         let back = deserialize(&bytes).expect("deserialize");
-        assert_eq!(back.script_source, app.script_source);
         assert_eq!(back.scripts.len(), 2);
-        assert_eq!(back.scripts[0].engine, "rhai");
+        assert_eq!(back.scripts[0].engine, "toy");
+        assert_eq!(back.scripts[0].module, "toy-host");
+        assert_eq!(back.scripts[0].source, "let x = 1;");
         assert_eq!(back.scripts[0].bytecode, None);
+        assert_eq!(back.scripts[1].module, "lumen-candela");
         assert_eq!(
             back.scripts[1].bytecode.as_deref(),
             Some([0xCD, 0x1B, 0x00, 0xFF].as_slice()),
@@ -569,7 +564,7 @@ mod tests {
         let app = sample();
         let bytes = serialize(&app).expect("serialize");
         let back = read_bytes(&bytes).expect("read_bytes");
-        assert_eq!(back.script_source, app.script_source);
+        assert_eq!(back.scripts[0].source, app.scripts[0].source);
     }
 
     #[test]

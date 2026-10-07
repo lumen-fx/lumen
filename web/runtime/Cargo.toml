@@ -32,6 +32,9 @@ lumen-web-dom = { workspace = true }
 lumen-portable = { workspace = true }
 # `json`: an add-on's arguments and results cross to JavaScript as JSON.
 lumen-script = { workspace = true, features = ["json"] }
+# The candela host, run from the precompiled bytecode a page loads. A page
+# cannot open a library, so the runtime installs the host's plugin itself.
+lumen-candela-host = { workspace = true }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
@@ -54,8 +57,8 @@ web-sys = { workspace = true, features = [
 # Compiles the test fixtures to `.cdlb` at build time, on the host, so the
 # artifact the browser loads is always the one this toolchain produces. Build
 # dependencies are resolved for the host and never linked into the wasm module,
-# so the compiler feature here does not reach the page.
-lumen-script-candela = { workspace = true, default-features = true }
+# so the compiler does not reach the page.
+lumen-candela-dev-host = { workspace = true }
 
 [dev-dependencies]
 # The emitter, so a browser test hydrates the document the real one writes
@@ -81,11 +84,3 @@ web-sys = { workspace = true, features = [
     "WheelEventInit",
 ] }
 
-[features]
-# The script hosts this module carries. A host is a language, and each one is a
-# feature, so a page pays for the languages its app ships and nothing else.
-# candela is on by default because it is the only host that runs in a browser
-# today: rhai has yet to be wired up here, and lua's C core does not build for
-# `wasm32-unknown-unknown` at all.
-default = ["host-candela"]
-host-candela = ["lumen-portable/host-candela"]

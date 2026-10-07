@@ -4,6 +4,7 @@
 //! What this proves: the local set outlives the app that wrote it and the
 //! session set does not, which is the whole difference between the two.
 
+use lumen_candela_dev as _;
 use lumen_core::app::App as EcsApp;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
@@ -37,9 +38,9 @@ fn run(dir: &std::path::Path, file: &std::path::Path, source: &str) -> EcsApp {
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],

@@ -610,6 +610,64 @@ fn engine_build_id() -> Option<String> {
 
 /// Call one build-id probe and copy the string out.
 #[cfg(unix)]
+/// The directory of the shared engine library this process runs on, when it
+/// runs on one: where the toolchain keeps its bundled modules, whichever
+/// executable loaded the engine. `None` for a process that compiled the
+/// engine in, and on Windows, where no engine library exists.
+pub fn engine_dir() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use libloading::os::unix::{Library, RTLD_LAZY, Symbol};
+
+        // SAFETY: the symbol is only looked up and its address handed to
+        // `dladdr`, which reads the loader's own records; nothing is called.
+        unsafe {
+            let address = |sym: &Symbol<ProbeFn>| **sym as *const std::ffi::c_void;
+            let mut found = Library::this()
+                .get::<ProbeFn>(b"lumen_engine_build_id\0")
+                .ok()
+                .map(|sym| address(&sym));
+            if found.is_none() {
+                for name in ["liblumen_engine.so", "liblumen_engine.dylib"] {
+                    let Ok(lib) = Library::open(Some(name), libc::RTLD_NOLOAD | RTLD_LAZY) else {
+                        continue;
+                    };
+                    found = lib
+                        .get::<ProbeFn>(b"lumen_engine_build_id\0")
+                        .ok()
+                        .map(|sym| address(&sym));
+                    // Keep the reference the open took, as `engine_build_id`
+                    // does: the library stays mapped for the process's life.
+                    std::mem::forget(lib);
+                    if found.is_some() {
+                        break;
+                    }
+                }
+            }
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            if libc::dladdr(found?, &mut info) == 0 || info.dli_fname.is_null() {
+                return None;
+            }
+            let file = PathBuf::from(
+                CStr::from_ptr(info.dli_fname)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            // The executable itself defines the symbol when it was linked
+            // against the engine rlib with the export kept; that is not a
+            // shared engine.
+            if std::env::current_exe().is_ok_and(|exe| same_file(&exe, &file)) {
+                return None;
+            }
+            file.parent().map(Path::to_path_buf)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 unsafe fn read_probe(probe: &ProbeFn) -> Option<String> {
     // SAFETY: the caller established the symbol contract (NUL-terminated
     // static, valid for the process lifetime).
@@ -662,14 +720,25 @@ fn resolve(dir: &Path, dep: &DepCfg, resolved: &ResolvedModules) -> Result<PathB
             push_module_dirs(dir, &dep.name, &mut probed);
         }
         ModuleSource::Bundled => {
-            // Beside the running engine: the executable's directory, then
-            // $LUMEN_LIB_DIR - the same order the liblumen loader probes -
-            // then the `modules/` directories a packaged app stages into.
+            // Beside the running engine: the executable's directory, the
+            // shared engine library's own, then $LUMEN_LIB_DIR - the same
+            // order the liblumen loader probes - then the `modules/`
+            // directories a packaged app stages into. The engine's directory
+            // is what finds the toolchain's modules for an executable that
+            // lives elsewhere, such as an SDK app.
             if let Ok(exe) = std::env::current_exe()
                 && let Some(exe_dir) = exe.parent()
             {
                 for f in library_spellings(&dep.name) {
                     probed.push(exe_dir.join(f));
+                }
+            }
+            if let Some(engine_dir) = engine_dir() {
+                for f in library_spellings(&dep.name) {
+                    let path = engine_dir.join(f);
+                    if !probed.contains(&path) {
+                        probed.push(path);
+                    }
                 }
             }
             if let Some(lib_dir) = std::env::var_os("LUMEN_LIB_DIR") {

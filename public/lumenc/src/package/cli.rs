@@ -745,7 +745,11 @@ fn package_static(
     // What links in is what ships with the toolchain; everything else the
     // app declares was cleared by `dependency_refusal` as something that
     // travels beside the executable, or needs nothing at all.
-    let (bundled, beside): (Vec<_>, Vec<_>) = declared
+    let mut compiled = compile_for_desktop(src, lib_dir)?;
+    // The script hosts the program names link in with the declared bundled
+    // modules: a module compiled into the executable is the one it runs on.
+    let hosts = WithHosts::new(declared, compiled_hosts(&compiled));
+    let (bundled, beside): (Vec<_>, Vec<_>) = hosts
         .cfg
         .0
         .iter()
@@ -754,7 +758,6 @@ fn package_static(
     let linked_deps = DependenciesCfg(bundled);
     let beside = DependenciesCfg(beside);
 
-    let mut compiled = compile_for_desktop(src, lib_dir)?;
     let (kit, manifest) = crate::link::kit::open(KitKind::Static, target, lib_dir)?;
     let sources = crate::config::app_sources(src);
     let selected = CapabilityChoice {
@@ -908,7 +911,10 @@ fn package_sdk(
             config: &cfg.raw,
             opaque: true,
         };
-        let shipped = ship_runtime(src, out, target, lib_dir, &toolchain, declared, &choice)?;
+        // The app reads its markup and scripts at run time, from source, so
+        // it runs on the source host of each language it ships.
+        let hosts = WithHosts::new(declared, source_hosts(src, lib_dir));
+        let shipped = ship_runtime(src, out, target, lib_dir, &toolchain, &hosts, &choice)?;
         (
             shipped.carried,
             vec![toolchain.dir],
@@ -978,15 +984,18 @@ fn ship_runtime(
     target: Target,
     lib_dir: Option<&Path>,
     toolchain: &Toolchain,
-    declared: &Declared<'_>,
+    with_hosts: &WithHosts<'_>,
     choice: &CapabilityChoice<'_>,
 ) -> Result<Shipped, String> {
+    let declared = &with_hosts.declared();
+    let hosts = &with_hosts.modules;
     let lib = out.join(target.lib_name());
     let mut consumers = Vec::new();
     let mut carried = 1;
     let full = if target.os == Os::Windows {
         // The engine is compiled into the C library there, so the library
-        // is what gets relinked.
+        // is what gets relinked, and the script hosts link into it: no file
+        // beside it could be opened.
         toolchain.lib.clone()
     } else {
         copy_c_engine(out, target, toolchain)?;
@@ -1024,7 +1033,24 @@ fn ship_runtime(
         engine
     };
 
-    let modules = stage_modules(src, out, target, lib_dir, declared)?;
+    let off_disk = DependenciesCfg(
+        declared
+            .cfg
+            .0
+            .iter()
+            .filter(|dep| !hosts.0.iter().any(|host| host.name == dep.name))
+            .cloned()
+            .collect(),
+    );
+    let staged = if target.os == Os::Windows {
+        Declared {
+            cfg: &off_disk,
+            ..*declared
+        }
+    } else {
+        Declared { ..*declared }
+    };
+    let modules = stage_modules(src, out, target, lib_dir, &staged)?;
     if let Ok(entries) = std::fs::read_dir(out.join("modules")) {
         consumers.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_file()));
     }
@@ -1039,6 +1065,7 @@ fn ship_runtime(
         full: &full,
         out: &engine_out,
         consumers: &consumers,
+        modules: hosts,
         choice,
     })?;
     say_full(&engine);
@@ -1293,6 +1320,103 @@ impl<'a> Declared<'a> {
             .0
             .iter()
             .any(|dep| matches!(self.shape(&dep.name), Shape::Bundled | Shape::Module))
+    }
+}
+
+/// What an app declares, with the script hosts its compiled program names
+/// added as bundled modules: the module each language runs on in a shipped
+/// app. Owned, because the hosts are only known once the app is compiled.
+struct WithHosts<'a> {
+    cfg: DependenciesCfg,
+    resolved: &'a crate::package::lpm::Resolved,
+    shapes: BTreeMap<String, Shape>,
+    /// The script hosts alone, as bundled entries.
+    modules: DependenciesCfg,
+}
+
+/// The host modules a compiled program names.
+fn compiled_hosts(compiled: &lumen_ir::artifact::CompiledApp) -> Vec<String> {
+    compiled
+        .scripts
+        .iter()
+        .map(|script| script.module.clone())
+        .filter(|module| !module.is_empty())
+        .collect()
+}
+
+/// The host modules an app that reads its scripts at run time needs: the
+/// source host of each language a script file under the app is written in,
+/// and of the default language when its markup has a `<script>` element.
+fn source_hosts(src: &Path, lib_dir: Option<&Path>) -> Vec<String> {
+    let table = lumen_modules::language::LanguageTable::discover(lib_dir).unwrap_or_default();
+    let mut languages: Vec<String> = Vec::new();
+    let mut inline = false;
+    let mut stack = vec![src.to_path_buf()];
+    let mut budget = 512usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let path = entry.path();
+            if path.is_dir() {
+                if !matches!(
+                    path.file_name().and_then(|n| n.to_str()),
+                    Some("target" | "node_modules" | "dist" | "build")
+                ) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if let Some(language) = table.language_of(&path) {
+                languages.push(language.to_string());
+            } else if path.extension().is_some_and(|e| e == "lmn")
+                && std::fs::read_to_string(&path).is_ok_and(|text| text.contains("<script"))
+            {
+                inline = true;
+            }
+        }
+    }
+    if inline && let Some(language) = table.default_language() {
+        languages.push(language.to_string());
+    }
+    languages.sort();
+    languages.dedup();
+    languages
+        .iter()
+        .filter_map(|language| table.source_provider(language))
+        .map(|provider| provider.module.clone())
+        .collect()
+}
+
+impl<'a> WithHosts<'a> {
+    /// `declared` plus the host modules `names`.
+    fn new(declared: &Declared<'a>, names: Vec<String>) -> Self {
+        let modules = lumen_modules::language::with_implied(&DependenciesCfg::default(), &names);
+        let cfg = lumen_modules::language::with_implied(declared.cfg, &names);
+        let mut shapes = declared.shapes.clone();
+        for module in &modules.0 {
+            shapes.entry(module.name.clone()).or_insert(Shape::Bundled);
+        }
+        Self {
+            cfg,
+            resolved: declared.resolved,
+            shapes,
+            modules,
+        }
+    }
+
+    /// The dependencies in the shape the staging and the engine steps read.
+    fn declared(&self) -> Declared<'_> {
+        Declared {
+            cfg: &self.cfg,
+            resolved: self.resolved,
+            shapes: &self.shapes,
+        }
     }
 }
 
@@ -1911,6 +2035,10 @@ fn package(
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
 
+    // The script hosts the compiled program names travel the way a declared
+    // bundled module does: staged beside the engine where modules are
+    // opened, and linked into the engine on Windows, where none is.
+    let hosts = WithHosts::new(declared, compiled_hosts(&compiled));
     let sources = crate::config::app_sources(src);
     let shipped = ship_runtime(
         src,
@@ -1918,7 +2046,7 @@ fn package(
         target,
         lib_dir,
         &toolchain,
-        declared,
+        &hosts,
         &CapabilityChoice {
             requested: &cfg.capabilities.0,
             sources: &sources,

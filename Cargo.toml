@@ -1,11 +1,12 @@
 # The engine crate lives at the workspace root: `src/` builds `liblumen`, the
 # shared library every app executable, launcher stub, and SDK loads. Internal
-# crates sit under `core/` (the engine's own subsystems, including `core/script/*`),
-# `web/` (the browser and SSR targets), `backends/`, `os/`, `dev/`, and
-# `capabilities/`, each grouped by the role it plays; the author-facing crates
-# external code depends on (the compiler, the plugin and module SDKs, the
-# engine carrier) sit under `public/`; first-party runtime modules under
-# `std/`; app SDKs under `sdk/`.
+# crates sit under `core/` (the engine's own subsystems, including the script
+# seam in `core/script/api`), `web/` (the browser and SSR targets),
+# `backends/`, `os/`, `dev/`, and `capabilities/`, each grouped by the role it
+# plays; the author-facing crates external code depends on (the compiler, the
+# plugin and module SDKs, the engine carrier) sit under `public/`; first-party
+# runtime modules, the script hosts among them, under `std/`; app SDKs under
+# `sdk/`.
 [package]
 name = "lumen"
 version.workspace = true
@@ -57,10 +58,12 @@ lumenc = { workspace = true, default-features = true, optional = true }
 # re-export module in src/lib.rs).
 lumen-widget = { workspace = true }
 lumen-widget-macros = { workspace = true }
-# Same reason: the Rust SDK's `AppBuilder::rhai_extension` takes a
-# `rhai::Engine`, so the type has to come from here to be the same type.
-# Follows the `host-rhai` feature, which is what compiles that host at all.
-rhai = { workspace = true, optional = true }
+# The candela script host every compiled app runs, for a build with no shared
+# engine to open it beside (Windows, a static bundle). Named only by the anchor
+# in src/lib.rs, which is off for the `dynamic-engine` shape, where the loader
+# opens it as a runtime module instead. A run from source takes the compiler
+# host, which `lumenc` (under `embed-parser`) brings with it.
+lumen-candela = { workspace = true }
 # Close-hook router (ABI 0.5): the `lumen_app_on_close` dispatch system
 # reads `Messages<CloseRequest>` through a `MessageCursor`, which
 # `lumen_core::prelude` does not re-export.
@@ -69,6 +72,13 @@ crossbeam-channel.workspace = true
 
 [build-dependencies]
 cbindgen.workspace = true
+
+[dev-dependencies]
+# The deprecated hosts, compiled into the test binary: the C ABI suite calls
+# an exposed function from every language, and a test has no shared engine to
+# open the host modules beside.
+lumen-lua = { workspace = true }
+lumen-rhai = { workspace = true }
 
 # The engine as a shared library, for the `dynamic-engine` release shape (see
 # [features]). Only off Windows - no linkable engine exists there.
@@ -88,9 +98,6 @@ default = [
     "mcp",
     "async",
     "modules",
-    "host-rhai",
-    "host-lua",
-    "host-candela",
 ]
 # Link lumenc for its `default_parser()` (the from-source embed path). Dropping
 # it yields a parser-free launcher that only runs prebuilt LMNA bytes.
@@ -102,9 +109,6 @@ mcp = ["lumen-runtime/mcp"]
 async = ["lumen-runtime/async"]
 # Runtime modules: the `[dependencies]` dylib loader.
 modules = ["lumen-runtime/modules"]
-host-rhai = ["lumen-runtime/host-rhai", "dep:rhai"]
-host-lua = ["lumen-runtime/host-lua"]
-host-candela = ["lumen-runtime/host-candela"]
 # Link the engine as the shared `liblumen_engine` library instead of compiling
 # it into `liblumen`. The release shape on Linux and macOS: built with
 # `-C prefer-dynamic` (and an `$ORIGIN` / `@loader_path` rpath), `liblumen`
@@ -120,9 +124,8 @@ resolver = "2"
 # The grouped directories glob cleanly. `core` and `web` are each a package in
 # their own right, so their subdirectories are listed crate by crate rather
 # than through a `core/*` / `web/*` glob: that glob would also try to match
-# `core/script` (a bare directory of crates, not a crate itself) and each
-# package's own `src`/`tests` directories. `core/script/*` globs cleanly one
-# level deeper, same as the other grouped directories.
+# `core/script` (a bare directory, not a crate itself) and each package's own
+# `src`/`tests` directories.
 members = [
     "capabilities/*",
     "core",
@@ -141,7 +144,7 @@ members = [
     "core/primitives",
     "core/runtime",
     "core/scene",
-    "core/script/*",
+    "core/script/api",
     "core/text",
     "core/widget",
     "core/widget-macros",
@@ -158,6 +161,10 @@ members = [
     "dev/*",
     "os/*",
     "std/*",
+    # The script hosts' libraries, apart from the module entries above them so
+    # a build script can depend on them without building a module.
+    "std/candela/host",
+    "std/candela-dev/host",
     "sdk/rust",
     "public/lumen-module",
     "public/lumen-module-macros",
@@ -223,6 +230,10 @@ lumen-assets = { path = "core/assets" }
 lumen-async-tokio = { path = "backends/async-tokio" }
 lumen-audio = { path = "std/audio", default-features = false }
 lumen-browser = { path = "std/browser", default-features = false }
+lumen-candela = { path = "std/candela", default-features = false }
+lumen-candela-dev = { path = "std/candela-dev", default-features = false }
+lumen-candela-dev-host = { path = "std/candela-dev/host" }
+lumen-candela-host = { path = "std/candela/host" }
 lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-cookie = { path = "std/cookie", default-features = false }
 lumen-core = { path = "core" }
@@ -240,6 +251,7 @@ lumen-input = { path = "core/input" }
 lumen-ir = { path = "core/ir" }
 lumen-js = { path = "std/js", default-features = false }
 lumen-layout-taffy = { path = "backends/layout-taffy" }
+lumen-lua = { path = "std/lua", default-features = false }
 lumen-mcp = { path = "core/mcp" }
 # The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
 # feature here, so dropping that feature drops the shared engine with it.
@@ -282,27 +294,18 @@ lumen-plugin = { path = "public/lumen-plugin", default-features = false }
 # The plugin plumbing both plugin systems sit on. Defaults off: the loader
 # halves ask for `dlopen` and `resolve`, a plugin author's crate takes neither.
 lumen-plugin-abi = { path = "core/plugin-abi", default-features = false }
-# `host-candela` is the default on both, and the browser build takes them
-# without it: a page runs precompiled bytecode and has no use for the compiler.
 lumen-portable = { path = "web/portable", default-features = false }
 lumen-prerender = { path = "web/prerender", default-features = false }
 lumen-primitives = { path = "core/primitives" }
 lumen-process = { path = "std/process", default-features = false }
 lumen-render-cpu = { path = "backends/render-cpu" }
 lumen-render-wgpu = { path = "backends/render-wgpu" }
+lumen-rhai = { path = "std/rhai", default-features = false }
 # Every subsystem is a default feature, and every consumer picks its own set:
 # the shared library takes them all, a `--bundle` takes the app's capabilities.
 lumen-runtime = { path = "core/runtime", default-features = false }
 lumen-scene = { path = "core/scene" }
-# These three carry no features of their own, so the flag only records that a
-# host is taken bare: giving one a default later will not switch it on
-# everywhere by surprise. `lumen-script-candela` below is the exception.
 lumen-script = { path = "core/script/api", default-features = false }
-# Default `compiler` builds candela source at run time. A build script wants it;
-# a shipped runtime executes precompiled `.cdlb` and does not.
-lumen-script-candela = { path = "core/script/candela", default-features = false }
-lumen-script-lua = { path = "core/script/lua", default-features = false }
-lumen-script-rhai = { path = "core/script/rhai", default-features = false }
 lumen-server = { path = "web/server" }
 lumen-ssr = { path = "web/ssr" }
 lumen-storage = { path = "std/storage", default-features = false }
@@ -406,7 +409,7 @@ accesskit_winit = "0.33"
 # Engine + AST + Dynamic are Send + Sync, letting hosts move between
 # threads / sit in regular bevy Resources / parallelize naturally.
 rhai = { version = "1.24", features = ["sync"] }
-# Alternative script host (lumen-script-lua). `vendored` statically
+# Alternative script host (lumen-lua). `vendored` statically
 # builds Lua 5.4 (no system dependency, hermetic under the pinned
 # toolchain); `send` swaps mlua's internals so `Lua`, `Value`,
 # `Function` are `Send + Sync` - required so `LuaHost` can be a regular
@@ -459,11 +462,7 @@ windows-sys = "0.61"
 # Serialization (used by lumen-mcp + lumen-mcp-server)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Reads the script builtin metadata (`core/script/api/builtins.ron`) in that
-# crate's build script, which generates the per-host tables. Build-time only:
-# no shipped binary links it, and nothing parses RON at run time.
-ron = "0.11"
-# Finds the C compiler for the target in `lumen-script-candela`'s build script,
+# Finds the C compiler for the target in `lumen-candela-dev-host`'s build script,
 # which builds candela's C-backed standard library modules. Build-time only.
 cc = "1"
 # Compact binary codec for the AOT compiled-app artifact (`lumenc build`).

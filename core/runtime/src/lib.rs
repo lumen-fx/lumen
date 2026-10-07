@@ -86,8 +86,6 @@ pub use compiler_plugins::CompilerPlugins;
 pub use config::{ConfigError, LumenToml};
 #[cfg(all(feature = "runtime-parse", feature = "modules"))]
 pub use run::module_surface;
-#[cfg(feature = "host-rhai")]
-pub use run::run_with;
 pub use run::{
     AppHook, CheckReport, PluginInstaller, RunError, RunOptions, WindowSetup, build_headless_app,
     run_app, run_app_headless,

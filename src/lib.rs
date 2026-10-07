@@ -76,9 +76,15 @@ pub mod sdk {
     pub use lumen_widget_macros;
     #[cfg(feature = "embed-parser")]
     pub use lumenc;
-    #[cfg(feature = "host-rhai")]
-    pub use rhai;
 }
+
+// The candela host every compiled app runs, compiled into a library with no
+// shared engine to open it beside: on Windows, where no engine dylib exists,
+// and in a static bundle. Its constructor puts it on the module registry, so
+// the loader answers an app's host the way it answers a compiled-in module.
+// The `dynamic-engine` shape opens it from the modules archive instead.
+#[cfg(not(feature = "dynamic-engine"))]
+use lumen_candela as _;
 
 // ============================================================
 // ABI version
@@ -310,7 +316,7 @@ pub enum LumenStatus {
     ErrAsset = 7,
     /// Window backend (winit / wgpu surface) failure.
     ErrWindow = 8,
-    /// Script (Rhai) compile / runtime failure.
+    /// Script compile / runtime failure.
     ErrScript = 9,
     /// Generic I/O error (filesystem, network).
     ErrIo = 10,
@@ -698,8 +704,8 @@ pub unsafe extern "C" fn lumen_app_new_from_lmna(
 }
 
 /// Expose a native callback to the app's script under `name`. `arg_count` is
-/// the arity (0..=8 sensible); Rhai dispatches on it, Lua and candela bind the
-/// call variadically. Pointers are stored by value; the embedder owns
+/// the arity (0..=8 sensible); a host that dispatches on arity reads it, and
+/// candela binds the call variadically. Pointers are stored by value; the embedder owns
 /// `user_data` and must keep it valid until `lumen_app_run` returns.
 ///
 /// `func` is a [`LumenFn`]: it writes its result through the `out` pointer
@@ -708,7 +714,7 @@ pub unsafe extern "C" fn lumen_app_new_from_lmna(
 /// Every script host the app runs gets the registration. A candela script
 /// declares what it calls, so it reaches an exposed `now_ms` as
 /// `native::now_ms()` after declaring `host "native" { any now_ms(...); }`;
-/// Rhai and Lua scripts call `now_ms()` directly.
+/// a host with global functions calls `now_ms()` directly.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_app_expose(
     app: *mut LumenApp,
@@ -1320,7 +1326,7 @@ fn classify_runtime_error(msg: &str) -> LumenStatus {
         LumenStatus::ErrAsset
     } else if m.contains("window") || m.contains("winit") || m.contains("surface") {
         LumenStatus::ErrWindow
-    } else if m.contains("rhai") || m.contains("script") {
+    } else if m.contains("script") {
         LumenStatus::ErrScript
     } else if m.contains("io") || m.contains("file") || m.contains("read") || m.contains("write") {
         LumenStatus::ErrIo
@@ -1484,7 +1490,7 @@ fn write_string_out(
 //
 // Navigation is a command on the shared bus, not a per-language builtin:
 // these exports write the reserved `route.request` cell through the same
-// `lumen_core::nav` surface the Rhai `page()` builtin and the Rust SDK use,
+// `lumen_core::nav` surface the scripts' `page()` builtin and the Rust SDK use,
 // so every embedding (C/C++, Python ctypes, C# P/Invoke, plugins) reaches
 // the ONE resolver. Thread-safe; callable before or during a run. The
 // runtime resolves the target by longest existing `.lmn` prefix.
@@ -1750,8 +1756,8 @@ fn stringify_lumen(v: &LumenValue) -> String {
 // color. The setters push directly into the foundation
 // `PropertyStore` via
 // `lumen_core::property_store::push_external_property`. The receiving
-// `drain_external_properties` system (installed by
-// `lumen-script-rhai`'s `ScriptRhaiPlugin`) lands the typed
+// `drain_external_properties` system (installed by `App::new()` in
+// `TickStage::CommandDrain`) lands the typed
 // `PropertyValue::Str` / `I64` / `F64` / `Bool` / `Color` cell on the
 // next tick - no stringify-on-write, no parse-on-read. `bind-text`
 // markup reads the same cell, stringifying scalars on read, so a
@@ -3731,7 +3737,7 @@ mod tests {
             LumenStatus::ErrWindow
         );
         assert_eq!(
-            classify_runtime_error("rhai script error"),
+            classify_runtime_error("script error in on_click"),
             LumenStatus::ErrScript
         );
         assert_eq!(classify_runtime_error("file io"), LumenStatus::ErrIo);
@@ -3873,7 +3879,7 @@ mod tests {
         }
         // Build a tiny world with just the property store and run the
         // drain system once. The synthetic schedule stands in for the
-        // ScriptRhaiPlugin's per-tick drain wiring.
+        // app's per-tick drain wiring.
         let mut world = World::new();
         world.insert_resource(PropertyStore::default());
         let mut schedule = Schedule::default();

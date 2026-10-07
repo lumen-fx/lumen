@@ -81,7 +81,7 @@ fn scratch(name: &str) -> Scratch {
     Scratch(dir)
 }
 
-/// A one-page app with an external Rhai script and a file the markup names.
+/// A one-page app with an external candela script and a file the markup names.
 fn write_app(dir: &Path) {
     std::fs::create_dir_all(dir.join("assets")).expect("create assets dir");
     std::fs::create_dir_all(dir.join("src")).expect("create src dir");
@@ -89,12 +89,12 @@ fn write_app(dir: &Path) {
         dir.join("src").join("main.lmn"),
         "<root>\n  <label id=\"greeting\" text=\"packaged\"/>\n  \
          <image id=\"logo\" src=\"assets/logo.png\"/>\n  \
-         <script src=\"main.rhai\"/>\n</root>\n",
+         <script src=\"main.cdl\"/>\n</root>\n",
     )
     .expect("write markup");
     std::fs::write(
-        dir.join("src").join("main.rhai"),
-        "fn on_start() { print(\"alive\"); }\n",
+        dir.join("src").join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn on_start() { lumen::print(\"alive\"); }\n\nfn main() {}\n",
     )
     .expect("write script");
     std::fs::write(dir.join("assets/logo.png"), RED_DOT_PNG).expect("write asset");
@@ -326,12 +326,21 @@ fn cross_packaging_assembles_each_platform() {
     // One directory holding a stand-in stub and library for every target.
     let libs = root.join("libs");
     std::fs::create_dir_all(&libs).expect("create lib dir");
+    // The app's script implies the candela host module, which ships beside
+    // the shared engine and the standard library it was built against on
+    // Linux and macOS.
     for name in [
         "lumen-launcher",
         "lumen-launcher.exe",
         "liblumen.so",
         "liblumen.dylib",
         "lumen.dll",
+        "liblumen_engine.so",
+        "liblumen_engine.dylib",
+        "liblumen_candela.so",
+        "liblumen_candela.dylib",
+        "libstd-0123456789abcdef.so",
+        "libstd-0123456789abcdef.dylib",
     ] {
         std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
     }
@@ -523,16 +532,12 @@ fn a_packaged_multi_page_app_runs() {
     let root = scratch("pages");
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
-    std::fs::write(
-        app.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .expect("write config");
+    std::fs::write(app.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write config");
     std::fs::create_dir_all(app.join("src")).expect("create src dir");
     std::fs::write(
         app.join("src").join("index.lmn"),
         "<root>\n  <label id=\"home\" text=\"HOME\"/>\n  <a href=\"about\" text=\"About\"/>\n  \
-         <script>\nfn on_start() { print(\"pages alive\"); }\n</script>\n</root>\n",
+         <script>\nimport \"lumen.cdl\";\nfn on_start() { lumen::print(\"pages alive\"); }\nfn main() {}\n</script>\n</root>\n",
     )
     .expect("write entry page");
     std::fs::write(

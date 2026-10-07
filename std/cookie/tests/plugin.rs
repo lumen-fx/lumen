@@ -6,6 +6,7 @@
 //! next `http()` to the same server carries it back, the script reads it with
 //! `cookie::get`, and the lasting one is in the jar's file for the next run.
 
+use lumen_candela_dev as _;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -108,9 +109,9 @@ fn main() {{}}
             },
             ..Default::default()
         },
-        script_source: source.clone(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source,
             bytecode: None,
         }],

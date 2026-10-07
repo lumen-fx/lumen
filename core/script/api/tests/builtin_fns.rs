@@ -2,10 +2,10 @@
 //! body with the arguments a script would pass and read back the command it
 //! queued or the value it returned.
 //!
-//! The per-host suites check that each language resolves these names; this one
-//! checks what they do once resolved.
+//! Each host's own suite checks that its language resolves these names; this
+//! one checks what they do once resolved.
 
-use lumen_script::{HostSet, ScriptCommand, ScriptFn, ScriptValue, builtin_script_fns, builtins};
+use lumen_script::{ScriptCommand, ScriptFn, ScriptValue, builtin_script_fns};
 
 /// Navigation rides a process-global bus, so the tests that read it run one at
 /// a time.
@@ -16,12 +16,12 @@ fn nav_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// The entry of that name a `lang` host would bind.
-fn builtin(lang: &str, name: &str) -> ScriptFn {
+/// The entry of that name every host binds.
+fn builtin(name: &str) -> ScriptFn {
     builtin_script_fns()
         .into_iter()
-        .find(|f| f.name == name && f.visible_to(lang))
-        .unwrap_or_else(|| panic!("no builtin `{name}` for {lang}"))
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no builtin `{name}`"))
 }
 
 /// The commands a call queued.
@@ -43,7 +43,7 @@ fn text(s: &str) -> ScriptValue {
 /// runtime's script-command applier.
 #[test]
 fn set_color_scheme_queues_the_command_that_carries_it() {
-    let f = builtin("rhai", "set_color_scheme");
+    let f = builtin("set_color_scheme");
     let queued = commands(&f, &[text("force-dark")]);
     assert!(
         matches!(&queued[..], [ScriptCommand::SetColorScheme { name }] if name == "force-dark"),
@@ -60,7 +60,7 @@ fn set_color_scheme_queues_the_command_that_carries_it() {
 /// there, so every host reports a typo the same way.
 #[test]
 fn set_color_scheme_leaves_an_unknown_name_to_the_applier() {
-    let f = builtin("lua", "set_color_scheme");
+    let f = builtin("set_color_scheme");
     let queued = commands(&f, &[text("chartreuse")]);
     assert!(matches!(
         &queued[..],
@@ -68,55 +68,13 @@ fn set_color_scheme_leaves_an_unknown_name_to_the_applier() {
     ));
 }
 
-/// `page` takes its argument optionally on the hosts that can resolve both
-/// call shapes: with one it navigates, without one it reads.
+/// The page reader is shared: every host reads the current page the same way.
 #[test]
-fn page_navigates_with_an_argument_and_reads_without_one() {
+fn page_current_reads_the_page_the_app_is_on() {
     let _guard = nav_guard();
-    let page = builtin("rhai", "page");
-    assert_eq!(page.sig.arity_range(), 0..=1);
-
     assert_eq!(
-        returns(&page, &[text("settings")]),
-        ScriptValue::Unit,
-        "navigating returns nothing"
-    );
-    let current = lumen_core::nav::current();
-    assert_eq!(returns(&page, &[]), ScriptValue::Str(current.clone()));
-    assert_eq!(
-        returns(&page, &[ScriptValue::Unit]),
-        ScriptValue::Str(current.clone()),
-        "a unit placeholder reads too"
-    );
-    assert_eq!(
-        returns(&builtin("lua", "page_current"), &[]),
-        ScriptValue::Str(current),
-        "page_current is the same reader under an unambiguous name"
-    );
-}
-
-/// candela cannot overload a host function on arity or return a value its
-/// declaration does not name, so it takes the writer-only `page` and
-/// unit-valued history steps.
-#[test]
-fn candela_takes_the_declarable_shape_of_the_navigation_family() {
-    let _guard = nav_guard();
-    let page = builtin("candela", "page");
-    assert_eq!(page.sig.arity_range(), 1..=1);
-    assert_eq!(page.sig.ret, lumen_script::ScriptTy::Unit);
-
-    let back = builtin("candela", "page_back");
-    assert_eq!(back.sig.ret, lumen_script::ScriptTy::Unit);
-    assert_eq!(returns(&back, &[]), ScriptValue::Unit);
-
-    assert_eq!(
-        returns(&builtin("rhai", "page_back"), &[]),
-        ScriptValue::Bool(true),
-        "the hosts that read the result get the boolean"
-    );
-    assert_eq!(
-        returns(&builtin("rhai", "page_forward"), &[]),
-        ScriptValue::Bool(true)
+        returns(&builtin("page_current"), &[]),
+        ScriptValue::Str(lumen_core::nav::current()),
     );
 }
 
@@ -124,13 +82,13 @@ fn candela_takes_the_declarable_shape_of_the_navigation_family() {
 /// markup binding in every language.
 #[test]
 fn opening_a_menu_writes_the_reserved_signal() {
-    let queued = commands(&builtin("candela", "open_menu"), &[text("file")]);
+    let queued = commands(&builtin("open_menu"), &[text("file")]);
     assert!(
         matches!(&queued[..], [ScriptCommand::SetSignal { name, value }]
             if name == "__menu_open:file" && value == "true"),
         "unexpected commands: {queued:?}"
     );
-    let queued = commands(&builtin("candela", "close_menu"), &[text("file")]);
+    let queued = commands(&builtin("close_menu"), &[text("file")]);
     assert!(
         matches!(&queued[..], [ScriptCommand::SetSignal { value, .. }] if value == "false"),
         "unexpected commands: {queued:?}"
@@ -140,7 +98,7 @@ fn opening_a_menu_writes_the_reserved_signal() {
 /// A filtered pick carries the parsed filter list; the plain picks carry none.
 #[test]
 fn a_file_dialog_carries_its_kind_and_filters() {
-    let queued = commands(&builtin("rhai", "pick_folder"), &[text("dir")]);
+    let queued = commands(&builtin("pick_folder"), &[text("dir")]);
     assert!(
         matches!(&queued[..], [ScriptCommand::OpenFileDialog { kind, tag, filters, .. }]
             if *kind == lumen_script::FileDialogKind::PickFolder
@@ -150,7 +108,7 @@ fn a_file_dialog_carries_its_kind_and_filters() {
     );
 
     let queued = commands(
-        &builtin("rhai", "pick_file_filtered"),
+        &builtin("pick_file_filtered"),
         &[text("open"), text("Images:png,jpg")],
     );
     let [ScriptCommand::OpenFileDialog { filters, .. }] = &queued[..] else {
@@ -164,7 +122,7 @@ fn a_file_dialog_carries_its_kind_and_filters() {
 #[test]
 fn a_timer_carries_its_repeat_flag() {
     let queued = commands(
-        &builtin("lua", "set_interval"),
+        &builtin("set_interval"),
         &[text("tick"), ScriptValue::I64(-5)],
     );
     assert!(
@@ -196,7 +154,7 @@ fn a_float_parameter_takes_an_integer_argument() {
 /// `local_id` resolves a sibling id inside the same template instance.
 #[test]
 fn local_id_swaps_the_suffix_under_the_same_prefix() {
-    let f = builtin("rhai", "local_id");
+    let f = builtin("local_id");
     assert_eq!(
         returns(&f, &[text("user-card:btn"), text("label")]),
         text("user-card:label")
@@ -218,168 +176,8 @@ fn local_id_swaps_the_suffix_under_the_same_prefix() {
 #[test]
 fn the_request_surface_reads_empty_off_a_server() {
     assert_eq!(
-        returns(&builtin("lua", "request_header"), &[text("accept")]),
+        returns(&builtin("request_header"), &[text("accept")]),
         text("")
     );
-    assert_eq!(returns(&builtin("lua", "request_body"), &[]), text(""));
-}
-
-/// Every host is offered the shared surface, apart from two deliberate
-/// exceptions: the navigation family, where a language's own shape wins, and
-/// the free-function DOM surface, which exists for the language that has no
-/// receiver methods to reach it through.
-#[test]
-fn the_table_reaches_every_host() {
-    let split = ["page", "page_back", "page_forward"];
-    for f in builtin_script_fns() {
-        if split.contains(&f.name.as_str()) {
-            continue;
-        }
-        let expected = if f.name.starts_with("node_") || f.name.starts_with("event_") {
-            HostSet::CANDELA
-        } else {
-            HostSet::ALL
-        };
-        assert_eq!(f.hosts, expected, "`{}` reaches the wrong hosts", f.name);
-    }
-}
-
-/// Editor tooling reads the per-host metadata tables, so a function a host
-/// binds from the shared table has a row there for that host.
-///
-/// The two sides are built from different files: the bodies from this crate's
-/// source, the rows from `builtins.ron`. A function moved into the shared table
-/// without its row would work in every language and be invisible in every
-/// editor.
-#[test]
-fn every_shared_entry_has_a_metadata_row_for_each_host_that_sees_it() {
-    let tables = [
-        ("rhai", builtins::RHAI_BUILTINS),
-        ("lua", builtins::LUA_BUILTINS),
-        ("candela", builtins::CANDELA_BUILTINS),
-    ];
-
-    let mut missing: Vec<String> = Vec::new();
-    for (lang, table) in tables {
-        let rows: std::collections::HashSet<&str> = table.iter().map(|b| b.name).collect();
-        for f in builtin_script_fns() {
-            if f.visible_to(lang) && !rows.contains(f.name.as_str()) {
-                missing.push(format!("{lang}::{}", f.name));
-            }
-        }
-    }
-    missing.sort_unstable();
-    assert!(
-        missing.is_empty(),
-        "these shared builtins have no row in builtins.ron for the host that sees them, so the \
-         LSP cannot offer them: {missing:?}"
-    );
-}
-
-/// A metadata row's parameter count matches the signature behind it, so hover
-/// text describes the call the body accepts.
-///
-/// A variadic or optional entry is exempt: one registration serves a range of
-/// arities and the row spells the shape an author writes.
-#[test]
-fn a_metadata_row_matches_the_signature_behind_it() {
-    let mut wrong: Vec<String> = Vec::new();
-    for b in builtins::CANDELA_BUILTINS {
-        let Some(f) = builtin_script_fns()
-            .into_iter()
-            .find(|f| f.name == b.name && f.visible_to("candela"))
-        else {
-            continue;
-        };
-        if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
-            continue;
-        }
-        if f.sig.params.len() != b.params.len() {
-            wrong.push(format!(
-                "{}: the table takes {} argument(s), the row spells {}",
-                b.name,
-                f.sig.params.len(),
-                b.params.len()
-            ));
-        }
-    }
-    assert!(wrong.is_empty(), "{wrong:?}");
-}
-
-/// A candela row spells the types the candela host declares.
-///
-/// candela is the language that has to name a type in a `host` block, so its
-/// rows and the generated declarations are read side by side. An entry the
-/// generator declares `string node_text(int)` and the LSP describes as taking a
-/// `node` is the same function twice over, and the two spellings have to agree.
-#[test]
-fn a_candela_row_spells_the_types_the_declaration_names() {
-    /// How a candela row spells a declared type.
-    fn spelling(ty: &lumen_script::ScriptTy) -> String {
-        use lumen_script::ScriptTy as T;
-        match ty {
-            T::Int => "int".to_string(),
-            T::Float => "float".to_string(),
-            T::Bool => "bool".to_string(),
-            T::Str => "string".to_string(),
-            T::Unit => "()".to_string(),
-            T::Any | T::Dynamic => "any".to_string(),
-            T::Array(inner) => format!("{}[]", spelling(inner)),
-            T::Map(value) => format!("{{string: {}}}", spelling(value)),
-            T::Struct(shape) => shape.name.clone(),
-        }
-    }
-
-    let mut drifted: Vec<String> = Vec::new();
-    for b in builtins::CANDELA_BUILTINS {
-        let Some(f) = builtin_script_fns()
-            .into_iter()
-            .find(|f| f.name == b.name && f.visible_to("candela"))
-        else {
-            continue;
-        };
-        if spelling(&f.sig.ret) != b.ret {
-            drifted.push(format!(
-                "{}: returns {}, the row says {}",
-                b.name,
-                spelling(&f.sig.ret),
-                b.ret
-            ));
-        }
-        if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
-            continue;
-        }
-        for (param, row) in f.sig.params.iter().zip(b.params) {
-            if spelling(&param.ty) != row.ty {
-                drifted.push(format!(
-                    "{}: `{}` is {}, the row says {}",
-                    b.name,
-                    param.name,
-                    spelling(&param.ty),
-                    row.ty
-                ));
-            }
-        }
-    }
-    drifted.sort_unstable();
-    assert!(drifted.is_empty(), "{drifted:#?}");
-}
-
-/// The free-function DOM surface is candela's, and no other host offers it:
-/// Rhai and Lua reach the same reads and writes through node receivers.
-#[test]
-fn the_free_function_dom_surface_is_candela_only() {
-    let node_fns: Vec<ScriptFn> = builtin_script_fns()
-        .into_iter()
-        .filter(|f| f.name.starts_with("node_") || f.name.starts_with("event_"))
-        .collect();
-    assert!(
-        node_fns.len() > 50,
-        "the DOM surface is much larger than {}",
-        node_fns.len()
-    );
-    for f in &node_fns {
-        assert!(!f.visible_to("rhai"), "`{}` reached Rhai", f.name);
-        assert!(!f.visible_to("lua"), "`{}` reached Lua", f.name);
-    }
+    assert_eq!(returns(&builtin("request_body"), &[]), text(""));
 }

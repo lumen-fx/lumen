@@ -68,14 +68,22 @@ pub trait SourceParser: Send + Sync {
     /// declared in one is usable from all of them.
     fn collect_fragments(&self, src: &str, self_path: &Path) -> Result<FragmentTable, String>;
 
-    /// Read the fragments the `lmn!` blocks in one candela script declare.
+    /// Build the fragments the markup blocks of one script declare. The
+    /// blocks are what the script's language read out of `src` (candela's
+    /// `lmn!`); this front-end turns each block's markup into a fragment.
     /// `uri` is where the script came from, and lands on each fragment's
-    /// origin. An app collects these alongside what its markup declares, so a
-    /// shipped artifact carries every fragment and parses no markup itself.
-    fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String>;
+    /// origin, at the line `src` holds the block on. An app collects these
+    /// alongside what its markup declares, so a shipped artifact carries every
+    /// fragment and parses no markup itself.
+    fn block_fragments(
+        &self,
+        src: &str,
+        uri: &str,
+        blocks: Vec<lumen_script::MarkupBlock>,
+    ) -> Result<FragmentTable, String>;
 
     /// Read the `<script>` elements `src` names, without building its tree.
-    /// Markup names a candela component by writing the function as a tag, so
+    /// Markup names a script component by writing the function as a tag, so
     /// the scripts are read before the tree and their blocks are in the table
     /// the parse instantiates against.
     fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, String>;

@@ -43,11 +43,10 @@ lumen-http-ureq = { workspace = true, optional = true }
 [build-dependencies]
 # Compiles the test fixtures to `.cdlb` on the host, so the program a render
 # loads is always the one this toolchain produces.
-lumen-script-candela = { workspace = true, default-features = true }
+lumen-candela-dev-host = { workspace = true }
 
 [features]
 # A render reaches the network through the client Lumen ships. An embedder
 # with its own stack turns this off and passes their own dispatcher.
-default = ["host-candela", "http-client"]
-host-candela = ["lumen-prerender/host-candela"]
+default = ["http-client"]
 http-client = ["dep:lumen-http-ureq"]

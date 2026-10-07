@@ -12,9 +12,15 @@
 # them: the release workflow building them beside the engine, the one packaging
 # `lumen-modules-<target>.tar.gz`, and the one naming the modules a link kit
 # carries. A crate added under std/ then reaches every release step untouched.
-# The static launcher (core/launcher) still names each module by hand, in its
-# manifest and its link anchors, and the link-kit step refuses the build when
-# that list is missing one.
+#
+# With `--linked`, only the modules an app links in: the ones the static
+# launcher compiles in and a link kit carries. A module's manifest says where it
+# is compiled in with `[package.metadata.lumen] link`: absent (an app links it
+# in), "toolchain" (the dev toolchain only, a compiler say), or "none" (nothing
+# compiles it in; it ships in the modules archive alone). The static launcher
+# (core/launcher) still names each linked module by hand, in its manifest and
+# its link anchors, and the link-kit step refuses the build when that list is
+# missing one.
 #
 # Needs jq, which every GitHub runner image has. On the Windows runner the
 # shell is git bash and the tools in the pipeline below are native Windows
@@ -30,13 +36,19 @@ set -euo pipefail
 # Windows cargo cannot follow, and a directory change it can.
 cd "$(dirname "$0")/../.."
 
+linked=""
+if [ "${1:-}" = "--linked" ]; then
+  linked=1
+fi
+
 cargo metadata --format-version 1 --no-deps |
-  jq -r '
+  jq -r --arg linked "$linked" '
     # A Windows cargo reports backslashes, which neither the match below nor
     # the shell reads as separators, so the path is normalized first.
     .packages[]
     | .manifest_path |= gsub("\\\\"; "/")
     | select(.manifest_path | test("/std/[^/]+/Cargo.toml$"))
+    | select($linked == "" or ((.metadata.lumen.link // "app") == "app"))
     | [.name, .manifest_path, ([.targets[] | select(.kind | index("lib")) | .name] | first)]
     | @tsv
   ' |
@@ -44,7 +56,10 @@ cargo metadata --format-version 1 --no-deps |
   tr -d '\r' |
   while IFS=$'\t' read -r package manifest lib; do
     src="$(dirname "$manifest")/src"
-    name="$(grep -rhoE 'lumen_module!\("[^"]+"' "$src" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+    # The sources are joined onto one line first: a call whose arguments do
+    # not fit one line puts the name on the line after the macro.
+    name="$(find "$src" -name '*.rs' -exec cat {} + | tr '\r\n' '  ' |
+      grep -oE 'lumen_module!\([[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/')"
     if [ -z "$name" ]; then
       echo "first-party-modules.sh: no lumen_module! declaration under $src" >&2
       exit 1

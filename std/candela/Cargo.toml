@@ -1,0 +1,48 @@
+# The candela script host a shipped app runs: precompiled `.cdlb` bytecode on
+# `candela-vm`, with no compiler in the process. A runtime module like any
+# other under std/: the `cdylib` target is the bundled `lumen-candela` module a
+# packaged app loads, and the `lib` target is the same host compiled into a
+# binary that has no shared engine to open it beside (a static package, the
+# Windows engine, a browser page). The host itself is `lumen-candela-host`
+# (host/); this package is its module entry. The compiler, hot reload, and the
+# ahead-of-time checks live in `lumen-candela-dev`.
+[package]
+name = "lumen-candela"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's candela script host: runs precompiled .cdlb bytecode on candela-vm, as a runtime module or compiled in."
+keywords = ["ui", "gui", "scripting", "candela", "lumen"]
+categories = ["gui"]
+publish = false
+
+[lib]
+# `lumen_candela` is the spelling the module loader's bundled probe derives
+# from the `lumen-candela` declaration: the cdylib builds to
+# `liblumen_candela.so`.
+name = "lumen_candela"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-candela-host = { workspace = true }
+
+# The module entry, and the registry a compiled-in copy announces itself on.
+# Not in a browser build: a page cannot open a library, so its assembly
+# installs `CandelaPlugin` itself.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lumen-module = { workspace = true }
+
+[dev-dependencies]
+# The descriptor test asks the host for its language name.
+lumen-script = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape. A
+# binary that links the `lib` target in drops the feature and links no engine
+# dylib.
+engine-dylib = ["lumen-module/engine-dylib"]

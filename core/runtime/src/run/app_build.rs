@@ -4,7 +4,8 @@ use lumen_core::window::{Menu, MenuEntry, MenuModel, WindowGeometry};
 use lumen_ir::layout_ir::MenuEntrySpec;
 
 use lumen_capability::Phase;
-use lumen_script::ScriptFnAppExt;
+use lumen_modules::language::{LanguageTable, ScriptGrouping};
+use lumen_script::{ScriptFnAppExt, ScriptLanguages, ScriptProgram};
 
 /// Construct the fully-configured [`App`] and the [`WindowSetup`] the
 /// windowed path would run it with - everything [`run_app`] does short
@@ -12,8 +13,6 @@ use lumen_script::ScriptFnAppExt;
 /// reuse the identical build without duplicating the plugin / system
 /// wiring.
 pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
-    #[cfg(feature = "host-rhai")]
-    let mut rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
     // Host-neutral native functions (the C-ABI's `lumen_app_expose`, the Rust
     // SDK). They go into the registry every host drains, so an exposed
     // function is callable from whichever languages the app ships.
@@ -169,6 +168,23 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     //
     // A compiled app is read before them instead: its tree was parsed when it
     // was compiled, so no module's tag waits on this order.
+    //
+    // Script hosts are modules too, loaded beside the declared ones: the
+    // module each of the app's script languages runs on. A compiled app names
+    // them; an app run from source has them picked from the language
+    // descriptors in reach, by the `<script>` elements its markup names. The
+    // descriptor table is only consulted on the source path: a shipped app
+    // runs from the artifact and carries none.
+    let table = if opts.artifact_bytes.is_some() || opts.artifact.is_some() {
+        LanguageTable::default()
+    } else {
+        language_table()
+    };
+    let grouping = ScriptGrouping {
+        table: &table,
+        engine: cfg.script.engine(),
+    };
+    let no_languages = ScriptLanguages::default();
     let compiled_first = if opts.artifact_bytes.is_some() || opts.artifact.is_some() {
         Some(load_inputs(
             &opts,
@@ -180,10 +196,34 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             &asset_roots,
             skin_override.as_deref(),
             page_plan.as_ref(),
+            &Languages {
+                grouping,
+                registered: &no_languages,
+            },
         )?)
     } else {
         None
     };
+    let host_modules: Vec<String> = match &compiled_first {
+        Some(loaded) => loaded
+            .scripts
+            .iter()
+            .map(|script| script.module.clone())
+            .filter(|module| !module.is_empty())
+            .collect(),
+        None => script_languages(
+            &opts,
+            parser.as_deref(),
+            grouping,
+            &html_path,
+            page_plan.as_ref(),
+        )
+        .iter()
+        .filter_map(|language| table.source_provider(language))
+        .map(|provider| provider.module.clone())
+        .collect(),
+    };
+    let dependencies = lumen_modules::language::with_implied(&dependencies, &host_modules);
     #[cfg(feature = "modules")]
     {
         let env = crate::modules::InitEnv {
@@ -217,6 +257,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     //
     // Either deserialize a precompiled AOT artifact (parser-free path) or
     // parse `main.lmn` + `main.css` from source (`runtime-parse`).
+    let registered = app
+        .world
+        .get_resource::<ScriptLanguages>()
+        .cloned()
+        .unwrap_or_default();
     let loaded = match compiled_first {
         Some(loaded) => loaded,
         None => load_inputs(
@@ -229,6 +274,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             &asset_roots,
             skin_override.as_deref(),
             page_plan.as_ref(),
+            &Languages {
+                grouping,
+                registered: &registered,
+            },
         )?,
     };
     let LoadResult {
@@ -266,35 +315,54 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         &css_import_paths,
         &css_import_mtimes,
     );
-    // Script host selection. Each script file picks its host from its own
-    // extension, so an app that ships two languages runs two hosts side by
-    // side; `[script] engine` collapses everything onto one. Every host
-    // re-exports the same generic tick / dispatch / derivation systems from
-    // `lumen-script`, and hosts reach each other only through the shared
-    // `PropertyStore` signal bus.
+    // Script hosts. Each part of the program runs on the host its language's
+    // module registered; an app that ships two languages runs two hosts side
+    // by side, reaching each other only through the shared `PropertyStore`
+    // signal bus, and `[script] engine` collapses everything onto one.
     //
     // `register_script_common` installs the host-neutral half once, ordering
     // it against `lumen_script::ScriptSet` so its RC-critical edges cover
-    // every active host; `register_script_host_systems::<H>` then installs
-    // the per-host half once per language. The native functions an app adds -
-    // a plugin's and the embedder's `RunOptions::native_fns` - go into one
-    // `ScriptFnRegistry` below, which each host drains as it loads; the shared
-    // builtin surface (`lumen_script::builtin_script_fns`) is bound by each
-    // host itself.
+    // every active host; each language's install adds the per-host half. The
+    // native functions an app adds - a plugin's and the embedder's
+    // `RunOptions::native_fns` - go into one `ScriptFnRegistry` below, which
+    // each host drains as it loads; the shared builtin surface
+    // (`lumen_script::builtin_script_fns`) is bound by each host itself.
     //
     // A precompiled artifact carries the split the AOT compiler recorded, and
-    // it is the only source of it: the app's `.lua` / `.rhai` files are not
-    // shipped beside a compiled app for the directory scan to read. An
-    // explicit `[script] engine` still collapses everything onto one host.
-    let resolve_here = compiled_scripts.is_empty() || cfg.script.engine.is_some();
-    let grouped = remap_trimmed_hosts(if resolve_here {
-        grouped_script_sources(&ir, &dir, &cfg)?
+    // it is the only source of it: a compiled app ships no script files for
+    // the grouping to read, and a language with a bytecode form ships no
+    // source at all.
+    let programs: Vec<(String, ScriptProgram)> = if compiled_scripts.is_empty() {
+        grouped_script_sources(&ir, &dir, grouping)?
+            .into_iter()
+            .map(|(language, source)| {
+                (
+                    language,
+                    ScriptProgram {
+                        source,
+                        ..ScriptProgram::default()
+                    },
+                )
+            })
+            .collect()
     } else {
         compiled_scripts
-    })?;
-    let has_script = !grouped.is_empty();
+            .into_iter()
+            .map(|script| {
+                (
+                    script.engine,
+                    ScriptProgram {
+                        source: script.source,
+                        bytecode: script.bytecode,
+                        ..ScriptProgram::default()
+                    },
+                )
+            })
+            .collect()
+    };
+    let has_script = !programs.is_empty();
     let mut reloaders = ScriptReloaders::default();
-    let multi_host = grouped.len() > 1;
+    let multi_host = programs.len() > 1;
     // The host-neutral half of the script wiring. It needs the parse: whether
     // the app ships a script at all is read out of the document.
     register_script_common(&mut app, has_script);
@@ -302,69 +370,37 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         install(&mut app);
     }
     app.add_script_fns(native_fns);
-    for (engine, combined) in grouped {
-        match engine {
-            #[cfg(feature = "host-rhai")]
-            crate::config::ScriptEngine::Rhai => {
-                let mut plugin = ScriptRhaiPlugin::new(combined);
-                // Native extensions (RunOptions / Rust SDK hooks) are
-                // `rhai::Engine`-typed, so they only bind to the Rhai host and
-                // are inapplicable to an app with no Rhai in it.
-                for ext in std::mem::take(&mut rhai_extensions) {
-                    plugin = plugin.with_extension(ext);
-                }
-                app.add_plugin(plugin);
-                register_script_host_systems::<RhaiHost>(&mut app, multi_host);
-                reloaders.push(engine, reload_script::<RhaiHost>);
-            }
-            #[cfg(feature = "host-lua")]
-            crate::config::ScriptEngine::Lua => {
-                app.add_plugin(ScriptLuaPlugin::new(combined));
-                register_script_host_systems::<LuaHost>(&mut app, multi_host);
-                reloaders.push(engine, reload_script::<LuaHost>);
-            }
-            #[cfg(feature = "host-candela")]
-            crate::config::ScriptEngine::Candela => {
-                // Pass the entry path so an error names the file the author
-                // wrote, and `lib/` so a `dylib "..."` import finds its
-                // library where the app's hooks build it.
-                //
-                // The runtime's own functions carry `RHAI | LUA` and so pass
-                // this host by: candela already declares `set_color_scheme`
-                // and the page family in its prelude, under the `lumen`
-                // namespace its scripts call them through, and a second
-                // spelling (`native::page`) would be backed by a different
-                // bus. Everything else reaches candela as `native::<name>(...)`
-                // once the script declares `host "native" { ... }`.
-                app.add_plugin(
-                    ScriptCandelaPlugin::new(combined)
-                        .with_uri(html_path.display().to_string())
-                        .with_library_dir(lib_dir.clone())
-                        .with_import_roots(import_roots.clone())
-                        // This run loop is the desktop's; the browser runs the
-                        // bytecode `lumenc web` compiled for it.
-                        .with_cfg_flags(lumen_modules::Target::Desktop.cfg_flags()),
-                );
-                register_script_host_systems::<CandelaHost>(&mut app, multi_host);
-                reloaders.push(engine, reload_script::<CandelaHost>);
-            }
-            // A trimmed-out host is remapped onto a compiled one by
-            // `remap_trimmed_hosts` above, so its `ScriptEngine` variant can
-            // never reach here.
-            #[cfg(not(all(
-                feature = "host-rhai",
-                feature = "host-lua",
-                feature = "host-candela"
-            )))]
-            _ => unreachable!("a trimmed script host is remapped before this match"),
+    for (language, mut program) in programs {
+        let Some(entry) = registered.get(&language).copied() else {
+            no_host_for(&mut app, &language, &table);
+            continue;
+        };
+        // The entry path names the program in an error, `lib/` is where a
+        // native library a script imports is looked for, and the script
+        // libraries and compile-time flags are this desktop run's.
+        program.uri = html_path.display().to_string();
+        program.lib_dir = Some(lib_dir.clone());
+        program.import_roots = import_roots.clone();
+        program.cfg_flags = lumen_modules::Target::Desktop
+            .cfg_flags()
+            .iter()
+            .map(|f| (*f).to_string())
+            .collect();
+        (entry.install)(&mut app, program, multi_host);
+        if let Some(reload) = entry.reload {
+            reloaders.push(language, reload);
         }
     }
-    #[cfg(feature = "host-rhai")]
-    let _ = &rhai_extensions;
-    // candela is the only host with a native-library import.
-    #[cfg(not(feature = "host-candela"))]
-    let _ = &lib_dir;
+    // RC6: a script that failed to load leaves `ScriptLoadFailure` behind.
+    // Mirror it into the in-app error banner so the failure is visible in the
+    // window itself, not only in the stderr banner the host printed.
+    if let Some(fail) = app.world.get_resource::<lumen_script::ScriptLoadFailure>() {
+        let msg = format!("script load failed: {}", fail.0);
+        app.world.resource_mut::<ErrorBanner>().0 = Some(msg);
+    }
     app.world.insert_resource(reloaders);
+    app.world
+        .insert_resource(ScriptLanguageTable(table.clone()));
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
     crate::run::restyle::install_root_class_list(&mut app.world, root);
@@ -618,52 +654,68 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     Ok((app, window))
 }
 
-/// True when this build compiled the host for `engine`.
-fn host_compiled(engine: crate::config::ScriptEngine) -> bool {
-    match engine {
-        crate::config::ScriptEngine::Candela => cfg!(feature = "host-candela"),
-        crate::config::ScriptEngine::Lua => cfg!(feature = "host-lua"),
-        crate::config::ScriptEngine::Rhai => cfg!(feature = "host-rhai"),
+/// The language descriptors in reach of this run. A set that disagrees with
+/// itself (two default languages) is reported and read as empty: the app
+/// runs, and every script says it has no host.
+fn language_table() -> LanguageTable {
+    LanguageTable::discover(None).unwrap_or_else(|e| {
+        lumen_core::warn_line!("lumen-runtime: {e}");
+        LanguageTable::default()
+    })
+}
+
+/// The languages an app run from source needs a host for: read off the
+/// `<script>` elements of its markup, before the parse. A run with no parser
+/// has nothing to read them with, and the parse it cannot do fails on its own.
+#[cfg(feature = "runtime-parse")]
+fn script_languages(
+    opts: &RunOptions,
+    parser: Option<&dyn SourceParser>,
+    grouping: ScriptGrouping<'_>,
+    html_path: &Path,
+    plan: Option<&crate::pages::PagePlan>,
+) -> Vec<String> {
+    match parser {
+        Some(parser) => source_languages(parser, grouping, html_path, opts.markup.as_deref(), plan),
+        None => Vec::new(),
     }
 }
 
-/// Fold any group whose host this build trimmed out into the first host the
-/// build does carry, in [`crate::config::ScriptEngine::ALL`] order.
-///
-/// A static `--bundle` compiles only the hosts the app needs, and `lumenc`
-/// derives that feature list from the same app directory, so a missing host
-/// only happens on a hand-edited misconfig. Folding the source onto a compiled
-/// host keeps the app running with a warning instead of dropping its script,
-/// and makes the trimmed match arms in [`build_app`] provably unreachable. A
-/// build with no host at all cannot run a script and says so
-/// ([`RunError::NoScriptHostAvailable`]); an app with no script is unaffected.
-pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScripts, RunError> {
-    let mut kept: GroupedScripts = Vec::new();
-    for (engine, source) in grouped {
-        let engine = if host_compiled(engine) {
-            engine
-        } else {
-            let Some(fallback) = crate::config::ScriptEngine::ALL
-                .into_iter()
-                .find(|e| host_compiled(*e))
-            else {
-                return Err(RunError::NoScriptHostAvailable);
-            };
-            tracing::warn!(
-                "this build was compiled without the {} host; running its \
-                 script under the {} host instead",
-                engine.name(),
-                fallback.name()
-            );
-            fallback
-        };
-        match kept.iter_mut().find(|(e, _)| *e == engine) {
-            Some((_, acc)) => {
-                acc.push('\n');
-                acc.push_str(&source);
-            }
-            None => kept.push((engine, source)),
-        }
-    }
-    Ok(kept)
+#[cfg(not(feature = "runtime-parse"))]
+fn script_languages(
+    _opts: &RunOptions,
+    _parser: Option<&dyn SourceParser>,
+    _grouping: ScriptGrouping<'_>,
+    _html_path: &Path,
+    _plan: Option<&crate::pages::PagePlan>,
+) -> Vec<String> {
+    Vec::new()
+}
+
+/// A part of the program whose language no loaded module registered: say so
+/// once, on stderr and in the window, and run the app without it. The module
+/// loader has already bannered a host module that failed to load; this names
+/// the language, and the module that would run it when a descriptor says.
+fn no_host_for(app: &mut App, language: &str, table: &LanguageTable) {
+    let module = table
+        .shipped_provider(language)
+        .map(|p| format!("the `{}` module", p.module))
+        .unwrap_or_else(|| "a module that provides it".to_string());
+    let reason = format!(
+        "no script host for the `{language}` language is loaded, so the app's `{language}` \
+         script does not run. Install {module} beside the engine."
+    );
+    lumen_core::warn_line!(
+        "\n\
+         ================================================================\n\
+         lumen-runtime: SCRIPT NOT RUN\n\
+         \n\
+           {reason}\n\
+         \n\
+         The window will still open, but every event handler, signal,\n\
+         and derivation in that script is DISABLED.\n\
+         ================================================================\n"
+    );
+    app.world
+        .insert_resource(lumen_script::ScriptLoadFailure(reason));
 }

@@ -340,8 +340,9 @@ fn a_marker_no_script_can_fill_is_reported_and_dropped() {
     // Ship the artifact with a program that lost the functions its tree names,
     // which is what a tampered or half-built artifact looks like.
     let stripped = "import \"lumen.cdl\";\nfn main() {}\n";
-    compiled.script_source = stripped.to_string();
+    // Carried as source, so the host that compiles source runs it.
     for script in &mut compiled.scripts {
+        script.module = "lumen-candela-dev".to_string();
         script.source = stripped.to_string();
         script.bytecode = None;
     }
@@ -394,9 +395,9 @@ fn a_block_naming_a_component_expands_to_no_call() {
     let _serial = isolate();
     let dir = fixture();
     let source = std::fs::read_to_string(dir.join("src").join("main.cdl")).expect("read main.cdl");
-    let index = lumen_script_candela::lmn::FnIndex::scan(&source);
+    let index = lumen_candela::lmn::FnIndex::scan(&source);
     let body = "<column id=\"app\"><Home name=\"bob\"/></column>";
-    let expansion = lumen_script_candela::lmn::expand(body, &index).expect("expands");
+    let expansion = lumen_candela::lmn::expand(body, &index).expect("expands");
     assert!(
         !expansion.contains("Home("),
         "the component is a use site, not a call: {expansion}"

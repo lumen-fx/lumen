@@ -73,13 +73,14 @@ fn scratch(name: &str) -> Scratch {
 }
 
 /// A script that only says it ran, for an app that declares no module.
-const PLAIN: &str = "fn on_start() { print(\"alive\"); }\n";
+const PLAIN: &str =
+    "import \"lumen.cdl\";\n\nfn on_start() { print(\"alive\"); }\n\nfn main() {}\n";
 
 /// A script that writes a file through the `files` namespace, which is what
 /// the `lumen-fs` module registers. The file it leaves is the proof that the
 /// module was installed rather than merely linked.
-const USES_FILES: &str =
-    "fn on_start() {\n  print(\"alive\");\n  files::write(\"started.txt\", \"linked\");\n}\n";
+const USES_FILES: &str = "import \"lumen.cdl\";\n\nfn on_start() {\n  print(\"alive\");\n  \
+     files::write(\"started.txt\", \"linked\");\n}\n\nfn main() {}\n";
 
 /// A string only `lumen-fs` carries, from the doc it registers its data
 /// directory with (`std/fs/src/plugin.rs`). Every module's objects are on the
@@ -101,10 +102,10 @@ fn write_app(dir: &Path, config: &str, script: &str) {
     std::fs::write(
         dir.join("src").join("main.lmn"),
         "<root>\n  <label id=\"greeting\" text=\"linked\"/>\n  \
-         <script src=\"main.rhai\"/>\n</root>\n",
+         <script src=\"main.cdl\"/>\n</root>\n",
     )
     .expect("write markup");
-    std::fs::write(dir.join("src").join("main.rhai"), script).expect("write script");
+    std::fs::write(dir.join("src").join("main.cdl"), script).expect("write script");
     std::fs::write(dir.join("lumen.toml"), config).expect("write config");
 }
 
@@ -235,7 +236,7 @@ fn a_candela_app_calling_its_declared_module_links_and_runs() {
     .expect("write script");
     std::fs::write(
         app.join("lumen.toml"),
-        "[script]\nengine = \"candela\"\n\n[dependencies]\nlumen-fs = { bundled = true }\n",
+        "[dependencies]\nlumen-fs = { bundled = true }\n",
     )
     .expect("write config");
     let out = root.join("out");
@@ -515,7 +516,9 @@ fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
             path: None,
         },
         args,
-        modules: Vec::new(),
+        // The script host every candela app implies; it has no objects of
+        // its own here, so selecting it adds nothing to the line.
+        modules: vec![lumen_modules::link_kit::KitModule::new("lumen-candela")],
         capabilities: Vec::new(),
         artifact: Artifact {
             kind: ArtifactKind::Append,
@@ -682,7 +685,9 @@ fn a_declared_module_reaches_the_executable_and_an_undeclared_one_does_not() {
             prefix: String::new(),
         },
     ]);
-    manifest.modules = vec![lumen_modules::link_kit::KitModule::new("lumen-fs")];
+    manifest
+        .modules
+        .push(lumen_modules::link_kit::KitModule::new("lumen-fs"));
     write_manifest(&kit, &manifest);
 
     let app = root.join("demo");
@@ -716,11 +721,17 @@ fn a_declared_module_reaches_the_executable_and_an_undeclared_one_does_not() {
         "[dependencies]\nlumen-fs = { bundled = true }\n",
         "Declared",
     );
-    assert!(said.contains("1 module compiled in: lumen-fs"), "{said}");
+    assert!(
+        said.contains("2 modules compiled in: lumen-fs, lumen-candela"),
+        "{said}"
+    );
     assert!(carries, "the declared module's object is in the executable");
 
     let (said, carries) = link("", "Bare");
-    assert!(!said.contains("compiled in"), "{said}");
+    assert!(
+        said.contains("1 module compiled in: lumen-candela"),
+        "only the script host is: {said}"
+    );
     assert!(
         !carries,
         "an app that declared nothing links neither the object nor the symbol"
@@ -841,7 +852,12 @@ fn a_candela_package_and_a_portable_plugin_travel_with_a_static_package() {
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(result.status.success(), "{stdout}{stderr}");
     assert!(stdout.contains("1 plugin beside it"), "{stdout}");
-    assert!(!stdout.contains("compiled in"), "{stdout}");
+    // The script host is the one module compiled in; the package travels
+    // beside the executable.
+    assert!(
+        stdout.contains("1 module compiled in: lumen-candela"),
+        "{stdout}"
+    );
     assert!(
         out.join("Beside").is_file(),
         "the link wrote the executable"
@@ -965,14 +981,14 @@ fn a_capability_reaches_the_executable_when_the_app_uses_or_asks_for_it() {
         !carries,
         "an app that never mentions the tray carries none of it: {stdout}"
     );
-    assert!(!stdout.contains("compiled in"), "{stdout}");
+    assert!(!stdout.contains("os-tray"), "{stdout}");
 
-    let uses = "fn on_start() { tray_icon(\"app\", \"icon.png\", \"\"); }\n";
+    let uses = "import \"lumen.cdl\";\n\nfn on_start() { lumen::tray_icon(\"app\", \"icon.png\", \"\"); }\n\nfn main() {}\n";
     let (code, stdout, stderr, carries) = link("", uses, "uses");
     assert_eq!(code, Some(0), "{stderr}");
     assert!(
         carries,
-        "the script's tray call pulls the capability in: {stdout}"
+        "the script's tray call pulls the capability in: {stdout}{stderr}"
     );
     assert!(
         stdout.contains("1 capability compiled in: os-tray"),

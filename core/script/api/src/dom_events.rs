@@ -1,10 +1,11 @@
 //! Runtime event dispatch for the dynamic DOM API (phase 4).
 //!
-//! These host-generic systems turn the input pipeline's typed messages
-//! (clicks, pointer moves, wheel, keys, focus changes, text commits, scroll)
-//! into DOM events and route them through the capture -> target -> bubble
-//! propagation driver in [`crate::event`]. A handler bound with
-//! `n.on(type, handler)` runs here; commands it queues are forwarded onto the
+//! These systems turn the input pipeline's typed messages (clicks, pointer
+//! moves, wheel, keys, focus changes, text commits, scroll) into DOM events
+//! and route each one through the capture -> target -> bubble propagation
+//! driver in [`crate::event`], once, whatever the number of script hosts the
+//! app runs. A handler bound with `n.on(type, handler)` runs here, in the host
+//! that bound it or natively; commands it queues are forwarded onto the
 //! [`ScriptCommandEvent`] bus so the normal appliers pick them up.
 //!
 //! The full event set: `click`, `dblclick`, `pointerdown` / `pointerup` /
@@ -32,7 +33,7 @@
 //! `submit`'s default is reserved (there is no form-submission model yet).
 
 use bevy_ecs::component::Mutable;
-use bevy_ecs::message::{MessageReader, MessageWriter};
+use bevy_ecs::message::{Message, MessageReader, MessageRegistry, Messages};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::prelude::*;
@@ -88,16 +89,103 @@ fn key_string(key: &Key) -> String {
     }
 }
 
-/// Deliver one already-built [`EventData`] targeting `target_entity`:
-/// resolve the propagation path, run the driver (host closures via the trait,
-/// native callbacks directly), forward queued commands, and record a
-/// default-prevented click.
-fn deliver<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: Option<&mut H>,
-    out: &mut MessageWriter<ScriptCommandEvent>,
-    data: EventData,
-    target_entity: Entity,
+/// The DOM events read from this tick's input, waiting for delivery.
+///
+/// Reading the input and delivering it are two steps because a handler can
+/// live in any of the app's hosts, and reaching a host needs the whole world:
+/// the readers are ordinary systems that run beside the rest of the tick, and
+/// the delivery is one exclusive pass that walks each event's propagation path
+/// once, whatever the number of hosts.
+#[derive(Resource, Default)]
+pub struct PendingDomEvents {
+    input: Vec<(EventData, Entity)>,
+    state: Vec<(EventData, Entity)>,
+}
+
+/// How the dispatch reaches one installed host: offer it a handler token, and
+/// forward the commands its handlers queued.
+#[derive(Clone, Copy)]
+pub struct EventHost {
+    dispatch: fn(&mut World, u64) -> bool,
+    drain: fn(&mut World),
+}
+
+/// The hosts DOM events are delivered into, one entry per installed host.
+/// Empty for an app with no script: native (C-ABI and SDK) handlers still run.
+#[derive(Resource, Default, Clone)]
+pub struct EventHosts(Vec<EventHost>);
+
+/// Put the host stored as the resource `H` on the list DOM events are
+/// delivered into.
+pub fn register_event_host<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World) {
+    world
+        .get_resource_or_insert_with(EventHosts::default)
+        .0
+        .push(EventHost {
+            dispatch: dispatch_into::<H>,
+            drain: drain_into::<H>,
+        });
+}
+
+/// Offer `token` to host `H`. A host answers for the tokens it minted and
+/// passes on every other, so the first host that runs a handler is its owner.
+fn dispatch_into<H: ScriptHost + Resource<Mutability = Mutable>>(
+    world: &mut World,
+    token: u64,
+) -> bool {
+    world
+        .get_resource_mut::<H>()
+        .is_some_and(|mut host| !matches!(host.dispatch_event_handler(token), Ok(false)))
+}
+
+/// Forward the commands host `H`'s handlers queued onto the command bus.
+fn drain_into<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World) {
+    let commands = match world.get_resource_mut::<H>() {
+        Some(mut host) => host.drain_commands(),
+        None => return,
+    };
+    for c in commands {
+        world.write_message(ScriptCommandEvent(c));
+    }
+}
+
+/// Deliver the pointer, click, wheel and key events read this tick.
+pub fn deliver_input_events(world: &mut World) {
+    // Fresh per-tick prevented-click set for the anchor-nav executor.
+    event::clear_prevented_clicks();
+    deliver_pending(world, |pending| &mut pending.input);
+}
+
+/// Deliver the focus, hover, edit, commit and scroll events read this tick.
+pub fn deliver_state_events(world: &mut World) {
+    deliver_pending(world, |pending| &mut pending.state);
+}
+
+fn deliver_pending(
+    world: &mut World,
+    queue: fn(&mut PendingDomEvents) -> &mut Vec<(EventData, Entity)>,
 ) {
+    let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
+        return;
+    };
+    let events = std::mem::take(queue(&mut pending));
+    if events.is_empty() {
+        return;
+    }
+    let hosts = world
+        .get_resource::<EventHosts>()
+        .cloned()
+        .unwrap_or_default();
+    for (data, target) in events {
+        deliver(world, &hosts, data, target);
+    }
+}
+
+/// Deliver one already-built [`EventData`] targeting `target_entity`:
+/// resolve the propagation path, run the driver once (native callbacks
+/// directly, host closures through whichever host owns the token), forward
+/// queued commands, and record a default-prevented click.
+fn deliver(world: &mut World, hosts: &EventHosts, data: EventData, target_entity: Entity) {
     if !event::has_bindings_for(&data.event_type) {
         return;
     }
@@ -105,17 +193,15 @@ fn deliver<H: ScriptHost + Resource<Mutability = Mutable>>(
     let bubbles = event::event_bubbles(&data.event_type);
     let etype = data.event_type.clone();
     let target_handle = data.target;
-    // Native (C-ABI / SDK) bindings fire directly inside the driver; host
-    // closures need the script host, which a script-less app does not have.
     let result = event::dispatch(data, &ancestors, bubbles, |token| {
-        if let Some(h) = host.as_mut() {
-            let _ = h.dispatch_event_handler(token);
+        for host in &hosts.0 {
+            if (host.dispatch)(world, token) {
+                break;
+            }
         }
     });
-    if let Some(h) = host.as_mut() {
-        for c in h.drain_commands() {
-            out.write(ScriptCommandEvent(c));
-        }
+    for host in &hosts.0 {
+        (host.drain)(world);
     }
     if etype == "click" && result.default_prevented {
         event::mark_prevented_click(target_handle);
@@ -182,12 +268,36 @@ fn set_mods(data: &mut EventData, mods: &Modifiers) {
     data.super_ = mods.super_;
 }
 
-/// Pointer / click / wheel / key dispatch. Pointer events target the hovered
-/// entity; key events target the focused entity.
+/// Register every input message the DOM event queues read, where the world
+/// does not have it yet.
+///
+/// A window's input layer registers these; a server render has no input
+/// layer, and its queue systems would fail parameter validation reading a
+/// message nobody registered. Registered, they stay empty.
+pub fn register_dom_event_messages(world: &mut World) {
+    fn register<M: Message>(world: &mut World) {
+        if !world.contains_resource::<Messages<M>>() {
+            MessageRegistry::register_message::<M>(world);
+        }
+    }
+    register::<ClickEvent>(world);
+    register::<DoubleClickEvent>(world);
+    register::<PointerPressed>(world);
+    register::<PointerReleased>(world);
+    register::<PointerMoved>(world);
+    register::<MouseWheel>(world);
+    register::<KeyReleased>(world);
+    register::<FocusedKey>(world);
+    register::<lumen_core::text_events::TextEditApplied>(world);
+    register::<TextInputCommitted>(world);
+}
+
+/// Read this tick's pointer, click, wheel and key input as DOM events, for
+/// [`deliver_input_events`]. Pointer events target the hovered entity; key
+/// events target the focused entity.
 #[allow(clippy::too_many_arguments)]
-pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: Option<ResMut<H>>,
-    mut out: MessageWriter<ScriptCommandEvent>,
+pub fn queue_pointer_and_key_events(
+    mut pending: ResMut<PendingDomEvents>,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
     mut presses: MessageReader<PointerPressed>,
@@ -200,9 +310,7 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
     hovered: Query<Entity, With<Hovered>>,
     focused: Query<Entity, With<Focused>>,
 ) {
-    // Fresh per-tick prevented-click set for the anchor-nav executor.
-    event::clear_prevented_clicks();
-
+    let queue = &mut pending.input;
     let hovered_entity = hovered.iter().next();
     let focused_entity = focused.iter().next();
 
@@ -216,7 +324,7 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
             c.local,
         );
         data.button = button_code(c.button);
-        deliver(host.as_deref_mut(), &mut out, data, c.entity);
+        queue.push((data, c.entity));
     }
     // dblclick.
     for d in doubles.read() {
@@ -227,38 +335,38 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
             d.position,
             None,
         );
-        deliver(host.as_deref_mut(), &mut out, data, d.entity);
+        queue.push((data, d.entity));
     }
     // pointerdown / up / move / wheel target the hovered entity.
     for p in presses.read() {
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "pointerdown"), &transforms, e, p.position, p.local);
         data.button = button_code(p.button);
-        deliver(host.as_deref_mut(), &mut out, data, e);
+        queue.push((data, e));
     }
     for p in releases.read() {
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "pointerup"), &transforms, e, p.position, p.local);
         data.button = button_code(p.button);
-        deliver(host.as_deref_mut(), &mut out, data, e);
+        queue.push((data, e));
     }
     for p in moves.read() {
         let Some(e) = hovered_entity else { continue };
         let data = with_position(base(e, "pointermove"), &transforms, e, p.position, p.local);
-        deliver(host.as_deref_mut(), &mut out, data, e);
+        queue.push((data, e));
     }
     for w in wheels.read() {
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);
         data.delta = (w.delta.x as f64, w.delta.y as f64);
-        deliver(host.as_deref_mut(), &mut out, data, e);
+        queue.push((data, e));
     }
     // keydown targets the entity the input router routed the key to.
     for k in keydowns.read() {
         let mut data = base(k.entity, "keydown");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
-        deliver(host.as_deref_mut(), &mut out, data, k.entity);
+        queue.push((data, k.entity));
     }
     // keyup targets the focused entity.
     for k in keyups.read() {
@@ -266,15 +374,15 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
         let mut data = base(e, "keyup");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
-        deliver(host.as_deref_mut(), &mut out, data, e);
+        queue.push((data, e));
     }
 }
 
-/// Focus / blur / enter / leave / input / change / submit / scroll dispatch.
+/// Read this tick's focus, hover, edit, commit and scroll changes as DOM
+/// events, for [`deliver_state_events`].
 #[allow(clippy::too_many_arguments)]
-pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: Option<ResMut<H>>,
-    mut out: MessageWriter<ScriptCommandEvent>,
+pub fn queue_state_events(
+    mut pending: ResMut<PendingDomEvents>,
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
     gained_focus: Query<Entity, Added<Focused>>,
@@ -288,20 +396,21 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     // despawned + recycled entity never matches a live binding; the
     // has-bindings gate inside `deliver` also makes an unbound remove a
     // no-op. No explicit liveness check is needed here.
+    let queue = &mut pending.state;
 
     // focus / blur.
     for e in gained_focus.iter() {
-        deliver(host.as_deref_mut(), &mut out, base(e, "focus"), e);
+        queue.push((base(e, "focus"), e));
     }
     for e in lost_focus.read() {
-        deliver(host.as_deref_mut(), &mut out, base(e, "blur"), e);
+        queue.push((base(e, "blur"), e));
     }
     // pointerenter / pointerleave.
     for e in gained_hover.iter() {
-        deliver(host.as_deref_mut(), &mut out, base(e, "pointerenter"), e);
+        queue.push((base(e, "pointerenter"), e));
     }
     for e in lost_hover.read() {
-        deliver(host.as_deref_mut(), &mut out, base(e, "pointerleave"), e);
+        queue.push((base(e, "pointerleave"), e));
     }
     // input, once per edit that changed the text. An entity gets at most
     // one `input` per tick: an IME commit both mutates the buffer and
@@ -321,7 +430,7 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
         fired.push(ev.entity);
         let mut data = base(ev.entity, "input");
         data.value = value;
-        deliver(host.as_deref_mut(), &mut out, data, ev.entity);
+        queue.push((data, ev.entity));
     }
     // change / submit from the commit signal (Enter on a single-line
     // input, or focus leaving a committed field).
@@ -329,12 +438,12 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
         for etype in ["change", "submit"] {
             let mut data = base(c.entity, etype);
             data.value = c.text.clone();
-            deliver(host.as_deref_mut(), &mut out, data, c.entity);
+            queue.push((data, c.entity));
         }
     }
     // scroll (does not bubble).
     for e in scrolled.iter() {
-        deliver(host.as_deref_mut(), &mut out, base(e, "scroll"), e);
+        queue.push((base(e, "scroll"), e));
     }
 }
 
@@ -353,14 +462,9 @@ pub(crate) mod text_event_tests {
         event::TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A host the dispatcher never sees: the systems take
-    /// `Option<ResMut<H>>` and these tests leave the resource out, so the
-    /// events route through native bindings only. The type exists to name
-    /// `H`.
-    ///
-    /// `pub(crate)` so `runtime`'s derivation tests can build on it instead
-    /// of writing a second `ScriptHost` stub with the same unimplemented /
-    /// trivial bodies.
+    /// A host stub with unimplemented / trivial bodies, for the tests that
+    /// need a type to name a host by. `pub(crate)` so `runtime`'s derivation
+    /// tests can build on it instead of writing a second one.
     #[derive(Resource)]
     pub(crate) struct NoHost;
 
@@ -424,9 +528,11 @@ pub(crate) mod text_event_tests {
     /// run is what keeps a tick from re-reading the previous tick's
     /// messages.
     fn drive(world: &mut World) {
+        world.init_resource::<PendingDomEvents>();
         world
-            .run_system_once(dispatch_state_events::<NoHost>)
+            .run_system_once(queue_state_events)
             .expect("system ran");
+        deliver_state_events(world);
         world.resource_mut::<Messages<TextEditApplied>>().clear();
         world.resource_mut::<Messages<TextInputCommitted>>().clear();
     }

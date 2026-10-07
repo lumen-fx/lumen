@@ -65,7 +65,7 @@ scripting, `apps/kanban` for drag and drop, `apps/pages-demo` for multi-page
 navigation, `apps/music` for audio.
 
 The build also writes `target/<profile>/libs`, the candela standard library
-that `lumen-script-candela`'s build script stages out of the candela source
+that `lumen-candela-dev-host`'s build script stages out of the candela source
 cargo resolved, with the C-backed modules built by the C compiler cargo already
 uses for the other native dependencies. candela reads the tree from beside the
 running executable, so it goes there rather than into `OUT_DIR`. The release
@@ -115,12 +115,12 @@ The same mode is what app authors use for automated testing; see
 `wasm32-unknown-unknown` target, which `rust-toolchain.toml` lists, so `rustup`
 installs it with the rest of the toolchain.
 
-The module carries one script host per `host-<engine>` feature, and the default
-build carries candela (`host-candela`). It is the only host that runs in a
-browser today: rhai is not wired up for this target yet, and lua's C core does
-not build for `wasm32-unknown-unknown` at all. An app names its engine in the
-manifest, so a module built without a host for that engine refuses to boot the
-app and says which engine it was asked for.
+A page cannot open a library, so the module installs the candela host it runs
+scripts with itself (`lumen_candela::CandelaPlugin`, the bytecode host, never
+the compiler); the prerender and server-render paths do the same. candela is
+the only language a page runs: rhai and lua are not wired up for this target.
+An app names its engine in the manifest, so a module with no host for that
+engine refuses to boot the app and says which engine it was asked for.
 
 Two more tools, neither a cargo dependency:
 
@@ -333,8 +333,15 @@ A handful of crates carry flags you will meet while working on the tree.
 integration tests drive an app in process. It also compiles the runtime
 modules under `std/` in, which is what lets `lumenc run` start an app that
 declares one in `[dependencies]`: a static binary cannot open a module beside
-it, so the module has to be part of the binary. `dynamic-engine` turns the
-anchors off, because that shape shares one engine with the modules it opens.
+it, so the module has to be part of the binary. The script hosts are among
+them: the library anchors `lumen-candela` and `lumen-candela-dev`, so every
+in-process run (the binary, a test, an SDK app) finds candela. A module whose
+manifest sets `[package.metadata.lumen] link = "none"` (rhai, lua) is compiled
+into nothing and ships only in the modules archive; `link = "toolchain"`
+(candela's compiler) is compiled into the dev toolchain but not the static
+launcher. `public/lumenc/tests/bundled_modules.rs` holds both rules.
+`dynamic-engine` turns the anchors off, because that shape shares one engine
+with the modules it opens.
 The thin shape drops the runtime and loads the shared `liblumen` over the C
 ABI instead:
 
@@ -351,30 +358,30 @@ Dropping every default feature yields a compiler library with no backends at
 all. That is what `lumen-lsp` links, which is why the LSP does not pull wgpu,
 winit, cosmic-text, or taffy.
 
-**`lumen-lsp`** has one flag, `lang-rhai`, on by default. It carries the Rhai
+**`lumen-lsp`** has one flag, `lang-rhai`, off by default. It carries the Rhai
 engine and builtin table the server analyses `.rhai` buffers with. Markup, CSS,
-and the cross-file id features do not depend on it, so a server built without
-it still serves those.
+and the cross-file id features do not depend on it.
 
-**`lumenui`** (the Rust SDK) has `host-rhai`, on by default. It gates
-`AppBuilder::rhai_extension`, which takes a `rhai::Engine` and so reaches one
-host. `AppBuilder::native_fn` registers into every host and is always
-available.
+**`lumen-runtime`** defaults to every subsystem on: `mcp`, `async`,
+`http-fetch`, `runtime-parse`, `modules`. It carries no script host: each
+language is a runtime module (`std/candela`, `std/candela-dev`, `std/rhai`,
+`std/lua`) that registers itself with the app through
+`lumen_script::ScriptLanguage`, and the runtime loads the one each script
+needs, picked by the `lumen-language.toml` descriptor beside the module. A
+script host therefore needs the `modules` feature. Per-app trimming by feature
+happens only on the static bundle path, where `lumenc` selects the exact
+feature set an app needs; the development path stays full featured. `lumenc
+package` trims capabilities at the link instead (see
+[the engine kit](#the-engine-kit)).
 
-**`lumen-runtime`** defaults to every subsystem on: `mcp`,
-`async`, `host-rhai`, `host-lua`, `host-candela`, `http-fetch`,
-`runtime-parse`. Each script host is its own feature, so a build can carry
-exactly the languages its app ships. Per-app trimming by feature happens only
-on the static bundle path, where `lumenc` selects the exact feature set an app
-needs; the development path stays full featured. `lumenc package` trims
-capabilities at the link instead (see [the engine kit](#the-engine-kit)).
-
-**`lumen-script-candela`** has `compiler`, on by default. It carries the
-candela compiler, and with it source compilation, hot reload, `lumenc check`,
-and `CandelaHost::compile_bytecode`, the build step that produces a `.cdlb`
-image. Off, the crate keeps the whole builtin surface and the host that runs
-such an image, and the compiler front end leaves the dependency graph. That is
-what the browser runtime builds against.
+candela is two crates. **`lumen-candela`** is the bytecode host a shipped app,
+a page and a server render run: the builtin surface, the prelude, and
+`candela-vm`, with no compiler. **`lumen-candela-dev`** adds the candela
+compiler on top: source compilation, hot reload, `lumenc check`, and
+`CandelaHost::compile_bytecode`, the build step that produces a `.cdlb` image.
+They are separate crates rather than one crate with a feature, because the
+release builds the engine, `lumenc` and every module in one cargo invocation,
+where a feature would unify on and put the compiler in the bytecode host.
 
 `http-fetch` adds the HTTP client behind the scripts' `fetch()` and `http()`
 builtins, and costs about a megabyte of release text for the TLS stack. A build
@@ -449,12 +456,12 @@ to regenerate on the engine side: it is already fresh on every run, by
 design, which is also why a stray `public/lumen-dylib/Cargo.lock` should
 never be committed (`.gitignore` covers it).
 
-`lumen-script-candela` depends on `candela-lang` and `candela-vm` as git
-dependencies pinned to one `candela` commit in
-`core/script/candela/Cargo.toml`, so a push to that repository changes
+The candela hosts depend on `candela-vm` and `candela-lang` as git
+dependencies pinned to one `candela` tag in `std/candela/host/Cargo.toml` and
+`std/candela-dev/host/Cargo.toml`, so a push to that repository changes
 nothing here until the pin moves. Both sides of the check resolve that same
 pin, which is what keeps them agreeing. Moving to a new `candela` release is
-one edit: set the `rev` and the `version` on both dependency lines, then run
+one edit per crate: set the `tag` and the `version` on each dependency line, then run
 `cargo update -p candela-lang -p candela-vm` so the lockfile follows.
 
 The suite also runs every app the repository ships. Each directory under
@@ -499,7 +506,7 @@ API reintroduced into one of them fails on the pull request that adds it:
 
 ```sh
 cargo check --target wasm32-unknown-unknown \
-  -p lumen-core -p lumen-ir -p lumen-html -p lumen-script -p lumen-script-candela
+  -p lumen-core -p lumen-ir -p lumen-html -p lumen-script -p lumen-candela
 ```
 
 The second builds the module, measures it against the size budget, and runs the

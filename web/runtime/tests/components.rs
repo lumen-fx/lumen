@@ -18,7 +18,7 @@
 //! `wasm-bindgen-test-runner` drives Chrome through `chromedriver`; point
 //! `CHROMEDRIVER` at the binary if it is not on `PATH`.
 
-#![cfg(all(target_arch = "wasm32", feature = "host-candela"))]
+#![cfg(target_arch = "wasm32")]
 
 use lumen_core::prelude::App;
 use lumen_html::contract::DATA_LM;
@@ -127,6 +127,7 @@ fn compiled_from(ir: LayoutIR) -> CompiledApp {
         fragments: fragments(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(COMPONENTS.to_vec()),
         }],
@@ -165,6 +166,7 @@ fn page() -> DomElement {
 /// Boot `ir` into `root`, the way the page's own boot does, and tick it once.
 fn boot_ir(ir: LayoutIR, root: DomElement) -> App {
     let mut app = assemble::portable_app();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     hosts::install(&mut app, "candela", COMPONENTS, "components.cdlb")
         .expect("this build carries the candela host");
     let root_entity = compiled_from(ir).spawn_into(&mut app.world);

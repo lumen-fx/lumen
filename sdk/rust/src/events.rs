@@ -1,8 +1,8 @@
 //! Native Rust event handlers.
 //!
-//! The script runtime (`lumen-script-rhai`) routes UI events to Rhai
-//! functions through a per-id handler registry on `RhaiHost`. This module
-//! is the Rust-closure equivalent: [`RustHandlers`] holds `FnMut`
+//! The script runtime routes UI events to script functions through a per-id
+//! handler registry on the script host. This module is the Rust-closure
+//! equivalent: [`RustHandlers`] holds `FnMut`
 //! closures keyed by `(event kind, element id)`, [`collect_ui_events`]
 //! folds this tick's [`ClickEvent`] / [`DoubleClickEvent`] /
 //! [`LongPressEvent`] messages into a queue, and
@@ -14,7 +14,7 @@
 //! [`lumenc::RunOptions::app_hooks`], ordered *before* the reactive
 //! binding readers (`apply_text_bindings` et al.) so a signal written by
 //! a handler is reflected by `bind-text="..."` markup on the very tick the
-//! event fired - the same same-tick guarantee the Rhai path gets from
+//! event fired - the same same-tick guarantee the script path gets from
 //! `commit_external_properties`.
 
 // The engine's copy of each crate this module names. The re-export block in
@@ -199,7 +199,7 @@ pub(crate) fn dispatch_rust_handlers(world: &mut World) {
     let mut handlers = std::mem::take(&mut world.resource_mut::<RustHandlers>().map);
     for (kind, target) in events {
         // Per-id handlers win; the wildcard runs only when no per-id
-        // handler matched (mirrors the Rhai `on(event, id, fn)` router).
+        // handler matched (mirrors the scripts' `on(event, id, fn)` router).
         let keyed = (kind, Some(target.clone()));
         let slot = if handlers.contains_key(&keyed) {
             keyed

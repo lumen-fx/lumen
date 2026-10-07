@@ -328,9 +328,9 @@ fn find(dir: &Path, name: &str) -> Option<PathBuf> {
 
 #[test]
 fn a_desktop_image_binds_against_the_real_modules() {
+    use lumen_candela::CandelaVmHost;
     use lumen_core::app::App;
     use lumen_script::{ScriptFnRegistry, ScriptHost, ScriptValue};
-    use lumen_script_candela::CandelaVmHost;
 
     let scratch =
         std::env::temp_dir().join(format!("lumen-std-modules-image-{}", std::process::id()));

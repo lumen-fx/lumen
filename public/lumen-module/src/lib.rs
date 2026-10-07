@@ -104,6 +104,12 @@ pub use lumen_module_macros::lumen_module;
 /// Where a linked-in module leaves itself for the loader. Named by the
 /// generated constructor; a module author has no reason to reach it.
 pub use lumen_module_registry as registry;
+/// The scene the app's tree lives in. A module that runs a script language
+/// installs the per-host half of the script wiring through
+/// [`lumen_scene::script_host::install`] once its host is in place, and
+/// registers the language with
+/// [`lumen_script::ScriptLanguageAppExt::add_script_language`].
+pub use lumen_scene;
 /// The script surface a module extends: register functions with
 /// [`lumen_script::ScriptFnAppExt::add_script_fn`], order systems against
 /// [`lumen_script::ScriptSet`], and deliver events through
@@ -272,6 +278,43 @@ impl Plugin for BrowserOnly {
             Err(reason) => eprintln!("lumen-runtime: {reason}"),
         }
     }
+}
+
+/// The probe-and-install pair a loader looks up after opening a module's
+/// library, expanded by [`lumen_module!`] with the module's own symbol names.
+/// Empty without the `engine-dylib` feature and on Windows, where a module is
+/// linked in and never opened.
+#[cfg(all(feature = "engine-dylib", not(windows)))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lumen_module_dylib_entries {
+    ($probe:literal, $install:literal, $install_module:ident) => {
+        // Naming the engine dylib from the module's own crate is what records
+        // its dependency on the shared engine, so an author cannot build a
+        // module that forgot it.
+        use $crate::lumen_dylib as _;
+
+        #[unsafe(export_name = $probe)]
+        extern "C" fn probe() -> *const ::std::os::raw::c_char {
+            $crate::BUILD_ID_C.as_ptr() as *const ::std::os::raw::c_char
+        }
+
+        // Rust ABI: the loader calls this only after the probe proved both
+        // sides are one build.
+        #[unsafe(export_name = $install)]
+        fn install(app: &mut $crate::App, config_toml: &str) -> u32 {
+            $install_module(app, config_toml)
+        }
+    };
+}
+
+/// See the other definition: a module that is only ever linked in exports no
+/// probe and no install entry.
+#[cfg(not(all(feature = "engine-dylib", not(windows))))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lumen_module_dylib_entries {
+    ($probe:literal, $install:literal, $install_module:ident) => {};
 }
 
 /// Install returned cleanly.

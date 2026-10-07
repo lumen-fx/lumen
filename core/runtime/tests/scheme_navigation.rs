@@ -8,13 +8,17 @@
 
 use lumen_core::components::{Fill, Visuals};
 use lumen_core::nav;
-use lumen_ir::artifact::{self, CompiledApp, CompiledPages};
+use lumen_ir::artifact::{self, CompiledApp, CompiledPages, CompiledScript};
 use lumen_ir::css::{
     ColorSchemePreference, Declaration, MediaFeature, MediaQuery, Origin, Rule, Stylesheet,
 };
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::node_query;
+
+// The candela host, compiled in: the artifact names the module that runs its
+// program, and a test binary has no shared engine to open it from.
+use lumen_candela_dev as _;
 
 /// The DOM snapshot and the navigation bus are process-global, so the
 /// headless apps that use them run one at a time.
@@ -89,8 +93,9 @@ struct Harness {
 
 impl Harness {
     /// A two-page app whose `.cell` is red by default and green under
-    /// `prefers-color-scheme: light`, with `script` baked in as its Rhai
-    /// source.
+    /// `prefers-color-scheme: light`, with `script` baked in as its candela
+    /// source. `script` holds the program's functions; the prelude import and
+    /// the empty `main` are added around it.
     fn two_pages(script: &str) -> Self {
         let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir =
@@ -99,13 +104,8 @@ impl Harness {
                 SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             }));
         std::fs::create_dir_all(&dir).unwrap();
-        // Pin the engine: the baked source below is Rhai, and the default is
-        // candela. Port 0 keeps parallel test binaries off a shared socket.
-        std::fs::write(
-            dir.join("lumen.toml"),
-            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-        )
-        .unwrap();
+        // Port 0 keeps parallel test binaries off a shared socket.
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
         let light = MediaQuery {
             features: vec![MediaFeature::PrefersColorScheme(
@@ -122,7 +122,6 @@ impl Harness {
                 children: vec![page("index", "p1"), page("other", "p2")],
                 ..Default::default()
             },
-            script_source: script.to_string(),
             combined_stylesheet: Some(Stylesheet {
                 rules: vec![
                     rule(".cell", &[("bg", "#ff0000")], 0, None),
@@ -139,7 +138,12 @@ impl Harness {
 
         let bytes = artifact::serialize(&CompiledApp {
             ir,
-            script_source: script.to_string(),
+            scripts: vec![CompiledScript {
+                engine: "candela".to_string(),
+                module: "lumen-candela-dev".to_string(),
+                source: format!("import \"lumen.cdl\";\n\n{script}\n\nfn main() {{}}\n"),
+                bytecode: None,
+            }],
             pages: Some(CompiledPages {
                 entry: "index".to_string(),
                 keys: vec!["index".to_string(), "other".to_string()],
@@ -190,7 +194,7 @@ impl Drop for Harness {
 /// navigation mounts afterwards.
 #[test]
 fn a_forced_scheme_survives_navigation() {
-    let mut h = Harness::two_pages(r#"fn on_start() { set_color_scheme("force-light"); }"#);
+    let mut h = Harness::two_pages(r#"fn on_start() { lumen::set_color_scheme("force-light"); }"#);
     assert!(
         near(h.fill("p1"), "#00ff00"),
         "the entry page follows the forced scheme"
@@ -208,7 +212,7 @@ fn a_forced_scheme_survives_navigation() {
 /// mounted later, so the fix is not a boot-time coincidence.
 #[test]
 fn a_scheme_forced_mid_run_reaches_a_later_page() {
-    let mut h = Harness::two_pages(r#"fn on_start() { set_color_scheme("force-dark"); }"#);
+    let mut h = Harness::two_pages(r#"fn on_start() { lumen::set_color_scheme("force-dark"); }"#);
     assert!(
         near(h.fill("p1"), "#ff0000"),
         "under a forced dark scheme the light media rule does not apply"

@@ -17,6 +17,11 @@ use lumen::{
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+// The Rhai and Lua hosts the cross-language cases run, registered through
+// their module constructors.
+use lumen_lua as _;
+use lumen_rhai as _;
+
 /// Every test here that builds a whole app and ticks it takes this lock,
 /// including the ones that reach an app through a helper. An app is not a
 /// process-local object: it publishes the DOM index, the node-handle

@@ -20,6 +20,18 @@
 #[cfg(all(feature = "dynamic-engine", not(windows)))]
 use lumen_engine as _;
 
+// The candela script hosts, compiled in where there is no shared engine to
+// open them beside: every process that runs an app through this library
+// (the `lumenc` binary, a test, an SDK app, `liblumen`'s from-source path)
+// then finds them registered the way the loader finds a compiled-in module.
+// A run from source takes the compiler host, a compiled app the bytecode one.
+// The `dynamic-engine` shape opens both from the modules archive instead,
+// and a compiled-in copy would answer first.
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_candela as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_candela_dev as _;
+
 /// The web halves of the modules an app depends on, found for the target a
 /// build is for.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
@@ -249,16 +261,6 @@ pub fn run_app_headless_rendered(
         with_default_compiler_plugins(with_default_parser(opts))?,
         headless,
     )
-}
-
-/// Minimal-boilerplate entry point: run `dir` with one native Rhai extension,
-/// injecting the compiler's default parser. See [`lumen_runtime::run_with`].
-#[cfg(feature = "dev-run")]
-pub fn run_with<F>(dir: impl Into<std::path::PathBuf>, extend: F) -> Result<(), RunError>
-where
-    F: FnOnce(&mut rhai::Engine) + Send + 'static,
-{
-    run_app(RunOptions::new(dir).with_rhai_extension(extend))
 }
 
 /// True for the `--help` / `-h` spellings every subcommand answers with its

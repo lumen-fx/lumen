@@ -32,8 +32,8 @@ is yours to arrange.
 - `src/main.cdl`, `src/main.rhai`, or `src/main.lua` - the script. Attach it
   with `<script src="main.cdl" />` in the markup; a `src=` path resolves beside
   the markup file. The extension picks the language; `.cdl` is candela, and
-  `.rhai` and `.lua` are the other two hosts. A short script can live inline
-  between `<script>` tags instead.
+  `.rhai` and `.lua` are the deprecated hosts that run only on Linux and
+  macOS. A short script can live inline between `<script>` tags instead.
 - Other `.lmn` files in `src/` are pages. Each one is reachable by its filename
   without the extension, `settings.lmn` is `/settings`, and `index.lmn` is the
   home page. `layout.lmn` is reserved: it contributes a shared template to

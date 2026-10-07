@@ -439,7 +439,8 @@ Three things it refuses to start on, all worth knowing before a release:
   compares the `repository` field of an existing crate against this one.
 - A dependency taken from git with no version. crates.io accepts no such
   dependency, so the crate carrying it, and everything above it, cannot be
-  published. `lumen-script-candela` is in that state until candela publishes.
+  published. `lumen-candela` and `lumen-candela-dev` are in that state until
+  candela publishes.
 
 Each of those exits 2 and takes the crates.io job red with it. A publish that
 starts and then fails partway exits 1, and the crates before the failure are

@@ -301,22 +301,32 @@ pub struct AssetRootsCfg {
 }
 
 /// `[script]` block - an override that forces every script in the app onto one
-/// engine. Without it each script file picks its host from its own extension
-/// (`.cdl` -> candela, `.rhai` -> rhai, `.lua` -> lua) and an app that ships
-/// more than one language runs one host per language. Set `engine` when the
-/// per-file answer is not the one you want, most often because the app keeps
-/// its script inline in the markup, where there is no extension to read.
+/// language. Without it each script file belongs to the language its
+/// extension names, as the installed host modules declare it, and an app that
+/// ships more than one language runs one host per language. Set `engine` when
+/// the per-file answer is not the one you want, most often because the app
+/// keeps its script inline in the markup, where there is no extension to read.
 ///
 /// ```toml
 /// [script]
-/// engine = "lua"   # "candela" (default) | "rhai" | "lua"
+/// engine = "candela"
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScriptCfg {
-    /// Engine name: `"candela"` (default), `"rhai"`, or `"lua"`. Unknown values
-    /// fall back to candela via [`ScriptCfg::engine_kind`].
+    /// The language name, as a host module registers it. A name no module
+    /// registers leaves the app's script unrun, with a banner that says so.
     pub engine: Option<String>,
+}
+
+impl ScriptCfg {
+    /// The `engine` override, trimmed, when one is set.
+    pub fn engine(&self) -> Option<&str> {
+        self.engine
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+    }
 }
 
 /// `[render]` block: which render backend draws the app.
@@ -356,80 +366,6 @@ impl RenderBackendChoice {
             RenderBackendChoice::Auto => None,
             RenderBackendChoice::Gpu => Some("gpu"),
             RenderBackendChoice::Cpu => Some("cpu"),
-        }
-    }
-}
-
-/// One script engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub enum ScriptEngine {
-    /// candela (`lumen-script-candela`), the default Lumen language.
-    #[default]
-    Candela,
-    /// Lua 5.4 (`lumen-script-lua`).
-    Lua,
-    /// Rhai (`lumen-script-rhai`) - compat host.
-    Rhai,
-}
-
-impl ScriptEngine {
-    /// Every engine, in the fixed order active hosts are built and their
-    /// systems registered. Declaration order is the ordering key, so a
-    /// two-language app wires its hosts the same way on every run.
-    pub const ALL: [ScriptEngine; 3] =
-        [ScriptEngine::Candela, ScriptEngine::Lua, ScriptEngine::Rhai];
-
-    /// The engine that owns a script file with this extension, or `None` for an
-    /// extension no host claims.
-    pub fn from_extension(ext: &str) -> Option<ScriptEngine> {
-        match ext {
-            "cdl" => Some(ScriptEngine::Candela),
-            "lua" => Some(ScriptEngine::Lua),
-            "rhai" => Some(ScriptEngine::Rhai),
-            _ => None,
-        }
-    }
-
-    /// The engine that owns a script path, read from its file extension.
-    pub fn from_path(path: &Path) -> Option<ScriptEngine> {
-        path.extension()
-            .and_then(|e| e.to_str())
-            .and_then(ScriptEngine::from_extension)
-    }
-
-    /// The engine an engine name selects, defaulting to
-    /// [`ScriptEngine::Candela`] for a name no host claims. The inverse of
-    /// [`Self::name`], with the same fallback [`ScriptCfg::engine_kind`] uses.
-    pub fn from_name(name: &str) -> ScriptEngine {
-        let name = name.trim();
-        if name.eq_ignore_ascii_case("lua") {
-            ScriptEngine::Lua
-        } else if name.eq_ignore_ascii_case("rhai") {
-            ScriptEngine::Rhai
-        } else {
-            ScriptEngine::Candela
-        }
-    }
-
-    /// The `[script] engine` name for this engine.
-    pub fn name(self) -> &'static str {
-        match self {
-            ScriptEngine::Candela => "candela",
-            ScriptEngine::Lua => "lua",
-            ScriptEngine::Rhai => "rhai",
-        }
-    }
-}
-
-impl ScriptCfg {
-    /// Resolve the declared engine name, defaulting to
-    /// [`ScriptEngine::Candela`] when absent or unrecognised
-    /// (case-insensitive match on `candela` / `rhai` / `lua`).
-    pub fn engine_kind(&self) -> ScriptEngine {
-        match self.engine.as_deref().map(str::trim) {
-            Some(e) if e.eq_ignore_ascii_case("lua") => ScriptEngine::Lua,
-            Some(e) if e.eq_ignore_ascii_case("rhai") => ScriptEngine::Rhai,
-            _ => ScriptEngine::Candela,
         }
     }
 }
@@ -536,13 +472,11 @@ pub struct BundleCapabilities {
     pub async_rt: bool,
     /// Scripts' HTTP `fetch()` builtin present.
     pub http_fetch: bool,
-    /// Runtime-module loader present. Follows `[dependencies]`: any declared
-    /// module keeps it, because a build without the loader would drop the
+    /// Runtime-module loader present. Follows `[dependencies]` and the app's
+    /// scripts: any declared module keeps it, and so does a script, since the
+    /// host that runs it is a module. A build without the loader would drop the
     /// modules in silence rather than with the load banner.
     pub modules: bool,
-    /// The script hosts compiled into the bundle, one per language the app
-    /// ships, in [`ScriptEngine::ALL`] order.
-    pub hosts: Vec<ScriptEngine>,
 }
 
 impl BundleCapabilities {
@@ -572,28 +506,27 @@ impl BundleCapabilities {
 
         // Modules: any declared `[dependencies]` entry keeps the loader in,
         // so a missing module banners at startup instead of vanishing. A
-        // bundle is a desktop build, so its own target table counts too.
-        let modules = !cfg
-            .dependencies_for(lumen_modules::Target::Desktop)
-            .0
-            .is_empty();
-
-        let hosts = infer_script_hosts(dir, cfg);
+        // bundle is a desktop build, so its own target table counts too. A
+        // script keeps it as well: the host that runs one is a module, even
+        // when the bundle compiles it in.
+        let modules = hay.contains("<script")
+            || !cfg
+                .dependencies_for(lumen_modules::Target::Desktop)
+                .0
+                .is_empty();
 
         Self {
             mcp,
             async_rt,
             http_fetch,
             modules,
-            hosts,
         }
     }
 
     /// The cargo `--features` list to compile the trimmed runtime seam with,
     /// passed after `--no-default-features`. `runtime-parse` is intentionally
     /// omitted: a `--bundle` runs from a precompiled AOT artifact, so the
-    /// source parser is dropped too. Every script host contributes its own
-    /// feature, so a bundle links only the languages the app ships.
+    /// source parser is dropped too.
     pub fn to_features(&self) -> Vec<String> {
         let mut f: Vec<String> = Vec::new();
         if self.mcp {
@@ -608,49 +541,8 @@ impl BundleCapabilities {
         if self.modules {
             f.push("modules".into());
         }
-        for host in &self.hosts {
-            match host {
-                ScriptEngine::Rhai => f.push("host-rhai".into()),
-                ScriptEngine::Lua => f.push("host-lua".into()),
-                ScriptEngine::Candela => f.push("host-candela".into()),
-            }
-        }
         f
     }
-}
-
-/// The script engines the app rooted at `dir` needs, in [`ScriptEngine::ALL`]
-/// order.
-///
-/// `[script] engine` forces the answer to that one engine. Otherwise every
-/// script file in the app's `src/` contributes its extension's engine (`.cdl`
-/// -> candela, `.lua` -> Lua, `.rhai` -> Rhai), so an app holding two
-/// languages comes back with two engines. An app with no script at all comes
-/// back with candela, the language an inline `<script>` block is read as.
-///
-/// This is the directory-scan answer, used before the markup is parsed: by
-/// `lumenc build` to pick which hosts to compile into a bundle, and by the
-/// startup subsystem gate. Once the markup is available, the authoritative
-/// grouping comes from the `<script src>` set the app references.
-pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
-    if cfg.script.engine.is_some() {
-        return vec![cfg.script.engine_kind()];
-    }
-    let mut found: Vec<ScriptEngine> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(crate::app_layout::src_dir(dir)) {
-        for entry in rd.flatten().take(512) {
-            if let Some(engine) = ScriptEngine::from_path(&entry.path())
-                && !found.contains(&engine)
-            {
-                found.push(engine);
-            }
-        }
-    }
-    if found.is_empty() {
-        return vec![ScriptEngine::default()];
-    }
-    found.sort();
-    found
 }
 
 /// `[web]` block - how `lumenc web` emits the app as a static site.
@@ -1431,28 +1323,13 @@ mod tests {
     }
 
     #[test]
-    fn script_engine_selection() {
-        // Absent -> candela default.
+    fn the_script_engine_key_is_a_free_language_name() {
         let cfg: LumenToml = toml::from_str("").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
-
-        // Explicit lua.
-        let cfg: LumenToml = toml::from_str("[script]\nengine = \"lua\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Lua);
-
-        // Explicit candela (case-insensitive).
-        let cfg: LumenToml = toml::from_str("[script]\nengine = \"candela\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
-        let cfg: LumenToml = toml::from_str("[script]\nengine = \"CANDELA\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
-
-        // Case-insensitive; explicit rhai.
-        let cfg: LumenToml = toml::from_str("[script]\nengine = \"RHAI\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Rhai);
-
-        // Unknown -> falls back to candela.
-        let cfg: LumenToml = toml::from_str("[script]\nengine = \"python\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
+        assert_eq!(cfg.script.engine(), None);
+        let cfg: LumenToml = toml::from_str("[script]\nengine = \" candela \"\n").unwrap();
+        assert_eq!(cfg.script.engine(), Some("candela"));
+        let cfg: LumenToml = toml::from_str("[script]\nengine = \"prolog\"\n").unwrap();
+        assert_eq!(cfg.script.engine(), Some("prolog"));
     }
 
     #[test]
@@ -1469,9 +1346,8 @@ mod tests {
         let src = dir.join("src");
         std::fs::create_dir_all(&src).unwrap();
 
-        // Bare UI app: http-fetch inferred OFF; mcp/async default OFF;
-        // candela host (the default when no script file names a language), so
-        // the feature list carries only that host.
+        // Bare UI app: http-fetch inferred OFF; mcp/async default OFF; no
+        // script and no dependency, so no module loader either.
         std::fs::write(
             src.join("main.lmn"),
             "<root><button id=\"inc\">+</button></root>",
@@ -1479,14 +1355,21 @@ mod tests {
         .unwrap();
         let cfg = LumenToml::default();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
-        assert!(!caps.http_fetch && !caps.mcp && !caps.async_rt);
-        assert_eq!(caps.hosts, vec![ScriptEngine::Candela]);
-        assert_eq!(caps.to_features(), vec!["host-candela".to_string()]);
+        assert!(!caps.http_fetch && !caps.mcp && !caps.async_rt && !caps.modules);
+        assert!(caps.to_features().is_empty());
+
+        // A script keeps the loader: its host is a module.
+        std::fs::write(
+            src.join("main.lmn"),
+            "<root><button id=\"inc\">+</button><script src=\"app.cdl\"/></root>",
+        )
+        .unwrap();
+        assert!(BundleCapabilities::resolve(&dir, &cfg).modules);
 
         // A fetch marker flips inference ON.
         std::fs::write(
-            src.join("app.rhai"),
-            "fn f(){ fetch(\"http://h\", \"t\"); }",
+            src.join("app.cdl"),
+            "fn f() { lumen::fetch(\"http://h\", \"t\"); }",
         )
         .unwrap();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
@@ -1501,7 +1384,11 @@ mod tests {
 
         // A file-dialog builtin keeps the async runtime in the bundle: on
         // macOS it is the only path that opens a dialog at all.
-        std::fs::write(src.join("dialogs.rhai"), "fn f(){ pick_file(\"import\"); }").unwrap();
+        std::fs::write(
+            src.join("dialogs.cdl"),
+            "fn f() { lumen::pick_file(\"import\"); }",
+        )
+        .unwrap();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
         assert!(caps.async_rt);
         assert!(caps.to_features().contains(&"async".to_string()));
@@ -1510,24 +1397,7 @@ mod tests {
         let mut cfg_no_async = LumenToml::default();
         cfg_no_async.capabilities.set("async", false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg_no_async).async_rt);
-        std::fs::remove_file(src.join("dialogs.rhai")).unwrap();
-
-        // A .lua file alongside the .rhai one needs both hosts compiled in,
-        // and each host names its own feature.
-        std::fs::write(src.join("logic.lua"), "-- lua").unwrap();
-        let caps = BundleCapabilities::resolve(&dir, &LumenToml::default());
-        assert_eq!(caps.hosts, vec![ScriptEngine::Lua, ScriptEngine::Rhai]);
-        let feats = caps.to_features();
-        assert!(feats.contains(&"host-lua".to_string()));
-        assert!(feats.contains(&"host-rhai".to_string()));
-
-        // Explicit [script] engine collapses the app onto one host.
-        let mut cfg3 = LumenToml::default();
-        cfg3.script.engine = Some("candela".into());
-        assert_eq!(
-            BundleCapabilities::resolve(&dir, &cfg3).hosts,
-            vec![ScriptEngine::Candela]
-        );
+        std::fs::remove_file(src.join("dialogs.cdl")).unwrap();
 
         let _ = std::fs::remove_dir_all(&dir);
     }

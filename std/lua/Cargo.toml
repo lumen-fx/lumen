@@ -1,0 +1,48 @@
+# The Lua script host, as a runtime module. Deprecated: candela is the
+# supported language, and this host gets no new builtins. An app keeps running
+# a `.lua` script by having the module beside the engine, which is where the
+# Linux and macOS modules archive installs it.
+[package]
+name = "lumen-lua"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's Lua 5.4 script host, as a runtime module. Deprecated in favour of candela."
+keywords = ["ui", "gui", "scripting", "lua", "mlua"]
+categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[package.metadata.lumen]
+# Where this module is compiled in: nowhere. It ships only as an openable
+# module in the Linux and macOS modules archive; not in the dev `lumenc`, the
+# static launcher, or a link kit. See .github/scripts/first-party-modules.sh.
+link = "none"
+
+[lib]
+name = "lumen_lua"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lumen-module = { workspace = true }
+lumen-scene = { workspace = true }
+# `json` and `markdown` pull in the shared `parse_json` / `parse_markdown`
+# walk (and, with it, serde_json / pulldown-cmark) through the builtin table.
+lumen-script = { workspace = true, features = ["json", "markdown"] }
+lumen-core = { workspace = true }
+bevy_ecs.workspace = true
+# Lua 5.4, statically vendored, Send+Sync (see workspace dep comment).
+mlua.workspace = true
+# Non-poisoning, smaller-sizeof Mutex; matches the Rhai host's choice so
+# the two hosts stay behaviourally aligned. Already in the dep graph.
+parking_lot = "0.12"
+tracing.workspace = true
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`.
+engine-dylib = ["lumen-module/engine-dylib"]

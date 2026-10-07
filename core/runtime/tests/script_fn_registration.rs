@@ -2,20 +2,23 @@
 //!
 //! The channel a plugin registers through is open for exactly as long as it
 //! takes the script hosts to bind: `ScriptPlugin::build` drains the registry,
-//! hands each host what it may see, and seals it. A plugin installed through
+//! binds every function into each host, and seals it. A plugin installed through
 //! `RunOptions::with_plugin` runs inside that window. Anything that registers
 //! afterwards has nothing left to bind to, and these pin the outcome rather
 //! than leaving it to be discovered as a function a script cannot call.
 
 use std::sync::{Arc, Mutex};
 
+// The candela host, compiled in: the module registry answers the program's
+// implied host dependency from it.
+use lumen_candela_dev as _;
 use lumen_core::app::{App as EcsApp, Plugin};
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::{
-    ScriptCommand, ScriptFn, ScriptFnAppExt, ScriptFnRegistry, ScriptHost, ScriptNs, ScriptValue,
+    ScriptCommand, ScriptFn, ScriptFnAppExt, ScriptFnRegistry, ScriptNs, ScriptValue,
 };
 
 /// Nav, the DOM snapshot and the property store are process-global, so the
@@ -50,13 +53,9 @@ impl Plugin for MarkPlugin {
     }
 }
 
-/// Build a headless app from `source` in `engine`, with `plugins` installed in
-/// order.
-fn app_with(
-    engine: &str,
-    source: &str,
-    plugins: Vec<Box<dyn FnOnce(RunOptions) -> RunOptions>>,
-) -> EcsApp {
+/// Build a headless app running `source` as its candela program, with
+/// `plugins` installed in order.
+fn app_with(source: &str, plugins: Vec<Box<dyn FnOnce(RunOptions) -> RunOptions>>) -> EcsApp {
     let dir = std::env::temp_dir().join(format!(
         "lumen_script_fn_registration_{}_{}",
         std::process::id(),
@@ -74,9 +73,9 @@ fn app_with(
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
         scripts: vec![CompiledScript {
-            engine: engine.to_string(),
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
         }],
@@ -108,56 +107,47 @@ fn signal(app: &EcsApp, name: &str) -> Option<String> {
     }
 }
 
-/// The call each language writes to reach `probe::mark`.
-fn call_source(engine: &str) -> &'static str {
-    match engine {
-        "rhai" => "fn on_start() { probe::mark(); }",
-        "lua" => "function on_start() probe.mark() end",
-        _ => "fn on_start() { let m = probe::mark(); }\nfn main() {}\n",
-    }
-}
+/// A program that reaches `probe::mark` from `on_start`.
+const CALL_SOURCE: &str = "fn on_start() { let m = probe::mark(); }\nfn main() {}\n";
 
 /// Two plugins wanting the same namespace and name: the later one is bound.
 ///
-/// Every engine behind a host does this with a repeated registration, so the
-/// registry keeps the order and lets it stand rather than refusing the second
-/// plugin or leaving which one wins to the host.
+/// The registry keeps the order and lets the repeated registration stand
+/// rather than refusing the second plugin or leaving which one wins to the
+/// host.
 #[test]
 fn the_later_of_two_plugins_registering_one_name_is_the_one_bound() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for engine in ["rhai", "lua", "candela"] {
-        let calls: Calls = Arc::default();
-        let (first, second) = (calls.clone(), calls.clone());
-        let app = app_with(
-            engine,
-            call_source(engine),
-            vec![
-                Box::new(move |o: RunOptions| {
-                    o.with_plugin(MarkPlugin {
-                        tag: "first",
-                        calls: first,
-                    })
-                }),
-                Box::new(move |o: RunOptions| {
-                    o.with_plugin(MarkPlugin {
-                        tag: "second",
-                        calls: second,
-                    })
-                }),
-            ],
-        );
+    let calls: Calls = Arc::default();
+    let (first, second) = (calls.clone(), calls.clone());
+    let app = app_with(
+        CALL_SOURCE,
+        vec![
+            Box::new(move |o: RunOptions| {
+                o.with_plugin(MarkPlugin {
+                    tag: "first",
+                    calls: first,
+                })
+            }),
+            Box::new(move |o: RunOptions| {
+                o.with_plugin(MarkPlugin {
+                    tag: "second",
+                    calls: second,
+                })
+            }),
+        ],
+    );
 
-        assert_eq!(
-            signal(&app, "mark").as_deref(),
-            Some("second"),
-            "{engine}: the second registration is the one the script reached"
-        );
-        assert_eq!(
-            calls.lock().unwrap().as_slice(),
-            ["second".to_owned()],
-            "{engine}: the shadowed body did not also run"
-        );
-    }
+    assert_eq!(
+        signal(&app, "mark").as_deref(),
+        Some("second"),
+        "the second registration is the one the script reached"
+    );
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        ["second".to_owned()],
+        "the shadowed body did not also run"
+    );
 }
 
 /// A registration made after the hosts have bound is refused.
@@ -170,8 +160,7 @@ fn a_registration_after_the_hosts_have_bound_changes_nothing() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let calls: Calls = Arc::default();
     let mut app = app_with(
-        "rhai",
-        call_source("rhai"),
+        CALL_SOURCE,
         vec![Box::new({
             let calls = calls.clone();
             move |o: RunOptions| {
@@ -202,13 +191,24 @@ fn a_registration_after_the_hosts_have_bound_changes_nothing() {
     );
 
     // The host bound what the registry held at seal time, and nothing since.
-    // Rhai resolves a call when it runs it, so the miss shows at the call.
-    let mut host = app.world.resource_mut::<lumen_script_rhai::RhaiHost>();
-    host.replace("fn probe_late() { late(); }", "late.rhai")
-        .expect("the source compiles; the name is only unresolved at the call");
+    // candela resolves a call when it compiles the program, so the miss shows
+    // as a compile error naming the call.
+    let reload = app
+        .world
+        .resource::<lumen_script::ScriptLanguages>()
+        .get("candela")
+        .and_then(|candela| candela.reload)
+        .expect("the candela source host reloads");
+    let err = reload(
+        &mut app.world,
+        "fn probe_late() { native::late(); }\nfn main() {}\n",
+        "reload.cdl",
+    )
+    .expect("the host is installed")
+    .expect_err("the late function is not callable");
     assert!(
-        host.call("probe_late", &[]).is_err(),
-        "the late function is not callable"
+        err.to_string().contains("late"),
+        "the error names the unbound call: {err}"
     );
     assert_eq!(calls.lock().unwrap().as_slice(), ["installed".to_owned()]);
 }
@@ -235,7 +235,6 @@ fn a_registration_no_host_can_bind_leaves_the_script_running() {
     }
 
     let app = app_with(
-        "candela",
         "import \"lumen.cdl\";\n\
          fn on_start() { lumen::signal_set(\"alive\", \"yes\"); }\n\
          fn main() {}\n",

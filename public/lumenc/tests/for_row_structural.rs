@@ -18,18 +18,17 @@ const MARKUP: &str = r#"<root id="app">
       <tile class="row" id="r-{row.id}" />
     </for>
   </column>
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "#;
 
-const SCRIPT: &str = r#"
+const SCRIPT: &str = r#"import "lumen.cdl";
+
 fn on_start() {
-  let list = [];
-  let a = #{}; a.id = "a"; list.push(a);
-  let b = #{}; b.id = "b"; list.push(b);
-  let c = #{}; c.id = "c"; list.push(c);
-  signal_array("rows").set(list);
+    lumen::signal_array_set("rows", [{"id": "a"}, {"id": "b"}, {"id": "c"}]);
 }
+
+fn main() {}
 "#;
 
 const CSS: &str = r#"
@@ -57,13 +56,9 @@ fn nth_child_stripes_a_for_list() {
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("main.lmn"), MARKUP).unwrap();
     std::fs::write(src.join("main.css"), CSS).unwrap();
-    std::fs::write(src.join("main.rhai"), SCRIPT).unwrap();
+    std::fs::write(src.join("main.cdl"), SCRIPT).unwrap();
     // Port 0 keeps parallel test binaries off a shared socket.
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
     let opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");

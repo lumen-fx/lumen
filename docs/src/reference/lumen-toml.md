@@ -91,15 +91,18 @@ setting per-tag sizing floors applies to every app either way.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `engine` | `"candela"`, `"rhai"`, `"lua"` | per file | Forces every script in the app onto one host. Matched case-insensitively; an unrecognised value falls back to candela. |
+| `engine` | language name: `"candela"`, or a deprecated `"rhai"` / `"lua"` | per file | Forces every script in the app onto one language. A name no installed host module runs leaves the app's script unrun, with a banner that says so. |
 
-With the key absent, each script file picks its host from its own extension: a
-`.cdl` file runs under candela, a `.lua` file under Lua, a `.rhai` file under
-Rhai. An app holding more than one language runs one host per language. An
-inline `<script>` block has no extension to read; it joins the app's one
-external language when there is exactly one, and candela otherwise. Set
-`engine` when that is not the host you want, most often for an inline script
-written in something other than candela.
+With the key absent, each script file belongs to the language its extension
+names: a `.cdl` file to candela, and on Linux and macOS a `.lua` file to Lua and
+a `.rhai` file to Rhai. An app holding more than one language runs one host per
+language. An inline `<script>` block has no extension to read; it joins the
+app's one external language when there is exactly one, and candela otherwise.
+Set `engine` when that is not the language you want, most often for an inline
+script written in something other than candela.
+
+The host that runs each language is a runtime module the toolchain ships, and
+Lumen loads it for you: it is never listed under `[dependencies]`.
 
 ## [render]
 
@@ -236,15 +239,17 @@ its builtins prints a warning when the app runs.
 `bundle --static` maps the names it knows (`http-fetch`, `async`, `mcp`) to
 the features it compiles with and ignores the rest.
 
-The script host is selected by `[script] engine` or inferred from the app's
-script files, not here.
+The script host is a runtime module chosen by `[script] engine` or the app's
+script files, not here. A package carries the host its compiled program runs
+on: beside the engine on Linux and macOS, linked in on Windows and under
+`--static`.
 
 ## [web]
 
 What `lumenc web` needs that only a site has. The rest of the file still
 describes the app: `[window] title` is the documents' title, `[app]` gives the
 entry file and the locale, `[pages]` the page set, `[asset_roots]` where an
-asset comes from, and `[script] engine` which engine runs the app's code.
+asset comes from, and `[script] engine` which language the app's code is in.
 
 `[capabilities]` does not apply. A site loads one prebuilt runtime that ships
 with the toolchain, so there is nothing per-app to compile or trim.

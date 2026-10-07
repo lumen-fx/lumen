@@ -2,7 +2,7 @@
 //! signature help for `.rhai` buffers.
 //!
 //! Diagnostics come from compiling the buffer with a real
-//! [`lumen_script_rhai::RhaiHost`] engine - the same engine the runtime
+//! [`lumen_rhai::RhaiHost`] engine - the same engine the runtime
 //! uses, with every Lumen builtin registered - so calls to `signal`,
 //! `derive`, `on`, timers, etc. never surface as "unknown function"
 //! errors. Optimization is disabled before compiling so constant-folding
@@ -10,10 +10,10 @@
 //! effect of analysis; only genuine syntax/parse errors are reported.
 //!
 //! Completion, hover, and signature help are driven by
-//! [`lumen_script_rhai::builtins::BUILTINS`], the shared signature table.
+//! [`lumen_rhai::builtins::BUILTINS`], the shared signature table.
 
-use lumen_script_rhai::RhaiHost;
-use lumen_script_rhai::builtins::{self, BuiltinFn};
+use lumen_rhai::RhaiHost;
+use lumen_rhai::builtins::{self, BuiltinFn};
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, Documentation,
     InsertTextFormat, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,

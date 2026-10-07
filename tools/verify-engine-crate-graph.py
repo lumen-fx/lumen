@@ -95,12 +95,12 @@ so a leftover file from a previous local run can never bias this one;
 nothing this script does leaves a file behind for git to notice, and root's
 own `Cargo.lock` is read, never written.
 
-`lumen-script-candela` depends on `candela-lang` and `candela-vm` at one
-pinned `candela` commit, named in `core/script/candela/Cargo.toml`, so a
-push to that repository moves neither side until the pin does. Both sides
-read the same pin, and moving it is an ordinary edit here: the new `rev`
-and `version` on both dependency lines, then `cargo update -p candela-lang
--p candela-vm`.
+The candela hosts depend on `candela-lang` and `candela-vm` at one pinned
+`candela` tag, named in `std/candela/host/Cargo.toml` and
+`std/candela-dev/host/Cargo.toml`, so a push to that repository moves neither
+side until the pin does. Both sides read the same pin, and moving it is an
+ordinary edit here: the new `tag` and `version` on each dependency line, then
+`cargo update -p candela-lang -p candela-vm`.
 
 For every package name common to both sides, this compares the resolved
 version set and, for versions in common, the resolved feature set (`default`

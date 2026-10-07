@@ -101,6 +101,7 @@ fn app_with(program: &[u8]) -> CompiledApp {
         }),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(program.to_vec()),
         }],
@@ -581,6 +582,7 @@ fn app_with_a_component() -> CompiledApp {
         fragments: table,
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(COMPONENTS.to_vec()),
         }],
@@ -838,6 +840,7 @@ fn translating() -> Arc<SsrSite> {
         },
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(TRANSLATES.to_vec()),
         }],
@@ -919,6 +922,7 @@ fn formatting() -> Arc<SsrSite> {
         },
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(FORMATS.to_vec()),
         }],

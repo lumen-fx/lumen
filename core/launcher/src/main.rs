@@ -34,6 +34,8 @@ use lumen_audio as _;
 #[cfg(feature = "static-run")]
 use lumen_browser as _;
 #[cfg(feature = "static-run")]
+use lumen_candela as _;
+#[cfg(feature = "static-run")]
 use lumen_canvas as _;
 #[cfg(feature = "static-run")]
 use lumen_cookie as _;

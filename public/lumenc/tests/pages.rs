@@ -234,11 +234,7 @@ fn auto_scratch_dir() -> PathBuf {
     }));
     std::fs::create_dir_all(dir.join("src")).unwrap();
     // No `[pages]` block: routing is entirely default-driven.
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     std::fs::write(
         dir.join("src").join("layout.lmn"),
         r#"<root>
@@ -353,11 +349,7 @@ fn artifact_scratch_dir() -> PathBuf {
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
     std::fs::create_dir_all(dir.join("src")).unwrap();
-    std::fs::write(
-        dir.join("lumen.toml"),
-        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     std::fs::write(
         dir.join("src").join("layout.lmn"),
         r#"<root>
@@ -381,9 +373,11 @@ fn artifact_scratch_dir() -> PathBuf {
     <button id="go" text="Open settings"/>
   </use>
   <script>
-fn on_click(id) {
-    if id == "go" { page("settings"); }
+import "lumen.cdl";
+fn on_click(id: string) {
+    if id == "go" { lumen::page("settings"); }
 }
+fn main() {}
   </script>
 </root>"#,
     )
@@ -524,190 +518,51 @@ fn a_single_page_app_compiles_without_a_page_set() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `page_current()` reads the active page key, on every host and under the
-/// same name. The no-argument reader is spelled apart from `page(path)`
-/// because a candela host function takes one arity per name; rhai and lua get
-/// the same spelling as a runtime extension beside their `page` overloads.
+/// `page_current()` reads the active page key. The no-argument reader is
+/// spelled apart from `page(path)` because a candela host function takes one
+/// arity per name.
 ///
-/// Each app writes what it read into the `seen` signal, which a label binds,
+/// The app writes what it read into the `seen` signal, which a label binds,
 /// so the value travels the same path a real app's would.
 #[test]
-fn page_current_reads_the_active_page_on_every_host() {
-    let scripts = [
-        (
-            "rhai",
-            "main.rhai",
-            "fn on_ready() { signal(\"seen\", \"\").set(page_current()); }".to_string(),
-        ),
-        (
-            "lua",
-            "main.lua",
-            "function on_ready() signal(\"seen\", \"\"):set(page_current()) end".to_string(),
-        ),
-        (
-            "candela",
-            "main.cdl",
-            "import \"lumen.cdl\";\n\
-             fn on_ready() { let key = lumen::page_current(); \
-             lumen::signal_set(\"seen\", key); }\n\
-             fn main() {}\n"
-                .to_string(),
-        ),
-    ];
+fn page_current_reads_the_active_page() {
+    let _guard = nav_test_guard();
+    let dir = std::env::temp_dir().join(format!("lumen_page_current_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        dir.join("src").join("index.lmn"),
+        "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
+         <script src=\"main.cdl\"/>\n</root>",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src").join("settings.lmn"),
+        "<root><label text=\"S\"/></root>",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src").join("main.cdl"),
+        "import \"lumen.cdl\";\n\
+         fn on_ready() { let key = lumen::page_current(); \
+         lumen::signal_set(\"seen\", key); }\n\
+         fn main() {}\n",
+    )
+    .unwrap();
 
-    for (engine, script_name, script) in scripts {
-        let _guard = nav_test_guard();
-        let dir = std::env::temp_dir().join(format!(
-            "lumen_page_current_{engine}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-        std::fs::write(
-            dir.join("src").join("index.lmn"),
-            format!(
-                "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
-                 <script src=\"{script_name}\"/>\n</root>"
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src").join("settings.lmn"),
-            "<root><label text=\"S\"/></root>",
-        )
-        .unwrap();
-        std::fs::write(dir.join("src").join(script_name), script).unwrap();
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 6);
 
-        let mut opts = RunOptions::new(&dir);
-        opts.hot_reload = false;
-        let (mut app, _window) =
-            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
-        tick_n(&mut app, 6);
+    assert_eq!(
+        route_signal(&mut app, "seen"),
+        "index",
+        "page_current() should read the active page key"
+    );
 
-        assert_eq!(
-            route_signal(&mut app, "seen"),
-            "index",
-            "{engine}: page_current() should read the active page key"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-/// `page_back()` reports whether the step reached the navigation bus, so a
-/// script can branch on it. Rhai and Lua see a boolean; candela's prelude
-/// entry returns nothing, which its reference page states.
-#[test]
-fn page_back_returns_whether_the_step_was_queued() {
-    let scripts = [
-        (
-            "rhai",
-            "main.rhai",
-            "fn on_ready() { signal(\"went\", \"\").set(if page_back() { \"yes\" } else { \"no\" }); }",
-        ),
-        (
-            "lua",
-            "main.lua",
-            "function on_ready() signal(\"went\", \"\"):set(page_back() and \"yes\" or \"no\") end",
-        ),
-    ];
-
-    for (engine, script_name, script) in scripts {
-        let _guard = nav_test_guard();
-        let dir =
-            std::env::temp_dir().join(format!("lumen_page_back_{engine}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-        std::fs::write(
-            dir.join("src").join("index.lmn"),
-            format!(
-                "<root>\n  <label id=\"went\" bind-text=\"went\" text=\"(none)\"/>\n  \
-                 <script src=\"{script_name}\"/>\n</root>"
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src").join("settings.lmn"),
-            "<root><label text=\"S\"/></root>",
-        )
-        .unwrap();
-        std::fs::write(dir.join("src").join(script_name), script).unwrap();
-
-        let mut opts = RunOptions::new(&dir);
-        opts.hot_reload = false;
-        let (mut app, _winit) =
-            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
-        tick_n(&mut app, 6);
-
-        assert_eq!(
-            route_signal(&mut app, "went"),
-            "yes",
-            "{engine}: page_back() should hand the script a boolean"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-/// The no-argument `page()` reader resolves as its own call, beside the
-/// one-argument `page(path)` that navigates. Both are registered over a single
-/// body and told apart by how many arguments arrive, so this checks the host
-/// actually dispatches the empty call rather than falling through to the
-/// navigating one. candela is absent because a candela host function takes one
-/// arity per name; `page_current()` is its spelling, covered above.
-#[test]
-fn page_with_no_arguments_reads_the_active_page() {
-    let scripts = [
-        (
-            "rhai",
-            "main.rhai",
-            "fn on_ready() { signal(\"seen\", \"\").set(page()); }",
-        ),
-        (
-            "lua",
-            "main.lua",
-            "function on_ready() signal(\"seen\", \"\"):set(page()) end",
-        ),
-    ];
-
-    for (engine, script_name, script) in scripts {
-        let _guard = nav_test_guard();
-        let dir =
-            std::env::temp_dir().join(format!("lumen_page_noarg_{engine}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-        std::fs::write(
-            dir.join("src").join("index.lmn"),
-            format!(
-                "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
-                 <script src=\"{script_name}\"/>\n</root>"
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src").join("settings.lmn"),
-            "<root><label text=\"S\"/></root>",
-        )
-        .unwrap();
-        std::fs::write(dir.join("src").join(script_name), script).unwrap();
-
-        let mut opts = RunOptions::new(&dir);
-        opts.hot_reload = false;
-        let (mut app, _winit) =
-            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
-        tick_n(&mut app, 6);
-
-        assert_eq!(
-            route_signal(&mut app, "seen"),
-            "index",
-            "{engine}: page() with no argument should read the active page key"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The fragment table is app-wide, not per-file: a `<template>` declared in

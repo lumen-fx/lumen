@@ -43,6 +43,8 @@ engine-dylib = ["lumen-module/engine-dylib"]
 # Tests only: the compiled-in-shape test builds a headless app around the
 # plugin, with the engine's HTTP client, against a server in the test.
 [dev-dependencies]
+# The candela host the tests' scripts run on, compiled into the test binary.
+lumen-candela-dev = { workspace = true }
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }

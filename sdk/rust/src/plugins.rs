@@ -3,8 +3,8 @@
 //!
 //! [`LumenDefaultPlugins`] is the whole batteries-included stack - markup
 //! loading, taffy layout, the winit window, cosmic text, input, the hover /
-//! press / drag / scroll primitives, asset loading, the optional Rhai script
-//! host, and the MCP introspection server. It carries the app's markup / CSS /
+//! press / drag / scroll primitives, asset loading, the script host for the
+//! app's `<script>`, and the MCP introspection server. It carries the app's markup / CSS /
 //! window configuration and is the value passed to [`App::add_plugins`]:
 //!
 //! ```no_run
@@ -248,7 +248,7 @@ pub enum LumenPluginId {
     Primitives,
     /// Image + font asset loading.
     Assets,
-    /// The Rhai script host for inline / external `<script>`.
+    /// The script hosts for inline / external `<script>`.
     Script,
     /// The MCP introspection server.
     Mcp,
@@ -286,7 +286,7 @@ constituent!(/// Interaction-primitives slice of the default stack.
     PrimitivesPlugin => Primitives);
 constituent!(/// Asset-loading slice of the default stack.
     AssetsPlugin => Assets);
-constituent!(/// Rhai script-host slice of the default stack.
+constituent!(/// Script-host slice of the default stack.
     ScriptPlugin => Script);
 constituent!(/// MCP introspection-server slice of the default stack.
     McpPlugin => Mcp);
@@ -646,7 +646,7 @@ impl LumenPluginsBuilder {
     ///   loop (no window, no GPU); pair with
     ///   [`App::run_headless`](crate::App::run_headless).
     /// * [`ScriptPlugin`] - strips `<script>` blocks from the markup so the
-    ///   Rhai host is never installed (a pure-Rust app).
+    ///   script host is never installed (a pure-Rust app).
     ///
     /// The remaining backend markers ([`LayoutPlugin`], [`InputPlugin`],
     /// [`PrimitivesPlugin`], [`AssetsPlugin`], [`TextPlugin`], [`McpPlugin`])

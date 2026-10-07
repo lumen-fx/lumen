@@ -101,6 +101,8 @@ async fn start(manifest_url: Option<String>, addons: &JsValue) -> Result<(), Boo
     app.world.insert_non_send(foreign);
     // The host goes in before the scene: `on_start` publishes the signals the
     // markup binds to, and the spawner seeds only what nothing has written.
+    // A page cannot open a library, so the host module's plugin goes in here.
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     for script in &loaded.scripts {
         hosts::install(&mut app, &script.engine, &script.bytes, &script.uri)
             .map_err(|e| BootError::Engine(e.to_string()))?;

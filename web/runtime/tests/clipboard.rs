@@ -11,7 +11,7 @@
 //! cargo test -p lumen-web-runtime --target wasm32-unknown-unknown
 //! ```
 
-#![cfg(all(target_arch = "wasm32", feature = "host-candela"))]
+#![cfg(target_arch = "wasm32")]
 
 use js_sys::{Function, Reflect};
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
@@ -51,11 +51,13 @@ async fn a_script_writes_and_reads_the_page_clipboard() {
     stand_in_for_the_clipboard();
 
     let mut app = assemble::portable_app();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     let host = hosts::install(&mut app, "candela", CLIPBOARD, "clipboard.cdlb")
         .expect("this build carries the candela host");
     let compiled = CompiledApp {
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(CLIPBOARD.to_vec()),
         }],
@@ -104,11 +106,13 @@ async fn a_read_the_browser_answers_or_refuses_still_reaches_on_clipboard() {
     }
 
     let mut app = assemble::portable_app();
+    app.add_plugin(lumen_candela_host::CandelaPlugin);
     let host = hosts::install(&mut app, "candela", CLIPBOARD, "clipboard.cdlb")
         .expect("this build carries the candela host");
     CompiledApp {
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
+            module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(CLIPBOARD.to_vec()),
         }],

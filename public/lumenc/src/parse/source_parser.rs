@@ -85,8 +85,13 @@ impl lumen_runtime::SourceParser for LumencParser {
             .map_err(|e| e.to_string())
     }
 
-    fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String> {
-        crate::parse::lmn::script_fragments(src, uri)
+    fn block_fragments(
+        &self,
+        src: &str,
+        uri: &str,
+        blocks: Vec<lumen_script::MarkupBlock>,
+    ) -> Result<FragmentTable, String> {
+        crate::parse::lmn::block_fragments(src, uri, blocks)
     }
 
     fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, String> {
