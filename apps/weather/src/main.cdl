@@ -1,0 +1,213 @@
+// Weather: city search and a 7-day forecast from Open-Meteo.
+//
+// Typing in the search box geocodes the city, then a second request fetches
+// its current weather and daily forecast. The script writes the results
+// straight into the elements by id with set_text / set_src. The daily codes
+// and highs are kept in array signals so a unit switch can re-render the
+// strip without fetching again.
+
+import "lumen.cdl";
+
+// ---------- helpers -------------------------------------------------
+
+fn wmo_to_kind(code: int) {
+    if code <= 1 { return "sun"; }
+    if code <= 3 { return "cloud"; }
+    if code >= 71 && code <= 77 { return "snow"; }
+    if code >= 85 && code <= 86 { return "snow"; }
+    return "rain";
+}
+
+fn pretty_kind(kind: string) {
+    if kind == "snow" { return "Snow"; }
+    if kind == "rain" { return "Light rain"; }
+    if kind == "cloud" { return "Cloudy"; }
+    return "Sunny and clear";
+}
+
+fn day_label(idx: int) {
+    let names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    return names[idx % 7];
+}
+
+// A JSON number arrives as an int when it has no fractional part.
+fn num(v: any) {
+    if is_int(v) { return float(as_int(v)); }
+    return as_float(v);
+}
+
+fn fmt_temp(c: float) {
+    let unit = signal<string>("unit").get();
+    if unit == "F" {
+        let f = c * 9.0 / 5.0 + 32.0;
+        return str(int(f)) + "F";
+    }
+    return str(int(c)) + "C";
+}
+
+// The cells below are written once: the first read seeds the cell with
+// `fallback`, and later reads keep whatever it holds by then.
+fn seeded_string(name: string, fallback: string) {
+    let cell = signal<string>(name);
+    if lumen::signal_get(name) == "" {
+        cell.set(fallback);
+    }
+    return cell.get();
+}
+
+fn seeded_float(name: string, fallback: float) {
+    let cell = signal<float>(name);
+    if lumen::signal_get(name) == "" {
+        cell.set(fallback);
+    }
+    return cell.get();
+}
+
+// ---------- rendering ----------------------------------------------
+
+fn render_hero() {
+    let city = seeded_string("city", "");
+    if city == "" {
+        lumen::set_text("hero-city", "Pick a city");
+        lumen::set_text("hero-condition", "Tap the search box and press Enter");
+        lumen::set_text("hero-temp", "-");
+        lumen::set_text("hero-high", "H -");
+        lumen::set_text("hero-low", "L -");
+        return;
+    }
+    let cond = seeded_string("hero_label", "Loading...");
+    let temp = seeded_float("hero_temp", 0.0);
+    let high = seeded_float("hero_high", temp);
+    let low = seeded_float("hero_low", temp);
+    lumen::set_text("hero-city", city);
+    lumen::set_text("hero-condition", cond);
+    lumen::set_text("hero-temp", fmt_temp(temp));
+    lumen::set_text("hero-high", "H " + fmt_temp(high));
+    lumen::set_text("hero-low", "L " + fmt_temp(low));
+    let kind = seeded_string("hero_kind", "sun");
+    lumen::set_src("hero-icon", "icons/" + kind + ".png");
+}
+
+fn render_forecast() {
+    let codes = as_list(signal_array("daily_codes").all());
+    let highs = as_list(signal_array("daily_highs").all());
+    let n = codes.len();
+    if n == 0 { return; }
+    if n > 7 { n = 7; }
+    let i = 0;
+    while i < n {
+        let kind = wmo_to_kind(as_int(codes[i]));
+        let prefix = "day-" + str(i);
+        lumen::set_text(prefix + "-name", day_label(i));
+        lumen::set_text(prefix + "-temp", fmt_temp(num(highs[i])));
+        lumen::set_src(prefix + "-icon", "icons/" + kind + ".png");
+        i += 1;
+    }
+}
+
+// ---------- HTTP flow ----------------------------------------------
+
+fn search_city(name: string) {
+    lumen::print("search_city: " + name);
+    lumen::set_text("status", "Fetching " + name + "...");
+    let url = "https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + name;
+    lumen::fetch(url, "geo");
+}
+
+fn fetch_forecast(lat: float, lon: float) {
+    lumen::set_text("status", "Fetching forecast...");
+    let url = "https://api.open-meteo.com/v1/forecast?current_weather=true&daily=temperature_2m_max,weathercode&timezone=auto&latitude="
+        + str(lat) + "&longitude=" + str(lon);
+    lumen::fetch(url, "forecast");
+}
+
+fn on_geo(data: {any: any}) {
+    let results = [];
+    if data.contains("results") && is_list(data.get("results")) {
+        results = as_list(data.get("results"));
+    }
+    if results.len() == 0 {
+        lumen::set_text("status", "City not found.");
+        return;
+    }
+    let r = as_map(results[0]);
+    signal<string>("city").set(as_str(r.get("name")));
+    signal<string>("hero_label").set("Loading...");
+    fetch_forecast(num(r.get("latitude")), num(r.get("longitude")));
+}
+
+fn on_forecast(data: {any: any}) {
+    let cur = as_map(data.get("current_weather"));
+    let kind = wmo_to_kind(as_int(cur.get("weathercode")));
+    signal<string>("hero_label").set(pretty_kind(kind));
+    signal<string>("hero_kind").set(kind);
+    signal<float>("hero_temp").set(num(cur.get("temperature")));
+    let daily = as_map(data.get("daily"));
+    signal_array("daily_codes").set(daily.get("weathercode"));
+    signal_array("daily_highs").set(daily.get("temperature_2m_max"));
+    lumen::set_text("status", "Updated.");
+    render_hero();
+    render_forecast();
+}
+
+// ---------- event handlers -----------------------------------------
+
+fn on_start() {
+    signal<string>("unit").set("C");
+    render_hero();
+}
+
+fn on_text_input(id: string, text: string) {
+    if id == "search" {
+        search_city(text);
+    }
+}
+
+fn on_click(id: string) {
+    if id == "unit" {
+        let unit = signal<string>("unit");
+        if unit.get() == "C" {
+            unit.set("F");
+            lumen::set_text("unit", "F");
+        } else {
+            unit.set("C");
+            lumen::set_text("unit", "C");
+        }
+        render_hero();
+        render_forecast();
+    }
+}
+
+fn on_long_press(id: string) {
+    if id == "search" || id == "dropzone" {
+        signal<string>("city").set("");
+        lumen::set_text("search", "");
+        lumen::set_text("status", "Reset.");
+        render_hero();
+    }
+}
+
+fn on_file_dropped(id: string, path: string) {
+    if id == "dropzone" {
+        lumen::set_text("status", "Imported: " + path);
+    }
+}
+
+fn on_fetch(tag: string, body: string) {
+    let parsed = lumen::parse_json(body);
+    if !is_map(parsed) { return; }
+    let data = as_map(parsed);
+    if tag == "geo" {
+        on_geo(data);
+        return;
+    }
+    if tag == "forecast" {
+        on_forecast(data);
+    }
+}
+
+fn on_fetch_error(tag: string, msg: string) {
+    lumen::set_text("status", "Fetch " + tag + " failed: " + msg);
+}
+
+fn main() {}

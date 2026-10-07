@@ -69,5 +69,5 @@
            text="Press Tab -> type a city -> Enter to fetch" />
   </row>
 
-  <script src="main.lua" />
+  <script src="main.cdl" />
 </root>
