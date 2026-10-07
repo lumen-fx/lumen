@@ -9,20 +9,24 @@
   <label id="echo" width="100%" height="40%" padding="0 0 24 0"
          text="(no file dropped yet)" />
   <script>
+    import "lumen.cdl";
+
     fn on_start() {
-        set_text("echo", "(no file dropped yet)");
+        lumen::set_text("echo", "(no file dropped yet)");
     }
 
-    fn on_file_dropped(id, path) {
+    fn on_file_dropped(id: string, path: string) {
         if id == "drop-zone" {
-            set_text("echo", "Dropped: " + path);
+            lumen::set_text("echo", "Dropped: " + path);
         }
     }
 
-    fn on_long_press(id) {
+    fn on_long_press(id: string) {
         if id == "drop-zone" {
-            set_text("echo", "(no file dropped yet)");
+            lumen::set_text("echo", "(no file dropped yet)");
         }
     }
+
+    fn main() {}
   </script>
 </root>
