@@ -12,26 +12,32 @@
   <label id="counter-label" width="100%" height="30%" padding="30 0 24 0"
          bind-text="counter_label"
          text="Lumen - Tab to focus, Enter/click to count" />
-  <script>
-    fn bump(by) {
-        let clicks = signal("clicks", 0);
+  <script><![CDATA[
+    import "lumen.cdl";
+
+    fn bump(by: int) {
+        let clicks = signal<int>("clicks");
         clicks.set(clicks.get() + by);
     }
 
-    // Demonstrates the S6 per-id callback router: register a click
-    // handler for one specific tile by name, sidestepping the
-    // `if id == "..."` chain inside on_click.
-    fn handle_reset_click(id) { signal("clicks", 0).set(0); }
+    // Demonstrates the per-id callback router: register a click handler for
+    // one specific tile by name, sidestepping the `if id == "..."` chain
+    // inside on_click.
+    fn handle_reset_click(id: string) { signal<int>("clicks").set(0); }
+
+    fn calc_counter_label(n: any) { return "Lumen - clicks: " + str(n); }
 
     fn on_start() {
-        let clicks = signal("clicks", 0);
-        // Computed signal: counter_label re-derives whenever clicks
-        // changes. Replaces the imperative `publish()` helper.
-        derive("counter_label", [clicks], |n| "Lumen - clicks: " + n);
-        on("click", "reset", "handle_reset_click");
+        signal<int>("clicks").set(0);
+        // Computed signal: counter_label re-derives whenever clicks changes.
+        lumen::derive("counter_label", ["clicks"], "calc_counter_label");
+        lumen::on("click", "reset", "handle_reset_click");
     }
-    fn on_click(id)        { bump(1); }
-    fn on_double_click(id) { bump(9); }
-    fn on_long_press(id)   { signal("clicks", 0).set(0); }
-  </script>
+
+    fn on_click(id: string)        { bump(1); }
+    fn on_double_click(id: string) { bump(9); }
+    fn on_long_press(id: string)   { signal<int>("clicks").set(0); }
+
+    fn main() {}
+  ]]></script>
 </root>
