@@ -139,6 +139,11 @@ if [ "$os" = macOS ]; then
   codesign --verify "$work/kanban/$engine"
 fi
 
+# An app in a deprecated language runs on its host: linked into the app's
+# own lumen.dll on Windows, loaded from the package's modules/ elsewhere.
+package "$here/apps/weather" "$work/weather"
+run "$work/weather" weather
+
 # An app that calls the tray carries it, and one that says it does not want
 # the tray is told twice that its calls do nothing.
 tray="$work/tray-app"
