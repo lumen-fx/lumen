@@ -40,7 +40,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use lumen_ir::artifact::UnlinkedCapability;
-use lumen_modules::link_kit::{KitCapability, LinkArg, Manifest};
+use lumen_modules::link_kit::{KitCapability, KitModule, LinkArg, Manifest};
 use lumen_runtime::modules::DependenciesCfg;
 use object::{BinaryFormat, Object, ObjectSymbol};
 
@@ -246,12 +246,12 @@ fn relink(job: &EngineJob<'_>) -> Result<Engine, Stop> {
     let exports = job.out.with_extension("exports");
     let keep = if windows {
         let recorded = recorded_export_list(&kit, &manifest)?;
-        let dropped: Vec<&str> = manifest
-            .capabilities
-            .iter()
-            .filter(|c| !selected.iter().any(|s| s.name == c.name))
-            .map(|c| c.register_symbol.as_str())
-            .collect();
+        let dropped = entries_left_out(
+            &manifest.capabilities,
+            &manifest.modules,
+            &selected,
+            job.modules,
+        );
         std::fs::write(
             &exports,
             filter_def(&std::fs::read_to_string(recorded)?, &dropped),
@@ -364,6 +364,31 @@ fn recorded_export_list(kit: &Path, manifest: &Manifest) -> Result<PathBuf, Stop
             _ => None,
         })
         .ok_or_else(|| Stop::Fallback("the engine kit records no export list".to_string()))
+}
+
+/// The register entries a replay leaves out of a recorded export list.
+///
+/// The recorded list names the register entry of everything the recorded
+/// line linked: each of the kit's `capabilities` and `offered` modules. A
+/// capability the app goes without, and a module it does not run on, is not
+/// on the replayed line, so its entry leaves the list with it: an export
+/// nothing defines fails the link. `selected` are the capabilities the app
+/// keeps, `modules` the ones it runs on.
+fn entries_left_out<'k>(
+    capabilities: &'k [KitCapability],
+    offered: &'k [KitModule],
+    selected: &[&KitCapability],
+    modules: &DependenciesCfg,
+) -> Vec<&'k str> {
+    let capabilities = capabilities
+        .iter()
+        .filter(|c| !selected.iter().any(|s| s.name == c.name))
+        .map(|c| c.register_symbol.as_str());
+    let unused_modules = offered
+        .iter()
+        .filter(|m| !modules.0.iter().any(|dep| dep.name == m.name))
+        .map(|m| m.register_symbol.as_str());
+    capabilities.chain(unused_modules).collect()
 }
 
 /// A module-definition file without the exports named in `dropped`: the
@@ -777,6 +802,40 @@ mod tests {
         assert_eq!(
             export_list(&keep, true),
             "_lumen_engine_build_id\n__ZN1a1bE\n"
+        );
+    }
+
+    #[test]
+    fn a_replay_drops_the_entries_of_what_the_app_does_without() {
+        use lumen_modules::link_kit::KitSelect;
+        use lumen_modules::{DepCfg, ModuleSource};
+
+        let capability = |name: &str| KitCapability {
+            name: name.to_string(),
+            register_symbol: lumen_capability::register_symbol(name),
+            select: KitSelect::Always,
+        };
+        let capabilities = [capability("os-tray"), capability("mcp")];
+        let offered = [
+            KitModule::new("lumen-candela"),
+            KitModule::new("lumen-candela-dev"),
+            KitModule::new("lumen-lua"),
+        ];
+        let runs_on = DependenciesCfg(vec![DepCfg {
+            name: "lumen-lua".to_string(),
+            source: ModuleSource::Bundled,
+            config: toml::Table::new(),
+            tags: Vec::new(),
+        }]);
+
+        assert_eq!(
+            entries_left_out(&capabilities, &offered, &[&capabilities[1]], &runs_on),
+            [
+                lumen_capability::register_symbol("os-tray").as_str(),
+                "lumen_module_register_lumen_candela",
+                "lumen_module_register_lumen_candela_dev",
+            ],
+            "the module the app runs on and the capability it keeps stay exported"
         );
     }
 
