@@ -108,6 +108,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+// The bytecode host every render's program runs on. A server has no shared
+// engine to open a module beside, so the host is compiled in here, where a
+// server is assembled, and its constructor registers it before `main`; a
+// render loads it from that registry the way an app run loads a module.
+use lumen_candela as _;
+
 pub mod error;
 pub mod fetch;
 mod locale;

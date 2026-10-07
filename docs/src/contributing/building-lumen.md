@@ -117,8 +117,11 @@ installs it with the rest of the toolchain.
 
 A page cannot open a library, so the module installs the candela host it runs
 scripts with itself (`lumen_candela::CandelaPlugin`, the bytecode host, never
-the compiler); the prerender and server-render paths do the same. candela is
-the only language a page runs: rhai and lua are not wired up for this target.
+the compiler). The prerender and server-render paths name no host: a run loads
+the module the artifact names through the module loader, the way an app run
+does. `lumen-ssr` compiles `lumen-candela` in for every server built on it, and
+`lumenc` compiles it in or opens it beside its shared engine. candela is the
+only language a page runs: rhai and lua are not wired up for this target.
 An app names its engine in the manifest, so a module with no host for that
 engine refuses to boot the app and says which engine it was asked for.
 

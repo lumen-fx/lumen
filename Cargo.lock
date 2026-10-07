@@ -4297,12 +4297,13 @@ name = "lumen-prerender"
 version = "0.0.9"
 dependencies = [
  "bevy_ecs",
+ "lumen-candela",
  "lumen-candela-dev-host",
- "lumen-candela-host",
  "lumen-core",
  "lumen-html",
  "lumen-i18n",
  "lumen-ir",
+ "lumen-modules",
  "lumen-portable",
  "lumen-scene",
  "lumen-script",
@@ -4517,6 +4518,7 @@ version = "0.0.9"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
+ "lumen-candela",
  "lumen-candela-dev-host",
  "lumen-core",
  "lumen-html",

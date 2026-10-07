@@ -1,5 +1,10 @@
 //! What a build gets out of running an app.
 
+// The bytecode host a run loads, compiled into this test binary: an unnamed
+// dependency puts nothing on the link line, and the module registers itself
+// before `main` only when it is there.
+use lumen_candela as _;
+
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 

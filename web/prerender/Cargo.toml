@@ -33,9 +33,11 @@ lumen-i18n = { workspace = true }
 lumen-web = { workspace = true }
 # The HTTP seam, so a run answers a request without one leaving the machine.
 lumen-script = { workspace = true }
-# The candela host, which runs the app's precompiled bytecode. A run installs
-# its plugin before the program goes in.
-lumen-candela-host = { workspace = true }
+# The loader a run's script hosts come through. A host is a runtime module,
+# so a run names none: it loads the module the artifact says each program runs
+# on, which the binary doing the run either compiled in or keeps beside a
+# shared engine.
+lumen-modules = { workspace = true, features = ["loader"] }
 
 [build-dependencies]
 # Compiles the test fixture to `.cdlb` on the host, so the program a run loads
@@ -45,4 +47,7 @@ lumen-candela-dev-host = { workspace = true }
 [dev-dependencies]
 # The tests build an app of their own to settle, which means writing a system.
 bevy_ecs.workspace = true
+# The bytecode host, compiled into the test binaries the way a binary with no
+# shared engine compiles it in, so a run's module load finds it registered.
+lumen-candela = { workspace = true }
 

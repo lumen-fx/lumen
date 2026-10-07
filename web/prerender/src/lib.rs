@@ -32,6 +32,7 @@ pub mod deny;
 pub mod fills;
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -48,10 +49,12 @@ use lumen_i18n::{
     Catalogues, Lang, LocaleFormatter, SharedFormatter, SharedI18n, format_spec, switch_locale,
 };
 use lumen_ir::artifact::CompiledApp;
+use lumen_modules::language::with_implied;
+use lumen_modules::{DependenciesCfg, InitEnv, ResolvedModules, load_modules};
 use lumen_portable::{apply_node_seed, apply_seed, hosts, install_i18n, portable_app};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
-use lumen_script::{FetchRegistry, HttpDispatch, ScriptFnAppExt};
+use lumen_script::{FetchRegistry, HttpDispatch, ScriptFnAppExt, ScriptLanguages};
 use lumen_web::{RowFills, State, state_of};
 
 pub use deny::DenyDispatch;
@@ -245,11 +248,16 @@ pub fn boot(
         }
     }
 
+    // The host each program runs on is a runtime module, loaded the way an
+    // app run loads it: from the module the artifact names, answered by a
+    // copy compiled into this binary or opened beside a shared engine. A host
+    // the assembly installed already is not loaded twice.
+    load_hosts(&mut app, compiled);
+
     // An engine with no host here is reported and passed over rather than
     // refused: what it would have published is missing from the page, which
     // is a page written with less state, not a build that cannot happen.
     let mut unsupported_engines = Vec::new();
-    app.add_plugin(lumen_candela_host::CandelaPlugin);
     for script in &compiled.scripts {
         let Some(bytecode) = &script.bytecode else {
             continue;
@@ -283,6 +291,43 @@ pub fn boot(
         unsupported_engines,
         language_error,
     }
+}
+
+/// Load the module each of `compiled`'s programs runs on, for the programs
+/// whose language no host in `app` answers for yet. Only programs in a form a
+/// run loads count: a render runs bytecode, and a program shipped as source
+/// is passed over by [`boot`] either way.
+///
+/// A module that cannot be loaded is reported on stderr, the way an app run
+/// reports it, and the program it would have run is then an unsupported
+/// engine.
+fn load_hosts(app: &mut App, compiled: &CompiledApp) {
+    let mut modules: Vec<String> = Vec::new();
+    {
+        let registered = app.world.get_resource::<ScriptLanguages>();
+        for script in &compiled.scripts {
+            let answered = registered.is_some_and(|l| l.get(&script.engine).is_some());
+            if script.bytecode.is_none()
+                || answered
+                || script.module.is_empty()
+                || modules.contains(&script.module)
+            {
+                continue;
+            }
+            modules.push(script.module.clone());
+        }
+    }
+    if modules.is_empty() {
+        return;
+    }
+    let deps = with_implied(&DependenciesCfg::default(), &modules);
+    let env = InitEnv {
+        app_dir: PathBuf::new(),
+        app_id: String::from("lumen-prerender"),
+        headless: true,
+        hot_reload: false,
+    };
+    load_modules(app, Path::new(""), &deps, &ResolvedModules::default(), &env);
 }
 
 /// The add-on functions a render's app called, which a render answers by
