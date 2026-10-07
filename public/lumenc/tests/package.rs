@@ -313,6 +313,24 @@ fn a_packaged_app_reaches_the_script_standard_library() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The toolchain files a cross package copies, as stand-ins for every target:
+/// the launcher and C library, and, because the app's script implies the
+/// candela host module, the shared engine, the standard library it was built
+/// against, and the module that ships beside them on Linux and macOS.
+const STAND_INS: [&str; 11] = [
+    "lumen-launcher",
+    "lumen-launcher.exe",
+    "liblumen.so",
+    "liblumen.dylib",
+    "lumen.dll",
+    "liblumen_engine.so",
+    "liblumen_engine.dylib",
+    "liblumen_candela.so",
+    "liblumen_candela.dylib",
+    "libstd-0123456789abcdef.so",
+    "libstd-0123456789abcdef.dylib",
+];
+
 /// Packaging for another platform is file assembly, so it works from any host.
 /// Stand-in toolchain files keep this off the network: what is under test is
 /// the shape of the output, not the download.
@@ -326,22 +344,7 @@ fn cross_packaging_assembles_each_platform() {
     // One directory holding a stand-in stub and library for every target.
     let libs = root.join("libs");
     std::fs::create_dir_all(&libs).expect("create lib dir");
-    // The app's script implies the candela host module, which ships beside
-    // the shared engine and the standard library it was built against on
-    // Linux and macOS.
-    for name in [
-        "lumen-launcher",
-        "lumen-launcher.exe",
-        "liblumen.so",
-        "liblumen.dylib",
-        "lumen.dll",
-        "liblumen_engine.so",
-        "liblumen_engine.dylib",
-        "liblumen_candela.so",
-        "liblumen_candela.dylib",
-        "libstd-0123456789abcdef.so",
-        "libstd-0123456789abcdef.dylib",
-    ] {
+    for name in STAND_INS {
         std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
     }
     let libs_arg = libs.to_str().expect("utf-8 path");
@@ -425,13 +428,7 @@ fn the_zip_holds_the_folder() {
 
     let libs = root.join("libs");
     std::fs::create_dir_all(&libs).expect("create lib dir");
-    for name in [
-        "lumen-launcher",
-        "lumen-launcher.exe",
-        "liblumen.so",
-        "liblumen.dylib",
-        "lumen.dll",
-    ] {
+    for name in STAND_INS {
         std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
     }
 
