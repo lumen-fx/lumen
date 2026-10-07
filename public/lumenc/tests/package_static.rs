@@ -497,9 +497,27 @@ fn a_kit_from_another_release_is_refused_before_anything_is_linked() {
     assert!(stderr.contains("schema"), "{stderr}");
 }
 
-/// The manifest of a kit whose whole link line is `args`.
-fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
+/// The object a synthetic kit carries for the candela script host every
+/// candela app implies: it defines the register symbol a replay asks the
+/// linker for, and nothing else.
+const SCRIPT_HOST_OBJECT: &str = "zz-script-host.o";
+
+/// The manifest of a kit whose link line is `args`, plus the script host's
+/// object ahead of the output, as a real kit carries it.
+fn synthetic_manifest(mut args: Vec<LinkArg>) -> Manifest {
     let (target, triple) = host_target();
+    if let Some(at) = args
+        .iter()
+        .position(|arg| matches!(arg, LinkArg::Lit { value } if value == "-o"))
+    {
+        args.insert(
+            at,
+            LinkArg::File {
+                path: SCRIPT_HOST_OBJECT.to_string(),
+                module: Some("lumen-candela".to_string()),
+            },
+        );
+    }
     Manifest {
         schema: SCHEMA_VERSION,
         target: target.to_string(),
@@ -516,8 +534,6 @@ fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
             path: None,
         },
         args,
-        // The script host every candela app implies; it has no objects of
-        // its own here, so selecting it adds nothing to the line.
         modules: vec![lumen_modules::link_kit::KitModule::new("lumen-candela")],
         capabilities: Vec::new(),
         artifact: Artifact {
@@ -527,7 +543,34 @@ fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
     }
 }
 
+/// Write `manifest` into `kit`, compiling the script host's object into the
+/// stage when the line names it.
 fn write_manifest(kit: &Path, manifest: &Manifest) {
+    let names_host = manifest
+        .args
+        .iter()
+        .any(|arg| matches!(arg, LinkArg::File { path, .. } if path == SCRIPT_HOST_OBJECT));
+    if names_host {
+        let source = kit.join("script-host.c");
+        std::fs::write(
+            &source,
+            "void lumen_module_register_lumen_candela(void) {}\n",
+        )
+        .expect("write the C file");
+        let stage = kit.join("stage");
+        std::fs::create_dir_all(&stage).expect("create the stage directory");
+        let compiled = Command::new("cc")
+            .arg("-c")
+            .arg(&source)
+            .arg("-o")
+            .arg(stage.join(SCRIPT_HOST_OBJECT))
+            .status()
+            .expect("run cc");
+        assert!(
+            compiled.success(),
+            "cc did not compile the script host object"
+        );
+    }
     std::fs::write(
         kit.join("manifest.json"),
         serde_json::to_string(manifest).expect("the manifest encodes"),
