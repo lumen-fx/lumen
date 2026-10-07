@@ -153,5 +153,5 @@
     </column>
   </dialog>
 
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
