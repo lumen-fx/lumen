@@ -10,7 +10,10 @@
     </column>
   </use>
   <script>
-    fn goto_settings(id) { page("settings"); }
-    fn on_start() { on("click", "go-settings", "goto_settings"); }
+    import "lumen.cdl";
+
+    fn goto_settings(id: string) { lumen::page("settings"); }
+    fn on_start() { lumen::on("click", "go-settings", "goto_settings"); }
+    fn main() {}
   </script>
 </root>
