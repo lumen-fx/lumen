@@ -608,8 +608,6 @@ fn engine_build_id() -> Option<String> {
     }
 }
 
-/// Call one build-id probe and copy the string out.
-#[cfg(unix)]
 /// The directory of the shared engine library this process runs on, when it
 /// runs on one: where the toolchain keeps its bundled modules, whichever
 /// executable loaded the engine. `None` for a process that compiled the
@@ -668,6 +666,8 @@ pub fn engine_dir() -> Option<PathBuf> {
     }
 }
 
+/// Call one build-id probe and copy the string out.
+#[cfg(unix)]
 unsafe fn read_probe(probe: &ProbeFn) -> Option<String> {
     // SAFETY: the caller established the symbol contract (NUL-terminated
     // static, valid for the process lifetime).
