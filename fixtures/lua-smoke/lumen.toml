@@ -1,0 +1,10 @@
+# Proof fixture for runtime script-host selection. `engine = "lua"` makes
+# lumenc load the app's `<script>` through the mlua-backed `LuaHost` instead
+# of the default Rhai host; the counter below exercises signal / derive / on
+# through the host-generic runtime wired for Lua.
+[script]
+engine = "lua"
+
+# No introspection server - keeps `--headless` CI runs from binding a port.
+[mcp]
+port = 0

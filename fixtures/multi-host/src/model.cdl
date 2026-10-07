@@ -1,0 +1,15 @@
+// The candela half of a two-language app. It owns the `shared` signal;
+// `report.lua` reads it without ever writing it, so the two programs
+// interoperate through the signal bus and nothing else.
+
+import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set("shared", "candela");
+}
+
+fn on_ready() {
+    lumen::signal_set("candela_ready", "1");
+}
+
+fn main() {}

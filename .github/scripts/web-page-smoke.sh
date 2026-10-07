@@ -31,7 +31,7 @@ set -euo pipefail
 lib_dir=$(realpath "${1:?usage: web-page-smoke.sh LIB_DIR [APP_DIR [PAGE]]}")
 app="${2:-apps/widget-garden}"
 page="${3:-/}"
-scriptless="web/tests/fixtures/unhosted-language"
+scriptless="apps/weather"
 with_addon="web/tests/fixtures/addon-echo"
 with_std="fixtures/candela-std"
 with_cfg="fixtures/cfg-target"

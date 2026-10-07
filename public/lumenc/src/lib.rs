@@ -20,17 +20,22 @@
 #[cfg(all(feature = "dynamic-engine", not(windows)))]
 use lumen_engine as _;
 
-// The candela script hosts, compiled in where there is no shared engine to
-// open them beside: every process that runs an app through this library
-// (the `lumenc` binary, a test, an SDK app, `liblumen`'s from-source path)
-// then finds them registered the way the loader finds a compiled-in module.
-// A run from source takes the compiler host, a compiled app the bytecode one.
-// The `dynamic-engine` shape opens both from the modules archive instead,
-// and a compiled-in copy would answer first.
+// The script hosts, compiled in where there is no shared engine to open them
+// beside: every process that runs an app through this library (the `lumenc`
+// binary, a test, an SDK app, `liblumen`'s from-source path, the Windows
+// `lumen.dll` an engine kit relinks) then finds them registered the way the
+// loader finds a compiled-in module. A candela run from source takes the
+// compiler host, a compiled app the bytecode one; the deprecated Rhai and Lua
+// hosts run source. The `dynamic-engine` shape opens all of them from the
+// modules archive instead, and a compiled-in copy would answer first.
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_candela as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_candela_dev as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_lua as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_rhai as _;
 
 /// The web halves of the modules an app depends on, found for the target a
 /// build is for.

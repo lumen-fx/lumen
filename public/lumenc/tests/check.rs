@@ -138,8 +138,9 @@ fn templates_present() -> bool {
 
 /// Every scaffold template checks clean as written. `check` compiles the
 /// markup, the CSS, and the script under the host the script's extension
-/// selects, so this is what proves a template a user scaffolds runs: its
-/// candela program type-checks against the real host surface.
+/// selects, so this is what proves a template a user scaffolds runs: the
+/// candela ones type-check against the real host surface, the Lua and Rhai
+/// ones parse on theirs.
 #[test]
 fn every_template_checks_clean() {
     if !templates_present() {

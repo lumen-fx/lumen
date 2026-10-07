@@ -58,9 +58,8 @@ a banner on stderr and in the window says which script did not run.
 
 ### Rhai and Lua
 
-Rhai and Lua are deprecated, kept as runtime modules in the Linux and macOS
-modules archive and nowhere else; new scripting features land in candela only,
-and their reference pages ([Rhai](../reference/scripting-rhai.md),
+Rhai and Lua are deprecated: new scripting features land in candela only, and
+their reference pages ([Rhai](../reference/scripting-rhai.md),
 [Lua](../reference/scripting-lua.md)) are not extended. A `.rhai` or `.lua`
 file runs on its module the way a `.cdl` file runs on candela's, side by side
 with a candela program: the languages do not call each other, but they read

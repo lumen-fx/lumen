@@ -16,8 +16,8 @@
 # With `--linked`, only the modules an app links in: the ones the static
 # launcher compiles in and a link kit carries. A module's manifest says where it
 # is compiled in with `[package.metadata.lumen] link`: absent (an app links it
-# in), "toolchain" (the dev toolchain only, a compiler say), or "none" (nothing
-# compiles it in; it ships in the modules archive alone). The static launcher
+# in) or "toolchain" (the dev toolchain only: a compiler, or a deprecated
+# script host a static package does not carry). The static launcher
 # (core/launcher) still names each linked module by hand, in its manifest and
 # its link anchors, and the link-kit step refuses the build when that list is
 # missing one.

@@ -94,8 +94,8 @@ setting per-tag sizing floors applies to every app either way.
 | `engine` | language name: `"candela"`, or a deprecated `"rhai"` / `"lua"` | per file | Forces every script in the app onto one language. A name no installed host module runs leaves the app's script unrun, with a banner that says so. |
 
 With the key absent, each script file belongs to the language its extension
-names: a `.cdl` file to candela, and on Linux and macOS a `.lua` file to Lua and
-a `.rhai` file to Rhai. An app holding more than one language runs one host per
+names: a `.cdl` file to candela, a `.lua` file to Lua and a `.rhai` file to
+Rhai. An app holding more than one language runs one host per
 language. An inline `<script>` block has no extension to read; it joins the
 app's one external language when there is exactly one, and candela otherwise.
 Set `engine` when that is not the language you want, most often for an inline

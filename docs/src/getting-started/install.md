@@ -65,8 +65,8 @@ toolchain runs and builds no script. The web halves of the modules, which
 `lumenc web` puts into a site, and the descriptors that say which module runs
 which script language, come with the toolchain itself under
 `~/.lumen/bin/modules`, so a web build does not need the module archive. On
-Windows there is no module archive: the candela hosts are compiled into
-`lumenc.exe` and `lumen.dll`, and Rhai and Lua are not available. The
+Windows there is no module archive: the script hosts are compiled into
+`lumenc.exe` and `lumen.dll`. The
 setup-lumen action installs them the same way on Linux and macOS runners; see
 [Continuous integration](#continuous-integration).
 

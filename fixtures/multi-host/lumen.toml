@@ -1,0 +1,6 @@
+# No `[script] engine` key: each file picks its host from its extension, so
+# this app runs the candela and Lua hosts side by side.
+
+# No introspection server - keeps `--headless` CI runs from binding a port.
+[mcp]
+port = 0
