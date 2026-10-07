@@ -12,14 +12,12 @@
 //!
 //! * a candela app installs the compiler host from `lumen-candela-dev`, the
 //!   module the loader records, and no other host;
-//! * `[script] engine = "lua"` installs the Lua host when its module is
-//!   compiled in, which this file arranges by linking `lumen-lua`;
-//! * a script in a language whose module is not compiled in (rhai here, which
-//!   this file deliberately does not link) runs nowhere, and the app still
-//!   builds and records why.
+//! * `[script] engine = "lua"` installs the Lua host, which the dev build
+//!   compiles in like every first-party module;
+//! * a script in a language no module runs (one named only by `[script]
+//!   engine`) runs nowhere, and the app still builds and records why.
 
 use lumen_core::prelude::App;
-use lumen_lua as _;
 use lumenc::{RunOptions, build_headless_app};
 
 /// Write `files` (path relative to the app root, contents) into a fresh temp
@@ -185,27 +183,27 @@ fn engine_lua_installs_the_lua_host_and_runs_the_script() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A script in a language whose module is not compiled in runs nowhere. The
-/// app still builds, and the failure is recorded naming the language, so the
-/// author learns why nothing happened.
+/// A script in a language no module runs runs nowhere. The app still
+/// builds, and the failure is recorded naming the language, so the author
+/// learns why nothing happened.
 #[test]
 fn a_language_with_no_module_runs_no_script_and_says_so() {
     let dir = write_app(
-        "rhai",
+        "basic",
         &[
-            ("lumen.toml", "[mcp]\nport = 0\n"),
+            (
+                "lumen.toml",
+                "[script]\nengine = \"basic\"\n\n[mcp]\nport = 0\n",
+            ),
             (
                 "src/main.lmn",
                 r#"<root>
   <label id="only" text="markup only" />
-  <script src="main.rhai" />
+  <script src="main.bas" />
 </root>
 "#,
             ),
-            (
-                "src/main.rhai",
-                "fn on_start() { signal(\"ran\", \"\").set(\"yes\"); }\n",
-            ),
+            ("src/main.bas", "10 LET RAN = \"yes\"\n"),
         ],
     );
     let mut app = run(&dir);
@@ -217,22 +215,23 @@ fn a_language_with_no_module_runs_no_script_and_says_so() {
         .0
         .clone();
     assert!(
-        failure.contains("rhai"),
+        failure.contains("basic"),
         "the failure names the language with no host: {failure}"
     );
     assert!(
         app.world
             .get_resource::<lumen_candela_dev::CandelaHost>()
             .is_none()
-            && app.world.get_resource::<lumen_lua::LuaHost>().is_none(),
-        "another language's host took the rhai script"
+            && app.world.get_resource::<lumen_lua::LuaHost>().is_none()
+            && app.world.get_resource::<lumen_rhai::RhaiHost>().is_none(),
+        "another language's host took the script"
     );
     let ran = app
         .world
         .resource::<lumen_core::property_store::PropertyStore>()
         .get_global_str("ran")
         .map(|v| v.to_string());
-    assert_ne!(ran.as_deref(), Some("yes"), "the rhai script ran");
+    assert_ne!(ran.as_deref(), Some("yes"), "the script ran");
     let texts = texts(&mut app);
     assert!(
         texts.iter().any(|t| t == "markup only"),

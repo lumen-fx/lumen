@@ -1,7 +1,8 @@
 # The Rhai script host, as a runtime module. Deprecated: candela is the
-# supported language, and this host gets no new builtins. An app keeps running
-# a `.rhai` script by having the module beside the engine, which is where the
-# Linux and macOS modules archive installs it.
+# supported language, and this host gets no new builtins. An app runs a
+# `.rhai` script on it like any other first-party module: compiled into the dev
+# `lumenc`, opened from the modules archive on Linux and macOS, and linked into
+# a Windows app's `lumen.dll` by its engine kit.
 [package]
 name = "lumen-rhai"
 version.workspace = true
@@ -17,10 +18,12 @@ categories = ["gui"]
 publish = false
 
 [package.metadata.lumen]
-# Where this module is compiled in: nowhere. It ships only as an openable
-# module in the Linux and macOS modules archive; not in the dev `lumenc`, the
-# static launcher, or a link kit. See .github/scripts/first-party-modules.sh.
-link = "none"
+# Where this module is compiled in: the dev toolchain (`lumenc`, and through
+# it the Windows `lumen.dll`, whose engine kit links it into an app that runs
+# this language). The static launcher and its link kit leave it out: a
+# deprecated host is not carried by every static package. See
+# .github/scripts/first-party-modules.sh.
+link = "toolchain"
 
 [lib]
 name = "lumen_rhai"

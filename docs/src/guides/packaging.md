@@ -80,8 +80,7 @@ os-tray. Name it in lumen.toml [capabilities] to package it in.
 
 A Windows package stays one library plus the executable, with any portable
 plugins the app declares in `modules/` and its candela packages compiled in;
-the candela host is linked into the library. Rhai and Lua scripts do not run
-in a Windows package.
+the script hosts its scripts run on are linked into the library.
 Runtime modules do not load beside it, because there is no shared engine
 there for one to load into, so an app that declares one of the modules that
 ship with the toolchain is packaged with
@@ -168,8 +167,9 @@ lumenc package myapp --static
 This writes the same folder with one difference: the app is a single
 executable. The engine is inside it, and so is every runtime module the app
 declares and the candela host its scripts run on, so there is no runtime
-library beside it and no `modules/` subfolder. Rhai and Lua scripts do not run
-in one. The engine inside is the app's own, chosen the way a folder
+library beside it and no `modules/` subfolder. It carries no Rhai or Lua
+host, so `--static` refuses an app with a script in either language. The
+engine inside is the app's own, chosen the way a folder
 package's is: of the optional subsystems the kit offers (tray,
 notifications, dialogs, hotkeys, the HTTP client and the rest), the
 executable carries the ones the app's sources show it uses, and

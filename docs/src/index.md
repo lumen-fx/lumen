@@ -49,7 +49,7 @@ imperatively pokes at elements.
 
 **Scripting.** Scripts are written in candela, compiled from source with hot
 reload while you work and shipped as bytecode. Rhai and Lua remain as
-deprecated modules on Linux and macOS; an app can mix languages, sharing state
+deprecated hosts; an app can mix languages, sharing state
 across them through signals. Scripts respond to lifecycle events, input,
 timers, and network replies, and can build and edit the element tree directly.
 

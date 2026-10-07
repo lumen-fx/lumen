@@ -8,12 +8,11 @@ languages. Lumen loads the module each script needs; an app declares nothing.
 
 This affects you in these cases.
 
-**Your app is written in Rhai or Lua.** Those hosts ship only in the Linux and
-macOS modules archive, so the app runs where `install.sh` installed that
-archive and nowhere else: not on Windows, not in a `lumenc package --static`
-executable, and not from a toolchain installed with `--no-modules`. Elsewhere
-the app starts, and a banner says its script did not run. Rewrite the script
-in candela to run everywhere; candela is the supported language.
+**Your app is written in Rhai or Lua.** It runs as before under `lumenc run`
+and in a package, on every platform. `lumenc package --static` refuses it,
+because a static executable carries no Rhai or Lua host, and a Linux or macOS
+toolchain installed with `--no-modules` runs it without its script, with a
+banner that says so. candela is the supported language.
 
 **You embed Lumen from Rust.** `RunOptions::rhai_extensions`,
 `RunOptions::with_rhai_extension`, `lumen_runtime::run_with`, `lumenc::run_with`,

@@ -69,12 +69,14 @@ lumen-widget = { workspace = true }
 # which the parser here compiles into fragments. Pulled in by `dev-run`, with
 # the runtime it belongs to.
 lumen-script = { workspace = true, optional = true }
-# The candela hosts, compiled in where this build has no shared engine to open
-# them beside (see the anchors in `src/lib.rs`): the compiler host a run from
-# source and a build need, and the bytecode host a run of a compiled app
-# needs. Pulled in by `dev-run`.
+# The script hosts, compiled in where this build has no shared engine to open
+# them beside (see the anchors in `src/lib.rs`): the candela compiler host a
+# run from source and a build need, the bytecode host a run of a compiled app
+# needs, and the deprecated Rhai and Lua hosts. Pulled in by `dev-run`.
 lumen-candela = { workspace = true, optional = true }
 lumen-candela-dev = { workspace = true, optional = true }
+lumen-lua = { workspace = true, optional = true }
+lumen-rhai = { workspace = true, optional = true }
 
 # `lumenc web` - the static-site emitter and the HTML contract it writes
 # against. OPTIONAL behind the default-on `web` feature; both are small and
@@ -217,8 +219,8 @@ lumen-scene = { workspace = true }
 lumen-assets = { workspace = true }
 lumen-candela = { workspace = true }
 lumen-candela-dev = { workspace = true }
-# The deprecated hosts, for the tests of an app that runs more than one
-# language. Compiled into those test binaries only.
+# The deprecated hosts, named by the tests of an app that runs more than one
+# language.
 lumen-lua = { workspace = true }
 lumen-rhai = { workspace = true }
 # os_integration.rs names the tray config / menu types directly, to assert a
@@ -285,9 +287,9 @@ bundle = ["dep:lumen-assets"]
 # they only augment it when `dev-run` has already pulled it.
 # The dev path stays FULL-featured (owner decision): `dev-run` turns on every
 # runtime subsystem so `lumenc run` / `build` / `check` and the integration
-# tests keep MCP and the async bridge. Script hosts are runtime modules: the
-# candela ones are compiled in here where there is no shared engine, and the
-# deprecated rhai and lua ones only ever load from the modules archive.
+# tests keep MCP and the async bridge. Script hosts are runtime modules,
+# compiled in here where there is no shared engine, like the first-party
+# modules below.
 # Per-app trimming by feature is exclusive to `lumenc bundle --static` (which
 # builds `lumen` with its own trimmed feature set), never the dev path;
 # `lumenc package` trims at the link, from the release's engine kit.
@@ -303,6 +305,8 @@ dev-run = [
     "dep:lumen-script",
     "dep:lumen-candela",
     "dep:lumen-candela-dev",
+    "dep:lumen-lua",
+    "dep:lumen-rhai",
     "lumen-runtime/mcp",
     "lumen-runtime/async",
     "lumen-runtime/modules",

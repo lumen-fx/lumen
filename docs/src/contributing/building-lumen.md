@@ -337,12 +337,14 @@ integration tests drive an app in process. It also compiles the runtime
 modules under `std/` in, which is what lets `lumenc run` start an app that
 declares one in `[dependencies]`: a static binary cannot open a module beside
 it, so the module has to be part of the binary. The script hosts are among
-them: the library anchors `lumen-candela` and `lumen-candela-dev`, so every
-in-process run (the binary, a test, an SDK app) finds candela. A module whose
-manifest sets `[package.metadata.lumen] link = "none"` (rhai, lua) is compiled
-into nothing and ships only in the modules archive; `link = "toolchain"`
-(candela's compiler) is compiled into the dev toolchain but not the static
-launcher. `public/lumenc/tests/bundled_modules.rs` holds both rules.
+them: the library anchors `lumen-candela`, `lumen-candela-dev`, `lumen-rhai`
+and `lumen-lua`, so every in-process run (the binary, a test, an SDK app, the
+Windows `lumen.dll` built from it) finds every language. A module whose
+manifest sets `[package.metadata.lumen] link = "toolchain"` (candela's
+compiler, and the deprecated rhai and lua hosts) is compiled into the dev
+toolchain but not the static launcher or its link kit.
+`public/lumenc/tests/bundled_modules.rs` checks that every module under `std/`
+is anchored.
 `dynamic-engine` turns the anchors off, because that shape shares one engine
 with the modules it opens.
 The thin shape drops the runtime and loads the shared `liblumen` over the C

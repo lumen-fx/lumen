@@ -8,134 +8,20 @@
 //! joins its extension's host, the hosts run side by side, and they reach each
 //! other only through the shared signal bus.
 //!
-//! The two-language app pairs `model.cdl` (writes the `shared` signal) with
+//! `fixtures/multi-host` pairs `model.cdl` (writes the `shared` signal) with
 //! `report.lua` (derives `seen_by_lua` from it without ever writing it), so a
 //! passing run proves both hosts loaded, both dispatched their lifecycle
-//! callbacks, and a value crossed from one language to the other. Lua is not
-//! compiled into anything by default; this file links its module so the
-//! second host is there to load.
+//! callbacks, and a value crossed from one language to the other.
 
 use lumen_core::prelude::App;
-use lumen_lua as _;
 use lumenc::{RunOptions, build_headless_app};
 
-/// The two-language app: a candela program that owns the `shared` signal and
-/// a Lua program that reads it without ever writing it.
-const MULTI_HOST: &[(&str, &str)] = &[
-    ("lumen.toml", "[mcp]\nport = 0\n"),
-    (
-        "src/main.lmn",
-        r#"<root>
-  <label id="shared-label" width="100%" padding="24 0 8 0"
-         bind-text="shared" text="waiting" />
-  <label id="seen-label" width="100%" padding="0 0 24 0"
-         bind-text="seen_by_lua" text="waiting" />
-  <script src="model.cdl" />
-  <script src="report.lua" />
-</root>
-"#,
-    ),
-    (
-        "src/model.cdl",
-        r#"import "lumen.cdl";
-
-fn on_start() {
-    lumen::signal_set("shared", "candela");
-}
-
-fn on_ready() {
-    lumen::signal_set("candela_ready", "1");
-}
-
-fn main() {}
-"#,
-    ),
-    (
-        "src/report.lua",
-        r#"-- `shared` is named as a string dep so this program never seeds it; the
--- value comes from model.cdl through the signal bus.
-
-function on_start()
-    derive("seen_by_lua", { "shared" }, function(v)
-        return tostring(v) .. "+lua"
-    end)
-end
-
-function on_ready()
-    signal("lua_ready", ""):set("1")
-end
-"#,
-    ),
-];
-
-/// A one-file Lua app whose `[script] engine` pins the Lua host for its
-/// inline script.
-const LUA_SMOKE: &[(&str, &str)] = &[
-    (
-        "lumen.toml",
-        "[script]\nengine = \"lua\"\n\n[mcp]\nport = 0\n",
-    ),
-    (
-        "src/main.lmn",
-        r#"<root>
-  <label id="counter-label" width="100%" height="100%" padding="30 0 24 0"
-         bind-text="counter_label"
-         text="Lua host - waiting" />
-  <script>
-    function bump(by)
-        local clicks = signal("clicks", 0)
-        clicks:set(clicks:get() + by)
-    end
-
-    function handle_reset_click(id)
-        signal("clicks", 0):set(0)
-    end
-
-    function on_start()
-        local clicks = signal("clicks", 0)
-        derive("counter_label", { clicks }, function(n)
-            return "Lua host - clicks: " .. n
-        end)
-        on("click", "reset", "handle_reset_click")
-    end
-
-    function on_click(id)
-        bump(1)
-    end
-  </script>
-</root>
-"#,
-    ),
-];
-
-/// The app named `name`: the two apps above are written into a fresh temp
-/// directory, anything else is read from the in-repo `fixtures/`.
 fn app_dir(name: &str) -> std::path::PathBuf {
-    let files = match name {
-        "multi-host" => MULTI_HOST,
-        "lua-smoke" => LUA_SMOKE,
-        _ => {
-            return std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../fixtures")
-                .join(name)
-                .canonicalize()
-                .unwrap_or_else(|e| panic!("fixtures/{name} must exist: {e}"));
-        }
-    };
-    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "lumen_multi_host_{name}_{}_{}",
-        std::process::id(),
-        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    for (path, body) in files {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().expect("a file sits in a directory"))
-            .expect("create app dir");
-        std::fs::write(&path, body).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
-    }
-    dir
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("fixtures/{name} must exist: {e}"))
 }
 
 fn run_ticks(dir: std::path::PathBuf, ticks: u32) -> App {
@@ -304,7 +190,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
     );
 }
 
-/// `[script] engine` still collapses an app onto one host. The Lua smoke app
+/// `[script] engine` still collapses an app onto one host. `fixtures/lua-smoke`
 /// keeps its script inline and declares `engine = "lua"`, so exactly the Lua
 /// host runs and the single-host tick order is unchanged.
 #[test]

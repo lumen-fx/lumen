@@ -13,13 +13,6 @@ every host: `page(path)` and `page_current()`, `computed_style(prop)` and
 
 ## Selecting the host
 
-The Lua host is deprecated: it gets no new builtins, and candela is the
-supported language. It is the `lumen-lua` runtime module in the Linux and
-macOS modules archive, which Lumen loads for a `.lua` script the way it loads
-candela's host for a `.cdl` one; it is not available on Windows or in a
-`--static` package. Without the module the app starts and its Lua script
-does not run.
-
 Each script file picks its host from its own extension: `.cdl` runs under
 candela, `.lua` under Lua, `.rhai` under Rhai. Files of one language combine
 into a single program; an app that ships two languages runs both hosts, sharing
