@@ -372,6 +372,25 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
         let arg = &record.argv[i];
         let staged = &record.staged_argv[i];
         i += 1;
+
+        // ld64's export list, which rustc passes as the flag and then the
+        // path, each in its own `-Wl,`. The recorder staged the path; the
+        // two become one export-list slot in the joined spelling, so the
+        // replay fills it the way it fills the other linkers'.
+        if arg == SPLIT_EXPORT_LIST_FLAG
+            && let (Some(next), Some(next_staged)) = (record.argv.get(i), record.staged_argv.get(i))
+            && next != next_staged
+            && let Some(path) = next_staged.strip_prefix("-Wl,")
+        {
+            i += 1;
+            kit.staged.push(path.to_string());
+            kit.args.push(LinkArg::ExportList {
+                prefix: format!("{SPLIT_EXPORT_LIST_FLAG},"),
+                path: path.to_string(),
+            });
+            continue;
+        }
+
         let mut take_next = || {
             let next = record.argv.get(i).cloned();
             if next.is_some() {
@@ -596,6 +615,10 @@ const EXPORT_LIST_FLAGS: [&str; 4] = [
     "/DEF:",
     "-DEF:",
 ];
+
+/// The flag rustc writes ahead of ld64's export list when the path is the
+/// next argument, which is how it writes it for every apple target.
+const SPLIT_EXPORT_LIST_FLAG: &str = "-Wl,-exported_symbols_list";
 
 /// The export-list flag `arg` starts with, as `arg` spells it.
 fn export_list_flag(arg: &str) -> Option<&str> {
@@ -914,7 +937,7 @@ mod tests {
         SCHEMA_VERSION,
     };
 
-    use super::{Kit, Options, carried_capabilities, classify, emit, pick};
+    use super::{Kit, Options, SPLIT_EXPORT_LIST_FLAG, carried_capabilities, classify, emit, pick};
     use crate::package::cli::Target;
 
     #[test]
@@ -1674,9 +1697,22 @@ mod tests {
     #[test]
     fn an_engine_link_becomes_a_shared_engine_kit() {
         let id = "lumen-engine 0.0.9 git:v0.0.9 rustc:0123456789abcdef";
-        for (target, list_flag) in [
-            ("linux-x86_64", "-Wl,--version-script="),
-            ("macos-aarch64", "-Wl,-exported_symbols_list,"),
+        // Each target's export list in the shape rustc writes it: joined to
+        // its flag for the GNU linkers, the flag and then the path for ld64.
+        // Both become one slot in the joined spelling.
+        for (target, recorded, recorded_staged, list_flag) in [
+            (
+                "linux-x86_64",
+                vec!["-Wl,--version-script=/tmp/rustcXX/list"],
+                vec!["-Wl,--version-script=55667788-list"],
+                "-Wl,--version-script=",
+            ),
+            (
+                "macos-aarch64",
+                vec!["-Wl,-exported_symbols_list", "-Wl,/tmp/rustcXX/list"],
+                vec!["-Wl,-exported_symbols_list", "-Wl,55667788-list"],
+                "-Wl,-exported_symbols_list,",
+            ),
         ] {
             let macos = target.starts_with("macos");
             let root = scratch(&format!("engine-{target}"));
@@ -1694,17 +1730,23 @@ mod tests {
             } else {
                 "/b/deps/liblumen_engine.so"
             };
-            let argv: Vec<String> = [
-                "/b/deps/lumen_engine.lumen_engine.rcgu.o".to_string(),
-                format!("{list_flag}/tmp/rustcXX/list"),
-                "-Wl,-install_name,/b/deps/liblumen_engine.dylib".to_string(),
-                "-o".to_string(),
-                out_lib.to_string(),
-            ]
-            .to_vec();
-            let mut staged = argv.clone();
-            staged[0] = "11223344-lumen_engine.lumen_engine.rcgu.o".to_string();
-            staged[1] = format!("{list_flag}55667788-list");
+            let tail = [
+                "-Wl,-install_name,/b/deps/liblumen_engine.dylib",
+                "-o",
+                out_lib,
+            ];
+            let argv: Vec<String> = ["/b/deps/lumen_engine.lumen_engine.rcgu.o"]
+                .iter()
+                .chain(&recorded)
+                .chain(&tail)
+                .map(|a| (*a).to_string())
+                .collect();
+            let staged: Vec<String> = ["11223344-lumen_engine.lumen_engine.rcgu.o"]
+                .iter()
+                .chain(&recorded_staged)
+                .chain(&tail)
+                .map(|a| (*a).to_string())
+                .collect();
             let record_path = root.join("record.jsonl");
             write(&record_path, line(out_lib, &argv, &staged).as_bytes());
 
@@ -1743,6 +1785,18 @@ mod tests {
             assert!(
                 out.join("stage/55667788-list").is_file(),
                 "the list travels"
+            );
+            // Nothing on the line still names rustc's temporary directory,
+            // which is gone by the time a replay runs, and no flag is left
+            // without the path it takes.
+            assert!(
+                !manifest.args.iter().any(|a| matches!(
+                    a,
+                    LinkArg::Lit { value }
+                        if value.contains("rustcXX") || value == SPLIT_EXPORT_LIST_FLAG
+                )),
+                "{:?}",
+                manifest.args
             );
             let rpath = LinkArg::Lit {
                 value: "-Wl,-install_name,@rpath/liblumen_engine.dylib".to_string(),
