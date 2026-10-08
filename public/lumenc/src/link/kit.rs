@@ -1085,6 +1085,60 @@ mod tests {
         );
     }
 
+    /// On macOS the export-list slot holds ld64's exported-symbols list, and
+    /// the replay points it at the app's own list or at the kit's copy of the
+    /// recorded one, never at the path the recording build wrote it to.
+    #[test]
+    fn a_macos_engine_replay_points_the_exported_symbols_list_at_a_file_it_has() {
+        let mut manifest = manifest(
+            Driver {
+                kind: DriverKind::Cc,
+                flavor: "darwin".to_string(),
+                path: None,
+            },
+            ArtifactKind::SharedEngine,
+        );
+        manifest.args.push(LinkArg::ExportList {
+            prefix: "-Wl,-exported_symbols_list,".to_string(),
+            path: "aabbccdd-list".to_string(),
+        });
+        let keep = vec!["_lumen_engine_build_id".to_string()];
+        let exports = Path::new("/out/liblumen_engine.exports");
+        let plan = plan(
+            Path::new("/kit"),
+            &manifest,
+            &deps(&[]),
+            &[],
+            &Library {
+                exports: Some(exports),
+                keep: &keep,
+                unforced_modules_stay: false,
+            },
+            Path::new("/out/liblumen_engine.dylib"),
+            Path::new("/out/liblumen_engine.dylib"),
+        )
+        .expect("the kit replays");
+        let args = args(&plan);
+        assert!(
+            args.contains(&format!("-Wl,-exported_symbols_list,{}", exports.display())),
+            "{args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("aabbccdd-list")),
+            "{args:?}"
+        );
+
+        let recorded = Path::new("/kit").join("stage").join("aabbccdd-list");
+        let passed = args_of_default(&manifest);
+        assert!(
+            passed.contains(&format!(
+                "-Wl,-exported_symbols_list,{}",
+                recorded.display()
+            )),
+            "{passed:?}"
+        );
+    }
+
     /// The flags a library replay adds are not doubled when the recorded
     /// line carries them, and MSVC's combined spelling counts.
     #[test]

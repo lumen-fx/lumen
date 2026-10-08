@@ -116,6 +116,11 @@ fn record(args: &[String]) -> Result<(), String> {
     for (i, arg) in argv.iter().enumerate() {
         let name = if Some(i) == out_at {
             None
+        } else if let Some((lead, path)) = i
+            .checked_sub(1)
+            .and_then(|prev| split_flag_path(&argv[prev], arg))
+        {
+            stage_input(path, &stage)?.map(|name| format!("{lead}{name}"))
         } else {
             stage_input(arg, &stage)?
         };
@@ -193,6 +198,22 @@ fn split_path_flag(arg: &str) -> Option<(&str, &str)> {
         }
     }
     None
+}
+
+/// The path an argument carries when the flag before it takes one.
+///
+/// rustc hands ld64 its exported-symbols list as two driver arguments,
+/// `-Wl,-exported_symbols_list` and `-Wl,<path>`, because it adds the flag and
+/// the path one at a time. The path is as temporary as a joined one, so it is
+/// staged the same way. Answers the `-Wl,` lead that stays and the path.
+fn split_flag_path<'a>(prev: &str, arg: &'a str) -> Option<(&'static str, &'a str)> {
+    const FLAGS: &[&str] = &["-Wl,-exported_symbols_list"];
+    if !FLAGS.contains(&prev) {
+        return None;
+    }
+    arg.strip_prefix("-Wl,")
+        .filter(|path| !path.is_empty() && !path.contains(','))
+        .map(|path| ("-Wl,", path))
 }
 
 /// Copy `arg` into the stage directory if it names a file, and answer the
@@ -366,7 +387,9 @@ fn tokenize_gnu(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{output_of, parse_response, split_path_flag, tokenize_gnu, tokenize_msvc};
+    use super::{
+        output_of, parse_response, split_flag_path, split_path_flag, tokenize_gnu, tokenize_msvc,
+    };
 
     fn utf16le(text: &str) -> Vec<u8> {
         let mut bytes = vec![0xFF, 0xFE];
@@ -389,6 +412,23 @@ mod tests {
         assert_eq!(
             split_path_flag("/def:C:\\t\\lib.def"),
             Some(("/def:", "C:\\t\\lib.def"))
+        );
+    }
+
+    #[test]
+    fn an_exported_symbols_list_split_across_two_arguments_is_staged() {
+        // The shape rustc writes for an apple target's library link.
+        assert_eq!(
+            split_flag_path(
+                "-Wl,-exported_symbols_list",
+                "-Wl,/b/release/deps/rustcO6UzO3/list"
+            ),
+            Some(("-Wl,", "/b/release/deps/rustcO6UzO3/list"))
+        );
+        assert_eq!(split_flag_path("-Wl,-dead_strip", "-Wl,/tmp/list"), None);
+        assert_eq!(
+            split_flag_path("-Wl,-exported_symbols_list", "-lSystem"),
+            None
         );
     }
 

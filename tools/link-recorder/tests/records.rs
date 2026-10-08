@@ -219,6 +219,53 @@ fn a_recorded_link_stages_its_inputs_and_passes_the_linker_through() {
     );
 }
 
+/// The export list of an apple library link, which rustc passes as the flag
+/// and then the path, each in its own `-Wl,`. The path is in a directory rustc
+/// deletes when the link returns, so it is staged, and the record keeps the
+/// `-Wl,` lead in front of the staged name.
+#[test]
+fn an_ld64_export_list_after_its_flag_is_staged() {
+    let root = scratch("ld64-exports");
+    let stage = root.join("stage");
+    let record = root.join("record.jsonl");
+    let tmp = root.join("rustcO6UzO3");
+    fs::create_dir_all(&tmp).expect("create rustc's temporary directory");
+    let list = tmp.join("list");
+    fs::write(&list, b"_lumen_app_new\n").expect("write the export list");
+    let out = root.join("liblumen_engine.dylib");
+
+    let result = Run::new()
+        .recording(&record, &stage)
+        .env("LUMEN_REAL_LINKER", linker_exiting(&root, 0))
+        .args(&[
+            "-Wl,-exported_symbols_list".to_string(),
+            format!("-Wl,{}", path_arg(&list)),
+            "-dynamiclib".to_string(),
+            "-o".to_string(),
+            path_arg(&out),
+        ])
+        .run();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    // rustc removes its directory once the linker returns.
+    fs::remove_dir_all(&tmp).expect("remove rustc's temporary directory");
+
+    let line = one_record(&record);
+    let staged = strings(&line, "staged_argv");
+    assert_eq!(staged[0], "-Wl,-exported_symbols_list", "{staged:?}");
+    let name = staged[1]
+        .strip_prefix("-Wl,")
+        .unwrap_or_else(|| panic!("the lead stays: {staged:?}"));
+    assert!(is_staged_name(name, "list"), "{staged:?}");
+    assert_eq!(
+        fs::read(stage.join(name)).expect("the list was copied"),
+        b"_lumen_app_new\n"
+    );
+}
+
 /// The MSVC shape: a UTF-16 response file, whitespace-separated, naming the
 /// output in the spelling that linker takes.
 #[test]
