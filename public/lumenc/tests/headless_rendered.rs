@@ -95,53 +95,83 @@ fn an_idle_app_wakes_for_its_timer() {
     )
     .expect("write main.lmn");
     // Long enough that startup's own follow-up frames have settled and the
-    // loop is parked when the deadline passes.
+    // loop is parked when the deadline passes. The `armed` line separates the
+    // app's startup from the wait on the timer when the bound is missed.
     std::fs::write(
         dir.join("src/main.cdl"),
         "import \"lumen.cdl\";\n\
-         fn on_ready() { lumen::set_timeout(\"t\", 1500); }\n\
+         fn on_ready() { print(\"timer armed\"); lumen::set_timeout(\"t\", 1500); }\n\
          fn on_timer(name: string) { print(\"timer fired \" + name); }\n\
          fn main() {}\n",
     )
     .expect("write main.cdl");
 
+    // The boot trace times each startup phase on stderr, so a missed bound
+    // shows where the time went.
     let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
         .arg("run")
         .arg(&dir)
         .arg("--headless")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
+        .env("LUMEN_BOOT_TRACE", "1")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn lumenc run --headless");
+    let started = Instant::now();
+    let (tx, rx) = mpsc::channel::<(bool, Duration, String)>();
     let stdout = child.stdout.take().expect("piped stdout");
-    let (tx, rx) = mpsc::channel();
+    let stderr = child.stderr.take().expect("piped stderr");
+    let out_tx = tx.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
+            if out_tx.send((false, started.elapsed(), line)).is_err() {
+                break;
+            }
+        }
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send((true, started.elapsed(), line)).is_err() {
                 break;
             }
         }
     });
 
-    let started = Instant::now();
     let limit = Duration::from_secs(6);
+    let mut armed = None;
     let mut fired = None;
+    let mut log = Vec::new();
     while fired.is_none() {
         let Some(left) = limit.checked_sub(started.elapsed()) else {
             break;
         };
-        match rx.recv_timeout(left) {
-            Ok(line) if line.contains("timer fired t") => fired = Some(started.elapsed()),
-            Ok(_) => {}
-            Err(_) => break,
+        let Ok((is_err, at, line)) = rx.recv_timeout(left) else {
+            break;
+        };
+        if !is_err && line.contains("timer armed") {
+            armed = Some(at);
         }
+        if !is_err && line.contains("timer fired t") {
+            fired = Some(at);
+        }
+        log.push(format!(
+            "{at:>12.3?} {} {line}",
+            if is_err { "err" } else { "out" }
+        ));
     }
+    let exited = child.try_wait().ok().flatten();
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
-    let fired = fired.expect("the timer never fired on an idle headless app");
+    let Some(fired) = fired else {
+        panic!(
+            "the timer never fired on an idle headless app within {limit:?} of spawn; \
+             armed at {armed:?}, exited with {exited:?}\n{}",
+            log.join("\n")
+        );
+    };
     assert!(
         fired >= Duration::from_millis(1500),
         "the timer fired early, after {fired:?}"
