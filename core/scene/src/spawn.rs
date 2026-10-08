@@ -2366,12 +2366,17 @@ pub fn reconcile_for_blocks(
             if aligned {
                 for (row_i, (idx, key)) in marker.win_rows.iter().enumerate() {
                     let slice = &kids[row_i * body_len..(row_i + 1) * body_len];
-                    let item = &items[*idx];
                     let was = marker.row_items.get(row_i);
+                    // A mounted row's index points into the array it was
+                    // built from, which may since have shrunk past it. Only
+                    // a row still in the desired window reads its record,
+                    // and every desired index is in bounds.
+                    let item =
+                        (desired_by_idx.get(idx) == Some(&key.as_str())).then(|| &items[*idx]);
                     // A kept row whose record changed follows it in place;
                     // one that cannot is dropped and mounts again below.
-                    let keep = desired_by_idx.get(idx) == Some(&key.as_str())
-                        && (was == Some(item)
+                    let kept = item.filter(|&item| {
+                        was == Some(item)
                             || row_template.plan(
                                 slice,
                                 (was, item),
@@ -2379,8 +2384,9 @@ pub fn reconcile_for_blocks(
                                 &report_missing,
                                 &lookup,
                                 &mut patches,
-                            ));
-                    if keep {
+                            )
+                    });
+                    if let Some(item) = kept {
                         new_win.push((*idx, key.clone()));
                         new_items.push(item.clone());
                     } else {
@@ -4165,6 +4171,79 @@ mod css_spawn_wiring_tests {
         assert_eq!(
             world.get::<TextContent>(e).map(|text| text.0.as_str()),
             Some("{name}")
+        );
+    }
+}
+
+#[cfg(test)]
+mod virtualized_for_tests {
+    //! A virtualized `<for>` remembers each mounted row by its index into
+    //! the array it was built from. When the array shrinks under the
+    //! window (a search filter), those indices can point past its end.
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::signals::{ArrayItem, ArraySignals};
+
+    fn rows(ids: &[usize]) -> Vec<ArrayItem> {
+        ids.iter()
+            .map(|i| {
+                let mut m = ArrayItem::default();
+                m.insert("id".to_string(), i.to_string());
+                m.insert("label".to_string(), format!("row {i}"));
+                m
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_filter_that_shrinks_the_array_under_the_window_keeps_the_surviving_row() {
+        let mut world = World::new();
+        let mut arrays = ArraySignals::default();
+        arrays.set("rows", rows(&[0, 1, 2]));
+        world.insert_resource(arrays);
+        world.insert_resource(PropertyStore::default());
+
+        let mut label = Element {
+            tag: "label".to_string(),
+            ..Element::default()
+        };
+        label.attrs.text = Some("{label}".to_string());
+        let block = world
+            .spawn((
+                lumen_core::components::Style::default(),
+                ForMarker {
+                    array_name: "rows".into(),
+                    body: vec![label],
+                    key_field: Some("id".to_string()),
+                    cached_keys: Vec::new(),
+                    virtualized: true,
+                    row_height: 20.0,
+                    win_rows: Vec::new(),
+                    cascaded_body: None,
+                    row_items: Vec::new(),
+                },
+            ))
+            .id();
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        assert_eq!(world.get::<ForMarker>(block).unwrap().win_rows.len(), 3);
+
+        // The filter keeps only the last row: it moves to index 0, and the
+        // rows mounted at indices 1 and 2 have no record left.
+        world.resource_mut::<ArraySignals>().set("rows", rows(&[2]));
+        world.run_system_once(reconcile_for_blocks).unwrap();
+
+        assert_eq!(
+            world.get::<ForMarker>(block).unwrap().win_rows,
+            vec![(0, "2".to_string())]
+        );
+        let kids: Vec<Entity> = world
+            .get::<bevy_ecs::hierarchy::Children>(block)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids.len(), 1);
+        assert_eq!(
+            world.get::<TextContent>(kids[0]).map(|t| t.0.as_str()),
+            Some("row 2")
         );
     }
 }
