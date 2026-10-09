@@ -1156,6 +1156,20 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if !el.attrs.classes.is_empty() {
         entity.insert(LumenClasses::from(el.attrs.classes.clone()));
     }
+    // Kept for the restyle pass, which re-runs the cascade from the
+    // element's tag, classes and id alone and would otherwise let a tag
+    // rule overwrite what the markup set. A value still holding a `{...}`
+    // placeholder is a template's, not this element's.
+    let markup: Vec<(String, String)> = el
+        .attrs
+        .markup_styles
+        .iter()
+        .filter(|(_, value)| !value.contains('{'))
+        .cloned()
+        .collect();
+    if !markup.is_empty() {
+        entity.insert(lumen_core::components::MarkupStyle(markup.into()));
+    }
     // Retain the tag on EVERY spawned element so the runtime can
     // rebuild a `tag.class#id` cascade target and re-resolve computed
     // style in place on a theme / media flip (see
