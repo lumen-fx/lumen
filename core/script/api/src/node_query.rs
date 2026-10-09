@@ -285,6 +285,9 @@ pub struct NodeDetail {
     pub attributes: Vec<(String, String)>,
     /// Inline-style overrides (`element.style`), ordered.
     pub inline_style: Vec<(String, String)>,
+    /// Styling attributes from the node's markup, ordered. They rank
+    /// above every stylesheet rule and below `inline_style`.
+    pub markup_style: Vec<(String, String)>,
 }
 
 /// Snapshot of per-node details plus the cascade inputs `computed_style`
@@ -473,8 +476,14 @@ pub fn resolved_attributes(handle: u64) -> lumen_ir::layout_ir::Attributes {
             attrs = el.attrs;
         }
     }
-    // Overlay inline style (highest tier).
+    // Markup attributes outrank every rule; inline style (the highest
+    // tier) outranks them.
     if let Some(detail) = details.detail(handle) {
+        for (prop, value) in &detail.markup_style {
+            if prop != "flex-direction" {
+                let _ = lumen_ir::css::apply_inline_declaration(prop, value, &mut attrs);
+            }
+        }
         for (prop, value) in &detail.inline_style {
             let _ = lumen_ir::css::apply_inline_declaration(prop, value, &mut attrs);
         }
