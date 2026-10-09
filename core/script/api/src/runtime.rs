@@ -140,6 +140,12 @@ pub enum ScriptSet {
     /// ([`dispatch_clicks_and_doubles`], [`dispatch_close_to_script`], the
     /// toggle / slider / menu / dialog / DnD / text-input fanout, and
     /// [`fire_plugin_events`], which delivers what the capabilities report).
+    ///
+    /// Every member runs after [`ScriptSet::SyncSignals`], which runs after the
+    /// control write-backs (`push_*_to_signal`). A handler therefore reads a
+    /// bound signal with this tick's toggle flip, slider move, or keystroke
+    /// already in it: `on_toggle` sees the new state, and a Save click on the
+    /// tick after typing reads the typed text.
     Dispatch,
     /// [`fire_due_timers`]: `on_timer` delivery, per host.
     Timers,
@@ -507,7 +513,8 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             TickStage::Systems,
             fire_plugin_events::<H>
                 .in_set(ScriptSet::PluginEvents)
-                .in_set(ScriptSet::Dispatch),
+                .in_set(ScriptSet::Dispatch)
+                .after(ScriptSet::SyncSignals),
         );
         // Event dispatchers: forward Click / LongPress / DoubleClick to
         // the script's `on_click(id)` / `on_long_press(id)` /
@@ -520,6 +527,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             TickStage::Systems,
             dispatch_clicks_and_doubles::<H>
                 .in_set(ScriptSet::Dispatch)
+                .after(ScriptSet::SyncSignals)
                 .after(lumen_input::dispatch_clicks)
                 .after(lumen_primitives::press::detect_double_click),
         );
@@ -537,7 +545,8 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 dispatch_slider_to_script::<H>,
                 dispatch_close_to_script::<H>,
             )
-                .in_set(ScriptSet::Dispatch),
+                .in_set(ScriptSet::Dispatch)
+                .after(ScriptSet::SyncSignals),
         );
     }
 }
