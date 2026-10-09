@@ -1236,9 +1236,8 @@ with the module's `max_concurrent` setting:
 lumen-archive = { bundled = true, config = { max_concurrent = 2 } }
 ```
 
-Selecting part of an archive, stripping leading path components, per-entry
-progress, listing an archive without unpacking it, and writing an archive are
-not part of this surface.
+Stripping leading path components, per-entry progress, listing an archive
+without unpacking it, and writing an archive are not part of this surface.
 
 On Windows nothing loads a module beside the executable, so this surface
 exists only in a
