@@ -93,19 +93,18 @@ impl Default for ProgressBar {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ProgressFill;
 
-/// Plugin: registers the binding pull + fill sync systems.
+/// Plugin: registers the fill sync system.
+///
+/// The binding pull, [`apply_progress_bindings`], is installed by whoever
+/// wires the app's signal bindings, beside the other pull readers, because
+/// it must run after every writer of the store on the tick (the script's
+/// command applier, the derivation pass, the control write-backs) and those
+/// are named only there.
 pub struct ProgressPlugin;
 
 impl Plugin for ProgressPlugin {
     fn build(self, app: &mut App) {
-        // Ordered after the store drain the host registers (no-op edge
-        // when absent) so a same-tick script write is observed, and the
-        // sync runs after the pull so the fill reflects this tick's
-        // value.
-        app.add_systems(
-            TickStage::Systems,
-            apply_progress_bindings.after(lumen_core::property_store::commit_external_properties),
-        );
+        // After the pull so the fill reflects this tick's value.
         app.add_systems(
             TickStage::Systems,
             sync_progress_fill.after(apply_progress_bindings),
@@ -116,7 +115,9 @@ impl Plugin for ProgressPlugin {
 /// Pull `bind-value` signal writes into [`ProgressBar::value`]. Same
 /// dirty-gated shape as `lumen_core::signals::apply_value_bindings`
 /// (which targets sliders - progress deliberately does not carry a
-/// `SliderValue`, or it would inherit wheel / click / drag mutation).
+/// `SliderValue`, or it would inherit wheel / click / drag mutation),
+/// and installed with the same ordering, after every store writer, so a
+/// write's one-tick dirty flag is still set when this reads it.
 pub fn apply_progress_bindings(
     store: Res<PropertyStore>,
     mut q: Query<(
