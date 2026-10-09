@@ -3355,6 +3355,31 @@ fn pickers_carry_a_shape_pattern() {
 }
 
 #[test]
+fn pickers_are_tabbable_and_keep_the_attributes_written_on_them() {
+    // A picker expands to an `<input>`, so it is in the Tab order the way a
+    // written `<input>` is, and the common attributes reach the field.
+    let ir = parse_html(
+        r##"<root>
+                <date-picker bind-value="due" id="due"/>
+                <time-picker bind-value="at" class="wide" tab-index="-1" required="true" width="240"/>
+            </root>"##,
+    )
+    .expect("html");
+    let date = &ir.root.children[0];
+    assert_eq!(date.attrs.tab_index, Some(0));
+    assert_eq!(date.attrs.id.as_deref(), Some("due"));
+    let time = &ir.root.children[1];
+    assert_eq!(time.attrs.tab_index, Some(-1), "an authored tab-index wins");
+    assert_eq!(time.attrs.classes, vec!["time-picker", "wide"]);
+    assert!(time.attrs.required);
+    assert_eq!(
+        time.attrs.width,
+        Some(lumenc::layout_ir::LengthSpec::Px(240.0))
+    );
+    assert_eq!(time.attrs.pattern.as_deref(), Some("shape:time"));
+}
+
+#[test]
 fn a_styling_attribute_is_recorded_under_the_name_the_cascade_uses() {
     let ir = parse_html(
         r##"<root><tile id="card" bg="#101014" padding="8" gap="4"
