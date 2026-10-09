@@ -275,6 +275,7 @@ pub(crate) fn publish_node_details(
         Option<&TextContent>,
         Option<&LumenAttributes>,
         Option<&InlineStyle>,
+        Option<&lumen_core::components::MarkupStyle>,
     )>,
     focused: Query<Entity, With<lumen_core::input::Focused>>,
     hovered: Query<Entity, With<lumen_core::input::Hovered>>,
@@ -287,13 +288,14 @@ pub(crate) fn publish_node_details(
         hovered.iter().next().map(pack),
     );
     let mut map: HashMap<u64, NodeDetail> = HashMap::new();
-    for (entity, text, attrs, inline) in nodes.iter() {
+    for (entity, text, attrs, inline, markup) in nodes.iter() {
         let detail = NodeDetail {
             text: text.map(|t| t.0.clone()),
             attributes: attrs
                 .map(|a| a.0.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default(),
             inline_style: inline.map(|s| s.0.clone()).unwrap_or_default(),
+            markup_style: markup.map(|m| m.0.to_vec()).unwrap_or_default(),
         };
         map.insert(entity.to_bits(), detail);
     }

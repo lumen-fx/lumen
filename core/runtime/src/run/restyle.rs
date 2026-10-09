@@ -523,6 +523,8 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
             }
             resolved = true;
         }
+        // Markup attributes outrank every rule, as in the first cascade.
+        resolved |= overlay_markup_style(world, entity, &mut el.attrs);
         // Highest cascade tier, applied last so it wins.
         resolved |= overlay_inline_style(world, entity, &mut el.attrs);
         if resolved {
@@ -554,6 +556,32 @@ fn overlay_inline_style(world: &World, entity: Entity, attrs: &mut Attributes) -
                 tracing::debug!("set_style: unknown property {property:?}, ignored")
             }
             Err(e) => tracing::warn!("set_style: {property}: {e}"),
+        }
+    }
+    applied
+}
+
+/// Fold an entity's [`MarkupStyle`](lumen_core::components::MarkupStyle)
+/// onto an already-cascaded [`Attributes`], returning whether anything
+/// landed. The first cascade ranks a styling attribute above every rule;
+/// this pass rebuilds the element from its tag, classes and id, so without
+/// it a tag rule (`toggle { height: 36 }`) would overwrite the attribute
+/// the markup wrote (`<toggle height="28px">`).
+fn overlay_markup_style(world: &World, entity: Entity, attrs: &mut Attributes) -> bool {
+    let Some(markup) = world.get::<lumen_core::components::MarkupStyle>(entity) else {
+        return false;
+    };
+    let mut applied = false;
+    for (property, value) in markup.0.iter() {
+        // `flex-direction` stays with the cascade, as in the first one:
+        // see `restore_inline_origin` in `lumen_ir::css`.
+        if property == "flex-direction" {
+            continue;
+        }
+        match lumen_ir::css::apply_inline_declaration(property, value, attrs) {
+            Ok(true) => applied = true,
+            Ok(false) => {}
+            Err(e) => tracing::debug!("markup style {property}: {e}"),
         }
     }
     applied

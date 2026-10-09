@@ -70,6 +70,12 @@ impl Harness {
     /// `script` baked in as the app's candela source. An empty `script` builds
     /// an app with no script at all.
     fn new(rules: Vec<Rule>, script: &str) -> Self {
+        Self::with_box(rules, script, |_| {})
+    }
+
+    /// [`Self::new`], with `markup` adjusting `#box`'s attributes as its
+    /// markup would have set them.
+    fn with_box(rules: Vec<Rule>, script: &str, markup: impl FnOnce(&mut Attributes)) -> Self {
         let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _ = node_query::drain_external_dom_commands();
         let dir = std::env::temp_dir().join(format!("lumen_restyle_{}_{}", std::process::id(), {
@@ -80,13 +86,10 @@ impl Harness {
         // Port 0 keeps parallel test binaries off a shared socket.
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
+        let mut boxed = el("tile", Some("box"), &["cold"], vec![]);
+        markup(&mut boxed.attrs);
         let mut ir = LayoutIR {
-            root: el(
-                "root",
-                Some("app"),
-                &[],
-                vec![el("tile", Some("box"), &["cold"], vec![])],
-            ),
+            root: el("root", Some("app"), &[], vec![boxed]),
             combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet {
                 rules,
                 ..Default::default()
@@ -173,6 +176,39 @@ fn near(a: lumen_core::components::Color, hex: &str) -> bool {
         u8::from_str_radix(&hex[1 + i * 2..3 + i * 2], 16).expect("#rrggbb literal") as f32 / 255.0
     };
     (a.r - byte(0)).abs() < 0.01 && (a.g - byte(1)).abs() < 0.01 && (a.b - byte(2)).abs() < 0.01
+}
+
+/// A styling attribute from markup outranks a stylesheet rule after a
+/// restyle as it does at load. The restyle rebuilt the element from its tag,
+/// classes and id, so a tag rule (`toggle { height: 36 }` in the built-in
+/// sheet) overwrote `height="28px"` on the first re-resolve.
+#[test]
+fn markup_attribute_outranks_a_tag_rule_after_a_restyle() {
+    use lumen_core::components::{Length, Style};
+    let mut h = Harness::with_box(
+        vec![rule("tile", &[("height", "36"), ("width", "90")], 0)],
+        "",
+        |attrs| {
+            attrs.height = Some(lumen_ir::layout_ir::LengthSpec::Px(28.0));
+            attrs
+                .markup_styles
+                .push(("height".to_string(), "28px".to_string()));
+        },
+    );
+    // A class change re-resolves `#box` against the stylesheet.
+    push_external_dom_command(lumen_script::ScriptCommand::SetClasses {
+        target_id: "box".to_string(),
+        classes: "warm".to_string(),
+    });
+    h.settle();
+    let entity = h.box_entity();
+    let style = h.app.world.get::<Style>(entity).expect("style");
+    assert_eq!(style.height, Length::Px(28.0), "the markup height stands");
+    assert_eq!(
+        style.width,
+        Length::Px(90.0),
+        "the rule still sets the rest"
+    );
 }
 
 /// `set_style` writes an inline value that beats the author rule and reaches

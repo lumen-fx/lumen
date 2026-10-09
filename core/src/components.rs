@@ -2016,6 +2016,16 @@ impl LumenAttributes {
     }
 }
 
+/// The styling attributes an element was written with in markup, as
+/// `(property, value)` pairs in the order they were written. A styling
+/// attribute outranks every stylesheet rule; the first cascade knows which
+/// values came from markup, and this keeps that record so a restyle (a
+/// class change, a theme or `@media` flip) ranks them the same way instead
+/// of letting a tag rule overwrite them. Absent on an element whose markup
+/// set no styling attribute.
+#[derive(Component, Clone, Debug, Default)]
+pub struct MarkupStyle(pub std::sync::Arc<[(String, String)]>);
+
 /// Per-element inline style overrides: the DOM `element.style` layer. Stored
 /// as ordered `(property, value)` pairs so a later write wins and iteration
 /// is deterministic. The runtime CSS re-apply reads this LAST (highest
