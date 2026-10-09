@@ -734,8 +734,9 @@ lumenc snapshot [--text|--json] [--max-lines N] [--cursor C]
 Prints an accessibility-tree-style text dump of the live UI. `--text` is the
 default; `--json` prints the raw result. `--max-lines` truncates and prints a
 cursor to resume from; pass it back with `--cursor`. `--include-invisible`
-(also spelled `--no-omit-invisible`) keeps entities that are not visible.
-Exits 0 on any successful call.
+(also spelled `--no-omit-invisible`) keeps entities that are not visible,
+including those hidden by a `Visible(false)` on an ancestor, such as the
+devtools panel before F12. Exits 0 on any successful call.
 
 ### find
 
@@ -745,7 +746,8 @@ lumenc find [--text S] [--role R] [--id N] [--limit N] [--json]
 ```
 
 Searches the live snapshot. Prints one row per hit: id, role, label, position,
-size, state. Exits 1 with `no matches` when nothing matches.
+size, state. Elements the app is not painting because they or an ancestor are
+hidden are not searched. Exits 1 with `no matches` when nothing matches.
 
 ### element-at
 
@@ -753,7 +755,8 @@ size, state. Exits 1 with `no matches` when nothing matches.
 lumenc element-at <x> <y> [--json] [--port P] [--app <dir>]
 ```
 
-Prints the topmost entity at the logical-pixel point. Exits 1 on a miss.
+Prints the topmost painted entity at the logical-pixel point; a hidden element
+over the point does not count. Exits 1 on a miss.
 
 ### click
 
@@ -806,8 +809,8 @@ lumenc lint --signals [<app-dir>] [--json] [--strict]
 ```
 
 Plain `lumenc lint` queries the running app and prints one finding per line as
-`<severity> <entity> <category>: <hint>`. It exits 1 when any finding has
-error severity.
+`<severity> <entity> <category>: <hint>`. Hidden elements are not linted. It
+exits 1 when any finding has error severity.
 
 `--css-cascade` is offline: it parses `<dir>/src/main.css` and reports every
 rule whose resolved value differs between first-wins and last-wins cascade
