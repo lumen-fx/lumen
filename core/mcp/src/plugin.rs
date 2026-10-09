@@ -148,6 +148,34 @@ mod builder_tests {
                 .issues_enabled
         );
     }
+
+    /// A port another process holds leaves the server off, and says so,
+    /// rather than claiming a listener that a client would never reach.
+    #[test]
+    fn a_taken_port_leaves_the_server_off() {
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = holder.local_addr().unwrap().port();
+        let mut app = lumen_core::app::App::new();
+        app.add_plugin(LumenMcpPlugin::with_port(port));
+        assert!(app.world.get_resource::<McpListening>().is_none());
+    }
+
+    /// A free port is bound by the time the plugin is built, so a client can
+    /// connect straight away.
+    #[test]
+    fn a_free_port_is_listening_once_built() {
+        let port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            probe.local_addr().unwrap().port()
+        };
+        let mut app = lumen_core::app::App::new();
+        app.add_plugin(LumenMcpPlugin::with_port(port));
+        assert_eq!(
+            app.world.get_resource::<McpListening>(),
+            Some(&McpListening(port))
+        );
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts");
+    }
 }
 
 /// Throttle controller for the 17 snap_* systems. The default 1 Hz
@@ -570,14 +598,43 @@ impl Plugin for LumenMcpPlugin {
             issues_enabled: self.issues_enabled,
             timer,
         };
+        // Bind here rather than on the server thread, so a port another
+        // process holds is reported now, in the app's own output, instead of
+        // a client later reaching whoever owns the port.
+        let server: Box<dyn FnOnce() + Send> = match transport {
+            McpTransport::Tcp(port) => match bind_tcp(port) {
+                Ok(listener) => {
+                    app.world.insert_resource(McpListening(port));
+                    Box::new(move || serve_tcp(listener, ctx))
+                }
+                Err(e) => {
+                    lumen_core::warn_line!(
+                        "lumen-mcp: cannot listen on 127.0.0.1:{port}: {e}; \
+                         the introspection server is off for this run"
+                    );
+                    return;
+                }
+            },
+            McpTransport::Stdio => Box::new(move || serve_stdio(ctx)),
+        };
         std::thread::Builder::new()
             .name("lumen-mcp-server".into())
-            .spawn(move || match transport {
-                McpTransport::Tcp(port) => serve_tcp(port, ctx),
-                McpTransport::Stdio => serve_stdio(ctx),
-            })
+            .spawn(server)
             .expect("lumen-mcp: failed to spawn server thread");
     }
+}
+
+/// The TCP port the introspection server is listening on, present only once
+/// the listener is bound.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpListening(pub u16);
+
+/// Bind the server's listener on `127.0.0.1:port`, ready for the async
+/// runtime to adopt.
+fn bind_tcp(port: u16) -> std::io::Result<std::net::TcpListener> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 /// W6 T5: main-world half of the real tick timing. Runs unthrottled in

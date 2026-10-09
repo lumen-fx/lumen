@@ -56,7 +56,7 @@ mod simulate;
 mod snapshot;
 
 pub use mcp_protocol::{MCP_PROTOCOL_VERSION, tool_name_to_legacy};
-pub use plugin::{LumenMcpPlugin, McpSnapshotSchedule, McpTransport};
+pub use plugin::{LumenMcpPlugin, McpListening, McpSnapshotSchedule, McpTransport};
 pub use simulate::{SimulateKind, SimulateQueue, SimulateRequest};
 pub use snapshot::{
     ColorView, EntityInspect, EntityView, ExtractedRectView, ExtractedTextView, FillView,
