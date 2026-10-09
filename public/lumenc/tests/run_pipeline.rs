@@ -665,6 +665,42 @@ mod pipeline_integration_tests {
         }
     }
 
+    /// A `<progress bind-value>` follows a signal the script writes, whether
+    /// or not the bar also carries a `value`.
+    const PROGRESS_MARKUP: &str = r#"
+<root>
+  <progress id="a" width="300px" height="10px" bind-value="a" max="100" />
+  <progress id="b" width="300px" height="10px" value="0" bind-value="b" max="100" />
+  <script>
+    import "lumen.cdl";
+    fn on_ready() {
+        lumen::signal_set_int("a", 81);
+        lumen::signal_set("b", "20");
+    }
+    fn main() {}
+  </script>
+</root>
+"#;
+
+    #[test]
+    fn progress_bind_value_follows_its_signal() {
+        let _serial = crate::serial();
+        let mut app = build_and_tick(PROGRESS_MARKUP, 6);
+        let mut q = app
+            .world
+            .query::<(&LumenId, &lumen_primitives::ProgressBar)>();
+        let mut values: Vec<(String, Option<f32>)> = q
+            .iter(&app.world)
+            .map(|(id, bar)| (id.0.clone(), bar.value))
+            .collect();
+        values.sort_by(|x, y| x.0.cmp(&y.0));
+        assert_eq!(
+            values,
+            [("a".to_string(), Some(81.0)), ("b".to_string(), Some(20.0))],
+            "a progress bar ignored the signal its bind-value names"
+        );
+    }
+
     // --- RC6: `lumenc check` compiles the script; run + check agree ------
 
     /// A script whose single expression nests `depth` parenthesised adds.
