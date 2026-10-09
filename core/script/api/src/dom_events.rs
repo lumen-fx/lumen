@@ -16,7 +16,9 @@
 //! - Pointer events target the entity currently under the cursor (`Hovered`);
 //!   `pointerenter` / `pointerleave` come from the hover marker transitions.
 //! - `keydown` targets the focused entity (from the input router's
-//!   `FocusedKey`); `keyup` targets the focused entity.
+//!   `FocusedKey`); `keyup` targets the focused entity. With nothing focused
+//!   both go to the document root, the way a browser sends them to the body,
+//!   so a listener on the document hears app-wide shortcuts.
 //! - `input` fires per edit, from the `TextEditApplied` signal the text
 //!   pipeline raises (or a page, whose fields the browser edits): one event
 //!   per keystroke, paste, or IME commit that changes the text, at most one
@@ -286,6 +288,7 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<PointerReleased>(world);
     register::<PointerMoved>(world);
     register::<MouseWheel>(world);
+    register::<KeyPressed>(world);
     register::<KeyReleased>(world);
     register::<FocusedKey>(world);
     register::<lumen_core::text_events::TextEditApplied>(world);
@@ -294,7 +297,8 @@ pub fn register_dom_event_messages(world: &mut World) {
 
 /// Read this tick's pointer, click, wheel and key input as DOM events, for
 /// [`deliver_input_events`]. Pointer events target the hovered entity; key
-/// events target the focused entity.
+/// events target the focused entity, or the document root when nothing is
+/// focused.
 #[allow(clippy::too_many_arguments)]
 pub fn queue_pointer_and_key_events(
     mut pending: ResMut<PendingDomEvents>,
@@ -306,6 +310,8 @@ pub fn queue_pointer_and_key_events(
     mut wheels: MessageReader<MouseWheel>,
     mut keyups: MessageReader<KeyReleased>,
     mut keydowns: MessageReader<FocusedKey>,
+    mut key_presses: MessageReader<KeyPressed>,
+    focus: Option<Res<FocusTracker>>,
     transforms: Query<&Transform>,
     hovered: Query<Entity, With<Hovered>>,
     focused: Query<Entity, With<Focused>>,
@@ -368,9 +374,26 @@ pub fn queue_pointer_and_key_events(
         set_mods(&mut data, &k.modifiers);
         queue.push((data, k.entity));
     }
-    // keyup targets the focused entity.
+    // The router routes nothing while no element has focus (the same
+    // `FocusTracker` it reads), and Tab is the focus move, not a key for
+    // the page. Those keys go to the document root instead.
+    let nothing_focused = focus.is_none_or(|f| f.0.is_none());
+    let document = || lumen_core::node::dom_index_snapshot().document();
+    for k in key_presses.read() {
+        if !nothing_focused || matches!(k.key, Key::Named(NamedKey::Tab)) {
+            continue;
+        }
+        let Some(doc) = document() else { continue };
+        let mut data = base(doc, "keydown");
+        data.key = key_string(&k.key);
+        set_mods(&mut data, &k.modifiers);
+        queue.push((data, doc));
+    }
+    // keyup targets the focused entity, or the document root.
     for k in keyups.read() {
-        let Some(e) = focused_entity else { continue };
+        let Some(e) = focused_entity.or_else(document) else {
+            continue;
+        };
         let mut data = base(e, "keyup");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
@@ -629,6 +652,108 @@ pub(crate) mod text_event_tests {
             "one `input` per entity per tick"
         );
         event::clear_all_bindings();
+    }
+
+    /// With nothing focused a key goes to the document root, as a browser
+    /// sends it to the body, so a listener on the document hears it. A
+    /// focused element still takes the key itself.
+    #[test]
+    fn keys_with_nothing_focused_reach_the_document() {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::node::{DomIndex, DomRecord, publish_dom_index};
+
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        world.init_resource::<FocusTracker>();
+        world.init_resource::<PendingDomEvents>();
+        let root = world.spawn_empty().id();
+        let button = world.spawn_empty().id();
+        let record = |entity: Entity, parent: Option<Entity>, children: Vec<Entity>| DomRecord {
+            entity,
+            generation: entity.generation().to_bits(),
+            tag: String::new(),
+            id: None,
+            classes: Vec::new(),
+            parent,
+            children,
+            child_index: 0,
+            sibling_count: 0,
+            doc_order: 0,
+        };
+        publish_dom_index(DomIndex::build(vec![
+            record(root, None, vec![button]),
+            record(button, Some(root), Vec::new()),
+        ]));
+        let doc = lumen_core::node::NodeHandle::new(root).pack();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        for t in ["keydown", "keyup"] {
+            let sink = Arc::clone(&seen);
+            event::register_native_binding(
+                doc,
+                t.to_string(),
+                false,
+                Arc::new(move || {
+                    let target = lumen_core::node::NodeHandle::unpack(event::event_target())
+                        .map(|h| h.entity);
+                    sink.lock()
+                        .unwrap()
+                        .push(format!("{} {:?}", event::event_type(), target));
+                }),
+            );
+        }
+        let press = |world: &mut World, key: Key| {
+            world.write_message(KeyPressed {
+                key: key.clone(),
+                modifiers: Modifiers::default(),
+                repeat: false,
+            });
+            world.write_message(KeyReleased {
+                key,
+                modifiers: Modifiers::default(),
+            });
+            world
+                .run_system_once(queue_pointer_and_key_events)
+                .expect("system ran");
+            deliver_input_events(world);
+            world.resource_mut::<Messages<KeyPressed>>().clear();
+            world.resource_mut::<Messages<KeyReleased>>().clear();
+        };
+
+        press(&mut world, Key::Named(NamedKey::Escape));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                format!("keydown {:?}", Some(root)),
+                format!("keyup {:?}", Some(root)),
+            ],
+            "an unfocused key reaches the document"
+        );
+
+        // A focused element takes the key: the router's `FocusedKey` is the
+        // keydown, and the raw press is not delivered a second time.
+        seen.lock().unwrap().clear();
+        world.resource_mut::<FocusTracker>().0 = Some(button);
+        world.entity_mut(button).insert(Focused);
+        world.write_message(FocusedKey {
+            entity: button,
+            key: Key::Named(NamedKey::Escape),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        });
+        press(&mut world, Key::Named(NamedKey::Escape));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                format!("keydown {:?}", Some(button)),
+                format!("keyup {:?}", Some(button)),
+            ],
+            "a focused key bubbles up from the element"
+        );
+        event::clear_all_bindings();
+        publish_dom_index(DomIndex::default());
     }
 
     #[test]
