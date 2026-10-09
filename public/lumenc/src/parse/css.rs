@@ -1245,7 +1245,7 @@ mod cascade_tests {
     }
 
     #[test]
-    fn reapply_single_copies_back_extended_whitelist() {
+    fn reapply_single_copies_back_paint_and_box_props() {
         // Regression: pre-W4.7 `reapply_single` only restored a text/box
         // subset, so a theme flip couldn't restyle bg / radius / width /
         // margin / opacity / shadow / hover-bg / press-bg. All must now
@@ -1287,6 +1287,53 @@ mod cascade_tests {
         assert_eq!(a.shadows.len(), 1, "shadow copied back");
         assert!(a.hover_bg.is_some(), "hover-bg copied back");
         assert!(a.press_bg.is_some(), "press-bg copied back");
+    }
+
+    /// Re-running the cascade for one element (a `<for>` row whose class
+    /// is interpolated, a class added from a script, a `@media` flip)
+    /// brings back every property the first resolution of the same rule
+    /// gives. Alignment, positioning, overflow and the grid properties
+    /// were once dropped on this path.
+    #[test]
+    fn reapply_single_matches_the_first_resolution() {
+        let css = parse_css(
+            r#"
+            .every {
+                display: grid; width: 120; height: 40; flex-direction: column;
+                padding: 3; margin: 4; gap: 5; row-gap: 6; grow: 1; flex-shrink: 0;
+                flex-basis: 10; flex-wrap: wrap; align-content: center;
+                align: center; justify: end; align-self: end; justify-items: center;
+                justify-self: start; grid-template-columns: 100px 100px 100px;
+                grid-template-rows: 30px; grid-row: 1 / 2; grid-column: 1 / 4;
+                position: absolute; inset: 1 2 3 4; min-width: 10; min-height: 11;
+                max-width: 500; max-height: 600; aspect-ratio: 2; overflow: hidden;
+                overflow-y: scroll; border: 2 solid #ff0000; box-sizing: content-box;
+                z-index: 3; bg: #112233; radius: 4; opacity: 0.5; text-color: #445566;
+                font-size: 18; text-align: center; max-lines: 2; line-height: 20px;
+                transition: opacity 100ms linear; hover-bg: #778899;
+                scrollbar-width: thin; layout-boundary: true;
+            }
+        "#,
+        )
+        .expect("css");
+        let mut ir = parse_html(r#"<root><tile class="every" /></root>"#).expect("html");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert!(
+            warnings.is_empty(),
+            "every declaration parses: {warnings:?}"
+        );
+        let first = &ir.root.children[0].attrs;
+
+        let mut el = Element {
+            tag: "tile".into(),
+            attrs: Attributes {
+                classes: vec!["every".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        reapply_single(&mut el, &css).expect("reapply");
+        assert_eq!(format!("{:?}", el.attrs), format!("{first:?}"));
     }
 
     fn card_el() -> Element {

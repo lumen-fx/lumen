@@ -463,10 +463,9 @@ pub(crate) fn detect_media_change(world: &mut World) {
 ///
 /// Reuses [`lumen_ir::css::reapply_single_with_media`] (the same
 /// cascade path the `<for>` reconciler uses for runtime-substituted rows)
-/// against the live [`RuntimeStylesheet`] and [`MediaContext`]. Only
-/// the properties in that function's extended whitelist are copied back;
-/// a property the cascade didn't set is left untouched so non-flipped
-/// inline values survive.
+/// against the live [`RuntimeStylesheet`] and [`MediaContext`]. Every
+/// property the cascade resolved is copied back; a property the cascade
+/// didn't set is left untouched so non-flipped inline values survive.
 ///
 /// The element's own [`InlineStyle`] (the `set_style` / `element.style`
 /// layer) folds on top of the stylesheet result, so an inline value beats
@@ -654,7 +653,7 @@ fn sibling_positions(world: &mut World) -> SiblingPositions {
     out
 }
 
-/// Patch the whitelisted cascade result from [`reapply_computed_styles`]
+/// Patch the cascade result from [`reapply_computed_styles`]
 /// onto an entity's live style components. Field-level so props the
 /// cascade didn't touch keep their spawn-time values; inserts an absent
 /// [`Visuals`] / [`TextStyle`] / [`Interaction`] only when the cascade
@@ -704,109 +703,18 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
             .copied()
     };
 
-    // Box props on the always-present `Style` (mutation auto-marks
-    // `DirtyLayout` via the layout crate's `Changed<Style>` watcher).
-    // D8 extended the whitelist beyond width/height/padding/margin to
-    // min/max sizes, gap, flex, and display so theme / media restyles
-    // of those properties actually reach layout.
-    if (attrs.width.is_some()
-        || attrs.height.is_some()
-        || attrs.padding.is_some()
-        || attrs.margin.is_some()
-        || attrs.min_width.is_some()
-        || attrs.min_height.is_some()
-        || attrs.max_width.is_some()
-        || attrs.max_height.is_some()
-        || attrs.gap.is_some()
-        || attrs.gap_row.is_some()
-        || attrs.gap_column.is_some()
-        || attrs.grow.is_some()
-        || attrs.flex.is_some()
-        || attrs.display.is_some()
-        || attrs.shrink.is_some()
-        || attrs.basis.is_some()
-        || attrs.flex_wrap.is_some()
-        || attrs.align_content.is_some()
-        || attrs.border_style.is_some()
-        || attrs.border_width.is_some()
-        || attrs.box_sizing.is_some()
-        || attrs.gap_pct.is_some()
-        || attrs.gap_row_pct.is_some()
-        || attrs.gap_column_pct.is_some())
-        && let Some(mut style) = ent.get_mut::<Style>()
-    {
-        if let Some(w) = attrs.width {
-            style.width = w.into();
-        }
-        if let Some(h) = attrs.height {
-            style.height = h.into();
-        }
-        if let Some(p) = attrs.padding {
-            style.padding = p.into();
-        }
-        if let Some(m) = attrs.margin {
-            style.margin = m.into();
-        }
-        if let Some(v) = attrs.min_width {
-            style.min_width = v.into();
-        }
-        if let Some(v) = attrs.min_height {
-            style.min_height = v.into();
-        }
-        if let Some(v) = attrs.max_width {
-            style.max_width = v.into();
-        }
-        if let Some(v) = attrs.max_height {
-            style.max_height = v.into();
-        }
-        match (attrs.gap_row, attrs.gap_column, attrs.gap) {
-            (None, None, None) => {}
-            (Some(r), Some(c), _) => {
-                style.gap = lumen_core::components::Gap {
-                    row: r,
-                    column: c,
-                    ..Default::default()
-                };
-            }
-            (Some(r), None, _) => style.gap.row = r,
-            (None, Some(c), _) => style.gap.column = c,
-            (None, None, Some(v)) => style.gap = lumen_core::components::Gap::from(v),
-        }
-        if let Some(g) = attrs.grow {
-            style.grow = g;
-        }
-        if let Some(f) = attrs.flex {
-            style.flex_direction = f.into();
-        }
-        if let Some(d) = attrs.display {
-            style.display = d.into();
-        }
-        if let Some(s) = attrs.shrink {
-            style.shrink = s;
-        }
-        if let Some(b) = attrs.basis {
-            style.basis = b.into();
-        }
-        if let Some(w) = attrs.flex_wrap {
-            style.flex_wrap = w.into();
-        }
-        if let Some(a) = attrs.align_content {
-            style.align_content = Some(a.into());
-        }
-        if attrs.border_style.is_some() || attrs.border_width.is_some() {
-            style.border = attrs
-                .effective_border()
-                .map(|(widths, _)| widths.into())
-                .unwrap_or_default();
-        }
-        if let Some(b) = attrs.box_sizing {
-            style.box_sizing = b.into();
-        }
-        if let Some(p) = attrs.gap_row_pct.or(attrs.gap_pct) {
-            style.gap.row_pct = Some(p);
-        }
-        if let Some(p) = attrs.gap_column_pct.or(attrs.gap_pct) {
-            style.gap.column_pct = Some(p);
+    // Layout props on the always-present `Style`, through the same
+    // mapping spawning uses (`Attributes::patch_style`), so a restyle
+    // reaches every property the initial resolution does. Written only
+    // when something moved: the layout crate's `Changed<Style>` watcher
+    // marks `DirtyLayout` on any mutable access.
+    if let Some(live) = ent.get::<Style>() {
+        let mut next = live.clone();
+        attrs.patch_style(&mut next);
+        if next != *live
+            && let Some(mut style) = ent.get_mut::<Style>()
+        {
+            *style = next;
         }
     }
 
@@ -1065,10 +973,9 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
 
     // Overlay-scrollbar styling (CSS `scrollbar-color` / `scrollbar-width`
     // / `scrollbar-track-hover` / `scrollbar-hover-boost`) - re-resolved on
-    // theme / media flips so a dark skin can retint the bars. Only these
-    // two of the newer scrollbar properties are whitelisted for live
-    // reapply (`copy_back_reapplied`); `scrollbar-thickness(-thin)`,
-    // `-margin`, `-min-thumb` and the fade timings are spawn-only.
+    // theme / media flips so a dark skin can retint the bars.
+    // `scrollbar-thickness(-thin)`, `-margin`, `-min-thumb` and the fade
+    // timings are read at spawn only.
     if attrs.scrollbar_color.is_some()
         || attrs.scrollbar_width.is_some()
         || attrs.scrollbar_track_hover.is_some()
@@ -1456,5 +1363,161 @@ mod apply_reapplied_attrs_tests {
             world.resource::<CaretBlink>().period,
             std::time::Duration::from_millis(250)
         );
+    }
+
+    /// A restyle writes every layout property the cascade resolved onto the
+    /// live `Style`, exactly as spawning would have: justify, align,
+    /// position, inset, overflow and the grid properties were once missing
+    /// from the restyle path, so a class added from a script or a `@media`
+    /// breakpoint crossing never moved them.
+    #[test]
+    fn restyle_reaches_every_layout_property() {
+        use lumen_core::components::Style;
+        use lumen_ir::layout_ir::{
+            AlignContentSpec, BorderStyleSpec, BoxSizingSpec, DisplaySpec, Edges, FlexAlign,
+            FlexAxis, FlexJustify, FlexWrapSpec, GridTemplateSpec, LengthSpec, OverflowSpec,
+            PositionSpec, TrackSizeSpec,
+        };
+        let edges = |v: f32| Edges {
+            left: v,
+            right: v + 1.0,
+            top: v + 2.0,
+            bottom: v + 3.0,
+            ..Default::default()
+        };
+        let attrs = Attributes {
+            display: Some(DisplaySpec::Grid),
+            width: Some(LengthSpec::Px(120.0)),
+            height: Some(LengthSpec::Percent(50.0)),
+            flex: Some(FlexAxis::Column),
+            padding: Some(edges(1.0)),
+            margin: Some(edges(5.0)),
+            gap: Some(4.0),
+            gap_row: Some(6.0),
+            gap_pct: Some(3.0),
+            grow: Some(1.0),
+            align: Some(FlexAlign::Center),
+            justify: Some(FlexJustify::End),
+            align_self: Some(FlexAlign::End),
+            justify_items: Some(FlexAlign::Center),
+            justify_self: Some(FlexAlign::Start),
+            grid_template: Some(GridTemplateSpec {
+                rows: vec![TrackSizeSpec::Auto],
+                columns: vec![TrackSizeSpec::Fixed(100.0), TrackSizeSpec::Fr(1.0)],
+            }),
+            grid_row: Some((1, 2)),
+            grid_column: Some((1, 4)),
+            position: Some(PositionSpec::Absolute),
+            inset: Some(edges(10.0)),
+            min_width: Some(LengthSpec::Px(10.0)),
+            min_height: Some(LengthSpec::Px(11.0)),
+            max_width: Some(LengthSpec::Px(500.0)),
+            max_height: Some(LengthSpec::Px(600.0)),
+            aspect_ratio: Some(2.0),
+            overflow: Some(OverflowSpec::Hidden),
+            overflow_y: Some(OverflowSpec::Scroll),
+            shrink: Some(0.0),
+            basis: Some(LengthSpec::Px(30.0)),
+            flex_wrap: Some(FlexWrapSpec::Wrap),
+            align_content: Some(AlignContentSpec::Center),
+            border_style: Some(BorderStyleSpec::Solid),
+            border_width: Some(edges(2.0)),
+            box_sizing: Some(BoxSizingSpec::ContentBox),
+            ..Default::default()
+        };
+        let mut world = World::new();
+        let e = world.spawn(Style::default()).id();
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        let live = world.get::<Style>(e).unwrap().clone();
+        assert_eq!(live, Style::from(&attrs), "restyle and spawn agree");
+
+        // Every field moved off its initial value, so the attributes above
+        // exercise every property kind. Destructured without `..`: a new
+        // `Style` field fails to compile here until the test covers it.
+        let d = Style::default();
+        let Style {
+            display,
+            width,
+            height,
+            flex_direction,
+            padding,
+            margin,
+            gap,
+            grow,
+            align,
+            justify,
+            align_self,
+            justify_items,
+            justify_self,
+            grid_template,
+            grid_row,
+            grid_column,
+            position,
+            inset,
+            min_width,
+            min_height,
+            max_width,
+            max_height,
+            aspect_ratio,
+            overflow_x,
+            overflow_y,
+            shrink,
+            basis,
+            flex_wrap,
+            align_content,
+            border,
+            box_sizing,
+        } = live;
+        assert_ne!(display, d.display, "display");
+        assert_ne!(width, d.width, "width");
+        assert_ne!(height, d.height, "height");
+        assert_ne!(flex_direction, d.flex_direction, "flex-direction");
+        assert_ne!(padding, d.padding, "padding");
+        assert_ne!(margin, d.margin, "margin");
+        assert_ne!(gap, d.gap, "gap");
+        assert_ne!(grow, d.grow, "grow");
+        assert_ne!(align, d.align, "align");
+        assert_ne!(justify, d.justify, "justify");
+        assert_ne!(align_self, d.align_self, "align-self");
+        assert_ne!(justify_items, d.justify_items, "justify-items");
+        assert_ne!(justify_self, d.justify_self, "justify-self");
+        assert_ne!(grid_template, d.grid_template, "grid-template");
+        assert_ne!(grid_row, d.grid_row, "grid-row");
+        assert_ne!(grid_column, d.grid_column, "grid-column");
+        assert_ne!(position, d.position, "position");
+        assert_ne!(inset, d.inset, "inset");
+        assert_ne!(min_width, d.min_width, "min-width");
+        assert_ne!(min_height, d.min_height, "min-height");
+        assert_ne!(max_width, d.max_width, "max-width");
+        assert_ne!(max_height, d.max_height, "max-height");
+        assert_ne!(aspect_ratio, d.aspect_ratio, "aspect-ratio");
+        assert_ne!(overflow_x, d.overflow_x, "overflow-x");
+        assert_ne!(overflow_y, d.overflow_y, "overflow-y");
+        assert_ne!(shrink, d.shrink, "shrink");
+        assert_ne!(basis, d.basis, "basis");
+        assert_ne!(flex_wrap, d.flex_wrap, "flex-wrap");
+        assert_ne!(align_content, d.align_content, "align-content");
+        assert_ne!(border, d.border, "border");
+        assert_ne!(box_sizing, d.box_sizing, "box-sizing");
+        assert_eq!(gap.row, 6.0, "row-gap overrides the gap shorthand");
+        assert_eq!(gap.column, 4.0, "gap shorthand fills the other axis");
+    }
+
+    /// A restyle that resolves nothing new leaves `Style` untouched, so it
+    /// does not mark the element's layout dirty.
+    #[test]
+    fn restyle_without_layout_changes_leaves_style_unchanged() {
+        use lumen_core::components::Style;
+        let mut world = World::new();
+        let e = world.spawn(Style::default()).id();
+        world.clear_trackers();
+        let tick = world.change_tick();
+        apply_reapplied_attrs(&mut world, e, &Attributes::default());
+        let changed = world
+            .entity(e)
+            .get_change_ticks::<Style>()
+            .unwrap()
+            .is_changed(tick, world.change_tick());
+        assert!(!changed, "an unchanged restyle must not touch Style");
     }
 }

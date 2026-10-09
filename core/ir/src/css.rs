@@ -1711,13 +1711,28 @@ fn sel_parse_anb(src: &str) -> Result<AnB, String> {
 /// Inline-set fields (origin: inline) beat CSS. Restore any field the
 /// inline snapshot had populated.
 ///
-/// Every property the cascade can write is listed here, so the rule
-/// "markup beats CSS" holds for the whole attribute surface rather than
-/// for an arbitrary subset. The exception is `flex`, which the markup
-/// parser fills in from the tag itself (`<row>` / `<column>` / `<scroll>`
-/// ...) rather than from anything the author wrote; restoring it would
-/// make `flex-direction` unsettable from CSS on those tags.
+/// The exception is `flex`, which the markup parser fills in from the tag
+/// itself (`<row>` / `<column>` / `<scroll>` ...) rather than from
+/// anything the author wrote; restoring it would make `flex-direction`
+/// unsettable from CSS on those tags.
 fn restore_inline_origin(target: &mut Attributes, inline: &Attributes) {
+    let cascaded_flex = target.flex;
+    overlay_set_fields(target, inline);
+    target.flex = cascaded_flex;
+}
+
+/// Copy every style field `src` sets onto `target`, leaving the fields
+/// `src` leaves unset as they are.
+///
+/// Every property the cascade can write is listed here, and both the
+/// inline-origin restore and the restyle copy-back go through it, so
+/// "markup beats CSS" and "a restyle reaches what the first resolution
+/// reached" hold for the whole attribute surface rather than for two
+/// lists that drift apart.
+fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
+    if inline.flex.is_some() {
+        target.flex = inline.flex;
+    }
     if inline.width.is_some() {
         target.width = inline.width;
     }
@@ -2106,13 +2121,9 @@ pub fn reapply_single(el: &mut Element, css: &Stylesheet) -> Result<(), ParseErr
 /// a `prefers-color-scheme` / viewport-width flip restyles already-
 /// spawned entities without a respawn.
 ///
-/// Copies back the cascade result for the visual + box props that a
-/// theme token scope realistically flips: text (`font_size`,
-/// `text_color`, `text_align`, `text_wrap`, `max_lines`, `style_role`),
-/// box (`padding`, `margin`, `width`, `height`), paint (`bg`, `radius`,
-/// `shadows`, `opacity`), and interaction tints (`hover_bg`,
-/// `press_bg`). A property the cascade didn't set is left untouched, so
-/// inline authoring values on non-flipped props survive.
+/// Copies back every property the cascade resolved, the same set the
+/// first resolution applies. A property the cascade didn't set is left
+/// untouched, so inline authoring values on non-flipped props survive.
 pub fn reapply_single_with_media(
     el: &mut Element,
     css: &Stylesheet,
@@ -2248,7 +2259,7 @@ impl AncestorInfo {
 /// The var seed is computed by [`ancestor_var_scope`] (root vars first,
 /// each ancestor overriding earlier ones in cascade order); the element's
 /// own matched rules then fold their `--*` on top inside
-/// [`apply_to_element`]. Copy-back uses the same whitelist as
+/// [`apply_to_element`]. Copy-back is the same as for
 /// [`reapply_single_with_media`].
 ///
 /// `position` is where `el` sits among its element siblings, and decides
@@ -2791,7 +2802,7 @@ fn ancestor_var_scope(
 /// Shared body of the two runtime re-apply entry points: cascade a
 /// probe (an attr-stripped clone carrying only the element's own
 /// classes / id) against `parents` + a pre-seeded `inherited` var scope,
-/// then copy the whitelisted result back onto `el`.
+/// then copy every property it resolved back onto `el`.
 #[allow(clippy::too_many_arguments)]
 fn reapply_probe(
     el: &mut Element,
@@ -2824,278 +2835,12 @@ fn reapply_probe(
     copy_back_reapplied(el, &probe);
 }
 
-/// Copy the whitelisted cascade result from `probe` back onto `el`, only
-/// where the cascade produced a value so inline authoring values on
-/// non-flipped props survive. The whitelist is the visual + box + text +
-/// interaction set a theme token scope realistically flips.
+/// Copy the cascade result from `probe` back onto `el`, only where the
+/// cascade produced a value so inline authoring values on properties no
+/// rule sets survive. Every property the cascade can write comes back, the
+/// same set the first resolution applies.
 fn copy_back_reapplied(el: &mut Element, probe: &Element) {
-    // Text.
-    if probe.attrs.font_size.is_some() {
-        el.attrs.font_size = probe.attrs.font_size;
-    }
-    if probe.attrs.font_family.is_some() {
-        el.attrs.font_family = probe.attrs.font_family.clone();
-    }
-    if probe.attrs.font_weight.is_some() {
-        el.attrs.font_weight = probe.attrs.font_weight;
-    }
-    if probe.attrs.text_color.is_some() {
-        el.attrs.text_color = probe.attrs.text_color;
-    }
-    if probe.attrs.selection_color.is_some() {
-        el.attrs.selection_color = probe.attrs.selection_color;
-    }
-    if probe.attrs.caret_color.is_some() {
-        el.attrs.caret_color = probe.attrs.caret_color;
-    }
-    if probe.attrs.selection_text_color.is_some() {
-        el.attrs.selection_text_color = probe.attrs.selection_text_color;
-    }
-    if probe.attrs.text_align.is_some() {
-        el.attrs.text_align = probe.attrs.text_align;
-    }
-    if probe.attrs.text_wrap.is_some() {
-        el.attrs.text_wrap = probe.attrs.text_wrap;
-    }
-    if probe.attrs.max_lines.is_some() {
-        el.attrs.max_lines = probe.attrs.max_lines;
-    }
-    if probe.attrs.style_role.is_some() {
-        el.attrs.style_role = probe.attrs.style_role.clone();
-    }
-    if probe.attrs.line_height.is_some() {
-        el.attrs.line_height = probe.attrs.line_height;
-    }
-    if probe.attrs.caret_width.is_some() {
-        el.attrs.caret_width = probe.attrs.caret_width;
-    }
-    if probe.attrs.caret_blink_ms.is_some() {
-        el.attrs.caret_blink_ms = probe.attrs.caret_blink_ms;
-    }
-    if probe.attrs.password_character.is_some() {
-        el.attrs.password_character = probe.attrs.password_character;
-    }
-    // Box.
-    if probe.attrs.padding.is_some() {
-        el.attrs.padding = probe.attrs.padding;
-    }
-    if probe.attrs.margin.is_some() {
-        el.attrs.margin = probe.attrs.margin;
-    }
-    if probe.attrs.width.is_some() {
-        el.attrs.width = probe.attrs.width;
-    }
-    if probe.attrs.height.is_some() {
-        el.attrs.height = probe.attrs.height;
-    }
-    // D8: layout-affecting props a theme / media flip can change. The
-    // runtime consumer (`run::apply_reapplied_attrs`) mirrors this set.
-    if probe.attrs.min_width.is_some() {
-        el.attrs.min_width = probe.attrs.min_width;
-    }
-    if probe.attrs.min_height.is_some() {
-        el.attrs.min_height = probe.attrs.min_height;
-    }
-    if probe.attrs.max_width.is_some() {
-        el.attrs.max_width = probe.attrs.max_width;
-    }
-    if probe.attrs.max_height.is_some() {
-        el.attrs.max_height = probe.attrs.max_height;
-    }
-    if probe.attrs.gap.is_some() {
-        el.attrs.gap = probe.attrs.gap;
-    }
-    if probe.attrs.gap_row.is_some() {
-        el.attrs.gap_row = probe.attrs.gap_row;
-    }
-    if probe.attrs.gap_column.is_some() {
-        el.attrs.gap_column = probe.attrs.gap_column;
-    }
-    if probe.attrs.grow.is_some() {
-        el.attrs.grow = probe.attrs.grow;
-    }
-    if probe.attrs.flex.is_some() {
-        el.attrs.flex = probe.attrs.flex;
-    }
-    if probe.attrs.display.is_some() {
-        el.attrs.display = probe.attrs.display;
-    }
-    // Paint.
-    if probe.attrs.bg.is_some() {
-        el.attrs.bg = probe.attrs.bg.clone();
-    }
-    if probe.attrs.radius.is_some() {
-        el.attrs.radius = probe.attrs.radius;
-    }
-    if probe.attrs.radius_corners.is_some() {
-        el.attrs.radius_corners = probe.attrs.radius_corners;
-    }
-    if probe.attrs.knob_color.is_some() {
-        el.attrs.knob_color = probe.attrs.knob_color;
-    }
-    if !probe.attrs.shadows.is_empty() {
-        el.attrs.shadows = probe.attrs.shadows.clone();
-    }
-    if probe.attrs.opacity.is_some() {
-        el.attrs.opacity = probe.attrs.opacity;
-    }
-    // Interaction tints.
-    if probe.attrs.hover_bg.is_some() {
-        el.attrs.hover_bg = probe.attrs.hover_bg;
-    }
-    if probe.attrs.press_bg.is_some() {
-        el.attrs.press_bg = probe.attrs.press_bg;
-    }
-    if probe.attrs.checked_bg.is_some() {
-        el.attrs.checked_bg = probe.attrs.checked_bg;
-    }
-    if probe.attrs.selected_bg.is_some() {
-        el.attrs.selected_bg = probe.attrs.selected_bg;
-    }
-    if probe.attrs.disabled_bg.is_some() {
-        el.attrs.disabled_bg = probe.attrs.disabled_bg;
-    }
-    if probe.attrs.drag_over_bg.is_some() {
-        el.attrs.drag_over_bg = probe.attrs.drag_over_bg;
-    }
-    if probe.attrs.drag_over_text_color.is_some() {
-        el.attrs.drag_over_text_color = probe.attrs.drag_over_text_color;
-    }
-    if probe.attrs.drag_over_opacity.is_some() {
-        el.attrs.drag_over_opacity = probe.attrs.drag_over_opacity;
-    }
-    if probe.attrs.drag_over_shadows.is_some() {
-        el.attrs.drag_over_shadows = probe.attrs.drag_over_shadows.clone();
-    }
-    // State-routed text / opacity / shadow swaps (native-skin wave).
-    if probe.attrs.hover_text_color.is_some() {
-        el.attrs.hover_text_color = probe.attrs.hover_text_color;
-    }
-    if probe.attrs.active_text_color.is_some() {
-        el.attrs.active_text_color = probe.attrs.active_text_color;
-    }
-    if probe.attrs.focus_text_color.is_some() {
-        el.attrs.focus_text_color = probe.attrs.focus_text_color;
-    }
-    if probe.attrs.disabled_text_color.is_some() {
-        el.attrs.disabled_text_color = probe.attrs.disabled_text_color;
-    }
-    if probe.attrs.hover_opacity.is_some() {
-        el.attrs.hover_opacity = probe.attrs.hover_opacity;
-    }
-    if probe.attrs.active_opacity.is_some() {
-        el.attrs.active_opacity = probe.attrs.active_opacity;
-    }
-    if probe.attrs.focus_opacity.is_some() {
-        el.attrs.focus_opacity = probe.attrs.focus_opacity;
-    }
-    if probe.attrs.disabled_opacity.is_some() {
-        el.attrs.disabled_opacity = probe.attrs.disabled_opacity;
-    }
-    // The CSS-authored default dimming fallback tracks its sibling
-    // `:disabled { opacity }` override above - both are plain opacity
-    // scalars, so a theme flip should move an unoverridden element's
-    // dimming amount exactly like it moves an overridden one's.
-    if probe.attrs.disabled_opacity_default.is_some() {
-        el.attrs.disabled_opacity_default = probe.attrs.disabled_opacity_default;
-    }
-    if probe.attrs.hover_shadows.is_some() {
-        el.attrs.hover_shadows = probe.attrs.hover_shadows.clone();
-    }
-    if probe.attrs.active_shadows.is_some() {
-        el.attrs.active_shadows = probe.attrs.active_shadows.clone();
-    }
-    if probe.attrs.focus_shadows.is_some() {
-        el.attrs.focus_shadows = probe.attrs.focus_shadows.clone();
-    }
-    if probe.attrs.disabled_shadows.is_some() {
-        el.attrs.disabled_shadows = probe.attrs.disabled_shadows.clone();
-    }
-    if probe.attrs.focus_visible_text_color.is_some() {
-        el.attrs.focus_visible_text_color = probe.attrs.focus_visible_text_color;
-    }
-    if probe.attrs.focus_visible_opacity.is_some() {
-        el.attrs.focus_visible_opacity = probe.attrs.focus_visible_opacity;
-    }
-    if probe.attrs.focus_visible_shadows.is_some() {
-        el.attrs.focus_visible_shadows = probe.attrs.focus_visible_shadows.clone();
-    }
-    // Borders + box model extensions (CSS-flexibility wave). A theme
-    // flip commonly retints `border-color` / swaps `border` shorthand.
-    if probe.attrs.border_width.is_some() {
-        el.attrs.border_width = probe.attrs.border_width;
-    }
-    if probe.attrs.border_color.is_some() {
-        el.attrs.border_color = probe.attrs.border_color;
-    }
-    if probe.attrs.border_color_top.is_some() {
-        el.attrs.border_color_top = probe.attrs.border_color_top;
-    }
-    if probe.attrs.border_color_right.is_some() {
-        el.attrs.border_color_right = probe.attrs.border_color_right;
-    }
-    if probe.attrs.border_color_bottom.is_some() {
-        el.attrs.border_color_bottom = probe.attrs.border_color_bottom;
-    }
-    if probe.attrs.border_color_left.is_some() {
-        el.attrs.border_color_left = probe.attrs.border_color_left;
-    }
-    if probe.attrs.border_style.is_some() {
-        el.attrs.border_style = probe.attrs.border_style;
-    }
-    if probe.attrs.box_sizing.is_some() {
-        el.attrs.box_sizing = probe.attrs.box_sizing;
-    }
-    if probe.attrs.hover_border.is_some() {
-        el.attrs.hover_border = probe.attrs.hover_border;
-    }
-    if probe.attrs.focus_border.is_some() {
-        el.attrs.focus_border = probe.attrs.focus_border;
-    }
-    if probe.attrs.focus_outline.is_some() {
-        el.attrs.focus_outline = probe.attrs.focus_outline;
-    }
-    if probe.attrs.focus_visible_outline.is_some() {
-        el.attrs.focus_visible_outline = probe.attrs.focus_visible_outline;
-    }
-    if probe.attrs.outline_offset.is_some() {
-        el.attrs.outline_offset = probe.attrs.outline_offset;
-    }
-    // Flex completeness.
-    if probe.attrs.shrink.is_some() {
-        el.attrs.shrink = probe.attrs.shrink;
-    }
-    if probe.attrs.basis.is_some() {
-        el.attrs.basis = probe.attrs.basis;
-    }
-    if probe.attrs.flex_wrap.is_some() {
-        el.attrs.flex_wrap = probe.attrs.flex_wrap;
-    }
-    if probe.attrs.align_content.is_some() {
-        el.attrs.align_content = probe.attrs.align_content;
-    }
-    if probe.attrs.z_index.is_some() {
-        el.attrs.z_index = probe.attrs.z_index;
-    }
-    if probe.attrs.gap_pct.is_some() {
-        el.attrs.gap_pct = probe.attrs.gap_pct;
-    }
-    if probe.attrs.gap_row_pct.is_some() {
-        el.attrs.gap_row_pct = probe.attrs.gap_row_pct;
-    }
-    if probe.attrs.gap_column_pct.is_some() {
-        el.attrs.gap_column_pct = probe.attrs.gap_column_pct;
-    }
-    // Scrollbar hover paint - cheap, paint-only values that should track
-    // a theme flip like any other color; the geometry siblings
-    // (thickness/margin/min-thumb) are spawn-time layout and are not
-    // reapplied here.
-    if probe.attrs.scrollbar_track_hover.is_some() {
-        el.attrs.scrollbar_track_hover = probe.attrs.scrollbar_track_hover;
-    }
-    if probe.attrs.scrollbar_hover_boost.is_some() {
-        el.attrs.scrollbar_hover_boost = probe.attrs.scrollbar_hover_boost;
-    }
+    overlay_set_fields(&mut el.attrs, &probe.attrs);
 }
 
 fn resolve_vars(
