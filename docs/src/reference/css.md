@@ -328,7 +328,7 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `min-width`, `min-height`, `max-width`, `max-height` | length | `auto` (see below) |
 | `aspect-ratio` | number | none |
 | `padding`, `margin` | edges | `0` |
-| `inset` | edges | auto |
+| `inset` | edges; any side may be `auto` | `auto` |
 | `position` | `relative`, `absolute` | `relative` |
 | `box-sizing` | `border-box`, `content-box` | `border-box` |
 | `flex-direction` | `row`, `column`, `row-reverse`, `column-reverse` | from the tag |
@@ -393,6 +393,14 @@ padding box, whichever element that parent happens to be; there is no
 So the wrapper you want an element pinned inside is the element you
 write it under, and no `position: relative` is needed on that wrapper.
 
+A side you leave unset is `auto`. With no `inset` at all the element
+keeps its content size where it would have sat in the flow; with two
+sides set, such as `inset: 4 8 auto auto` or `inset-block-start` plus
+`inset-inline-end`, it keeps its size against that corner. Set opposite
+sides, as `inset: 0` does, to stretch it between them. An element with
+no parent at all, such as a tooltip, resolves its `inset` against the
+window.
+
 An out-of-flow child contributes nothing to its parent's content size.
 A parent that is content-sized on an axis and has only absolutely
 positioned children therefore measures zero on that axis, and a child
@@ -421,9 +429,9 @@ names the child it found.
 
 ### Logical properties
 
-Each takes a px number and resolves against the element's writing
-direction, which comes from `dir` in the markup or, with none authored,
-from the app's locale.
+Each takes a px number (the `inset-*` ones also take `auto`) and
+resolves against the element's writing direction, which comes from `dir`
+in the markup or, with none authored, from the app's locale.
 
 - `padding-inline-start`, `padding-inline-end`, `padding-block-start`, `padding-block-end`
 - `margin-inline-start`, `margin-inline-end`, `margin-block-start`, `margin-block-end`

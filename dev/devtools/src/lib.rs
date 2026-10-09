@@ -263,8 +263,7 @@ impl Plugin for DevtoolsPlugin {
 
         // The element-highlight box: its own top-layer root, placed over the
         // target by writing its `Transform` directly - it deliberately has no
-        // `Style`, so layout never touches it (an inset on a layout root is
-        // ignored; the box would pin to the origin). `Disabled` keeps it out
+        // `Style`, so layout never touches it. `Disabled` keeps it out
         // of hit-testing so it never steals the hover it is visualizing.
         app.world.spawn((
             HighlightBox,
