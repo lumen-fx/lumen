@@ -664,6 +664,11 @@ mod tests {
 
     #[test]
     fn snapshot_entry_points_and_liveness() {
+        // The published snapshot is process-wide; the DOM event tests
+        // publish one of their own under the same lock.
+        let _guard = crate::event::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let (idx, root, card, save, cancel) = fixture();
         publish_dom_index(idx);
         let q = run_query(".row").unwrap();

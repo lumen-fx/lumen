@@ -143,7 +143,9 @@ The bindable types are `click`, `dblclick`, `pointerdown`, `pointerup`,
 `input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit. `click` is the one type with a default action to prevent: it
-suppresses the navigation an `<a href>` would otherwise perform.
+suppresses the navigation an `<a href>` would otherwise perform. Key events go
+to the focused element; with nothing focused they go to the document, so bind
+app-wide shortcuts on `document_node()`.
 
 ## Reading and writing signals
 
