@@ -902,7 +902,7 @@ Three settings, all optional:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `timeout_ms` | none | How long a stalled server has to start answering: name resolution, connecting, and the response headers. The body is not on a deadline, so a large download is never cut off part way. |
+| `timeout_ms` | none | How long the transfer waits on a server that has gone quiet: for name resolution, for the connection, for the response headers, and then for each next piece of the body. A body that keeps arriving is never cut off, however long it takes; one that stops for longer than this fails the download. Unset, a stalled server is waited on forever. |
 | `max_bytes` | none | The largest body accepted. Anything past it fails and writes nothing. |
 | `max_concurrent` | `4` | How many transfers run at once, from 1 to 64. A call past the limit fails. |
 

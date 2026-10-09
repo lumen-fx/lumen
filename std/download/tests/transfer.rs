@@ -7,11 +7,13 @@
 //! - the destination only ever holds a complete, verified file, and the temp
 //!   file the bytes landed in is gone whichever way the transfer ended;
 //! - a body the server declared no size for reports no total;
-//! - `max_bytes` stops a body that is too large, before and during the read.
+//! - `max_bytes` stops a body that is too large, before and during the read;
+//! - `timeout_ms` fails a body that goes quiet, and never one that keeps
+//!   arriving, however long it takes in all.
 
 use std::path::{Path, PathBuf};
 
-use lumen_download::testkit::{BODY, OTHER_BODY, TestServer};
+use lumen_download::testkit::{BODY, DRIP_PAUSE, OTHER_BODY, STALL, TestServer};
 use lumen_download::transfer::{self, Checksum, Limits, Transferred};
 
 /// A fresh directory to download into.
@@ -376,6 +378,47 @@ fn progress_climbs_while_a_slow_body_arrives() {
         "the running count only grows: {seen:?}"
     );
     assert_eq!(seen.last().map(|(n, _)| *n), Some(BODY.len() as u64));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `timeout_ms` is an idle limit on the body as well as a bound on the reply
+/// starting: a body that stops arriving fails once the setting has passed
+/// with nothing read, and a body that keeps arriving finishes even when the
+/// whole of it takes longer than the setting.
+#[test]
+fn timeout_ms_fails_a_quiet_body_and_never_a_steady_one() {
+    let server = TestServer::start();
+    let dir = scratch("timeout");
+    let timeout = DRIP_PAUSE * 4;
+    let limits = Limits {
+        timeout_ms: Some(timeout.as_millis() as u64),
+        max_bytes: None,
+    };
+
+    let dest = dir.join("stalled.bin");
+    let started = std::time::Instant::now();
+    let (outcome, _) = fetch(&server.url("/stall"), &dest, &Checksum::None, &limits);
+    let err = outcome.expect_err("a body that goes quiet past the timeout fails");
+    assert!(err.contains("timeout"), "{err}");
+    assert!(
+        started.elapsed() < STALL,
+        "the stall was waited out rather than timed out: {err}"
+    );
+    assert!(!dest.exists(), "a stalled body wrote a file");
+
+    let dest = dir.join("steady.bin");
+    let started = std::time::Instant::now();
+    let (outcome, _) = fetch(&server.url("/drip"), &dest, &Checksum::None, &limits);
+    assert!(
+        outcome.is_ok(),
+        "a steady body is never cut off: {outcome:?}"
+    );
+    assert!(
+        started.elapsed() > timeout,
+        "the steady body has to outlast the timeout for this to prove anything"
+    );
+    assert_eq!(std::fs::read(&dest).expect("the file"), BODY);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
