@@ -9,7 +9,7 @@
 //! `lumenc` spawn walker calls them via `Style::from(&attrs)` / `.into()`.
 
 use crate::layout_ir::Attributes;
-use lumen_core::components::{Fill, FlexDirection, Length, ShadowSpec, Style, TextStyle, Visuals};
+use lumen_core::components::{Fill, FlexDirection, Gap, ShadowSpec, Style, TextStyle, Visuals};
 
 /// Resolve a Material 3-flavored typography role name to a pixel
 /// font size. Returns `None` for unknown names so the caller can
@@ -48,80 +48,139 @@ pub fn typography_role_to_px(role: &str) -> Option<f32> {
 }
 
 impl From<&Attributes> for Style {
+    /// The element's layout style from its resolved attributes: the CSS
+    /// initial values, with every property the attributes set written over
+    /// them by [`Attributes::patch_style`].
     fn from(attrs: &Attributes) -> Self {
-        // `overflow="..."` is shorthand for both axes; per-axis `overflow-x`
-        // / `overflow-y` override.
-        let overflow_x = attrs.overflow_x.or(attrs.overflow);
-        let overflow_y = attrs.overflow_y.or(attrs.overflow);
-        // W5.9: per-axis gap. CSS `gap: <r> <c>` lands in
-        // `gap_row` + `gap_column`; the legacy `gap=<v>` shorthand
-        // sets both axes via `Gap::from(v)`.
-        let gap = match (attrs.gap_row, attrs.gap_column, attrs.gap) {
-            (Some(r), Some(c), _) => lumen_core::components::Gap {
-                row: r,
-                column: c,
-                ..Default::default()
-            },
-            (Some(r), None, _) => lumen_core::components::Gap {
-                row: r,
-                column: 0.0,
-                ..Default::default()
-            },
-            (None, Some(c), _) => lumen_core::components::Gap {
-                row: 0.0,
-                column: c,
-                ..Default::default()
-            },
-            (None, None, Some(v)) => lumen_core::components::Gap::from(v),
-            (None, None, None) => lumen_core::components::Gap::default(),
-        };
-        let display = attrs.display.map(Into::into).unwrap_or_default();
-        let grid_template = attrs.grid_template.as_ref().map(Into::into);
-        // Percent gaps (CSS `gap: 5%`) ride along in the Gap pct slots.
-        let gap = lumen_core::components::Gap {
-            row_pct: attrs.gap_row_pct.or(attrs.gap_pct),
-            column_pct: attrs.gap_column_pct.or(attrs.gap_pct),
-            ..gap
-        };
+        let mut style = Style::default();
+        attrs.patch_style(&mut style);
+        style
+    }
+}
+
+impl Attributes {
+    /// Write every layout property these attributes set onto `style`,
+    /// leaving the fields they leave unset as they are.
+    ///
+    /// This is the one mapping from attributes to [`Style`]. Spawning an
+    /// element applies it to the initial values (`Style::from`), and a
+    /// restyle (a class change, a `@media` breakpoint, a theme flip)
+    /// applies the re-resolved cascade to the live component, so the two
+    /// can never disagree about which properties reach layout.
+    pub fn patch_style(&self, style: &mut Style) {
+        if let Some(d) = self.display {
+            style.display = d.into();
+        }
+        if let Some(w) = self.width {
+            style.width = w.into();
+        }
+        if let Some(h) = self.height {
+            style.height = h.into();
+        }
+        if let Some(f) = self.flex {
+            style.flex_direction = FlexDirection::from(f);
+        }
+        if let Some(p) = self.padding {
+            style.padding = p.into();
+        }
+        if let Some(m) = self.margin {
+            style.margin = m.into();
+        }
+        // `gap` sets both axes; `row-gap` / `column-gap` then override
+        // their own axis. Percent gaps ride in the `Gap` pct slots.
+        if let Some(v) = self.gap {
+            style.gap = Gap::from(v);
+        }
+        if let Some(r) = self.gap_row {
+            style.gap.row = r;
+        }
+        if let Some(c) = self.gap_column {
+            style.gap.column = c;
+        }
+        if let Some(p) = self.gap_row_pct.or(self.gap_pct) {
+            style.gap.row_pct = Some(p);
+        }
+        if let Some(p) = self.gap_column_pct.or(self.gap_pct) {
+            style.gap.column_pct = Some(p);
+        }
+        if let Some(g) = self.grow {
+            style.grow = g;
+        }
+        if let Some(a) = self.align {
+            style.align = a.into();
+        }
+        if let Some(j) = self.justify {
+            style.justify = j.into();
+        }
+        if let Some(a) = self.align_self {
+            style.align_self = Some(a.into());
+        }
+        if let Some(j) = self.justify_items {
+            style.justify_items = Some(j.into());
+        }
+        if let Some(j) = self.justify_self {
+            style.justify_self = Some(j.into());
+        }
+        if let Some(t) = self.grid_template.as_ref() {
+            style.grid_template = Some(t.into());
+        }
+        if let Some(r) = self.grid_row {
+            style.grid_row = r;
+        }
+        if let Some(c) = self.grid_column {
+            style.grid_column = c;
+        }
+        if let Some(p) = self.position {
+            style.position = p.into();
+        }
+        if let Some(i) = self.inset {
+            style.inset = i.into();
+        }
+        if let Some(v) = self.min_width {
+            style.min_width = v.into();
+        }
+        if let Some(v) = self.min_height {
+            style.min_height = v.into();
+        }
+        if let Some(v) = self.max_width {
+            style.max_width = v.into();
+        }
+        if let Some(v) = self.max_height {
+            style.max_height = v.into();
+        }
+        if self.aspect_ratio.is_some() {
+            style.aspect_ratio = self.aspect_ratio;
+        }
+        // `overflow` is shorthand for both axes; `overflow-x` /
+        // `overflow-y` override their own axis.
+        if let Some(o) = self.overflow_x.or(self.overflow) {
+            style.overflow_x = o.into();
+        }
+        if let Some(o) = self.overflow_y.or(self.overflow) {
+            style.overflow_y = o.into();
+        }
+        if let Some(s) = self.shrink {
+            style.shrink = s;
+        }
+        if let Some(b) = self.basis {
+            style.basis = b.into();
+        }
+        if let Some(w) = self.flex_wrap {
+            style.flex_wrap = w.into();
+        }
+        if let Some(a) = self.align_content {
+            style.align_content = Some(a.into());
+        }
         // CSS border-style folds into computed widths: no solid style =>
         // zero widths (no layout space, no paint).
-        let border: lumen_core::components::Edges = attrs
-            .effective_border()
-            .map(|(widths, _)| widths.into())
-            .unwrap_or_default();
-        Style {
-            display,
-            width: attrs.width.map(Into::into).unwrap_or(Length::Auto),
-            height: attrs.height.map(Into::into).unwrap_or(Length::Auto),
-            flex_direction: attrs.flex.map(Into::into).unwrap_or(FlexDirection::Row),
-            padding: attrs.padding.map(Into::into).unwrap_or_default(),
-            margin: attrs.margin.map(Into::into).unwrap_or_default(),
-            gap,
-            grow: attrs.grow.unwrap_or(0.0),
-            align: attrs.align.map(Into::into).unwrap_or_default(),
-            justify: attrs.justify.map(Into::into).unwrap_or_default(),
-            align_self: attrs.align_self.map(Into::into),
-            justify_items: attrs.justify_items.map(Into::into),
-            justify_self: attrs.justify_self.map(Into::into),
-            grid_template,
-            grid_row: attrs.grid_row.unwrap_or((0, 0)),
-            grid_column: attrs.grid_column.unwrap_or((0, 0)),
-            position: attrs.position.map(Into::into).unwrap_or_default(),
-            inset: attrs.inset.map(Into::into).unwrap_or_default(),
-            min_width: attrs.min_width.map(Into::into).unwrap_or(Length::Auto),
-            min_height: attrs.min_height.map(Into::into).unwrap_or(Length::Auto),
-            max_width: attrs.max_width.map(Into::into).unwrap_or(Length::Auto),
-            max_height: attrs.max_height.map(Into::into).unwrap_or(Length::Auto),
-            aspect_ratio: attrs.aspect_ratio,
-            overflow_x: overflow_x.map(Into::into).unwrap_or_default(),
-            overflow_y: overflow_y.map(Into::into).unwrap_or_default(),
-            // CSS initial value for flex-shrink is 1.
-            shrink: attrs.shrink.unwrap_or(1.0),
-            basis: attrs.basis.map(Into::into).unwrap_or(Length::Auto),
-            flex_wrap: attrs.flex_wrap.map(Into::into).unwrap_or_default(),
-            align_content: attrs.align_content.map(Into::into),
-            border,
-            box_sizing: attrs.box_sizing.map(Into::into).unwrap_or_default(),
+        if self.border_style.is_some() || self.border_width.is_some() {
+            style.border = self
+                .effective_border()
+                .map(|(widths, _)| widths.into())
+                .unwrap_or_default();
+        }
+        if let Some(b) = self.box_sizing {
+            style.box_sizing = b.into();
         }
     }
 }
