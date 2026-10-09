@@ -1729,6 +1729,12 @@ impl SliderValue {
     /// so `min="0" max="100" step="30"` tops out at 90. That is what
     /// `<input type=range>` does, and it is the only answer that keeps
     /// every value the control can take on the grid.
+    ///
+    /// A grid position is written with no more decimal places than the near
+    /// bound and the step carry between them, so `min="0.8" step="0.1"`
+    /// lands on `0.9` rather than on the `0.90000004` that adding the two in
+    /// binary floating point gives. That is the value a bound signal and a
+    /// label reading it show.
     pub fn snap(&self, value: f32) -> f32 {
         let step = self.step_size();
         if !step.is_finite() || step <= 0.0 {
@@ -1737,14 +1743,29 @@ impl SliderValue {
         let near = self.min.min(self.max);
         let far = self.min.max(self.max);
         let steps = ((value - near) / step).round();
-        let snapped = near + steps * step;
+        let at = |steps: f32| {
+            let exact = f64::from(near) + f64::from(steps) * f64::from(step);
+            let places = decimal_places(near).max(decimal_places(step));
+            let scale = 10f64.powi(places);
+            ((exact * scale).round() / scale) as f32
+        };
+        let snapped = at(steps);
         let snapped = if snapped > far {
-            near + (steps - 1.0) * step
+            at(steps - 1.0)
         } else {
             snapped
         };
         snapped.clamp(near, far)
     }
+}
+
+/// How many decimal places `x` is written with in its shortest form: `0.1`
+/// has one, `0.25` two, `3` none. Capped at nine, past the precision an `f32`
+/// holds, so a step with no short form, like a third, cannot ask for more.
+fn decimal_places(x: f32) -> i32 {
+    let text = x.abs().to_string();
+    let places = text.split_once('.').map_or(0, |(_, frac)| frac.len());
+    places.min(9) as i32
 }
 
 impl Default for SliderValue {
@@ -2944,5 +2965,40 @@ mod direction_tests {
         assert_eq!(&*l.0, "ar-EG");
         let l2: Lang = String::from("en-US").into();
         assert_eq!(&*l2.0, "en-US");
+    }
+}
+
+#[cfg(test)]
+mod slider_snap_tests {
+    use super::SliderValue;
+
+    fn slider(min: f32, max: f32, step: f32) -> SliderValue {
+        SliderValue {
+            value: min,
+            min,
+            max,
+            step: Some(step),
+        }
+    }
+
+    /// Every grid position of a fractional step reads as the number the user
+    /// sees, so the text a bound signal carries is free of float noise.
+    #[test]
+    fn a_fractional_step_snaps_to_clean_decimals() {
+        let s = slider(0.8, 1.6, 0.1);
+        let written: Vec<String> = (0..=8)
+            .map(|i| s.snap(0.8 + i as f32 * 0.1).to_string())
+            .collect();
+        assert_eq!(
+            written,
+            ["0.8", "0.9", "1", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"]
+        );
+    }
+
+    #[test]
+    fn the_grid_keeps_the_places_of_its_bound_and_step() {
+        assert_eq!(slider(0.0, 1.0, 0.25).snap(0.3).to_string(), "0.25");
+        assert_eq!(slider(0.05, 1.0, 0.1).snap(0.14).to_string(), "0.15");
+        assert_eq!(slider(0.0, 100.0, 30.0).snap(99.0).to_string(), "90");
     }
 }
