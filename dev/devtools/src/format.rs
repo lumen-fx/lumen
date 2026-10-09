@@ -103,14 +103,8 @@ fn walk_element(
     rows.push(element_row(id, depth, inspect));
 
     if let Some(i) = inspect {
-        let mut kids: Vec<u64> = i
-            .children
-            .iter()
-            .copied()
-            .filter(|k| !excluded.contains(k))
-            .collect();
-        kids.sort_unstable();
-        for k in kids {
+        // `children` is the `Children` list, already in document order.
+        for &k in &i.children {
             walk_element(snap, k, depth + 1, excluded, rows);
         }
     }
@@ -318,6 +312,33 @@ mod tests {
             text_line.starts_with("  "),
             "child should be indented: {text_line:?}"
         );
+    }
+
+    #[test]
+    fn elements_list_children_in_document_order() {
+        // The scene hands later siblings lower entity ids, so the children
+        // list (document order) runs against id order.
+        let mut snap = Snapshot::default();
+        snap.entities = [10, 9, 8, 7]
+            .into_iter()
+            .map(|id| EntityView {
+                id,
+                components: vec![],
+            })
+            .collect();
+        snap.inspect
+            .insert(10, inspect("root", None, None, vec![9, 7]));
+        snap.inspect
+            .insert(9, inspect("label", Some("counter"), Some(10), vec![]));
+        snap.inspect
+            .insert(7, inspect("row", None, Some(10), vec![8]));
+        snap.inspect
+            .insert(8, inspect("button", Some("bump"), Some(7), vec![]));
+        let ids: Vec<u64> = element_rows(&snap, &HashSet::new())
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, vec![10, 9, 7, 8]);
     }
 
     #[test]
