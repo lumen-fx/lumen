@@ -179,8 +179,10 @@ should carry or leave out regardless. The renderer follows
 that one renderer and none of the other, which is the way to keep a small app
 small, and `auto` links both so the app starts on a machine without a GPU. The
 candela standard library still travels in `libs/`, because scripts read it off
-disk as they compile whatever links the engine. Copy the executable, `libs/`,
-and the app's files, and that is the whole app.
+disk as they compile whatever links the engine, and the three license files
+travel beside the executable as they do in a folder package. Copy the
+executable, `libs/`, the license files, and the app's files, and that is the
+whole app.
 
 Reach for it when you want one file to hand over rather than a folder to keep
 together, and on Windows when your app declares a module that ships with the
@@ -316,7 +318,8 @@ lumenc bundle --static myapp out/
 ```
 
 It prints the capability set it resolved, builds the trimmed runtime, and
-copies the library into `out/`. Put that library in a package in place of the
+copies the library into `out/` with the source tree's `LICENSE`, `NOTICE` and
+`THIRD-PARTY-LICENSES` beside it. Put that library in a package in place of the
 one `lumenc package` copied, and the packaged app opens the trimmed build
 instead.
 

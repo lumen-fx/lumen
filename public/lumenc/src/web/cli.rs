@@ -794,7 +794,12 @@ fn build(options: &Options) -> Result<Report, String> {
         write_file(&out.join(&runtime.js.path), &runtime.js.bytes)?;
     }
     if let Some(dir) = &runtime_dir {
-        crate::package::cli::stage_license_files(std::slice::from_ref(dir), &out)?;
+        crate::package::cli::stage_license_files(
+            std::slice::from_ref(dir),
+            options.lib_dir.as_deref(),
+            &out,
+            "lumenc web",
+        )?;
     }
     // Which paths a file server has no file for is the build's to say; a
     // render answers every path with the page it names.

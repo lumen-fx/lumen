@@ -186,6 +186,14 @@ fn a_static_package_is_one_executable_carrying_its_declared_module() {
         "a static package carries no library beside the executable: {names:?}"
     );
     assert!(names.contains(&"lumen.toml".to_string()), "{names:?}");
+    // The executable carries the engine the kit was built from, and a kit
+    // carries that engine's license text at its root, so the text travels.
+    let kit = kit_dir().expect("checked above");
+    for name in ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSES"] {
+        if kit.join(name).is_file() {
+            assert!(names.contains(&name.to_string()), "no {name}: {names:?}");
+        }
+    }
 
     let run = Command::new(&exe)
         .args(["--headless", "--ticks", "3"])

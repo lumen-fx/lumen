@@ -253,6 +253,18 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
             return ExitCode::FAILURE;
         }
         println!("lumenc bundle --static: staged seam -> {}", dest.display());
+        // The seam is the engine, so its license text travels with it, from
+        // the source tree it was built in.
+        #[cfg(feature = "package")]
+        if let Err(e) = crate::package::cli::stage_license_files(
+            std::slice::from_ref(&workspace_dir),
+            None,
+            out_path,
+            "lumenc bundle --static",
+        ) {
+            eprintln!("lumenc bundle --static: {e}");
+            return ExitCode::FAILURE;
+        }
     } else {
         eprintln!(
             "lumenc bundle --static: seam built but artifact not found at {}",
