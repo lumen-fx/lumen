@@ -473,12 +473,26 @@ pub fn react_to_style_changes(
 /// `rebuild_taffy_subtree` only runs for dirty roots, so adding /
 /// removing children without an explicit dirty mark would leave
 /// taffy's `set_children` stale (bug 3 in `docs/audits/layout.md`).
+///
+/// A parent whose last child leaves loses its `Children` component
+/// instead of seeing it change, so `Changed<Children>` never fires for
+/// it; the removal reader covers that case, or the parent keeps the size
+/// its departed children gave it (an `<if>` that unmounts its body).
 pub fn react_to_children_changes(
     mut commands: Commands,
     changed: Query<Entity, Changed<Children>>,
+    mut removed: RemovedComponents<Children>,
+    alive: Query<(), With<Style>>,
 ) {
     for e in &changed {
         commands.entity(e).insert(DirtyLayout);
+    }
+    for e in removed.read() {
+        // The removal reader also reports despawned entities; only
+        // re-dirty ones that still participate in layout.
+        if alive.contains(e) {
+            commands.entity(e).insert(DirtyLayout);
+        }
     }
 }
 
@@ -2032,6 +2046,76 @@ mod tests {
         *world.resource_mut::<DockInsets>() = DockInsets::default();
         schedule.run(&mut world);
         assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
+    }
+
+    /// A parent whose last child is despawned gives the space back on the
+    /// next pass. Its `Children` component goes away rather than
+    /// changing, so this once left an unmounted `<if>` at the height of
+    /// the body it no longer had.
+    #[test]
+    fn losing_the_last_child_relayouts_the_parent() {
+        use lumen_core::components::*;
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::default());
+        world.insert_resource(TextMeasureMemo::default());
+        world.insert_resource(Viewport {
+            size: glam::Vec2::new(400.0, 400.0),
+            ..Viewport::default()
+        });
+        let column = |extra: Style| Style {
+            flex_direction: LumenFlexDir::Column,
+            ..extra
+        };
+        let root = world
+            .spawn((
+                column(Style {
+                    width: Length::Px(400.0),
+                    height: Length::Px(400.0),
+                    ..Style::default()
+                }),
+                DirtyLayout,
+            ))
+            .id();
+        let block = world.spawn((column(Style::default()), ChildOf(root))).id();
+        let body = world
+            .spawn((
+                Style {
+                    height: Length::Px(50.0),
+                    ..Style::default()
+                },
+                ChildOf(block),
+            ))
+            .id();
+        let after = world
+            .spawn((
+                Style {
+                    height: Length::Px(20.0),
+                    ..Style::default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(react_to_children_changes.after(sync_viewport));
+        schedule.add_systems(propagate_dirty_layout.after(react_to_children_changes));
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(propagate_dirty_layout));
+        schedule.run(&mut world);
+        let y = |world: &bevy_ecs::world::World, e| world.get::<Transform>(e).unwrap().absolute.y;
+        assert_eq!(y(&world, after), 50.0, "the body pushes the sibling down");
+
+        world.entity_mut(body).despawn();
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<Transform>(block).unwrap().size.y,
+            0.0,
+            "the emptied block has no height left"
+        );
+        assert_eq!(y(&world, after), 0.0, "the sibling moves back up");
     }
 
     /// A popup spawned as its own layout root (a tooltip) is pinned by its
