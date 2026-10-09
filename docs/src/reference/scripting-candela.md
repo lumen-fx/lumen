@@ -935,9 +935,11 @@ let geo = as_map(root.get("geo"));
 let city = as_str(geo.get("city_name"));
 ```
 
-candela's own `json_parse` builtin parses JSON too. Prefer `lumen::parse_json`:
-it interns the keys it produces, so a key longer than six characters is still
-reachable with `map.get(...)`.
+candela's own `json_parse` builtin parses JSON too, into the same values. The
+two differ on malformed input: `json_parse` raises a runtime error, which ends
+the handler unless a `try` catches it, while `lumen::parse_json` returns null.
+Text from outside the app, such as a response body, is simpler to read with
+`lumen::parse_json` and a null check.
 
 A `parse_markdown` block record carries `id`, `kind`, `level`, `text`, and
 `lang`. `kind` is `h`, `p`, `code`, `li`, or `hr`; `level` is the heading depth
