@@ -3285,7 +3285,7 @@ THIS SOFTWARE.
 --------
 ISC License
 Used by:
-- rustls-webpki 0.103.13 - https://github.com/rustls/webpki
+- rustls-webpki 0.103.15 - https://github.com/rustls/webpki
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -5525,7 +5525,7 @@ DEALINGS IN THE SOFTWARE.
 --------
 MIT License
 Used by:
-- rustls 0.23.43 - https://github.com/rustls/rustls
+- rustls 0.23.45 - https://github.com/rustls/rustls
 
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 
@@ -5964,37 +5964,6 @@ THE SOFTWARE.
 --------
 MIT License
 Used by:
-- ron 0.11.0 - https://github.com/ron-rs/ron
-
-Copyright (c) 2017 RON developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
---------
-MIT License
-Used by:
 - redox_syscall 0.4.1 - https://gitlab.redox-os.org/redox-os/syscall
 - redox_syscall 0.5.18 - https://gitlab.redox-os.org/redox-os/syscall
 - redox_syscall 0.9.1 - https://gitlab.redox-os.org/redox-os/syscall
@@ -6324,6 +6293,7 @@ SOFTWARE.
 --------
 MIT License
 Used by:
+- fearless_simd 0.4.1 - https://github.com/linebender/fearless_simd
 - kurbo 0.13.1 - https://github.com/linebender/kurbo
 - peniko 0.6.1 - https://github.com/linebender/peniko
 - polycool 0.4.0 - https://github.com/linebender/kurbo
@@ -8164,6 +8134,8 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 Used by:
 - vello 0.9.0 - https://github.com/linebender/vello
+- vello_common 0.2.0 - https://github.com/linebender/vello
+- vello_cpu 0.2.0 - https://github.com/linebender/vello
 - vello_encoding 0.9.0 - https://github.com/linebender/vello
 - vello_shaders 0.9.0 - https://github.com/linebender/vello
 
@@ -8221,6 +8193,32 @@ SOFTWARE.
 --------
 MIT License
 Used by:
+- softbuffer 0.4.8 - https://github.com/rust-windowing/softbuffer
+
+Copyright 2022 Kirill Chibisov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+--------
+MIT License
+Used by:
 - ureq-proto 0.6.0 - https://github.com/algesten/ureq-proto
 
 Copyright 2022 Martin Algesten
@@ -8263,6 +8261,37 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
+
+--------
+MIT License
+Used by:
+- glifo 0.3.0 - https://github.com/linebender/vello
+
+Copyright 2025 the Vello Authors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 --------
 MIT License
@@ -9049,6 +9078,33 @@ Used by:
 MIT License
 
 Copyright (c) 2023 4lDO2
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------
+MIT License
+Used by:
+- tiny-xlib 0.2.5 - https://github.com/rust-windowing/tiny-xlib
+
+MIT License
+
+Copyright (c) 2023 John Nunley
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9991,6 +10047,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
+--------
+MIT License
+Used by:
+- ctor 0.10.1 - https://github.com/mmastrac/rust-ctor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --------
 MIT License
 Used by:
@@ -12226,80 +12292,89 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 --------
 Mozilla Public License 2.0
 Used by:
-- lumen-a11y-accesskit 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-async-tokio 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-http-ureq 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-layout-taffy 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-render-wgpu 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-text-cosmic 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-window-winit 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-async-tokio-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-devtools-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-http-ureq-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-mcp-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-filedialog-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-hotkey-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-launcher-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-lifecycle-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-notify-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-power-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-tray-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-core 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-assets 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-capability 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-capability-macros 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-i18n 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-input 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-ir 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-mcp 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-module-registry 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-modules 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-plugin-abi 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-primitives 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-runtime 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-scene 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-script 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-script-candela 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-script-lua 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-script-rhai 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-text 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-widget 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-widget-macros 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-devtools 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-clipboard 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-dnd 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-filedialog 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-hotkey 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-launcher 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-lifecycle 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-menu 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-mime 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-notify 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-power 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-os-tray 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-module 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-module-macros 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-plugin 0.0.8 - https://github.com/lumen-fx/lumen
-- lumenc 0.0.8 - https://github.com/lumen-fx/lumen
-- lumenc-plugin 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-archive 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-audio 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-browser 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-canvas 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-cookie 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-download 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-fs 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-js 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-process 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-storage 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-svg 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-websocket 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-web 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-html 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-web-http 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-portable 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-prerender 0.0.8 - https://github.com/lumen-fx/lumen
-- lumen-ssr 0.0.8 - https://github.com/lumen-fx/lumen
+- lumen-a11y-accesskit 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-async-tokio 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-http-ureq 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-layout-taffy 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-render-cpu 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-render-wgpu 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-text-cosmic 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-window-winit 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-async-tokio-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-devtools-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-http-ureq-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-layout-taffy-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-mcp-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-filedialog-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-hotkey-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-launcher-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-lifecycle-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-notify-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-power-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-tray-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-render-cpu-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-render-gpu-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-core 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-assets 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-capability 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-capability-macros 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-i18n 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-input 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-ir 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-mcp 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-module-registry 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-modules 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-paint 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-plugin-abi 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-primitives 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-runtime 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-scene 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-script 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-text 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-widget 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-widget-macros 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-devtools 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-clipboard 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-dnd 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-filedialog 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-hotkey 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-launcher 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-lifecycle 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-menu 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-mime 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-notify 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-power 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-os-tray 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-module 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-module-macros 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-plugin 0.0.9 - https://github.com/lumen-fx/lumen
+- lumenc 0.0.9 - https://github.com/lumen-fx/lumen
+- lumenc-plugin 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-archive 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-audio 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-browser 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-candela 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-candela-dev 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-candela-dev-host 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-candela-host 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-canvas 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-cookie 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-download 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-fs 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-js 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-lua 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-process 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-rhai 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-storage 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-svg 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-websocket 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-web 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-html 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-web-http 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-portable 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-prerender 0.0.9 - https://github.com/lumen-fx/lumen
+- lumen-ssr 0.0.9 - https://github.com/lumen-fx/lumen
 - option-ext 0.2.0 - https://github.com/soc/option-ext.git
 - symphonia-codec-pcm 0.5.5 - https://github.com/pdeljanov/Symphonia
 - symphonia-codec-vorbis 0.5.5 - https://github.com/pdeljanov/Symphonia
