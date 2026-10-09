@@ -171,16 +171,16 @@ pub fn accumulate_wheel(
         )
     };
 
-    // section 16.5 consumption test: `offset -= delta`, so a positive delta
-    // moves toward 0 (needs offset > 0) and a negative delta moves
-    // toward max (needs offset < max) - per axis, masked to the
-    // container's allowed axes.
+    // section 16.5 consumption test: `offset += delta` (the DOM wheel
+    // convention), so a negative delta moves toward 0 (needs offset > 0)
+    // and a positive delta moves toward max (needs offset < max) - per
+    // axis, masked to the container's allowed axes.
     let can_consume = |scroll: &Scroll, offset: Vec2, max_off: Vec2| -> bool {
         let masked = mask_delta(total, scroll.axis);
         let axis_ok = |d: f32, off: f32, max: f32| -> bool {
-            if d > 0.0 {
+            if d < 0.0 {
                 off > WHEEL_LIMIT_EPSILON
-            } else if d < 0.0 {
+            } else if d > 0.0 {
                 off < max - WHEEL_LIMIT_EPSILON
             } else {
                 false
@@ -237,14 +237,14 @@ pub fn accumulate_wheel(
         delta *= scroll.sensitivity;
         let inertia = scroll.inertia.clamp(0.0, 1.0);
         // Immediate portion: 1 - inertia. Velocity portion: inertia.
-        offset.0 -= delta * (1.0 - inertia);
+        offset.0 += delta * (1.0 - inertia);
         // Velocity is stored in px/s. A wheel detent normally takes
         // ~16 ms (one 60 Hz tick) for the OS to fire, so the px/frame
         // equivalent multiplies by ~60 to land in px/s - preserves the
         // pre-delta-time-fix glide distance at 60 Hz while letting the
         // integrator scale correctly across refresh rates.
         const WHEEL_VELOCITY_HZ: f32 = 60.0;
-        scroll.velocity += -delta * inertia * WHEEL_VELOCITY_HZ;
+        scroll.velocity += delta * inertia * WHEEL_VELOCITY_HZ;
     }
 }
 
@@ -865,8 +865,8 @@ mod wheel_routing_tests {
     #[test]
     fn inner_scrolls_while_it_can() {
         let (mut world, outer, inner) = nested_scrollers(0.0);
-        // Wheel-down (negative delta -> offset increases).
-        wheel(&mut world, -30.0);
+        // Wheel-down (positive delta -> offset increases).
+        wheel(&mut world, 30.0);
         world.run_system_once(accumulate_wheel).unwrap();
         assert_eq!(offset_y(&world, inner), 30.0, "inner consumes the wheel");
         assert_eq!(offset_y(&world, outer), 0.0, "outer untouched");
@@ -876,7 +876,7 @@ mod wheel_routing_tests {
     fn wheel_down_at_inner_bottom_bubbles_to_outer() {
         // Inner pinned at its max offset (600 content - 200 viewport).
         let (mut world, outer, inner) = nested_scrollers(400.0);
-        wheel(&mut world, -30.0);
+        wheel(&mut world, 30.0);
         world.run_system_once(accumulate_wheel).unwrap();
         assert_eq!(
             offset_y(&world, inner),
@@ -889,9 +889,9 @@ mod wheel_routing_tests {
     #[test]
     fn wheel_up_at_inner_bottom_still_scrolls_inner() {
         let (mut world, outer, inner) = nested_scrollers(400.0);
-        // Wheel-up (positive delta -> offset decreases): inner CAN
+        // Wheel-up (negative delta -> offset decreases): inner CAN
         // consume this direction, so it must not bubble.
-        wheel(&mut world, 30.0);
+        wheel(&mut world, -30.0);
         world.run_system_once(accumulate_wheel).unwrap();
         assert_eq!(offset_y(&world, inner), 370.0, "inner scrolls back up");
         assert_eq!(offset_y(&world, outer), 0.0, "outer untouched");
@@ -902,7 +902,7 @@ mod wheel_routing_tests {
         // Both at 0 and wheel-up: nobody can consume; the innermost
         // gets the (overshooting) delta and clamp handles it later.
         let (mut world, outer, inner) = nested_scrollers(0.0);
-        wheel(&mut world, 30.0);
+        wheel(&mut world, -30.0);
         world.run_system_once(accumulate_wheel).unwrap();
         assert_eq!(offset_y(&world, outer), 0.0, "outer untouched");
         assert_eq!(
@@ -929,7 +929,7 @@ mod wheel_routing_tests {
         ));
         // Hovered chrome entity entirely outside the scroller's tree.
         world.spawn((Transform::new(Vec2::ZERO, Vec2::new(50.0, 50.0)), Hovered));
-        wheel(&mut world, -20.0);
+        wheel(&mut world, 20.0);
         world.run_system_once(accumulate_wheel).unwrap();
         assert_eq!(offset_y(&world, scroller), 20.0);
     }

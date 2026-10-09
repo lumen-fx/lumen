@@ -73,7 +73,7 @@ fn a_simulated_wheel_scrolls_the_container_under_the_point() {
             x: 300.0,
             y: 100.0,
             dx: 0.0,
-            dy: -50.0,
+            dy: 50.0,
         },
         wait_for: None,
     });

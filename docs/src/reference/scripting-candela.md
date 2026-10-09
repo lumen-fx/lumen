@@ -633,7 +633,7 @@ through the accessors below:
 | `lumen::event_button(ev: int)` | `int` | `0` primary, `1` middle, `2` secondary. |
 | `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target. |
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
-| `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta. |
+| `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
 | `lumen::event_shift(ev: int)` / `_ctrl` / `_alt` / `_super` | `bool` | Modifier state. |
 | `lumen::event_prevent_default(ev: int)` | | Cancel the default action. |
 | `lumen::event_stop_propagation(ev: int)` | | Stop the event reaching further elements. |

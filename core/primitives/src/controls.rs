@@ -482,8 +482,8 @@ pub fn set_slider_on_drag(
 pub const WHEEL_NOTCH_PX: f32 = 32.0;
 
 /// Wheel over a hovered `<slider>` (or its thumb child) nudges the value
-/// by [`SliderValue::step_size`] per notch - wheel-up increases, matching
-/// Qt's `QSlider::wheelEvent`. The wheel is *consumed* by the slider:
+/// by [`SliderValue::step_size`] per notch - wheel-up (a negative delta,
+/// away from the user) increases, matching Qt's `QSlider::wheelEvent`. The wheel is *consumed* by the slider:
 /// `lumen_primitives::scroll::accumulate_wheel` stands down whenever a
 /// slider sits on the hovered entity's ancestor chain, so adjusting a
 /// slider never also scrolls an ancestor scroll container.
@@ -512,7 +512,7 @@ pub fn adjust_slider_on_wheel(
         return;
     };
     let new = clamp_range(
-        s.value + (total / WHEEL_NOTCH_PX) * s.step_size(),
+        s.value - (total / WHEEL_NOTCH_PX) * s.step_size(),
         s.min,
         s.max,
     );

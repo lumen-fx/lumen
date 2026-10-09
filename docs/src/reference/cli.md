@@ -791,7 +791,9 @@ lumenc scroll <x> <y> <dx> <dy> [--wait-for R] [--json]
               [--port P] [--app <dir>]
 ```
 
-Injects a wheel event of `(dx, dy)` pixels at the logical-pixel point. The
+Injects a wheel event of `(dx, dy)` pixels at the logical-pixel point.
+Positive `dy` scrolls down and positive `dx` scrolls right, as in a DOM wheel
+event. The
 pointer moves to the point first, so the wheel scrolls the container there and
 reaches its `wheel` handlers.
 
