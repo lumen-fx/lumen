@@ -782,8 +782,12 @@ fn package_static(
     )?;
     let modules = linked.modules;
     // `--static` is this machine's own platform, so the installation's own
-    // directories are the ones holding the library.
-    stage_script_library(&search_dirs(lib_dir, true), out)?;
+    // directories are the ones holding the library. The kit comes first: the
+    // engine inside the executable is the one it was built from.
+    let toolchain_dirs: Vec<PathBuf> = std::iter::once(kit.clone())
+        .chain(search_dirs(lib_dir, true))
+        .collect();
+    stage_toolchain_files(&toolchain_dirs, lib_dir, out)?;
     let plugins = stage_modules(
         src,
         out,
@@ -922,8 +926,7 @@ fn package_sdk(
             Some(shipped.engine),
         )
     };
-    stage_script_library(&library_dirs, out)?;
-    stage_license_files(&library_dirs, out)?;
+    stage_toolchain_files(&library_dirs, lib_dir, out)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -1226,28 +1229,64 @@ fn stage_script_library(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
     copy_tree(&from, &out.join(SCRIPT_LIBRARY_DIR))
 }
 
-/// Stage the license files into the package root.
+/// Stage what every desktop package carries beside its executable, whichever
+/// path built it: the script standard library and the license files, both
+/// taken from the first of `dirs` that holds them.
 ///
-/// They sit at the root of an installed toolchain while the binaries sit in
-/// `bin/`, so each search directory is tried with its parent: an installation
-/// finds them one level up from `lumenc`, and a workspace build finds them at
-/// the repository root. The first directory holding all three wins, for the
-/// reason [`first_dir_with`] gives - a partial directory cannot make a
-/// complete package.
+/// Every packaging path goes through here rather than staging the two on its
+/// own, so a path cannot ship the engine and leave its license text behind.
+fn stage_toolchain_files(
+    dirs: &[PathBuf],
+    lib_dir: Option<&Path>,
+    out: &Path,
+) -> Result<(), String> {
+    stage_script_library(dirs, out)?;
+    stage_license_files(dirs, lib_dir, out, "lumenc package")
+}
+
+/// The license files under the names an archive member carries, for a fetch
+/// to take them along with what it was sent for.
+pub(crate) fn license_members() -> Vec<String> {
+    LICENSE_FILES.map(String::from).to_vec()
+}
+
+/// Stage the license files into the root of `out`, the output `command`
+/// writes.
+///
+/// `dirs` are where the files the output ships came from, and they are tried
+/// first; the installation's own directories (`--lib-dir`, the one holding
+/// `lumenc`, `LUMEN_LIB_DIR`) come after them, because every toolchain this
+/// `lumenc` takes files from is the same product under the same licenses, and
+/// a download cache filled before the archives carried the files has none.
+/// The files sit at the root of an installed toolchain while the binaries sit
+/// in `bin/`, so each directory is tried with its parent. The first directory
+/// holding all three wins, for the reason [`first_dir_with`] gives - a partial
+/// directory cannot make a complete package.
 ///
 /// This reports rather than fails. A toolchain assembled without them still
 /// builds a working app, and a build that stops here would turn a missing
-/// text file into a broken `lumenc package`.
-pub(crate) fn stage_license_files(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
-    let names: Vec<String> = LICENSE_FILES.map(String::from).to_vec();
-    let candidates: Vec<PathBuf> = dirs
-        .iter()
-        .flat_map(|dir| [Some(dir.clone()), dir.parent().map(Path::to_path_buf)])
-        .flatten()
-        .collect();
+/// text file into a broken build.
+pub(crate) fn stage_license_files(
+    dirs: &[PathBuf],
+    lib_dir: Option<&Path>,
+    out: &Path,
+    command: &str,
+) -> Result<(), String> {
+    let names = license_members();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for dir in dirs.iter().cloned().chain(search_dirs(lib_dir, true)) {
+        for candidate in [Some(dir.clone()), dir.parent().map(Path::to_path_buf)]
+            .into_iter()
+            .flatten()
+        {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
     let Some(from) = first_dir_with(&candidates, &names) else {
         eprintln!(
-            "lumenc package: warning: no {} in {}, so the package carries no license text for \
+            "{command}: warning: no {} in {}, so the output carries no license text for \
              the engine it ships",
             LICENSE_FILES.join(", "),
             searched(&candidates)
@@ -2076,7 +2115,7 @@ fn package(
         }
     }
 
-    stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
+    stage_toolchain_files(std::slice::from_ref(&toolchain.dir), lib_dir, out)?;
     let modules = shipped.modules;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
@@ -2167,12 +2206,16 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
         if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none()
             || !dir.join(SCRIPT_LIBRARY_DIR).is_dir()
         {
+            let optional: Vec<String> = dynamic_runtime_patterns(target)
+                .into_iter()
+                .chain(license_members())
+                .collect();
             fetch_release_files(
                 &version,
                 &target.archive_name(),
                 &Members {
                     wanted: &wanted,
-                    optional: &dynamic_runtime_patterns(target),
+                    optional: &optional,
                     trees: &[SCRIPT_LIBRARY_DIR],
                     layout: Unpack::Flat,
                 },
@@ -2247,7 +2290,7 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
         fetch_release_files(
             &version,
             WEB_ARCHIVE,
-            &Members::flat(&wanted),
+            &web_archive_members(&wanted, &license_members()),
             &dir,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
@@ -2257,6 +2300,20 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
         wasm: dir.join(&wanted[0]),
         js: dir.join(&wanted[1]),
     })
+}
+
+/// What a web build takes out of the published web archive: the runtime pair
+/// it was sent for, and the license files beside them when the release
+/// carries them. The runtime carries the engine, so its license text has to
+/// reach the cache the site is staged from; a release older than the files
+/// still unpacks.
+fn web_archive_members<'a>(wanted: &'a [String], licenses: &'a [String]) -> Members<'a> {
+    Members {
+        wanted,
+        optional: licenses,
+        trees: &[],
+        layout: Unpack::Flat,
+    }
 }
 
 /// The directories a toolchain artifact is looked for in before the download
@@ -3175,7 +3232,8 @@ mod tests {
             std::fs::write(root.join("prefix").join(name), name).expect("write the license");
         }
 
-        stage_license_files(std::slice::from_ref(&bin), &out).expect("stage from the parent");
+        stage_license_files(std::slice::from_ref(&bin), None, &out, "test")
+            .expect("stage from the parent");
         for name in LICENSE_FILES {
             assert_eq!(
                 std::fs::read_to_string(out.join(name)).ok(),
@@ -3191,7 +3249,8 @@ mod tests {
         std::fs::write(half.join("LICENSE"), "LICENSE").expect("write one");
         let bare = root.join("bare-out");
         std::fs::create_dir_all(&bare).expect("make the bare output");
-        stage_license_files(&[half], &bare).expect("a missing set reports rather than fails");
+        stage_license_files(&[half], None, &bare, "test")
+            .expect("a missing set reports rather than fails");
         assert!(
             !bare.join("LICENSE").exists(),
             "a partial directory was used"
@@ -3479,6 +3538,79 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The web archive carries the license files beside the runtime pair, and
+    /// a site is staged from the cache the archive unpacks into, so the files
+    /// have to come out of it with the pair. A release older than the files
+    /// still unpacks.
+    #[test]
+    fn the_web_archive_unpacks_its_license_files_beside_the_runtime() {
+        let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+        let licenses = license_members();
+        let tmp = std::env::temp_dir().join(format!("lumen-web-licenses-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let bytes = tar_gz(&[
+            (WEB_WASM, b"wasm".as_slice()),
+            (WEB_JS, b"js"),
+            ("LICENSE", b"LICENSE"),
+            ("NOTICE", b"NOTICE"),
+            ("THIRD-PARTY-LICENSES", b"THIRD-PARTY-LICENSES"),
+        ]);
+        let current = tmp.join("current");
+        extract_tar_gz(&bytes, &web_archive_members(&wanted, &licenses), &current).expect("unpack");
+        assert_eq!(
+            first_dir_with(std::slice::from_ref(&current), &licenses),
+            Some(current.clone()),
+            "the license files stay behind in the archive"
+        );
+        let site = tmp.join("site");
+        std::fs::create_dir_all(&site).expect("make the site");
+        stage_license_files(std::slice::from_ref(&current), None, &site, "test")
+            .expect("stage from the cache");
+        for name in LICENSE_FILES {
+            assert!(site.join(name).is_file(), "the site carries no {name}");
+        }
+
+        let older = tar_gz(&[(WEB_WASM, b"wasm".as_slice()), (WEB_JS, b"js")]);
+        let old = tmp.join("old");
+        extract_tar_gz(&older, &web_archive_members(&wanted, &licenses), &old)
+            .expect("a release without the files still unpacks");
+        assert!(old.join(WEB_WASM).is_file());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The directories an output's files came from may hold no license text
+    /// (a Rust app's own cargo build, a cache an older `lumenc` filled), and
+    /// the installation's own copy answers for them then.
+    #[test]
+    fn license_files_fall_back_to_the_installation() {
+        let root =
+            std::env::temp_dir().join(format!("lumenc-license-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let build = root.join("build");
+        let install = root.join("prefix").join("bin");
+        let out = root.join("out");
+        for dir in [&build, &install, &out] {
+            std::fs::create_dir_all(dir).expect("make the directory");
+        }
+        for name in LICENSE_FILES {
+            std::fs::write(root.join("prefix").join(name), name).expect("write the license");
+        }
+
+        stage_license_files(std::slice::from_ref(&build), Some(&install), &out, "test")
+            .expect("stage from the installation");
+        for name in LICENSE_FILES {
+            assert_eq!(
+                std::fs::read_to_string(out.join(name)).ok().as_deref(),
+                Some(name),
+                "{name} did not travel"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A link kit is a tree whose manifest names files by their path inside
