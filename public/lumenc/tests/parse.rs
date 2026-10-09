@@ -2883,6 +2883,28 @@ fn radio_desugars_with_group_value_and_roving_tab_index() {
 }
 
 #[test]
+fn radio_group_strips_the_signal_sigil() {
+    let ir = parse_html(
+        r##"<root><radio group="$cat" value="food" label="Food" checked="true" /></root>"##,
+    )
+    .expect("html");
+    let r = &ir.root.children[0];
+    assert_eq!(
+        r.attrs.radio_group.as_deref(),
+        Some("cat"),
+        "`$cat` names the signal `cat`, as it does on every bind-*"
+    );
+    assert_eq!(
+        r.attrs.signal_seed,
+        Some(("cat".to_string(), "food".to_string()))
+    );
+    assert!(
+        parse_html(r##"<root><radio group="$" value="a" /></root>"##).is_err(),
+        "a bare sigil names no signal"
+    );
+}
+
+#[test]
 fn radio_without_group_errors() {
     let r = parse_html(r##"<root><radio value="a" /></root>"##);
     assert!(r.is_err(), "group + value are mandatory on <radio>");
