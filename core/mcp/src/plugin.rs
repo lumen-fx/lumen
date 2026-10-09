@@ -273,6 +273,9 @@ fn wire_simulate_waker(
 #[derive(Resource, Default, Debug)]
 struct SimulateProgress {
     drained_seq: u64,
+    /// A simulated wheel waiting for the tick after the pointer move that
+    /// brought the pointer over its point, with the request it belongs to.
+    deferred_wheel: Option<(u64, MouseWheel)>,
 }
 
 /// Pop exactly ONE pending [`SimulateRequest`] (FIFO) and convert it into
@@ -306,10 +309,19 @@ fn drain_simulate_queue(
     mut key_pressed: MessageWriter<KeyPressed>,
     mut key_released: MessageWriter<KeyReleased>,
 ) {
+    // A wheel deferred last tick takes this tick, the way a real wheel
+    // arrives on a tick after the move that put the pointer there.
+    if let Some((seq, event)) = progress.deferred_wheel.take() {
+        wheel.write(event);
+        progress.drained_seq = seq;
+        queue.wake();
+        return;
+    }
     let (popped, remaining) = queue.pop_front();
     let Some((seq, req)) = popped else {
         return;
     };
+    let prior_seq = progress.drained_seq;
     progress.drained_seq = seq;
     if remaining {
         // Schedule the follow-up tick for the next queued request now -
@@ -415,11 +427,30 @@ fn drain_simulate_queue(
                 }
             }
             SimulateKind::Scroll { x, y, dx, dy } => {
-                wheel.write(MouseWheel {
+                let at = glam::Vec2::new(x, y);
+                let event = MouseWheel {
                     delta: glam::Vec2::new(dx, dy),
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     local: None,
-                });
+                };
+                if pointer.position == Some(at) {
+                    wheel.write(event);
+                } else {
+                    // A real wheel turns with the pointer already over the
+                    // window. Move it to (x, y) this tick, so `hit_test`
+                    // hovers the element there, and deliver the wheel next
+                    // tick: the scroll routing reads the hover the tick
+                    // before resolved, and the `wheel` handlers target it.
+                    // The request completes with the wheel.
+                    pointer.position = Some(at);
+                    moved.write(PointerMoved {
+                        position: at,
+                        local: None,
+                    });
+                    progress.deferred_wheel = Some((seq, event));
+                    progress.drained_seq = prior_seq;
+                    queue.wake();
+                }
             }
         }
     }
