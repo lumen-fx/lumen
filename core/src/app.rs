@@ -436,6 +436,10 @@ impl App {
             TickStage::A11ySync,
             crate::property_store::clear_property_store_dirty,
         );
+        s.add_systems(
+            TickStage::A11ySync,
+            crate::signals::clear_array_signal_changes,
+        );
         // Wave-D back-mirror: pre wave-D systems wrote into `Signals` which
         // mirrored forward into `PropertyStore`. Post wave-D internal systems
         // write directly to `PropertyStore`, so we run the mirror in the

@@ -434,7 +434,9 @@ fn calc_label(n: any) {
 ```
 
 A derivation runs once after registration, then on every change to a
-dependency. Derived-of-derived chains settle within the same tick. A derivation
+dependency. A dependency can be an array signal: setting it, pushing to it, or
+removing from it recomputes the derivation, which receives the items as a
+list. Derived-of-derived chains settle within the same tick. A derivation
 that errors, including an internal engine crash mid-evaluation, is contained
 the same way a failed call is: the app keeps running, that one recompute is
 skipped, and the derivation is retried on the next tick, so a parameter type
