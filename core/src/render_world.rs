@@ -647,9 +647,10 @@ pub struct ExtractedShadow {
     pub blur: f32,
     /// Shadow color (alpha controls softness).
     pub color: Color,
-    /// Global paint order; placed strictly below the source rect.
+    /// Global paint order: below the source rect for a drop shadow, the
+    /// rect's own order for an inset one.
     pub order: PaintOrder,
-    /// `true` for an inset shadow: the renderer clips to the entity's bbox and draws at the negated offset. `false` for a drop shadow.
+    /// `true` for an inset shadow: the renderer shades the source rect minus a blurred copy of it moved by the offset. `false` for a drop shadow.
     pub inner: bool,
     /// Source rect top-left (`origin` minus the per-shadow offset). Inset shadows use it for the clip boundary and offset flip.
     pub rect_origin: Vec2,
@@ -1252,7 +1253,8 @@ pub fn clear_extracted(render: &mut World) {
 }
 
 /// Extract fn that emits one [`ExtractedShadow`] per entry in [`Visuals::shadows`].
-/// Each shadow is placed at `rect.order - 1 + idx` so it paints under the source rect and stacked shadows keep source order.
+/// A drop shadow is placed at `rect.order - 1 + idx` so it paints under the source rect and stacked shadows keep source order.
+/// An inset shadow takes the rect's own order: it paints over the background and under the border, as CSS draws it.
 pub fn extract_shadows(main: &mut World, render: &mut World) {
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
@@ -1268,10 +1270,17 @@ pub fn extract_shadows(main: &mut World, render: &mut World) {
         }
         let alpha = effective_opacity(opacity, &inherited_alpha, e);
         let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
-        let base_order = paint_order_of(e, &parents, &mut depth_cache).saturating_sub(1);
+        let own_order = paint_order_of(e, &parents, &mut depth_cache);
+        let base_order = own_order.saturating_sub(1);
         let mut entries = Vec::with_capacity(v.shadows.len());
-        for (idx, s) in v.shadows.iter().enumerate() {
-            let order = base_order.saturating_add(idx as u32);
+        let mut outer_idx = 0u32;
+        for s in &v.shadows {
+            let order = if s.inner {
+                own_order
+            } else {
+                outer_idx += 1;
+                base_order.saturating_add(outer_idx - 1)
+            };
             entries.push(ExtractedShadow {
                 origin: Vec2::new(t.absolute.x + s.offset_x, t.absolute.y + s.offset_y) - off,
                 size: t.size,
@@ -2776,6 +2785,51 @@ mod tests {
         // Zero text: the label is inside the hidden subtree.
         let text_count = render.query::<&ExtractedText>().iter(&render).count();
         assert_eq!(text_count, 0, "hidden subtree text must not extract");
+    }
+
+    /// An inset shadow extracts at its element's own paint order, so it can
+    /// paint over the element's background; a drop shadow stays below it.
+    #[test]
+    fn inset_shadow_takes_the_element_order() {
+        use crate::components::{Fill, ShadowSpec, Transform, Visuals};
+        let mut main = World::new();
+        let mut render = World::new();
+        render.insert_resource(RenderEntityMap::default());
+        let shadow = |inner: bool| ShadowSpec {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blur: 4.0,
+            spread: 0.0,
+            color: Color::rgba(1.0, 0.0, 0.0, 1.0),
+            inner,
+        };
+        main.spawn((
+            Transform {
+                absolute: Vec2::ZERO,
+                size: Vec2::new(50.0, 50.0),
+                baseline_y: None,
+            },
+            Visuals {
+                fill: Some(Fill::Solid(Color::rgba(1.0, 1.0, 1.0, 1.0))),
+                shadows: vec![shadow(false), shadow(true)],
+                ..Default::default()
+            },
+        ));
+        extract_rects(&mut main, &mut render);
+        extract_shadows(&mut main, &mut render);
+        let rect = render
+            .query::<&ExtractedRect>()
+            .iter(&render)
+            .next()
+            .expect("rect")
+            .order;
+        let mut shadows: Vec<(bool, PaintOrder)> = render
+            .query::<&ExtractedShadow>()
+            .iter(&render)
+            .map(|s| (s.inner, s.order))
+            .collect();
+        shadows.sort();
+        assert_eq!(shadows, vec![(false, rect - 1), (true, rect)]);
     }
 
     /// `display: none` hides the descendants' paint as well as the box.

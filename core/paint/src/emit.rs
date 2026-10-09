@@ -310,42 +310,64 @@ fn emit_shadow_at(painter: &mut dyn Painter, cmd: &ExtractedShadow, ox: f64, oy:
         );
         return;
     }
-    // Inner (inset) shadow. Clip to the entity rect, then draw a
-    // blurred rect at the *negated* offset so the dark edge lands on
-    // the inside rim. Grow the inner rect outward by ~3x blur so the
-    // gradient covers the whole interior; the clip hides the overflow.
+    // Inner (inset) shadow, CSS Backgrounds section 7.1.1: the shadow
+    // colour covers the box except where a copy of the box, moved by the
+    // offset and shrunk by the spread, sits blurred. Drawn as the colour
+    // under a luminance mask that is white over the box and black over
+    // that blurred hole, so only the rim between the two shows.
     let rect_x0 = cmd.rect_origin.x as f64;
     let rect_y0 = cmd.rect_origin.y as f64;
     let rect_x1 = rect_x0 + cmd.size.x as f64;
     let rect_y1 = rect_y0 + cmd.size.y as f64;
-    let clip = Rect::new(rect_x0, rect_y0, rect_x1, rect_y1);
-    let grow = (cmd.blur.max(0.0) as f64 * 3.0).max(1.0);
-    let dx = -(cmd.origin.x - cmd.rect_origin.x) as f64;
-    let dy = -(cmd.origin.y - cmd.rect_origin.y) as f64;
-    // Inset spread moves the shadow's inner edge inward: shrink the
-    // blurred rect by `spread` per side (the clip still hides the
-    // outer overflow).
-    let inset_rect = Rect::new(
-        rect_x0 + dx - grow + spread,
-        rect_y0 + dy - grow + spread,
-        rect_x1 + dx + grow - spread,
-        rect_y1 + dy + grow - spread,
-    );
-    painter.push_layer(
-        Fill::NonZero,
-        peniko::BlendMode::default(),
-        1.0,
+    let bounds = Rect::new(rect_x0, rect_y0, rect_x1, rect_y1);
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return;
+    }
+    let radius = (cmd.radius as f64).max(0.0);
+    let region = RoundedRect::from_rect(bounds, radius);
+    let hole = Rect::new(ox + spread, oy + spread, x1 - spread, y1 - spread);
+    let hole_radius = (radius - spread).max(0.0);
+    let blur = cmd.blur.max(0.0) as f64;
+    let white = PenikoColor::from_rgba8(255, 255, 255, 255);
+    let black = PenikoColor::from_rgba8(0, 0, 0, 255);
+    let color = peniko_color(cmd.color);
+    painter.draw_masked(
+        crate::MaskKind::Luminance,
         Affine::IDENTITY,
-        &Shape::Rect(clip),
+        &Shape::RoundedRect(region),
+        &mut |p: &mut dyn Painter| {
+            p.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                white.into(),
+                None,
+                &Shape::Rect(bounds),
+            );
+            if hole.width() <= 0.0 || hole.height() <= 0.0 {
+                return;
+            }
+            if blur > 0.0 {
+                p.draw_blurred_rounded_rect(Affine::IDENTITY, hole, black, hole_radius, blur);
+            } else {
+                p.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    black.into(),
+                    None,
+                    &Shape::RoundedRect(RoundedRect::from_rect(hole, hole_radius)),
+                );
+            }
+        },
+        &mut |p: &mut dyn Painter| {
+            p.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                color.into(),
+                None,
+                &Shape::Rect(bounds),
+            );
+        },
     );
-    painter.draw_blurred_rounded_rect(
-        Affine::IDENTITY,
-        inset_rect,
-        peniko_color(cmd.color),
-        cmd.radius as f64,
-        cmd.blur.max(0.0) as f64,
-    );
-    painter.pop_layer();
 }
 
 /// Cache-aware shadow emit. Identical appearance shares one encoded blurred
@@ -1216,10 +1238,12 @@ mod tests {
         assert_eq!(sink.frame.len(), 2);
     }
 
-    /// An inset shadow is clipped to its box and never cached, since it
-    /// depends on where the box is.
+    /// An inset shadow is its colour over its box, masked out where a
+    /// blurred copy of the box sits, moved by the offset and shrunk by the
+    /// spread; only the rim between them shows. It is never cached, since
+    /// it depends on where the box is.
     #[test]
-    fn an_inner_shadow_paints_inside_its_box_and_skips_the_cache() {
+    fn an_inner_shadow_shades_the_rim_of_its_box_and_skips_the_cache() {
         let mut inner = shadow();
         inner.inner = true;
         let mut sink = FragmentSink::default();
@@ -1229,14 +1253,32 @@ mod tests {
 
         assert!(cache.is_empty());
         let commands = sink.frame.commands();
-        assert_eq!(commands.len(), 3, "{commands:?}");
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        let Command::Masked {
+            kind,
+            region,
+            mask,
+            content,
+            ..
+        } = &commands[0]
+        else {
+            panic!("a masked draw: {commands:?}");
+        };
+        assert_eq!(*kind, crate::MaskKind::Luminance);
         assert!(matches!(
-            &commands[0],
-            Command::PushLayer { clip: OwnedShape::Rect(r), .. }
-                if *r == Rect::new(10.0, 20.0, 50.0, 40.0)
+            region,
+            OwnedShape::RoundedRect(r) if r.rect() == Rect::new(10.0, 20.0, 50.0, 40.0)
         ));
-        assert!(matches!(commands[1], Command::BlurredRoundedRect { .. }));
-        assert!(matches!(commands[2], Command::PopLayer));
+        let mask = mask.commands();
+        assert_eq!(mask.len(), 2, "{mask:?}");
+        assert!(matches!(mask[0], Command::Fill { .. }));
+        assert!(matches!(
+            &mask[1],
+            Command::BlurredRoundedRect { rect, radius, std_dev, .. }
+                if *rect == Rect::new(14.0, 24.0, 50.0, 40.0)
+                    && (*radius, *std_dev) == (2.0, 3.0)
+        ));
+        assert!(matches!(content.commands(), [Command::Fill { .. }]));
     }
 
     /// An outline strokes its box, rounded when it has a radius, and a zero
