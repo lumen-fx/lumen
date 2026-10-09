@@ -783,6 +783,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         // of starting a competing restyle tween.
         let fill_owned_by_state_fsm = ent.get::<lumen_primitives::HoverBaseColor>().is_some()
             || ent.get::<lumen_primitives::PressBaseColor>().is_some();
+        let rest_color = want_fill.as_ref().and_then(Fill::as_solid);
         if let Some(current_vis) = ent.get::<Visuals>().cloned() {
             // CSS transition trigger: a computed-style change on an
             // entity with a matching `transition:` declaration tweens
@@ -828,6 +829,18 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
             }
             if border_authored && border_tween.is_none() {
                 v.border = want_border;
+            }
+            // The hover / press tint snapshotted the resting colour on
+            // entry and fades back to that snapshot on exit. A new resting
+            // colour is what it must fade back to, or leaving the element
+            // undoes the restyle.
+            if fill_owned_by_state_fsm && let Some(rest) = rest_color {
+                if let Some(mut base) = ent.get_mut::<lumen_primitives::HoverBaseColor>() {
+                    base.0 = rest;
+                }
+                if let Some(mut base) = ent.get_mut::<lumen_primitives::PressBaseColor>() {
+                    base.0 = rest;
+                }
             }
             if let Some(t) = bg_tween {
                 ent.insert(t);
@@ -980,20 +993,23 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
     }
 
     // Opacity - tweened when a `transition: opacity ...` declaration is
-    // present and the entity already carries an Opacity to start from
-    // (first-time application snaps; transitions animate CHANGES).
+    // present. An element that never had an opacity starts from the
+    // computed `1`, as in CSS, and gets the component the tween drives.
     if let Some(o) = attrs.opacity {
-        match (
-            spec_for(TransitionProperty::Opacity),
-            ent.get::<Opacity>().copied(),
-        ) {
-            (Some(spec), Some(cur)) => {
+        match spec_for(TransitionProperty::Opacity) {
+            Some(spec) => {
+                let cur = ent.get::<Opacity>().copied().unwrap_or(Opacity(1.0));
                 if let Some(t) = retarget(cur.0, o, &spec) {
+                    if !ent.contains::<Opacity>() {
+                        ent.insert(cur);
+                    }
                     ent.insert(OpacityTransition(t));
                     inserted_tween = true;
+                } else if !ent.contains::<Opacity>() {
+                    ent.insert(Opacity(o));
                 }
             }
-            _ => {
+            None => {
                 ent.insert(Opacity(o));
             }
         }
@@ -1529,6 +1545,70 @@ mod apply_reapplied_attrs_tests {
         assert_ne!(box_sizing, d.box_sizing, "box-sizing");
         assert_eq!(gap.row, 6.0, "row-gap overrides the gap shorthand");
         assert_eq!(gap.column, 4.0, "gap shorthand fills the other axis");
+    }
+
+    /// A resting `bg` that changes while the element is hovered or pressed
+    /// becomes the colour the hover and press tints fade back to. They
+    /// once faded back to the colour they snapshotted on entry, so leaving
+    /// a button undid the `active` class its click handler had added.
+    #[test]
+    fn restyle_while_hovered_rebases_the_tint_snapshots() {
+        use lumen_core::components::{Color, Fill, Visuals};
+        use lumen_ir::layout_ir::BgSpec;
+        use lumen_primitives::{HoverBaseColor, PressBaseColor};
+        let old = Color::rgba(0.0, 0.0, 0.0, 0.0);
+        let mut world = World::new();
+        let e = world
+            .spawn((
+                Visuals {
+                    fill: Some(Fill::Solid(old)),
+                    ..Default::default()
+                },
+                HoverBaseColor(old),
+                PressBaseColor(old),
+            ))
+            .id();
+        let blue = Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let attrs = Attributes {
+            bg: Some(BgSpec::Solid(blue)),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        let want: Color = blue.into();
+        assert_eq!(world.get::<HoverBaseColor>(e).unwrap().0, want);
+        assert_eq!(world.get::<PressBaseColor>(e).unwrap().0, want);
+    }
+
+    /// An element with an opacity transition and no authored opacity fades
+    /// from the computed `1` the first time a rule gives it one. With no
+    /// `Opacity` component to start from, the change once snapped.
+    #[test]
+    fn opacity_transition_starts_from_one_when_none_was_authored() {
+        use lumen_core::components::Opacity;
+        use lumen_ir::layout_ir::{EasingIr, TransitionIr, TransitionPropertyIr};
+        use lumen_primitives::OpacityTransition;
+        let mut world = World::new();
+        let e = world.spawn_empty().id();
+        let attrs = Attributes {
+            opacity: Some(0.2),
+            transitions: vec![TransitionIr {
+                property: TransitionPropertyIr::Opacity,
+                duration_ms: 6000,
+                easing: EasingIr::Linear,
+            }],
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        let tween = world
+            .get::<OpacityTransition>(e)
+            .expect("the change tweens");
+        assert_eq!((tween.0.from, tween.0.to), (1.0, 0.2));
+        assert_eq!(world.get::<Opacity>(e), Some(&Opacity(1.0)));
     }
 
     /// A restyle that resolves nothing new leaves `Style` untouched, so it
