@@ -331,6 +331,10 @@ const STAND_INS: [&str; 11] = [
     "libstd-0123456789abcdef.dylib",
 ];
 
+/// The license files a toolchain carries at its root, and a package beside its
+/// executable.
+const LICENSE_FILES: [&str; 3] = ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSES"];
+
 /// Packaging for another platform is file assembly, so it works from any host.
 /// Stand-in toolchain files keep this off the network: what is under test is
 /// the shape of the output, not the download.
@@ -346,6 +350,9 @@ fn cross_packaging_assembles_each_platform() {
     std::fs::create_dir_all(&libs).expect("create lib dir");
     for name in STAND_INS {
         std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
+    }
+    for name in LICENSE_FILES {
+        std::fs::write(libs.join(name), name).expect("write stand-in license");
     }
     let libs_arg = libs.to_str().expect("utf-8 path");
 
@@ -377,6 +384,15 @@ fn cross_packaging_assembles_each_platform() {
             !out.join("Demo.lmna").exists(),
             "{target} needs no sidecar app file"
         );
+        // The executable carries the engine, so its license text travels
+        // beside it on every target.
+        for name in LICENSE_FILES {
+            assert_eq!(
+                std::fs::read_to_string(out.join(name)).ok().as_deref(),
+                Some(name),
+                "{target} ships without {name}"
+            );
+        }
     }
 
     // macOS from another platform ships the app beside the executable, since
