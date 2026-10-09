@@ -1,6 +1,7 @@
 //! `LumenMcpPlugin`: wires snapshot systems into both worlds and launches the
 //! TCP server on a dedicated OS thread.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
@@ -10,7 +11,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::app::{App, Plugin};
 use lumen_core::components::{
     BindText, Fill, LumenClasses, LumenId, LumenTag, Opacity, SliderValue, Style, TabIndex,
-    TextAlign, TextContent, TextStyle, TextWrap, Toggleable, Transform, Visuals,
+    TextAlign, TextContent, TextStyle, TextWrap, Toggleable, Transform, Visible, Visuals,
 };
 use lumen_core::input::{
     ClickEvent, FocusTracker, Focused, FocusedKey, Hovered, Key, KeyPressed, KeyReleased,
@@ -1022,6 +1023,7 @@ fn fingerprint_of(inv: &EntityInspect) -> EntityFingerprint {
     }
     inv.parent.hash(&mut h);
     inv.children.hash(&mut h);
+    inv.hidden.hash(&mut h);
     EntityFingerprint(h.finish())
 }
 
@@ -1029,12 +1031,16 @@ fn snap_hierarchy(
     handle: Res<SnapshotHandle>,
     parents: Query<(Entity, &ChildOf)>,
     children: Query<(Entity, &Children)>,
+    visibles: Query<(Entity, &Visible)>,
 ) {
     let Ok(mut snap) = handle.0.write() else {
         return;
     };
+    let mut parent_of: HashMap<u64, u64> = HashMap::new();
     for (e, parent) in &parents {
-        get_or_init(&mut snap.inspect, e).parent = Some(parent.parent().to_bits());
+        let parent = parent.parent().to_bits();
+        parent_of.insert(e.to_bits(), parent);
+        get_or_init(&mut snap.inspect, e).parent = Some(parent);
     }
     for (e, kids) in &children {
         let ids: Vec<u64> = kids.iter().map(|c| c.to_bits()).collect();
@@ -1042,6 +1048,30 @@ fn snap_hierarchy(
             get_or_init(&mut snap.inspect, e).children = ids;
         }
     }
+    // Hidden: a `Visible(false)` on the entity or any ancestor, the rule
+    // the paint pipeline skips a subtree by.
+    let hide_roots: HashSet<u64> = visibles
+        .iter()
+        .filter(|(_, v)| !v.0)
+        .map(|(e, _)| e.to_bits())
+        .collect();
+    for inv in snap.inspect.values_mut() {
+        inv.hidden = !hide_roots.is_empty() && under_hide_root(inv.id, &hide_roots, &parent_of);
+    }
+}
+
+/// Whether `id` or one of its ancestors is in `roots`.
+fn under_hide_root(id: u64, roots: &HashSet<u64>, parent_of: &HashMap<u64, u64>) -> bool {
+    let mut cur = Some(id);
+    // Hop cap: the hierarchy can hold a cycle mid-reparent.
+    for _ in 0..256 {
+        let Some(e) = cur else { return false };
+        if roots.contains(&e) {
+            return true;
+        }
+        cur = parent_of.get(&e).copied();
+    }
+    false
 }
 
 fn snap_bindings(handle: Res<SnapshotHandle>, q: Query<(Entity, &BindText)>) {
@@ -1496,6 +1526,40 @@ mod signal_snapshot_tests {
         assert_eq!(count.last_changed_frame, 6, "change stamps current frame");
         let vol = snap.signals.iter().find(|s| s.name == "volume").unwrap();
         assert_eq!(vol.last_changed_frame, 0, "unchanged cell keeps its stamp");
+    }
+}
+
+#[cfg(test)]
+mod hidden_snapshot_tests {
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+
+    /// A `Visible(false)` hides its whole subtree in the snapshot, and the
+    /// mark goes away once the root is shown again.
+    #[test]
+    fn a_hidden_root_marks_its_subtree() {
+        let mut world = World::new();
+        let handle = SnapshotHandle::default();
+        world.insert_resource(handle.clone());
+        let panel = world.spawn(Visible(false)).id();
+        let button = world.spawn(ChildOf(panel)).id();
+        let app_root = world.spawn_empty().id();
+        world.run_system_once(snap_hierarchy).unwrap();
+        {
+            let snap = handle.0.read().unwrap();
+            assert!(snap.inspect[&panel.to_bits()].hidden);
+            assert!(snap.inspect[&button.to_bits()].hidden);
+            assert!(
+                !snap
+                    .inspect
+                    .get(&app_root.to_bits())
+                    .is_some_and(|i| i.hidden)
+            );
+        }
+        world.entity_mut(panel).insert(Visible(true));
+        world.run_system_once(snap_hierarchy).unwrap();
+        let snap = handle.0.read().unwrap();
+        assert!(!snap.inspect[&button.to_bits()].hidden);
     }
 }
 

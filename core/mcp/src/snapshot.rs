@@ -145,6 +145,11 @@ pub struct EntityInspect {
     /// Direct children ids from `bevy_ecs::hierarchy::Children` (if any).
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub children: Vec<u64>,
+    /// True when a `Visible(false)` on the entity or an ancestor keeps it
+    /// from painting, such as the devtools panel before F12. `find`,
+    /// `element_at`, `lint`, and `snapshot_text` leave such entities out.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub hidden: bool,
     /// Markup tag name from [`lumen_core::components::LumenTag`] (attached to
     /// selector-reachable entities only).
     #[serde(skip_serializing_if = "Option::is_none")]

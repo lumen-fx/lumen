@@ -288,6 +288,9 @@ fn cmp_yx_id(a: &EntityInspect, b: &EntityInspect) -> std::cmp::Ordering {
 }
 
 fn is_invisible(inv: &EntityInspect) -> bool {
+    if inv.hidden {
+        return true;
+    }
     match inv.transform {
         None => true,
         Some(t) => t.size.x <= 0.0 || t.size.y <= 0.0,
@@ -651,7 +654,7 @@ fn method_find(snap: &Snapshot, p: &FindParams) -> Value {
     let mut matches: Vec<&EntityInspect> = snap
         .inspect
         .values()
-        .filter(|inv| match_find(inv, p))
+        .filter(|inv| !inv.hidden && match_find(inv, p))
         .collect();
     matches.sort_by_key(|inv| inv.id);
     let truncated = matches.len() > limit;
@@ -780,7 +783,7 @@ fn parse_element_at(params: Option<&Value>) -> Result<ElementAtParams, String> {
 /// the snapshot does not yet capture z-order or hierarchy.
 fn method_element_at(snap: &Snapshot, p: &ElementAtParams) -> Value {
     let mut best: Option<(&EntityInspect, f32)> = None;
-    for inv in snap.inspect.values() {
+    for inv in snap.inspect.values().filter(|inv| !inv.hidden) {
         // Scroll-corrected on-screen rect - the same space the real
         // hit-test (`lumen_input::hit_test`) and the painted frame use.
         let (x, y, w, h) = on_screen_rect(snap, inv);
@@ -832,7 +835,9 @@ pub(crate) fn method_lint(snap: &Snapshot) -> Value {
     // Runs first: the entities it claims get the exact mechanism
     // instead of `zero_size_visible`'s generic parent-flex guess.
     let collapsed = check_collapsed_containing_block(snap, &mut findings);
-    for inv in snap.inspect.values() {
+    // What the app does not paint has nothing to lint: the hidden devtools
+    // panel is not the app's.
+    for inv in snap.inspect.values().filter(|inv| !inv.hidden) {
         if !collapsed.contains(&inv.id) {
             check_zero_size(inv, &mut findings);
         }
@@ -964,7 +969,7 @@ fn check_gradient_underdefined(inv: &EntityInspect, out: &mut Vec<Value>) {
 /// [`check_zero_size`] leaves them alone.
 fn check_collapsed_containing_block(snap: &Snapshot, out: &mut Vec<Value>) -> HashSet<u64> {
     let mut claimed = HashSet::new();
-    for inv in snap.inspect.values() {
+    for inv in snap.inspect.values().filter(|inv| !inv.hidden) {
         let Some(parent_t) = inv.transform else {
             continue;
         };
@@ -1035,7 +1040,7 @@ impl Axis {
 }
 
 fn check_child_overflow(snap: &Snapshot, out: &mut Vec<Value>) {
-    for inv in snap.inspect.values() {
+    for inv in snap.inspect.values().filter(|inv| !inv.hidden) {
         let Some(parent_t) = inv.transform else {
             continue;
         };
@@ -1233,6 +1238,65 @@ mod tests {
         let lines = v.get("lines").and_then(|l| l.as_array()).unwrap();
         assert_eq!(lines.len(), 1);
         assert!(lines[0].as_str().unwrap().contains("real"));
+    }
+
+    /// A hidden panel over the right half of the window, the devtools
+    /// overlay before F12, is not what the user sees: the introspection
+    /// methods answer about the app element under it.
+    #[test]
+    fn hidden_entities_stay_out_of_find_element_at_lint_and_text() {
+        let mut snap = make_snap_with_entities(&[
+            (1, 0.0, 0.0, 400.0, 300.0, Some("Shown"), false),
+            (2, 200.0, 0.0, 200.0, 300.0, Some("Delete"), false),
+        ]);
+        // A focusable field without a label, which lint would flag.
+        let mut field = EntityInspect {
+            id: 3,
+            tab_index: Some(0),
+            parent: Some(2),
+            ..Default::default()
+        };
+        field.transform = Some(TransformView {
+            absolute: V2 { x: 220.0, y: 20.0 },
+            size: V2 { x: 50.0, y: 20.0 },
+        });
+        snap.inspect.insert(3, field);
+        for id in [2, 3] {
+            snap.inspect.get_mut(&id).unwrap().hidden = true;
+        }
+
+        let hit = method_element_at(&snap, &ElementAtParams { x: 300.0, y: 150.0 });
+        assert_eq!(hit["element"]["id"], json!(1), "{hit}");
+
+        let found = method_find(
+            &snap,
+            &FindParams {
+                by_text: Some("Delete".into()),
+                by_role: None,
+                by_id: None,
+                limit: None,
+            },
+        );
+        assert_eq!(found["total"], json!(0), "{found}");
+
+        let lint = method_lint(&snap);
+        assert!(
+            lint["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|f| f.get("entity") != Some(&json!(3))),
+            "{lint}"
+        );
+
+        let text = method_snapshot_text(&snap, &SnapshotTextParams::default());
+        let lines = text["lines"].as_array().unwrap();
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.as_str().unwrap().contains("Delete")),
+            "{text}"
+        );
     }
 
     #[test]
