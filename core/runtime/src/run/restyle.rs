@@ -500,12 +500,22 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
     #[allow(clippy::type_complexity)]
     let mut q = world.query::<(Entity, &LumenTag, Option<&LumenClasses>, Option<&LumenId>)>();
     let entities: Vec<Entity> = q.iter(world).map(|(e, ..)| e).collect();
+    // The app's stylesheet styles the app's document. A tree mounted as a
+    // root of its own beside it (a dev tool's panel, styled by its own
+    // sheet when it was spawned) is left alone, as the first cascade left
+    // it alone.
+    let document = world
+        .get_resource::<lumen_scene::spawn::DocumentRoot>()
+        .map(|r| r.0);
     // Sibling positions for the whole tree, once. The structural
     // pseudo-classes read them, and computing them per element would
     // re-walk each parent's child list once per child.
     let positions = sibling_positions(world);
 
     for entity in entities {
+        if document.is_some_and(|root| topmost_ancestor(world, entity) != root) {
+            continue;
+        }
         // Reconstruct the subject element from its identity components.
         let Some(mut el) = entity_to_element(world, entity) else {
             continue;
@@ -532,6 +542,21 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
         }
     }
     world.insert_resource(AppliedStyleVersion(version));
+}
+
+/// The root of the tree `entity` sits in: the last `ChildOf` parent up
+/// from it, or `entity` itself when it has none.
+fn topmost_ancestor(world: &World, entity: Entity) -> Entity {
+    use bevy_ecs::hierarchy::ChildOf;
+    let mut cur = entity;
+    // Same cap as the ancestor-chain walk: the cascade must never hang.
+    for _ in 0..256 {
+        match world.get::<ChildOf>(cur) {
+            Some(c) => cur = c.parent(),
+            None => break,
+        }
+    }
+    cur
 }
 
 /// Fold an entity's [`InlineStyle`] declarations onto an already-cascaded
