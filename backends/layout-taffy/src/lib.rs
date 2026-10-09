@@ -1026,7 +1026,36 @@ pub fn sync_layout(
     // absolute position - taffy zeroes the compute-root's location,
     // which must not leak into the boundary's own Transform.
     for root in &dirty_roots {
-        let absolute_override = pins.get(root).map(|p| p.prior_absolute);
+        let absolute_override = pins.get(root).map(|p| p.prior_absolute).or_else(|| {
+            // A true root has no parent box for its `inset` to resolve
+            // against, so an absolutely positioned one (a tooltip
+            // popup) resolves it against the space it was solved in,
+            // the viewport. taffy places every compute root at the
+            // origin, which would pin it there.
+            if parent_q.get(*root).is_ok() {
+                return None;
+            }
+            let (_, style) = style_q.get(*root).ok()?;
+            if !matches!(style.position, LumenPosition::Absolute) {
+                return None;
+            }
+            let node = *layout.map.get(root)?;
+            let size = layout.geometry.get(node).unwrap_or_default().size;
+            let space = if overlay_q.contains(*root) {
+                viewport
+            } else {
+                inset_viewport
+            };
+            let dir = dir_q
+                .get(*root)
+                .map(|d| d.0)
+                .unwrap_or(LayoutDirection::Ltr);
+            Some(root_inset_origin(
+                style.inset.resolved(dir),
+                Vec2::new(size.width, size.height),
+                definite_or_zero(space),
+            ))
+        });
         let parent_origin = match parent_q.get(*root) {
             Ok(p) => transform_q
                 .get(p.parent())
@@ -1683,6 +1712,48 @@ fn edges_to_lp(e: LumenEdges) -> taffy::Rect<taffy::style::LengthPercentage> {
     }
 }
 
+/// Where an absolutely positioned layout root sits inside `space`: each
+/// axis is pinned by its start inset when that is set, else by its end
+/// inset, else it stays at the origin. `NaN` is an `auto` side.
+fn root_inset_origin(inset: LumenEdges, size: Vec2, space: Vec2) -> Vec2 {
+    fn side(px: f32, pct: Option<f32>, extent: f32) -> Option<f32> {
+        match pct {
+            Some(p) => Some(extent * p / 100.0),
+            None if px.is_finite() => Some(px),
+            None => None,
+        }
+    }
+    let axis = |start: Option<f32>, end: Option<f32>, extent: f32, own: f32| match (start, end) {
+        (Some(s), _) => s,
+        (None, Some(e)) => extent - e - own,
+        (None, None) => 0.0,
+    };
+    Vec2::new(
+        axis(
+            side(inset.left, inset.pct_left, space.x),
+            side(inset.right, inset.pct_right, space.x),
+            space.x,
+            size.x,
+        ),
+        axis(
+            side(inset.top, inset.pct_top, space.y),
+            side(inset.bottom, inset.pct_bottom, space.y),
+            space.y,
+            size.y,
+        ),
+    )
+}
+
+/// The definite extent of an available-space pair, `0` on an axis that
+/// has none.
+fn definite_or_zero(space: taffy::Size<AvailableSpace>) -> Vec2 {
+    let one = |s: AvailableSpace| match s {
+        AvailableSpace::Definite(v) => v,
+        _ => 0.0,
+    };
+    Vec2::new(one(space.width), one(space.height))
+}
+
 fn edges_to_lpa(e: LumenEdges) -> taffy::Rect<taffy::style::LengthPercentageAuto> {
     use taffy::style::LengthPercentageAuto;
     fn one(v: f32, pct: Option<f32>) -> LengthPercentageAuto {
@@ -1963,6 +2034,49 @@ mod tests {
         assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
     }
 
+    /// A popup spawned as its own layout root (a tooltip) is pinned by its
+    /// `left` / `top` inset with `right` / `bottom` left `auto`, and lands
+    /// where those say at its content size.
+    #[test]
+    fn root_popup_pinned_by_left_top_lands_at_its_inset() {
+        use lumen_core::components::*;
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::default());
+        world.insert_resource(TextMeasureMemo::default());
+        world.insert_resource(Viewport {
+            size: glam::Vec2::new(1000.0, 600.0),
+            ..Viewport::default()
+        });
+        let popup = world
+            .spawn((
+                Style {
+                    position: Position::Absolute,
+                    width: Length::Px(80.0),
+                    height: Length::Px(20.0),
+                    inset: Edges {
+                        left: 312.0,
+                        top: 330.0,
+                        ..Edges::auto()
+                    },
+                    ..Style::default()
+                },
+                DirtyLayout,
+            ))
+            .id();
+
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(sync_viewport));
+        schedule.run(&mut world);
+
+        let t = world.get::<Transform>(popup).expect("laid out");
+        assert_eq!(t.absolute, glam::Vec2::new(312.0, 330.0));
+        assert_eq!(t.size, glam::Vec2::new(80.0, 20.0));
+    }
+
     /// An out-of-flow child never contributes to its parent's content
     /// size, so a parent that is content-sized on an axis and has only
     /// absolutely positioned children measures zero on that axis and
@@ -2219,6 +2333,45 @@ mod css_flex_wave_tests {
             .map(|k| *tree.layout(*k).expect("kid layout"))
             .collect();
         (root_l, kid_l)
+    }
+
+    /// `inset` starts `auto` on every side, as in CSS: an absolutely
+    /// positioned element with no inset keeps its content size instead of
+    /// stretching over its parent, and one pinned by two sides keeps its
+    /// size against those two.
+    #[test]
+    fn absolute_inset_defaults_to_auto() {
+        let parent = Style {
+            width: CoreLength::Px(300.0),
+            height: CoreLength::Px(100.0),
+            ..Style::default()
+        };
+        let bare = Style {
+            position: lumen_core::components::Position::Absolute,
+            ..Style::default()
+        };
+        let corner = Style {
+            position: lumen_core::components::Position::Absolute,
+            width: CoreLength::Px(40.0),
+            height: CoreLength::Px(10.0),
+            inset: CoreEdges {
+                block_start: Some(4.0),
+                inline_end: Some(8.0),
+                ..CoreEdges::auto()
+            },
+            ..Style::default()
+        };
+        let (_, kids) = solve(&parent, &[bare, corner], Vec2::new(400.0, 400.0));
+        assert_eq!(
+            (kids[0].size.width, kids[0].size.height),
+            (0.0, 0.0),
+            "no inset: content size, not the parent's box"
+        );
+        assert_eq!(
+            (kids[1].location.x, kids[1].location.y),
+            (252.0, 4.0),
+            "pinned to the top-right corner at its own size"
+        );
     }
 
     /// CSS box model: a 10px border consumes space inside a border-box

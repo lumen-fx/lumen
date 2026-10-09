@@ -530,6 +530,12 @@ pub struct Edges {
 }
 
 impl Edges {
+    /// Every side `auto` (`NaN`), the initial value of `inset`. A side an
+    /// `inset` longhand does not name stays `auto`.
+    pub const fn auto() -> Self {
+        Self::all(f32::NAN)
+    }
+
     /// Uniform edges.
     pub const fn all(v: f32) -> Self {
         Self {

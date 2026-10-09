@@ -203,13 +203,12 @@ fn spawn_tooltip_popups(
                 width: lumen_core::components::Length::Auto,
                 height: lumen_core::components::Length::Auto,
                 position: Position::Absolute,
+                // Pinned by its top-left corner; `right` / `bottom` stay
+                // `auto` so the popup keeps its content size.
                 inset: lumen_core::components::Edges {
                     left: origin.x,
-                    right: f32::INFINITY,
                     top: origin.y,
-                    bottom: f32::INFINITY,
-                    // W5.5: logical-edge overrides default to None.
-                    ..Default::default()
+                    ..lumen_core::components::Edges::auto()
                 },
                 padding: lumen_core::components::Edges::all(8.0),
                 ..Default::default()

@@ -33,7 +33,9 @@ use crate::layout_ir::{
     LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScriptRefs, ScrollAxisSpec,
     TextAlignSpec, TextWrapSpec, WidgetRole,
 };
-use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
+use crate::values::{
+    bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges, parse_length,
+};
 // `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
 // because it's shared with `transition-duration`; reused here rather
 // than re-implementing the `Nms` / `Ns` unit handling for the inline
@@ -2781,7 +2783,7 @@ fn apply_attribute(
                 }
             });
         }
-        "inset" => attrs.inset = Some(parse_edges(tag, name, value)?),
+        "inset" => attrs.inset = Some(parse_inset_edges(tag, name, value)?),
         "min-width" => attrs.min_width = Some(parse_length(tag, name, value)?),
         "min-height" => attrs.min_height = Some(parse_length(tag, name, value)?),
         "max-width" => attrs.max_width = Some(parse_length(tag, name, value)?),

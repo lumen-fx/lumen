@@ -104,7 +104,7 @@ These apply to any element unless the entry says otherwise.
 | `padding` | edges | `0` |
 | `margin` | edges | `0` |
 | `gap` | number | `0` |
-| `inset` | edges | `0` on `<overlay>` and `<dialog>`, otherwise auto |
+| `inset` | edges; any side may be `auto` | `0` on `<overlay>` and `<dialog>`, otherwise `auto` |
 
 ### Layout
 
