@@ -348,7 +348,10 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// wiping the user's in-progress typing or leaving the caret dangling past the
 /// new (shorter) string. Focus alone is not an edit: a focused element with no
 /// text buffer, such as the `<dropdown>` header the popup hands focus back to on
-/// close, has no keystroke to protect and keeps tracking its signal. When
+/// close, has no keystroke to protect and keeps tracking its signal. A write the
+/// gate held back is applied when the field loses focus: the blur re-reads every
+/// binding, so a submit handler that clears the signal clears the field once the
+/// user leaves it, rather than leaving the typed text on screen. When
 /// `apply_text_bindings` does overwrite an entity, any co-resident
 /// [`TextInput.cursor`] is clamped to `<= new_text.len()` so the cursor cannot
 /// point past the buffer end.
@@ -367,6 +370,7 @@ pub fn apply_text_bindings(
         Without<ImeState>,
     >,
     new_binds: Query<(), Added<BindText>>,
+    mut blurred: bevy_ecs::lifecycle::RemovedComponents<Focused>,
     i18n: Option<Res<crate::i18n::AppI18n>>,
 ) {
     // Idle-tick fast path: no signal changed this tick, so no bound
@@ -389,7 +393,18 @@ pub fn apply_text_bindings(
     // marked changed by the applier that switches it, and the rescan below
     // is idempotent either way.
     let locale_changed = i18n.as_ref().is_some_and(|i18n| i18n.is_changed());
-    if store.dirty_peek().is_empty() && new_binds.is_empty() && !locale_changed {
+    // The fourth is a field losing focus. The gate below skips a focused text
+    // input, so a write that landed while the user was in it is still waiting;
+    // the dirty flag that carried it is long gone, so the blur is what lets
+    // the field catch up with its signal.
+    // Only a bound field leaving focus counts; focus moving between buttons
+    // has nothing held back.
+    let blur = blurred
+        .read()
+        .filter(|&e| q.get(e).is_ok_and(|row| row.2.is_some()))
+        .count()
+        > 0;
+    if store.dirty_peek().is_empty() && new_binds.is_empty() && !locale_changed && !blur {
         return;
     }
     for (bind, mut tc, input, labels, format, focused) in &mut q {
@@ -984,6 +999,39 @@ mod tests {
         world.run_system_once(apply_text_bindings).unwrap();
         assert_eq!(text_of(&world, input), "half typed");
         assert_eq!(world.get::<TextInput>(input).unwrap().cursor, 10);
+    }
+
+    #[test]
+    fn a_write_held_back_by_focus_lands_when_the_field_blurs() {
+        let mut world = world_with_signal("name", "hello");
+        let input = world
+            .spawn((
+                BindText("name".into()),
+                TextContent("hello".into()),
+                TextInput {
+                    cursor: 5,
+                    ..Default::default()
+                },
+                Focused,
+            ))
+            .id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(apply_text_bindings);
+        // A submit handler clears the signal while the field has focus.
+        write_signal(&mut world, "name", "cleared");
+        schedule.run(&mut world);
+        assert_eq!(text_of(&world, input), "hello", "the edit in flight wins");
+        // The write's tick ends; its dirty flag goes with it.
+        world.resource_mut::<PropertyStore>().clear_dirty();
+        schedule.run(&mut world);
+        // The user tabs away.
+        world.entity_mut(input).remove::<Focused>();
+        schedule.run(&mut world);
+        assert_eq!(
+            text_of(&world, input),
+            "cleared",
+            "the write held back while the field had focus was dropped"
+        );
     }
 
     #[test]
