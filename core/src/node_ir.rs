@@ -225,7 +225,7 @@ pub enum Node {
         blur: f32,
         /// Shadow color.
         color: Color,
-        /// `true` for an inset shadow (clipped to the source rect, drawn at the negated offset).
+        /// `true` for an inset shadow (the source rect minus a blurred copy of it moved by the offset).
         inner: bool,
         /// Source rect top-left without the per-shadow offset. Used by inset shadows for the clip rect and
         /// to flip the offset; ignored for outer shadows.
@@ -619,13 +619,18 @@ pub fn transform_extracted_to_nodes(
             entries.push((s.order, background_clip(clip, Node::from(s))));
         }
     }
+    // An inset shadow shares the entity's order key too, and sits between
+    // the background and the border, as CSS paints it.
+    for s in shadows.iter().filter(|s| s.inner) {
+        entries.push((s.order, Arc::new(Node::from(s))));
+    }
     // Borders share the entity's own order key with its background rect;
     // pushing them after rects keeps `background -> border` paint order
     // through the stable sort below.
     for b in &borders {
         entries.push((b.order, Arc::new(Node::from(b))));
     }
-    for s in &shadows {
+    for s in shadows.iter().filter(|s| !s.inner) {
         entries.push((s.order, Arc::new(Node::from(s))));
     }
     for o in &outlines {
@@ -829,6 +834,64 @@ mod tests {
         assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
         assert!(matches!(children[1].as_ref(), Node::Border { .. }));
         assert!(matches!(children[2].as_ref(), Node::Rect { .. }));
+    }
+
+    /// An inset shadow paints over its element's background and under its
+    /// border, as CSS draws it, while a drop shadow stays below the
+    /// background. The inset shadow once painted under the background, so
+    /// any element with a `bg` hid it.
+    #[test]
+    fn inset_shadow_sits_between_fill_and_border() {
+        let shadow = |order: PaintOrder, inner: bool| ExtractedShadow {
+            origin: Vec2::ZERO,
+            size: Vec2::new(10.0, 10.0),
+            radius: 0.0,
+            spread: 0.0,
+            blur: 2.0,
+            color: Color::rgba(1.0, 0.0, 0.0, 1.0),
+            order,
+            inner,
+            rect_origin: Vec2::ZERO,
+        };
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(ExtractedBorder {
+            origin: Vec2::ZERO,
+            size: Vec2::new(10.0, 10.0),
+            widths: [1.0; 4],
+            color: Color::rgba(0.0, 0.0, 1.0, 1.0),
+            side_colors: None,
+            radius: 0.0,
+            corner_radii: None,
+            order: 4,
+        });
+        world.spawn(shadow(4, true));
+        world.spawn(shadow(3, false));
+        world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(10.0, 10.0)));
+        world.insert_resource(RetainedScene::default());
+        world.insert_resource(PreviousScene::default());
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(transform_extracted_to_nodes);
+        schedule.run(&mut world);
+
+        let root = world
+            .resource::<RetainedScene>()
+            .root
+            .clone()
+            .expect("root");
+        let Node::Container { children } = root.as_ref() else {
+            panic!("root is a container");
+        };
+        let kinds: Vec<&str> = children
+            .iter()
+            .map(|n| match n.as_ref() {
+                Node::Shadow { inner: true, .. } => "inset",
+                Node::Shadow { .. } => "drop",
+                Node::Rect { .. } => "fill",
+                Node::Border { .. } => "border",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["drop", "fill", "inset", "border"]);
     }
 
     fn image(order: PaintOrder, background: Option<BackgroundClip>) -> ExtractedImage {
