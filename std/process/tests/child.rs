@@ -351,6 +351,64 @@ fn a_stop_ends_a_running_child_and_its_exit_arrives() {
     assert_reaped(running.pid());
 }
 
+/// A stop ends the programs the child started too, so the exit is not held
+/// back until a grandchild closes the output it inherited, and nothing the
+/// child started outlives it. Unix only: a Windows stop ends the program
+/// itself, as the docs say.
+#[cfg(unix)]
+#[test]
+fn a_stop_ends_the_programs_the_child_started() {
+    let (running, log) = start_with(
+        &["0", "--grandchild", "60000", "--sleep", "60000"],
+        &Options::default(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let grandchild: u32 = loop {
+        let entries = log.0.lock().expect("log").clone();
+        if let Some(pid) = reported(&entries, "grandchild=") {
+            break pid.parse().expect("a process id");
+        }
+        assert!(Instant::now() < deadline, "the grandchild never started");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+
+    let asked = Instant::now();
+    assert!(running.stop());
+    let entries = log.drained();
+    assert!(
+        asked.elapsed() < Duration::from_secs(10),
+        "the exit arrived once the grandchild was gone, not after its sleep"
+    );
+    assert!(entries.last().is_some_and(|e| e.starts_with("exit:")));
+    assert_gone(grandchild);
+}
+
+/// The process has ended: gone from the table, or a zombie waiting for the
+/// parent it was handed to.
+#[cfg(target_os = "linux")]
+fn assert_gone(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                let after_name = stat.rsplit_once(')')?.1.trim_start().to_string();
+                after_name.chars().next()
+            });
+        if matches!(state, None | Some('Z' | 'X')) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process {pid} is still running after the stop"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn assert_gone(_pid: u32) {}
+
 /// Stopping several children at once returns only once every one of them
 /// has ended.
 #[test]

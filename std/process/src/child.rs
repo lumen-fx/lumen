@@ -15,11 +15,15 @@
 //!   the child's status, so every line a child wrote is delivered before its
 //!   [`Event::Exit`]. A child ended by [`Running::stop`] reports its exit the
 //!   same way.
+//! - **A stop ends the program's own children too.** On Unix each child
+//!   leads a process group of its own, and a stop signals the group, so a
+//!   shell's `sleep` ends with the shell instead of holding the pipes, and
+//!   with them the exit, open.
 //! - **Every child is reaped exactly once, and signalled only while it is
-//!   unreaped.** The handle sits behind one lock; whoever holds the lock asks
-//!   the system whether the child has ended before signalling it, so a signal
-//!   never reaches a process id the system has already handed to someone
-//!   else.
+//!   unreaped.** The handle sits behind one lock, and only the supervisor
+//!   reaps, after both pipes close. An unreaped child keeps its process id,
+//!   which is also its group's id, so a signal never reaches a process or a
+//!   group the system has handed to someone else.
 
 use std::fmt;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
@@ -30,10 +34,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 #[cfg(unix)]
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 
 use lumen_module::lumen_core::app_paths;
 
@@ -87,7 +91,8 @@ pub type Refusal = String;
 /// inherits the app's environment with `options.env` laid over it, reads
 /// end-of-file from stdin, and has both output pipes captured. A `cmd`
 /// carrying a path separator names a program relative to the app; a bare
-/// `cmd` is looked up on `PATH`.
+/// `cmd` is looked up on `PATH`. On Unix the child leads a new process group,
+/// which every program it starts joins unless it leaves on purpose.
 pub fn start(
     cmd: &str,
     args: &[String],
@@ -99,7 +104,10 @@ pub fn start(
         .cwd
         .as_deref()
         .map_or_else(app_paths::app_dir, app_paths::resolve);
-    let child = Command::new(program(cmd))
+    let mut command = Command::new(program(cmd));
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command
         .args(args)
         .current_dir(&cwd)
         .envs(options.env.iter().map(|(k, v)| (k, v)))
@@ -137,7 +145,7 @@ fn program(cmd: &str) -> PathBuf {
 /// rather than a pooled task per read: a child lives for as long as it likes,
 /// and a pool sized for bounded work would be held by the first program that
 /// waits for input.
-pub fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal> {
+fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal> {
     let pid = child.id();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -200,38 +208,36 @@ impl Running {
     /// exit has not been reported yet answers false.
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.with_live(|_| ()).is_some()
+        self.with_unreaped(|child| !has_exited(child))
+            .unwrap_or(false)
     }
 
-    /// Ask the child to end: `SIGTERM` on Unix, which the program may catch,
-    /// and `TerminateProcess` on Windows, which it cannot. Answers false when
-    /// the child had already ended.
+    /// Whether the child's exit is still to be reported: it is running, or
+    /// it has ended while a program it started still holds its output open.
+    fn is_unreaped(&self) -> bool {
+        self.with_unreaped(|_| ()).is_some()
+    }
+
+    /// Ask the child to end: `SIGTERM` to its process group on Unix, which a
+    /// program may catch, and `TerminateProcess` on Windows, which it cannot.
+    /// Answers false when the child's exit has already been reported.
     pub fn terminate(&self) -> bool {
-        self.with_live(|child| {
-            #[cfg(unix)]
-            {
-                let _ = kill_process(Pid::from_child(child), Signal::TERM);
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = child.kill();
-            }
-        })
-        .is_some()
+        self.with_unreaped(|child| signal_tree(child, false))
+            .is_some()
     }
 
-    /// End the child outright: `SIGKILL` on Unix, `TerminateProcess` on
-    /// Windows. Does nothing to a child that has already ended.
+    /// End the child outright: `SIGKILL` to its process group on Unix,
+    /// `TerminateProcess` on Windows. Does nothing once the child's exit has
+    /// been reported.
     pub fn kill(&self) {
-        let _ = self.with_live(|child| {
-            let _ = child.kill();
-        });
+        let _ = self.with_unreaped(|child| signal_tree(child, true));
     }
 
     /// End the child the way `process::stop` does: [`terminate`](Self::terminate)
-    /// it now, and on Unix [`kill`](Self::kill) it after [`GRACE`] if it is
-    /// still running then. Returns at once; the child's exit arrives through
-    /// the sink as always. Answers false when the child had already ended.
+    /// it now, and on Unix [`kill`](Self::kill) it after [`GRACE`] if its exit
+    /// has still not been collected then. Returns at once; the child's exit
+    /// arrives through the sink as always. Answers false when the child's exit
+    /// had already been reported.
     pub fn stop(&self) -> bool {
         if !self.terminate() {
             return false;
@@ -242,7 +248,7 @@ impl Running {
                 .name(format!("lumen-process-stop-{}", self.pid))
                 .spawn(move || {
                     let until = Instant::now() + GRACE;
-                    while running.is_running() && Instant::now() < until {
+                    while running.is_unreaped() && Instant::now() < until {
                         thread::sleep(POLL_CAP);
                     }
                     running.kill();
@@ -256,17 +262,13 @@ impl Running {
         true
     }
 
-    /// Run `f` on the child while it is unreaped and still running, and
-    /// answer what it returned; `None` for a child that has ended. Asking the
-    /// system first, under the lock, is what keeps a signal away from a
-    /// process id that has been reused.
-    fn with_live<T>(&self, f: impl FnOnce(&mut Child) -> T) -> Option<T> {
+    /// Run `f` on the child while it is unreaped, and answer what it
+    /// returned; `None` once the supervisor has collected its exit. Only the
+    /// supervisor reaps, under this lock, so the process id `f` sees is still
+    /// the child's.
+    fn with_unreaped<T>(&self, f: impl FnOnce(&mut Child) -> T) -> Option<T> {
         let mut held = self.slot.lock().ok()?;
-        let child = held.as_mut()?;
-        match child.try_wait() {
-            Ok(None) => Some(f(child)),
-            _ => None,
-        }
+        held.as_mut().map(f)
     }
 
     /// Wait for the child to end, reap it, and answer its exit code. Only the
@@ -314,11 +316,49 @@ impl Running {
 pub fn stop_all(children: &[Running]) {
     let asked: Vec<&Running> = children.iter().filter(|c| c.terminate()).collect();
     let until = Instant::now() + GRACE;
-    while asked.iter().any(|c| c.is_running()) && Instant::now() < until {
+    while asked.iter().any(|c| c.is_unreaped()) && Instant::now() < until {
         thread::sleep(Duration::from_millis(10));
     }
     for child in asked {
         child.kill();
+    }
+}
+
+/// Whether `child` has ended, asked without reaping it: the supervisor alone
+/// reaps, so the process id stays the child's until its exit is collected.
+fn has_exited(child: &mut Child) -> bool {
+    #[cfg(unix)]
+    {
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        // An error is a child the system no longer reports on, which is one
+        // that has ended as far as a caller can tell.
+        !matches!(
+            waitid(WaitId::Pid(Pid::from_child(child)), options),
+            Ok(None)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        // A Windows process id stays reserved while its handle is open, so
+        // asking through the handle cannot let it go.
+        !matches!(child.try_wait(), Ok(None))
+    }
+}
+
+/// Signal `child` and everything in its process group: `SIGTERM`, or
+/// `SIGKILL` when `kill`. Windows has no group to signal, so it ends the
+/// child itself either way.
+fn signal_tree(child: &mut Child, kill: bool) {
+    #[cfg(unix)]
+    {
+        let signal = if kill { Signal::KILL } else { Signal::TERM };
+        // The child leads its group, so its pid names the group.
+        let _ = kill_process_group(Pid::from_child(child), signal);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = kill;
+        let _ = child.kill();
     }
 }
 
