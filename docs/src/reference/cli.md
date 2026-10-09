@@ -401,7 +401,7 @@ lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
 
 Assembles a folder that runs on a machine with no Lumen installation: the app
 executable, the Lumen runtime library, `lumen.toml`, and every other file from
-`<app_dir>` at the same relative path. Dotfiles, the output directory, and the app's build inputs
+`<app_dir>` at the same relative path. Dotfiles, the output directory, `<app_dir>/dist/`, and the app's build inputs
 and build tree are skipped; compiler-plugin outputs under `.lumen/generated`
 are the one dot-prefixed tree that ships. Prints one line naming the executable it wrote and
 how many app files travelled with it.

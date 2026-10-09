@@ -108,7 +108,9 @@ The markup, the stylesheet, and the scripts are compiled into the executable,
 so `src/` stays behind; a [multi-page app](pages.md) compiles every page in.
 Everything else in the app directory travels: images, fonts, sounds,
 translation catalogues, data files. Dotfiles and a `target/` directory are left
-behind, and so is the output folder itself.
+behind, and so are the output folder itself and the app's `dist/` folder, where
+`lumenc` writes packages and sites by default, wherever this package is
+written.
 
 The candela standard library travels too, in a `libs/` folder beside the
 executable. Scripts read it as they compile, so `import "std/..."` and the

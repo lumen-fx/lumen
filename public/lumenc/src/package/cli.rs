@@ -72,6 +72,12 @@ const STUB_STEM: &str = "lumen-launcher";
 /// Windows installer stage it under the same name for the same reason.
 const SCRIPT_LIBRARY_DIR: &str = "libs";
 
+/// The directory under the app that `lumenc` writes its output into by
+/// default: `dist/<name>` for a package, its `.zip` beside it, and
+/// `dist/web` for a site. Nothing in it is part of the app, so a package
+/// never copies it, wherever that package is written.
+const OUTPUT_ROOT: &str = "dist";
+
 /// The license files a package carries, under the names the release archives
 /// and the repository root both use.
 ///
@@ -543,7 +549,7 @@ lumen.toml settles any). <out_dir> defaults to <app_dir>/dist/<name>.
     });
     let out_dir = out_arg
         .map(PathBuf::from)
-        .unwrap_or_else(|| src_path.join("dist").join(&app_name));
+        .unwrap_or_else(|| src_path.join(OUTPUT_ROOT).join(&app_name));
     // Writing the package over its own source would copy files onto
     // themselves. A subdirectory of the app is fine, and is the default.
     if std::fs::canonicalize(&out_dir).is_ok_and(|p| p == src_path) {
@@ -2597,8 +2603,8 @@ fn copy_generated_outputs(src: &Path, out: &Path) -> Result<(), String> {
 ///
 /// Everything the app directory holds travels except what the executable
 /// already carries and what is not part of the shipped app: dotfiles, the
-/// build inputs and outputs named by `rules`, and whichever directory the
-/// package is being written into. Copying whole rather than only the files the
+/// build inputs and outputs named by `rules`, the app's [`OUTPUT_ROOT`], and
+/// whichever directory the package is being written into. Copying whole rather than only the files the
 /// markup names is deliberate: an app reaches many of its files at run time,
 /// through a script that plays a sound or a translation the locale picks, and
 /// a static reading of the markup cannot see those.
@@ -2618,10 +2624,12 @@ fn copy_app_files(src: &Path, out: &Path, rules: CopyRules) -> Result<usize, Str
                 continue;
             }
             if path.is_dir() {
-                // Never descend towards the package being written, so the
-                // default `dist/<name>` output and anything else already
-                // built there stays out of it.
-                if !holds(&path, out) {
+                // Never descend towards the package being written, and never
+                // into the app's own output root, so a package or site an
+                // earlier run left under `dist/` stays out of this one
+                // wherever this one is written.
+                let output_root = dir == src && name == OUTPUT_ROOT;
+                if !output_root && !holds(&path, out) {
                     stack.push(path);
                 }
                 continue;
