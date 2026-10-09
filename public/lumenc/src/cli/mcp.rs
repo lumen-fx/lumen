@@ -56,7 +56,7 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{SCREENSHOT_USAGE}");
+                outln!("{SCREENSHOT_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--highlight" => match args.next() {
@@ -145,7 +145,7 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
         .and_then(|v| v.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
-    println!(
+    outln!(
         "wrote {} ({}x{}{})",
         out_path.display(),
         w,
@@ -164,7 +164,7 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
             eprintln!("lumenc screenshot: write {}: {e}", p.display());
             return ExitCode::FAILURE;
         }
-        println!("wrote {}", p.display());
+        outln!("wrote {}", p.display());
     }
     ExitCode::SUCCESS
 }
@@ -207,7 +207,7 @@ error.
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{LINT_USAGE}");
+                outln!("{LINT_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
@@ -266,7 +266,7 @@ error.
     match call(port, "lumen.lint", json!({})) {
         Ok(result) => {
             if as_json {
-                println!(
+                outln!(
                     "{}",
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into())
                 );
@@ -277,7 +277,7 @@ error.
                 };
             }
             if let Some(summary) = result.get("summary").and_then(|v| v.as_str()) {
-                println!("# {summary}");
+                outln!("# {summary}");
             }
             let mut had_error = false;
             if let Some(findings) = result.get("findings").and_then(|v| v.as_array()) {
@@ -290,7 +290,7 @@ error.
                         .and_then(|v| v.as_u64())
                         .map(|id| format!("e{id} "))
                         .unwrap_or_default();
-                    println!("{severity:<7} {entity}{category}: {hint}");
+                    outln!("{severity:<7} {entity}{category}: {hint}");
                     if severity == "error" {
                         had_error = true;
                     }
@@ -328,9 +328,9 @@ fn run_css_cascade_lint(dir: &std::path::Path, as_json: bool) -> ExitCode {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // No stylesheet -> no divergence, no findings.
             if as_json {
-                println!("{{\"findings\":[]}}");
+                outln!("{{\"findings\":[]}}");
             } else {
-                println!("# {}: no src/main.css - nothing to lint", dir.display());
+                outln!("# {}: no src/main.css - nothing to lint", dir.display());
             }
             return ExitCode::SUCCESS;
         }
@@ -365,7 +365,7 @@ fn run_css_cascade_lint(dir: &std::path::Path, as_json: bool) -> ExitCode {
                 })
             })
             .collect();
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "css_path": css_path.display().to_string(),
@@ -374,11 +374,14 @@ fn run_css_cascade_lint(dir: &std::path::Path, as_json: bool) -> ExitCode {
             .unwrap_or_else(|_| "null".into())
         );
     } else {
-        println!("# {}: {} divergence(s)", css_path.display(), findings.len());
+        outln!("# {}: {} divergence(s)", css_path.display(), findings.len());
         for d in &findings {
-            println!(
+            outln!(
                 "warn   {} :: {} - first-wins='{}' vs last-wins='{}'",
-                d.selector, d.property, d.first_wins, d.last_wins
+                d.selector,
+                d.property,
+                d.first_wins,
+                d.last_wins
             );
         }
     }
@@ -427,7 +430,7 @@ the previous tick when it is omitted.
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{DIFF_USAGE}");
+                outln!("{DIFF_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
@@ -454,24 +457,24 @@ the previous tick when it is omitted.
     match call(port, "lumen.diff_since", Value::Object(params)) {
         Ok(result) => {
             if as_json {
-                println!(
+                outln!(
                     "{}",
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into())
                 );
                 return ExitCode::SUCCESS;
             }
             if let Some(summary) = result.get("summary").and_then(|v| v.as_str()) {
-                println!("# {summary}");
+                outln!("# {summary}");
             }
             let print_list = |label: &str, sign: char, key: &str| {
                 if let Some(arr) = result.get(key).and_then(|v| v.as_array()) {
                     if arr.is_empty() {
                         return;
                     }
-                    println!("{label}:");
+                    outln!("{label}:");
                     for v in arr {
                         if let Some(id) = v.as_u64() {
-                            println!("  {sign} {id}");
+                            outln!("  {sign} {id}");
                         }
                     }
                 }
@@ -682,7 +685,7 @@ fn parse_simulate_args(
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{}", simulate_usage(verb[0]));
+                outln!("{}", simulate_usage(verb[0]));
                 return Err(ExitCode::SUCCESS);
             }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
@@ -748,7 +751,7 @@ fn run_simulate(
     match call(port, "lumen.simulate", params) {
         Ok(result) => {
             if as_json {
-                println!(
+                outln!(
                     "{}",
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into())
                 );
@@ -768,7 +771,7 @@ fn run_simulate(
                 return ExitCode::FAILURE;
             }
             if let Some(summary) = result.get("summary").and_then(|v| v.as_str()) {
-                println!("{summary}");
+                outln!("{summary}");
             }
             ExitCode::SUCCESS
         }
@@ -809,7 +812,7 @@ nothing matches.
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{FIND_USAGE}");
+                outln!("{FIND_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--text" => match args.next() {
@@ -858,7 +861,7 @@ nothing matches.
     match call(port, "lumen.find", Value::Object(params)) {
         Ok(result) => {
             if as_json {
-                println!(
+                outln!(
                     "{}",
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into())
                 );
@@ -905,7 +908,7 @@ Coordinates are logical pixels. Exits non-zero when nothing is there.
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{ELEMENT_AT_USAGE}");
+                outln!("{ELEMENT_AT_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
@@ -938,7 +941,7 @@ Coordinates are logical pixels. Exits non-zero when nothing is there.
     match call(port, "lumen.element_at", json!({"x": x, "y": y})) {
         Ok(result) => {
             if as_json {
-                println!(
+                outln!(
                     "{}",
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into())
                 );
@@ -975,7 +978,7 @@ fn print_summary_row(row: &Value) {
     } else {
         format!("\"{label}\"")
     };
-    println!("{id:>10}  {role:<11} {quoted:<32} {x:>5.0},{y:<5.0} {w:>4.0}x{h:<4.0} {state}");
+    outln!("{id:>10}  {role:<11} {quoted:<32} {x:>5.0},{y:<5.0} {w:>4.0}x{h:<4.0} {state}");
 }
 
 /// `lumenc snapshot` - compact a11y-tree text dump.
@@ -1006,7 +1009,7 @@ USAGE:
     while let Some(a) = args.next() {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{SNAPSHOT_USAGE}");
+                outln!("{SNAPSHOT_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--text" => output = OutputMode::Text,
@@ -1039,7 +1042,7 @@ USAGE:
         Ok(result) => match output {
             OutputMode::Json => {
                 let body = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "null".into());
-                println!("{body}");
+                outln!("{body}");
                 ExitCode::SUCCESS
             }
             OutputMode::Text => {
@@ -1079,20 +1082,20 @@ fn build_params(
 
 fn print_text_snapshot(result: &Value) {
     if let Some(summary) = result.get("summary").and_then(|v| v.as_str()) {
-        println!("# {summary}");
+        outln!("# {summary}");
     }
     if let Some(lines) = result.get("lines").and_then(|v| v.as_array()) {
         for line in lines {
             if let Some(s) = line.as_str() {
-                println!("{s}");
+                outln!("{s}");
             }
         }
     }
     if result.get("truncated").and_then(|v| v.as_bool()) == Some(true) {
         if let Some(c) = result.get("next_cursor").and_then(|v| v.as_u64()) {
-            println!("# truncated - resume with --cursor {c}");
+            outln!("# truncated - resume with --cursor {c}");
         } else {
-            println!("# truncated");
+            outln!("# truncated");
         }
     }
 }

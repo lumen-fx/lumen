@@ -1,6 +1,29 @@
 //! CLI subcommand handlers: everything `main.rs` dispatches to that is not
 //! `run` / `web` / `package` / `link-kit` itself.
 
+/// `println!` for output a reader may stop consuming early (`| head -1`).
+/// `println!` panics when stdout is a closed pipe; a closed pipe here only
+/// means the reader has what it wants, so exit quietly like any filter.
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        $crate::cli::write_stdout_line(format_args!($($arg)*))
+    };
+}
+
+pub(crate) fn write_stdout_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let res = out
+        .write_fmt(args)
+        .and_then(|()| out.write_all(b"\n"))
+        .and_then(|()| out.flush());
+    if let Err(e) = res
+        && e.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        std::process::exit(0);
+    }
+}
+
 /// `lumenc build` - parse an app once and emit an AOT [`crate::artifact`].
 /// Requires the source parser (`runtime-parse`) AND the runtime (`dev-run`):
 /// it drives `compile_app` + `app_kind`, both of which live in `lumen-runtime`.

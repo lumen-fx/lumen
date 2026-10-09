@@ -210,7 +210,7 @@ schema mismatches, untracked binds, and orphan writes.
     for a in args {
         match a.as_str() {
             h if crate::is_help_flag(h) => {
-                println!("{LINT_SIGNALS_USAGE}");
+                outln!("{LINT_SIGNALS_USAGE}");
                 return ExitCode::SUCCESS;
             }
             "--json" => as_json = true,
@@ -1383,7 +1383,7 @@ fn emit(findings: &[Finding], as_json: bool, strict: bool) -> ExitCode {
             "findings": arr,
             "summary": summary,
         });
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into())
         );
@@ -1393,7 +1393,7 @@ fn emit(findings: &[Finding], as_json: bool, strict: bool) -> ExitCode {
             *counts
                 .entry(effective_severity_str(f.severity, strict))
                 .or_default() += 1;
-            println!(
+            outln!(
                 "{sev:<5} {file}:{line}:{col}  [{kind}] {sig}: {msg}",
                 sev = effective_severity_str(f.severity, strict),
                 file = f.file.display(),
@@ -1404,14 +1404,14 @@ fn emit(findings: &[Finding], as_json: bool, strict: bool) -> ExitCode {
                 msg = f.message,
             );
             if !f.suggestion.is_empty() {
-                println!("       hint: {}", f.suggestion);
+                outln!("       hint: {}", f.suggestion);
             }
         }
         if findings.is_empty() {
-            println!("# no findings");
+            outln!("# no findings");
         } else {
             let parts: Vec<String> = counts.iter().map(|(k, v)| format!("{v} {k}")).collect();
-            println!("# {} finding(s): {}", findings.len(), parts.join(", "));
+            outln!("# {} finding(s): {}", findings.len(), parts.join(", "));
         }
     }
     let has_error = findings.iter().any(|f| {
