@@ -1019,6 +1019,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             item_id: item_id.clone(),
         });
     }
+    // A popup row is clicked whether or not a skin gives it a background,
+    // so it is a pointer target either way. `tab-index="-1"` is that: in
+    // reach of the pointer and of the popup's own arrow-key navigation,
+    // out of the Tab chain, as a `QComboBox` or `QMenu` row is.
+    if (el.attrs.dropdown_option.is_some() || el.attrs.menu_item.is_some())
+        && el.attrs.tab_index.is_none()
+    {
+        entity.insert(TabIndex(-1));
+    }
     if let Some(open_signal) = &el.attrs.popup_panel {
         let inset = el.attrs.inset.unwrap_or_default();
         entity.insert((

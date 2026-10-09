@@ -144,3 +144,84 @@ fn a_value_no_option_declares_is_shown_as_it_stands() {
     select(&mut app, "fruit", "kiwi");
     assert_eq!(header_text(&mut app), "kiwi");
 }
+
+/// Press and release the primary button at `p`, the way a window backend
+/// reports a click, so the hit test decides what was clicked.
+fn pointer_click(app: &mut App, p: glam::Vec2) {
+    use bevy_ecs::message::Messages;
+    use lumen_core::input::{
+        PointerButton, PointerMoved, PointerPressed, PointerReleased, PointerState,
+    };
+    app.world.resource_mut::<PointerState>().position = Some(p);
+    app.world
+        .resource_mut::<Messages<PointerMoved>>()
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
+    app.tick();
+    app.world.resource_mut::<PointerState>().primary_down = true;
+    app.world
+        .resource_mut::<Messages<PointerPressed>>()
+        .write(PointerPressed {
+            position: p,
+            button: PointerButton::Primary,
+            local: None,
+        });
+    app.tick();
+    app.world.resource_mut::<PointerState>().primary_down = false;
+    app.world
+        .resource_mut::<Messages<PointerReleased>>()
+        .write(PointerReleased {
+            position: p,
+            button: PointerButton::Primary,
+            local: None,
+        });
+    for _ in 0..3 {
+        app.tick();
+    }
+}
+
+/// The centre of the first entity carrying `class` whose text is `text`
+/// (any text when `text` is empty).
+fn centre_of(app: &mut App, class: &str, text: &str) -> glam::Vec2 {
+    use lumen_core::components::Transform;
+    let mut q = app
+        .world
+        .query::<(&LumenClasses, Option<&TextContent>, &Transform)>();
+    q.iter(&app.world)
+        .find(|(classes, label, _)| {
+            classes.0.iter().any(|c| c.as_ref() == class)
+                && (text.is_empty() || label.is_some_and(|l| l.0 == text))
+        })
+        .map(|(_, _, t)| t.absolute + t.size * 0.5)
+        .unwrap_or_else(|| panic!("no .{class} {text:?}"))
+}
+
+/// An option row with no background is still what a click on it hits.
+/// The hit test once considered only elements that paint, scroll or take
+/// focus, so with no `bg` on `.dropdown-option` (a bare app has none) the
+/// click went through the panel to whatever lay under it.
+#[test]
+fn clicking_an_option_without_a_background_selects_it() {
+    let mut app = build(
+        r##"<root padding="20" gap="10">
+  <dropdown width="160px" bind-value="theme">
+    <option value="dark" label="Dark"/>
+    <option value="light" label="Light"/>
+  </dropdown>
+  <button width="200px" height="80px" text="under"/>
+</root>"##,
+    );
+    let header = centre_of(&mut app, "dropdown-button", "");
+    pointer_click(&mut app, header);
+    let light = centre_of(&mut app, "dropdown-option", "Light");
+    pointer_click(&mut app, light);
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str("theme")
+            .as_deref(),
+        Some("light")
+    );
+}
