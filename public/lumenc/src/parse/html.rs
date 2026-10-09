@@ -1575,17 +1575,36 @@ fn build_composed_widget(
                     node.range().start
                 ))
             })?;
-        let id = node.attribute("id").map(|s| s.to_string());
-        let placeholder = node
-            .attribute("placeholder")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                if is_time {
-                    "HH:MM".to_string()
-                } else {
-                    "YYYY-MM-DD".to_string()
-                }
+        // The generated field is an `<input>`, so the attributes written on
+        // the picker (`class`, `tab-index`, `required`, sizing, ...) reach it
+        // the way they reach a written `<input>`.
+        let mut attrs = Attributes::default();
+        let mut slots: Vec<InterpolationSlot> = Vec::new();
+        apply_authored_attributes(
+            node,
+            "input",
+            &mut attrs,
+            &mut slots,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+        )?;
+        if attrs.placeholder.is_none() {
+            attrs.placeholder = Some(if is_time {
+                "HH:MM".to_string()
+            } else {
+                "YYYY-MM-DD".to_string()
             });
+        }
+        if attrs.width.is_none() {
+            attrs.width = Some(LengthSpec::Px(180.0));
+        }
+        // In the Tab order like every other text field, unless the author
+        // took it out.
+        if attrs.tab_index.is_none() {
+            attrs.tab_index = Some(0);
+        }
         // Structural patterns, checked by `lumen_primitives::validation`:
         // `shape:time` is 24-hour `HH:MM` (hour 00-23, minute 00-59),
         // `shape:date` is ISO 8601 `YYYY-MM-DD` (month 01-12, day
@@ -1597,28 +1616,26 @@ fn build_composed_widget(
         } else {
             "date-picker"
         };
-        let mut input = Element {
-            tag: "input".to_string(),
-            attrs: Attributes {
-                width: Some(LengthSpec::Px(180.0)),
-                ..Attributes::default()
-            },
-            children: Vec::new(),
-            ..Default::default()
-        };
-        input.attrs.placeholder = Some(placeholder);
-        input.attrs.id = id;
-        input.attrs.bind = Some(crate::layout_ir::BindSpec {
+        // `bind-value` is the picker's own vocabulary: the field edits the
+        // signal as text.
+        attrs.bind = Some(crate::layout_ir::BindSpec {
             kind: BindKind::Text,
             name: signal_name,
         });
-        input.attrs.pattern = Some(pattern.to_string());
-        input.attrs.classes = vec![class.to_string()];
-        input.attrs.widget = Some(if is_time {
+        attrs.pattern = Some(pattern.to_string());
+        attrs.classes.insert(0, class.to_string());
+        attrs.widget = Some(if is_time {
             WidgetRole::TimePicker
         } else {
             WidgetRole::DatePicker
         });
+        let input = Element {
+            tag: "input".to_string(),
+            attrs,
+            children: Vec::new(),
+            interpolations: slots,
+            ..Default::default()
+        };
         return Ok(Some(input));
     }
 

@@ -605,13 +605,16 @@ generated elements carry the classes `tabs`, `tab-strip`, and `tab-btn`.
 ### `<date-picker>` and `<time-picker>`
 
 A validated text field for a date or a time. Each expands to an `<input>`
-with a built-in pattern and the class `date-picker` or `time-picker`.
+with a built-in pattern and the class `date-picker` or `time-picker`. Like
+any `<input>` it is in the Tab order, and the other attributes written on
+the picker (`id`, `class`, `tab-index`, `required`, sizing) pass through to
+the generated input.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `bind-value` | signal | Required. |
 | `placeholder` | text | Defaults to `YYYY-MM-DD` for dates and `HH:MM` for times. |
-| `id` | text | Passed through to the generated input. |
+| `width` | length | Defaults to `180px`. |
 
 The built-in check matches the placeholder: `YYYY-MM-DD` with month 01-12
 and day 01-31 for a date, `HH:MM` with hour 00-23 and minute 00-59 for a
