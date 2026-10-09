@@ -74,8 +74,10 @@
 //!
 //! # Ending a child
 //!
-//! `process::stop` sends `SIGTERM` on Unix and kills the child if it is still
-//! running after [`child::GRACE`]; on Windows it ends the child at once. The
+//! `process::stop` sends `SIGTERM` to the child's process group on Unix, so
+//! the programs it started end with it, and kills the group if the child's
+//! exit has not been collected after [`child::GRACE`]; on Windows it ends the
+//! child itself at once. The
 //! exit event still arrives, last as always. A tag several children share
 //! stops all of them. A child started with `end_at_exit` is ended the same
 //! way when the app's world is dropped, and the drop waits for it; an app

@@ -1411,7 +1411,8 @@ exit that never comes.
 
 `process::stop(tag)` ends the program running under `tag`: `SIGTERM` first on
 Linux and macOS, then a kill if it is still running two seconds later, and an
-immediate end on Windows. It answers `false` when nothing runs under the tag, ends every
+immediate end on Windows. On Linux and macOS the programs it started end with
+it; on Windows only the program itself ends. It answers `false` when nothing runs under the tag, ends every
 child when several share it, and the child's `process_exit` still arrives as
 the last event. A child started with `end_at_exit` is ended the same way when
 the app closes; the app waits for it before it exits. An app that is killed
