@@ -101,13 +101,22 @@ pub fn start(
         .map_or_else(app_paths::app_dir, app_paths::resolve);
     let child = Command::new(program(cmd))
         .args(args)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .envs(options.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("start({cmd}): {e}"))?;
+        .map_err(|e| {
+            // The system reports a missing working directory with the same
+            // error as a missing program, so name the directory when it is
+            // the one that is not there.
+            if cwd.is_dir() {
+                format!("start({cmd}): {e}")
+            } else {
+                format!("start({cmd}): cwd {}: no such directory", cwd.display())
+            }
+        })?;
     supervise(tag, child, emit)
 }
 

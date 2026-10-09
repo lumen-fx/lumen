@@ -242,6 +242,22 @@ fn a_program_that_cannot_start_is_a_refusal() {
     );
 }
 
+/// A working directory that is not there is a refusal naming the directory,
+/// not the program, which is fine.
+#[test]
+fn a_missing_working_directory_is_named_in_the_refusal() {
+    let options = Options {
+        cwd: Some("no/such/dir-8f2c".to_string()),
+        ..Options::default()
+    };
+    let outcome = child::start(&test_child(), &[], "case", &options, Log::new().sink());
+    let message = outcome.expect_err("a missing directory cannot be started in");
+    assert!(
+        message.contains("no/such/dir-8f2c"),
+        "the refusal names the directory: {message}"
+    );
+}
+
 /// Start the test program with `args` and `options`, answering the handle
 /// and the log its events land in.
 fn start_with(args: &[&str], options: &Options) -> (child::Running, Log) {
