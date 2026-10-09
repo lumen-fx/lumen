@@ -1350,11 +1350,37 @@ pub fn extract_shadows(main: &mut World, render: &mut World) {
     render.resource_mut::<RenderEntityMap>().shadow = next;
 }
 
+/// Snap a box's edges to the device pixel grid, as browsers do before
+/// painting backgrounds. Each edge rounds on its own, so two boxes that
+/// share an edge still share it after snapping: a scroll offset or a layout
+/// position with a fraction no longer leaves the antialiased seam between
+/// adjacent backgrounds through which whatever is behind them shows. A box
+/// with any width or height keeps at least one device pixel of it.
+pub fn snap_to_device_pixels(origin: Vec2, size: Vec2, scale: f32) -> (Vec2, Vec2) {
+    let axis = |start: f32, extent: f32| {
+        let s0 = (start * scale).round() / scale;
+        let mut s1 = ((start + extent) * scale).round() / scale;
+        if extent > 0.0 && s1 <= s0 {
+            s1 = s0 + 1.0 / scale;
+        }
+        (s0, (s1 - s0).max(0.0))
+    };
+    let (x, w) = axis(origin.x, size.x);
+    let (y, h) = axis(origin.y, size.y);
+    (Vec2::new(x, y), Vec2::new(w, h))
+}
+
 /// Default extract fn that emits one [`ExtractedRect`] per main-world entity carrying a [`Transform`] and a [`Visuals::fill`].
 ///
 /// - Paints in deterministic order via [`PaintOrder`]: pre-order document/tree order.
 /// - Skips entities whose AABB falls fully outside the nearest scroll / overflow-hidden ancestor.
+/// - Snaps each rect's edges to device pixels ([`snap_to_device_pixels`]).
 pub fn extract_rects(main: &mut World, render: &mut World) {
+    let scale = main
+        .get_resource::<Viewport>()
+        .map(|v| v.scale_factor)
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or(1.0);
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
@@ -1375,11 +1401,12 @@ pub fn extract_rects(main: &mut World, render: &mut World) {
             {
                 return None;
             }
+            let (origin, size) = snap_to_device_pixels(origin, t.size, scale);
             Some((
                 e,
                 ExtractedRect {
                     origin,
-                    size: t.size,
+                    size,
                     brush,
                     radius: v.radius,
                     corner_radii: v.corner_radii,
@@ -2785,6 +2812,57 @@ mod tests {
         // Zero text: the label is inside the hidden subtree.
         let text_count = render.query::<&ExtractedText>().iter(&render).count();
         assert_eq!(text_count, 0, "hidden subtree text must not extract");
+    }
+
+    /// Two backgrounds that share an edge at a fractional position (a
+    /// scroll offset mid-inertia) still share it once extracted, on whole
+    /// device pixels. Each once antialiased the edge on its own, and what
+    /// was behind them showed through the seam.
+    #[test]
+    fn adjacent_rects_at_a_fractional_offset_share_a_pixel_edge() {
+        use crate::components::{Fill, Transform, Visuals};
+        let mut main = World::new();
+        let mut render = World::new();
+        render.insert_resource(RenderEntityMap::default());
+        main.insert_resource(Viewport {
+            scale_factor: 2.0,
+            ..Viewport::default()
+        });
+        let row = |y: f32| {
+            (
+                Transform {
+                    absolute: Vec2::new(0.0, y),
+                    size: Vec2::new(100.0, 30.0),
+                    baseline_y: None,
+                },
+                Visuals {
+                    fill: Some(Fill::Solid(Color::rgba(0.2, 0.3, 0.4, 1.0))),
+                    ..Default::default()
+                },
+            )
+        };
+        main.spawn(row(-1693.68 + 1680.0));
+        main.spawn(row(-1693.68 + 1710.0));
+        extract_rects(&mut main, &mut render);
+        let mut edges: Vec<(f32, f32)> = render
+            .query::<&ExtractedRect>()
+            .iter(&render)
+            .map(|r| (r.origin.y, r.origin.y + r.size.y))
+            .collect();
+        edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(edges[0].1, edges[1].0, "one shared edge: {edges:?}");
+        for (top, bottom) in edges {
+            assert_eq!((top * 2.0).fract(), 0.0, "top on a device pixel");
+            assert_eq!((bottom * 2.0).fract(), 0.0, "bottom on a device pixel");
+        }
+    }
+
+    /// Snapping keeps at least one device pixel of a box that has any size.
+    #[test]
+    fn snapping_keeps_a_hairline() {
+        let (origin, size) = snap_to_device_pixels(Vec2::new(0.2, 0.2), Vec2::new(10.0, 0.3), 1.0);
+        assert_eq!(origin, Vec2::ZERO);
+        assert_eq!(size, Vec2::new(10.0, 1.0));
     }
 
     /// An inset shadow extracts at its element's own paint order, so it can
