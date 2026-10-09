@@ -231,11 +231,24 @@ Take one to try a fix or a feature before it is released. It carries the same
 archives a release does, and the notes on it name the commit it was built from.
 The same run pushes the server image as `ghcr.io/lumen-fx/lumen-server:nightly`.
 
-Download the archive for your platform and unpack it yourself; on Windows take
-`lumen-windows-x86_64.zip`. Nothing installs a nightly for you. `install.sh`,
-the setup-lumen action, and `lumenc`'s own update check all resolve the current
-release, and a prerelease is not one, so a nightly never arrives on a machine
-that did not ask for it and never offers to replace itself.
+On Linux and macOS, install one by naming the tag:
+
+```sh
+curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --version nightly --force
+```
+
+The installer unpacks it under the prefix with its runtime modules, the same
+as a release, and pins the install to `nightly`, so `lumenc` never offers to
+replace it with a release. Every night is published under the same tag, so
+`--force` is what replaces the nightly you already have with the latest one.
+Run the installer again without `--version` to go back to the current release
+and lift the pin. On Windows, download `lumen-windows-x86_64.zip` and unpack it
+yourself.
+
+Nothing reaches for a nightly on its own. A plain `install.sh`, the
+setup-lumen action, and `lumenc`'s own update check all resolve the current
+release, and a prerelease is not one, so a nightly arrives only on a machine
+that asked for it.
 
 Three things to expect from a nightly:
 
