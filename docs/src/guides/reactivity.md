@@ -165,6 +165,10 @@ All of that happens on one tick, so a handler that writes three signals
 produces one consistent frame rather than three. Elements bound to a signal
 nobody wrote are not touched, so an idle app does no work.
 
+An edit to a bound control is in its signal before any handler runs. `on_toggle`,
+`on_slider`, and `on_text_input` read the signal with the new value in it, and
+so does a Save button's `on_click` that fires right after the last keystroke.
+
 One value edits at a time: while an `<input>` has focus, a signal write does not
 overwrite what the user is typing. Only an edit in progress holds a write back;
 any other focused element, such as a `<dropdown>` header that the popup returns
