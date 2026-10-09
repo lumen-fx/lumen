@@ -215,6 +215,11 @@ fn clicking_an_option_without_a_background_selects_it() {
     );
     let header = centre_of(&mut app, "dropdown-button", "");
     pointer_click(&mut app, header);
+    // The panel is measured, then placed below the header; read the row's
+    // position once it has landed.
+    for _ in 0..6 {
+        app.tick();
+    }
     let light = centre_of(&mut app, "dropdown-option", "Light");
     pointer_click(&mut app, light);
     assert_eq!(
