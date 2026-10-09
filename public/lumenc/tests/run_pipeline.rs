@@ -622,6 +622,49 @@ mod pipeline_integration_tests {
         );
     }
 
+    /// A derived signal whose dependency is an array signal recomputes when
+    /// the array changes, not only on its first run.
+    const ARRAY_DEP_MARKUP: &str = r#"
+<root>
+  <button id="add" text="Add" />
+  <button id="add2" text="Add too" />
+  <label id="n" bind-text="n" />
+  <script>
+    import "lumen.cdl";
+    fn count_items(items: any) { return str(as_list(items).len()) + " items"; }
+    fn on_start() {
+        lumen::signal_array_set("items", ["a"]);
+        lumen::derive("n", ["items"], "count_items");
+    }
+    fn on_click(id: string) { lumen::signal_array_push("items", "b"); }
+    fn main() {}
+  </script>
+</root>
+"#;
+
+    #[test]
+    fn derive_over_an_array_signal_recomputes_when_the_array_changes() {
+        let _serial = crate::serial();
+        let mut app = build_and_tick(ARRAY_DEP_MARKUP, 6);
+        let texts = all_texts(&mut app);
+        assert!(
+            texts.iter().any(|t| t == "1 items"),
+            "initial derived value missing; TextContents = {texts:?}"
+        );
+        // Two buttons so the second click is not taken for a double click.
+        for (button, want) in [("add", "2 items"), ("add2", "3 items")] {
+            click_on(&mut app, button);
+            app.tick();
+            app.tick();
+            let texts = all_texts(&mut app);
+            assert!(
+                texts.iter().any(|t| t == want),
+                "derive() over an array signal did not recompute; \
+                 want {want:?}, TextContents = {texts:?}"
+            );
+        }
+    }
+
     // --- RC6: `lumenc check` compiles the script; run + check agree ------
 
     /// A script whose single expression nests `depth` parenthesised adds.

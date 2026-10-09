@@ -763,8 +763,9 @@ pub fn sync_signals_into_host<H: ScriptHost + Resource<Mutability = Mutable>>(
 
 /// Re-evaluate every computed signal whose deps changed this tick.
 ///
-/// Reads the per-tick `PropertyStore::dirty_global_names` set, snapshots
-/// every derivation whose declared deps intersect that set (plus the
+/// Reads the per-tick `PropertyStore::dirty_global_names` set together with
+/// the arrays `ArraySignals::changed` names, snapshots every derivation
+/// whose declared deps intersect that set (plus the
 /// pending-initial set), evaluates each via
 /// [`ScriptHost::eval_derivation`], and commits the result **directly
 /// into the store** (marking it dirty) so binding readers ordered
@@ -790,6 +791,7 @@ pub fn sync_signals_into_host<H: ScriptHost + Resource<Mutability = Mutable>>(
 pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
     mut store: ResMut<lumen_core::property_store::PropertyStore>,
+    arrays: Option<Res<lumen_core::signals::ArraySignals>>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
     /// Upper bound on in-tick cascade waves. Real dependency chains are
@@ -800,8 +802,13 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
     // matching subset (still outside any closure invocation so the host
     // holds no locks across re-entrant builtins).
     let mut pending = host.pending_initial();
-    let mut dirty: std::collections::HashSet<String> =
-        store.dirty_global_names().map(str::to_string).collect();
+    // An array signal is a dependency like any other: a write that changed
+    // its contents is recorded beside the scalar dirty queue, not in it.
+    let mut dirty: std::collections::HashSet<String> = store
+        .dirty_global_names()
+        .chain(arrays.iter().flat_map(|a| a.changed()))
+        .map(str::to_string)
+        .collect();
     if dirty.is_empty() && pending.is_empty() {
         return;
     }

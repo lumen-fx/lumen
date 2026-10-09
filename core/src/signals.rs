@@ -763,13 +763,28 @@ pub type ArrayItem = HashMap<String, String>;
 /// `PropertyValue::Custom(Arc<ArrayItems>)` so the typed property store becomes
 /// the single source of truth - left as a separate resource for now since the
 /// record-shaped data model doesn't map cleanly onto the scalar typed cells.
+///
+/// The second field records the arrays whose contents changed this tick, the
+/// array counterpart of the [`PropertyStore`] dirty queue: a derived signal
+/// that depends on an array reads it to know when to recompute. It is emptied
+/// at the end of every tick by [`clear_array_signal_changes`].
 #[derive(Resource, Debug, Default, Clone)]
-pub struct ArraySignals(pub HashMap<String, Vec<ArrayItem>>);
+pub struct ArraySignals(pub HashMap<String, Vec<ArrayItem>>, HashSet<String>);
 
 impl ArraySignals {
-    /// Replaces the contents of the named array with `items`.
+    /// Replaces the contents of the named array with `items`. A write that
+    /// changes the contents records the name in [`Self::changed`].
     pub fn set(&mut self, name: impl Into<String>, items: Vec<ArrayItem>) {
-        self.0.insert(name.into(), items);
+        let name = name.into();
+        if self.0.get(&name) != Some(&items) {
+            self.1.insert(name.clone());
+        }
+        self.0.insert(name, items);
+    }
+
+    /// Names of the arrays whose contents changed this tick.
+    pub fn changed(&self) -> impl Iterator<Item = &str> {
+        self.1.iter().map(String::as_str)
     }
 
     /// Returns the named array as a slice, or `None` when absent.
@@ -780,6 +795,18 @@ impl ArraySignals {
     /// No-op placeholder retained for forward-compatibility with an incremental-diff reconciler.
     pub fn touch(&mut self, name: &str) {
         let _ = name;
+    }
+}
+
+/// End-of-tick system that empties the [`ArraySignals`] change record, the
+/// array counterpart of [`crate::property_store::clear_property_store_dirty`].
+/// Bypasses change detection so clearing the record does not read as a write
+/// to the arrays themselves.
+pub fn clear_array_signal_changes(arrays: Option<ResMut<ArraySignals>>) {
+    if let Some(mut arrays) = arrays
+        && !arrays.1.is_empty()
+    {
+        arrays.bypass_change_detection().1.clear();
     }
 }
 
