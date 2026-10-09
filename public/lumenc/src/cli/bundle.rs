@@ -3,8 +3,9 @@
 //! Two shapes:
 //!
 //! - Default (asset pack): walks `app_dir` and ships every regular file
-//!   (skipping dotfiles and `target/` directories) into a single `.lpak`
-//!   archive. Mirrors `glib-compile-resources` (GTK) and `rcc` (Qt).
+//!   (skipping dotfiles, `target/` directories, and the app's `src/`) into
+//!   a single `.lpak` archive. Mirrors `glib-compile-resources` (GTK) and
+//!   `rcc` (Qt).
 //! - `--static` (Part B tree-shaking): resolves the app's capability set
 //!   (`lumen.toml [capabilities]` + a conservative source scan), maps it to a
 //!   cargo `--features` list, and builds the per-app static runtime seam
@@ -27,9 +28,9 @@ USAGE:
     lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
 
 Without --static, packs every regular file under <app_dir> into a single
-.lpak archive, skipping dotfiles and `target/` directories. Entries are
-keyed by their path relative to <app_dir>; run against the archive with
-`lumenc run <app_dir> --assets <out.lpak>`.
+.lpak archive, skipping dotfiles, `target/` directories, and the app's
+`src/`. Entries are keyed by their path relative to <app_dir>; run against
+the archive with `lumenc run <app_dir> --assets <out.lpak>`.
 
     --static          Resolve the app's capability set, map it to a cargo
                       feature list, build the runtime library with only
