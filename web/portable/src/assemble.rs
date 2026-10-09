@@ -207,6 +207,7 @@ fn install_bindings(app: &mut App) {
             .before(apply_text_bindings)
             .before(apply_checked_bindings)
             .before(apply_value_bindings)
+            .before(lumen_primitives::progress::apply_progress_bindings)
             .before(spawn::reconcile_for_blocks),
     );
     // A `set_locale` applied above rebuilds what the tree says on the same
@@ -230,6 +231,7 @@ fn install_bindings(app: &mut App) {
             apply_value_bindings,
             apply_disabled_bindings,
             apply_scroll_bindings,
+            lumen_primitives::progress::apply_progress_bindings,
         )
             .after(commit_external_properties)
             .after(ScriptSet::Derivations)

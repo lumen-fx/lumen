@@ -128,6 +128,16 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal),
     );
+    // `<progress bind-value>`: the same reader for a progress bar.
+    app.add_systems(
+        TickStage::Systems,
+        lumen_primitives::progress::apply_progress_bindings
+            .after(lumen_core::property_store::commit_external_properties)
+            .after(ScriptSet::Derivations)
+            .after(lumen_core::signals::push_toggle_to_signal)
+            .after(lumen_core::signals::push_slider_to_signal)
+            .after(lumen_core::signals::push_textinput_to_signal),
+    );
     // W6 T6: `bind-scroll` pull half - signal (f32 px) drives the vertical
     // scroll offset. Same dirty-gated reader shape and ordering as the
     // value/checked bindings above (reader AFTER pushes + AFTER
@@ -285,6 +295,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .before(lumen_core::signals::apply_text_bindings)
                 .before(lumen_core::signals::apply_checked_bindings)
                 .before(lumen_core::signals::apply_value_bindings)
+                .before(lumen_primitives::progress::apply_progress_bindings)
                 .before(crate::spawn::reconcile_for_blocks),
         );
         // The commands whose effect is on the app's own state: an asset
