@@ -758,7 +758,7 @@ fn golden_scroll_offset() {
         "",
         &|app| {
             let center = find_center(app, "sc");
-            wheel(app, center, Vec2::new(0.0, -60.0));
+            wheel(app, center, Vec2::new(0.0, 60.0));
         },
     );
 }

@@ -337,7 +337,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
     app.world
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
-            delta: glam::Vec2::new(0.0, lumen_primitives::WHEEL_NOTCH_PX),
+            delta: glam::Vec2::new(0.0, -lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
         });
@@ -359,7 +359,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
     app.world
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
-            delta: glam::Vec2::new(0.0, -lumen_primitives::WHEEL_NOTCH_PX),
+            delta: glam::Vec2::new(0.0, lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
         });

@@ -372,7 +372,7 @@ The handler receives an `Event`:
 | `button()` | `int` | `0` primary, `1` middle, `2` secondary. |
 | `x()` / `y()` | `float` | Pointer position relative to the target. |
 | `client_x()` / `client_y()` | `float` | Pointer position in window coordinates. |
-| `delta_x()` / `delta_y()` | `float` | Wheel delta. |
+| `delta_x()` / `delta_y()` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
 | `position()` | `map` | `x`, `y`, `client_x`, `client_y`. |
 | `modifiers()` | `map` | `shift`, `ctrl`, `alt`, `super`. |
 | `prevent_default()` | | Cancel the default action. |

@@ -278,7 +278,7 @@ fn tools_list_result() -> Value {
                         "x": { "type": "number" },
                         "y": { "type": "number" },
                         "dx": { "type": "number" },
-                        "dy": { "type": "number" },
+                        "dy": { "type": "number", "description": "Wheel delta in logical pixels; positive scrolls down (DOM deltaY)." },
                         "button": { "type": "string", "description": "primary | secondary | middle (default primary)" },
                         "key": { "type": "string", "description": "Key name like Enter, Tab, Escape, or a literal char like 'a'." },
                         "modifiers": {

@@ -371,7 +371,7 @@ The handler receives an `Event`:
 | `button()` | integer | `0` primary, `1` middle, `2` secondary. |
 | `x()` / `y()` | number | Pointer position relative to the target. |
 | `client_x()` / `client_y()` | number | Pointer position in window coordinates. |
-| `delta_x()` / `delta_y()` | number | Wheel delta. |
+| `delta_x()` / `delta_y()` | number | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
 | `position()` | table | `x`, `y`, `client_x`, `client_y`. |
 | `modifiers()` | table | `shift`, `ctrl`, `alt`, `super`. |
 | `prevent_default()` | | Cancel the default action. |

@@ -64,7 +64,9 @@ pub struct PointerReleased {
 #[derive(Message, Clone, Copy, Debug)]
 pub struct PointerLeft;
 
-/// Mouse-wheel scroll event. `delta` is in logical pixels (positive y scrolls content down).
+/// Mouse-wheel scroll event. `delta` is in logical pixels and follows the DOM
+/// `WheelEvent` convention: positive y scrolls toward the end of the content
+/// (the wheel turned toward the user), positive x toward the right.
 /// Backends normalise line-based wheel input to pixels with a fixed 32 px/line.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct MouseWheel {

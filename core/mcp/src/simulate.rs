@@ -210,7 +210,8 @@ pub enum SimulateKind {
         y: f32,
         /// Horizontal scroll delta (logical pixels).
         dx: f32,
-        /// Vertical scroll delta (logical pixels).
+        /// Vertical scroll delta (logical pixels). Positive scrolls down,
+        /// as a DOM `WheelEvent.deltaY` does.
         dy: f32,
     },
 }
