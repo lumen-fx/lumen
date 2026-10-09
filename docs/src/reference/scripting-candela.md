@@ -647,7 +647,8 @@ through the accessors below:
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
-`scroll` do not bubble.
+`scroll` do not bubble. `keydown` and `keyup` target the focused element, or
+the document root when nothing is focused.
 
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.
