@@ -134,6 +134,10 @@ impl Plugin for TaffyLayoutPlugin {
         // after `sync_layout` so `Transform` (hence the inner box width) is
         // final. Uses the same main-world `ShaperService` as `sync_layout`.
         app.add_systems(TickStage::LayoutSync, update_shaped_text.after(sync_layout));
+        app.add_systems(
+            TickStage::LayoutSync,
+            update_wrapped_text_origin.after(sync_layout),
+        );
     }
 }
 
@@ -230,6 +234,83 @@ pub fn update_shaped_text(
                 },
                 TextBlockOrigin { top },
             ));
+        }
+    }
+}
+
+/// Publish [`TextBlockOrigin`] for wrapping text that is not an editable
+/// buffer (a label, a paragraph), so a run that soft-wraps onto several
+/// lines starts at the top of its box like any stacked block instead of
+/// being centred there as one line. [`update_shaped_text`] covers the
+/// buffers; without this a label falls back to counting `\n`, which a
+/// soft wrap never adds.
+///
+/// Runs only for text whose box, content or style moved this tick, and
+/// measures at the content width the layout pass just measured at, so the
+/// shaper's cache answers it.
+#[allow(clippy::type_complexity)]
+pub fn update_wrapped_text_origin(
+    mut shaper: NonSendMut<ShaperService>,
+    mut commands: Commands,
+    q: Query<
+        (
+            Entity,
+            &TextContent,
+            &Transform,
+            Option<&TextStyle>,
+            Option<&Style>,
+            Option<&TextBlockOrigin>,
+        ),
+        (
+            Without<TextBuffer>,
+            Or<(
+                Changed<Transform>,
+                Changed<TextContent>,
+                Changed<TextStyle>,
+                Changed<Style>,
+            )>,
+        ),
+    >,
+) {
+    for (e, text, t, ts, style, existing) in &q {
+        let ts = ts.cloned().unwrap_or_default();
+        let wrap = WrapMode::from(ts.wrap);
+        if wrap == WrapMode::None || text.0.is_empty() {
+            // The `\n` fallback is right for a run that never wraps.
+            if existing.is_some() {
+                commands.entity(e).remove::<TextBlockOrigin>();
+            }
+            continue;
+        }
+        let size_px = ts.size_px;
+        let (pad_l, pad_r, pad_t, pad_b) = style
+            .map(|s| {
+                (
+                    s.padding.left,
+                    s.padding.right,
+                    s.padding.top,
+                    s.padding.bottom,
+                )
+            })
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let inner_w = (t.size.x - pad_l - pad_r).max(0.0);
+        let inner_h = (t.size.y - pad_t - pad_b).max(size_px);
+        let line_h = resolve_line_height(ts.line_height, size_px);
+        let opts = ShapeOptions {
+            width: Some(inner_w),
+            wrap,
+            max_lines: ts.max_lines,
+            family: ts.family.clone(),
+            weight: ts.weight,
+            line_height: Some(line_h),
+        };
+        let (_, h, _) = shaper.measure_with_baseline(&text.0, size_px, &opts);
+        let stacked = h > line_h * 1.5 || text.0.contains('\n');
+        let origin = TextBlockOrigin {
+            top: text_block_top(inner_h, line_h, stacked),
+        };
+        if existing != Some(&origin) {
+            commands.entity(e).insert(origin);
         }
     }
 }
@@ -941,7 +1022,7 @@ pub fn sync_layout(
                 node,
                 available,
                 |known: taffy::Size<Option<f32>>,
-                 _available: taffy::Size<AvailableSpace>,
+                 available: taffy::Size<AvailableSpace>,
                  _node_id: NodeId,
                  ctx: Option<NodeContext>,
                  _style: &taffy::Style| {
@@ -957,7 +1038,16 @@ pub fn sync_layout(
                     match ctx.as_ref() {
                         Some(NodeContext::Text(entity)) => match measure_inputs.get(entity) {
                             Some(MeasureInput::Text(t)) => {
-                                let max_width = known.width.or(t.max_width);
+                                // Wrap at the content box. `known.width` is
+                                // the border box, padding and border
+                                // included; taffy hands the content width
+                                // it leaves as the definite available
+                                // width whenever a width is known.
+                                let content_width = match available.width {
+                                    AvailableSpace::Definite(w) => Some(w),
+                                    _ => known.width,
+                                };
+                                let max_width = known.width.and(content_width).or(t.max_width);
                                 // Lazy path: a scroll-contained, word-wrapped
                                 // paragraph outside the visible band (see the
                                 // `lazy_text` set below) gets a cheap height
@@ -1293,8 +1383,15 @@ fn build_measure_inputs(
             // author authored one; taffy will usually pass
             // `known.width` first anyway, but for absolute-positioned
             // text this is the only hint that reaches the shaper.
+            // A border-box `max-width` caps padding and border too, so
+            // the text inside wraps at what is left of it.
             let max_width = match style.max_width {
-                LumenLength::Px(v) => Some(v),
+                LumenLength::Px(v) => Some(match style.box_sizing {
+                    lumen_core::components::BoxSizing::BorderBox => {
+                        (v - horizontal_inset(style)).max(0.0)
+                    }
+                    lumen_core::components::BoxSizing::ContentBox => v,
+                }),
                 _ => None,
             };
             out.insert(
@@ -1726,6 +1823,19 @@ fn edges_to_lp(e: LumenEdges) -> taffy::Rect<taffy::style::LengthPercentage> {
     }
 }
 
+/// Horizontal padding plus border of `style` in px, the part of a
+/// border-box width that is not content. Percent padding is left out:
+/// it resolves against a parent width this pre-pass does not have.
+fn horizontal_inset(style: &Style) -> f32 {
+    let padding = style.padding.resolved(LayoutDirection::Ltr);
+    let border = style.border.resolved(LayoutDirection::Ltr);
+    let px = |v: f32, pct: Option<f32>| if pct.is_some() { 0.0 } else { v };
+    px(padding.left, padding.pct_left)
+        + px(padding.right, padding.pct_right)
+        + border.left
+        + border.right
+}
+
 /// Where an absolutely positioned layout root sits inside `space`: each
 /// axis is pinned by its start inset when that is set, else by its end
 /// inset, else it stays at the origin. `NaN` is an `auto` side.
@@ -2046,6 +2156,135 @@ mod tests {
         *world.resource_mut::<DockInsets>() = DockInsets::default();
         schedule.run(&mut world);
         assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
+    }
+
+    /// Shaper with a fixed 10 px advance per char that wraps on spaces,
+    /// so a test knows exactly how many lines a width gives.
+    struct GridShaper;
+
+    impl lumen_text::TextShaper for GridShaper {
+        fn shape(
+            &mut self,
+            _text: &str,
+            _size_px: f32,
+            _opts: ShapeOptions,
+        ) -> Option<lumen_text::ShapedRun> {
+            None
+        }
+
+        fn measure_with_baseline(
+            &mut self,
+            text: &str,
+            size_px: f32,
+            opts: &ShapeOptions,
+        ) -> (f32, f32, f32) {
+            let line_h = opts.resolved_line_height(size_px);
+            let cap = match (opts.wrap, opts.width) {
+                (WrapMode::None, _) | (_, None) => f32::INFINITY,
+                (_, Some(w)) => w,
+            };
+            let (mut lines, mut cur, mut widest) = (1u32, 0.0f32, 0.0f32);
+            for word in text.split(' ') {
+                let w = word.chars().count() as f32 * 10.0;
+                let next = if cur == 0.0 { w } else { cur + 10.0 + w };
+                if next > cap && cur > 0.0 {
+                    lines += 1;
+                    cur = w;
+                } else {
+                    cur = next;
+                }
+                widest = widest.max(cur);
+            }
+            (widest, lines as f32 * line_h, line_h * 0.8)
+        }
+    }
+
+    /// Lay out one 200 px wide wrapping label with horizontal `padding`
+    /// and an optional fixed `height` inside a column, returning the world
+    /// and the label.
+    fn wrapped_label(padding: f32, height: Option<f32>) -> (bevy_ecs::world::World, Entity) {
+        use lumen_core::components::*;
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::new(GridShaper));
+        world.insert_resource(TextMeasureMemo::default());
+        world.insert_resource(Viewport {
+            size: glam::Vec2::new(600.0, 400.0),
+            ..Viewport::default()
+        });
+        let root = world
+            .spawn((
+                Style {
+                    flex_direction: LumenFlexDir::Column,
+                    align: LumenAlign::Start,
+                    width: Length::Px(600.0),
+                    height: Length::Px(400.0),
+                    ..Style::default()
+                },
+                DirtyLayout,
+            ))
+            .id();
+        let label = world
+            .spawn((
+                Style {
+                    width: Length::Px(200.0),
+                    height: height.map(Length::Px).unwrap_or(Length::Auto),
+                    padding: Edges {
+                        left: padding,
+                        right: padding,
+                        ..Edges::default()
+                    },
+                    ..Style::default()
+                },
+                TextContent("aaaa bbbb cccc dddd".into()),
+                TextStyle {
+                    wrap: TextWrap::Word,
+                    line_height: Some(LineHeightSpec::Px(20.0)),
+                    ..TextStyle::default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(sync_viewport));
+        schedule.add_systems(update_wrapped_text_origin.after(sync_layout));
+        schedule.run(&mut world);
+        (world, label)
+    }
+
+    /// A wrapping label is measured at its content width, so horizontal
+    /// padding takes room from the text the way it does when the text is
+    /// drawn. It was once measured at the border-box width, which gave
+    /// fewer lines than the drawn text had.
+    #[test]
+    fn wrapped_text_is_measured_at_the_content_width() {
+        // 19 chars = 190 px: one line in 200 px, two in the 100 px that
+        // 50 px of padding a side leaves.
+        let (world, plain) = wrapped_label(0.0, None);
+        assert_eq!(world.get::<Transform>(plain).unwrap().size.y, 20.0);
+        let (world, padded) = wrapped_label(50.0, None);
+        assert_eq!(world.get::<Transform>(padded).unwrap().size.y, 40.0);
+    }
+
+    /// A label whose text soft-wraps starts its first line at the top of
+    /// its box, as a stacked block does; one that fits on a line stays
+    /// centred. Paint once centred every label as a single line, which
+    /// pushed a wrapped paragraph out of the bottom of its box.
+    #[test]
+    fn soft_wrapped_label_publishes_a_top_aligned_origin() {
+        let (world, wrapped) = wrapped_label(50.0, Some(100.0));
+        assert_eq!(
+            world.get::<TextBlockOrigin>(wrapped),
+            Some(&TextBlockOrigin { top: 0.0 })
+        );
+        let (world, single) = wrapped_label(0.0, Some(100.0));
+        assert_eq!(
+            world.get::<TextBlockOrigin>(single),
+            Some(&TextBlockOrigin { top: 40.0 })
+        );
     }
 
     /// A parent whose last child is despawned gives the space back on the
