@@ -189,9 +189,10 @@ USAGE:
                       per-system spans to stderr. Needs a lumenc built
                       with --features profiling.
     --headless        Automation/CI mode: the full pipeline runs with no
-                      window. Bounded, so the MCP server and the
-                      hot-reload watcher stay off unless lumen.toml sets
-                      [mcp] simulate = true or [runtime] mcp = true.
+                      window. Bounded, so the MCP server stays off unless
+                      lumen.toml sets [mcp] simulate = true or
+                      [runtime] mcp = true, and the hot-reload watcher
+                      stays off unless it sets [runtime] hot_reload = true.
     --size WxH        Logical viewport (default: lumen.toml [window] size,
                       else 960x720).
     --dpr N           Scale the offscreen target; screenshot pixels are
@@ -938,9 +939,10 @@ USAGE:
                           simulate, screenshots, hot reload) runs with
                           no window - the desktop is never touched.
                           A headless run is bounded, so the MCP server
-                          and the hot-reload watcher are off unless
-                          lumen.toml sets [mcp] simulate = true or
-                          [runtime] mcp = true.
+                          is off unless lumen.toml sets [mcp] simulate =
+                          true or [runtime] mcp = true, and the hot-reload
+                          watcher is off unless it sets [runtime]
+                          hot_reload = true.
                           Ticks run on demand (MCP wake / animations /
                           dirty state / a script timer coming due) and
                           the process idles otherwise.
@@ -1059,7 +1061,8 @@ USAGE:
     lumenc run <dir> --artifact <file> [--headless] [--ticks N]
                           Run from a precompiled artifact instead of source.
     lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
-                          [--lib-dir <dir>] [--no-hooks]
+                          [--lib-dir <dir>] [--static] [--zip]
+                          [--no-hooks] [--offline]
                           Assemble a folder to ship: the app executable, the
                           Lumen runtime library where one is needed, and the
                           app's files. The result runs on a machine with no
@@ -1077,14 +1080,20 @@ USAGE:
                           windows-aarch64), fetching that
                           platform's files from the release channel into a
                           per-version cache; --lib-dir points at a directory
-                          holding them instead.
+                          holding them instead. --static writes one
+                          executable with the engine and the app's declared
+                          modules linked in (markup apps, this machine's
+                          platform, a C toolchain); --zip also writes
+                          <out_dir>.zip; --offline resolves registry
+                          packages from what is already downloaded.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr|ssr] [--prerender seeds|run|none]
                          [--runtime|--no-runtime]
-                         [--no-hooks] [--lib-dir DIR] [--strict]
-                         [--serve [--port N]]
+                         [--no-hooks] [--lib-dir DIR] [--strict] [--offline]
+                         [--serve [--port N] [--host ADDR]]
+                         [--allow-host NAME]...
                           Emit the app as a site: one HTML document per page
                           with the markup already in it, the stylesheet, the
                           compiled app, the browser runtime and the app's
@@ -1102,17 +1111,22 @@ USAGE:
                           --lib-dir points at a directory holding
                           lumen-web.wasm and lumen-web.js; --strict fails
                           the build on any warning; --serve runs the
-                          lumen-server beside lumenc on the result, on
-                          127.0.0.1, with --port to choose the port (0
-                          picks a free one).
+                          lumen-server beside lumenc on the result, with
+                          --port to choose the port (0 picks a free one)
+                          and --host the address (default 127.0.0.1);
+                          --allow-host lets a render ask that host for
+                          data, repeated for each host; --offline resolves
+                          registry packages from what is already
+                          downloaded.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]
                           Pack every regular file under `<app_dir>` into
-                          a single `.lpak` archive, skipping dotfiles and
-                          `target/` directories. Entries are keyed by
-                          their path relative to `<app_dir>`. Mirrors
-                          GTK's `glib-compile-resources` + Qt's `rcc`.
+                          a single `.lpak` archive, skipping dotfiles,
+                          `target/` directories, and the app's `src/`.
+                          Entries are keyed by their path relative to
+                          `<app_dir>`. Mirrors GTK's
+                          `glib-compile-resources` + Qt's `rcc`.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc run <dir> --assets <file.lpak>

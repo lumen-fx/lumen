@@ -364,3 +364,58 @@ fn an_unknown_shell_is_a_usage_error() {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
 }
+
+/// The flags a subcommand's own `--help` lists in its usage lines: every
+/// `--word` between `USAGE:` and the first blank line after it.
+fn usage_flags(help: &str) -> BTreeSet<String> {
+    help.split_once("USAGE:")
+        .map(|(_, rest)| rest.trim_start_matches('\n'))
+        .and_then(|rest| rest.split("\n\n").next())
+        .unwrap_or_default()
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|word| word.starts_with("--") && word.len() > 2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The top-level help's entry for `command`: its lines, from the one that
+/// opens with `lumenc <command> ` to the next entry.
+fn top_level_entry(help: &str, command: &str) -> String {
+    let opener = format!("    lumenc {command} ");
+    let mut entry = String::new();
+    let mut inside = false;
+    for line in help.lines() {
+        if line.starts_with("    lumenc ") {
+            inside = line.starts_with(&opener);
+        }
+        if inside {
+            entry.push_str(line);
+            entry.push('\n');
+        }
+    }
+    entry
+}
+
+/// `lumenc --help` is the overview a reader meets first, so it must not lag
+/// behind the subcommands it summarises: every flag a subcommand's own usage
+/// lines take is named in its top-level entry.
+#[test]
+fn the_top_level_help_names_every_flag_a_subcommand_takes() {
+    let top = lumenc(&["--help"]);
+    for command in ["package", "web"] {
+        let entry = top_level_entry(&top, command);
+        assert!(!entry.is_empty(), "`lumenc --help` has no {command} entry");
+        let flags = usage_flags(&lumenc(&[command, "--help"]));
+        assert!(
+            !flags.is_empty(),
+            "no flags were read out of `lumenc {command} --help`"
+        );
+        for flag in flags {
+            assert!(
+                entry.contains(&flag),
+                "`lumenc {command} --help` takes `{flag}`, but its entry in \
+                 `lumenc --help` does not name it"
+            );
+        }
+    }
+}
