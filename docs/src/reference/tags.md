@@ -490,7 +490,9 @@ thumb with `knob-color` and `thumb-size`.
 A click or a drag lands on the same positions the arrow keys reach: the
 value is `min` plus a whole number of steps. A range that is not a whole
 number of steps stops on the last step that fits, so `min="0" max="100"
-step="30"` tops out at 90.
+step="30"` tops out at 90. The value carries no more decimal places than
+`min` and `step` do, so `min="0.8" step="0.1"` writes `0.9` to a bound
+signal.
 
 ### `<checkbox>`
 
