@@ -16,10 +16,10 @@
 
 use crate::app::App;
 use crate::components::{
-    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, FlexDirection, FlexJustify,
-    ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign, TextBlockOrigin,
-    TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible,
-    Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
+    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, Display, EchoMode, Fill, FlexDirection,
+    FlexJustify, ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign,
+    TextBlockOrigin, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform,
+    Visible, Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use crate::node_ir::transform_extracted_to_nodes;
@@ -2056,10 +2056,12 @@ pub fn parent_scroll_offsets(
     by_entity
 }
 
-/// Returns the set of entities hidden by a [`Visible(false)`] on themselves or any ancestor.
+/// Returns the set of entities hidden by a [`Visible(false)`] or a
+/// `display: none` on themselves or any ancestor.
 ///
-/// - Used by extract fns to skip subtrees of `<if mode="hide">` blocks without despawning.
-/// - First pass collects every `Visible(false)`; second pass walks each `parents` chain upward, memoising the answer per entity.
+/// - Used by extract fns to skip subtrees of `<if mode="hide">` blocks and of `display: none` boxes without despawning.
+/// - First pass collects every hiding root; second pass walks each `parents` chain upward, memoising the answer per entity.
+/// - Matches [`crate::components::hidden_via_ancestors`], the main-world walk the widget systems use.
 pub fn hidden_entities(
     main: &mut World,
     parents: &std::collections::HashMap<Entity, Entity>,
@@ -2074,6 +2076,15 @@ pub fn hidden_entities(
     let mut q = main.query::<(Entity, &Visible)>();
     for (e, v) in q.iter(main) {
         if !v.0 {
+            hide_roots.insert(e);
+        }
+    }
+    // `display: none` takes the box out of layout, which leaves it 0x0 at
+    // its parent's origin; its descendants still carry text and fills, and
+    // would paint there without this.
+    let mut styles = main.query::<(Entity, &Style)>();
+    for (e, style) in styles.iter(main) {
+        if matches!(style.display, Display::None) {
             hide_roots.insert(e);
         }
     }
@@ -2765,6 +2776,53 @@ mod tests {
         // Zero text: the label is inside the hidden subtree.
         let text_count = render.query::<&ExtractedText>().iter(&render).count();
         assert_eq!(text_count, 0, "hidden subtree text must not extract");
+    }
+
+    /// `display: none` hides the descendants' paint as well as the box.
+    /// Layout collapses the box to 0x0 at its parent's origin, and the
+    /// labels inside it once drew their text there.
+    #[test]
+    fn display_none_subtree_extracts_no_text() {
+        use crate::components::{Display, Style, TextContent, Transform};
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.insert_resource(RenderEntityMap::default());
+        let at = |x: f32, y: f32, w: f32, h: f32| Transform {
+            absolute: Vec2::new(x, y),
+            size: Vec2::new(w, h),
+            baseline_y: None,
+        };
+        let root = main.spawn(at(0.0, 0.0, 200.0, 200.0)).id();
+        let hidden = main
+            .spawn((
+                at(0.0, 0.0, 0.0, 0.0),
+                Style {
+                    display: Display::None,
+                    ..Default::default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+        main.spawn((
+            at(0.0, 0.0, 80.0, 16.0),
+            TextContent("should be hidden".into()),
+            ChildOf(hidden),
+        ));
+        main.spawn((
+            at(0.0, 40.0, 80.0, 16.0),
+            TextContent("shown".into()),
+            ChildOf(root),
+        ));
+
+        extract_text(&mut main, &mut render);
+
+        let texts: Vec<String> = render
+            .query::<&ExtractedText>()
+            .iter(&render)
+            .map(|t| t.text.to_string())
+            .collect();
+        assert_eq!(texts, vec!["shown".to_string()]);
     }
 
     /// The `cull_hidden` guard is the safety net behind the per-extractor
