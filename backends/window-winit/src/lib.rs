@@ -908,15 +908,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                // Normalize line-based wheel events to logical pixels.
-                // 32 px/line matches GTK/X11's gtk-scroll-lines default for
-                // a 16pt line. Apps tune per-container feel via
-                // `Scroll::sensitivity` rather than changing this default.
-                const LINE_PX: f32 = 32.0;
-                let v = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => glam::Vec2::new(x * LINE_PX, y * LINE_PX),
-                    MouseScrollDelta::PixelDelta(p) => glam::Vec2::new(p.x as f32, p.y as f32),
-                };
+                let v = wheel_delta(delta);
                 let pos = self
                     .app
                     .world
@@ -1709,9 +1701,24 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
     }
 }
 
+/// A winit wheel delta as the logical pixels [`MouseWheel`] carries.
+///
+/// Line-based wheel events are normalised at 32 px/line, which matches
+/// GTK/X11's gtk-scroll-lines default for a 16pt line; apps tune
+/// per-container feel through `Scroll::sensitivity` rather than this. winit
+/// reports a wheel turned toward the user as negative, and `MouseWheel`
+/// follows the DOM, where that is positive, so the sign flips.
+fn wheel_delta(delta: MouseScrollDelta) -> glam::Vec2 {
+    const LINE_PX: f32 = 32.0;
+    -match delta {
+        MouseScrollDelta::LineDelta(x, y) => glam::Vec2::new(x * LINE_PX, y * LINE_PX),
+        MouseScrollDelta::PixelDelta(p) => glam::Vec2::new(p.x as f32, p.y as f32),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{attach_first, idle_control_flow, present_frame};
+    use super::{attach_first, idle_control_flow, present_frame, wheel_delta};
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, FrameTarget, RenderError,
@@ -2048,6 +2055,25 @@ mod tests {
             fallbacks.len(),
             1,
             "nothing was tried past a non-init failure"
+        );
+    }
+
+    /// A wheel turned toward the user scrolls down, which the DOM writes as a
+    /// positive `deltaY`; winit writes it negative.
+    #[test]
+    fn a_wheel_toward_the_user_is_a_positive_delta() {
+        use winit::dpi::PhysicalPosition;
+        use winit::event::MouseScrollDelta;
+
+        assert_eq!(
+            wheel_delta(MouseScrollDelta::LineDelta(0.0, -1.0)),
+            glam::Vec2::new(0.0, 32.0)
+        );
+        assert_eq!(
+            wheel_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                -5.0, -40.0
+            ))),
+            glam::Vec2::new(5.0, 40.0)
         );
     }
 }

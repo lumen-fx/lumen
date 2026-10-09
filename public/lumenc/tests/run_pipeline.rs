@@ -1140,7 +1140,7 @@ mod virtualization_tests {
         );
 
         // Scroll down ~3 rows (96 px at row-height 32).
-        wheel(&mut app, -96.0);
+        wheel(&mut app, 96.0);
         for _ in 0..3 {
             app.tick();
         }
@@ -1271,7 +1271,7 @@ mod virtualization_tests {
         const FRAMES: usize = 60;
         let mut times = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            wheel(&mut app, -30.0);
+            wheel(&mut app, 30.0);
             let t0 = Instant::now();
             app.tick();
             times.push(t0.elapsed());
@@ -1293,7 +1293,7 @@ mod virtualization_tests {
         const FRAMES: usize = 64;
         let mut times = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            wheel(&mut app, -4.0);
+            wheel(&mut app, 4.0);
             let t0 = Instant::now();
             app.tick();
             times.push(t0.elapsed());
@@ -1330,7 +1330,7 @@ mod virtualization_tests {
             .count();
         let mut times = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            wheel(&mut app, -30.0); // ~1 row/frame at row-height 32
+            wheel(&mut app, 30.0); // ~1 row/frame at row-height 32
             let t0 = Instant::now();
             app.tick();
             times.push(t0.elapsed());
@@ -1353,7 +1353,7 @@ mod virtualization_tests {
         let mut render_t = Duration::ZERO;
         const BFRAMES: usize = 60;
         for _ in 0..BFRAMES {
-            wheel(&mut app, -30.0);
+            wheel(&mut app, 30.0);
             if let Some(mut tick) = app.world.get_resource_mut::<lumen_core::tick::Tick>() {
                 tick.advance();
             }
