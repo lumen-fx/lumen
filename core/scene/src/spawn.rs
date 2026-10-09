@@ -1412,11 +1412,9 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // every scrollbar field the cascade can produce is listed here now.
     //
     // `scrollbar-track-hover` / `scrollbar-hover-boost` are also
-    // whitelisted for live reapply (`restyle::apply_reapplied_attrs`);
+    // applied on a restyle (`restyle::apply_reapplied_attrs`);
     // `scrollbar-thickness(-thin)`, `-margin`, `-min-thumb`, and the fade
-    // timings are spawn-only (see that function's comment) - this is the
-    // only place those ever get set, which is why they were the visible
-    // gap.
+    // timings are read here only.
     if el.attrs.scrollbar_color.is_some()
         || el.attrs.scrollbar_width.is_some()
         || el.attrs.scrollbar_thickness.is_some()
