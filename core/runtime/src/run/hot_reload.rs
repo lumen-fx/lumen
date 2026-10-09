@@ -40,6 +40,22 @@ pub(crate) struct HotReloadState {
     /// markup doesn't carry an explicit `skin="..."`.
     pub(crate) skin_override: Option<String>,
     pub(crate) root: Entity,
+    /// The text every element with an `id` had when the tree was spawned,
+    /// before any script or user changed it. A reload keeps an element's
+    /// live text only when it differs from this, so an authored edit to the
+    /// text lands while typed or scripted text survives.
+    pub(crate) authored_text: std::collections::HashMap<String, String>,
+}
+
+/// The text of every element with an `id`, keyed by the id. Read right after
+/// a spawn, it is what the markup gave each element.
+#[cfg(feature = "runtime-parse")]
+pub(crate) fn authored_texts(world: &mut World) -> std::collections::HashMap<String, String> {
+    use lumen_core::components::{LumenId, TextContent};
+    let mut q = world.query::<(&LumenId, &TextContent)>();
+    q.iter(world)
+        .map(|(id, text)| (id.0.clone(), text.0.clone()))
+        .collect()
 }
 // HotkeyRegistry + register/unregister/poll moved to lumen-os-hotkey
 // (W6.5). The runtime now installs `lumen_os_hotkey::HotkeyRegistry`
@@ -329,7 +345,11 @@ pub(crate) fn hot_reload(world: &mut World) {
     // survive a markup edit. Resources (Signals, ArraySignals,
     // FocusTracker, ...) survive automatically - they're world-level,
     // not entity-level.
-    let preserved = snapshot_stateful_components(world);
+    let authored = world
+        .get_resource::<HotReloadState>()
+        .map(|s| s.authored_text.clone())
+        .unwrap_or_default();
+    let preserved = snapshot_stateful_components(world, &authored);
     world.entity_mut(old_root).despawn();
     // Refresh the live stylesheet so the theme / media re-resolver
     // cascades against the just-edited CSS.
@@ -342,6 +362,7 @@ pub(crate) fn hot_reload(world: &mut World) {
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
     crate::run::restyle::install_root_class_list(world, new_root);
+    let authored_text = authored_texts(world);
     restore_stateful_components(world, &preserved);
 
     {
@@ -386,6 +407,7 @@ pub(crate) fn hot_reload(world: &mut World) {
 
     if let Some(mut s) = world.get_resource_mut::<HotReloadState>() {
         s.root = new_root;
+        s.authored_text = authored_text;
         s.html_mtime = html_mtime;
         s.css_mtime = css_mtime;
         s.script_paths = script_paths;
@@ -423,6 +445,7 @@ struct PreservedState {
 #[cfg(feature = "runtime-parse")]
 fn snapshot_stateful_components(
     world: &mut World,
+    authored: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashMap<String, PreservedState> {
     use lumen_core::components::{
         LumenId, Opacity, SliderValue, TextContent, TextInput, Toggleable,
@@ -444,7 +467,9 @@ fn snapshot_stateful_components(
             id.0.clone(),
             PreservedState {
                 text_input: ti.cloned(),
-                text_content: tc.cloned(),
+                // Text still as the markup wrote it is the markup's to
+                // change: the respawn already carries the edited version.
+                text_content: tc.filter(|tc| authored.get(&id.0) != Some(&tc.0)).cloned(),
                 toggleable: tg.copied(),
                 slider_value: sl.copied(),
                 scroll_offset: so.copied(),

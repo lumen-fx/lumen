@@ -487,6 +487,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             .filter(|d| d.is_dir())
             .map(PathBuf::from)
             .collect();
+        let authored_text = authored_texts(&mut app.world);
         app.world.insert_resource(HotReloadState {
             dir: dir.clone(),
             html_path: html_path.clone(),
@@ -503,6 +504,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             asset_roots: asset_roots.clone(),
             skin_override: skin_override.clone(),
             root,
+            authored_text,
         });
         // Change detection driver: notify watcher by default (idle apps
         // park with zero ticks; an fs event wakes the loop for one tick),
