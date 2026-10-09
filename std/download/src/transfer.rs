@@ -118,8 +118,9 @@ enum Algorithm {
 /// The bounds a transfer runs under, from the module's `config` table.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Limits {
-    /// How long a stalled connection has to produce the response line and
-    /// headers before the transfer gives up. `None` waits indefinitely.
+    /// How long a quiet connection is waited on before the transfer gives
+    /// up: for the reply to start, and then for each next read of the body.
+    /// `None` waits indefinitely.
     pub timeout_ms: Option<u64>,
     /// The largest body accepted, in bytes. `None` accepts any size.
     pub max_bytes: Option<u64>,
@@ -278,11 +279,12 @@ fn stream(
     limits: &Limits,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(u64, Option<u64>), Failure> {
-    // The timeouts cover getting a reply started, not carrying it: a deadline
-    // over the whole body would kill exactly the large transfers this module
-    // exists for, and ureq exposes no idle-socket deadline that would bound a
-    // stall without bounding the transfer. Redirects (ten deep) and TLS
-    // (rustls over the web-PKI roots) are ureq's defaults.
+    // No deadline covers the whole transfer: one would kill exactly the large
+    // downloads this module exists for. The receive timeout also bounds each
+    // read of the body, so it works as an idle limit there: a body that keeps
+    // arriving runs as long as it takes, and one that stops for longer than
+    // the timeout fails. Redirects (ten deep) and TLS (rustls over the
+    // web-PKI roots) are ureq's defaults.
     let timeout = limits.timeout_ms.map(Duration::from_millis);
     let config = Agent::config_builder()
         .http_status_as_error(false)

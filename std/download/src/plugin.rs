@@ -146,9 +146,9 @@ pub struct DownloadPlugin {
 impl DownloadPlugin {
     /// Build from the module's `config` table.
     ///
-    /// `timeout_ms` bounds how long a stalled server has to start answering,
-    /// `max_bytes` caps a body, and `max_concurrent` caps how many transfers
-    /// run at once. A key that is absent, negative, or of another type leaves
+    /// `timeout_ms` bounds how long a quiet server is waited on, before it
+    /// answers and between the pieces of a body, `max_bytes` caps a body, and
+    /// `max_concurrent` caps how many transfers run at once. A key that is absent, negative, or of another type leaves
     /// the default in place.
     #[must_use]
     pub fn new(config: ModuleConfig) -> Self {

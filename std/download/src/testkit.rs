@@ -18,6 +18,12 @@ pub const BODY: &[u8] = b"lumen download module fixture body";
 /// `BODY`'s digest fails verification.
 pub const OTHER_BODY: &[u8] = b"a different body entirely, same length ok";
 
+/// How long `/stall` goes quiet after the first piece of its body.
+pub const STALL: Duration = Duration::from_secs(5);
+
+/// The pause between the pieces `/drip` sends.
+pub const DRIP_PAUSE: Duration = Duration::from_millis(40);
+
 /// A running server. Dropping it stops the accept loop.
 pub struct TestServer {
     addr: SocketAddr,
@@ -29,8 +35,9 @@ impl TestServer {
     ///
     /// Routes: `/fixed` (a body with `Content-Length`), `/nolength` (a body
     /// the closed connection delimits), `/drip` (the same body in pieces, with
-    /// pauses), `/mismatch` (a different body), and `/missing` (404). Anything
-    /// else is a 404 too.
+    /// pauses), `/stall` (the first piece of the body, then [`STALL`] of
+    /// silence), `/mismatch` (a different body), and `/missing` (404).
+    /// Anything else is a 404 too.
     #[must_use]
     pub fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -107,9 +114,17 @@ fn serve(mut stream: TcpStream) {
                 if sent.is_err() {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(40));
+                std::thread::sleep(DRIP_PAUSE);
             }
             sent
+        }
+        "/stall" => {
+            let _ = stream.write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", BODY.len()).as_bytes(),
+            );
+            let _ = stream.write_all(&BODY[..4]).and_then(|()| stream.flush());
+            std::thread::sleep(STALL);
+            stream.write_all(&BODY[4..])
         }
         _ => stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"),
     };
