@@ -565,7 +565,9 @@ fn on_process_exit(tag: string, code: int) {
 `process::stop(tag)` ends the program running under a tag and answers whether
 there was one. On Linux and macOS the child gets `SIGTERM` first, so it can
 save its state, and is killed if it is still running two seconds later; on
-Windows it is ended at once. Its `on_process_exit` still arrives, as the last
+Windows it is ended at once. On Linux and macOS the stop also reaches every
+program the child started, so a shell script's commands end with the shell;
+on Windows only the program itself ends. Its `on_process_exit` still arrives, as the last
 event for the tag. When several children share a tag, `stop` ends all of them.
 
 A child started with `end_at_exit` is ended the same way when the app closes,
