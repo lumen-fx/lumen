@@ -2910,8 +2910,9 @@ fn apply_attribute(
         }
         "value" => attrs.value = Some(parse_f32(tag, name, value)?),
         "group" if tag == "radio" => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
+            // A signal name like every `bind-*`: `$cat` and `cat` are one signal.
+            let group = signal_attr_name(value);
+            if group.is_empty() {
                 return Err(bad(
                     tag,
                     name,
@@ -2919,7 +2920,7 @@ fn apply_attribute(
                     "radio group requires a signal name".to_string(),
                 ));
             }
-            attrs.radio_group = Some(trimmed.to_string());
+            attrs.radio_group = Some(group);
         }
         // `<checkbox label>` / `<radio label>` - the visible caption.
         // Routed through the shared `text` slot; the desugar moves it
