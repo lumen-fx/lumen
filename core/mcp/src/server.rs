@@ -71,7 +71,7 @@ impl Timer for TokioTimer {
 /// networking, and the [`Spawn`](lumen_core::task::Spawn) seam carries no
 /// promise that an installed executor drives a tokio reactor. Timing is a
 /// different matter, and goes through [`ServerCtx::timer`].
-pub fn serve_tcp(port: u16, ctx: ServerCtx) {
+pub fn serve_tcp(listener: std::net::TcpListener, ctx: ServerCtx) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -82,7 +82,7 @@ pub fn serve_tcp(port: u16, ctx: ServerCtx) {
             return;
         }
     };
-    rt.block_on(run_tcp(port, ctx));
+    rt.block_on(run_tcp(listener, ctx));
 }
 
 /// MCP-over-stdio. Reads newline-delimited JSON-RPC requests from
@@ -148,16 +148,18 @@ async fn run_stdio(ctx: ServerCtx) {
     }
 }
 
-async fn run_tcp(port: u16, ctx: ServerCtx) {
-    let addr = format!("127.0.0.1:{port}");
-    let listener = match TcpListener::bind(&addr).await {
+async fn run_tcp(listener: std::net::TcpListener, ctx: ServerCtx) {
+    let addr = listener.local_addr();
+    let listener = match TcpListener::from_std(listener) {
         Ok(l) => l,
         Err(e) => {
-            warn!("lumen-mcp: failed to bind {addr}: {e}");
+            warn!("lumen-mcp: failed to adopt the listener: {e}");
             return;
         }
     };
-    info!("lumen-mcp: listening on {addr}");
+    if let Ok(addr) = addr {
+        info!("lumen-mcp: listening on {addr}");
+    }
 
     loop {
         let (sock, _peer) = match listener.accept().await {

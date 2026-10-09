@@ -22,7 +22,7 @@ use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use serde::Deserialize;
 
-use crate::{LumenMcpPlugin, McpSnapshotSchedule};
+use crate::{LumenMcpPlugin, McpListening, McpSnapshotSchedule};
 
 /// The `[mcp]` keys this capability reads.
 #[derive(Default, Deserialize)]
@@ -72,6 +72,16 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
             Some(7878)
         }
     };
+    // The plugin reports a port it could not bind; the banner below is only
+    // for a server that is listening.
+    if let Some(p) = port
+        && !app.world.contains_resource::<McpListening>()
+    {
+        lumen_core::warn_line!(
+            "lumenc: MCP server off; set [mcp] port in lumen.toml to a port other than {p}"
+        );
+        return;
+    }
     print_help_snippet(port, simulate_enabled, issues_enabled);
 
     // Snapshot cadence. Input-simulation automation (benchmarks, UI tests)

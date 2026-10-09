@@ -241,7 +241,9 @@ and `gh` subprocesses that tool runs off that surface unless a developer
 opts in.
 
 On startup the app prints its port and a ready-to-paste agent configuration
-fragment, or `lumenc: MCP server disabled`.
+fragment, or `lumenc: MCP server disabled`. When the port is already taken,
+for example by another app on the default port, the app says so on stderr and
+runs without the server.
 
 ### Connecting an agent
 
