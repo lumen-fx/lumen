@@ -433,6 +433,51 @@ fn cross_packaging_assembles_each_platform() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `dist/` under the app is where `lumenc` writes its packages and sites by
+/// default, so a package written anywhere else leaves an earlier one there
+/// behind rather than carrying it whole.
+#[test]
+fn an_earlier_package_under_dist_stays_out_of_one_written_elsewhere() {
+    let root = scratch("earlier-dist");
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    write_app(&app);
+    let earlier = app.join("dist").join("demo");
+    std::fs::create_dir_all(&earlier).expect("create the earlier package");
+    std::fs::write(earlier.join("liblumen.so"), b"an earlier package").expect("write it");
+
+    let libs = root.join("libs");
+    std::fs::create_dir_all(&libs).expect("create lib dir");
+    for name in STAND_INS {
+        std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
+    }
+    let out = root.join("elsewhere");
+    let result = run_package(&[
+        app.to_str().expect("utf-8 path"),
+        out.to_str().expect("utf-8 path"),
+        "--name",
+        "Demo",
+        "--target",
+        "linux-aarch64",
+        "--lib-dir",
+        libs.to_str().expect("utf-8 path"),
+    ]);
+    let printed = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "package failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        !out.join("dist").exists(),
+        "the earlier package travelled into the new one"
+    );
+    assert!(
+        printed.contains("(2 app files beside it"),
+        "only lumen.toml and the image are the app's files: {printed}"
+    );
+}
+
 /// `--zip` writes the folder into one file, rooted at the folder itself so
 /// unpacking it gives the directory back rather than loose files.
 #[test]
