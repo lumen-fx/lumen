@@ -424,7 +424,8 @@ What survives an edit:
 - Signal values, including array signals and anything derived from them.
 - Per-element state of anything carrying an `id`: typed text and cursor,
   toggle and slider values, scroll positions. Elements without an `id` have no
-  stable name to match on and start fresh.
+  stable name to match on and start fresh. Text still as the markup wrote it
+  takes your edit; text a user typed or a script set is kept.
 - Handler and derivation registrations. A handler registered from `on_start`
   keeps working even though `on_start` does not run again; anything the new
   source registers replaces its match.
