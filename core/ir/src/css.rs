@@ -22,7 +22,10 @@ use crate::layout_ir::{
     ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec, TrackSizeSpec, TransitionIr,
     TransitionPropertyIr,
 };
-use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
+use crate::values::{
+    bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges,
+    parse_inset_term, parse_length,
+};
 use std::rc::Rc;
 // ---------------------------------------------------------------------------
 // Public AST
@@ -3852,7 +3855,7 @@ fn apply_declaration(
                 }
             });
         }
-        "inset" => attrs.inset = Some(parse_edges(ctx, name, value)?),
+        "inset" => attrs.inset = Some(parse_inset_edges(ctx, name, value)?),
         "min-width" => attrs.min_width = Some(parse_length(ctx, name, value)?),
         "min-height" => attrs.min_height = Some(parse_length(ctx, name, value)?),
         "max-width" => attrs.max_width = Some(parse_length(ctx, name, value)?),
@@ -4046,10 +4049,11 @@ fn apply_declaration(
             }
         }
         "inset-inline-start" | "inset-inline-end" | "inset-block-start" | "inset-block-end" => {
-            let px = parse_f32(ctx, name, value)?;
+            let px = parse_inset_term(ctx, name, value)?;
+            // The sides this longhand does not name stay `auto`.
             let edges = attrs
                 .inset
-                .get_or_insert_with(crate::layout_ir::Edges::default);
+                .get_or_insert_with(crate::layout_ir::Edges::auto);
             match name {
                 "inset-inline-start" => edges.inline_start = Some(px),
                 "inset-inline-end" => edges.inline_end = Some(px),

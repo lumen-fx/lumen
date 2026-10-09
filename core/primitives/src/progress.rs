@@ -228,7 +228,11 @@ pub fn sync_progress_fill(
                 let fill_w = tr.size.x * fraction;
                 let left = bounce(phase) * (tr.size.x - fill_w).max(0.0);
                 let target_w = Length::Percent(fraction * 100.0);
-                if style.width != target_w || (style.inset.left - left).abs() > 0.25 {
+                // An `auto` (NaN) `left` has never been placed.
+                if style.width != target_w
+                    || style.inset.left.is_nan()
+                    || (style.inset.left - left).abs() > 0.25
+                {
                     style.width = target_w;
                     style.inset.left = left;
                     commands.entity(fill_e).insert(DirtyLayout);

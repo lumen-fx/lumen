@@ -737,7 +737,10 @@ pub fn sync_slider_thumb(
         };
         let left = frac * (tr.size.x - thumb_size).max(0.0);
         let top = ((tr.size.y - thumb_size) / 2.0).max(0.0);
-        if (style.inset.left - left).abs() > 0.25 || (style.inset.top - top).abs() > 0.25 {
+        // An `auto` (NaN) side compares unequal to everything, so a thumb
+        // whose inset was never placed is placed now.
+        let moved = |cur: f32, want: f32| cur.is_nan() || (cur - want).abs() > 0.25;
+        if moved(style.inset.left, left) || moved(style.inset.top, top) {
             style.inset.left = left;
             style.inset.top = top;
             commands.entity(thumb_e).insert(DirtyLayout);

@@ -1336,6 +1336,27 @@ mod cascade_tests {
         assert_eq!(format!("{:?}", el.attrs), format!("{first:?}"));
     }
 
+    /// `inset` takes `auto` per side, and a longhand leaves the sides it
+    /// does not name `auto` rather than `0`.
+    #[test]
+    fn inset_accepts_auto_and_longhands_leave_other_sides_auto() {
+        let css =
+            parse_css(".a { inset: 4 8 auto auto; } .b { inset-block-start: 4; }").expect("css");
+        let mut ir =
+            parse_html(r#"<root><tile class="a" /><tile class="b" /></root>"#).expect("html");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a = ir.root.children[0].attrs.inset.expect("inset");
+        assert_eq!((a.top, a.right), (4.0, 8.0));
+        assert!(a.bottom.is_nan() && a.left.is_nan(), "auto sides: {a:?}");
+        let b = ir.root.children[1].attrs.inset.expect("inset");
+        assert_eq!(b.block_start, Some(4.0));
+        assert!(
+            b.top.is_nan() && b.right.is_nan() && b.bottom.is_nan() && b.left.is_nan(),
+            "unnamed sides stay auto: {b:?}"
+        );
+    }
+
     fn card_el() -> Element {
         Element {
             tag: "tile".into(),

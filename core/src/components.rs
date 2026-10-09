@@ -138,7 +138,10 @@ pub struct Style {
     /// `Absolute` lifts the entity out of the flow and offsets it by
     /// [`Self::inset`] against its parent's padding box.
     pub position: Position,
-    /// Distance from each edge when [`Self::position`] is `Absolute`.
+    /// Distance from each edge when [`Self::position`] is `Absolute`. A
+    /// `NaN` side is `auto`, and every side starts `auto`
+    /// ([`Edges::auto`]): an absolutely positioned element with no inset
+    /// keeps its content size at the place it would have had in flow.
     pub inset: Edges,
     /// Minimum width (after content). `Auto` = unconstrained.
     pub min_width: Length,
@@ -202,7 +205,7 @@ impl Default for Style {
             grid_row: (0, 0),
             grid_column: (0, 0),
             position: Position::default(),
-            inset: Edges::default(),
+            inset: Edges::auto(),
             min_width: Length::Auto,
             min_height: Length::Auto,
             max_width: Length::Auto,
@@ -559,6 +562,12 @@ impl PartialEq for Edges {
 }
 
 impl Edges {
+    /// Every side `auto`, the initial value of `inset`. A `NaN` side is
+    /// the `auto` sentinel the layout backend reads.
+    pub const fn auto() -> Self {
+        Self::all(f32::NAN)
+    }
+
     /// Uniform physical edges.
     pub const fn all(v: f32) -> Self {
         Self {

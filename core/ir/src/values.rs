@@ -359,8 +359,60 @@ fn parse_edge_term(
 /// Each term is `<n>` / `<n>px` / `<n>%` - percent terms land in the
 /// `pct_*` fields and resolve per CSS at layout time.
 pub fn parse_edges(ctx: &str, name: &str, value: &str) -> Result<Edges, ParseError> {
+    edges_with(
+        value,
+        |s| parse_edge_term(ctx, name, value, s),
+        |other| {
+            bad(
+                ctx,
+                name,
+                value,
+                format!("expected 1, 2, 3, or 4 numbers, got {other}"),
+            )
+        },
+    )
+}
+
+/// [`parse_edges`] for `inset`, where a term may also be `auto` (stored as
+/// `NaN`, the sentinel the layout backend reads as `auto`).
+pub fn parse_inset_edges(ctx: &str, name: &str, value: &str) -> Result<Edges, ParseError> {
+    edges_with(
+        value,
+        |s| {
+            if s.trim() == "auto" {
+                Ok((f32::NAN, None))
+            } else {
+                parse_edge_term(ctx, name, value, s)
+            }
+        },
+        |other| {
+            bad(
+                ctx,
+                name,
+                value,
+                format!("expected 1, 2, 3, or 4 numbers or `auto`, got {other}"),
+            )
+        },
+    )
+}
+
+/// One `inset` longhand term: a px number, or `auto` (`NaN`).
+pub fn parse_inset_term(ctx: &str, name: &str, value: &str) -> Result<f32, ParseError> {
+    if value.trim() == "auto" {
+        return Ok(f32::NAN);
+    }
+    parse_num(ctx, name, value, value.trim())
+}
+
+/// The top-right-bottom-left rotation shared by [`parse_edges`] and
+/// [`parse_inset_edges`]; `term` parses one side.
+fn edges_with(
+    value: &str,
+    term: impl Fn(&str) -> Result<(f32, Option<f32>), ParseError>,
+    arity: impl Fn(usize) -> ParseError,
+) -> Result<Edges, ParseError> {
     let parts: Vec<&str> = value.split_whitespace().collect();
-    let n = |s: &str| parse_edge_term(ctx, name, value, s);
+    let n = |s: &str| term(s);
     let (t, r, b, l) = match parts.len() {
         1 => {
             let v = n(parts[0])?;
@@ -378,14 +430,7 @@ pub fn parse_edges(ctx: &str, name: &str, value: &str) -> Result<Edges, ParseErr
             (t, h, b, h)
         }
         4 => (n(parts[0])?, n(parts[1])?, n(parts[2])?, n(parts[3])?),
-        other => {
-            return Err(bad(
-                ctx,
-                name,
-                value,
-                format!("expected 1, 2, 3, or 4 numbers, got {other}"),
-            ));
-        }
+        other => return Err(arity(other)),
     };
     Ok(Edges {
         top: t.0,

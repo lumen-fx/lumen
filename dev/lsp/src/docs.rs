@@ -376,7 +376,9 @@ equal values keep document order (CSS stacking within the parent)."
             "**`justify`** - `start | end | center | between | around`. Main-axis alignment."
         }
         "position" => "**`position`** - `static | relative | absolute`. Layout positioning mode.",
-        "inset" => "**`inset`** - `<t> <r> <b> <l>` (px). Offsets for absolute children.",
+        "inset" => {
+            "**`inset`** - `<t> <r> <b> <l>` (px or `auto`). Offsets for absolute children; unset sides are `auto`."
+        }
         "overflow" => "**`overflow`** - `visible | hidden | scroll`. Both axes.",
         "overflow-x" => "**`overflow-x`** - `visible | hidden | scroll`.",
         "overflow-y" => "**`overflow-y`** - `visible | hidden | scroll`.",
