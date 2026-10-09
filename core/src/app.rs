@@ -425,6 +425,9 @@ impl App {
             crate::render_world::reset_animations_active,
         );
         s.add_systems(TickStage::Input, crate::tick::reset_wake_deadline);
+        // `window.size()` / `window.dpr()` read a process-wide cache that
+        // scripts reach without a world; keep it on the live viewport.
+        s.add_systems(TickStage::Input, crate::window_state::publish_viewport);
         // Wave-D dirty-queue lifecycle. `clear_signal_dirty` keeps the legacy
         // `Signals::dirty` set tidy for embedders that still hold a `Res<Signals>`
         // reference; `clear_property_store_dirty` runs against the canonical

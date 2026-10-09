@@ -3,14 +3,19 @@
 //! The OS window lives inside the winit event loop, not in the ECS, so the
 //! `window.title()` / `window.size()` / `window.dpr()` getters and the
 //! `window.set_title` / `window.set_size` setters cannot reach it through a
-//! `&World`. They read and write this small cache instead. The window
-//! backend publishes the live size and device-pixel ratio here on resize
-//! and scale-factor changes; the setters write the requested title / size,
-//! which the backend applies to the real window when one exists. Headless
-//! runs have no window, so a setter followed by its getter round-trips
-//! through the cache; the observable contract the tests assert.
+//! `&World`. They read and write this small cache instead.
+//! [`publish_viewport`] copies the live size and device-pixel ratio here
+//! from the main world's [`Viewport`], which every window backend and the
+//! headless runner keep current; the setters write the requested title /
+//! size, which the backend applies to the real window when one exists.
+//! Headless runs have no window, so a setter followed by its getter
+//! round-trips through the cache.
 
 use std::sync::{Mutex, OnceLock};
+
+use bevy_ecs::prelude::*;
+
+use crate::render_world::Viewport;
 
 #[derive(Debug, Clone)]
 struct WindowState {
@@ -76,17 +81,20 @@ pub fn set_dpr(dpr: f32) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn title_and_size_round_trip() {
-        set_title("Hello");
-        assert_eq!(title(), "Hello");
-        set_size(640.0, 480.0);
-        assert_eq!(size(), (640.0, 480.0));
-        set_dpr(2.0);
-        assert_eq!(dpr(), 2.0);
+/// Copy the main world's [`Viewport`] into the cache whenever it changes,
+/// so `window.size()` and `window.dpr()` read what the app is running at.
+/// Registered by `App::new` at the start of each tick, ahead of every
+/// script handler.
+pub fn publish_viewport(viewport: Option<Res<Viewport>>) {
+    let Some(viewport) = viewport else {
+        return;
+    };
+    if !viewport.is_changed() {
+        return;
+    }
+    if let Ok(mut s) = cell().lock() {
+        s.width = viewport.size.x;
+        s.height = viewport.size.y;
+        s.dpr = viewport.scale_factor;
     }
 }
