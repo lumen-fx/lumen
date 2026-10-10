@@ -256,10 +256,13 @@ Three things to expect from a nightly:
   share product identity with a released install and take it over.
 - `lumenc --version` reports the version `main` carries, which no release is
   behind. It does not say which night you have; the commit in the notes does.
-- `lumenc web` and `lumenc package --target` download their extra files from
-  the current release rather than from the nightly, because that is the only
-  version they can resolve. A nightly compiler pairs them with a released
-  browser runtime.
+- `lumenc web`, `lumenc package --target`, and `lumenc package --static`
+  download their extra files (the browser runtime, other platforms' launchers,
+  the link kits) from the nightly prerelease, so they pair with the nightly
+  compiler. They are cached until you reinstall. A link kit only matches the
+  nightly it was published with, so after a new night has gone up, reinstall
+  with `--force` before packaging, or point `LUMEN_LINK_KIT_DIR` at a kit you
+  recorded from your build.
 
 Every night's assets replace the last, so a link keeps working and the build
 before it is gone. Keep a copy if you need one to stay around.
