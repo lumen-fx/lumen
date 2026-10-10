@@ -2,7 +2,7 @@
   "name": "lumen-ui",
   "displayName": "Lumen UI",
   "description": "First-class language support for Lumen: .lmn markup, Lumen CSS, and .rhai scripts - diagnostics, completion, hover, formatting, an in-editor headless live preview, and one-click run/check/build/scaffold via lumenc.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "lumen-fx",
   "license": "MPL-2.0",
   "repository": {
@@ -162,17 +162,17 @@
         "lumen.serverPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `lumen-lsp` binary. If empty, the extension auto-discovers `target/{release,debug}/lumen-lsp` in the workspace (respecting `CARGO_TARGET_DIR`) and finally falls back to `lumen-lsp` on `$PATH`."
+          "markdownDescription": "Absolute path to the `lumen-lsp` binary. If empty, the extension auto-discovers `target/{release,debug}/lumen-lsp` in the workspace (respecting `CARGO_TARGET_DIR`), then the `lumen-lsp` an installed toolchain ships beside `lumenc`, and finally falls back to `lumen-lsp` on `$PATH`."
         },
         "lumen.lumencPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `lumenc` CLI. If empty, the extension auto-discovers `target/{release,debug}/lumenc` in the workspace (respecting `CARGO_TARGET_DIR`) and finally falls back to `lumenc` on `$PATH`."
+          "markdownDescription": "Absolute path to the `lumenc` CLI. If empty, the extension auto-discovers `target/{release,debug}/lumenc` in the workspace (respecting `CARGO_TARGET_DIR`), then an installed toolchain (`~/.lumen/bin`, or `%LOCALAPPDATA%\\Programs\\Lumen\\bin` on Windows), and finally falls back to `lumenc` on `$PATH`."
         },
         "lumen.serverAutoDiscover": {
           "type": "boolean",
           "default": true,
-          "description": "Search the workspace's target/ directories for the lumen-lsp and lumenc binaries before falling back to $PATH."
+          "description": "Search the workspace's target/ directories and the installed toolchain for the lumen-lsp and lumenc binaries before falling back to $PATH."
         },
         "lumen.run.flags": {
           "type": "array",

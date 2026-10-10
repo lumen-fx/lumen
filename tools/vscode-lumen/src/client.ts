@@ -79,18 +79,18 @@ export class LumenServer {
             );
             const hint = discovered
                 ? `Tried '${command}'.`
-                : `'${command}' was not on $PATH and no target/ build was found.`;
+                : `'${command}' was not beside lumenc, on $PATH, or in a target/ build.`;
             window
                 .showErrorMessage(
                     `Lumen language server failed to start. ${hint} ` +
-                        `Build it with 'cargo build -p lumen-lsp' or set 'lumen.serverPath'. ` +
+                        `It ships with the Lumen toolchain; install Lumen, or set 'lumen.serverPath'. ` +
                         `Syntax highlighting still works; diagnostics/completion are disabled. (${err})`,
                     "Open Settings",
                 )
                 .then((choice) => {
                     if (choice === "Open Settings") {
                         void window.showInformationMessage(
-                            "Set 'lumen.serverPath' to your built lumen-lsp binary.",
+                            "Set 'lumen.serverPath' to the lumen-lsp binary beside lumenc.",
                         );
                     }
                 });

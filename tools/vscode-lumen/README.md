@@ -126,14 +126,18 @@ ln -s "$PWD" ~/.vscode/extensions/lumen-ui   # Linux/macOS
 | --- | --- |
 | `lumen.serverPath` | Absolute path to `lumen-lsp`. Empty means auto-discover, then `$PATH`. |
 | `lumen.lumencPath` | Absolute path to `lumenc`. Empty means auto-discover, then `$PATH`. |
-| `lumen.serverAutoDiscover` | Probe `target/{release,debug}/` (honors `CARGO_TARGET_DIR`) before `$PATH`. |
+| `lumen.serverAutoDiscover` | Probe `target/{release,debug}/` (honors `CARGO_TARGET_DIR`), then the installed toolchain, before `$PATH`. |
 | `lumen.run.flags` | Extra flags appended to `lumenc run`. |
 | `lumen.run.headless` | Append `--headless` to `lumenc run`. |
 | `lumen.preview.size` | Logical viewport `WxH` for the preview render. |
 | `lumen.preview.dpr` | Device-pixel ratio for the preview render. |
 | `lumen.trace.server` | LSP trace verbosity (`off`, `messages`, `verbose`). |
 
-Build the server and CLI with:
+The server ships with the Lumen toolchain beside `lumenc`, and auto-discovery
+finds it there: beside the `lumenc` that `lumen.lumencPath` names or that is
+on `$PATH`, then in the default install locations (`~/.lumen/bin`, and
+`%LOCALAPPDATA%\Programs\Lumen\bin` on Windows). To use binaries built from a
+Lumen checkout instead:
 
 ```sh
 cargo build -p lumen-lsp -p lumenc   # binaries land in target/{debug,release}

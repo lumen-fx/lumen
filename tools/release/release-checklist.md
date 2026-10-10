@@ -80,8 +80,9 @@ every pull request.
 
 There is one component, `lumen`, meaning `lumenc`, the `liblumen` runtime
 library (the `lumen` crate, built as a shared library), `lumen-launcher`, the
-stub `lumenc package` copies to make an app executable, and `lumen-server`, the
-production server for sites `lumenc web --render ssr` builds. Lumen's candela
+stub `lumenc package` copies to make an app executable, `lumen-server`, the
+production server for sites `lumenc web --render ssr` builds, and `lumen-lsp`,
+the language server the editor integrations start. Lumen's candela
 scripting support is compiled into `liblumen` directly; there is no separate
 candela binary and nothing here builds or ships one. The standalone candela
 language toolchain is a different product with its own repository
@@ -194,14 +195,16 @@ The tag push starts `release.yml` again, this time as the release itself:
    release body.
 3. For each target:
    - checks out at the tag and builds `lumenc`, `liblumen`, the launcher
-     stub, and `lumen-server` in release mode (`cargo build --release` with
-     `-p lumenc`, `-p lumen`, `-p lumen-launcher`, and `-p lumen-server`; the
+     stub, `lumen-server`, and `lumen-lsp` in release mode (`cargo build
+     --release` with `-p lumenc`, `-p lumen`, `-p lumen-launcher`,
+     `-p lumen-server`, and `-p lumen-lsp`; the
      workspace `[profile.release]` already strips symbols, so there is no
      separate strip step);
    - downloads the templates at the commits settled above with
      `tools/fetch-templates.sh`;
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
-     library, `bin/lumen-launcher`, and `bin/lumen-server` into one archive,
+     library, `bin/lumen-launcher`, `bin/lumen-server`, and `bin/lumen-lsp`
+     into one archive,
      all in the *same* `bin/` directory, along with the three trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs`, the templates in
      `bin/templates`, and the web halves of the first-party modules, copied
@@ -431,8 +434,10 @@ belongs in `bin/` too. The archive therefore puts all three files there:
 | macOS    | `lumenc`, `liblumen.dylib`, `lumen-launcher`    |
 | Windows  | `lumenc.exe`, `lumen.dll`, `lumen-launcher.exe` |
 
-`lumen-server` sits in the same `bin/` on every platform. It loads nothing
-from beside itself; it is there because `bin/` is the directory on `PATH`.
+`lumen-server` and `lumen-lsp` sit in the same `bin/` on every platform. They
+load nothing from beside themselves; they are there because `bin/` is the
+directory on `PATH`, and the editor integrations look for `lumen-lsp` beside
+`lumenc`.
 
 ## Publishing to the install channel
 
@@ -639,6 +644,7 @@ update itself out from under a package manager that owns the version.
     sh -s -- --prefix /tmp/lumen-check --no-confirm
   /tmp/lumen-check/bin/lumenc --version
   test -x /tmp/lumen-check/bin/lumen-server
+  test -x /tmp/lumen-check/bin/lumen-lsp
   curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --prefix /tmp/lumen-check --uninstall --no-confirm
   ```
 

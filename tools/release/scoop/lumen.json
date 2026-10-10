@@ -17,7 +17,8 @@
         "lumenc loads the runtime library from beside its own executable and",
         "`lumenc package` looks for the launcher stub there too, so splitting them",
         "up breaks both. lumen-server.exe, the production server for",
-        "server-rendered sites, is shimmed beside lumenc.exe.",
+        "server-rendered sites, and lumen-lsp.exe, the language server the editor",
+        "integrations start, are shimmed beside lumenc.exe.",
         "",
         "Both Windows architectures are listed. Scoop picks the one matching the",
         "machine, so an Arm64 machine gets the native build instead of the x64",
@@ -40,7 +41,8 @@
     "extract_dir": "bin",
     "bin": [
         "lumenc.exe",
-        "lumen-server.exe"
+        "lumen-server.exe",
+        "lumen-lsp.exe"
     ],
     "checkver": {
         "github": "https://github.com/lumen-fx/lumen"

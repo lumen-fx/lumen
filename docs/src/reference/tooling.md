@@ -66,8 +66,11 @@ Lumen projects.
 
 ### Running it
 
-The binary is `lumen-lsp`. It speaks LSP over stdio, takes no arguments, and
-logs to stderr. Point any LSP-capable editor at it as a stdio server.
+The binary is `lumen-lsp`, and every Lumen toolchain installs it in the same
+directory as `lumenc`: the install script, the Windows installer, and the
+package managers all carry it, so editor support needs no Rust toolchain. It
+speaks LSP over stdio, takes no arguments, and logs to stderr. Point any
+LSP-capable editor at it as a stdio server.
 
 It treats files by extension: `.lmn` as markup, `.css` as stylesheets, and
 `.rhai` as script. It discovers the rest of a project from the sibling files in
@@ -133,7 +136,7 @@ Settings:
 |---------|---------|--------|
 | `lumen.serverPath` | unset | Explicit path to `lumen-lsp`. |
 | `lumen.lumencPath` | unset | Explicit path to `lumenc`. |
-| `lumen.serverAutoDiscover` | `true` | Searches for a built server before falling back to `PATH`. |
+| `lumen.serverAutoDiscover` | `true` | Searches for a built or installed server before falling back to `PATH`. |
 | `lumen.run.flags` | `[]` | Extra flags passed to `lumenc run`. |
 | `lumen.run.headless` | `false` | Runs the app headless. |
 | `lumen.preview.size` | `"960x720"` | Preview viewport. |
@@ -142,7 +145,11 @@ Settings:
 
 With auto-discovery on, the extension looks for the server in
 `$CARGO_TARGET_DIR`, then in each workspace folder's `target/` directory
-(release before debug), then for `lumen-lsp` on `PATH`.
+(release before debug), then beside `lumenc` (the one `lumen.lumencPath` names,
+or the one on `PATH`), then in the default install locations (`~/.lumen/bin`,
+and `%LOCALAPPDATA%\Programs\Lumen\bin` on Windows), then for `lumen-lsp` on
+`PATH`. An editor started from a desktop launcher often runs without the
+shell's `PATH`, which is what the install locations cover.
 
 ### JetBrains plugin
 
@@ -170,7 +177,7 @@ Settings, under Settings | Languages & Frameworks | Lumen:
 | Setting | Default | Effect |
 |---------|---------|--------|
 | Path to `lumen-lsp` | unset | Explicit path to the server binary. |
-| Look for a locally built server | on | Searches `$CARGO_TARGET_DIR` and the project's `target/` directories (release before debug) before falling back to `PATH`. |
+| Look for a locally built server | on | Searches `$CARGO_TARGET_DIR` and the project's `target/` directories (release before debug), then beside the `lumenc` on `PATH` and the default install locations, before falling back to `PATH`. |
 
 Changing either setting restarts the server.
 
@@ -198,8 +205,8 @@ after the grammar changes.
 registers `.lmn` as the `lumen` filetype, registers the grammar so
 `:TSInstall lumen` builds it, and enables `lumen-lsp`. The server is found the
 way the VS Code extension finds it: `$CARGO_TARGET_DIR`, then the project's
-`target/` directory, then `PATH`, with the `server_path` option overriding all
-of it. Pass `grammar_path` to build the grammar from a local Lumen checkout.
+`target/` directory, then beside the `lumenc` on `PATH`, then `PATH`, with the
+`server_path` option overriding all of it. Pass `grammar_path` to build the grammar from a local Lumen checkout.
 The same directory also holds `lsp/lumen_lsp.lua`, the server definition on
 its own in the layout `nvim-lspconfig` uses.
 
@@ -207,13 +214,14 @@ its own in the layout `nvim-lspconfig` uses.
 `~/.config/helix/languages.toml`, copy the queries into
 `~/.config/helix/runtime/queries/lumen/`, then run `hx --grammar fetch` and
 `hx --grammar build`. `hx --health lumen` reports what Helix found.
-`lumen-lsp` has to be on `PATH`, or named by an absolute path in the
-`[language-server.lumen-lsp]` section.
+`lumen-lsp` has to be on `PATH`, where an installed toolchain puts it, or
+named by an absolute path in the `[language-server.lumen-lsp]` section.
 
 **Zed**: the extension is in `tools/zed-lumen`. Install it from the Extensions
 view with "Install Dev Extension", pointed at that directory; Zed builds the
-grammar and the extension itself. `lumen-lsp` is taken from `PATH`, or from
-`lsp.lumen-lsp.binary.path` in your Zed settings.
+grammar and the extension itself. `lumen-lsp` is taken from
+`lsp.lumen-lsp.binary.path` in your Zed settings, then from `PATH`, then from
+the directory holding the `lumenc` on `PATH`.
 
 ## MCP server
 

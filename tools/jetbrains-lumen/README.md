@@ -15,14 +15,13 @@ Use it if you write Lumen apps in a JetBrains IDE. The VS Code extension in
 
 The plugin is on the
 [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33856-lumen-ui).
-Install it from Settings | Plugins; you still need `lumen-lsp`, so follow
-steps 1 and 4 below. To build the plugin yourself instead:
+Install it from Settings | Plugins. The language server it talks to,
+`lumen-lsp`, ships with the Lumen toolchain beside `lumenc`, so an
+[installed toolchain](https://docs.lumenfx.dev/getting-started/install/) is all
+it needs. To build the plugin yourself instead:
 
-1. Build the language server:
-
-   ```sh
-   cargo build --release -p lumen-lsp
-   ```
+1. Install the Lumen toolchain, or build the server from a Lumen checkout with
+   `cargo build --release -p lumen-lsp`.
 
 2. Build the plugin:
 
@@ -38,10 +37,12 @@ steps 1 and 4 below. To build the plugin yourself instead:
    later, LSP4IJ 0.21.0 or newer is required; earlier LSP4IJ builds do not
    load there.
 
-4. Put `lumen-lsp` on your `PATH`, or set its path in Settings |
-   Languages & Frameworks | Lumen. With auto-discovery on, the plugin also
-   finds a binary under `$CARGO_TARGET_DIR` or the project's `target/`
-   directory, release before debug.
+4. With auto-discovery on, the plugin finds the server under
+   `$CARGO_TARGET_DIR` or the project's `target/` directory (release before
+   debug), then beside the `lumenc` on your `PATH`, then in the default install
+   locations (`~/.lumen/bin`, and `%LOCALAPPDATA%\Programs\Lumen\bin` on
+   Windows), then on `PATH`. To use another copy, set its path in Settings |
+   Languages & Frameworks | Lumen.
 
 Open a `.lmn` file. The status of the server is in the LSP console
 (View | Tool Windows | Language Servers).
@@ -66,7 +67,8 @@ beside the markup, so stylesheets elsewhere keep the IDE's own CSS support.
 
 - LSP4IJ has to be installed first. It is the LSP client, and it is what makes
   the plugin work in Community-edition IDEs.
-- The plugin does not ship `lumen-lsp`. Build it from this repository.
+- The plugin does not carry `lumen-lsp` itself; it uses the one the Lumen
+  toolchain installs.
 - There are no `lumenc` run/check/build actions and no live preview; the VS
   Code extension has those and this one does not yet.
 - Enabling or disabling it takes an IDE restart, because it registers the

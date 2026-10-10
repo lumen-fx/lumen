@@ -30,7 +30,8 @@ checkout instead of fetching it), `grammar_url` and `grammar_revision`
 (where and what to fetch), `server_path` (absolute path to `lumen-lsp`),
 and `treesitter`/`lsp` toggles to skip either half. With `server_path`
 unset the server is found the way the VS Code extension finds it:
-`$CARGO_TARGET_DIR`, then the project's `target/` directory, then `$PATH`.
+`$CARGO_TARGET_DIR`, then the project's `target/` directory, then beside the
+`lumenc` on `$PATH`, where the Lumen toolchain installs it, then `$PATH`.
 
 On the `nvim-treesitter` main branch the queries install with the parser;
 on master, copy them yourself:
@@ -50,8 +51,9 @@ other way.
 Append `editors/helix/languages.toml` to `~/.config/helix/languages.toml`,
 copy the queries into `~/.config/helix/runtime/queries/lumen/`, then run
 `hx --grammar fetch` and `hx --grammar build`. `hx --health lumen` reports
-what Helix found. `lumen-lsp` has to be on `$PATH`, or named by an absolute
-path in the `[language-server.lumen-lsp]` section.
+what Helix found. `lumen-lsp` has to be on `$PATH`, which an installed Lumen
+toolchain takes care of, since it ships the server beside `lumenc`; or name it
+by an absolute path in the `[language-server.lumen-lsp]` section.
 
 Both editors highlight an inline `<script>` body as Rhai when a `rhai`
 grammar is installed; without one the body shows as plain text.
