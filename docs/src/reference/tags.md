@@ -538,7 +538,7 @@ container's width. The parser synthesizes a `.progress-fill` child.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `value` | number | Determinate progress. Omit it (and any `bind-value`) for an indeterminate sweep. |
+| `value` | number | Determinate progress. Omit it for an indeterminate sweep. A bar with `bind-value` and no `value` sweeps until its signal first holds a number, then shows it. |
 | `max` | number | Upper bound. Defaults to `1`. |
 | `duration` | integer milliseconds | Indeterminate sweep period. Defaults to `1200`. |
 | `chunk` | number 0..1 | Fraction of the track the indeterminate chunk covers. Defaults to `0.3`. |
