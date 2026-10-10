@@ -41,12 +41,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_INSTALL_ROOT");
     println!("cargo:rerun-if-env-changed=LUMEN_GH_REPO");
 
-    if std::env::var_os("LUMEN_SKIP_ENGINE_BUILD").is_some() {
-        return;
-    }
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("cargo always sets CARGO_MANIFEST_DIR"),
     );
+    emit_rust_channel(&manifest_dir);
+
+    if std::env::var_os("LUMEN_SKIP_ENGINE_BUILD").is_some() {
+        return;
+    }
     if in_lumen_workspace(&manifest_dir) {
         return;
     }
@@ -66,6 +68,36 @@ fn main() {
              liblumen and lumen-launcher, so build them from a checkout and point \
              LUMEN_LIB_DIR at them."
         ));
+    }
+}
+
+/// The Rust toolchain a Rust SDK app scaffolded by this `lumenc` must build
+/// with, as `LUMEN_RUST_CHANNEL`: the release's prebuilt engine is readable only
+/// by the compiler that built it, and `lumenc new` pins an app to that one.
+///
+/// A checkout (which is what a release builds from) pins its toolchain in
+/// `rust-toolchain.toml`, and that file is the answer. Anywhere else this crate
+/// was compiled by some rustc of the installer's choosing, and the version of
+/// that compiler is the best answer there is.
+fn emit_rust_channel(manifest_dir: &Path) {
+    let pin = manifest_dir.join("../../rust-toolchain.toml");
+    println!("cargo:rerun-if-changed={}", pin.display());
+    let pinned = std::fs::read_to_string(&pin).ok().and_then(|text| {
+        text.lines().find_map(|line| {
+            let value = line.trim().strip_prefix("channel")?.trim_start();
+            let value = value.strip_prefix('=')?.trim();
+            Some(value.trim_matches('"').to_string())
+        })
+    });
+    let channel = pinned.or_else(|| {
+        let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+        let out = std::process::Command::new(rustc).arg("-vV").output().ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix("release:").map(|v| v.trim().to_string()))
+    });
+    if let Some(channel) = channel {
+        println!("cargo:rustc-env=LUMEN_RUST_CHANNEL={channel}");
     }
 }
 

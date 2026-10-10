@@ -816,7 +816,9 @@ USAGE:
 The template defaults to `blank`, an empty <root> plus lumen.toml. Every
 template writes lumen.toml and a README at the app root and the app's code
 under src/, starting with src/main.lmn. The README explains the concepts the
-template demonstrates.
+template demonstrates. A template that is a Rust SDK app (it has a
+Cargo.toml) also gets a rust-toolchain.toml naming the compiler this
+release's prebuilt engine was built with, unless it brings its own.
 
     --list, -l        Print the template gallery with one-line
                       descriptions.";
