@@ -56,7 +56,13 @@ scripts are `.rhai`.
 
 ## Install
 
+Every Lumen toolchain ships `lumen-lsp` beside `lumenc`: the release archives,
+the Windows installer, Homebrew, Scoop, and the AUR package all install it, and
+the editor integrations look for it there. Installing Lumen is enough.
+
 ### Build the server
+
+To run a server built from a checkout instead:
 
 ```sh
 cargo build --release -p lumen-lsp

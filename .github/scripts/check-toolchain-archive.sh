@@ -73,6 +73,12 @@ if [ ! -f "$dest/bin/lumen-server" ] && [ ! -f "$dest/bin/lumen-server.exe" ]; t
   exit 1
 fi
 
+# So does the language server the editor integrations start.
+if [ ! -f "$dest/bin/lumen-lsp" ] && [ ! -f "$dest/bin/lumen-lsp.exe" ]; then
+  echo "the unpacked archive carries no bin/lumen-lsp" >&2
+  exit 1
+fi
+
 # So do the web halves of the first-party modules, every one the tree has,
 # each where `lumenc web` looks for the web half of a `bundled = true` module.
 for web in "$(dirname "$0")"/../../std/*/web; do

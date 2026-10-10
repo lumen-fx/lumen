@@ -20,7 +20,8 @@ local defaults = {
   grammar_path = nil,
 
   -- Absolute path to `lumen-lsp`. Unset means: look in the Cargo target
-  -- directories of the current project, then fall back to $PATH.
+  -- directories of the current project, then beside the `lumenc` on $PATH,
+  -- where the Lumen toolchain installs it, then fall back to $PATH.
   server_path = nil,
 
   treesitter = true,
@@ -37,7 +38,8 @@ end
 
 --- Resolve the `lumen-lsp` command, mirroring the VS Code extension: an
 --- explicit path wins, then a locally built binary under a Cargo target
---- directory (release before debug), then the bare name on $PATH.
+--- directory (release before debug), then the one an installed toolchain
+--- ships beside `lumenc`, then the bare name on $PATH.
 ---@param opts table
 ---@return string
 function M.server_command(opts)
@@ -63,6 +65,16 @@ function M.server_command(opts)
       if is_file(candidate) then
         return candidate
       end
+    end
+  end
+
+  -- Every toolchain archive puts the server beside lumenc.
+  local lumenc = vim.fn.exepath('lumenc')
+  if lumenc ~= '' then
+    local real = vim.uv.fs_realpath(lumenc) or lumenc
+    local candidate = vim.fs.joinpath(vim.fs.dirname(real), exe)
+    if is_file(candidate) then
+      return candidate
     end
   end
 

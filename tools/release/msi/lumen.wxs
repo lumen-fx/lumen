@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The Lumen Windows installer: lumenc, the liblumen runtime library, the app
-  launcher stub, the lumen-server production server, the candela standard
+  launcher stub, the lumen-server production server, the lumen-lsp language
+  server, the candela standard
   library, the `lumenc new` templates, the first-party browser add-ons, and
   an install receipt, installed for the current user.
 
@@ -96,6 +97,15 @@
       <!-- Component GUID generated once for lumen-server.exe; never change it, and never reuse it for another file or product. -->
       <Component Id="LumenServerExe" Guid="{8C73C94E-9BEA-4783-988A-3A41D47F2E86}" Directory="BINFOLDER">
         <File Id="LumenServerExe" Source="$(var.StageDir)\bin\lumen-server.exe" KeyPath="yes" />
+      </Component>
+
+      <!--
+        The language server the editor integrations start. They look for it
+        beside lumenc.exe, and the PATH entry below covers it too.
+      -->
+      <!-- Component GUID generated once for lumen-lsp.exe; never change it, and never reuse it for another file or product. -->
+      <Component Id="LumenLspExe" Guid="{CB84FD66-5A04-46CF-BDA5-D75350142B0A}" Directory="BINFOLDER">
+        <File Id="LumenLspExe" Source="$(var.StageDir)\bin\lumen-lsp.exe" KeyPath="yes" />
       </Component>
 
       <!--

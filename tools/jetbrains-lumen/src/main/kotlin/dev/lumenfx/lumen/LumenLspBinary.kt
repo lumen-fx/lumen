@@ -11,7 +11,8 @@ import java.nio.file.Paths
 /**
  * Finds the `lumen-lsp` binary the same way the VS Code extension does: an
  * explicit setting wins, then a locally built binary under the project's Cargo
- * target directories, then `PATH`.
+ * target directories, then the one an installed toolchain ships beside
+ * `lumenc`, then `PATH`.
  */
 object LumenLspBinary {
 
@@ -32,21 +33,45 @@ object LumenLspBinary {
         }
 
         if (settings.autoDiscover) {
-            for (candidate in targetCandidates(project)) {
+            for (candidate in targetCandidates(project) + installCandidates()) {
                 if (Files.isRegularFile(candidate)) {
                     return Resolved(candidate.toString(), true)
                 }
             }
         }
 
-        val onPath = findOnPath()
+        val onPath = findOnPath(NAME)
         return if (onPath != null) Resolved(onPath.toString(), true) else Resolved(NAME, false)
     }
 
-    /** The first executable named [NAME] in a `PATH` directory. */
-    private fun findOnPath(): Path? {
+    /**
+     * Where an installed toolchain keeps the server: beside `lumenc` on `PATH`
+     * (every toolchain archive ships the two together), then the default
+     * prefixes of `install.sh` (`~/.lumen/bin`) and the Windows installer
+     * (`%LOCALAPPDATA%\Programs\Lumen\bin`). An IDE started from a desktop
+     * launcher often lacks the shell's `PATH`, which is why the prefixes are
+     * probed by name.
+     */
+    private fun installCandidates(): List<Path> {
+        val dirs = ArrayList<Path>()
+        findOnPath("lumenc")?.let { lumenc ->
+            val real = runCatching { lumenc.toRealPath() }.getOrDefault(lumenc)
+            real.parent?.let { dirs.add(it) }
+        }
+        dirs.add(Paths.get(System.getProperty("user.home"), ".lumen", "bin"))
+        if (SystemInfo.isWindows) {
+            System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let {
+                dirs.add(Paths.get(it, "Programs", "Lumen", "bin"))
+            }
+        }
+        val binary = executableName(NAME)
+        return dirs.map { it.resolve(binary) }
+    }
+
+    /** The first executable named [name] in a `PATH` directory. */
+    private fun findOnPath(name: String): Path? {
         val path = System.getenv("PATH") ?: return null
-        val binary = executableName()
+        val binary = executableName(name)
         for (directory in path.split(File.pathSeparatorChar)) {
             if (directory.isBlank()) {
                 continue
@@ -59,7 +84,7 @@ object LumenLspBinary {
         return null
     }
 
-    private fun executableName(): String = if (SystemInfo.isWindows) "$NAME.exe" else NAME
+    private fun executableName(name: String): String = if (SystemInfo.isWindows) "$name.exe" else name
 
     /** `target/{release,debug}/lumen-lsp` under every root the project knows about. */
     private fun targetCandidates(project: Project): List<Path> {
@@ -71,7 +96,7 @@ object LumenLspBinary {
             contentRoot.canonicalPath?.let { roots.add(Paths.get(it, "target")) }
         }
 
-        val binary = executableName()
+        val binary = executableName(NAME)
         // Release first: that is the build the docs tell you to make.
         return roots.flatMap { listOf(it.resolve("release").resolve(binary), it.resolve("debug").resolve(binary)) }
     }
