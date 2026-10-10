@@ -126,9 +126,8 @@ fn owning_radio(
 /// or any of its children - writes the member's value to the group
 /// signal AND moves focus to the radio root (Qt: clicking a radio
 /// focuses it, so arrow-key navigation picks up right where the
-/// pointer left off). Focus must be explicit here because the click
-/// usually lands on the dot / label CHILD, which carries no
-/// `TabIndex`, so `lumen_input::focus_on_click` never fires.
+/// pointer left off). Focus is set here as well as on the press because a
+/// click raised without one, from the keyboard or a script, still moves it.
 ///
 /// Disabled members are unreachable by pointer already
 /// (`dispatch_clicks` filters), but the ancestor resolve could cross a

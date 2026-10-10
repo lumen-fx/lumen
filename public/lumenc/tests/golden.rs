@@ -547,7 +547,8 @@ fn golden_button_states() {
     );
 }
 
-/// Pointer held down on a button: `:active` fill + press tint.
+/// Pointer held down on a button: `:active` fill + press tint, and the
+/// `:focus` ring the press gave it.
 #[test]
 fn golden_button_pressed() {
     run_case(
