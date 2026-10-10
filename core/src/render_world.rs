@@ -60,7 +60,7 @@ pub fn install_extract_pipeline(app: &mut App) {
         return;
     }
     app.render_world.insert_resource(ExtractPipeline);
-    let chain: [ExtractFn; 7] = [
+    let chain: [ExtractFn; 8] = [
         // Runs first so it primes the shared hierarchy memos and so
         // `HiddenExtracts` is fresh for the `cull_hidden` guard.
         stash_hidden_entities,
@@ -69,6 +69,7 @@ pub fn install_extract_pipeline(app: &mut App) {
         extract_borders,
         extract_text,
         extract_clips,
+        extract_opacity_groups,
         extract_scrollbars,
     ];
     app.extract_fns.splice(0..0, chain);
@@ -263,7 +264,7 @@ impl Rect {
 /// image/SVG extractors registered by `lumen-assets` - and each one
 /// independently rebuilds the same hierarchy-derived structures via
 /// [`build_parent_map`], [`hidden_entities`], [`parent_scroll_offsets`],
-/// [`parent_opacities`], and [`parent_scroll_clip_rects`]. Those depend
+/// [`opacity_model`], and [`parent_scroll_clip_rects`]. Those depend
 /// only on the main-world hierarchy / `ScrollOffset` / `Opacity` /
 /// `Visible` / clip components, none of which mutate between extractors of
 /// the same phase (extract fns only read the main world and write the
@@ -297,8 +298,8 @@ pub struct ExtractContextCache {
     hidden: Option<std::collections::HashSet<Entity>>,
     /// Memoised cumulative ancestor scroll offsets.
     scroll: Option<HashMap<Entity, Vec2>>,
-    /// Memoised cumulative ancestor opacity products.
-    opacities: Option<HashMap<Entity, f32>>,
+    /// Memoised per-entity draw alphas and opacity groups.
+    opacities: Option<OpacityModel>,
     /// Memoised nearest-clip rect per entity.
     clip: Option<HashMap<Entity, (Vec2, Vec2)>>,
 }
@@ -824,6 +825,26 @@ pub struct ExtractedClipBox {
     pub end_order: PaintOrder,
 }
 
+/// One element whose paints composite as a single layer that fades as a whole: CSS group opacity.
+///
+/// - Emitted for an element with [`Opacity`] below one that has a visible child in its own paint band.
+///   Its own paints and its descendants' paint at full alpha into the layer, and the layer composites
+///   at `alpha` when it closes, so a child over its parent hides the parent the way it would at full
+///   opacity, and the two fade once, together.
+/// - An element with no such child folds its opacity into its own paints instead; nothing of its own
+///   overlaps anything else of its own by more than a border or a text run, and a layer costs a pass.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedOpacityGroup {
+    /// The element's own [`Opacity`], in `[0, 1)`.
+    pub alpha: f32,
+    /// Paint-order key at which the layer opens: the slot under the element's own [`PaintOrder`] that
+    /// its drop shadows take, so they fade with the element.
+    pub start_order: PaintOrder,
+    /// Paint-order key at which the layer closes - the maximum [`PaintOrder`] across the element and its
+    /// descendants in the same paint band, as for an [`ExtractedClipBox`].
+    pub end_order: PaintOrder,
+}
+
 /// One rounded solid rect of an overlay scrollbar (track or thumb).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollbarDrawRect {
@@ -838,12 +859,13 @@ pub struct ScrollbarDrawRect {
 }
 
 /// Overlay-scrollbar draw list for one scroll container (spec section 16.2 /
-/// section 16.6). Emitted by [`extract_scrollbars`]; the IR builder appends the
-/// rects - in `draws` order - AFTER every other leaf sharing the same
-/// [`PaintOrder`], so bars always paint above the container's content
-/// (the `order` is the container's `max descendant order + 1`, which
-/// also places them outside the container's clip bracket - overlay bars
-/// are never clipped by their own viewport).
+/// section 16.6). Emitted by [`extract_scrollbars`]; the `order` is the
+/// container's `max descendant order + 1`, so the bars paint above all of the
+/// container's content, in `draws` order, and outside its clip bracket -
+/// overlay bars are never clipped by their own viewport. That slot is also
+/// where the next element's drop shadows go; the IR builder keys the bars
+/// under them, so a later sibling paints over an earlier one's bars and an
+/// opacity group the sibling opens there leaves the bars out.
 #[derive(Component, Clone, Debug)]
 pub struct ExtractedScrollbar {
     /// Track / thumb rects in back-to-front paint order.
@@ -1202,6 +1224,9 @@ pub struct RenderEntityMap {
     pub svg: std::collections::HashMap<Entity, Entity>,
     /// `main_entity -> render_entity` for [`ExtractedClipBox`]; one entry per scrollable or overflow-hidden container.
     pub clip: std::collections::HashMap<Entity, Entity>,
+    /// `main_entity -> render_entity` for [`ExtractedOpacityGroup`]; one entry per faded element with
+    /// children.
+    pub opacity_group: std::collections::HashMap<Entity, Entity>,
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
@@ -1227,6 +1252,7 @@ pub fn clear_extracted(render: &mut World) {
         set.extend(map.outline.values().copied());
         set.extend(map.border.values().copied());
         set.extend(map.clip.values().copied());
+        set.extend(map.opacity_group.values().copied());
         set.extend(map.image.values().copied());
         set.extend(map.svg.values().copied());
         set.extend(map.scrollbar.values().copied());
@@ -1259,16 +1285,16 @@ pub fn extract_shadows(main: &mut World, render: &mut World) {
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
-    let inherited_alpha = parent_opacities(main, &parents);
-    let mut q = main.query::<(Entity, &Transform, &Visuals, Option<&Opacity>)>();
+    let alphas = opacity_model(main, &parents).draw;
+    let mut q = main.query::<(Entity, &Transform, &Visuals)>();
     // Group shadows by main entity so the upsert can grow or shrink each entity's render-side set.
     let mut groups: std::collections::HashMap<Entity, Vec<ExtractedShadow>> =
         std::collections::HashMap::new();
-    for (e, t, v, opacity) in q.iter(main) {
+    for (e, t, v) in q.iter(main) {
         if hidden.contains(&e) || v.shadows.is_empty() {
             continue;
         }
-        let alpha = effective_opacity(opacity, &inherited_alpha, e);
+        let alpha = draw_opacity(&alphas, e);
         let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
         let own_order = paint_order_of(e, &parents, &mut depth_cache);
         let base_order = own_order.saturating_sub(1);
@@ -1384,14 +1410,14 @@ pub fn extract_rects(main: &mut World, render: &mut World) {
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
-    let inherited_alpha = parent_opacities(main, &parents);
+    let alphas = opacity_model(main, &parents).draw;
     let clip = parent_scroll_clip_rects(main, &parents);
-    let mut q = main.query::<(Entity, &Transform, &Visuals, Option<&Opacity>)>();
+    let mut q = main.query::<(Entity, &Transform, &Visuals)>();
     let pairs: Vec<(Entity, ExtractedRect)> = q
         .iter(main)
-        .filter(|(e, _, _, _)| !hidden.contains(e))
-        .filter_map(|(e, t, v, opacity)| {
-            let alpha = effective_opacity(opacity, &inherited_alpha, e);
+        .filter(|(e, _, _)| !hidden.contains(e))
+        .filter_map(|(e, t, v)| {
+            let alpha = draw_opacity(&alphas, e);
             let brush = Brush::from(v.fill.as_ref()?).with_opacity(alpha);
             let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
             let origin = t.absolute - off;
@@ -1458,20 +1484,19 @@ pub fn extract_borders(main: &mut World, render: &mut World) {
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
-    let inherited_alpha = parent_opacities(main, &parents);
+    let alphas = opacity_model(main, &parents).draw;
     let clip = parent_scroll_clip_rects(main, &parents);
     type Row<'a> = (
         Entity,
         &'a Transform,
         &'a Visuals,
-        Option<&'a Opacity>,
         Option<&'a ResolvedDirection>,
     );
     let mut q = main.query::<Row>();
     let pairs: Vec<(Entity, ExtractedBorder)> = q
         .iter(main)
-        .filter(|(e, _, _, _, _)| !hidden.contains(e))
-        .filter_map(|(e, t, v, opacity, dir)| {
+        .filter(|(e, _, _, _)| !hidden.contains(e))
+        .filter_map(|(e, t, v, dir)| {
             let border = v.border.as_ref()?;
             let widths = border
                 .widths
@@ -1483,7 +1508,7 @@ pub fn extract_borders(main: &mut World, render: &mut World) {
             {
                 return None;
             }
-            let alpha = effective_opacity(opacity, &inherited_alpha, e);
+            let alpha = draw_opacity(&alphas, e);
             let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
             let origin = t.absolute - off;
             if let Some(clip_rect) = clip.get(&e)
@@ -1698,33 +1723,6 @@ pub fn extract_clips(main: &mut World, render: &mut World) {
         let mut oq = main.query_filtered::<Entity, With<OverlayLayer>>();
         oq.iter(main).collect()
     };
-    // Compute the maximum [`PaintOrder`] across `root` and its descendants via DFS over `children`,
-    // not descending into nested [`OverlayLayer`] roots (their ranks sit in the top-layer band and
-    // would wrongly stretch the bracket across all content between).
-    fn max_desc_order(
-        root: Entity,
-        children: &std::collections::HashMap<Entity, Vec<Entity>>,
-        parents: &std::collections::HashMap<Entity, Entity>,
-        overlay: &std::collections::HashSet<Entity>,
-        depth_cache: &mut std::collections::HashMap<Entity, u32>,
-    ) -> PaintOrder {
-        let mut stack = vec![root];
-        let mut best = paint_order_of(root, parents, depth_cache);
-        while let Some(n) = stack.pop() {
-            let order = paint_order_of(n, parents, depth_cache);
-            if order > best {
-                best = order;
-            }
-            if let Some(kids) = children.get(&n) {
-                for &k in kids {
-                    if !overlay.contains(&k) {
-                        stack.push(k);
-                    }
-                }
-            }
-        }
-        best
-    }
     let pairs: Vec<(Entity, ExtractedClipBox)> = candidates
         .into_iter()
         .filter_map(|e| {
@@ -1889,16 +1887,54 @@ pub fn build_parent_map(
     result
 }
 
-/// Returns each entity's cumulative ANCESTOR opacity product (own
-/// [`Opacity`] excluded - extract fns already fold that in). CSS
-/// semantics: `opacity` multiplies down the subtree, so fading a dialog
-/// root fades every descendant. Returns an empty map when no entity
-/// carries an [`Opacity`] (the overwhelmingly common case - extracts
-/// then skip the lookup entirely).
-pub fn parent_opacities(
-    main: &mut World,
+/// The maximum [`PaintOrder`] across `root` and its descendants, by DFS over `children`, not descending
+/// into nested [`OverlayLayer`] roots: their ranks sit in the top-layer band and would wrongly stretch a
+/// bracket across all the content between.
+fn max_desc_order(
+    root: Entity,
+    children: &HashMap<Entity, Vec<Entity>>,
     parents: &HashMap<Entity, Entity>,
-) -> HashMap<Entity, f32> {
+    overlay: &std::collections::HashSet<Entity>,
+    depth_cache: &mut HashMap<Entity, u32>,
+) -> PaintOrder {
+    let mut stack = vec![root];
+    let mut best = paint_order_of(root, parents, depth_cache);
+    while let Some(n) = stack.pop() {
+        let order = paint_order_of(n, parents, depth_cache);
+        if order > best {
+            best = order;
+        }
+        if let Some(kids) = children.get(&n) {
+            for &k in kids {
+                if !overlay.contains(&k) {
+                    stack.push(k);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// How [`Opacity`] reaches the paints of one frame: the alpha each entity's own paints carry, and the
+/// elements whose subtree composites as one layer ([`ExtractedOpacityGroup`]).
+#[derive(Clone, Debug, Default)]
+pub struct OpacityModel {
+    /// The alpha to fold into each entity's own paints, for the entities where it is below one.
+    pub draw: HashMap<Entity, f32>,
+    /// The elements that fade as a group, with their own opacity.
+    pub groups: Vec<(Entity, f32)>,
+}
+
+/// Resolves CSS `opacity` for the frame.
+///
+/// An element with [`Opacity`] below one and a visible child in its own paint band is a group: it and
+/// its subtree paint at full alpha into a layer that fades once ([`ExtractedOpacityGroup`]). Every other
+/// faded element folds its opacity into its own paints. A paint inside a group therefore carries none
+/// of that group's alpha. The one way out of an ancestor's group is an [`OverlayLayer`] root, whose
+/// subtree paints in the top-layer band outside the group's bracket; its paints carry the opacity of
+/// every element above it instead. Returns an empty model when no entity carries an [`Opacity`] (the
+/// overwhelmingly common case, so extracts skip the lookup entirely).
+pub fn opacity_model(main: &mut World, parents: &HashMap<Entity, Entity>) -> OpacityModel {
     if let Some(c) = main.get_resource::<ExtractContextCache>()
         && c.active
         && let Some(v) = &c.opacities
@@ -1907,59 +1943,174 @@ pub fn parent_opacities(
     }
     let direct: HashMap<Entity, f32> = {
         let mut q = main.query::<(Entity, &Opacity)>();
-        q.iter(main).map(|(e, o)| (e, o.0)).collect()
+        q.iter(main)
+            .filter(|(_, o)| o.0 < 1.0)
+            .map(|(e, o)| (e, o.0.max(0.0)))
+            .collect()
     };
-    let by_entity: HashMap<Entity, f32> = if direct.is_empty() {
-        HashMap::new()
+    let model = if direct.is_empty() {
+        OpacityModel::default()
     } else {
-        fn cumulative(
+        let hidden = hidden_entities(main, parents);
+        let overlay: std::collections::HashSet<Entity> = {
+            let mut q = main.query_filtered::<Entity, With<OverlayLayer>>();
+            q.iter(main).collect()
+        };
+        let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
+        for (&e, &p) in parents {
+            children.entry(p).or_default().push(e);
+        }
+        let mut groups: Vec<(Entity, f32)> = direct
+            .iter()
+            .filter(|(e, _)| !hidden.contains(e))
+            .filter(|(e, _)| {
+                children.get(e).is_some_and(|kids| {
+                    kids.iter()
+                        .any(|k| !hidden.contains(k) && !overlay.contains(k))
+                })
+            })
+            .map(|(&e, &a)| (e, a))
+            .collect();
+        groups.sort_by_key(|(e, _)| *e);
+        let grouped: std::collections::HashSet<Entity> = groups.iter().map(|(e, _)| *e).collect();
+
+        // The product of the opacity of `e` and every ancestor of it.
+        fn chain(
             e: Entity,
             parents: &HashMap<Entity, Entity>,
             direct: &HashMap<Entity, f32>,
-            cache: &mut HashMap<Entity, f32>,
+            memo: &mut HashMap<Entity, f32>,
         ) -> f32 {
-            if let Some(v) = cache.get(&e) {
+            if let Some(v) = memo.get(&e) {
                 return *v;
             }
-            let parent_alpha = parents
+            let above = parents
                 .get(&e)
-                .map(|p| cumulative(*p, parents, direct, cache))
+                .map(|p| chain(*p, parents, direct, memo))
                 .unwrap_or(1.0);
-            let own = direct.get(&e).copied().unwrap_or(1.0);
-            let total = parent_alpha * own;
-            cache.insert(e, total);
+            let total = above * direct.get(&e).copied().unwrap_or(1.0);
+            memo.insert(e, total);
             total
         }
-        let mut cache: HashMap<Entity, f32> = HashMap::new();
-        let mut by_entity: HashMap<Entity, f32> = HashMap::new();
-        for &e in parents.keys() {
-            if let Some(p) = parents.get(&e) {
-                let alpha = cumulative(*p, parents, &direct, &mut cache);
-                if alpha < 1.0 {
-                    by_entity.insert(e, alpha);
-                }
+        // What the ancestors outside every group holding `e` contribute: nothing unless `e` sits under
+        // an overlay root, and then the opacity of everything above the nearest one.
+        fn outer(
+            e: Entity,
+            parents: &HashMap<Entity, Entity>,
+            direct: &HashMap<Entity, f32>,
+            overlay: &std::collections::HashSet<Entity>,
+            chains: &mut HashMap<Entity, f32>,
+            memo: &mut HashMap<Entity, f32>,
+        ) -> f32 {
+            if let Some(v) = memo.get(&e) {
+                return *v;
+            }
+            let value = if overlay.contains(&e) {
+                parents
+                    .get(&e)
+                    .map(|p| chain(*p, parents, direct, chains))
+                    .unwrap_or(1.0)
+            } else {
+                parents
+                    .get(&e)
+                    .map(|p| outer(*p, parents, direct, overlay, chains, memo))
+                    .unwrap_or(1.0)
+            };
+            memo.insert(e, value);
+            value
+        }
+        let mut chains = HashMap::new();
+        let mut outers = HashMap::new();
+        let mut draw = HashMap::new();
+        let entities: Vec<Entity> = parents
+            .keys()
+            .chain(parents.values())
+            .chain(direct.keys())
+            .copied()
+            .collect();
+        for e in entities {
+            if draw.contains_key(&e) {
+                continue;
+            }
+            let own = if grouped.contains(&e) {
+                1.0
+            } else {
+                direct.get(&e).copied().unwrap_or(1.0)
+            };
+            let alpha = own * outer(e, parents, &direct, &overlay, &mut chains, &mut outers);
+            if alpha < 1.0 {
+                draw.insert(e, alpha);
             }
         }
-        by_entity
+        OpacityModel { draw, groups }
     };
     if let Some(mut c) = main.get_resource_mut::<ExtractContextCache>()
         && c.active
     {
-        c.opacities = Some(by_entity.clone());
+        c.opacities = Some(model.clone());
     }
-    by_entity
+    model
 }
 
-/// Combine an entity's own [`Opacity`] with its inherited ancestor
-/// product from [`parent_opacities`].
-pub(crate) fn effective_opacity(
-    own: Option<&Opacity>,
-    inherited: &HashMap<Entity, f32>,
-    e: Entity,
-) -> Opacity {
-    let own = own.copied().unwrap_or_default().0;
-    let anc = inherited.get(&e).copied().unwrap_or(1.0);
-    Opacity(own * anc)
+/// The alpha an entity's own paints carry, from [`OpacityModel::draw`].
+pub fn draw_opacity(draw: &HashMap<Entity, f32>, e: Entity) -> Opacity {
+    Opacity(draw.get(&e).copied().unwrap_or(1.0))
+}
+
+/// Extracts one [`ExtractedOpacityGroup`] per element that fades as a group (see [`opacity_model`]).
+/// Each carries the element's opacity and the `(start_order, end_order)` bracket of the paints it fades,
+/// which [`crate::node_ir::transform_extracted_to_nodes`] folds into a [`crate::node_ir::Node::Opacity`].
+pub fn extract_opacity_groups(main: &mut World, render: &mut World) {
+    let (parents, mut depth_cache) = build_parent_map(main);
+    let groups = opacity_model(main, &parents).groups;
+    let mut pairs: Vec<(Entity, ExtractedOpacityGroup)> = Vec::with_capacity(groups.len());
+    if !groups.is_empty() {
+        let overlay: std::collections::HashSet<Entity> = {
+            let mut q = main.query_filtered::<Entity, With<OverlayLayer>>();
+            q.iter(main).collect()
+        };
+        let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
+        for (&e, &p) in &parents {
+            children.entry(p).or_default().push(e);
+        }
+        for (e, alpha) in groups {
+            let own = paint_order_of(e, &parents, &mut depth_cache);
+            let end = max_desc_order(e, &children, &parents, &overlay, &mut depth_cache);
+            pairs.push((
+                e,
+                ExtractedOpacityGroup {
+                    alpha,
+                    start_order: own.saturating_sub(1),
+                    end_order: end,
+                },
+            ));
+        }
+    }
+    // Keyed-upsert against `RenderEntityMap.opacity_group`.
+    let prior = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().opacity_group);
+    let mut next: HashMap<Entity, Entity> = HashMap::with_capacity(pairs.len());
+    for (main_e, group) in pairs {
+        let reuse = prior
+            .get(&main_e)
+            .copied()
+            .filter(|&re| render.get_entity(re).is_ok());
+        let render_e = match reuse {
+            Some(re) => {
+                render.entity_mut(re).insert(group);
+                re
+            }
+            None => render.spawn(group).id(),
+        };
+        next.insert(main_e, render_e);
+    }
+    for (main_e, render_e) in &prior {
+        if !next.contains_key(main_e)
+            && let Ok(em) = render.get_entity_mut(*render_e)
+        {
+            em.despawn();
+        }
+    }
+    render.resource_mut::<RenderEntityMap>().opacity_group = next;
 }
 
 /// Ranks every [`OverlayLayer`] subtree into the top-layer band (`>= OVERLAY_ORDER_BASE`).
@@ -2359,7 +2510,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
-    let inherited_alpha = parent_opacities(main, &parents);
+    let alphas = opacity_model(main, &parents).draw;
     let clip = parent_scroll_clip_rects(main, &parents);
     // Caret blink gate: when the blink resource says "hidden half of the
     // phase", withhold the caret byte so the renderer paints no bar.
@@ -2378,7 +2529,6 @@ pub fn extract_text(main: &mut World, render: &mut World) {
         Option<&'a TextInput>,
         Option<&'a Focused>,
         Option<&'a Style>,
-        Option<&'a Opacity>,
         Option<&'a TextInputScroll>,
         Option<&'a EchoMode>,
         Option<&'a TextInputPaint>,
@@ -2400,7 +2550,6 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 input,
                 focused,
                 style,
-                opacity,
                 edit_scroll,
                 echo,
                 paint,
@@ -2484,7 +2633,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                     + block_top
                     + text_baseline_in_line(size_px, line_height_px);
                 let container_width = (t.size.x - pad_left - pad_right).max(0.0);
-                let alpha = effective_opacity(opacity, &inherited_alpha, e);
+                let alpha = draw_opacity(&alphas, e);
                 let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
                 // AABB-cull against the nearest scroll / overflow-hidden ancestor; matches the rule applied in `extract_rects`.
                 if let Some(clip_rect) = clip.get(&e) {
@@ -3238,7 +3387,7 @@ mod tests {
     /// every descendant's painted alpha (this is what makes a fading
     /// dialog fade its content, not just its scrim).
     #[test]
-    fn ancestor_opacity_multiplies_into_descendant_fill() {
+    fn a_faded_parent_fades_its_subtree_as_a_group() {
         let mut main = World::new();
         let mut render = World::new();
         render.insert_resource(RenderEntityMap::default());
@@ -3248,19 +3397,22 @@ mod tests {
                 Opacity(0.5),
             ))
             .id();
-        main.spawn((
-            Transform::new(Vec2::ZERO, Vec2::new(50.0, 50.0)),
-            Visuals {
-                fill: Some(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0))),
-                radius: 0.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            },
-            Opacity(0.5),
-            ChildOf(parent),
-        ));
+        let child = main
+            .spawn((
+                Transform::new(Vec2::ZERO, Vec2::new(50.0, 50.0)),
+                Visuals {
+                    fill: Some(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0))),
+                    radius: 0.0,
+                    corner_radii: None,
+                    shadows: Vec::new(),
+                    border: None,
+                },
+                Opacity(0.5),
+                ChildOf(parent),
+            ))
+            .id();
         extract_rects(&mut main, &mut render);
+        extract_opacity_groups(&mut main, &mut render);
         let rects: Vec<ExtractedRect> = {
             let mut q = render.query::<&ExtractedRect>();
             q.iter(&render).cloned().collect()
@@ -3269,8 +3421,57 @@ mod tests {
         let Brush::Solid(c) = &rects[0].brush else {
             panic!("solid brush expected");
         };
-        // own 0.5 x ancestor 0.5 = 0.25.
-        assert!((c.a - 0.25).abs() < 1e-4, "expected 0.25, got {}", c.a);
+        // The leaf child folds its own 0.5; the parent's 0.5 is the group's to apply.
+        assert!((c.a - 0.5).abs() < 1e-4, "expected 0.5, got {}", c.a);
+        let groups: Vec<ExtractedOpacityGroup> = {
+            let mut q = render.query::<&ExtractedOpacityGroup>();
+            q.iter(&render).copied().collect()
+        };
+        assert_eq!(groups.len(), 1, "only the parent has children to fade");
+        let (parents, mut depth) = build_parent_map(&mut main);
+        let parent_order = paint_order_of(parent, &parents, &mut depth);
+        let child_order = paint_order_of(child, &parents, &mut depth);
+        assert_eq!(groups[0].alpha, 0.5);
+        assert_eq!(groups[0].start_order, parent_order.saturating_sub(1));
+        assert_eq!(groups[0].end_order, child_order);
+    }
+
+    /// A popup under a faded element paints in the top layer, outside the element's group, so its
+    /// paints carry the element's opacity themselves.
+    #[test]
+    fn an_overlay_under_a_faded_parent_carries_the_parent_s_opacity() {
+        let mut main = World::new();
+        let parent = main
+            .spawn((
+                Transform::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                Opacity(0.5),
+            ))
+            .id();
+        let inline = main.spawn((Transform::default(), ChildOf(parent))).id();
+        let popup = main
+            .spawn((Transform::default(), OverlayLayer, ChildOf(parent)))
+            .id();
+        let item = main.spawn((Transform::default(), ChildOf(popup))).id();
+        let (parents, _) = build_parent_map(&mut main);
+        let model = opacity_model(&mut main, &parents);
+        assert_eq!(model.groups, vec![(parent, 0.5)]);
+        assert_eq!(draw_opacity(&model.draw, parent).0, 1.0);
+        assert_eq!(draw_opacity(&model.draw, inline).0, 1.0);
+        assert_eq!(draw_opacity(&model.draw, popup).0, 0.5);
+        assert_eq!(draw_opacity(&model.draw, item).0, 0.5);
+    }
+
+    /// An element whose only children are hidden has nothing to fade with it, so it folds its
+    /// opacity into its own paints.
+    #[test]
+    fn a_faded_element_with_no_visible_child_folds_its_own_opacity() {
+        let mut main = World::new();
+        let leaf = main.spawn((Transform::default(), Opacity(0.25))).id();
+        main.spawn((Transform::default(), Visible(false), ChildOf(leaf)));
+        let (parents, _) = build_parent_map(&mut main);
+        let model = opacity_model(&mut main, &parents);
+        assert!(model.groups.is_empty());
+        assert_eq!(draw_opacity(&model.draw, leaf).0, 0.25);
     }
 
     /// Spec section 16.2: overlay bars extract only when content overflows, and

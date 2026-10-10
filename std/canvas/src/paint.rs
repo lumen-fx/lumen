@@ -11,7 +11,7 @@
 //! an extension id and a painter registered for that id, which is the whole
 //! contract.
 
-use lumen_module::lumen_core::components::{Opacity, Transform};
+use lumen_module::lumen_core::components::Transform;
 use lumen_module::lumen_core::native::{
     ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, upsert_native_leaves,
 };
@@ -46,11 +46,11 @@ pub struct CanvasLeaf {
 /// lock in the middle of a frame.
 pub fn extract_canvases(main: &mut World, render: &mut World) {
     let mut place = NativeExtract::new(main);
-    let mut query = main.query::<(Entity, &Transform, &Canvas, Option<&Opacity>)>();
+    let mut query = main.query::<(Entity, &Transform, &Canvas)>();
     let leaves: Vec<(Entity, ExtractedNative)> = query
         .iter(main)
-        .filter_map(|(entity, transform, canvas, opacity)| {
-            let placed = place.place(entity, transform, opacity)?;
+        .filter_map(|(entity, transform, canvas)| {
+            let placed = place.place(entity, transform)?;
             Some((
                 entity,
                 ExtractedNative {

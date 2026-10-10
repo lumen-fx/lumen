@@ -497,7 +497,9 @@ The `Prepare` stage then culls: entities outside the viewport, and entities
 whose main-world entity is hidden by a `Visible(false)` on itself or an
 ancestor. What survives is folded into a retained node tree, a typed scene
 graph with container, transform, opacity, clip, rect, shadow, outline, text,
-image, and native variants. The variants map one to one onto Qt's scene graph
+image, and native variants. An opacity node is a group: its subtree paints into
+a layer that fades once, which is how CSS `opacity` on an element with children
+reaches the renderer. The variants map one to one onto Qt's scene graph
 and GTK's GSK render nodes, so a renderer backend only has to translate each
 variant to its native equivalent. Children are shared behind reference counts,
 so an unchanged subtree compares equal by pointer and the frame diff

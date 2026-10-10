@@ -36,11 +36,11 @@
 //! [`upsert_native_leaves`] carries the leaves across frames under one extension id so two plugins
 //! extracting in the same frame cannot evict each other's entities.
 
-use crate::components::{Opacity, Transform};
+use crate::components::Transform;
 use crate::node_ir::Affine2;
 use crate::render_world::{
-    PaintOrder, Rect, RenderEntityMap, aabb_outside, build_parent_map, effective_opacity,
-    hidden_entities, paint_order_of, parent_opacities, parent_scroll_clip_rects,
+    PaintOrder, Rect, RenderEntityMap, aabb_outside, build_parent_map, draw_opacity,
+    hidden_entities, opacity_model, paint_order_of, parent_scroll_clip_rects,
     parent_scroll_offsets,
 };
 use bevy_ecs::entity::Entity;
@@ -103,7 +103,9 @@ pub struct NativePlacement {
     pub bounds: Rect,
     /// Paint order for the entity's position in the document.
     pub order: PaintOrder,
-    /// Opacity inherited from ancestors, multiplied by the entity's own.
+    /// The alpha the leaf's own paints carry: the entity's own opacity, unless the entity fades as a
+    /// group with its children, times what ancestors outside any group holding it contribute. A
+    /// group's fade is a layer the backend composites, so it is not part of this figure.
     pub opacity: f32,
 }
 
@@ -129,7 +131,7 @@ impl NativeExtract {
         let (parents, depth_cache) = build_parent_map(main);
         let hidden = hidden_entities(main, &parents);
         let scroll = parent_scroll_offsets(main, &parents);
-        let opacities = parent_opacities(main, &parents);
+        let opacities = opacity_model(main, &parents).draw;
         let clip = parent_scroll_clip_rects(main, &parents);
         Self {
             parents,
@@ -144,12 +146,7 @@ impl NativeExtract {
     /// Resolves where `entity`'s leaf belongs, or `None` when it should not be extracted at all:
     /// hidden by a `Visible(false)` on itself or an ancestor, or scrolled fully out of the nearest
     /// scroll or `overflow: hidden` container.
-    pub fn place(
-        &mut self,
-        entity: Entity,
-        transform: &Transform,
-        opacity: Option<&Opacity>,
-    ) -> Option<NativePlacement> {
+    pub fn place(&mut self, entity: Entity, transform: &Transform) -> Option<NativePlacement> {
         if self.hidden.contains(&entity) {
             return None;
         }
@@ -163,7 +160,7 @@ impl NativeExtract {
         Some(NativePlacement {
             bounds: Rect::new(origin, transform.size),
             order: paint_order_of(entity, &self.parents, &mut self.depth_cache),
-            opacity: effective_opacity(opacity, &self.opacities, entity).0,
+            opacity: draw_opacity(&self.opacities, entity).0,
         })
     }
 }
@@ -233,8 +230,9 @@ pub struct NativePaintCtx<'a> {
     /// Alpha multiplier accumulated from ancestor opacity nodes.
     ///
     /// The painter is the only thing that applies it. A bounds clip composites nothing, so asking
-    /// to be clipped never changes a leaf's alpha. The tree builder emits no opacity nodes today,
-    /// so this is `1.0` for now; the way to honour CSS `opacity` is to fold
+    /// to be clipped never changes a leaf's alpha. An ancestor that fades as a group is a layer the
+    /// backend composites over whatever the painter draws, so it never reaches this figure, which is
+    /// `1.0` for every leaf the tree builder places; the way to honour CSS `opacity` is to fold
     /// [`NativePlacement::opacity`] into the payload at extract, which is what the built-in
     /// extractors do with their own colours.
     pub opacity: f32,

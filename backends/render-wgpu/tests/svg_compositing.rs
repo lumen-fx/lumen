@@ -45,7 +45,7 @@ fn extract_drawings(main: &mut World, render: &mut World) {
     let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
         .filter_map(|(e, transform, drawing)| {
-            let placed = place.place(e, transform, None)?;
+            let placed = place.place(e, transform)?;
             Some((
                 e,
                 ExtractedNative {

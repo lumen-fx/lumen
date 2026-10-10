@@ -225,6 +225,13 @@ fn push_clip_layer(painter: &mut PaintTarget, shape: ClipShape, opacity: f32) ->
     1
 }
 
+/// The bounds an opacity group's layer falls back to for a leaf whose extent cannot be read: wide
+/// enough to cover any target.
+const GROUP_EXTENT: LumenRect = LumenRect {
+    origin: glam::Vec2::new(-1.0e6, -1.0e6),
+    size: glam::Vec2::new(2.0e6, 2.0e6),
+};
+
 /// Walks a single [`Node`] subtree onto the painter.
 ///
 /// Each leaf variant maps onto painter calls through the matching emitter, and the
@@ -248,10 +255,34 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             ctx.transform = prev;
         }
         Node::Opacity { alpha, child } => {
-            let prev = ctx.opacity;
-            ctx.opacity = prev * alpha.clamp(0.0, 1.0);
+            // Group opacity: the subtree paints into a layer of its own and the layer fades once
+            // when it closes, so a child over its parent hides it as it would at full opacity.
+            let alpha = alpha.clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                return;
+            }
+            if alpha >= 1.0 {
+                walk_node(ctx, child);
+                return;
+            }
+            // The layer only needs to cover what the subtree paints. Bounds come out in logical
+            // pixels like a clip's, so they scale the same way; a pixel of slack keeps the
+            // antialiased edges of the subtree inside it.
+            let bounds = node_bounds(child, GROUP_EXTENT, Affine::IDENTITY);
+            let slack = glam::Vec2::splat(1.0);
+            let layer = LumenRect {
+                origin: (bounds.origin - slack) * ctx.dpr,
+                size: (bounds.size + slack * 2.0) * ctx.dpr,
+            };
+            ctx.painter.push_layer(
+                Fill::NonZero,
+                peniko::BlendMode::default(),
+                alpha,
+                Affine::IDENTITY,
+                &Shape::Rect(lumen_rect_to_kurbo(layer)),
+            );
             walk_node(ctx, child);
-            ctx.opacity = prev;
+            ctx.painter.pop_layer();
         }
         Node::Clip { shape, child } => {
             // Scale the logical clip rect to physical pixels - leaves below scale themselves by
@@ -751,7 +782,9 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
             spread,
             ..
         } => {
-            let pad = blur.max(0.0) + spread.max(0.0);
+            // `blur` is the Gaussian's standard deviation, and the blurred rect reaches about three
+            // of them past its edge.
+            let pad = blur.max(0.0) * 3.0 + spread.max(0.0);
             let r = LumenRect {
                 origin: *origin - glam::Vec2::splat(pad),
                 size: *size + glam::Vec2::splat(pad * 2.0),

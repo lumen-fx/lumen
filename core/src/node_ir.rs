@@ -45,8 +45,9 @@
 use crate::components::{Color, ImageBlob, SvgPayload};
 use crate::native::ExtractedNative;
 use crate::render_world::{
-    BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedOutline,
-    ExtractedRect, ExtractedScrollbar, ExtractedShadow, ExtractedText, PaintOrder, Rect,
+    BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage,
+    ExtractedOpacityGroup, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
+    ExtractedText, PaintOrder, Rect,
 };
 use bevy_ecs::entity::Entity;
 use bevy_ecs::prelude::Resource;
@@ -171,14 +172,17 @@ pub enum Node {
         /// Child subtree.
         child: Arc<Node>,
     },
-    /// Opacity multiplier pushed onto the back-end's compositing stack. Multiplies into the alpha of every
-    /// descendant - including nested [`Opacity`] groups. Wraps a single child subtree.
+    /// Group opacity: the child subtree paints into a layer of its own at full alpha, and the layer
+    /// composites at `alpha` when it closes, so the subtree fades once, as a whole, the way CSS
+    /// `opacity` does. A descendant over an ancestor hides it inside the group just as it would at
+    /// full opacity. Nested [`Opacity`] groups composite into the enclosing layer. Wraps a single
+    /// child subtree; authored from [`ExtractedOpacityGroup`].
     ///
-    /// Maps to `QSGOpacityNode::setOpacity` / `gtk_snapshot_push_opacity`.
+    /// Maps to `gtk_snapshot_push_opacity` / a layered `QQuickItem` (`layer.enabled` with `opacity`).
     ///
     /// [`Opacity`]: Node::Opacity
     Opacity {
-        /// `[0.0, 1.0]` multiplier applied to descendant alpha.
+        /// `[0.0, 1.0]` alpha the layer composites at.
         alpha: f32,
         /// Child subtree.
         child: Arc<Node>,
@@ -559,8 +563,41 @@ fn background_clip(clip: BackgroundClip, leaf: Node) -> Arc<Node> {
     })
 }
 
-/// Sort key for ordering [`DrawEntry`] before tree assembly.
-type EntryOrder = PaintOrder;
+/// Sort key for ordering leaves before tree assembly: the [`PaintOrder`] doubled, plus one for every
+/// leaf but an overlay scrollbar. A scroll container's bars sit at its last descendant's order plus
+/// one, which is the slot the next element's drop shadows share; keyed under them, the bars stay out
+/// of an [`ExtractedOpacityGroup`] the next element opens at that slot, and paint under its shadows,
+/// as a later sibling paints over an earlier one.
+type EntryOrder = u64;
+
+/// The [`EntryOrder`] of an ordinary leaf at `order`.
+fn leaf_key(order: PaintOrder) -> EntryOrder {
+    u64::from(order) * 2 + 1
+}
+
+/// The [`EntryOrder`] of an overlay scrollbar at `order`.
+fn scrollbar_key(order: PaintOrder) -> EntryOrder {
+    u64::from(order) * 2
+}
+
+/// What a bracketed range of leaves is wrapped in.
+#[derive(Clone, Copy)]
+enum Bracket {
+    /// A [`Node::Clip`].
+    Clip(ClipShape),
+    /// A [`Node::Opacity`] group.
+    Opacity(f32),
+}
+
+impl Bracket {
+    fn wrap(self, children: Vec<Arc<Node>>) -> Arc<Node> {
+        let child = Arc::new(Node::Container { children });
+        Arc::new(match self {
+            Bracket::Clip(shape) => Node::Clip { shape, child },
+            Bracket::Opacity(alpha) => Node::Opacity { alpha, child },
+        })
+    }
+}
 
 /// Builds a [`RetainedScene`] from the flat `Extracted*` components in the render world.
 ///
@@ -583,6 +620,7 @@ pub fn transform_extracted_to_nodes(
     svgs: bevy_ecs::system::Query<&SvgPayload>,
     natives: bevy_ecs::system::Query<(bevy_ecs::entity::Entity, &ExtractedNative)>,
     clips: bevy_ecs::system::Query<&ExtractedClipBox>,
+    groups: bevy_ecs::system::Query<&ExtractedOpacityGroup>,
     scrollbars: bevy_ecs::system::Query<&ExtractedScrollbar>,
 ) {
     // Park the prior frame's root in PreviousScene so the walker / damage diff can compare ptr-equal subtrees.
@@ -600,7 +638,7 @@ pub fn transform_extracted_to_nodes(
             + natives.iter().len(),
     );
     for r in &rects {
-        entries.push((r.order, Arc::new(Node::from(r))));
+        entries.push((leaf_key(r.order), Arc::new(Node::from(r))));
     }
     // Background images (`bg: url(...)`) share the entity's order key too.
     // Pushed after the fills and before the borders, they paint over the
@@ -611,33 +649,33 @@ pub fn transform_extracted_to_nodes(
                 Some(blob) => Node::from((i, blob)),
                 None => Node::from(i),
             };
-            entries.push((i.order, background_clip(clip, leaf)));
+            entries.push((leaf_key(i.order), background_clip(clip, leaf)));
         }
     }
     for s in &svgs {
         if let Some(clip) = s.background {
-            entries.push((s.order, background_clip(clip, Node::from(s))));
+            entries.push((leaf_key(s.order), background_clip(clip, Node::from(s))));
         }
     }
     // An inset shadow shares the entity's order key too, and sits between
     // the background and the border, as CSS paints it.
     for s in shadows.iter().filter(|s| s.inner) {
-        entries.push((s.order, Arc::new(Node::from(s))));
+        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
     }
     // Borders share the entity's own order key with its background rect;
     // pushing them after rects keeps `background -> border` paint order
     // through the stable sort below.
     for b in &borders {
-        entries.push((b.order, Arc::new(Node::from(b))));
+        entries.push((leaf_key(b.order), Arc::new(Node::from(b))));
     }
     for s in shadows.iter().filter(|s| !s.inner) {
-        entries.push((s.order, Arc::new(Node::from(s))));
+        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
     }
     for o in &outlines {
-        entries.push((o.order, Arc::new(Node::from(o))));
+        entries.push((leaf_key(o.order), Arc::new(Node::from(o))));
     }
     for t in &texts {
-        entries.push((t.order, Arc::new(Node::from(t))));
+        entries.push((leaf_key(t.order), Arc::new(Node::from(t))));
     }
     for (i, maybe_blob) in images.iter().filter(|(i, _)| i.background.is_none()) {
         // Splice the type-erased blob payload (set by lumen-assets in its extract pass) directly
@@ -648,10 +686,10 @@ pub fn transform_extracted_to_nodes(
             Some(blob) => Node::from((i, blob)),
             None => Node::from(i),
         };
-        entries.push((i.order, Arc::new(node)));
+        entries.push((leaf_key(i.order), Arc::new(node)));
     }
     for s in svgs.iter().filter(|s| s.background.is_none()) {
-        entries.push((s.order, Arc::new(Node::from(s))));
+        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
     }
     // Plugin-painted leaves. Query iteration follows archetype order, which
     // shifts as plugins add and drop components, so sort on a key that is
@@ -667,15 +705,15 @@ pub fn transform_extracted_to_nodes(
             .then_with(|| ae.cmp(be))
     });
     for (_, n) in native_leaves {
-        entries.push((n.order, Arc::new(Node::from(n))));
+        entries.push((leaf_key(n.order), Arc::new(Node::from(n))));
     }
-    // Overlay scrollbars: pushed LAST so the stable sort keeps them
-    // after any other leaf sharing their paint-order key, and `draws`
-    // order (track -> thumb) is preserved within the bar.
+    // Overlay scrollbars, keyed by `scrollbar_key` under the leaves that
+    // share their paint order; the stable sort keeps `draws` order
+    // (track -> thumb) within the bar.
     for sb in &scrollbars {
         for d in &sb.draws {
             entries.push((
-                sb.order,
+                scrollbar_key(sb.order),
                 Arc::new(Node::Rect {
                     bounds: Rect::new(d.origin, d.size),
                     brush: Brush::Solid(d.color),
@@ -687,80 +725,87 @@ pub fn transform_extracted_to_nodes(
     }
     entries.sort_by_key(|(k, _)| *k);
 
-    // Collect clip ranges sorted by start_order so the assembly loop can bracket leaves with the right
-    // push/pop sequence. A clip wraps every leaf whose order is in `[start_order, end_order]`.
-    let mut clip_ranges: Vec<(PaintOrder, PaintOrder, ClipShape)> = clips
+    // Collect the clip and opacity-group ranges sorted by where they open, so the assembly loop can
+    // bracket leaves with the right push/pop sequence. A range wraps every leaf whose key is in
+    // `[start, end]`. An opacity group opens at the drop-shadow slot under its element and a clip at
+    // the element itself, so an element that does both fades its clipped content; ranges that open
+    // together nest the longer one outside.
+    let mut ranges: Vec<(EntryOrder, EntryOrder, Bracket)> = clips
         .iter()
-        .map(|c| (c.start_order, c.end_order, ClipShape::from(c)))
+        .map(|c| {
+            (
+                leaf_key(c.start_order),
+                leaf_key(c.end_order),
+                Bracket::Clip(ClipShape::from(c)),
+            )
+        })
+        .chain(groups.iter().map(|g| {
+            (
+                leaf_key(g.start_order),
+                leaf_key(g.end_order),
+                Bracket::Opacity(g.alpha),
+            )
+        }))
         .collect();
-    clip_ranges.sort_by_key(|(s, _, _)| *s);
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
 
-    // Single pass: at each leaf, close any open clips whose end has passed, then open any clips whose
-    // start matches the leaf's order. The result is a flat children Vec carrying the painter-ordered leaves
-    // wrapped in Clip subtrees.
-    let mut next_clip = 0usize;
-    let mut open_clips: Vec<(PaintOrder, ClipShape, Vec<Arc<Node>>)> = Vec::new();
+    // Single pass: at each leaf, close any open ranges whose end has passed, then open any ranges whose
+    // start the leaf has reached. The result is a flat children Vec carrying the painter-ordered leaves
+    // wrapped in Clip and Opacity subtrees.
+    let mut next_range = 0usize;
+    let mut open: Vec<(EntryOrder, Bracket, Vec<Arc<Node>>)> = Vec::new();
     let mut roots: Vec<Arc<Node>> = Vec::new();
 
     fn flush_open(
-        open_clips: &mut Vec<(PaintOrder, ClipShape, Vec<Arc<Node>>)>,
+        open: &mut Vec<(EntryOrder, Bracket, Vec<Arc<Node>>)>,
         roots: &mut Vec<Arc<Node>>,
-        until_order: PaintOrder,
+        until: EntryOrder,
     ) {
-        while let Some((end, _, _)) = open_clips.last() {
-            if *end >= until_order {
+        while let Some((end, _, _)) = open.last() {
+            if *end >= until {
                 break;
             }
-            let (_, shape, children) = open_clips.pop().expect("checked above");
-            let container = Arc::new(Node::Container { children });
-            let clip_node = Arc::new(Node::Clip {
-                shape,
-                child: container,
-            });
-            push_into(open_clips, roots, clip_node);
+            let (_, bracket, children) = open.pop().expect("checked above");
+            push_into(open, roots, bracket.wrap(children));
         }
     }
 
     fn push_into(
-        open_clips: &mut [(PaintOrder, ClipShape, Vec<Arc<Node>>)],
+        open: &mut [(EntryOrder, Bracket, Vec<Arc<Node>>)],
         roots: &mut Vec<Arc<Node>>,
         child: Arc<Node>,
     ) {
-        if let Some(top) = open_clips.last_mut() {
+        if let Some(top) = open.last_mut() {
             top.2.push(child);
         } else {
             roots.push(child);
         }
     }
 
-    for (order, leaf) in entries {
-        // Close finished clips first.
-        flush_open(&mut open_clips, &mut roots, order);
-        // Open any new clips that start at/before this leaf.
-        while next_clip < clip_ranges.len() && clip_ranges[next_clip].0 <= order {
-            let (_, end, shape) = clip_ranges[next_clip];
-            next_clip += 1;
+    for (key, leaf) in entries {
+        // Close finished ranges first.
+        flush_open(&mut open, &mut roots, key);
+        // Open any new ranges that start at/before this leaf.
+        while next_range < ranges.len() && ranges[next_range].0 <= key {
+            let (_, end, bracket) = ranges[next_range];
+            next_range += 1;
             // A range that already ended holds no leaf of its own: an empty
-            // container clips nothing. Opening it here would wrap this leaf,
-            // which sits past the range, in a clip it is not inside.
-            if end < order {
+            // container clips or fades nothing. Opening it here would wrap this
+            // leaf, which sits past the range, in a bracket it is not inside.
+            if end < key {
                 continue;
             }
-            open_clips.push((end, shape, Vec::new()));
+            open.push((end, bracket, Vec::new()));
         }
-        push_into(&mut open_clips, &mut roots, leaf);
+        push_into(&mut open, &mut roots, leaf);
     }
-    // Drain any remaining clips.
-    while let Some((_, shape, children)) = open_clips.pop() {
-        let container = Arc::new(Node::Container { children });
-        let clip_node = Arc::new(Node::Clip {
-            shape,
-            child: container,
-        });
-        if let Some(top) = open_clips.last_mut() {
-            top.2.push(clip_node);
+    // Drain any remaining ranges.
+    while let Some((_, bracket, children)) = open.pop() {
+        let node = bracket.wrap(children);
+        if let Some(top) = open.last_mut() {
+            top.2.push(node);
         } else {
-            roots.push(clip_node);
+            roots.push(node);
         }
     }
 
@@ -1157,7 +1202,8 @@ mod tests {
     }
 
     /// The top-layer band lifts a plugin's leaf over all normal content, and
-    /// overlay scrollbars still paint last of all.
+    /// the overlay scrollbars of a container in that band paint after its
+    /// content.
     #[test]
     fn the_overlay_band_and_scrollbars_keep_their_places_around_a_native_leaf() {
         let mut world = bevy_ecs::world::World::new();
@@ -1175,7 +1221,7 @@ mod tests {
                 color: Color::rgba(0.0, 0.0, 0.0, 0.4),
                 radius: 3.0,
             }],
-            order: OVERLAY_ORDER_BASE + 2,
+            order: OVERLAY_ORDER_BASE + 3,
         });
 
         let children = children_of(&assemble(&mut world));
@@ -1183,6 +1229,51 @@ mod tests {
         assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
         assert!(matches!(children[1].as_ref(), Node::Native { .. }));
         assert!(matches!(children[2].as_ref(), Node::Rect { .. }));
+    }
+
+    /// An opacity group wraps its element's drop-shadow slot and its subtree in one `Opacity` node,
+    /// and leaves out a preceding container's scrollbar that shares the shadow slot.
+    #[test]
+    fn an_opacity_group_wraps_the_faded_subtree_and_nothing_else() {
+        let mut world = bevy_ecs::world::World::new();
+        // A scroll container at 2 with content up to 4; its bar sits at 5.
+        world.spawn(solid_rect(2, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+        world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+        world.spawn(ExtractedScrollbar {
+            draws: vec![ScrollbarDrawRect {
+                origin: Vec2::new(34.0, 0.0),
+                size: Vec2::new(6.0, 40.0),
+                color: Color::rgba(0.0, 0.0, 0.0, 0.4),
+                radius: 3.0,
+            }],
+            order: 5,
+        });
+        // The faded sibling at 6 with a child at 8, and one more element after it.
+        world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+        world.spawn(solid_rect(8, Vec2::ZERO, Vec2::new(20.0, 20.0)));
+        world.spawn(solid_rect(10, Vec2::ZERO, Vec2::new(10.0, 10.0)));
+        world.spawn(ExtractedOpacityGroup {
+            alpha: 0.3,
+            start_order: 5,
+            end_order: 8,
+        });
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(
+            children.len(),
+            5,
+            "two rects, the bar, the group, the last rect"
+        );
+        assert!(
+            matches!(children[2].as_ref(), Node::Rect { .. }),
+            "the bar stays outside"
+        );
+        let Node::Opacity { alpha, child } = children[3].as_ref() else {
+            panic!("expected the group, got {:?}", children[3]);
+        };
+        assert_eq!(*alpha, 0.3);
+        assert_eq!(children_of(child).len(), 2, "the element and its child");
+        assert!(matches!(children[4].as_ref(), Node::Rect { .. }));
     }
 
     #[test]
