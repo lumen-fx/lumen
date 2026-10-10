@@ -27,7 +27,7 @@ use crate::components::{
     BindChecked, BindDisabled, BindScroll, BindText, BindTextLabels, BindValue, Disabled, ImeState,
     SliderValue, TextContent, TextFormat, TextInput, Toggleable,
 };
-use crate::input::{Focused, Scroll, ScrollOffset};
+use crate::input::{EditCommitted, Focused, Scroll, ScrollOffset};
 use crate::property_store::{PropertyKey, PropertyStore, PropertyValue, push_external_property};
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
@@ -350,8 +350,11 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// text buffer, such as the `<dropdown>` header the popup hands focus back to on
 /// close, has no keystroke to protect and keeps tracking its signal. A write the
 /// gate held back is applied when the field loses focus: the blur re-reads every
-/// binding, so a submit handler that clears the signal clears the field once the
-/// user leaves it, rather than leaving the typed text on screen. When
+/// binding, so a handler that clears the signal clears the field once the user
+/// leaves it, rather than leaving the typed text on screen. Enter in a
+/// single-line field ends the edit too ([`EditCommitted`]): the field takes the
+/// write it held back, and any write after it, while it keeps focus, so a
+/// submit handler that clears the signal clears the field. When
 /// `apply_text_bindings` does overwrite an entity, any co-resident
 /// [`TextInput.cursor`] is clamped to `<= new_text.len()` so the cursor cannot
 /// point past the buffer end.
@@ -366,10 +369,12 @@ pub fn apply_text_bindings(
             Option<&BindTextLabels>,
             Option<&TextFormat>,
             Option<&Focused>,
+            Has<EditCommitted>,
         ),
         Without<ImeState>,
     >,
     new_binds: Query<(), Added<BindText>>,
+    committed: Query<(), Added<EditCommitted>>,
     mut blurred: bevy_ecs::lifecycle::RemovedComponents<Focused>,
     i18n: Option<Res<crate::i18n::AppI18n>>,
 ) {
@@ -404,13 +409,21 @@ pub fn apply_text_bindings(
         .filter(|&e| q.get(e).is_ok_and(|row| row.2.is_some()))
         .count()
         > 0;
-    if store.dirty_peek().is_empty() && new_binds.is_empty() && !locale_changed && !blur {
+    // The fifth is Enter committing a field's edit, which ends it the way a
+    // blur does while the field keeps focus.
+    if store.dirty_peek().is_empty()
+        && new_binds.is_empty()
+        && !locale_changed
+        && !blur
+        && committed.is_empty()
+    {
         return;
     }
-    for (bind, mut tc, input, labels, format, focused) in &mut q {
+    for (bind, mut tc, input, labels, format, focused, committed) in &mut q {
         // The edit in flight the gate protects: a focused text buffer, whose
-        // next keystroke would land on the text this write replaces.
-        if focused.is_some() && input.is_some() {
+        // next keystroke would land on the text this write replaces. Enter
+        // ended it on a committed one.
+        if focused.is_some() && input.is_some() && !committed {
             continue;
         }
         let key = PropertyKey::Global(Arc::<str>::from(bind.0.as_ref()));
@@ -443,6 +456,14 @@ pub fn apply_text_bindings(
             // boundary so the next route_ime_events / type_into_focused call
             // doesn't panic on `insert_str` / `drain`.
             if let Some(mut input) = input {
+                // A field that keeps focus puts the caret after the new
+                // text, as setting a focused field's value does in a
+                // browser (and `QLineEdit::setText`), so the next keystroke
+                // extends it.
+                if focused.is_some() {
+                    input.cursor = tc.0.len();
+                    input.selection_anchor = None;
+                }
                 if input.cursor > tc.0.len() {
                     input.cursor = tc.0.len();
                 }
@@ -1058,6 +1079,38 @@ mod tests {
             text_of(&world, input),
             "cleared",
             "the write held back while the field had focus was dropped"
+        );
+    }
+
+    #[test]
+    fn a_field_whose_edit_enter_committed_takes_writes_while_focused() {
+        let mut world = world_with_signal("name", "hello");
+        let input = world
+            .spawn((
+                BindText("name".into()),
+                TextContent("hello".into()),
+                TextInput {
+                    cursor: 5,
+                    ..Default::default()
+                },
+                Focused,
+            ))
+            .id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(apply_text_bindings);
+        write_signal(&mut world, "name", "cleared");
+        schedule.run(&mut world);
+        assert_eq!(text_of(&world, input), "hello", "the edit in flight wins");
+        world.resource_mut::<PropertyStore>().clear_dirty();
+        // Enter commits the edit; the write held back lands with nothing
+        // else written.
+        world.entity_mut(input).insert(crate::input::EditCommitted);
+        schedule.run(&mut world);
+        assert_eq!(text_of(&world, input), "cleared");
+        assert_eq!(
+            world.get::<TextInput>(input).unwrap().cursor,
+            7,
+            "the caret follows the new text"
         );
     }
 

@@ -20,6 +20,14 @@ use lumen_core::input::{
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
+/// The DOM event bindings a script makes with `node.on(...)` live in
+/// process-wide state that another app's script host clears as it loads, so
+/// the apps in this file run one at a time.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn build_and_tick(markup: &str, ticks: u32) -> App {
     let dir =
         std::env::temp_dir().join(format!("lumenc_control_reads_{}_{}", std::process::id(), {
@@ -117,6 +125,7 @@ const CONTROLS: &str = r##"<root padding="20" gap="10">
 /// `on_toggle` reads the bound signal after the flip has been written back.
 #[test]
 fn toggle_callback_reads_the_new_value() {
+    let _serial = serial();
     let mut app = build_and_tick(CONTROLS, 4);
     for expect in ["true", "false", "true", "false"] {
         click(&mut app, "t", glam::Vec2::ZERO);
@@ -133,6 +142,7 @@ fn toggle_callback_reads_the_new_value() {
 /// `on_slider` reads the bound signal after the move has been written back.
 #[test]
 fn slider_callback_reads_the_new_value() {
+    let _serial = serial();
     let mut app = build_and_tick(CONTROLS, 4);
     let s = find(&mut app, "s");
     let t = *app.world.get::<Transform>(s).unwrap();
@@ -153,6 +163,7 @@ fn slider_callback_reads_the_new_value() {
 /// `on_text_input` reads the bound signal with the keystroke in it.
 #[test]
 fn text_input_callback_reads_the_new_value() {
+    let _serial = serial();
     let mut app = build_and_tick(CONTROLS, 4);
     focus(&mut app, "name");
     let mut typed = String::new();
@@ -191,6 +202,7 @@ const SAVE_FORM: &str = r##"<root padding="20" gap="10">
 /// buttons so back-to-back clicks are not taken for a double click.
 #[test]
 fn click_right_after_typing_reads_the_typed_value() {
+    let _serial = serial();
     let mut app = build_and_tick(SAVE_FORM, 4);
     focus(&mut app, "amt");
     let mut want = String::new();
@@ -209,4 +221,58 @@ fn click_right_after_typing_reads_the_typed_value() {
             "the click read the input's signal from before the keystroke"
         );
     }
+}
+
+const SUBMIT_AND_CLEAR: &str = r##"<root padding="20" gap="10">
+  <input id="name" bind-text="name" width="300px" />
+  <script>
+    import "lumen.cdl";
+    fn on_ready() {
+        lumen::signal_set("name", "");
+        get_by_id("name").on("submit", "on_submit");
+    }
+    fn on_submit(ev: int) { lumen::signal_set("name", "cleared"); }
+    fn main() {}
+  </script>
+</root>"##;
+
+/// Enter ends the edit in a single-line field, so the write its submit
+/// handler makes reaches the field while it still has focus, and the next
+/// keystroke edits the new text.
+#[test]
+fn enter_lets_a_submit_handler_clear_the_field_it_came_from() {
+    let _serial = serial();
+    let mut app = build_and_tick(SUBMIT_AND_CLEAR, 4);
+    focus(&mut app, "name");
+    for ch in "hello".chars() {
+        key(&mut app, ch);
+        app.tick();
+    }
+    assert_eq!(text_of(&mut app, "name"), "hello");
+    app.world.write_message(KeyPressed {
+        key: Key::Named(lumen_core::input::NamedKey::Enter),
+        modifiers: Modifiers::default(),
+        repeat: false,
+    });
+    let e = find(&mut app, "name");
+    for _ in 0..4 {
+        app.tick();
+    }
+    assert!(
+        app.world.get::<lumen_core::input::Focused>(e).is_some(),
+        "the field keeps focus"
+    );
+    assert_eq!(
+        text_of(&mut app, "name"),
+        "cleared",
+        "the field took the write"
+    );
+    key(&mut app, '!');
+    app.tick();
+    app.tick();
+    assert_eq!(
+        text_of(&mut app, "name"),
+        "cleared!",
+        "typing resumes on the new text"
+    );
 }

@@ -170,11 +170,13 @@ An edit to a bound control is in its signal before any handler runs. `on_toggle`
 so does a Save button's `on_click` that fires right after the last keystroke.
 
 One value edits at a time: while an `<input>` has focus, a signal write does not
-overwrite what the user is typing. The field takes the signal's value when it
-loses focus, so a submit handler that clears the signal clears the field once
-the user leaves it. Only an edit in progress holds a write back; any other
-focused element, such as a `<dropdown>` header that the popup returns
-focus to, keeps showing whatever its signal says.
+overwrite what the user is typing. The edit ends when the field loses focus, or
+when Enter commits a single-line field, and the field then takes the signal's
+value. A submit handler that clears the signal therefore clears the field while
+it keeps focus, with the caret after the new text, and the next key starts a
+new edit. Only an edit in progress holds a write back; any other focused
+element, such as a `<dropdown>` header that the popup returns focus to, keeps
+showing whatever its signal says.
 
 ## Where to look things up
 

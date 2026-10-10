@@ -850,6 +850,15 @@ pub struct KeyReleased {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Focused;
 
+/// Marker on a focused single-line text field whose edit Enter committed, until
+/// the next key reaches it. A field with an edit in flight holds back signal
+/// writes so a script cannot clobber the typing; a committed field has none in
+/// flight, so [`crate::signals::apply_text_bindings`] gives it the signal's
+/// value while it keeps focus, and a submit handler that clears the signal
+/// clears the field.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct EditCommitted;
+
 /// Marker placed alongside [`Focused`] when focus arrived via the
 /// keyboard (Tab / Shift-Tab cycling), mirroring the CSS
 /// `:focus-visible` heuristic. Pointer-driven focus (click-to-focus)
