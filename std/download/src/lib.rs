@@ -53,6 +53,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod idle;
 pub mod transfer;
 
 #[doc(hidden)]
