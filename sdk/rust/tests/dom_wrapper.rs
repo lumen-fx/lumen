@@ -4,6 +4,10 @@
 //! compiler wrapper (so the injected parser is present) and reads back through
 //! the same `Node` handles a caller would use.
 
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
+
 use lumenui::dom::{self, Node};
 use lumenui::ecs_app::App as EcsApp;
 use lumenui::lumenc::build_headless_app;

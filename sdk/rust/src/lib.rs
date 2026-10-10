@@ -8,6 +8,7 @@
 //! ## Quickstart
 //!
 //! ```no_run
+//! # extern crate lumenui_engine as lumenui;
 //! use lumenui::prelude::*;
 //!
 //! fn main() -> lumenui::Result<()> {
@@ -72,6 +73,7 @@
 //! loads - you write one line:
 //!
 //! ```no_run
+//! # extern crate lumenui_engine as lumenui;
 //! # use lumenui::prelude::*;
 //! # fn demo() -> lumenui::Result<()> { lumenui::App::new().add_plugins(
 //! LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
@@ -134,6 +136,7 @@ pub use signal::Signals;
 /// The v1 builder surface - a terse facade over the ECS core for small apps.
 ///
 /// ```no_run
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::simple::App;
 /// use lumenui::prelude::*;
 ///

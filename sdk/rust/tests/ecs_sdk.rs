@@ -1,6 +1,10 @@
 //! Integration tests for the ECS-first SDK surface: plugin-group composition,
 //! bare-app assembly, and the typed `Signals` param.
 
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
+
 // `#[derive(Resource)]` expands to `bevy_ecs` paths, and the SDK's copy of the
 // crate is the one the engine library carries.
 use lumenui::bevy_ecs;

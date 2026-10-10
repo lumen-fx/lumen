@@ -8,6 +8,7 @@
 //! window configuration and is the value passed to [`App::add_plugins`]:
 //!
 //! ```no_run
+//! # extern crate lumenui_engine as lumenui;
 //! use lumenui::prelude::*;
 //!
 //! # fn demo() -> lumenui::Result<()> {
@@ -86,6 +87,7 @@ impl<P: Plugin + Send + 'static> BoxedPlugin for P {
 /// [`App::add_plugins`](crate::App::add_plugins):
 ///
 /// ```
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::prelude::*;
 /// use lumenui::plugins::{PluginGroup, PluginGroupBuilder};
 ///
@@ -424,6 +426,7 @@ impl Source {
 /// named files are embedded.
 ///
 /// ```no_run
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::prelude::*;
 ///
 /// # fn demo() -> lumenui::Result<()> {
@@ -440,6 +443,7 @@ impl Source {
 /// Markup-only form (no stylesheet):
 ///
 /// ```no_run
+/// # extern crate lumenui_engine as lumenui;
 /// # use lumenui::prelude::*;
 /// # fn demo() -> lumenui::Result<()> {
 /// # lumenui::App::new().add_plugins(
@@ -505,6 +509,7 @@ impl LumenDefaultPlugins {
     /// hot reload in `cargo run` and embedding in `cargo run --release`:
     ///
     /// ```no_run
+    /// # extern crate lumenui_engine as lumenui;
     /// # use lumenui::prelude::*;
     /// # fn demo() -> lumenui::Result<()> {
     /// # lumenui::App::new().add_plugins(

@@ -20,6 +20,7 @@ type ConfigureHook = Box<dyn FnOnce(&mut EcsApp) + Send + 'static>;
 /// This is a facade over [`AppBuilder`]; start with [`App::builder`]:
 ///
 /// ```no_run
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::simple::App;
 ///
 /// fn main() -> lumenui::Result<()> {
@@ -206,6 +207,7 @@ impl AppBuilder {
     /// namespace, or a doc string.
     ///
     /// ```no_run
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::simple::App;
     /// use lumenui::ScriptValue;
     ///
@@ -230,6 +232,7 @@ impl AppBuilder {
     /// the script that called it.
     ///
     /// ```no_run
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::simple::App;
     /// use lumenui::{ScriptFn, ScriptTy, ScriptValue};
     ///

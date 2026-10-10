@@ -382,11 +382,22 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   produced the static launcher and the files it read can be kept and replayed
   later. Build tooling: no archive carries it. See
   [Building Lumen](building-lumen.md) for what the kit it feeds is for.
-- **lumenui** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
-  node handles, and event-condition helpers. It reaches every other crate
-  through the engine's `sdk` re-export module rather than depending on them
-  again; a second path to `lumen-core` or `bevy_ecs` would put a second copy of
-  those types in an app, and two copies do not share a signal store.
+- **lumenui-engine** (in `sdk/rust`, library `lumenui_engine`): the Rust SDK's
+  code. Plugin groups, typed signals, safe node handles, and event-condition
+  helpers. It reaches every other crate through the engine's `sdk` re-export
+  module rather than depending on them again; a second path to `lumen-core` or
+  `bevy_ecs` would put a second copy of those types in an app, and two copies
+  do not share a signal store. Not published: each release compiles it once per
+  desktop target (`tools/release/lumenui-engine.py`, run by
+  `.github/workflows/lumenui-engine.yml`) and ships the compiled crates as
+  `lumenui-engine-<target>.tar.zst`.
+- **lumenui** (in `sdk/lumenui`): the Rust SDK as an app depends on it, and the
+  crate to publish on crates.io. It holds no code beyond `pub use lumenui_engine::*`; its
+  build script downloads the compiled set for its own version and target,
+  checks the manifest's rustc against the one building, and points rustc at the
+  set with `-L`, so an app compiles none of the engine. Outside the workspace,
+  with its own `[workspace]` table, because its manifest names no engine crate;
+  `LUMEN_ENGINE_ARTIFACTS` points it at a set built from a checkout.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
   and CSS.
 - **lumen-mcp**: in-app introspection. Per-tick snapshots, message rings,

@@ -18,8 +18,9 @@ rust-version.workspace = true
 description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
 # The engine ships as a shared library through the toolchain installer, not as
 # a crates.io package: the `lumen` name there belongs to an unrelated project.
-# The Rust-facing package is `lumenui` (sdk/rust), which depends on this crate
-# and re-exports it; the C-facing one is the installed liblumen.
+# The Rust-facing package is `lumenui` (sdk/lumenui), which re-exports the
+# SDK crate in sdk/rust from the release's prebuilt copy of it; the C-facing
+# one is the installed liblumen.
 publish = false
 
 [lib]

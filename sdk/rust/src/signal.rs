@@ -33,6 +33,7 @@ impl<T> Signal for T where T: TryFrom<PropertyValue> + Into<PropertyValue> + Clo
 /// Take it in any system to read and write signals with real Rust types:
 ///
 /// ```
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::prelude::*;
 ///
 /// fn bump(mut signals: Signals) {
@@ -79,6 +80,7 @@ impl Signals<'_> {
     /// Collapses the ubiquitous `let n = get_or(..); set(.., n + 1)` dance:
     ///
     /// ```
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::prelude::*;
     ///
     /// fn bump(mut signals: Signals) {
@@ -169,6 +171,7 @@ impl Signals<'_> {
 /// every `get`/`set`:
 ///
 /// ```
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::prelude::*;
 ///
 /// signals! {

@@ -27,6 +27,7 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 /// systems, then [`run`](Self::run).
 ///
 /// ```no_run
+/// # extern crate lumenui_engine as lumenui;
 /// use lumenui::prelude::*;
 ///
 /// fn bump(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
@@ -99,6 +100,7 @@ impl App {
     /// `.chain()`, `.after(..)`, `.run_if(..)`.
     ///
     /// ```
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::prelude::*;
     /// fn a() {}
     /// fn b() {}
@@ -165,6 +167,7 @@ impl App {
     /// overrides [`on_any_click`](Self::on_any_click) for its id.
     ///
     /// ```
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::prelude::*;
     ///
     /// # let app =
@@ -236,6 +239,7 @@ impl App {
     /// never spams observers.
     ///
     /// ```
+    /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::prelude::*;
     ///
     /// # let app =

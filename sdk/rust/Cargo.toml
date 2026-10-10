@@ -1,14 +1,25 @@
 [package]
-name = "lumenui"
+# The Rust SDK's code. Apps depend on `lumenui` (sdk/lumenui), which a release
+# publishes: that crate re-exports this one from a prebuilt copy, compiled once
+# per target by the release (tools/release/lumenui-engine.py), so an app links
+# the engine without compiling it. Not published itself.
+name = "lumenui-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Lumen UI framework Rust SDK: the single dependency for building and embedding Lumen apps in Rust."
+description = "Lumen UI framework Rust SDK, the engine side: what the published lumenui crate re-exports."
 keywords = ["ui", "gui", "framework", "desktop", "sdk"]
 categories = ["gui"]
+publish = false
+
+[lib]
+# Not `lumenui`: the published crate of that name says `extern crate
+# lumenui_engine`, and a crate cannot name a dependency that shares its own
+# library name.
+name = "lumenui_engine"
 
 # The engine: everything the SDK is written against - the runtime, the ECS
 # app, the DOM surface, the widget trait, `bevy_ecs` itself - is reached

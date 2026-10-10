@@ -9,8 +9,12 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumenui --example systems
+//! cargo run -p lumenui-engine --example systems
 //! ```
+
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
 
 use lumenui::prelude::*;
 

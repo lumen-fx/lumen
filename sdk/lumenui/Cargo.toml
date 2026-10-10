@@ -1,0 +1,53 @@
+# The Rust SDK as an app depends on it. The code is the engine crate in
+# sdk/rust (`lumenui-engine`); this crate re-exports it from a prebuilt copy
+# the release compiled for each target, which build.rs downloads by this
+# crate's version and points the compiler at. An app that depends on
+# `lumenui` compiles this crate and its own code, and nothing of the engine.
+#
+# Outside the workspace, for the reason it can be published: the manifest is
+# the one crates.io gets, and it names no engine crate, because none is on
+# crates.io. Its own `[workspace]` table answers a tool that resolves this
+# manifest on its own instead of searching upward. Safe only because nothing
+# above this directory is a workspace member; inside a member's subtree the
+# two roots would collide. `version` and the rest are spelled out because a
+# package outside the workspace cannot inherit them; bump-version.py keeps
+# the version in step.
+[workspace]
+
+[package]
+name = "lumenui"
+version = "0.0.10"
+edition = "2024"
+license = "MPL-2.0"
+authors = ["Lumen contributors"]
+repository = "https://github.com/lumen-fx/lumen"
+homepage = "https://lumenfx.dev"
+documentation = "https://docs.lumenfx.dev/reference/ffi/#rust-sdk"
+rust-version = "1.88"
+description = "Lumen UI framework Rust SDK: an ECS-first app surface over the Lumen engine, linked from the release's prebuilt engine."
+keywords = ["ui", "gui", "framework", "desktop", "sdk"]
+categories = ["gui"]
+# One copy per build: two would point the compiler at two engine sets, and the
+# same crate found twice is an error rather than a choice.
+links = "lumenui-engine"
+build = "build.rs"
+include = ["build.rs", "src/**", "Cargo.toml"]
+
+[lib]
+name = "lumenui"
+
+[build-dependencies]
+# The download: the release's checksums, the target's engine manifest, and the
+# archive, verified before anything is unpacked.
+ureq = "3"
+sha2 = "0.10"
+tar = "0.4"
+# A pure-Rust zstd decoder, so building an app needs no C compiler for it.
+ruzstd = "0.8"
+serde_json = "1"
+
+[package.metadata.docs.rs]
+# docs.rs builds without network access, so build.rs fetches nothing there and
+# the crate documents itself without the engine; the API reference lives at
+# api.lumenfx.dev.
+targets = ["x86_64-unknown-linux-gnu"]
