@@ -2,13 +2,14 @@
 //!
 //! The engine has no download code; this crate is the whole capability.
 //! Install [`DownloadPlugin`] and the app gains the `download` namespace, in
-//! every host. It holds one function:
+//! every host. It holds two functions:
 //!
 //! ```text
 //! download::to_file(url, path, tag, checksum) -> bool
+//! download::cancel(tag) -> bool
 //! ```
 //!
-//! Rhai and candela spell the call `download::to_file(..)`; Lua spells it
+//! Rhai and candela spell the calls `download::to_file(..)`; Lua spells them
 //! `download.to_file(..)`. Without the module none of it exists: a script
 //! calling `download::to_file` gets its host's ordinary unknown-function
 //! error.
@@ -17,7 +18,8 @@
 //! reports through three events keyed by the tag you passed:
 //! `download_progress`, `download_done`, and `download_error`. A per-tag
 //! `on("download_done", tag, fn)` registration wins over the
-//! `on_download_done(tag, path)` fallback.
+//! `on_download_done(tag, path)` fallback. `cancel` stops a running transfer,
+//! frees its tag, and reports `download_error` with the message `cancelled`.
 //!
 //! Use this rather than `fetch()` when the answer is a file: a large or binary
 //! body, a transfer you want progress for, a payload you can verify. `fetch()`
@@ -53,8 +55,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod idle;
 pub mod transfer;
+mod wait;
 
 #[doc(hidden)]
 pub mod testkit;

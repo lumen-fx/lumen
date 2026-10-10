@@ -397,6 +397,74 @@ fn main() {{}}
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `download::cancel` stops a transfer stuck on a quiet server: the tag hears
+/// `cancelled` through `download_error`, and both the tag and its concurrency
+/// slot are free at once, so the error handler can start the next transfer
+/// under the same tag with a limit of one. Cancelling a tag with nothing
+/// running answers false.
+#[test]
+fn a_cancelled_download_frees_its_tag_and_its_slot() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let server = TestServer::start();
+    let dir = app_dir("cancel");
+    let stall = server.url("/stall");
+    let fixed = server.url("/fixed");
+    let mut app = build_app(
+        &dir,
+        &format!(
+            r#"import "lumen.cdl";
+
+fn on_start() {{
+    lumen::signal_set_bool("idle_cancel", download::cancel("nothing"));
+    lumen::signal_set_bool("started", download::to_file("{stall}", "big.bin", "big", ""));
+    lumen::set_timeout("stop", 200);
+}}
+
+fn on_timer(name: string) {{ lumen::signal_set_bool("cancelled", download::cancel("big")); }}
+
+fn on_download_error(tag: string, message: string) {{
+    lumen::signal_set("error", tag + ":" + message);
+    lumen::signal_set_bool("retry", download::to_file("{fixed}", "small.bin", "big", ""));
+}}
+
+fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", tag); }}
+
+fn on_download_progress(tag: string, received: int, total: int) {{}}
+
+fn main() {{}}
+"#
+        ),
+        Some(DownloadPlugin::with_limits(Limits::default(), 1)),
+    );
+
+    assert_eq!(signal(&app, "idle_cancel").as_deref(), Some("false"));
+    assert_eq!(signal(&app, "started").as_deref(), Some("true"));
+    let started = std::time::Instant::now();
+    assert!(
+        tick_until(&mut app, 30.0, |app| signal(app, "done").is_some()),
+        "the retry under the freed tag finishes; error={:?} retry={:?}",
+        signal(&app, "error"),
+        signal(&app, "retry")
+    );
+    assert!(
+        started.elapsed() < lumen_download::testkit::STALL,
+        "the stalled transfer was waited out rather than cancelled"
+    );
+    assert_eq!(signal(&app, "cancelled").as_deref(), Some("true"));
+    assert_eq!(signal(&app, "error").as_deref(), Some("big:cancelled"));
+    assert_eq!(signal(&app, "retry").as_deref(), Some("true"));
+    assert_eq!(
+        std::fs::read(dir.join("small.bin")).expect("the file"),
+        BODY
+    );
+    assert!(
+        !dir.join("big.bin").exists(),
+        "the cancelled transfer wrote nothing"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A checksum the module cannot read is that tag's error, and no request is
 /// made at all.
 #[test]
