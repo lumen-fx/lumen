@@ -26,10 +26,10 @@ Each template is also a repository of its own under the
 the templates are maintained, and you can clone one, or use it as a GitHub
 template repository, to start an app without the CLI. Installing Lumen brings a
 copy of every one with it, which is what `lumenc new` writes, so scaffolding
-needs no network. Each template repository publishes a release named for the
-Lumen release it is for, so the `v0.0.6` release of `lumen-fx/counter` is the
-counter that Lumen 0.0.6 scaffolds. A fix to a template lands in its repository
-and arrives with the next Lumen release.
+needs no network. A Lumen release packages each template as its repository's
+`main` branch stood when the release was built, and the release notes name the
+commit of each one. A fix to a template lands on its repository's `main` and
+arrives with the next Lumen release.
 
 ## blank
 

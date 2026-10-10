@@ -21,8 +21,20 @@ name: release
 # an installed copy is the only kind that checks for updates. See
 # tools/release/msi/lumen.wxs.
 #
-# Triggers on any vX.Y.Z tag push. The repository starts with no releases
-# and no tags, so the first run of this workflow is also the first release.
+# A release starts from one click: run this workflow by hand (the Actions tab,
+# or `gh workflow run release -f version=X.Y.Z`) on main. That run is the cut:
+# it reads the version from the workspace Cargo.toml, refuses unless the typed
+# version is the same one, refuses a version that is already tagged or is not
+# newer than the last release, regenerates THIRD-PARTY-LICENSES and commits it
+# to main when it changed, waits for `ci` to pass on the commit it is about to
+# tag, and pushes the tag. Nothing is built in that run.
+#
+# The tag push starts this workflow a second time, and that run is the
+# release: everything from the version guard down. The tag goes over SSH with
+# the write deploy key for the reason the bump job gives below: a push made
+# with GITHUB_TOKEN raises no workflow events, so a tag pushed that way would
+# start nothing.
+#
 # nightly.yml builds the same artifacts every night and publishes them under a
 # rolling `nightly` tag; that tag does not match the pattern below, so a
 # nightly never cuts a release, moves the version on main, or reaches any of
@@ -41,39 +53,319 @@ name: release
 #
 # The last job sets the workspace version on `main` to the next patch, files
 # the migration notes the release shipped with under its own version, and
-# pushes both there, so a tag push is the whole release: nothing is left to
+# pushes both there, so the click is the whole release: nothing is left to
 # merge and nothing is left to type.
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          The version to release, typed back as the workspace Cargo.toml on
+          main carries it (for example 0.0.10). The run stops if it differs.
+        type: string
+        required: true
 
 # contents: write is granted to the one job whose token writes to the
 # repository, the one that publishes the release, and packages: write to the
-# one that pushes the server image. The bump job writes to `main` over SSH
-# with a deploy key instead, for the reasons its own comment gives, so its
-# token stays read-only, and build-toolchain.yml declares its own read-only
-# token for the builds.
+# one that pushes the server image. The license, tag and bump jobs write to
+# the repository over SSH with a deploy key instead, for the reasons the bump
+# job's comment gives, so their tokens stay read-only; the cut's jobs add
+# actions: read to see `ci` runs. build-toolchain.yml declares its own
+# read-only token for the builds.
 permissions:
   contents: read
 
 # Unlike ci.yml, a release in progress is never cancelled by a follow-up
 # push to the same tag (tags do not move) or a different tag (different
 # group). This only matters if the same tag is deleted and re-pushed.
+#
+# Every cut shares one group, whatever branch it was started from, so two
+# clicks cannot race each other to the tag: the second waits for the first and
+# then finds the tag already there.
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && 'release-cut' || format('release-{0}', github.ref) }}
   cancel-in-progress: false
 
 jobs:
+  # The first of the three jobs a click runs. Everything it refuses, it refuses
+  # before anything is written anywhere, and each refusal says what to fix.
+  #
+  # The commit being released is the one main was at when the button was
+  # pressed (github.sha), not whatever main is by the time a job reads it. The
+  # license commit below lands only as a fast-forward of that commit, and the
+  # tag lands only on that commit or on the license commit, so a merge to main
+  # during the run is never released by accident.
+  preflight:
+    name: check what is being released
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Check the version
+        id: version
+        env:
+          TYPED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != refs/heads/main ]; then
+            echo "release.yml: a release is cut from main, and this run was started on ${GITHUB_REF}." >&2
+            echo "Start it again with main selected as the branch." >&2
+            exit 1
+          fi
+
+          version="$(awk -F'"' '
+            /^\[workspace\.package\]/ { in_section = 1; next }
+            /^\[/                     { in_section = 0 }
+            in_section && /^version[[:space:]]*=/ { print $2; exit }
+          ' Cargo.toml)"
+          if ! printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "release.yml: the [workspace.package] version in Cargo.toml is '${version}', not X.Y.Z." >&2
+            exit 1
+          fi
+
+          # The typed version is the confirmation. A checkbox is ticked out of
+          # habit; typing the number proves the person pressing the button
+          # knows which release they are about to publish, and catches the
+          # case where main is not at the version they expect.
+          if [ "${TYPED#v}" != "$version" ]; then
+            echo "release.yml: you typed '${TYPED}', and main's Cargo.toml says ${version}." >&2
+            echo "Nothing was released. Start the run again and type ${version}, or move" >&2
+            echo "main to the version you meant with tools/release/bump-version.py first." >&2
+            exit 1
+          fi
+
+          tag="v${version}"
+          tags="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's|.*refs/tags/||')"
+          if printf '%s\n' "$tags" | grep -qx "$tag"; then
+            echo "release.yml: ${tag} is already tagged, so it is already released or being released." >&2
+            echo "If that release only partly published, re-run the failed jobs of its own run" >&2
+            echo "rather than cutting it again; tools/release/release-checklist.md says how." >&2
+            exit 1
+          fi
+          newest="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$newest" "$tag" | sort -V | tail -n 1)" != "$tag" ]; then
+            echo "release.yml: ${tag} is not newer than the last release, ${newest}." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Cutting ${tag}"
+            echo
+            echo "From main at \`${GITHUB_SHA}\`${newest:+, the release after ${newest}}."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A commit whose run already failed is not going to be released, so say
+      # so now rather than after the license commit and a two-hour wait. A run
+      # still going is waited for by the tag job.
+      - name: Check ci on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/main-ci.sh check "${GITHUB_SHA}"
+
+      # The migration notes in this tree are the release's migration guide,
+      # and the release job turns their headings into the top of the release
+      # body. Rendering that section now, from a tag that exists only on this
+      # runner, stops a malformed note before the tag rather than after it,
+      # and puts the section on this run's summary to read.
+      - name: Check the migration notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+          git tag "v${VERSION}" "${GITHUB_SHA}"
+          tools/release/migration-notes.sh "v${VERSION}" "${RUNNER_TEMP}/migration-notes.md"
+          git tag -d "v${VERSION}" >/dev/null
+          if [ -s "${RUNNER_TEMP}/migration-notes.md" ]; then
+            { echo; cat "${RUNNER_TEMP}/migration-notes.md"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no migration notes for v${VERSION}"
+          fi
+
+  # Every archive, the MSI, and every app `lumenc package` writes carries
+  # THIRD-PARTY-LICENSES, so a stale one ships the wrong license text. The file
+  # is a function of Cargo.lock and the pinned cargo-about, so it is
+  # regenerated here and, when it changed, committed straight to main the way
+  # the bump job commits: over SSH with the write deploy key, for the same two
+  # reasons that job gives. The commit is a fast-forward of the commit the
+  # click released and nothing else, so a main that moved meanwhile refuses
+  # it and the run stops.
+  #
+  # A license cargo-about does not recognise stops the job. Read it and add it
+  # to the `accepted` list in about.toml, rather than dropping the crate.
+  licenses:
+    name: regenerate the third-party licenses
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          lfs: false
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: Regenerate THIRD-PARTY-LICENSES
+        run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES
+
+      - name: Commit it to main if it changed
+        id: commit
+        env:
+          BASE: ${{ needs.preflight.outputs.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          DEPLOY_KEY: ${{ secrets.REPIN_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "THIRD-PARTY-LICENSES is current"
+            echo "sha=${BASE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only)"
+          if [ "$changed" != THIRD-PARTY-LICENSES ]; then
+            echo "release.yml: regenerating the licenses changed more than THIRD-PARTY-LICENSES:" >&2
+            printf '%s\n' "$changed" | sed 's/^/  /' >&2
+            exit 1
+          fi
+          if [ -z "${DEPLOY_KEY}" ]; then
+            echo "release.yml: THIRD-PARTY-LICENSES is out of date, and there is no REPIN_DEPLOY_KEY" >&2
+            echo "to push the regenerated file to main with. Restore the secret and start again." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "chore(license): bring THIRD-PARTY-LICENSES up to date for v${VERSION}"
+
+          key_file="$(mktemp)"
+          trap 'rm -f "${key_file}"' EXIT
+          printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          if ! git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
+            echo "release.yml: the license commit could not be pushed to main. Either main" >&2
+            echo "moved after the click, which starting the release again answers, or the" >&2
+            echo "deploy key no longer bypasses the ruleset on main." >&2
+            exit 1
+          fi
+          sha="$(git rev-parse HEAD)"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "::notice::THIRD-PARTY-LICENSES updated on main at ${sha}"
+
+  # The tag goes only on a commit whose `ci` run on main passed: the commit the
+  # click released, or the license commit on top of it. A license commit
+  # starts its own run, and this waits for it.
+  #
+  # The tag is pushed over SSH with the deploy key. GITHUB_TOKEN would create
+  # it just as well, but GitHub starts no workflow for anything that token
+  # pushes, so the release run below would never begin.
+  tag:
+    name: tag the release
+    needs: [preflight, licenses]
+    runs-on: ubuntu-latest
+    # The ci wait below gives up after two hours.
+    timeout-minutes: 140
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.licenses.outputs.sha }}
+          lfs: false
+
+      - name: Wait for ci on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.licenses.outputs.sha }}
+        run: tools/release/main-ci.sh wait "${SHA}" 120
+
+      - name: Push the tag
+        env:
+          SHA: ${{ needs.licenses.outputs.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          DEPLOY_KEY: ${{ secrets.REPIN_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if [ -z "${DEPLOY_KEY}" ]; then
+            echo "release.yml: no REPIN_DEPLOY_KEY to push ${tag} with. A tag pushed with the" >&2
+            echo "workflow's own token would start no release run. Restore the secret and" >&2
+            echo "start again." >&2
+            exit 1
+          fi
+          key_file="$(mktemp)"
+          trap 'rm -f "${key_file}"' EXIT
+          printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          # Asked again here, because a tag pushed by hand during the wait
+          # would otherwise be overwritten or collide.
+          if git ls-remote --tags --refs origin "refs/tags/${tag}" | grep -q .; then
+            echo "release.yml: ${tag} appeared while this run was waiting; nothing was pushed." >&2
+            exit 1
+          fi
+          git tag "${tag}" "${SHA}"
+          git push "git@github.com:${GITHUB_REPOSITORY}.git" "refs/tags/${tag}"
+          echo "::notice::pushed ${tag} at ${SHA}"
+
+      # The tag push is what starts the release, so a run that never appears
+      # is the one failure that would otherwise be silent.
+      - name: Find the release run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          for _ in $(seq 1 30); do
+            url="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?event=push&branch=${tag}&per_page=1" \
+                     --jq '.workflow_runs[0].html_url // empty')"
+            if [ -n "$url" ]; then
+              echo "the ${tag} release is building: ${url}"
+              echo "The ${tag} release is building: ${url}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "release.yml: ${tag} is pushed, but no release run started for it within five" >&2
+          echo "minutes. Look for it in the Actions tab; if there is none, the tag push raised" >&2
+          echo "no event, and tools/release/release-checklist.md says how to recover." >&2
+          exit 1
+
   # The tag is the version, and three separate things read it: the MSI's
   # ProductVersion, the receipt the MSI installs, and CARGO_PKG_VERSION baked
   # into lumenc by the workspace Cargo.toml. Nothing downstream reconciles
   # them, so a tag that disagrees with Cargo.toml ships an installer whose
   # ARP entry, receipt, and `lumenc --version` all say different things. Catch
   # it before anything is built.
+  #
+  # This is the first job of the run the tag push starts, and the only one the
+  # rest of the release depends on directly, so gating it on the event keeps
+  # every job below out of the run a click starts.
   version:
     name: tag matches the workspace version
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -149,13 +441,34 @@ jobs:
       # For a plain vX.Y.Z tag, the migration notes in the tag's tree become
       # the top of the release body: the release they migrate from, a link to
       # the guide, and one line per note. The earlier release tags are fetched so the script can name
-      # the one this migrates from. With no notes the file is empty and the
-      # body is GitHub's generated notes alone; with notes, GitHub puts the
-      # file's text above the generated notes.
+      # the one this migrates from. With no notes the section is empty. GitHub
+      # puts the file's text, this section and the template list below it,
+      # above its own generated notes.
       - name: Write the migration notes
         run: |
           git fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
           tools/release/migration-notes.sh "${{ github.ref_name }}" "${RUNNER_TEMP}/migration-notes.md"
+
+      # Then the commit of every template the toolchain packaged, since a
+      # template is fetched from its repository's main and carries no tag of
+      # its own for this release.
+      - name: Name the template commits
+        env:
+          REVS: ${{ needs.build.outputs.templates }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/migration-notes.md"
+          if [ -z "${REVS}" ]; then
+            echo "::warning::the build named no template commits, so the release body names none"
+            exit 0
+          fi
+          if [ -s "$notes" ]; then echo >> "$notes"; fi
+          printf "## Templates\n\n\`lumenc new\` scaffolds these commits of the template repositories:\n\n" >> "$notes"
+          tr ' ' '\n' <<< "${REVS}" | while IFS='=' read -r name sha; do
+            printf -- "- [\`%s\` at \`%s\`](https://github.com/%s/%s/tree/%s)\n" \
+              "${name}" "${sha:0:7}" "${OWNER}" "${name}" "${sha}" >> "$notes"
+          done
 
       - name: Create the release and upload assets
         env:
@@ -233,10 +546,10 @@ jobs:
       channel: release
       version: ${{ needs.version.outputs.version }}
 
-  # Cutting a release is a tag push and nothing else, so the version main
+  # Cutting a release is one click and nothing else, so the version main
   # carries has to move afterwards on its own. This moves it, by committing
   # straight to main, which leaves a release asking nothing of anyone after the
-  # tag.
+  # click.
   #
   # The push goes over SSH with the write deploy key, not with GITHUB_TOKEN,
   # for two separate reasons. A push authenticated by GITHUB_TOKEN raises no
