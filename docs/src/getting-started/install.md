@@ -11,7 +11,9 @@ Every release install also carries `lumen-server`, the server that runs a
 [server-rendered site](../guides/server-rendering.md#running-in-production) in
 production and the one `lumenc web --serve` starts. It is published as a
 container image too, `ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and
-aarch64.
+aarch64. It also carries `lumen-lsp`, the
+[language server](../reference/tooling.md#language-server) the editor
+integrations start; they find it beside `lumenc`.
 
 ## Linux and macOS
 
@@ -134,7 +136,7 @@ brew install lumen
 ```
 
 The formula unpacks the same release archive the script installs, so `lumenc`,
-the runtime library, the launcher, `lumen-server`, the candela standard
+the runtime library, the launcher, `lumen-server`, `lumen-lsp`, the candela standard
 library, the app templates, and the web halves of the first-party
 [modules](../reference/lumen-toml.md#dependencies) all come with it. `brew upgrade lumen` moves you
 to a newer release.
@@ -153,7 +155,7 @@ https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-aarch64
 ```
 
 It installs under your user profile, so it needs no administrator rights, and
-it adds `lumenc` and `lumen-server` to your user `PATH`. Open a new terminal
+it adds `lumenc`, `lumen-server`, and `lumen-lsp` to your user `PATH`. Open a new terminal
 afterwards. Remove it from Settings > Installed apps, which also removes the
 `PATH` entry.
 
@@ -176,7 +178,7 @@ scoop install lumen
 ```
 
 Scoop installs the portable zip rather than the MSI, so the two never end up
-side by side. It puts `lumenc` and `lumen-server` on your `PATH`.
+side by side. It puts `lumenc`, `lumen-server`, and `lumen-lsp` on your `PATH`.
 `scoop update lumen` moves versions and `scoop uninstall lumen` removes it.
 Like the zip, it carries no [runtime modules](#runtime-modules) and does not
 check for updates on its own.
@@ -210,7 +212,9 @@ need a release install.
 
 Nor does it build `lumen-server`, which `lumenc web --serve` runs. Build it
 from a Lumen checkout of the same version with `cargo build --release -p
-lumen-server`, and point `LUMEN_SERVER` at the binary.
+lumen-server`, and point `LUMEN_SERVER` at the binary. The language server is
+the same: build it with `cargo build --release -p lumen-lsp` and put it beside
+`lumenc` or on your `PATH`.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the rest yourself. `lumenc run`, `build`, and `check` work without the

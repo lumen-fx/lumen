@@ -18,9 +18,11 @@
 # macOS reports the path used to launch, not the resolved one, and the library
 # would go missing.
 #
-# lumen-server, the production server for server-rendered sites, needs nothing
-# beside it; it gets the same exec script so both commands are installed the
-# same way. `lumenc web --serve` finds it beside lumenc in libexec.
+# lumen-server, the production server for server-rendered sites, and
+# lumen-lsp, the language server the editor integrations start, need nothing
+# beside them; they get the same exec script so every command is installed the
+# same way. `lumenc web --serve` finds the server beside lumenc in libexec, and
+# an editor finds the language server on PATH.
 #
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on
@@ -70,6 +72,7 @@ class Lumen < Formula
     libexec.install Dir["bin/*"]
     bin.write_exec_script libexec/"lumenc"
     bin.write_exec_script libexec/"lumen-server"
+    bin.write_exec_script libexec/"lumen-lsp"
   end
 
   test do

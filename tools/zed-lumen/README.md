@@ -19,14 +19,12 @@ directory: open the Extensions view, choose "Install Dev Extension", and pick
 `tools/zed-lumen`. Zed clones the grammar, compiles it, and builds the
 extension itself, so a Rust toolchain and a C compiler have to be available.
 
-`lumen-lsp` has to be on `$PATH`:
-
-```sh
-cargo build --release -p lumen-lsp
-cp target/release/lumen-lsp ~/.local/bin/
-```
-
-To use a server elsewhere, point Zed at it in settings:
+The language server, `lumen-lsp`, ships with the Lumen toolchain beside
+`lumenc`. The extension takes `lumen-lsp` from `$PATH`, or from the directory
+holding the `lumenc` on `$PATH`, so an
+[installed toolchain](https://docs.lumenfx.dev/getting-started/install/) is all
+it needs. To use a server elsewhere, such as one built from a Lumen checkout,
+point Zed at it in settings:
 
 ```json
 {

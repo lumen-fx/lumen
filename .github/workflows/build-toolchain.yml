@@ -5,7 +5,8 @@ name: build-toolchain
 # and, for Windows, lumen-<target>.zip as the portable archive plus
 # lumen-<target>.msi as the install channel. Every one of them holds
 # bin/lumenc, the liblumen shared library, bin/lumen-launcher,
-# bin/lumen-server (the production server for server-rendered sites), and
+# bin/lumen-server (the production server for server-rendered sites),
+# bin/lumen-lsp (the language server the editor integrations start), and
 # the three trees lumenc reads from beside itself: the candela standard
 # library in bin/libs, the `lumenc new` templates in bin/templates, and the
 # web halves of the first-party modules in bin/modules. The Unix
@@ -340,6 +341,14 @@ jobs:
       - name: Build the production server
         run: cargo build --release -p lumen-server
 
+      # The language server the editor integrations start. It links lumenc's
+      # parser front-end and nothing of the runtime, so it is a standalone
+      # executable like the server above and is built on its own for the same
+      # reason: a shared invocation would unify its features with another
+      # package's. The editor integrations look for it beside lumenc.
+      - name: Build the language server
+        run: cargo build --release -p lumen-lsp
+
       # The `lumenc new` templates. Each is maintained in a repository of its
       # own under lumen-fx and published there as an archive of its tree;
       # Lumen keeps no copy of any of them, so the copy the toolchain ships is
@@ -363,6 +372,7 @@ jobs:
           cp "target/$triple/release/${{ matrix.libname }}" dist/bin/
           cp target/release/lumen-launcher dist/bin/
           cp target/release/lumen-server dist/bin/
+          cp target/release/lumen-lsp dist/bin/
           # The shared engine the two binaries above link. cargo writes a
           # dependency's dylib into deps/ (unhashed - a shared library's file
           # name is its identity); tolerate either layout.
@@ -506,6 +516,7 @@ jobs:
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Copy-Item target\release\lumen-launcher.exe dist\bin\
           Copy-Item target\release\lumen-server.exe dist\bin\
+          Copy-Item target\release\lumen-lsp.exe dist\bin\
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
           Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES dist\

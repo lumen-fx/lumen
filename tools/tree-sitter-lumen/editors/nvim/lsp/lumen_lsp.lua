@@ -6,9 +6,9 @@
 --- scripts. It calls lumenc's own parser, so the editor and the compiler
 --- agree on what counts as valid.
 ---
---- Install it with `cargo install --git https://github.com/lumen-fx/lumen
---- lumen-lsp`, or build it from a checkout with `cargo build --release -p
---- lumen-lsp`.
+--- It ships with the Lumen toolchain beside `lumenc`, so installing Lumen
+--- puts it on $PATH; or build it from a checkout with `cargo build --release
+--- -p lumen-lsp`.
 
 ---@type vim.lsp.Config
 return {

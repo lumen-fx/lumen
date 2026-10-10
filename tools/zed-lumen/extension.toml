@@ -1,7 +1,7 @@
 id = "lumen"
 name = "Lumen"
 description = "Lumen markup (.lmn): syntax highlighting and the lumen-lsp language server."
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["Lumen contributors"]
 repository = "https://github.com/lumen-fx/lumen"

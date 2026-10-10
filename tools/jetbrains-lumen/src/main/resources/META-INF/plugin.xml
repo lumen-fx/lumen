@@ -9,11 +9,11 @@
         <p>
         Syntax highlighting ships with the plugin. Diagnostics, completion, hover,
         signature help, navigation, find usages, rename, structure view, and
-        formatting come from <code>lumen-lsp</code>, the language server built from
-        the Lumen repository, so the editor and the compiler agree on what is valid.
-        Build the server with <code>cargo build --release -p lumen-lsp</code>, then
-        put it on <code>PATH</code> or set its path in Settings under
-        Languages &amp; Frameworks | Lumen.
+        formatting come from <code>lumen-lsp</code>, the language server that ships
+        with the Lumen toolchain beside <code>lumenc</code>, so the editor and the
+        compiler agree on what is valid. The plugin finds it in an installed
+        toolchain or on <code>PATH</code>; set its path in Settings under
+        Languages &amp; Frameworks | Lumen to use another copy.
         ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
