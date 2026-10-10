@@ -584,8 +584,9 @@ A `native_fn` closure always succeeds, as an exposed `LumenFn` does.
 
 Both land in the same registry as `lumen_app_expose` and as anything a plugin
 registers. A plugin is the third way in, and it goes through `add_plugin`: that
-installs it before the script hosts load, which is the window a registration has
-to arrive in. See [Writing plugins](../contributing/plugins.md) for what a plugin
+installs it before the markup is parsed and before the script hosts load, which
+is the window a registration has to arrive in, and the one a widget plugin's
+tag has to arrive in for the markup to use it. See [Writing plugins](../contributing/plugins.md) for what a plugin
 can expose and how each language spells a namespace.
 
 The builder has no hook into one language's engine: `AppBuilder::rhai_extension`
