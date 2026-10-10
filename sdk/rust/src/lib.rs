@@ -117,6 +117,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+// The SDK under the name `#[derive(Widget)]` reaches it by from inside this
+// package (its examples and tests name it so already).
+extern crate self as lumenui_engine;
+
 pub mod app;
 pub mod conditions;
 pub mod dom;

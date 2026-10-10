@@ -4676,6 +4676,7 @@ dependencies = [
  "bevy_ecs",
  "lumen-core",
  "lumen-widget",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 3.0.3",

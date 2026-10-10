@@ -19,6 +19,10 @@ proc-macro = true
 syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+# Reads the manifest of the crate being compiled, to tell an app on the Rust
+# SDK (which must reach the engine crates through `lumenui`) from an engine
+# crate that depends on them directly.
+proc-macro-crate = "3"
 
 [dev-dependencies]
 lumen-widget = { workspace = true }
