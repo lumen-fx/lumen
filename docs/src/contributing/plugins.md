@@ -570,9 +570,13 @@ A plugin that adds a markup tag registers it with the widget registry, which
 the markup parser consults after its built-in tag table misses.
 `#[derive(Widget)]` generates that registration together with a companion
 plugin, so installing the plugin is enough. Registration has to happen before
-the app's markup is parsed. Suppressing the generated plugin also suppresses
-the registration, in which case call the generated `register` function
-yourself.
+the app's markup is parsed, and a plugin installed through
+`RunOptions::with_plugin` or the Rust SDK's `App::add_plugin` builds before the
+parse. Suppressing the generated plugin also suppresses the registration, in
+which case call the generated `register` function yourself. In a crate that
+depends on the Rust SDK, the expansion names `lumen-widget`, `lumen-core` and
+`bevy_ecs` through `lumenui`, so the derive needs no dependency on any of the
+three.
 
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
@@ -671,6 +675,7 @@ still applied.
 
 Install a plugin that registers script functions through the plugin phase:
 `RunOptions::with_plugin`, or `App::add_plugin` on the Rust SDK. That phase runs
+right after the app's runtime modules install, before the markup is parsed and
 before the script hosts load the app's program, which is the window in which a
 registration can still be bound. candela resolves its `host` declarations while
 the program compiles, and the artifact host binds them while the image loads, so

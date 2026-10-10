@@ -249,6 +249,16 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             dep.name
         );
     }
+    // The embedder's plugins (`RunOptions::with_plugin`, the Rust SDK's
+    // `add_plugin`), at the same point as the modules and for the same
+    // reason: a plugin that brings an element registers its tag from
+    // `Plugin::build`, and the parse below refuses a tag nobody registered.
+    // After the modules, so a plugin's script functions shadow a module's of
+    // the same name; before the script hosts load, which bind every function
+    // registered by then.
+    for install in std::mem::take(&mut opts.plugins) {
+        install(&mut app);
+    }
 
     // Initial load runs before the window exists, so there's no real
     // OS theme / viewport yet. Apply with the best-guess default
@@ -368,9 +378,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // The host-neutral half of the script wiring. It needs the parse: whether
     // the app ships a script at all is read out of the document.
     register_script_common(&mut app, has_script);
-    for install in std::mem::take(&mut opts.plugins) {
-        install(&mut app);
-    }
     app.add_script_fns(native_fns);
     for (language, mut program) in programs {
         let Some(entry) = registered.get(&language).copied() else {

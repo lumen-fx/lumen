@@ -75,10 +75,12 @@ impl App {
         self
     }
 
-    /// Add a single [`Plugin`], installed on the built ECS app before the
-    /// script hosts load.
+    /// Add a single [`Plugin`], installed on the ECS app before the markup is
+    /// parsed and before the script hosts load.
     ///
-    /// That phase is what lets a plugin register script functions
+    /// That phase is what lets a widget plugin (the one `#[derive(Widget)]`
+    /// generates, say) register its tag in time for the markup that uses it,
+    /// and what lets a plugin register script functions
     /// ([`ScriptFnAppExt::add_script_fn`](lumen_script::ScriptFnAppExt::add_script_fn)):
     /// candela binds its host declarations when the program compiles, so a
     /// registration after the load has nothing to bind to. The consequence to

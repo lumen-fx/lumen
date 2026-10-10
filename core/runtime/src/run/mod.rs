@@ -97,7 +97,8 @@ pub struct RunOptions {
     pub clear: Color,
     /// Watch source files and reload on change. On by default.
     pub hot_reload: bool,
-    /// Plugins installed on the [`App`] before the script hosts load. See
+    /// Plugins installed on the [`App`] before the markup is parsed and the
+    /// script hosts load. See
     /// [`Self::with_plugin`].
     pub plugins: Vec<PluginInstaller>,
     /// Native functions exposed to the app's script in host-neutral terms.
@@ -246,9 +247,11 @@ impl RunOptions {
     }
 
     /// Builder: install a [`Plugin`](lumen_core::app::Plugin) on the app
-    /// before the script hosts load.
+    /// before the markup is parsed and before the script hosts load.
     ///
-    /// This is the phase a plugin that registers script functions
+    /// A plugin that brings an element registers its tag from `build`, which
+    /// this phase puts ahead of the parse that would otherwise refuse it. It
+    /// is also the phase a plugin that registers script functions
     /// ([`ScriptFnAppExt::add_script_fn`](lumen_script::ScriptFnAppExt::add_script_fn))
     /// belongs in: candela binds its host declarations when the program
     /// compiles or the artifact loads, so a function registered later has
