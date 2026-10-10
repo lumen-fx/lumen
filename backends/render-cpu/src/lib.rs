@@ -23,7 +23,7 @@ use bevy_ecs::world::World;
 use lumen_core::prelude::*;
 use lumen_core::render_backend::install_offscreen;
 use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
-use lumen_paint::PaintTarget;
+use lumen_paint::{LayerCache, LayerStats, PaintTarget};
 use surface::Presenter;
 use vello_cpu::Pixmap;
 
@@ -44,6 +44,8 @@ pub struct CpuRenderer {
     /// Whether the pixmap holds a rasterized frame at its current size.
     holds_frame: bool,
     render_count: u64,
+    /// Faded groups' layers, kept from frame to frame.
+    layers: LayerCache,
 }
 
 /// What a [`CpuRenderer`] shows its frames on.
@@ -62,6 +64,7 @@ impl Default for CpuRenderer {
             target: None,
             holds_frame: false,
             render_count: 0,
+            layers: LayerCache::default(),
         }
     }
 }
@@ -98,6 +101,12 @@ impl CpuRenderer {
     /// skipped do not count, so a static UI leaves it flat.
     pub fn render_count(&self) -> u64 {
         self.render_count
+    }
+
+    /// What the kept layers of faded groups hold and how often they were
+    /// reused.
+    pub fn layer_stats(&self) -> LayerStats {
+        self.layers.stats()
     }
 
     /// The last frame as tightly packed, straight-alpha RGBA8.
@@ -164,7 +173,12 @@ impl Renderer for CpuRenderer {
         };
         let (w, h) = (self.pixmap.width(), self.pixmap.height());
         cpu_painter(&mut self.painter).begin_frame(w, h, lumen_paint::clear_color(render_world));
-        lumen_paint::paint_frame(render_world, &mut self.painter, None);
+        lumen_paint::paint_frame(
+            render_world,
+            &mut self.painter,
+            None,
+            Some(&mut self.layers),
+        );
         cpu_painter(&mut self.painter).render_into(&mut self.pixmap);
         self.holds_frame = true;
         self.render_count += 1;

@@ -14,8 +14,9 @@
 use crate::cache::FragmentCache;
 use crate::emit::{
     draw_image, draw_text, emit_border, emit_outline, emit_outline_cached, emit_rect,
-    emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, folded,
+    emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, folded, text_bounds,
 };
+use crate::layers::{LayerCache, Plan};
 use crate::{PaintTarget, Shape};
 use bevy_ecs::world::World;
 use lumen_core::native::{NativePaintCtx, NativePainters};
@@ -83,6 +84,9 @@ pub struct WalkContext<'a> {
     /// Painters for [`Node::Native`] leaves. When `None`, or when no painter is registered for a
     /// leaf's `extension_id`, that leaf paints nothing.
     pub natives: Option<&'a NativePainters>,
+    /// Layers kept for faded groups across frames. When `None`, every group paints its layer
+    /// afresh.
+    pub layers: Option<&'a mut LayerCache>,
 }
 
 impl<'a> WalkContext<'a> {
@@ -107,6 +111,7 @@ impl<'a> WalkContext<'a> {
             clips: ClipStack::default(),
             dpr: 1.0,
             natives: None,
+            layers: None,
         }
     }
 
@@ -132,6 +137,7 @@ impl<'a> WalkContext<'a> {
             clips: ClipStack::default(),
             dpr: dpr.max(0.01),
             natives: None,
+            layers: None,
         }
     }
 
@@ -140,6 +146,14 @@ impl<'a> WalkContext<'a> {
     /// portable rather than failing.
     pub fn with_native_painters(mut self, painters: &'a NativePainters) -> Self {
         self.natives = Some(painters);
+        self
+    }
+
+    /// Attaches the cache faded groups keep their layers in across frames. Hand it only with a
+    /// sink that paints offscreen ([`crate::Painter::begin_offscreen`]); the caller brackets the
+    /// walk with [`LayerCache::begin_frame`] and [`LayerCache::end_frame`].
+    pub fn with_layer_cache(mut self, layers: &'a mut LayerCache) -> Self {
+        self.layers = Some(layers);
         self
     }
 }
@@ -225,6 +239,13 @@ fn push_clip_layer(painter: &mut PaintTarget, shape: ClipShape, opacity: f32) ->
     1
 }
 
+/// The bounds an opacity group's layer falls back to for a leaf whose extent cannot be read: wide
+/// enough to cover any target.
+const GROUP_EXTENT: LumenRect = LumenRect {
+    origin: glam::Vec2::new(-1.0e6, -1.0e6),
+    size: glam::Vec2::new(2.0e6, 2.0e6),
+};
+
 /// Walks a single [`Node`] subtree onto the painter.
 ///
 /// Each leaf variant maps onto painter calls through the matching emitter, and the
@@ -247,11 +268,18 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             walk_node(ctx, child);
             ctx.transform = prev;
         }
-        Node::Opacity { alpha, child } => {
-            let prev = ctx.opacity;
-            ctx.opacity = prev * alpha.clamp(0.0, 1.0);
-            walk_node(ctx, child);
-            ctx.opacity = prev;
+        Node::Opacity { alpha, child, key } => {
+            // Group opacity: the subtree paints into a layer of its own and the layer fades once
+            // when it closes, so a child over its parent hides it as it would at full opacity.
+            let alpha = alpha.clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                return;
+            }
+            if alpha >= 1.0 {
+                walk_node(ctx, child);
+                return;
+            }
+            walk_group(ctx, child, alpha, *key);
         }
         Node::Clip { shape, child } => {
             // Scale the logical clip rect to physical pixels - leaves below scale themselves by
@@ -467,6 +495,144 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
     }
 }
 
+/// Paints the subtree of a group fading at `alpha` (in `(0, 1)`), into one layer that composites at
+/// `alpha`.
+///
+/// With a [`LayerCache`] and a `key`, the layer is the kept one while the subtree paints the same
+/// as when it was kept, so the subtree itself paints only when it changed; see
+/// [`crate::layers`]. Otherwise, or for a subtree holding a native leaf (whose painter may draw
+/// past the sink, straight into the backend's own target), the subtree paints into a layer that
+/// lives for this frame only.
+fn walk_group(ctx: &mut WalkContext<'_>, child: &Arc<Node>, alpha: f32, key: Option<u64>) {
+    let (bounds, native) = group_bounds(ctx, child);
+    // Bounds come out in logical pixels like a clip's, so they scale the same way; a pixel of
+    // slack keeps the antialiased edges of the subtree inside, and whole-pixel edges let a kept
+    // layer composite one layer pixel per target pixel.
+    let slack = glam::Vec2::splat(1.0);
+    let device = Rect::new(
+        ((bounds.origin.x - slack.x) * ctx.dpr).floor() as f64,
+        ((bounds.origin.y - slack.y) * ctx.dpr).floor() as f64,
+        ((bounds.origin.x + bounds.size.x + slack.x) * ctx.dpr).ceil() as f64,
+        ((bounds.origin.y + bounds.size.y + slack.y) * ctx.dpr).ceil() as f64,
+    );
+    if let (Some(key), false) = (key, native)
+        && let Some(layers) = ctx.layers.as_deref_mut()
+    {
+        let device = device.intersect(layers.target_rect());
+        if device.width() <= 0.0 || device.height() <= 0.0 {
+            // Nothing of the group lands on the target.
+            return;
+        }
+        match layers.plan(key, child, device) {
+            Plan::Composite(layer) => {
+                if ctx.painter.draw_offscreen(&layer, alpha) {
+                    return;
+                }
+            }
+            Plan::Render => {
+                if ctx.painter.begin_offscreen(device) {
+                    walk_node(ctx, child);
+                    if let Some(layer) = ctx.painter.end_offscreen() {
+                        ctx.painter.draw_offscreen(&layer, alpha);
+                        if let Some(layers) = ctx.layers.as_deref_mut() {
+                            layers.store(key, layer);
+                        }
+                    }
+                    return;
+                }
+            }
+            Plan::Direct => {}
+        }
+    }
+    ctx.painter.push_layer(
+        Fill::NonZero,
+        peniko::BlendMode::default(),
+        alpha,
+        Affine::IDENTITY,
+        &Shape::Rect(device),
+    );
+    walk_node(ctx, child);
+    ctx.painter.pop_layer();
+}
+
+/// The logical-pixel box that holds everything `node` paints, and whether it holds a native leaf.
+///
+/// Text is measured the way it paints, through the context's shaper, so a run that wraps onto
+/// more lines or overflows its container stays inside; without a shaper it falls back to the
+/// frame diff's rough box. A clip bounds what it wraps.
+fn group_bounds(ctx: &mut WalkContext<'_>, node: &Node) -> (LumenRect, bool) {
+    match node {
+        Node::Container { children } => {
+            let mut acc: Option<LumenRect> = None;
+            let mut native = false;
+            for c in children {
+                let (b, n) = group_bounds(ctx, c);
+                native |= n;
+                if has_area(b) {
+                    acc = Some(acc.map_or(b, |a| union(a, b)));
+                }
+            }
+            (acc.unwrap_or(EMPTY), native)
+        }
+        Node::Opacity { child, .. } => group_bounds(ctx, child),
+        Node::Clip { shape, child } => {
+            let (b, native) = group_bounds(ctx, child);
+            let clip = match shape {
+                ClipShape::Rect(r) | ClipShape::RoundedRect { rect: r, .. } => *r,
+            };
+            (intersection(b, clip), native)
+        }
+        Node::Transform { child, matrix } => {
+            let (b, native) = group_bounds(ctx, child);
+            (
+                apply_affine_to_rect(b, compose_affine(Affine::IDENTITY, *matrix)),
+                native,
+            )
+        }
+        Node::Text { run } => match ctx.shaper.as_deref_mut() {
+            Some(shaper) => {
+                let r = text_bounds(shaper, run, ctx.dpr);
+                let dpr = f64::from(ctx.dpr);
+                let b = LumenRect {
+                    origin: glam::Vec2::new((r.x0 / dpr) as f32, (r.y0 / dpr) as f32),
+                    size: glam::Vec2::new((r.width() / dpr) as f32, (r.height() / dpr) as f32),
+                };
+                (b, false)
+            }
+            None => (node_bounds(node, GROUP_EXTENT, Affine::IDENTITY), false),
+        },
+        Node::Native { .. } => (node_bounds(node, GROUP_EXTENT, Affine::IDENTITY), true),
+        _ => (node_bounds(node, GROUP_EXTENT, Affine::IDENTITY), false),
+    }
+}
+
+/// A rect with no area.
+const EMPTY: LumenRect = LumenRect {
+    origin: glam::Vec2::ZERO,
+    size: glam::Vec2::ZERO,
+};
+
+/// The overlap of two rects; [`EMPTY`] when they do not overlap.
+fn intersection(a: LumenRect, b: LumenRect) -> LumenRect {
+    let x0 = a.origin.x.max(b.origin.x);
+    let y0 = a.origin.y.max(b.origin.y);
+    let x1 = (a.origin.x + a.size.x).min(b.origin.x + b.size.x);
+    let y1 = (a.origin.y + a.size.y).min(b.origin.y + b.size.y);
+    if x1 <= x0 || y1 <= y0 {
+        return EMPTY;
+    }
+    LumenRect {
+        origin: glam::Vec2::new(x0, y0),
+        size: glam::Vec2::new(x1 - x0, y1 - y0),
+    }
+}
+
+/// Whether `curr` paints anything differently from `prev`, by the frame diff: the test a kept
+/// group layer is reused under.
+pub(crate) fn subtree_changed(prev: &Arc<Node>, curr: &Arc<Node>) -> bool {
+    diff_node(prev, curr, GROUP_EXTENT, Affine::IDENTITY)
+}
+
 /// Walks the [`RetainedScene`] root into the context's painter.
 ///
 /// Convenience entry point - equivalent to `walk_node(&ctx, &scene.root)` once the root is known to exist.
@@ -541,10 +707,12 @@ fn diff_node(prev: &Arc<Node>, curr: &Arc<Node>, viewport: LumenRect, xform: Aff
             Node::Opacity {
                 alpha: pa,
                 child: pchild,
+                ..
             },
             Node::Opacity {
                 alpha: ca,
                 child: cchild,
+                ..
             },
         ) => {
             if (pa - ca).abs() < f32::EPSILON {
@@ -595,10 +763,9 @@ fn either_has_area(
 /// damage.
 ///
 /// Conservative by construction: only the leaf variants whose every visual
-/// field is comparable return `true`. Variants carrying an opaque payload we
-/// cannot compare for equality ([`Node::Image`] blob, [`Node::Svg`]) and any
-/// cross-variant pair fall through to `false`, i.e.
-/// "assume changed" - a false *positive* damage only costs an unnecessary
+/// field is comparable return `true`. An image or SVG payload of a type this
+/// crate does not know, and any cross-variant pair, fall through to `false`,
+/// i.e. "assume changed" - a false *positive* damage only costs an unnecessary
 /// repaint, whereas a false *negative* would drop a real change on the floor.
 /// This is the same safety bias as GTK's / Qt's damage bookkeeping: never
 /// under-report the dirty region.
@@ -711,8 +878,57 @@ fn leaf_visually_eq(a: &Node, b: &Node) -> bool {
                 ..
             },
         ) => aid == bid && ab == bb && arv == brv && ac == bc,
-        // Image / Svg carry `Arc<dyn Any>` payloads we cannot compare; any
-        // cross-variant pair is also a real change. Assume changed.
+        // Images compare by every placed field and by the identity of their
+        // pixels: the producer shares one pixel buffer across frames for as
+        // long as the picture is the same.
+        (
+            Node::Image {
+                image: ai,
+                blob: ab,
+            },
+            Node::Image {
+                image: bi,
+                blob: bb,
+            },
+        ) => {
+            let same_blob = match (ab, bb) {
+                (None, None) => true,
+                (Some(a), Some(b)) => match (
+                    a.downcast_ref::<lumen_assets::ExtractedImageBlob>(),
+                    b.downcast_ref::<lumen_assets::ExtractedImageBlob>(),
+                ) {
+                    (Some(a), Some(b)) => a.0.id() == b.0.id(),
+                    _ => false,
+                },
+                _ => false,
+            };
+            same_blob
+                && ai.origin == bi.origin
+                && ai.size == bi.size
+                && ai.width == bi.width
+                && ai.height == bi.height
+                && std::sync::Arc::ptr_eq(&ai.rgba, &bi.rgba)
+                && ai.fit == bi.fit
+                && ai.alpha == bi.alpha
+                && ai.background == bi.background
+        }
+        // SVGs compare by every placed field and by the identity of the
+        // decoded drawing they paint.
+        (Node::Svg { payload: ap }, Node::Svg { payload: bp }) => match (
+            ap.downcast_ref::<lumen_assets::ExtractedSvg>(),
+            bp.downcast_ref::<lumen_assets::ExtractedSvg>(),
+        ) {
+            (Some(a), Some(b)) => {
+                a.asset.id() == b.asset.id()
+                    && a.origin == b.origin
+                    && a.size == b.size
+                    && a.intrinsic == b.intrinsic
+                    && a.fit == b.fit
+                    && a.alpha == b.alpha
+            }
+            _ => false,
+        },
+        // Any cross-variant pair is a real change.
         _ => false,
     }
 }
@@ -751,7 +967,9 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
             spread,
             ..
         } => {
-            let pad = blur.max(0.0) + spread.max(0.0);
+            // `blur` is the Gaussian's standard deviation, and the blurred rect reaches about three
+            // of them past its edge.
+            let pad = blur.max(0.0) * 3.0 + spread.max(0.0);
             let r = LumenRect {
                 origin: *origin - glam::Vec2::splat(pad),
                 size: *size + glam::Vec2::splat(pad * 2.0),
@@ -889,8 +1107,8 @@ fn has_area(r: LumenRect) -> bool {
 /// Whether the retained Node IR differs visually from the last painted frame.
 ///
 /// Diffs `PreviousScene` (the last painted tree) against `RetainedScene` (this tick's freshly built
-/// tree). Conservative: the diff assumes-changed for any leaf it cannot compare (images, SVGs), so it
-/// never misses a change, and a render world missing the scene resources (a non-standard embed)
+/// tree). Conservative: the diff assumes-changed for any leaf it cannot compare (an image or SVG
+/// payload of a type it does not know), so it never misses a change, and a render world missing the scene resources (a non-standard embed)
 /// always reports one.
 pub fn scene_has_damage(render_world: &World) -> bool {
     let previous = render_world.get_resource::<PreviousScene>();

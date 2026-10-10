@@ -18,6 +18,12 @@
 //! [`FragmentCache`]. A sink that cannot answers `false` and the walker paints
 //! every leaf directly.
 //!
+//! A sink that can rasterize offscreen offers layers
+//! ([`Painter::begin_offscreen`]); the walker then paints a faded group into
+//! one, keeps it in a [`LayerCache`], and composites the kept pixels on later
+//! frames for as long as the group paints the same, so an unchanged group
+//! costs one composite and a fade costs no repaint.
+//!
 //! The frame logic around the walk is shared too: [`wants_frame`] decides
 //! whether a frame is worth painting, [`paint_frame`] walks the render
 //! world's retained scene into a sink, and [`answer_capture`] hands a
@@ -29,6 +35,7 @@
 pub mod cache;
 pub mod emit;
 pub mod frame;
+pub mod layers;
 pub mod recording;
 pub mod svg;
 pub mod walker;
@@ -37,9 +44,10 @@ pub use cache::{CacheStats, FragmentCache, FragmentKey};
 pub use emit::{
     draw_glyph_run, draw_image, draw_text, emit_border, emit_outline, emit_outline_cached,
     emit_rect, emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, fit_box, folded,
-    peniko_color,
+    peniko_color, text_bounds,
 };
 pub use frame::{answer_capture, capture_requested, clear_color, paint_frame, wants_frame};
+pub use layers::{LayerCache, LayerStats};
 pub use peniko;
 pub use peniko::kurbo;
 pub use recording::Recording;
@@ -137,6 +145,33 @@ impl Fragment {
 impl std::fmt::Debug for Fragment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Fragment")
+    }
+}
+
+/// Pixels a sink rasterized between [`Painter::begin_offscreen`] and
+/// [`Painter::end_offscreen`], kept so a later frame can composite them again
+/// with [`Painter::draw_offscreen`] instead of painting what made them.
+///
+/// Opaque to everything but the sink that made it, like a [`Fragment`].
+/// Dropping the last clone releases the sink's pixels.
+#[derive(Clone)]
+pub struct OffscreenLayer(Arc<dyn Any + Send + Sync>);
+
+impl OffscreenLayer {
+    /// Wrap a sink's rasterized layer.
+    pub fn new<T: Any + Send + Sync>(pixels: Arc<T>) -> Self {
+        Self(pixels)
+    }
+
+    /// The layer as `T`, or `None` when another kind of sink made it.
+    pub fn downcast<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.0.downcast_ref::<T>()
+    }
+}
+
+impl std::fmt::Debug for OffscreenLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OffscreenLayer")
     }
 }
 
@@ -238,6 +273,32 @@ pub trait Painter: Send + 'static {
     /// came from another kind of sink and nothing was painted.
     fn append_fragment(&mut self, fragment: &Fragment, transform: Affine) -> bool {
         let _ = (fragment, transform);
+        false
+    }
+
+    /// Start painting into an offscreen layer covering `bounds`, a rect in
+    /// target pixels with whole-pixel edges, instead of the frame. Every call
+    /// until the matching [`Self::end_offscreen`] paints into the layer, in
+    /// the same coordinates as the frame; what falls outside `bounds` is
+    /// lost. Layers nest. Returns `false` when this sink has no offscreen
+    /// layers, in which case nothing changed and the caller paints directly.
+    fn begin_offscreen(&mut self, bounds: Rect) -> bool {
+        let _ = bounds;
+        false
+    }
+
+    /// Finish the innermost layer [`Self::begin_offscreen`] opened and hand
+    /// back its pixels, transparent wherever nothing painted. Paints nothing
+    /// itself. `None` when no layer was open.
+    fn end_offscreen(&mut self) -> Option<OffscreenLayer> {
+        None
+    }
+
+    /// Composite `layer` over what is painted so far, at the bounds it was
+    /// painted at, with its alpha scaled by `alpha`. Returns `false` when the
+    /// layer came from another kind of sink and nothing was painted.
+    fn draw_offscreen(&mut self, layer: &OffscreenLayer, alpha: f32) -> bool {
+        let _ = (layer, alpha);
         false
     }
 

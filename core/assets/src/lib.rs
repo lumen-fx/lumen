@@ -33,9 +33,9 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
-use lumen_core::components::{Opacity, Visuals};
+use lumen_core::components::Visuals;
 use lumen_core::prelude::*;
-use lumen_core::render_world::{BackgroundClip, parent_opacities, parent_scroll_offsets};
+use lumen_core::render_world::{BackgroundClip, opacity_model, parent_scroll_offsets};
 use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::Entry as MapEntry;
@@ -1074,29 +1074,28 @@ pub fn register_asset_loader(app: &mut App, loader: impl AssetLoader) {
 const _LRU_CAP_PROBE: NonZeroUsize = NonZeroUsize::MIN;
 
 /// What placing an image needs from the whole tree: the scroll offset and
-/// the ancestor opacity each element inherits. A content image moves and
+/// the alpha each element's own paints carry. A content image moves and
 /// fades with its ancestors, and a background moves and fades with the
 /// element whose colour it replaces, so both read the two the way the rect
 /// extract does.
 struct Placement {
     scroll: HashMap<Entity, glam::Vec2>,
-    inherited_alpha: HashMap<Entity, f32>,
+    alphas: HashMap<Entity, f32>,
 }
 
 impl Placement {
     fn new(main: &mut World, parents: &HashMap<Entity, Entity>) -> Self {
         Self {
             scroll: parent_scroll_offsets(main, parents),
-            inherited_alpha: parent_opacities(main, parents),
+            alphas: opacity_model(main, parents).draw,
         }
     }
 
     /// The on-screen origin and the alpha of `e`: its layout position less
-    /// its ancestors' scroll, and its own opacity times theirs.
-    fn place(&self, e: Entity, t: &Transform, opacity: Option<&Opacity>) -> (glam::Vec2, f32) {
+    /// its ancestors' scroll, and the alpha its own paints carry.
+    fn place(&self, e: Entity, t: &Transform) -> (glam::Vec2, f32) {
         let origin = t.absolute - self.scroll.get(&e).copied().unwrap_or(glam::Vec2::ZERO);
-        let alpha = opacity.map(|o| o.0).unwrap_or(1.0)
-            * self.inherited_alpha.get(&e).copied().unwrap_or(1.0);
+        let alpha = self.alphas.get(&e).copied().unwrap_or(1.0);
         (origin, alpha)
     }
 
@@ -1106,9 +1105,8 @@ impl Placement {
         e: Entity,
         t: &Transform,
         visuals: Option<&Visuals>,
-        opacity: Option<&Opacity>,
     ) -> (glam::Vec2, f32, BackgroundClip) {
-        let (origin, alpha) = self.place(e, t, opacity);
+        let (origin, alpha) = self.place(e, t);
         let radii = visuals
             .map(|v| v.corner_radii.unwrap_or([v.radius; 4]))
             .unwrap_or([0.0; 4]);
@@ -1140,21 +1138,20 @@ pub fn extract_loaded_svgs(main: &mut World, render: &mut World) {
         &Transform,
         &LoadedSvg,
         Option<&ImageFit>,
-        Option<&Opacity>,
         Option<&BackgroundImage>,
         Option<&Visuals>,
     )>();
     let pairs: Vec<(Entity, ExtractedSvg, SvgPayload)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .map(|(e, t, svg, fit, opacity, bg, visuals)| {
+        .map(|(e, t, svg, fit, bg, visuals)| {
             let (origin, alpha, fit, background) = match bg {
                 Some(bg) => {
-                    let (origin, alpha, clip) = placement.place_background(e, t, visuals, opacity);
+                    let (origin, alpha, clip) = placement.place_background(e, t, visuals);
                     (origin, alpha, bg.fit, Some(clip))
                 }
                 None => {
-                    let (origin, alpha) = placement.place(e, t, opacity);
+                    let (origin, alpha) = placement.place(e, t);
                     // Default fit for SVGs is `Contain` (aspect-preserving).
                     (
                         origin,
@@ -1248,21 +1245,20 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
         &Transform,
         &LoadedImage,
         Option<&ImageFit>,
-        Option<&Opacity>,
         Option<&BackgroundImage>,
         Option<&Visuals>,
     )>();
     let rows: Vec<(Entity, ExtractedImage, ExtractedImageBlob, ImageBlob)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .map(|(e, t, img, fit, opacity, bg, visuals)| {
+        .map(|(e, t, img, fit, bg, visuals)| {
             let (origin, alpha, fit, background) = match bg {
                 Some(bg) => {
-                    let (origin, alpha, clip) = placement.place_background(e, t, visuals, opacity);
+                    let (origin, alpha, clip) = placement.place_background(e, t, visuals);
                     (origin, alpha, bg.fit, Some(clip))
                 }
                 None => {
-                    let (origin, alpha) = placement.place(e, t, opacity);
+                    let (origin, alpha) = placement.place(e, t);
                     (origin, alpha, fit.copied().unwrap_or_default(), None)
                 }
             };
@@ -1696,8 +1692,10 @@ mod tests {
         );
     }
 
-    /// A content image and an SVG move with their ancestors' scroll and
-    /// fade with their opacity, the same as a background image does.
+    /// A content image and an SVG move with their ancestors' scroll, the
+    /// same as a background image does. A faded parent fades them as a
+    /// group, so their own paints carry none of its opacity; an image's own
+    /// opacity still folds into its paint.
     #[test]
     fn content_images_follow_ancestor_scroll_and_opacity() {
         use lumen_core::input::ScrollOffset;
@@ -1716,7 +1714,12 @@ mod tests {
             ..Default::default()
         };
         let content = main
-            .spawn((at, LoadedImage(make_image_data(64).into()), ChildOf(parent)))
+            .spawn((
+                at,
+                LoadedImage(make_image_data(64).into()),
+                Opacity(0.25),
+                ChildOf(parent),
+            ))
             .id();
         let background = main
             .spawn((
@@ -1749,16 +1752,16 @@ mod tests {
         let map = render.resource::<RenderEntityMap>();
         let (content_e, background_e, svg_e) =
             (map.image[&content], map.image[&background], map.svg[&svg]);
-        for img in [
-            render.get::<ExtractedImage>(content_e).unwrap(),
-            render.get::<ExtractedImage>(background_e).unwrap(),
+        for (img, alpha) in [
+            (render.get::<ExtractedImage>(content_e).unwrap(), 0.25),
+            (render.get::<ExtractedImage>(background_e).unwrap(), 1.0),
         ] {
             assert_eq!(img.origin, glam::Vec2::new(0.0, 50.0));
-            assert_eq!(img.alpha, 0.5);
+            assert_eq!(img.alpha, alpha);
         }
         let svg = render.get::<ExtractedSvg>(svg_e).unwrap();
         assert_eq!(svg.origin, glam::Vec2::new(0.0, 50.0));
-        assert_eq!(svg.alpha, 0.5);
+        assert_eq!(svg.alpha, 1.0);
     }
 
     /// A waiter registered at enqueue time can be despawned before its

@@ -9,6 +9,7 @@
 //! on its target.
 
 use crate::cache::FragmentCache;
+use crate::layers::LayerCache;
 use crate::walker::{WalkContext, scene_has_damage, walk_node};
 use crate::{PaintTarget, peniko_color};
 use bevy_ecs::world::World;
@@ -57,22 +58,29 @@ pub fn clear_color(render_world: &World) -> peniko::Color {
 /// The caller resets its sink first. The walker scales every leaf from
 /// logical to physical pixels by the viewport's scale factor, paints text
 /// through the render world's [`ShaperService`] (skipping it when there is
-/// none), dispatches native leaves to the registered [`NativePainters`], and
-/// replays repeated appearances from `cache` when the sink records fragments.
+/// none), dispatches native leaves to the registered [`NativePainters`],
+/// replays repeated appearances from `cache` when the sink records fragments,
+/// and composites faded groups from the layers kept in `layers` when the sink
+/// paints offscreen.
 pub fn paint_frame(
     render_world: &mut World,
     painter: &mut PaintTarget,
     cache: Option<&mut FragmentCache>,
+    mut layers: Option<&mut LayerCache>,
 ) {
     // Carve a local Arc of the tree so the borrow on the world releases
     // before the shaper is taken mutably.
     let root = render_world
         .get_resource::<RetainedScene>()
         .and_then(|scene| scene.root.clone());
-    let dpr = render_world
+    let (dpr, size) = render_world
         .get_resource::<Viewport>()
-        .map_or(1.0, |v| v.scale_factor)
-        .max(0.01);
+        .map_or((1.0, glam::Vec2::ZERO), |v| (v.scale_factor, v.size));
+    let dpr = dpr.max(0.01);
+    if let Some(layers) = layers.as_deref_mut() {
+        let target = size * dpr;
+        layers.begin_frame(dpr, target.x.ceil() as u32, target.y.ceil() as u32);
+    }
     // Cloning shares the table, so this costs one refcount.
     let natives = render_world.get_resource::<NativePainters>().cloned();
     if let Some(root) = root.as_ref() {
@@ -84,7 +92,13 @@ pub fn paint_frame(
         if let Some(painters) = natives.as_ref() {
             ctx = ctx.with_native_painters(painters);
         }
+        if let Some(layers) = layers.as_deref_mut() {
+            ctx = ctx.with_layer_cache(layers);
+        }
         walk_node(&mut ctx, root);
+    }
+    if let Some(layers) = layers {
+        layers.end_frame();
     }
     if let Some(mut previous) = render_world.get_resource_mut::<PreviousScene>() {
         previous.root = root;
@@ -169,7 +183,7 @@ mod tests {
         assert!(wants_frame(&world, request(true, false), true));
 
         let mut painter: PaintTarget = Box::<crate::recording::Recording>::default();
-        paint_frame(&mut world, &mut painter, None);
+        paint_frame(&mut world, &mut painter, None, None);
         assert!(!wants_frame(&world, request(true, false), true));
     }
 

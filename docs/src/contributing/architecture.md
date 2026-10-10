@@ -83,8 +83,9 @@ tools/             the release plumbing and the editor plugins
 - **lumen-paint**: what a frame looks like, independent of what draws it. The
   `Painter` trait, the walker that turns the retained node tree into painter
   calls, the leaf emitters (rects, gradients, borders, shadows, images, SVGs,
-  text, the caret and selection), the fragment cache, and `Recording`, a
-  painter that keeps its calls to replay later. Every render backend paints
+  text, the caret and selection), the fragment cache, the layer cache faded
+  groups are kept in, and `Recording`, a painter that keeps its calls to
+  replay later. Every render backend paints
   through it, so the backends agree on a frame by construction.
 
 ### Backends
@@ -497,7 +498,9 @@ The `Prepare` stage then culls: entities outside the viewport, and entities
 whose main-world entity is hidden by a `Visible(false)` on itself or an
 ancestor. What survives is folded into a retained node tree, a typed scene
 graph with container, transform, opacity, clip, rect, shadow, outline, text,
-image, and native variants. The variants map one to one onto Qt's scene graph
+image, and native variants. An opacity node is a group: its subtree paints into
+a layer that fades once, which is how CSS `opacity` on an element with children
+reaches the renderer. The variants map one to one onto Qt's scene graph
 and GTK's GSK render nodes, so a renderer backend only has to translate each
 variant to its native equivalent. Children are shared behind reference counts,
 so an unchanged subtree compares equal by pointer and the frame diff
@@ -614,7 +617,16 @@ implements over its own draw target: the GPU backend's sink encodes into a
 vello scene, the CPU backend's draws into a vello_cpu context. A sink that can
 record work offers fragments, and the walker then encodes each repeated
 appearance once and replays it at every position; the GPU sink does, the CPU
-sink paints every leaf in place. The frame logic around the walk is shared
+sink paints every leaf in place. A sink that can paint offscreen offers
+layers, and both do: the walker paints an opacity group into one, keeps it in
+the renderer's layer cache under the faded element's identity, and while the
+group paints the same as when it was kept, composites the kept pixels at the
+group's current alpha instead of painting its subtree. A group is kept once it
+has held still for a frame, a scale or size change drops every kept layer, a
+group holding a native leaf is never kept, and the cache holds at most a fixed
+budget of pixels; a group it does not keep paints directly. The GPU sink
+renders the layers a frame closes packed into shared textures, one vello pass
+per texture rather than one per layer. The frame logic around the walk is shared
 too, in `lumen-paint`'s `frame` module: both backends diff the tree against
 the previous frame's, skip the frame entirely when nothing visible changed
 (leaving the last one on screen), and answer a screenshot request from the

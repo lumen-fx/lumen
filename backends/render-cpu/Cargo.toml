@@ -25,6 +25,9 @@ glam.workspace = true
 # The rasterizer. Single-threaded, the u8 pipeline only, and glyph rendering;
 # no PNG decoding, because images reach the painter already decoded.
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline"] }
+# The tint type vello_cpu draws an image with; it fades a kept offscreen
+# layer without a compositing layer. The same release vello_cpu builds on.
+vello_common = { version = "0.2", default-features = false, features = ["std"] }
 # Presents the rasterized frame into a window: the platform's own blit for a
 # CPU buffer, with no graphics API underneath. The KMS backend is left out;
 # Lumen presents through a window backend, never straight to a display.

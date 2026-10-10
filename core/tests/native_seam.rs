@@ -82,11 +82,11 @@ fn redraw_when_samples_change(
 /// hidden subtrees are handled the same way the built-in extractors handle them.
 fn extract_sparklines(main: &mut World, render: &mut World) {
     let mut place = NativeExtract::new(main);
-    let mut q = main.query::<(Entity, &Transform, &Sparkline, Option<&Opacity>)>();
+    let mut q = main.query::<(Entity, &Transform, &Sparkline)>();
     let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .filter_map(|(e, transform, sparkline, opacity)| {
-            let placed = place.place(e, transform, opacity)?;
+        .filter_map(|(e, transform, sparkline)| {
+            let placed = place.place(e, transform)?;
             Some((
                 e,
                 ExtractedNative {
@@ -252,7 +252,7 @@ fn two_extensions_extracting_in_one_frame_do_not_evict_each_other() {
         let leaves: Vec<(Entity, ExtractedNative)> = q
             .iter(main)
             .filter_map(|(e, transform, _)| {
-                let placed = place.place(e, transform, None)?;
+                let placed = place.place(e, transform)?;
                 Some((
                     e,
                     ExtractedNative {

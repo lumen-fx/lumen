@@ -181,6 +181,12 @@ impl WgpuRenderer {
         self.render_count
     }
 
+    /// What the kept layers of faded groups hold and how often they were
+    /// reused, or `None` while detached.
+    pub fn layer_stats(&self) -> Option<lumen_paint::LayerStats> {
+        self.bound.as_ref().map(|b| b.gpu.layer_stats())
+    }
+
     /// The last rendered frame as tightly packed RGBA8.
     pub fn read_rgba8(&self) -> Result<Vec<u8>, RenderError> {
         let bound = self.bound.as_ref().ok_or(RenderError::Detached)?;

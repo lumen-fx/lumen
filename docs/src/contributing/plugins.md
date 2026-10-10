@@ -244,7 +244,7 @@ plugin state.
 **An extract function** turns that state into an `ExtractedNative` in the
 render world. Place each leaf with `NativeExtract`: it resolves the paint order
 for the entity's position in the document, subtracts the scroll offset of every
-ancestor, reports the opacity the entity inherits, and returns nothing at all
+ancestor, reports the opacity the entity's own paints carry, and returns nothing at all
 for an entity that is hidden or scrolled out of its container. Placing a leaf
 from `Transform::absolute` by hand instead pins it in place while its scroll
 container scrolls. Hand the finished leaves to `upsert_native_leaves`, which
@@ -328,11 +328,11 @@ impl NativePainter for SparklinePainter {
 
 fn extract_sparklines(main: &mut World, render: &mut World) {
     let mut place = NativeExtract::new(main);
-    let mut q = main.query::<(Entity, &Transform, &Sparkline, Option<&Opacity>)>();
+    let mut q = main.query::<(Entity, &Transform, &Sparkline)>();
     let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .filter_map(|(e, transform, sparkline, opacity)| {
-            let placed = place.place(e, transform, opacity)?;
+        .filter_map(|(e, transform, sparkline)| {
+            let placed = place.place(e, transform)?;
             Some((
                 e,
                 ExtractedNative {
@@ -383,10 +383,11 @@ The contracts that come with the seam:
   that leaf in silence, which is what lets one scene render on a backend that
   does not implement the extension.
 - **Opacity is the painter's to apply.** A bounds clip composites nothing, so
-  asking to be clipped never changes a leaf's alpha. `ctx.opacity` carries what
-  ancestor opacity groups accumulated; the entity's own CSS `opacity` reaches
-  you as `NativePlacement::opacity` at extract, to fold into the payload the way
-  the built-in extractors fold it into their colours.
+  asking to be clipped never changes a leaf's alpha. An ancestor that fades
+  with its children is a layer the walker composites over your pixels, so it
+  never reaches you; what your leaf has to apply itself reaches you as
+  `NativePlacement::opacity` at extract, to fold into the payload the way the
+  built-in extractors fold it into their colours. `ctx.opacity` is `1.0`.
 - **Leave the layer stack as you found it.** The walker closes any layer a
   painter left open before it moves on, so a painter cannot cost the rest of the
   frame its clips, but a painter that pops more than it pushed has already

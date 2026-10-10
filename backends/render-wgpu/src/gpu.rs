@@ -7,12 +7,13 @@
 //! it back; a window blits it onto the swap chain (see `surface.rs`). The
 //! texture carries a second, sRGB view of the same bytes for that blit.
 
+use crate::sink::{FinishedLayer, GpuLayer};
 use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
 use lumen_core::traits::RenderTarget;
-use lumen_paint::{FragmentCache, PaintTarget};
-use std::sync::Arc;
+use lumen_paint::{FragmentCache, LayerCache, PaintTarget};
 use std::sync::mpsc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use vello::wgpu;
 // wgpu re-exports the handle crate it was built against, so the seam
@@ -259,6 +260,11 @@ pub(crate) struct GpuCore {
     /// and SVGs keyed by appearance, each reused across every position it
     /// appears at and across frames.
     cache: FragmentCache,
+    /// Faded groups' layers, kept from frame to frame.
+    layers: LayerCache,
+    /// The textures standing in for kept layers' images, each with the layer
+    /// it belongs to; a texture goes once its layer is dropped.
+    textures: Vec<(Weak<GpuLayer>, vello::peniko::ImageData)>,
     frame: FrameTexture,
 }
 
@@ -298,6 +304,9 @@ impl GpuCore {
         let vello = vello::Renderer::new(&device, vello_options(&adapter_info))
             .map_err(|e| format!("vello renderer init: {e:?}"))?;
         let frame = FrameTexture::new(&device, width, height);
+        let mut sink = VelloPainter::new();
+        sink.limit_layer_side(device.limits().max_texture_dimension_2d);
+        let painter: PaintTarget = Box::new(sink);
         Ok((
             Self {
                 adapter,
@@ -305,12 +314,20 @@ impl GpuCore {
                 device,
                 queue,
                 vello,
-                painter: Box::new(VelloPainter::new()),
+                painter,
                 cache: FragmentCache::default(),
+                layers: LayerCache::default(),
+                textures: Vec::new(),
                 frame,
             },
             surface,
         ))
+    }
+
+    /// What the kept layers of faded groups hold and how often they were
+    /// reused.
+    pub(crate) fn layer_stats(&self) -> lumen_paint::LayerStats {
+        self.layers.stats()
     }
 
     /// Size of the frame texture in physical pixels.
@@ -342,7 +359,13 @@ impl GpuCore {
             .downcast_mut::<VelloPainter>()
             .expect("the GPU renderer paints through a VelloPainter")
             .reset();
-        lumen_paint::paint_frame(render_world, &mut self.painter, Some(&mut self.cache));
+        lumen_paint::paint_frame(
+            render_world,
+            &mut self.painter,
+            Some(&mut self.cache),
+            Some(&mut self.layers),
+        );
+        self.render_offscreen()?;
         let params = RenderParams {
             base_color: lumen_paint::clear_color(render_world),
             width: self.frame.width,
@@ -363,7 +386,126 @@ impl GpuCore {
                 &self.frame.linear,
                 &params,
             )
-            .map_err(|e| format!("vello render: {e:?}"))
+            .map_err(|e| format!("vello render: {e:?}"))?;
+        self.release_textures();
+        Ok(())
+    }
+
+    /// Render the offscreen layers the frame closed, and stand a region of a
+    /// texture in for the image the frame draws each layer through.
+    ///
+    /// Each render costs a full pass of vello's pipeline however little it
+    /// draws, so layers share textures: those closed at the same depth pack
+    /// into as few textures as fit, and each texture is one render. The
+    /// deepest go first, since a layer may draw a deeper one.
+    fn render_offscreen(&mut self) -> Result<(), String> {
+        let mut finished = self
+            .painter
+            .native()
+            .downcast_mut::<VelloPainter>()
+            .expect("the GPU renderer paints through a VelloPainter")
+            .take_offscreen();
+        if finished.is_empty() {
+            return Ok(());
+        }
+        let max_side = self.device.limits().max_texture_dimension_2d;
+        finished.sort_by(|a, b| {
+            b.depth
+                .cmp(&a.depth)
+                .then(b.image.height.cmp(&a.image.height))
+        });
+        let mut rest = finished.as_slice();
+        while !rest.is_empty() {
+            let depth = rest[0].depth;
+            let same = rest.iter().take_while(|l| l.depth == depth).count();
+            let (wave, after) = rest.split_at(same);
+            for batch in pack_layers(wave, max_side) {
+                self.render_batch(wave, &batch)?;
+            }
+            rest = after;
+        }
+        Ok(())
+    }
+
+    /// Render one packed texture of offscreen layers and point each layer's
+    /// image at its region.
+    fn render_batch(&mut self, layers: &[FinishedLayer], batch: &Batch) -> Result<(), String> {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lumen offscreen layers"),
+            size: wgpu::Extent3d {
+                width: batch.width,
+                height: batch.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Vello renders into it as storage and copies each layer's region
+            // into its image atlas from it.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut scene = vello::Scene::new();
+        for &(index, x, y) in &batch.places {
+            let layer = &layers[index];
+            let (w, h) = (f64::from(layer.image.width), f64::from(layer.image.height));
+            let (x, y) = (f64::from(x), f64::from(y));
+            // Clip each layer to its own region so nothing it paints past its
+            // bounds lands in a neighbour's.
+            scene.push_clip_layer(
+                vello::peniko::Fill::NonZero,
+                vello::kurbo::Affine::IDENTITY,
+                &vello::kurbo::Rect::new(x, y, x + w, y + h),
+            );
+            scene.append(
+                &layer.scene,
+                Some(vello::kurbo::Affine::translate((
+                    x - layer.bounds.x0,
+                    y - layer.bounds.y0,
+                ))),
+            );
+            scene.pop_layer();
+        }
+        let params = RenderParams {
+            base_color: vello::peniko::Color::TRANSPARENT,
+            width: batch.width,
+            height: batch.height,
+            antialiasing_method: AaConfig::Area,
+        };
+        self.vello
+            .render_to_texture(&self.device, &self.queue, &scene, &view, &params)
+            .map_err(|e| format!("vello offscreen layer render: {e:?}"))?;
+        for &(index, x, y) in &batch.places {
+            let layer = &layers[index];
+            self.vello.override_image(
+                &layer.image,
+                Some(wgpu::TexelCopyTextureInfoBase {
+                    texture: texture.clone(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                }),
+            );
+            self.textures
+                .push((layer.layer.clone(), layer.image.clone()));
+        }
+        Ok(())
+    }
+
+    /// Drop the texture of every offscreen layer nothing holds any more: the
+    /// layer cache let it go, so no later frame draws it. Runs after the
+    /// frame rendered, which may have drawn it one last time.
+    fn release_textures(&mut self) {
+        let vello = &mut self.vello;
+        self.textures.retain(|(layer, image)| {
+            let live = layer.strong_count() > 0;
+            if !live {
+                vello.override_image(image, None);
+            }
+            live
+        });
     }
 
     /// Copy the frame texture to the CPU as tightly packed RGBA8: exactly
@@ -440,10 +582,103 @@ impl GpuCore {
     }
 }
 
+/// One texture's worth of offscreen layers: its size, and where each layer
+/// (by index into the slice it was packed from) sits in it.
+#[derive(Debug, PartialEq)]
+struct Batch {
+    width: u32,
+    height: u32,
+    places: Vec<(usize, u32, u32)>,
+}
+
+/// Pack `layers` into shelves of textures no wider or taller than
+/// `max_side`, in the order given (tallest first packs tightest). A layer
+/// larger than `max_side` either way gets no place and is left undrawn.
+fn pack_layers(layers: &[FinishedLayer], max_side: u32) -> Vec<Batch> {
+    pack_sizes(
+        &layers
+            .iter()
+            .map(|l| (l.image.width, l.image.height))
+            .collect::<Vec<_>>(),
+        max_side,
+    )
+}
+
+/// [`pack_layers`] over bare sizes.
+fn pack_sizes(sizes: &[(u32, u32)], max_side: u32) -> Vec<Batch> {
+    let area: u64 = sizes
+        .iter()
+        .map(|&(w, h)| u64::from(w) * u64::from(h))
+        .sum();
+    let widest = sizes.iter().map(|&(w, _)| w).max().unwrap_or(1);
+    // About square, and never narrower than the widest layer.
+    let width = ((area as f64).sqrt().ceil() as u32)
+        .max(widest)
+        .clamp(1, max_side);
+    let mut batches = Vec::new();
+    let mut batch = Batch {
+        width,
+        height: 0,
+        places: Vec::new(),
+    };
+    let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
+    for (index, &(w, h)) in sizes.iter().enumerate() {
+        if w > max_side || h > max_side || w == 0 || h == 0 {
+            continue;
+        }
+        if x + w > width {
+            (x, y, shelf) = (0, y + shelf, 0);
+        }
+        if y + h > max_side {
+            batch.height = y;
+            batches.push(std::mem::replace(
+                &mut batch,
+                Batch {
+                    width,
+                    height: 0,
+                    places: Vec::new(),
+                },
+            ));
+            (x, y, shelf) = (0, 0, 0);
+        }
+        batch.places.push((index, x, y));
+        x += w;
+        shelf = shelf.max(h);
+    }
+    batch.height = y + shelf;
+    if !batch.places.is_empty() {
+        batches.push(batch);
+    }
+    batches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use vello::wgpu::rwh::{HasWindowHandle, WindowHandle};
+
+    /// Layers pack side by side on shelves, a new shelf when one is full and
+    /// a new texture when the shelves reach the size limit; a layer too big
+    /// for any texture gets no place.
+    #[test]
+    fn layers_pack_into_shelves_and_textures() {
+        let batches = pack_sizes(&[(4, 4), (4, 4), (4, 4), (4, 4)], 8);
+        assert_eq!(
+            batches,
+            vec![Batch {
+                width: 8,
+                height: 8,
+                places: vec![(0, 0, 0), (1, 4, 0), (2, 0, 4), (3, 4, 4)],
+            }]
+        );
+
+        let batches = pack_sizes(&[(8, 6), (8, 6), (9, 1)], 8);
+        assert_eq!(batches.len(), 2, "one layer per texture at that height");
+        assert_eq!(batches[0].places, vec![(0, 0, 0)]);
+        assert_eq!((batches[0].width, batches[0].height), (8, 6));
+        assert_eq!(batches[1].places, vec![(1, 0, 0)]);
+        assert!(pack_sizes(&[], 8).is_empty());
+    }
 
     /// The init deadline is a tuning knob, not a validated setting: a
     /// missing or malformed value falls back to the default so a typo in
