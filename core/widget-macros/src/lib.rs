@@ -49,6 +49,12 @@
 //! }
 //! ```
 //!
+//! The paths above are the ones an engine crate gets, which depends on
+//! `lumen_widget`, `lumen_core` and `bevy_ecs` itself. A crate whose manifest
+//! depends on the Rust SDK (`lumenui`, under any name) gets the same items
+//! through the SDK instead, `::lumenui::lumen_widget::Widget` and so on, so an
+//! app needs no dependency of its own on any of the three.
+//!
 //! ## Attribute reference
 //!
 //! - `#[widget(tag = "name")]` on the struct (required) - the markup
@@ -76,7 +82,8 @@
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{Attribute, Data, DataStruct, DeriveInput, Field, Fields, Lit, Type, parse_macro_input};
 
@@ -153,8 +160,9 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
         prop_writes.push(emit_prop_write(f)?);
     }
 
+    let Paths { widget, core, ecs } = paths();
     let widget_impl = quote! {
-        impl ::lumen_widget::Widget for #ident {
+        impl #widget::Widget for #ident {
             fn name() -> &'static str {
                 #widget_name
             }
@@ -162,13 +170,13 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #tag
             }
             fn spawn(
-                _parent: ::bevy_ecs::prelude::Entity,
-                attrs: &::lumen_widget::Attributes,
-                world: &mut ::bevy_ecs::prelude::World,
-            ) -> ::bevy_ecs::prelude::Entity {
+                _parent: #ecs::prelude::Entity,
+                attrs: &#widget::Attributes,
+                world: &mut #ecs::prelude::World,
+            ) -> #ecs::prelude::Entity {
                 let mut value: #ident = ::core::default::Default::default();
                 #(#prop_writes)*
-                ::bevy_ecs::prelude::World::spawn(world, value).id()
+                #ecs::prelude::World::spawn(world, value).id()
             }
         }
 
@@ -181,7 +189,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 " ...>` instead of rejecting it as `UnknownTag`. Subsequent calls are no-ops.",
             )]
             pub fn register() {
-                ::lumen_widget::register_widget_tag(#tag);
+                #widget::register_widget_tag(#tag);
             }
         }
     };
@@ -203,11 +211,11 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
             #[derive(Default, Debug, Clone, Copy)]
             pub struct #plugin_ident;
 
-            impl ::lumen_core::app::Plugin for #plugin_ident {
+            impl #core::app::Plugin for #plugin_ident {
                 fn name(&self) -> &'static str {
                     #plugin_name_lit
                 }
-                fn build(self, _app: &mut ::lumen_core::app::App) {
+                fn build(self, _app: &mut #core::app::App) {
                     // Self-register the markup tag with the lumenc
                     // parser registry so `<#tag ...>` markup is accepted
                     // by parse_html. Idempotent - subsequent calls
@@ -223,6 +231,45 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
         #widget_impl
         #plugin_tokens
     })
+}
+
+/// The paths the expansion names the widget, core and ECS crates by.
+struct Paths {
+    widget: TokenStream2,
+    core: TokenStream2,
+    ecs: TokenStream2,
+}
+
+/// Where the three crates the expansion names are reached from, read off the
+/// manifest of the crate being compiled.
+///
+/// An app on the Rust SDK depends on `lumenui` alone, and must: its own
+/// dependency on any of the three would compile a second copy, whose types
+/// are not the engine's. So when the manifest names the SDK - the published
+/// crate or the engine side of it, renamed or not - the expansion goes
+/// through the SDK's re-exports. Anything else is an engine crate that
+/// depends on the three directly, and gets them by their own names.
+fn paths() -> Paths {
+    for sdk in ["lumenui", "lumenui-engine"] {
+        let root = match crate_name(sdk) {
+            Ok(FoundCrate::Name(name)) => format_ident!("{}", name),
+            // The SDK crate itself (its library says `extern crate self` under
+            // its own name, so the path works inside it too) or one of its
+            // examples, which reach it by that name.
+            Ok(FoundCrate::Itself) => syn::Ident::new(&sdk.replace('-', "_"), Span::call_site()),
+            Err(_) => continue,
+        };
+        return Paths {
+            widget: quote!(::#root::lumen_widget),
+            core: quote!(::#root::lumen_core),
+            ecs: quote!(::#root::bevy_ecs),
+        };
+    }
+    Paths {
+        widget: quote!(::lumen_widget),
+        core: quote!(::lumen_core),
+        ecs: quote!(::bevy_ecs),
+    }
 }
 
 fn parse_struct_attrs(attrs: &[Attribute]) -> syn::Result<StructAttrs> {
