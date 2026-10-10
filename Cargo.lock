@@ -4334,6 +4334,7 @@ dependencies = [
  "lumen-runtime",
  "rustix 1.1.4",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

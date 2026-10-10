@@ -40,9 +40,18 @@ lumen-module = { workspace = true }
 bevy_ecs = { workspace = true }
 
 # Sending SIGTERM without unsafe code: `process::stop` asks a child to end
-# before it kills it. Windows ends a child through std alone.
+# before it kills it.
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
+
+# The job object a child runs in on Windows, so a stop ends every program the
+# child started; std has no wrapper for it.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
 
 [features]
 default = ["engine-dylib"]

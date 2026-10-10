@@ -76,19 +76,23 @@
 //!
 //! `process::stop` sends `SIGTERM` to the child's process group on Unix, so
 //! the programs it started end with it, and kills the group if the child's
-//! exit has not been collected after [`child::GRACE`]; on Windows it ends the
-//! child itself at once. The
-//! exit event still arrives, last as always. A tag several children share
+//! exit has not been collected after [`child::GRACE`]. On Windows each child
+//! runs in a job object of its own, and a stop ends the job at once, the child
+//! and every program it started. The exit event still arrives, last as always. A tag several children share
 //! stops all of them. A child started with `end_at_exit` is ended the same
 //! way when the app's world is dropped, and the drop waits for it; an app
 //! killed outright never drops its world, so its children keep running.
 //!
 //! There is no way to write to a child's stdin.
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid` so the one module that needs the Win32 job
+// calls can allow it for itself; nothing else in the crate may.
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod child;
+#[cfg(windows)]
+mod job;
 
 mod plugin;
 

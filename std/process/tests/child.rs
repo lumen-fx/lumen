@@ -353,9 +353,8 @@ fn a_stop_ends_a_running_child_and_its_exit_arrives() {
 
 /// A stop ends the programs the child started too, so the exit is not held
 /// back until a grandchild closes the output it inherited, and nothing the
-/// child started outlives it. Unix only: a Windows stop ends the program
-/// itself, as the docs say.
-#[cfg(unix)]
+/// child started outlives it: its process group on Unix, its job object on
+/// Windows.
 #[test]
 fn a_stop_ends_the_programs_the_child_started() {
     let (running, log) = start_with(
@@ -406,8 +405,31 @@ fn assert_gone(pid: u32) {
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
-fn assert_gone(_pid: u32) {}
+#[cfg(not(target_os = "linux"))]
+fn assert_gone(pid: u32) {
+    // `tasklist` lists a process id only while that process runs; asking
+    // through it keeps the test free of the Win32 calls it would take to
+    // open the process. Elsewhere the timing check above stands alone.
+    if !cfg!(windows) {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let listed = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()))
+            .unwrap_or(false);
+        if !listed {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process {pid} is still running after the stop"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
 /// Stopping several children at once returns only once every one of them
 /// has ended.
