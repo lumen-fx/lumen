@@ -47,8 +47,13 @@ fn load_error(dir: &Path) -> String {
         .expect("the script failed to load")
 }
 
+/// `file` is written with `/`; join it a component at a time so the path
+/// matches the one the runtime prints, which uses the platform separator.
 fn at(dir: &Path, file: &str, line: u32) -> String {
-    format!("{}:{line}:", dir.join(file).display())
+    let path = file
+        .split('/')
+        .fold(dir.to_path_buf(), |path, part| path.join(part));
+    format!("{}:{line}:", path.display())
 }
 
 const CANDELA_BROKEN: &str = "import \"lumen.cdl\";\nfn on_ready() {\n    let n = 1;\n    \
