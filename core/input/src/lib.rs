@@ -674,7 +674,9 @@ pub fn dispatch_file_drops(
 /// * For [`TextInput`] focused entities, Enter emits a
 ///   [`TextInputCommitted`] carrying the input's *full* current text -
 ///   the canonical "submit" signal scripts use to react to a finished
-///   single-line edit.
+///   single-line edit. On a single-line field it also marks the edit
+///   [`lumen_core::input::EditCommitted`] until the next key, so the
+///   field takes the signal writes it held back while it keeps focus.
 /// * Focused **sliders** are exempt: a slider is a positional control,
 ///   and a synthetic click can't carry a meaningful pointer position -
 ///   the `position: Vec2::ZERO` placeholder made `set_slider_on_click`
@@ -727,6 +729,19 @@ pub fn activate_focused_on_enter(
                             text: text.clone(),
                         });
                     }
+                    // Enter ends a single-line edit: the field takes the
+                    // signal writes it held back while the user typed.
+                    if !*multiline {
+                        commands
+                            .entity(entity)
+                            .insert(lumen_core::input::EditCommitted);
+                    }
+                } else {
+                    // Any other key starts the next edit, which the
+                    // binding gate protects again.
+                    commands
+                        .entity(entity)
+                        .remove::<lumen_core::input::EditCommitted>();
                 }
             } else if !ev.repeat && !sliders.contains(entity) && !disabled.contains(entity) {
                 if is_enter {
