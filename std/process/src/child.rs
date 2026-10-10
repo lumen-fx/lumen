@@ -16,9 +16,10 @@
 //!   [`Event::Exit`]. A child ended by [`Running::stop`] reports its exit the
 //!   same way.
 //! - **A stop ends the program's own children too.** On Unix each child
-//!   leads a process group of its own, and a stop signals the group, so a
-//!   shell's `sleep` ends with the shell instead of holding the pipes, and
-//!   with them the exit, open.
+//!   leads a process group of its own, and a stop signals the group; on
+//!   Windows each child is put in a job object of its own, and a stop ends
+//!   the job. Either way a shell's `sleep` ends with the shell instead of
+//!   holding the pipes, and with them the exit, open.
 //! - **Every child is reaped exactly once, and signalled only while it is
 //!   unreaped.** The handle sits behind one lock, and only the supervisor
 //!   reaps, after both pipes close. An unreaped child keeps its process id,
@@ -92,7 +93,8 @@ pub type Refusal = String;
 /// end-of-file from stdin, and has both output pipes captured. A `cmd`
 /// carrying a path separator names a program relative to the app; a bare
 /// `cmd` is looked up on `PATH`. On Unix the child leads a new process group,
-/// which every program it starts joins unless it leaves on purpose.
+/// which every program it starts joins unless it leaves on purpose; on Windows
+/// it is put in a job object of its own, which every program it starts joins.
 pub fn start(
     cmd: &str,
     args: &[String],
@@ -147,6 +149,10 @@ fn program(cmd: &str) -> PathBuf {
 /// waits for input.
 fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal> {
     let pid = child.id();
+    // Assigned before the supervisor starts, so a stop that comes before the
+    // first line already reaches the whole tree.
+    #[cfg(windows)]
+    let job = crate::job::Job::assign(&child).map(Arc::new);
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let name = format!("lumen-process-{tag}");
@@ -156,6 +162,8 @@ fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal
     let running = Running {
         pid,
         slot: Arc::new(Mutex::new(Some(child))),
+        #[cfg(windows)]
+        job,
     };
     let body = {
         let name = name.clone();
@@ -189,6 +197,10 @@ fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal
 pub struct Running {
     pid: u32,
     slot: Arc<Mutex<Option<Child>>>,
+    /// The job the child and everything it starts run in. `None` when the
+    /// system would not make one, and a stop then ends the child alone.
+    #[cfg(windows)]
+    job: Option<Arc<crate::job::Job>>,
 }
 
 impl fmt::Debug for Running {
@@ -219,18 +231,43 @@ impl Running {
     }
 
     /// Ask the child to end: `SIGTERM` to its process group on Unix, which a
-    /// program may catch, and `TerminateProcess` on Windows, which it cannot.
+    /// program may catch, and the end of its job on Windows, which it cannot.
     /// Answers false when the child's exit has already been reported.
     pub fn terminate(&self) -> bool {
-        self.with_unreaped(|child| signal_tree(child, false))
+        self.with_unreaped(|child| self.signal_tree(child, false))
             .is_some()
     }
 
-    /// End the child outright: `SIGKILL` to its process group on Unix,
-    /// `TerminateProcess` on Windows. Does nothing once the child's exit has
-    /// been reported.
+    /// End the child outright: `SIGKILL` to its process group on Unix, the
+    /// end of its job on Windows. Does nothing once the child's exit has been
+    /// reported.
     pub fn kill(&self) {
-        let _ = self.with_unreaped(|child| signal_tree(child, true));
+        let _ = self.with_unreaped(|child| self.signal_tree(child, true));
+    }
+
+    /// Signal `child` and every program it started: `SIGTERM` to its process
+    /// group, or `SIGKILL` when `kill`. Windows has no signal to ask with, so
+    /// it ends the child's job either way, or the child alone when it has no
+    /// job.
+    fn signal_tree(&self, child: &mut Child, kill: bool) {
+        #[cfg(unix)]
+        {
+            let signal = if kill { Signal::KILL } else { Signal::TERM };
+            // The child leads its group, so its pid names the group.
+            let _ = kill_process_group(Pid::from_child(child), signal);
+        }
+        #[cfg(windows)]
+        {
+            let _ = kill;
+            if !self.job.as_ref().is_some_and(|job| job.terminate()) {
+                let _ = child.kill();
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = kill;
+            let _ = child.kill();
+        }
     }
 
     /// End the child the way `process::stop` does: [`terminate`](Self::terminate)
@@ -342,23 +379,6 @@ fn has_exited(child: &mut Child) -> bool {
         // A Windows process id stays reserved while its handle is open, so
         // asking through the handle cannot let it go.
         !matches!(child.try_wait(), Ok(None))
-    }
-}
-
-/// Signal `child` and everything in its process group: `SIGTERM`, or
-/// `SIGKILL` when `kill`. Windows has no group to signal, so it ends the
-/// child itself either way.
-fn signal_tree(child: &mut Child, kill: bool) {
-    #[cfg(unix)]
-    {
-        let signal = if kill { Signal::KILL } else { Signal::TERM };
-        // The child leads its group, so its pid names the group.
-        let _ = kill_process_group(Pid::from_child(child), signal);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = kill;
-        let _ = child.kill();
     }
 }
 
