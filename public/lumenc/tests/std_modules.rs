@@ -405,6 +405,7 @@ fn on_start() {
     print("fs: " + files::read("started.txt") + " under " + files::data_dir());
     print("download: " + str(download::to_file("http://127.0.0.1:1/none", "none.bin", "dl", "")));
     print("archive: " + str(archive::extract("none.zip", "none", "ar", Default::default())));
+    print("download cancel: " + str(download::cancel("nothing")));
     print("process: " + str(process::stop("nothing")));
     let opts = process::StartOptions { ..Default::default() };
     print("process opts: " + str(opts.end_at_exit));
@@ -464,6 +465,7 @@ fn a_desktop_compile_declares_the_modules_with_no_web_half() {
     assert!(text.contains("process: false"), "{text}");
     assert!(text.contains("process opts: false"), "{text}");
     assert!(text.contains("download: "), "{text}");
+    assert!(text.contains("download cancel: false"), "{text}");
     assert!(text.contains("archive: "), "{text}");
     assert!(app.join("compiled.txt").is_file(), "a run runs main");
     let _ = std::fs::remove_dir_all(&scratch);

@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use lumen_download::testkit::{BODY, DRIP_PAUSE, OTHER_BODY, STALL, TestServer};
-use lumen_download::transfer::{self, Checksum, Limits, Transferred};
+use lumen_download::transfer::{self, CANCELLED, Checksum, Control, Limits, Transferred};
 
 /// A fresh directory to download into.
 fn scratch(name: &str) -> PathBuf {
@@ -61,9 +61,16 @@ type Downloaded = (Result<Transferred, String>, Vec<Report>);
 /// Download one URL, counting the progress reports it made.
 fn fetch(url: &str, dest: &Path, checksum: &Checksum, limits: &Limits) -> Downloaded {
     let mut seen = Vec::new();
-    let outcome = transfer::to_file(url, dest, checksum, limits, &mut |received, total| {
-        seen.push((received, total));
-    });
+    let outcome = transfer::to_file(
+        url,
+        dest,
+        checksum,
+        limits,
+        &Control::default(),
+        &mut |received, total| {
+            seen.push((received, total));
+        },
+    );
     (outcome, seen)
 }
 
@@ -419,6 +426,44 @@ fn timeout_ms_fails_a_quiet_body_and_never_a_steady_one() {
         "the steady body has to outlast the timeout for this to prove anything"
     );
     assert_eq!(std::fs::read(&dest).expect("the file"), BODY);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cancel reaches a transfer stuck on a server that has gone quiet with no
+/// timeout configured: the transfer fails with the cancel's own message well
+/// before the stall ends, and leaves no file and no temp behind.
+#[test]
+fn a_cancel_ends_a_transfer_waiting_on_a_quiet_server() {
+    let server = TestServer::start();
+    let dir = scratch("cancel");
+    let dest = dir.join("stalled.bin");
+    let control = Control::default();
+    let canceller = {
+        let control = control.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            control.cancel()
+        })
+    };
+    let started = std::time::Instant::now();
+    let outcome = transfer::to_file(
+        &server.url("/stall"),
+        &dest,
+        &Checksum::None,
+        &Limits::default(),
+        &control,
+        &mut |_, _| {},
+    );
+    assert!(canceller.join().unwrap(), "the transfer was still running");
+    assert_eq!(outcome.expect_err("a cancelled transfer fails"), CANCELLED);
+    assert!(
+        started.elapsed() < STALL,
+        "the stall was waited out instead of cancelled"
+    );
+    assert!(!dest.exists(), "a cancelled transfer wrote a file");
+    assert!(temps(&dir).is_empty(), "the temp file was left behind");
+    assert!(!control.finish(), "a cancelled transfer cannot also finish");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
