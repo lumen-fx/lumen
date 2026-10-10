@@ -13,7 +13,9 @@
 //!   for as long as the installation lasts, so the launcher stub and the web
 //!   runtime a build downloads are the ones this compiler was published
 //!   beside. It is also what holds an `install.sh --version` pin in place: the
-//!   pinned version is the version the installer wrote.
+//!   pinned version is the version the installer wrote. A receipt that says
+//!   `nightly` names the rolling nightly prerelease, whose files are published
+//!   under the `nightly` tag rather than a version.
 //! * The releases page. A copy that was not installed, such as a cargo build
 //!   or an unpacked portable zip, has no receipt, so the newest published
 //!   release answers. `<repo>/releases/latest` redirects to it, and the last
@@ -59,9 +61,64 @@ pub fn latest_url() -> String {
     format!("{}/releases/latest", repo_url())
 }
 
-/// Where the files published with release `version` live.
-pub fn asset_base(version: &str) -> String {
-    format!("{}/releases/download/v{version}", repo_url())
+/// The tag the nightly prerelease is published under.
+pub const NIGHTLY: &str = "nightly";
+
+/// A published release this toolchain can draw files from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Release {
+    /// A numbered release, `vX.Y.Z` on the releases page; the bare version.
+    Version(String),
+    /// The rolling nightly prerelease. Its version number identifies nothing,
+    /// so it is named by its tag alone.
+    Nightly,
+}
+
+impl Release {
+    /// The tag the release's files are published under.
+    #[must_use]
+    pub fn tag(&self) -> String {
+        match self {
+            Release::Version(v) => format!("v{v}"),
+            Release::Nightly => NIGHTLY.to_string(),
+        }
+    }
+
+    /// The name the release's cached files are kept under.
+    #[must_use]
+    pub fn cache_name(&self) -> &str {
+        match self {
+            Release::Version(v) => v,
+            Release::Nightly => NIGHTLY,
+        }
+    }
+
+    /// Whether a `lumenc` built as `version` is the build this release
+    /// published, so a file that has to pair with the exact compiler can come
+    /// from it. A nightly's number identifies nothing, so an install of the
+    /// nightly is taken as its build; the files that need an exact match check
+    /// their build ids on top of this.
+    #[must_use]
+    pub fn is_build_of(&self, version: &str) -> bool {
+        match self {
+            Release::Version(v) => v == version,
+            Release::Nightly => true,
+        }
+    }
+}
+
+impl fmt::Display for Release {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Release::Version(v) => write!(f, "the v{v} release"),
+            Release::Nightly => write!(f, "the nightly prerelease"),
+        }
+    }
+}
+
+/// Where the files published with `release` live.
+pub fn asset_base(release: &Release) -> String {
+    format!("{}/releases/download/{}", repo_url(), release.tag())
 }
 
 /// The version this binary was built as. It says what this copy is, never what
@@ -75,14 +132,14 @@ pub fn current() -> &'static str {
 ///
 /// An installed copy answers from its receipt without a request. Anything else
 /// asks the releases page, and the answer is kept for a day.
-pub fn resolve() -> Result<String, Unresolved> {
+pub fn resolve() -> Result<Release, Unresolved> {
     let receipt = receipt_text();
     let now = unix_now().unwrap_or(0);
     let answer = decide(receipt.as_deref(), &read_state(), now, fetch_latest)?;
     if let Answer::Asked(version) = &answer {
         write_state(now, Some(version));
     }
-    Ok(answer.into_version())
+    Ok(answer.into_release())
 }
 
 /// Which of the things that can name a release did, so a caller knows whether
@@ -90,7 +147,7 @@ pub fn resolve() -> Result<String, Unresolved> {
 #[derive(Debug, PartialEq, Eq)]
 enum Answer {
     /// The receipt named the release this copy was installed from.
-    Installed(String),
+    Installed(Release),
     /// The answer from an earlier run was still inside its day.
     Remembered(String),
     /// The releases page answered just now.
@@ -100,9 +157,10 @@ enum Answer {
 }
 
 impl Answer {
-    fn into_version(self) -> String {
+    fn into_release(self) -> Release {
         match self {
-            Answer::Installed(v) | Answer::Remembered(v) | Answer::Asked(v) | Answer::Stale(v) => v,
+            Answer::Installed(release) => release,
+            Answer::Remembered(v) | Answer::Asked(v) | Answer::Stale(v) => Release::Version(v),
         }
     }
 }
@@ -260,7 +318,7 @@ pub(crate) fn receipt_text() -> Option<String> {
 
 /// The receipt for the running executable. Symlinks are resolved first so a
 /// `~/.local/bin/lumenc` symlink into the install prefix still finds it.
-fn receipt_path() -> Option<PathBuf> {
+pub(crate) fn receipt_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     receipt_path_from(&exe)
@@ -273,13 +331,17 @@ fn receipt_path_from(exe: &Path) -> Option<PathBuf> {
     Some(prefix.join("share").join("lumen").join("lumen.receipt"))
 }
 
-/// The release a receipt records. A receipt whose `version` line is damaged
-/// reads as no receipt at all, so the releases page answers instead of a
-/// malformed URL being built.
-pub(crate) fn installed_release(receipt: &str) -> Option<String> {
+/// The release a receipt records. `install.sh --version nightly` records the
+/// nightly by its tag. A receipt whose `version` line is damaged reads as no
+/// receipt at all, so the releases page answers instead of a malformed URL
+/// being built.
+pub(crate) fn installed_release(receipt: &str) -> Option<Release> {
     let value = receipt_field(receipt, "version")?;
+    if value == NIGHTLY {
+        return Some(Release::Nightly);
+    }
     let value = value.strip_prefix('v').unwrap_or(&value).to_string();
-    parse_version(&value).map(|_| value)
+    parse_version(&value).map(|_| Release::Version(value))
 }
 
 /// Whether a receipt records a pinned install. Pinning is a decision, so a
@@ -464,7 +526,10 @@ mod tests {
             1_000_000,
             page(Ok("9.9.9".to_string()), &asked),
         );
-        assert_eq!(answer, Ok(Answer::Installed("0.1.0".to_string())));
+        assert_eq!(
+            answer,
+            Ok(Answer::Installed(Release::Version("0.1.0".to_string())))
+        );
         assert_eq!(asked.get(), 0, "the receipt already answered");
     }
 
@@ -479,7 +544,10 @@ mod tests {
             1_000_000,
             page(Ok("9.9.9".to_string()), &asked),
         );
-        assert_eq!(answer.map(Answer::into_version), Ok("0.1.0".to_string()));
+        assert_eq!(
+            answer.map(Answer::into_release),
+            Ok(Release::Version("0.1.0".to_string()))
+        );
         assert_eq!(asked.get(), 0);
         assert!(is_pinned_receipt(PINNED));
         assert!(!is_pinned_receipt(RECEIPT));
@@ -511,11 +579,33 @@ mod tests {
     /// rather than turned into `vv0.1.0` further down.
     #[test]
     fn a_receipt_version_reads_with_or_without_the_v() {
-        assert_eq!(
-            installed_release("version v0.1.0\n").as_deref(),
-            Some("0.1.0")
+        let v010 = Some(Release::Version("0.1.0".to_string()));
+        assert_eq!(installed_release("version v0.1.0\n"), v010);
+        assert_eq!(installed_release(RECEIPT), v010);
+    }
+
+    /// `install.sh --version nightly` records the tag as the version, and that
+    /// names the nightly prerelease, whose files live under its own tag. It
+    /// must not fall through to the newest release, whose kits were written
+    /// for another compiler.
+    #[test]
+    fn a_nightly_receipt_names_the_nightly_prerelease() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            Some("version nightly\npinned nightly\n"),
+            &State::default(),
+            1_000_000,
+            page(Ok("0.0.8".to_string()), &asked),
         );
-        assert_eq!(installed_release(RECEIPT).as_deref(), Some("0.1.0"));
+        assert_eq!(answer, Ok(Answer::Installed(Release::Nightly)));
+        assert_eq!(asked.get(), 0, "the receipt already answered");
+        assert!(Release::Nightly.is_build_of("0.0.9"));
+        assert_eq!(Release::Nightly.cache_name(), "nightly");
+        assert_eq!(Release::Nightly.to_string(), "the nightly prerelease");
+        assert_eq!(
+            asset_base(&Release::Nightly),
+            format!("https://github.com/{}/releases/download/nightly", repo())
+        );
     }
 
     /// A copy that was not installed asks the page, and the answer is one the
@@ -826,7 +916,7 @@ mod tests {
         let repo = repo();
         assert!(latest_url().starts_with(&format!("https://github.com/{repo}/")));
         assert_eq!(
-            asset_base("1.2.3"),
+            asset_base(&Release::Version("1.2.3".to_string())),
             format!("https://github.com/{repo}/releases/download/v1.2.3")
         );
     }

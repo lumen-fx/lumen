@@ -209,7 +209,7 @@ pub(crate) fn open(
     lib_dir: Option<&Path>,
 ) -> Result<(PathBuf, Manifest), String> {
     let kit = locate(kind, target, lib_dir)?;
-    let manifest = read_manifest(&kit, target)?;
+    let manifest = read_manifest(&kit, target, kind.dir_env())?;
     if !kind.holds(manifest.artifact.kind) {
         return Err(format!(
             "the kit in {} links {}, and this package needs one that links {}",
@@ -305,8 +305,9 @@ fn named_kit(dir: &Path, env: &str) -> Result<PathBuf, String> {
 ///
 /// The schema is checked before anything else is read, and the target after
 /// it: a kit is one platform's link line, and replaying another platform's
-/// would fail deep inside a linker rather than here.
-fn read_manifest(kit: &Path, target: Target) -> Result<Manifest, String> {
+/// would fail deep inside a linker rather than here. `env` is the variable
+/// that names a kit by hand, which a refusal offers as the way round it.
+fn read_manifest(kit: &Path, target: Target, env: &str) -> Result<Manifest, String> {
     let path = kit.join(MANIFEST);
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -316,7 +317,8 @@ fn read_manifest(kit: &Path, target: Target) -> Result<Manifest, String> {
         return Err(format!(
             "the link kit in {} was written against schema {} and this lumenc reads schema \
              {SCHEMA_VERSION}. A kit and the lumenc that replays it come from one release; \
-             use the kit published with this one.",
+             use the kit published with this one, or point {env} at a kit recorded from this \
+             build.",
             kit.display(),
             manifest.schema
         ));
@@ -1336,31 +1338,39 @@ mod tests {
         let mut manifest = manifest(unix(), ArtifactKind::Append);
         manifest.schema = SCHEMA_VERSION + 1;
         write_manifest(&kit, &manifest);
-        let error = read_manifest(&kit, target).expect_err("a newer schema is refused");
+        let error = read_manifest(&kit, target, "LUMEN_LINK_KIT_DIR")
+            .expect_err("a newer schema is refused");
         assert!(error.contains("schema"), "{error}");
+        assert!(
+            error.contains("LUMEN_LINK_KIT_DIR"),
+            "the way round is named: {error}"
+        );
 
         manifest.schema = SCHEMA_VERSION;
         manifest.target = "macos-aarch64".to_string();
         write_manifest(&kit, &manifest);
-        let error = read_manifest(&kit, target).expect_err("another platform's kit is refused");
+        let error = read_manifest(&kit, target, "LUMEN_LINK_KIT_DIR")
+            .expect_err("another platform's kit is refused");
         assert!(error.contains("macos-aarch64"), "{error}");
         assert!(error.contains("linux-x86_64"), "{error}");
 
         manifest.target = "linux-x86_64".to_string();
         write_manifest(&kit, &manifest);
         assert_eq!(
-            read_manifest(&kit, target)
+            read_manifest(&kit, target, "LUMEN_LINK_KIT_DIR")
                 .expect("its own target reads")
                 .target,
             "linux-x86_64"
         );
 
         std::fs::write(kit.join(MANIFEST), b"{ not a manifest").expect("write");
-        let error = read_manifest(&kit, target).expect_err("the manifest does not parse");
+        let error = read_manifest(&kit, target, "LUMEN_LINK_KIT_DIR")
+            .expect_err("the manifest does not parse");
         assert!(error.contains(MANIFEST), "{error}");
 
         let _ = std::fs::remove_dir_all(&kit);
-        let error = read_manifest(&kit, target).expect_err("there is no manifest");
+        let error =
+            read_manifest(&kit, target, "LUMEN_LINK_KIT_DIR").expect_err("there is no manifest");
         assert!(error.contains("read "), "{error}");
     }
 
