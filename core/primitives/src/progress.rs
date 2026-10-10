@@ -13,10 +13,11 @@
 //! progress       { progress-duration: var(--lumen-progress-period); }
 //! ```
 //!
-//! - Determinate (`value=` / `bind-value=`): the fill's width tracks
-//!   `value / max` as a percent of the track.
-//! - Indeterminate (no `value`, no `bind-value`): a 30 %-wide chunk
-//!   sweeps back and forth (GTK-style bounce; period from
+//! - Determinate (`value=`, or a `bind-value=` signal once it holds a
+//!   number): the fill's width tracks `value / max` as a percent of the
+//!   track.
+//! - Indeterminate (no `value`, and no number yet in a `bind-value`
+//!   signal): a 30 %-wide chunk sweeps back and forth (GTK-style bounce; period from
 //!   `progress-duration`, token `--lumen-progress-period`). The sweep
 //!   keeps the frame loop awake via [`AnimationsActive`] only while an
 //!   indeterminate bar is actually visible.
