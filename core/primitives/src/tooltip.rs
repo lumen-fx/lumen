@@ -32,7 +32,8 @@ use lumen_core::components::{
 use lumen_core::input::Hovered;
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
-use lumen_core::time::Instant;
+use lumen_core::tick::WakeDeadline;
+use lumen_core::time::{Duration, Instant};
 use lumen_widget_macros::Widget;
 
 /// Authored on the trigger via `<tooltip text="..." delay="...">`. The
@@ -110,9 +111,21 @@ impl Plugin for TooltipPlugin {
 }
 
 /// Stamp `HoverStartedAt` on any entity that just gained `Hovered`.
-fn record_hover_started(mut commands: Commands, new_hovers: Query<Entity, Added<Hovered>>) {
-    for e in &new_hovers {
-        commands.entity(e).insert(HoverStartedAt(Instant::now()));
+///
+/// A tooltip trigger also asks the loop to wake when its delay runs out:
+/// with the pointer resting on the trigger nothing else may tick, and the
+/// popup only spawns on a tick.
+fn record_hover_started(
+    mut commands: Commands,
+    new_hovers: Query<(Entity, Option<&TooltipSource>), Added<Hovered>>,
+    wake: Option<Res<WakeDeadline>>,
+) {
+    let now = Instant::now();
+    for (e, src) in &new_hovers {
+        commands.entity(e).insert(HoverStartedAt(now));
+        if let (Some(src), Some(wake)) = (src, wake.as_deref()) {
+            wake.request(now + Duration::from_millis(u64::from(src.delay_ms)));
+        }
     }
 }
 
@@ -168,6 +181,7 @@ fn spawn_tooltip_popups(
     existing: Query<&TooltipPopup>,
     viewport: Option<Res<Viewport>>,
     pointer: Option<Res<lumen_core::input::PointerState>>,
+    wake: Option<Res<WakeDeadline>>,
 ) {
     let already: std::collections::HashSet<Entity> = existing.iter().map(|p| p.trigger).collect();
     let now = Instant::now();
@@ -179,7 +193,13 @@ fn spawn_tooltip_popups(
         if already.contains(&trigger) {
             continue;
         }
-        if now.duration_since(started.0).as_millis() < u128::from(src.delay_ms) {
+        let due = started.0 + Duration::from_millis(u64::from(src.delay_ms));
+        if now < due {
+            // Still dwelling: keep the loop's wake-up booked for the moment
+            // the delay ends, since the deadline is cleared every tick.
+            if let Some(wake) = wake.as_deref() {
+                wake.request(due);
+            }
             continue;
         }
         let est = estimated_tooltip_size(&src.text);
@@ -358,5 +378,30 @@ mod tests {
             12.0,
         );
         assert_eq!(o, Vec2::ZERO);
+    }
+
+    /// A trigger resting under the pointer books a wake-up for when its delay
+    /// ends, on the first hovered tick and on every tick until the popup
+    /// spawns, so an idle loop still shows the tooltip.
+    #[test]
+    fn a_dwelling_trigger_wakes_the_loop_when_its_delay_ends() {
+        let mut app = App::new();
+        app.add_plugin(TooltipPlugin);
+        let before = Instant::now();
+        app.world.spawn((
+            TooltipSource {
+                text: "Save".into(),
+                delay_ms: 10_000,
+                ..Default::default()
+            },
+            Transform::default(),
+            Hovered,
+        ));
+        for _ in 0..2 {
+            app.tick();
+            let at = lumen_core::tick::wake_deadline(&app.world).expect("a wake-up is booked");
+            assert!(at >= before + Duration::from_millis(10_000));
+            assert!(at <= Instant::now() + Duration::from_millis(10_000));
+        }
     }
 }
