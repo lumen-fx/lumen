@@ -131,6 +131,9 @@ async fn start(manifest_url: Option<String>, addons: &JsValue) -> Result<(), Boo
     );
     apply_seed(&mut app.world, &loaded.seed);
     let root_entity = loaded.artifact.spawn_into(&mut app.world);
+    // The `<if>` / `<for>` bodies the starting state opens, mounted before the
+    // first tick so `on_ready` finds them, the way the desktop does.
+    lumen_scene::spawn::settle_tree(&mut app.world);
     // What the page says the app wrote onto its nodes. Applied after the
     // spawn, because it names nodes and there are none before it.
     apply_node_seed(&mut app.world, root_entity, &loaded.seed);

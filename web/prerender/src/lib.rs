@@ -281,6 +281,9 @@ pub fn boot(
 
     apply_seed(&mut app.world, seed);
     let root = compiled.spawn_into(&mut app.world);
+    // The `<if>` / `<for>` bodies the starting state opens, mounted before the
+    // first tick so `on_ready` finds them, the way the desktop does.
+    lumen_scene::spawn::settle_tree(&mut app.world);
     // What the app wrote onto a node the last time it ran, for a render that
     // starts from a page rather than from nothing.
     apply_node_seed(&mut app.world, root, seed);

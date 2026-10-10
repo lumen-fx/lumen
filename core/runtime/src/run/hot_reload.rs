@@ -362,6 +362,9 @@ pub(crate) fn hot_reload(world: &mut World) {
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
     crate::run::restyle::install_root_class_list(world, new_root);
+    // As at startup: the `<if>` / `<for>` bodies the live signals open are
+    // mounted now, so the re-armed `on_ready` finds them.
+    crate::spawn::settle_tree(world);
     let authored_text = authored_texts(world);
     restore_stateful_components(world, &preserved);
 
