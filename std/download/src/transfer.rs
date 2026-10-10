@@ -22,6 +22,10 @@ use std::time::Duration;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use ureq::Agent;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{Connector as _, DefaultConnector};
+
+use crate::idle::IdleConnector;
 
 /// How much is read from the socket before the progress callback is offered
 /// another figure.
@@ -280,19 +284,25 @@ fn stream(
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(u64, Option<u64>), Failure> {
     // No deadline covers the whole transfer: one would kill exactly the large
-    // downloads this module exists for. The receive timeout also bounds each
-    // read of the body, so it works as an idle limit there: a body that keeps
-    // arriving runs as long as it takes, and one that stops for longer than
-    // the timeout fails. Redirects (ten deep) and TLS (rustls over the
-    // web-PKI roots) are ureq's defaults.
+    // downloads this module exists for. Resolution and the connection are
+    // bounded by ureq; every wait for the server after that is capped by
+    // `IdleConnector`, so a body that keeps arriving runs as long as it takes
+    // and one that stops for longer than the timeout fails. Redirects (ten
+    // deep) and TLS (rustls over the web-PKI roots) are ureq's defaults.
     let timeout = limits.timeout_ms.map(Duration::from_millis);
     let config = Agent::config_builder()
         .http_status_as_error(false)
         .timeout_resolve(timeout)
         .timeout_connect(timeout)
-        .timeout_recv_response(timeout)
         .build();
-    let agent: Agent = config.into();
+    let agent = match timeout {
+        Some(limit) => Agent::with_parts(
+            config,
+            DefaultConnector::new().chain(IdleConnector { limit }),
+            DefaultResolver::default(),
+        ),
+        None => Agent::new_with_config(config),
+    };
 
     let mut reply = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
     let status = reply.status().as_u16();
