@@ -195,6 +195,11 @@ pub use lumen_widget as widget;
 /// build against the exact workspace version.
 pub use bevy_ecs as ecs;
 
+/// The math crate (`glam`) the engine's components and messages carry, such as
+/// the `Vec2` of a click's position. Name it through here: a dependency of an
+/// app's own would be a second copy whose types are not these.
+pub use glam;
+
 /// Typed reactive property store and typed [`Property`] handle.
 pub use lumen_core::property_store::{Property, PropertyStore};
 
@@ -213,9 +218,20 @@ pub use lumen_script::{
 /// Brings in [`App`], the plugin groups, typed [`Signals`], the run-condition
 /// adapters, the common components, the typed signal surface, and the
 /// `bevy_ecs` items systems need (`Query`, `Res`, `ResMut`, `Commands`,
-/// `MessageReader`, `.chain()` / `.run_if()` via `IntoScheduleConfigs`).
+/// `MessageReader`, `.chain()` / `.run_if()` via `IntoScheduleConfigs`), and
+/// the derives an app defines its own data with (`Component`, `Resource`,
+/// `Message`, `Bundle`, `Widget`). Import it with a glob: the `bevy_ecs`
+/// derives find the ECS crate through the `bevy_ecs` name this module also
+/// brings in, so an app needs no dependency on that crate.
 pub mod prelude {
-    use crate::{bevy_ecs, lumen_core, lumen_widget, lumen_widget_macros};
+    use crate::{lumen_core, lumen_widget, lumen_widget_macros};
+
+    // The ECS crate itself, under its own name. The `bevy_ecs` derives an app
+    // writes (`Component`, `Resource`, `Message`, ...) expand to paths that
+    // start with `bevy_ecs::`, and an app must not depend on that crate itself:
+    // a second copy is a second set of types. Glob-importing the prelude puts
+    // the engine's copy under that name, which is what the expansion finds.
+    pub use crate::bevy_ecs;
 
     pub use crate::{App, Error, Result};
     pub use crate::{EventCtx, EventKind};
@@ -266,7 +282,8 @@ pub mod prelude {
     // brings `.chain()` / `.run_if()` / `.after()` into scope.
     pub use bevy_ecs::message::{MessageReader, MessageWriter};
     pub use bevy_ecs::prelude::{
-        Commands, Entity, IntoScheduleConfigs, Local, Query, Res, ResMut, Resource, With, Without,
+        Bundle, Commands, Component, Entity, IntoScheduleConfigs, Local, Message, Query, Res,
+        ResMut, Resource, With, Without,
     };
     pub use bevy_ecs::query::Changed;
 }

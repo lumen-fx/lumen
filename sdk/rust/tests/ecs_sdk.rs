@@ -5,9 +5,6 @@
 // engine crate it re-exports stands in for it under the same name.
 extern crate lumenui_engine as lumenui;
 
-// `#[derive(Resource)]` expands to `bevy_ecs` paths, and the SDK's copy of the
-// crate is the one the engine library carries.
-use lumenui::bevy_ecs;
 use lumenui::ecs_app::{App as EcsApp, Plugin};
 use lumenui::plugins::PluginGroupBuilder;
 use lumenui::prelude::*;
@@ -156,7 +153,7 @@ fn on_click_closure_fires_and_writes_signal() {
     let go = app.world.spawn(LumenId("go".to_string())).id();
     app.world.write_message(ClickEvent {
         entity: go,
-        position: glam::Vec2::ZERO,
+        position: lumenui::glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
         local: None,
     });
@@ -179,7 +176,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
     let special = app.world.spawn(LumenId("special".to_string())).id();
     app.world.write_message(ClickEvent {
         entity: special,
-        position: glam::Vec2::ZERO,
+        position: lumenui::glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
         local: None,
     });
@@ -195,7 +192,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
     let plain = app.world.spawn_empty().id();
     app.world.write_message(ClickEvent {
         entity: plain,
-        position: glam::Vec2::ZERO,
+        position: lumenui::glam::Vec2::ZERO,
         button: lumenui::input::PointerButton::Primary,
         local: None,
     });

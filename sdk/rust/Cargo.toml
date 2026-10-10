@@ -49,7 +49,9 @@ lumenc = { workspace = true, features = ["runtime-parse", "dev-run"] }
 [target.'cfg(windows)'.dependencies]
 lumen = { workspace = true }
 
-
-[dev-dependencies]
-# Tests construct `ClickEvent { position: Vec2, .. }` directly.
+[dependencies]
+# The math types the engine's components and messages carry (a click's
+# `position` is a `Vec2`), re-exported so an app names them through the SDK.
+# The same crate the engine resolves, not a second copy: one version, one
+# workspace pin.
 glam.workspace = true
