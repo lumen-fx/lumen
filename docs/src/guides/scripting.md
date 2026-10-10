@@ -82,7 +82,9 @@ Two entry points run automatically:
   The element tree is not queryable yet, so a lookup here finds nothing. Use it
   to seed signals and register handlers.
 - `on_ready()` runs on the first tick, once the tree is mounted and queryable.
-  Build your initial dynamic content here.
+  The tree already reflects what `on_start` wrote: the body of an `<if>` its
+  signals open, and the rows of a `<for>` over an array it set, are there to
+  find and to append to. Build your initial dynamic content here.
 
 `on_ready` is re-armed by hot reload, so a script that builds elements rebuilds
 them after every edit.

@@ -115,3 +115,97 @@ fn rearmed_latch_fires_on_ready_again() {
         "re-arming the latch must dispatch on_ready exactly once more"
     );
 }
+
+/// Write `files` (path relative to the app root, contents) into a fresh app
+/// directory named after `tag`.
+fn write_app(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "lumen_candela_on_ready_{tag}_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    for (path, body) in files {
+        std::fs::write(dir.join(path), body).unwrap();
+    }
+    dir
+}
+
+/// `on_ready` finds the elements inside an `<if>` that `on_start` opened, in
+/// either mode, and the rows of a `<for>` over an array it set, and a node it
+/// appends to one attaches there.
+#[test]
+fn on_ready_finds_the_body_of_an_if_on_start_opened() {
+    let _isolation = isolate();
+    let dir = write_app(
+        "if_body",
+        &[
+            (
+                "src/main.lmn",
+                r#"<root>
+  <if signal="page" eq="a" mode="hide"><row id="chips"/></if>
+  <if signal="flag"><row id="chips3"/></if>
+  <column id="list">
+    <for each="rows" key="id"><label class="row" text="{title}" /></for>
+  </column>
+  <label id="seen" bind-text="seen" text="waiting" />
+  <script src="main.cdl"/>
+</root>
+"#,
+            ),
+            (
+                "src/main.cdl",
+                r#"import "lumen.cdl";
+fn on_start() {
+    signal<string>("page").set("a");
+    signal<bool>("flag").set(true);
+    lumen::signal_array_set("rows", [{"id": "a", "title": "Alpha"}, {"id": "b", "title": "Beta"}]);
+}
+fn on_ready() {
+    let a = lumen::node_get_by_id("chips");
+    let b = lumen::node_get_by_id("chips3");
+    let rows = lumen::node_query(".row");
+    lumen::signal_set("seen", str(a != 0) + " " + str(b != 0) + " " + str(rows.len()));
+    let chip = create("label");
+    chip.set_id("chip");
+    chip.set_text("first chip");
+    get_by_id("chips").append(chip);
+}
+fn main() {}
+"#,
+            ),
+        ],
+    );
+    let (mut app, _window) = build_headless_app(RunOptions::new(&dir)).expect("build_headless_app");
+    for _ in 0..5 {
+        app.tick();
+    }
+    assert_eq!(
+        label_text(&mut app, "seen").as_deref(),
+        Some("true true 2"),
+        "on_ready resolved both gated elements and the rows"
+    );
+    assert_eq!(
+        label_text(&mut app, "chip").as_deref(),
+        Some("first chip"),
+        "the node on_ready appended attached under the gated row"
+    );
+    let chip_parent = {
+        use lumen_core::components::LumenId;
+        let mut q = app
+            .world
+            .query::<(&LumenId, &bevy_ecs::hierarchy::ChildOf)>();
+        q.iter(&app.world)
+            .find(|(lid, _)| lid.0.as_str() == "chip")
+            .map(|(_, c)| c.parent())
+    };
+    let chips = {
+        use lumen_core::components::LumenId;
+        let mut q = app.world.query::<(bevy_ecs::entity::Entity, &LumenId)>();
+        q.iter(&app.world)
+            .find(|(_, lid)| lid.0.as_str() == "chips")
+            .map(|(e, _)| e)
+    };
+    assert_eq!(chip_parent, chips, "the chip sits under #chips");
+}

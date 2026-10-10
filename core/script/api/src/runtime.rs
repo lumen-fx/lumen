@@ -291,18 +291,22 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             );
             app.world.insert_resource(ScriptLoadFailure(e.to_string()));
         }
-        // Fire on_start once now that the program is loaded. Any commands
-        // it produced are re-stashed into the sink and drained on the
-        // first tick through the normal ScriptCommandEvent path
-        // (apply_script_commands is downstream of the message bus, not
-        // the sink).
-        match self.host.call("on_start", &[]) {
-            Ok(outcome) => self.host.push_commands(outcome.commands),
+        // Fire on_start once now that the program is loaded. Its signal
+        // writes land in the store here, so the tree the app spawns next
+        // starts from them and the `<if>` / `<for>` pass the app runs before
+        // the first tick mounts what they open. Everything else it produced
+        // is re-stashed into the sink and drained on the first tick through
+        // the normal ScriptCommandEvent path (apply_script_commands is
+        // downstream of the message bus, not the sink).
+        let commands = match self.host.call("on_start", &[]) {
+            Ok(outcome) => outcome.commands,
             Err(failure) => {
                 warn_line!("{}: on_start failed: {failure}", prefix(lang));
-                self.host.push_commands(failure.commands);
+                failure.commands
             }
-        }
+        };
+        let rest = apply_signal_writes(&mut app.world, commands);
+        self.host.push_commands(rest);
         app.world.insert_resource(self.host);
         app.world.insert_resource(ScriptStartedAt(Instant::now()));
         // -- Once per app, however many hosts are installed ---------------
@@ -565,6 +569,42 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 .after(ScriptSet::SyncSignals),
         );
     }
+}
+
+/// Apply the signal writes among `commands` to the world's store and answer
+/// the rest, in their order.
+///
+/// What `on_start` writes is the state the app starts in, so it goes in before
+/// the tree is spawned rather than on the first tick. A world with no store
+/// (a bare test app) takes none of them here, and they all travel on as
+/// commands.
+fn apply_signal_writes(world: &mut World, commands: Vec<ScriptCommand>) -> Vec<ScriptCommand> {
+    if !world.contains_resource::<lumen_core::property_store::PropertyStore>() {
+        return commands;
+    }
+    world.init_resource::<lumen_core::signals::ArraySignals>();
+    let mut rest = Vec::with_capacity(commands.len());
+    for command in commands {
+        match command {
+            ScriptCommand::SetSignal { name, value } => {
+                world
+                    .resource_mut::<lumen_core::property_store::PropertyStore>()
+                    .set_global_str(&name, value.as_str());
+            }
+            ScriptCommand::SetProperty { key, value } => {
+                world
+                    .resource_mut::<lumen_core::property_store::PropertyStore>()
+                    .set(key, value);
+            }
+            ScriptCommand::SetArray { name, items } => {
+                world
+                    .resource_mut::<lumen_core::signals::ArraySignals>()
+                    .set(name, items);
+            }
+            other => rest.push(other),
+        }
+    }
+    rest
 }
 
 /// Hot-reload orchestration entry: swap the loaded program on the live

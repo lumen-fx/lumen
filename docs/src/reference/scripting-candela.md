@@ -190,7 +190,7 @@ Define these as free functions. Each is optional; a missing hook is a no-op.
 | Hook | Fires |
 | --- | --- |
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `node_get_by_id` returns `0`. |
-| `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here. Re-armed after a hot reload, so it runs again on the fresh tree. |
+| `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here, including inside the `<if>` and `<for>` bodies the signals `on_start` wrote open. Re-armed after a hot reload, so it runs again on the fresh tree. |
 | `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
 | `on_archive_done(tag: string, dest: string, count: int)` | When an extraction started through the `lumen-archive` module finishes; `count` is the number of files written. |
 | `on_archive_error(tag: string, message: string)` | When an extraction started through the `lumen-archive` module is refused or fails. |

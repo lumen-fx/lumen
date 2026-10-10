@@ -406,6 +406,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
     crate::run::restyle::install_root_class_list(&mut app.world, root);
+    // The `<if>` / `<for>` bodies `on_start`'s writes open, mounted before the
+    // first tick so `on_ready` finds them.
+    crate::spawn::settle_tree(&mut app.world);
 
     // Pages: install the page registry, in-memory history, the reserved
     // `route.*` signal seeds, and the navigation systems (`apply_navigation`

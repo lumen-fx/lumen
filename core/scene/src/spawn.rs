@@ -1637,6 +1637,28 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     id
 }
 
+/// Bring a just-spawned tree in line with the state the app starts in, before
+/// its first tick.
+///
+/// `on_start` has run by the time the tree spawns and its signal writes are in
+/// the store, but the `<if>` and `<for>` bodies they open are mounted by the
+/// reconcilers, which run on a tick. Run here once, so the tree the first
+/// tick indexes already holds them: `on_ready`, which runs on that tick, finds
+/// an element inside an `<if>` that starts truthy, and a node it appends
+/// there attaches. Writes queued on the external buses (a host's typed
+/// signal builtins, an embedder writing before the run) are taken in first.
+///
+/// One pass: an `<if>` inside a body mounted here mounts on the first tick.
+pub fn settle_tree(world: &mut bevy_ecs::world::World) {
+    use bevy_ecs::system::RunSystemOnce;
+    // A world missing what a pass reads (a bare test app) skips that pass;
+    // the first tick runs the same systems with the same result.
+    let _ = world.run_system_once(lumen_core::property_store::drain_external_properties);
+    let _ = world.run_system_once(lumen_core::signals::drain_external_signals);
+    let _ = world.run_system_once(reconcile_for_blocks);
+    let _ = world.run_system_once(reconcile_if_blocks);
+}
+
 /// Reconcile every `<if>` block against the current [`PropertyStore`]
 /// truthiness. Truthy: property exists AND value is not empty AND is not
 /// literal `"false"` / `"0"`.
