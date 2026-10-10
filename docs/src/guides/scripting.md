@@ -147,6 +147,11 @@ suppresses the navigation an `<a href>` would otherwise perform. Key events go
 to the focused element; with nothing focused they go to the document, so bind
 app-wide shortcuts on `document_node()`.
 
+A handler that raises an uncaught error stops at that line and the error is
+reported; the app keeps running. What the handler did before the error stays
+done, as it does in a browser: text it set, signals it wrote, timers it armed,
+and lines it printed all apply.
+
 ## Reading and writing signals
 
 Signals are the shared state bus between markup and script. Writing one updates

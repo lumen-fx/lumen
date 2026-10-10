@@ -39,8 +39,8 @@ use std::sync::{Arc, RwLock};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, Credentials, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore,
-    ScriptHost, ScriptNs, ScriptValue,
+    CallFailure, CallOutcome, Credentials, ScriptCommand, ScriptContext, ScriptError, ScriptFn,
+    ScriptFnStore, ScriptHost, ScriptNs, ScriptValue,
 };
 use mlua::{
     Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value as LuaValue, Variadic,
@@ -1233,17 +1233,6 @@ impl LuaHost {
         None
     }
 
-    /// Variadic event call returning only the drained commands.
-    /// Concrete-caller convenience; the trait entry is
-    /// [`ScriptHost::call`].
-    pub fn call_event(
-        &mut self,
-        fn_name: &str,
-        args: &[ScriptValue],
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        Ok(self.call(fn_name, args)?.commands)
-    }
-
     /// Put commands back into the sink so they flush on the next tick.
     /// Used after `on_start` fires during plugin build.
     pub fn push_commands_back(&mut self, cmds: Vec<ScriptCommand>) {
@@ -1400,47 +1389,34 @@ impl ScriptHost for LuaHost {
         LuaHost::reset(self);
     }
 
-    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError> {
+    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, CallFailure> {
         // A missing global (or a non-function global) is silent success:
-        // `found: false`, `ret: None`. Commands are drained regardless
-        // (builtins invoked before/outside the call may have queued).
+        // `found: false`, `ret: None`. The sink drains on every path, an
+        // error included: what the function queued before it raised still
+        // applies.
         let func: Option<Function> = match self.lua.globals().get::<LuaValue>(fn_name) {
             Ok(LuaValue::Function(f)) => Some(f),
             _ => None,
         };
-        let ret = match func {
-            None => None,
-            Some(f) => {
-                let mut lua_args: Vec<LuaValue> = Vec::with_capacity(args.len());
-                for a in args {
-                    lua_args.push(
-                        script_value_to_lua(&self.lua, a)
-                            .map_err(|e| ScriptError::Runtime(e.to_string()))?,
-                    );
-                }
-                match f.call::<LuaValue>(Variadic::from_iter(lua_args)) {
-                    Ok(v) => Some(lua_value_to_script_value(&v)),
-                    Err(e) => {
-                        // A handler that queued commands (set_text, set_signal,
-                        // fetch, notify, ...) and *then* errored must
-                        // contribute NO commands: draining only on the success
-                        // path would leak them into the sink, where the next
-                        // unrelated event's outcome would apply them. Discard
-                        // the partial batch before propagating the error.
-                        // Mirrors `lumen-rhai`'s
-                        // `call_event_dyn_with_result`.
-                        self.sink.lock().clear();
-                        return Err(ScriptError::Runtime(e.to_string()));
-                    }
-                }
-            }
+        let result = match func {
+            None => Ok(None),
+            Some(f) => args
+                .iter()
+                .map(|a| script_value_to_lua(&self.lua, a))
+                .collect::<mlua::Result<Vec<LuaValue>>>()
+                .and_then(|lua_args| f.call::<LuaValue>(Variadic::from_iter(lua_args)))
+                .map(|v| Some(lua_value_to_script_value(&v)))
+                .map_err(|e| ScriptError::Runtime(e.to_string())),
         };
         let commands = std::mem::take(&mut *self.sink.lock());
-        Ok(CallOutcome {
-            commands,
-            found: ret.is_some(),
-            ret,
-        })
+        match result {
+            Ok(ret) => Ok(CallOutcome {
+                commands,
+                found: ret.is_some(),
+                ret,
+            }),
+            Err(error) => Err(CallFailure { error, commands }),
+        }
     }
 
     fn call_closure(

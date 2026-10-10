@@ -392,6 +392,7 @@ fn a_failing_plugin_fn_raises_at_the_call_site() {
     let ScriptError::Runtime(message) = host
         .call("level", &[ScriptValue::I64(7)])
         .expect_err("the plugin refused")
+        .error
     else {
         panic!("a failing plugin function is a runtime error");
     };

@@ -26,8 +26,8 @@ mod pages;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, Credentials, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext, ScriptError,
-    ScriptFn, ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
+    CallFailure, CallOutcome, Credentials, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext,
+    ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
 };
 use parking_lot::Mutex;
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Module, Scope};
@@ -2010,125 +2010,10 @@ impl RhaiHost {
         None
     }
 
-    /// Variadic event call: invoke a script-defined function with
-    /// the supplied [`ScriptValue`] args, translating each into the
-    /// backend's native `rhai::Dynamic`. Returns the commands the
-    /// builtins pushed into the sink during the call.
-    ///
-    /// Replaces the previous five `call_event_*` variants (no-args,
-    /// `(id)`, `(id, bool)`, `(id, f64)`, `(id, text)`). Missing
-    /// functions silently succeed (return an empty `Vec`); a function
-    /// arity mismatch surfaces as [`ScriptError::Runtime`] from
-    /// Rhai's own error.
-    ///
-    /// Detection of "function not found" goes through
-    /// `EvalAltResult::ErrorFunctionNotFound` instead of the brittle
-    /// `to_string().contains("Function not found")` fallback the old
-    /// code used.
-    pub fn call_event_values(
-        &mut self,
-        fn_name: &str,
-        args: &[ScriptValue],
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        let dyn_args: Vec<rhai::Dynamic> = args.iter().map(script_value_to_dynamic).collect();
-        self.call_event_dyn(fn_name, dyn_args)
-    }
-
-    /// Internal entry point: same as [`Self::call_event_values`] but
-    /// takes already-converted `rhai::Dynamic`s. Lets dispatchers
-    /// avoid an extra round-trip through [`ScriptValue`].
-    pub fn call_event_dyn(
-        &mut self,
-        fn_name: &str,
-        args: Vec<rhai::Dynamic>,
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_dyn_with_result(fn_name, args)
-            .map(|(cmds, _)| cmds)
-    }
-
-    /// Same as [`Self::call_event_dyn`], but also returns the script
-    /// function's return value. `None` when no function with that name
-    /// exists (or no AST is loaded) - callers use it for hooks whose
-    /// return value carries meaning, e.g. `on_close()` returning `false`
-    /// to veto a window close.
-    pub fn call_event_dyn_with_result(
-        &mut self,
-        fn_name: &str,
-        args: Vec<rhai::Dynamic>,
-    ) -> Result<(Vec<ScriptCommand>, Option<rhai::Dynamic>), ScriptError> {
-        let Some(ast) = self.ast.as_ref() else {
-            return Ok((Vec::new(), None));
-        };
-        let opts = CallFnOptions::new().rewind_scope(false).eval_ast(false);
-        let result: Result<rhai::Dynamic, _> =
-            self.engine
-                .call_fn_with_options(opts, &mut self.scope, ast, fn_name, args);
-        let ret = match result {
-            Ok(v) => Some(v),
-            Err(e) if is_function_not_found(&e, fn_name) => None,
-            Err(e) => {
-                // A handler that queued commands (set_text, notify,
-                // set_signal, fetch, ...) and *then* errored must contribute
-                // NO commands: draining only on the success path would leak
-                // them into the sink, where the next unrelated event's
-                // outcome would apply them. Discard the partial batch.
-                self.sink.lock().clear();
-                return Err(ScriptError::Runtime(e.to_string()));
-            }
-        };
-        Ok((std::mem::take(&mut *self.sink.lock()), ret))
-    }
-
-    /// Backward-compatible wrappers for callers that haven't migrated
-    /// to the variadic API yet. Each is a one-liner over
-    /// [`Self::call_event_dyn`].
-    pub fn call_event_no_args(&mut self, fn_name: &str) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_dyn(fn_name, Vec::new())
-    }
-
-    /// Call a script-defined function with `(id, bool)` args.
-    /// Convenience wrapper kept for backward source compat; new code
-    /// should call [`Self::call_event_values`] / [`Self::call_event_dyn`].
-    pub fn call_event_id_bool(
-        &mut self,
-        fn_name: &str,
-        id: &str,
-        value: bool,
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_dyn(fn_name, vec![id.to_string().into(), value.into()])
-    }
-
-    /// Call a script-defined function with `(id, f64)` args.
-    /// Convenience wrapper kept for backward source compat; new code
-    /// should call [`Self::call_event_values`] / [`Self::call_event_dyn`].
-    pub fn call_event_id_f64(
-        &mut self,
-        fn_name: &str,
-        id: &str,
-        value: f64,
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_dyn(fn_name, vec![id.to_string().into(), value.into()])
-    }
-
-    /// Call a script-defined function with two string args.
-    /// Convenience wrapper kept for backward source compat; new code
-    /// should call [`Self::call_event_values`] / [`Self::call_event_dyn`].
-    pub fn call_event_two_args(
-        &mut self,
-        fn_name: &str,
-        arg1: &str,
-        arg2: &str,
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_dyn(
-            fn_name,
-            vec![arg1.to_string().into(), arg2.to_string().into()],
-        )
-    }
-
     /// Put commands back into the per-host sink so they flush on the
-    /// next `tick`. Used after `call_event_no_args("on_start")` which
-    /// returns the commands directly - we need them to flow through the
-    /// usual `ScriptCommandEvent` dispatch instead of being applied here.
+    /// next `tick`. Used after `on_start`, whose call returns the commands
+    /// directly: they flow through the usual `ScriptCommandEvent` dispatch
+    /// instead of being applied here.
     pub fn push_commands_back(&mut self, cmds: Vec<ScriptCommand>) {
         self.sink.lock().extend(cmds);
     }
@@ -2450,18 +2335,6 @@ impl RhaiHost {
         self.ast = Some(ast);
         Ok(())
     }
-
-    /// Variadic event call returning only the drained commands.
-    /// Concrete-caller convenience; the trait-level entry is
-    /// [`ScriptHost::call`], which also surfaces the return value and
-    /// the found flag.
-    pub fn call_event(
-        &mut self,
-        fn_name: &str,
-        args: &[ScriptValue],
-    ) -> Result<Vec<ScriptCommand>, ScriptError> {
-        self.call_event_values(fn_name, args)
-    }
 }
 
 impl ScriptHost for RhaiHost {
@@ -2488,14 +2361,38 @@ impl ScriptHost for RhaiHost {
         RhaiHost::reset(self);
     }
 
-    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError> {
-        let dyn_args: Vec<rhai::Dynamic> = args.iter().map(script_value_to_dynamic).collect();
-        let (commands, ret) = self.call_event_dyn_with_result(fn_name, dyn_args)?;
-        Ok(CallOutcome {
-            commands,
-            found: ret.is_some(),
-            ret: ret.as_ref().map(dynamic_to_script_value),
-        })
+    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, CallFailure> {
+        // A missing function (or no loaded AST) is silent success. The sink
+        // drains on every path, an error included: what the function queued
+        // before it raised still applies.
+        let result = match self.ast.as_ref() {
+            None => Ok(None),
+            Some(ast) => {
+                let dyn_args: Vec<rhai::Dynamic> =
+                    args.iter().map(script_value_to_dynamic).collect();
+                let opts = CallFnOptions::new().rewind_scope(false).eval_ast(false);
+                match self.engine.call_fn_with_options::<rhai::Dynamic>(
+                    opts,
+                    &mut self.scope,
+                    ast,
+                    fn_name,
+                    dyn_args,
+                ) {
+                    Ok(v) => Ok(Some(dynamic_to_script_value(&v))),
+                    Err(e) if is_function_not_found(&e, fn_name) => Ok(None),
+                    Err(e) => Err(ScriptError::Runtime(e.to_string())),
+                }
+            }
+        };
+        let commands = std::mem::take(&mut *self.sink.lock());
+        match result {
+            Ok(ret) => Ok(CallOutcome {
+                commands,
+                found: ret.is_some(),
+                ret,
+            }),
+            Err(error) => Err(CallFailure { error, commands }),
+        }
     }
 
     fn call_closure(
@@ -3025,43 +2922,39 @@ lumen_module::lumen_module!(
 mod error_drain_tests {
     use super::*;
 
-    /// A handler that queues a command and *then* errors must contribute
-    /// NO commands: the failed batch is discarded so it cannot leak into an
-    /// unrelated later event's outcome. Guards the error-path sink drain in
-    /// `call_event_dyn_with_result`.
+    /// A handler that queues a command and then raises keeps the command:
+    /// the failure carries it to the runtime, which applies it the way a
+    /// browser keeps what a throwing listener did. Nothing stays behind in
+    /// the sink for an unrelated later call to pick up.
     #[test]
-    fn erroring_handler_leaks_no_commands() {
+    fn raising_handler_returns_what_it_queued() {
         let mut host = RhaiHost::new();
         host.load(
             r#"
-            fn on_ok() { set_text("lbl", "kept"); }
+            fn on_ok() { set_text("lbl", "next"); }
             fn on_boom() {
-                set_text("lbl", "leaked");
+                set_text("lbl", "kept");
                 throw "deliberate failure";
             }
             "#,
         )
         .expect("compile inline script");
 
-        // Positive control: a successful handler drains its one command and
-        // leaves the sink empty.
-        let cmds = host.call_event_no_args("on_ok").expect("ok handler runs");
-        assert_eq!(cmds.len(), 1, "successful handler yields its command");
-        assert!(host.sink.lock().is_empty(), "sink drained after success");
-
-        // The erroring handler queued a SetText *before* throwing.
-        let res = host.call_event_no_args("on_boom");
-        assert!(res.is_err(), "handler error surfaces as Err, not Ok");
-
-        // That queued command must not survive in the sink.
-        assert!(
-            host.sink.lock().is_empty(),
-            "failed handler contributes no commands"
+        let failure =
+            ScriptHost::call(&mut host, "on_boom", &[]).expect_err("the handler error surfaces");
+        assert!(failure.error.to_string().contains("deliberate failure"));
+        assert_eq!(
+            failure.commands.len(),
+            1,
+            "the queued command rides the failure"
         );
+        assert!(host.sink.lock().is_empty(), "the sink drained on the error");
 
-        // End-to-end: the next unrelated event sees only its own command,
-        // proving nothing leaked across the boundary.
-        let next = host.call_event_no_args("on_ok").expect("ok handler runs");
-        assert_eq!(next.len(), 1, "next event only sees its own command");
+        let next = ScriptHost::call(&mut host, "on_ok", &[]).expect("ok handler runs");
+        assert_eq!(
+            next.commands.len(),
+            1,
+            "the next call sees only its own command"
+        );
     }
 }

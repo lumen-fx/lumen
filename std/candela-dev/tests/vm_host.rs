@@ -360,7 +360,7 @@ fn a_second_load_is_refused_because_the_bindings_are_placed_once() {
 fn calling_an_export_with_the_wrong_argument_count_is_an_error_not_a_miss() {
     let mut host = loaded(SMOKE, "smoke.cdlb");
 
-    let Err(ScriptError::Runtime(message)) = host.call("bump", &[]) else {
+    let Err(ScriptError::Runtime(message)) = host.call("bump", &[]).map_err(|f| f.error) else {
         panic!(
             "a name the image exports but not with this shape is a failure, not the absent-handler case"
         );
@@ -742,7 +742,7 @@ fn exploding_host() -> CandelaVmHost {
 fn a_vm_panic_in_a_call_is_contained_and_disables_the_image() {
     let mut host = exploding_host();
 
-    let Err(ScriptError::Runtime(message)) = host.call("boom", &[]) else {
+    let Err(ScriptError::Runtime(message)) = host.call("boom", &[]).map_err(|f| f.error) else {
         panic!("a panic out of the VM must come back as an error, not end the process");
     };
     assert!(

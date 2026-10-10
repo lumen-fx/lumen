@@ -923,10 +923,9 @@ pub trait ScriptContext {
 
 /// Outcome of one [`ScriptHost::call`] invocation.
 ///
-/// `commands` is the full drain of the host's command sink at return -
-/// note it is drained **even when `found == false`** (builtins invoked
-/// outside handlers may have queued commands; the v1 host behaved this
-/// way and the generic runtime relies on it).
+/// `commands` is the full drain of the host's command sink at return. It is
+/// drained even when `found == false`, because builtins invoked outside
+/// handlers may have queued commands.
 #[derive(Debug, Clone)]
 pub struct CallOutcome {
     /// Commands the host's builtins pushed into the sink during (and
@@ -939,6 +938,33 @@ pub struct CallOutcome {
     /// `false` when the function does not exist - the runtime probes
     /// optional handlers and treats a miss as silent success.
     pub found: bool,
+}
+
+/// A [`ScriptHost::call`] whose function raised an error.
+///
+/// `commands` holds what the function queued before it failed, drained from
+/// the sink like a successful call's. The runtime applies them, the way a
+/// browser keeps the DOM changes a throwing handler made before the throw:
+/// a `print` placed before the failing line still reaches the log, and a
+/// timer armed there still fires.
+#[derive(Debug)]
+pub struct CallFailure {
+    /// The error the function raised.
+    pub error: ScriptError,
+    /// Commands queued before the failure.
+    pub commands: Vec<ScriptCommand>,
+}
+
+impl std::fmt::Display for CallFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for CallFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 /// Merge a pre-reload registry snapshot back under the entries the reloaded
@@ -1022,8 +1048,10 @@ pub trait ScriptHost: Send + Sync + 'static {
     // -- invocation (reactive-only: no per-frame hook in this trait) ---
 
     /// Call a script function by name. A missing function is silent
-    /// success (`found: false`); see [`CallOutcome`].
-    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError>;
+    /// success (`found: false`); see [`CallOutcome`]. A function that raises
+    /// returns [`CallFailure`], which still carries the commands it queued
+    /// before the error.
+    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, CallFailure>;
 
     /// Re-entrant closure invocation. Must be callable while the generic
     /// runtime holds NO host locks (snapshot-then-call pattern): the
