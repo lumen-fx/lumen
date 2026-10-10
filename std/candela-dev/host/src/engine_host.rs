@@ -14,8 +14,8 @@ use bevy_ecs::prelude::*;
 use candela_vm::Value;
 use lumen_core::prelude::{App, Plugin};
 use lumen_script::{
-    CallOutcome, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore, ScriptHost,
-    ScriptPlugin, ScriptValue,
+    CallFailure, CallOutcome, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore,
+    ScriptHost, ScriptPlugin, ScriptValue,
 };
 
 use crate::compile_warnings;
@@ -613,7 +613,7 @@ impl ScriptHost for CandelaHost {
         self.registries.reset();
     }
 
-    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError> {
+    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, CallFailure> {
         let kargs: Vec<Value> = args.iter().map(script_value_to_candela).collect();
         let mut runtime_err: Option<ScriptError> = None;
         let mut ret: Option<ScriptValue> = None;
@@ -630,12 +630,11 @@ impl ScriptHost for CandelaHost {
             }
         }
 
-        // Drain even on error / miss: builtins may have queued commands before
-        // the failure (the v1 host behaved this way and the runtime relies on
-        // it).
+        // Drain on a miss and on an error too: what the function queued before
+        // it raised still applies.
         let commands = self.registries.drain();
-        if let Some(err) = runtime_err {
-            return Err(err);
+        if let Some(error) = runtime_err {
+            return Err(CallFailure { error, commands });
         }
         Ok(CallOutcome {
             commands,

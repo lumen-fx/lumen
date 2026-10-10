@@ -59,7 +59,7 @@ use crate::http::{
     HttpResponse, ThreadDispatch,
 };
 use crate::script_fn::ScriptFnRegistry;
-use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
+use crate::{CallFailure, CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
 
 /// One [`ScriptCommand`] flowing through the ECS message bus so app
 /// systems can read it via `MessageReader<ScriptCommandEvent>`.
@@ -285,7 +285,10 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         // the sink).
         match self.host.call("on_start", &[]) {
             Ok(outcome) => self.host.push_commands(outcome.commands),
-            Err(e) => warn_line!("{}: on_start failed: {e}", prefix(lang)),
+            Err(failure) => {
+                warn_line!("{}: on_start failed: {failure}", prefix(lang));
+                self.host.push_commands(failure.commands);
+            }
         }
         app.world.insert_resource(self.host);
         app.world.insert_resource(ScriptStartedAt(Instant::now()));
@@ -632,12 +635,15 @@ pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
             .collect();
         let outcome = match host.call(&fill.function, &args) {
             Ok(outcome) => outcome,
-            Err(e) => {
+            Err(failure) => {
                 warn_line!(
-                    "{}: component {} failed: {e}",
+                    "{}: component {} failed: {failure}",
                     prefix(host.lang()),
                     fill.function
                 );
+                for c in failure.commands {
+                    events.write(ScriptCommandEvent(c));
+                }
                 commands
                     .entity(entity)
                     .remove::<lumen_core::components::PendingFill>();
@@ -719,13 +725,9 @@ pub fn fire_on_ready<H: ScriptHost + Resource<Mutability = Mutable>>(
     if !fired.0.insert(host.lang()) {
         return;
     }
-    match host.call("on_ready", &[]) {
-        Ok(outcome) => {
-            for c in outcome.commands {
-                events.write(ScriptCommandEvent(c));
-            }
-        }
-        Err(e) => warn_line!("{}: on_ready failed: {e}", prefix(host.lang())),
+    let lang = host.lang();
+    if let Err(e) = forward_call(host.call("on_ready", &[]), &mut events) {
+        warn_line!("{}: on_ready failed: {e}", prefix(lang));
     }
 }
 
@@ -1094,9 +1096,9 @@ pub fn fire_frame_callbacks<H: ScriptHost + Resource<Mutability = Mutable>>(
     let Some(dt) = due.0 else {
         return;
     };
-    match host.call("on_frame", &[ScriptValue::F64(dt)]) {
-        Ok(outcome) => forward_outcome(outcome, &mut out),
-        Err(e) => warn_line!("{}: on_frame failed: {e}", prefix(host.lang())),
+    let lang = host.lang();
+    if let Err(e) = forward_call(host.call("on_frame", &[ScriptValue::F64(dt)]), &mut out) {
+        warn_line!("{}: on_frame failed: {e}", prefix(lang));
     }
 }
 
@@ -1590,9 +1592,9 @@ pub fn fire_plugin_events<H: ScriptHost + Resource<Mutability = Mutable>>(
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(ScriptValue::Str(key.clone()));
         call_args.extend(args.iter().cloned());
-        match host.call(&target, &call_args) {
-            Ok(outcome) => forward_outcome(outcome, &mut out),
-            Err(e) => warn_line!("{}: {target}({key}) failed: {e}", prefix(host.lang())),
+        let lang = host.lang();
+        if let Err(e) = forward_call(host.call(&target, &call_args), &mut out) {
+            warn_line!("{}: {target}({key}) failed: {e}", prefix(lang));
         }
     }
 }
@@ -1605,6 +1607,28 @@ pub fn fire_plugin_events<H: ScriptHost + Resource<Mutability = Mutable>>(
 fn forward_outcome(outcome: CallOutcome, out: &mut MessageWriter<ScriptCommandEvent>) {
     for c in outcome.commands {
         out.write(ScriptCommandEvent(c));
+    }
+}
+
+/// Push a call's commands onto the message bus, whether it returned or
+/// raised, and hand back its error. A handler that raises keeps what it did
+/// before the error, as a browser keeps the DOM changes a throwing listener
+/// made.
+fn forward_call(
+    result: Result<CallOutcome, CallFailure>,
+    out: &mut MessageWriter<ScriptCommandEvent>,
+) -> Result<(), ScriptError> {
+    match result {
+        Ok(outcome) => {
+            forward_outcome(outcome, out);
+            Ok(())
+        }
+        Err(failure) => {
+            for c in failure.commands {
+                out.write(ScriptCommandEvent(c));
+            }
+            Err(failure.error)
+        }
     }
 }
 
@@ -1629,9 +1653,10 @@ fn route_event<H: ScriptHost + Resource<Mutability = Mutable>>(
     out: &mut MessageWriter<ScriptCommandEvent>,
 ) -> Result<(), ScriptError> {
     let target = resolve_handler(&*host, event_name, id_str, fallback_fn);
-    let outcome = host.call(&target, &[ScriptValue::Str(id_str.to_string())])?;
-    forward_outcome(outcome, out);
-    Ok(())
+    forward_call(
+        host.call(&target, &[ScriptValue::Str(id_str.to_string())]),
+        out,
+    )
 }
 
 /// Two-arg variant of [`route_event`]: per-id handler lookup keyed by
@@ -1647,15 +1672,16 @@ pub(crate) fn route_event_two_args<H: ScriptHost + Resource<Mutability = Mutable
     out: &mut MessageWriter<ScriptCommandEvent>,
 ) -> Result<(), ScriptError> {
     let target = resolve_handler(&*host, event_name, key, fallback_fn);
-    let outcome = host.call(
-        &target,
-        &[
-            ScriptValue::Str(key.to_string()),
-            ScriptValue::Str(arg2.to_string()),
-        ],
-    )?;
-    forward_outcome(outcome, out);
-    Ok(())
+    forward_call(
+        host.call(
+            &target,
+            &[
+                ScriptValue::Str(key.to_string()),
+                ScriptValue::Str(arg2.to_string()),
+            ],
+        ),
+        out,
+    )
 }
 
 /// Variant of [`route_event_two_args`] whose second argument is an
@@ -1672,9 +1698,10 @@ fn route_event_key_value<H: ScriptHost + Resource<Mutability = Mutable>>(
     out: &mut MessageWriter<ScriptCommandEvent>,
 ) -> Result<(), ScriptError> {
     let target = resolve_handler(&*host, event_name, key, fallback_fn);
-    let outcome = host.call(&target, &[ScriptValue::Str(key.to_string()), value])?;
-    forward_outcome(outcome, out);
-    Ok(())
+    forward_call(
+        host.call(&target, &[ScriptValue::Str(key.to_string()), value]),
+        out,
+    )
 }
 
 /// Per-id-handler-aware variant for `(id: String, value: bool)` events;
@@ -1688,15 +1715,16 @@ fn route_event_id_bool<H: ScriptHost + Resource<Mutability = Mutable>>(
     out: &mut MessageWriter<ScriptCommandEvent>,
 ) -> Result<(), ScriptError> {
     let target = resolve_handler(&*host, event_name, id_str, fallback_fn);
-    let outcome = host.call(
-        &target,
-        &[
-            ScriptValue::Str(id_str.to_string()),
-            ScriptValue::Bool(value),
-        ],
-    )?;
-    forward_outcome(outcome, out);
-    Ok(())
+    forward_call(
+        host.call(
+            &target,
+            &[
+                ScriptValue::Str(id_str.to_string()),
+                ScriptValue::Bool(value),
+            ],
+        ),
+        out,
+    )
 }
 
 /// Per-id-handler-aware variant for `(id: String, value: f64)` events;
@@ -1710,15 +1738,16 @@ fn route_event_id_f64<H: ScriptHost + Resource<Mutability = Mutable>>(
     out: &mut MessageWriter<ScriptCommandEvent>,
 ) -> Result<(), ScriptError> {
     let target = resolve_handler(&*host, event_name, id_str, fallback_fn);
-    let outcome = host.call(
-        &target,
-        &[
-            ScriptValue::Str(id_str.to_string()),
-            ScriptValue::F64(value),
-        ],
-    )?;
-    forward_outcome(outcome, out);
-    Ok(())
+    forward_call(
+        host.call(
+            &target,
+            &[
+                ScriptValue::Str(id_str.to_string()),
+                ScriptValue::F64(value),
+            ],
+        ),
+        out,
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -1829,7 +1858,12 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
                 }
                 forward_outcome(outcome, &mut out);
             }
-            Err(e) => warn_line!("{}: on_close failed: {e}", prefix(host.lang())),
+            Err(failure) => {
+                warn_line!("{}: on_close failed: {failure}", prefix(host.lang()));
+                for c in failure.commands {
+                    out.write(ScriptCommandEvent(c));
+                }
+            }
         }
     }
     if veto {
@@ -2346,7 +2380,7 @@ mod derivation_panic_tests {
             &mut self,
             fn_name: &str,
             args: &[ScriptValue],
-        ) -> Result<CallOutcome, ScriptError> {
+        ) -> Result<CallOutcome, CallFailure> {
             self.inner.call(fn_name, args)
         }
         fn call_closure(
@@ -2524,12 +2558,15 @@ mod frame_hook_tests {
             &mut self,
             fn_name: &str,
             args: &[ScriptValue],
-        ) -> Result<CallOutcome, ScriptError> {
+        ) -> Result<CallOutcome, CallFailure> {
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push(fn_name.to_string());
             }
             if self.fails {
-                return Err(ScriptError::Runtime("the handler raised".to_string()));
+                return Err(CallFailure {
+                    error: ScriptError::Runtime("the handler raised".to_string()),
+                    commands: Vec::new(),
+                });
             }
             if !self.declares {
                 // What a host answers for a handler the script never wrote.

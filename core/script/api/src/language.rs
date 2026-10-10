@@ -150,9 +150,16 @@ where
     let Some(mut host) = world.get_resource_mut::<H>() else {
         return Err(ScriptError::Runtime("no script is loaded".to_owned()));
     };
-    let outcome = host.call(name, &[])?;
-    host.push_commands(outcome.commands);
-    Ok(outcome.ret.filter(|_| outcome.found))
+    match host.call(name, &[]) {
+        Ok(outcome) => {
+            host.push_commands(outcome.commands);
+            Ok(outcome.ret.filter(|_| outcome.found))
+        }
+        Err(failure) => {
+            host.push_commands(failure.commands);
+            Err(failure.error)
+        }
+    }
 }
 
 /// Install a host over a program. `multi_host` is true when the app runs more

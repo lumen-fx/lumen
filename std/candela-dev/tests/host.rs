@@ -542,7 +542,10 @@ fn main() {}
     // The next hook must come back as a value, never abort the process. On
     // the current candela pin the corrupted VM panics and the host reports
     // it; a candela with the corruption fixed returns Ok, and both are fine.
-    match host.call("ready", &[ScriptValue::Str("go".to_owned())]) {
+    match host
+        .call("ready", &[ScriptValue::Str("go".to_owned())])
+        .map_err(|f| f.error)
+    {
         Ok(_) => {}
         Err(ScriptError::Runtime(msg)) => {
             assert!(msg.contains("candela VM panicked"), "{msg}");

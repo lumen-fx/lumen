@@ -509,7 +509,7 @@ pub(crate) mod text_event_tests {
             &mut self,
             _fn_name: &str,
             _args: &[crate::ScriptValue],
-        ) -> Result<crate::CallOutcome, crate::ScriptError> {
+        ) -> Result<crate::CallOutcome, crate::CallFailure> {
             unimplemented!("no host in these tests")
         }
         fn call_closure(

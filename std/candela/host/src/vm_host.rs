@@ -24,8 +24,8 @@ use candela_vm::{CallError, HostRegistry, RuntimeProgram, Value, load_program};
 use lumen_core::prelude::{App, Plugin};
 use lumen_core::warn_line;
 use lumen_script::{
-    CallOutcome, ScriptCommand, ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptPlugin,
-    ScriptValue,
+    CallFailure, CallOutcome, ScriptCommand, ScriptError, ScriptFn, ScriptFnStore, ScriptHost,
+    ScriptPlugin, ScriptValue,
 };
 
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
@@ -260,7 +260,7 @@ impl ScriptHost for CandelaVmHost {
         }
     }
 
-    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError> {
+    fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, CallFailure> {
         let kargs: Vec<Value> = args.iter().map(script_value_to_candela).collect();
         let mut runtime_err: Option<ScriptError> = None;
         let mut ret: Option<ScriptValue> = None;
@@ -276,11 +276,11 @@ impl ScriptHost for CandelaVmHost {
             }
         }
 
-        // Drain even on error / miss: builtins may have queued commands before
-        // the failure.
+        // Drain on a miss and on an error too: what the function queued before
+        // it raised still applies.
         let commands = self.registries.drain();
-        if let Some(err) = runtime_err {
-            return Err(err);
+        if let Some(error) = runtime_err {
+            return Err(CallFailure { error, commands });
         }
         Ok(CallOutcome {
             commands,

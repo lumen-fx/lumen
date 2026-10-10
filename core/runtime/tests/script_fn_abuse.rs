@@ -416,15 +416,16 @@ fn main() {}
 
 // -- an error nobody catches -------------------------------------------------
 
-/// An error the script does not catch stops its handler and discards what the
-/// handler had already queued, so a half-applied batch never reaches the app.
-/// The next handler still fires, which is what says the app is not wedged.
+/// An error the script does not catch stops its handler, and what the handler
+/// had already queued still applies, as a browser keeps what a throwing
+/// listener did. The next handler still fires, which is what says the app is
+/// not wedged.
 ///
 /// Every call candela can check is checked before the program runs, so the
 /// error here is one only a run can find: an index past the end of a list,
 /// computed from a signal no one set.
 #[test]
-fn an_uncaught_error_discards_what_the_handler_had_queued() {
+fn an_uncaught_error_keeps_what_the_handler_had_queued() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let out = run(r#"
 import "lumen.cdl";
@@ -453,8 +454,9 @@ fn main() {}
         "on_start stopped at the bad index, and on_ready still ran"
     );
     assert_eq!(
-        out.control, None,
-        "the command the handler queued before it failed was dropped"
+        out.control.as_deref(),
+        Some("ok"),
+        "the command the handler queued before it failed still applied"
     );
 }
 
