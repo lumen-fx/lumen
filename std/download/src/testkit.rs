@@ -21,8 +21,9 @@ pub const OTHER_BODY: &[u8] = b"a different body entirely, same length ok";
 /// How long `/stall` goes quiet after the first piece of its body.
 pub const STALL: Duration = Duration::from_secs(5);
 
-/// The pause between the pieces `/drip` sends.
-pub const DRIP_PAUSE: Duration = Duration::from_millis(40);
+/// The pause between the pieces `/drip` sends. Long enough that a timeout a
+/// few pauses wide still leaves room for a loaded runner's scheduling jitter.
+pub const DRIP_PAUSE: Duration = Duration::from_millis(120);
 
 /// A running server. Dropping it stops the accept loop.
 pub struct TestServer {
