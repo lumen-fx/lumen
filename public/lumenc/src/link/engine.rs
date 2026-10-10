@@ -214,10 +214,10 @@ fn relink(job: &EngineJob<'_>) -> Result<Engine, Stop> {
         // only a toolchain that is that release's build can replay it: a
         // download that cannot match is not worth making.
         let published = release::resolve().map_err(|e| Stop::Fallback(e.to_string()))?;
-        if published != release::current() {
+        if !published.is_build_of(release::current()) {
             return Err(Stop::Fallback(format!(
-                "this lumenc is {}, not the v{published} release, so no published engine kit \
-                 matches it; point {} at a kit recorded from this build",
+                "this lumenc is {}, not {published}, so no published engine kit matches it; \
+                 point {} at a kit recorded from this build",
                 release::current(),
                 KitKind::SharedEngine.dir_env()
             )));

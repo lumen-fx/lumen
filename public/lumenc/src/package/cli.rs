@@ -47,7 +47,7 @@ use lumen_runtime::modules::{DependenciesCfg, ModuleSource, library_spellings};
 use crate::app_kind::AppKind;
 use crate::link::engine::{Engine, EngineJob};
 use crate::link::kit::{CapabilityChoice, KitKind};
-use crate::package::release;
+use crate::package::release::{self, Release};
 
 /// Conventional extension for a compiled-app artifact, matching
 /// [`crate::cli::build::ARTIFACT_EXT`].
@@ -1630,7 +1630,7 @@ fn find_in_dir(dir: &Path, names: &[String]) -> Option<PathBuf> {
 /// dependencies from, resolved at most once per package and downloaded at
 /// most once per cache.
 struct CrossModules {
-    version: String,
+    version: Release,
     dir: PathBuf,
     fetched: bool,
 }
@@ -1685,9 +1685,9 @@ fn cross_bundled_module(
 /// A module the release's modules archive does not carry. Naming the archive
 /// and the file separates a module that does not exist from a release too
 /// old to ship it.
-fn missing_from_archive(name: &str, target: Target, version: &str, names: &[String]) -> String {
+fn missing_from_archive(name: &str, target: Target, from: &Release, names: &[String]) -> String {
     format!(
-        "dependency '{name}': {} from the v{version} release carries no {}, so the \
+        "dependency '{name}': {} from {from} carries no {}, so the \
          package cannot ship it. Pass --lib-dir at a directory holding the {} build of \
          the module.",
         target.modules_archive_name(),
@@ -2399,33 +2399,69 @@ pub(crate) fn cannot_fetch(
 /// The release this toolchain fetches published files from, and the directory
 /// they are cached in. Resolving the release is what makes the request, so
 /// this is called only once the local directories have come up empty.
-pub(crate) fn component_cache(component: &str) -> Result<(String, PathBuf), String> {
-    let version = release::resolve().map_err(|why| why.to_string())?;
-    let dir = cache_dir_for(&version, component).ok_or_else(|| {
+pub(crate) fn component_cache(component: &str) -> Result<(Release, PathBuf), String> {
+    let from = release::resolve().map_err(|why| why.to_string())?;
+    let dir = cache_dir_for(from.cache_name(), component).ok_or_else(|| {
         "there is no cache directory to download into on this machine".to_string()
     })?;
-    if let Some(note) = release_note(&version, release::current()) {
+    if from == Release::Nightly {
+        forget_an_earlier_nightly(&dir, receipt_written_at());
+    }
+    if let Some(note) = release_note(&from, release::current()) {
         println!("{note}");
     }
-    Ok((version, dir))
+    Ok((from, dir))
+}
+
+/// When the install receipt was last written, in seconds since the epoch: a
+/// reinstall rewrites it, so this tells one install of the nightly from the
+/// next, which the version number cannot.
+fn receipt_written_at() -> Option<u64> {
+    let modified = std::fs::metadata(release::receipt_path()?)
+        .ok()?
+        .modified()
+        .ok()?;
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+/// The file in a nightly cache directory that records which install filled it.
+const NIGHTLY_STAMP: &str = ".installed-at";
+
+/// Empty a nightly cache directory an earlier install of the nightly filled.
+///
+/// Every nightly carries the same tag and usually the same version, so the
+/// cache cannot be keyed by either; the files of yesterday's nightly would
+/// otherwise be reused by today's compiler. A reinstall rewrites the install
+/// receipt, so the time it was written tells one install from the next, and a
+/// directory stamped with another time is cleared before anything reads it.
+fn forget_an_earlier_nightly(dir: &Path, installed_at: Option<u64>) {
+    let stamp = installed_at.map(|t| t.to_string()).unwrap_or_default();
+    let recorded = std::fs::read_to_string(dir.join(NIGHTLY_STAMP)).ok();
+    if recorded.as_deref() == Some(stamp.as_str()) {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    if std::fs::create_dir_all(dir).is_ok() {
+        let _ = std::fs::write(dir.join(NIGHTLY_STAMP), stamp);
+    }
 }
 
 /// What to say when the files come from a release this build is not, which is
 /// the normal case for a build made from source. Saying which release keeps
 /// that visible rather than surprising.
-fn release_note(version: &str, current: &str) -> Option<String> {
-    (version != current).then(|| {
-        format!(
-            "lumenc: this build is {current}, and the toolchain files come from the \
-             v{version} release"
-        )
+fn release_note(from: &Release, current: &str) -> Option<String> {
+    (!from.is_build_of(current)).then(|| {
+        format!("lumenc: this build is {current}, and the toolchain files come from {from}")
     })
 }
 
 /// Where files that did not come with this installation are kept between
-/// runs: under the platform cache directory, keyed by the release `version`
-/// they came from and by `component` (a target name, or the web runtime) so an
-/// upgrade never reuses the old ones.
+/// runs: under the platform cache directory, keyed by the release they came
+/// from (its version, or `nightly`) and by `component` (a target name, or the
+/// web runtime) so an upgrade never reuses the old ones.
 fn cache_dir_for(version: &str, component: &str) -> Option<PathBuf> {
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
@@ -2741,7 +2777,7 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 /// `version` is a release that exists, resolved by [`release::resolve`]. It is
 /// never this binary's own version, which says nothing about what is published.
 pub(crate) fn fetch_release_files(
-    version: &str,
+    from: &Release,
     archive: &str,
     want: &Members<'_>,
     dest: &Path,
@@ -2749,9 +2785,9 @@ pub(crate) fn fetch_release_files(
 ) -> Result<(), String> {
     fetch_verified_archive(
         &Publisher {
-            base: release::asset_base(version),
+            base: release::asset_base(from),
             sums: SHA256SUMS.to_string(),
-            name: format!("the v{version} release"),
+            name: from.to_string(),
             hint: format!(
                 "Either there is no such release, or it is older than checksum publishing. \
                  {hint}"
@@ -2875,16 +2911,16 @@ pub(crate) const EVERY_MEMBER: &str = "*";
 /// declares modules and the release predates shipping them - rather than
 /// with a bare download error.
 fn fetch_modules_archive(
-    version: &str,
+    published: &Release,
     target: Target,
     dest: &Path,
     deps: &DependenciesCfg,
 ) -> Result<(), String> {
     let archive = target.modules_archive_name();
     let from = Publisher {
-        base: release::asset_base(version),
+        base: release::asset_base(published),
         sums: SHA256SUMS.to_string(),
-        name: format!("the v{version} release"),
+        name: published.to_string(),
         hint: "Pass --lib-dir at a directory holding the module libraries instead.".to_string(),
     };
 
@@ -2894,7 +2930,7 @@ fn fetch_modules_archive(
 
     let archive_url = format!("{}/{archive}", from.base);
     let bytes = http_get(&archive_url).map_err(|e| match e {
-        HttpError::Status(_) => no_modules_archive(version, target, deps),
+        HttpError::Status(_) => no_modules_archive(published, target, deps),
         HttpError::Transport(message) => format!("cannot download {archive_url}: {message}"),
     })?;
 
@@ -2916,10 +2952,10 @@ fn fetch_modules_archive(
 /// What a release without a modules archive means for an app that declares
 /// `[dependencies]`: there is nothing to package the modules from, said with
 /// what the app declares so the reader knows what the package would lose.
-fn no_modules_archive(version: &str, target: Target, deps: &DependenciesCfg) -> String {
+fn no_modules_archive(from: &Release, target: Target, deps: &DependenciesCfg) -> String {
     let declared: Vec<&str> = deps.0.iter().map(|dep| dep.name.as_str()).collect();
     format!(
-        "the v{version} release ships no modules archive ({}), and this app declares {}. \
+        "{from} ships no modules archive ({}), and this app declares {}. \
          A release older than runtime modules cannot supply them; pass --lib-dir at a \
          directory holding the {} module libraries, or package on a {} machine.",
         target.modules_archive_name(),
@@ -3367,7 +3403,7 @@ mod tests {
             tags: Vec::new(),
         }]);
 
-        let message = no_modules_archive("0.0.9", linux, &deps);
+        let message = no_modules_archive(&Release::Version("0.0.9".to_string()), linux, &deps);
         assert!(message.contains("v0.0.9"), "{message}");
         assert!(
             message.contains("lumen-modules-linux-x86_64.tar.gz"),
@@ -3383,7 +3419,12 @@ mod tests {
     fn a_module_the_archive_does_not_carry_is_named_with_the_archive() {
         let linux = Target::parse("linux-x86_64").expect("known target");
         let names = module_file_names("lumen-audio", linux);
-        let message = missing_from_archive("lumen-audio", linux, "0.0.9", &names);
+        let message = missing_from_archive(
+            "lumen-audio",
+            linux,
+            &Release::Version("0.0.9".to_string()),
+            &names,
+        );
         assert!(message.contains("dependency 'lumen-audio'"), "{message}");
         assert!(
             message.contains("lumen-modules-linux-x86_64.tar.gz"),
@@ -3496,10 +3537,11 @@ mod tests {
     /// after a download over the network. The hint is the word the assertions
     /// look for.
     fn release(version: &str) -> Publisher {
+        let from = Release::Version(version.to_string());
         Publisher {
-            base: release::asset_base(version),
+            base: release::asset_base(&from),
             sums: SHA256SUMS.to_string(),
-            name: format!("the v{version} release"),
+            name: from.to_string(),
             hint: "HINT".to_string(),
         }
     }
@@ -4115,10 +4157,39 @@ mod tests {
     /// which release that is, and a build that matches says nothing.
     #[test]
     fn a_build_that_is_not_its_release_says_which_release_it_used() {
-        let note = release_note("0.0.3", "0.0.4").expect("the two differ");
+        let v003 = Release::Version("0.0.3".to_string());
+        let note = release_note(&v003, "0.0.4").expect("the two differ");
         assert!(note.contains("this build is 0.0.4"), "{note}");
         assert!(note.contains("v0.0.3 release"), "{note}");
-        assert_eq!(release_note("0.0.3", "0.0.3"), None);
+        assert_eq!(release_note(&v003, "0.0.3"), None);
+        assert_eq!(
+            release_note(&Release::Nightly, "0.0.9"),
+            None,
+            "a nightly install draws on its own prerelease"
+        );
+    }
+
+    /// The cache of a nightly is cleared when the nightly is reinstalled, and
+    /// kept across runs of one install, since every nightly shares one tag and
+    /// usually one version.
+    #[test]
+    fn a_reinstalled_nightly_does_not_reuse_the_last_one_s_files() {
+        let dir = std::env::temp_dir().join(format!("lumenc-nightly-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        forget_an_earlier_nightly(&dir, Some(100));
+        std::fs::write(dir.join("kit.toml"), "yesterday").expect("fill the cache");
+        forget_an_earlier_nightly(&dir, Some(100));
+        assert!(
+            dir.join("kit.toml").is_file(),
+            "one install keeps its cache"
+        );
+        forget_an_earlier_nightly(&dir, Some(200));
+        assert!(
+            !dir.join("kit.toml").exists(),
+            "a reinstall starts the cache over"
+        );
+        assert!(dir.is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The web runtime is the same pair everywhere, so it caches under its
