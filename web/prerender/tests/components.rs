@@ -150,6 +150,7 @@ fn compiled() -> CompiledApp {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(COMPONENTS.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }

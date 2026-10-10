@@ -104,6 +104,7 @@ fn app_with(program: &[u8]) -> CompiledApp {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(program.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }
@@ -585,6 +586,7 @@ fn app_with_a_component() -> CompiledApp {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(COMPONENTS.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }
@@ -843,6 +845,7 @@ fn translating() -> Arc<SsrSite> {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(TRANSLATES.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };
@@ -925,6 +928,7 @@ fn formatting() -> Arc<SsrSite> {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(FORMATS.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };

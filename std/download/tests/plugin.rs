@@ -66,6 +66,7 @@ fn build_app(dir: &std::path::Path, source: &str, plugin: Option<DownloadPlugin>
             module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })

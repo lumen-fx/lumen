@@ -2,7 +2,7 @@ use super::*;
 
 use crate::app_layout::src_dir;
 use crate::compiler_plugins::CompilerPlugins;
-use lumen_modules::language::{GroupedScripts, ScriptGrouping};
+use lumen_modules::language::{GroupedScripts, ScriptFile, ScriptGrouping};
 use lumen_script::ScriptLanguages;
 
 /// Everything [`load_ir`] produces: the parsed [`lumen_ir::layout_ir::LayoutIR`] plus
@@ -129,6 +129,7 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Pa
     // The program travels in `compiled.scripts`, split by language; the tree
     // carries none of it.
     ir.script_source.clear();
+    ir.script_map = lumen_ir::source_map::SourceMap::default();
     ir.external_scripts.clear();
     // An artifact built for a fixed directory carries absolute asset paths and
     // is unaffected here; one built to travel (`lumenc package`) carries paths
@@ -298,6 +299,7 @@ pub(crate) fn load_ir(
     // directory), so inline `var()` substitution below applies uniformly
     // to the main file *and* every included fragment.
     let mut include_paths: Vec<PathBuf> = Vec::new();
+    let written = html.clone();
     let html = parser
         .resolve_includes(&html, html_path, &mut include_paths)
         .map_err(|e| RunError::ParseHtml(attribute(e)))?;
@@ -376,6 +378,10 @@ pub(crate) fn load_ir(
     let mut ir = parser
         .parse_html(&html, &fragments)
         .map_err(|e| RunError::ParseHtml(attribute(e)))?;
+    // The parse saw spliced markup with no path; the inline blocks were
+    // written in the entry file, at the lines it has.
+    ir.script_map.name_unnamed(&html_path.display().to_string());
+    ir.script_map.place_in(&ir.script_source, &written);
     // Carry the resolved include list on the IR for parity with
     // `external_scripts` (used by hot reload + inspectable by consumers).
     ir.included_files = include_paths.clone();
@@ -720,13 +726,17 @@ pub(crate) fn grouped_script_sources(
     grouping: ScriptGrouping<'_>,
 ) -> Result<GroupedScripts, RunError> {
     let script_root = src_dir(dir);
-    let mut externals: Vec<(&str, String)> = Vec::with_capacity(ir.external_scripts.len());
+    let mut externals: Vec<ScriptFile<'_>> = Vec::with_capacity(ir.external_scripts.len());
     for rel in &ir.external_scripts {
         let path = script_root.join(rel);
         let body = std::fs::read_to_string(&path).map_err(|e| RunError::Read(path.clone(), e))?;
-        externals.push((rel.as_str(), body));
+        externals.push(ScriptFile {
+            rel: rel.as_str(),
+            file: path.display().to_string(),
+            body,
+        });
     }
-    Ok(grouping.group(&ir.script_source, &externals))
+    Ok(grouping.group(&ir.script_source, &ir.script_map, &externals))
 }
 
 #[cfg(feature = "runtime-parse")]

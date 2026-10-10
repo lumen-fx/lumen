@@ -18,6 +18,7 @@ fn script(bytecode: Option<Vec<u8>>) -> CompiledScript {
         module: "lumen-candela".to_string(),
         source: String::new(),
         bytecode,
+        source_map: Default::default(),
     }
 }
 

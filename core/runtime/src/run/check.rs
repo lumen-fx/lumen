@@ -250,7 +250,8 @@ pub fn compile_app_with_skin(
     // others ship their source, run by the one module they have.
     let uri = html_path.display().to_string();
     let mut scripts = Vec::new();
-    for (language, source) in grouped_script_sources(&loaded.ir, dir, grouping)? {
+    for script in grouped_script_sources(&loaded.ir, dir, grouping)? {
+        let (language, source, source_map) = (script.language, script.source, script.map);
         let Some(shipped) = table.shipped_provider(&language) else {
             warnings.push(format!(
                 "no script host module provides the `{language}` language, so its script \
@@ -261,6 +262,7 @@ pub fn compile_app_with_skin(
                 module: String::new(),
                 source,
                 bytecode: None,
+                source_map,
             });
             continue;
         };
@@ -271,6 +273,7 @@ pub fn compile_app_with_skin(
                 module,
                 source,
                 bytecode: None,
+                source_map,
             });
             continue;
         }
@@ -289,6 +292,7 @@ pub fn compile_app_with_skin(
         let flags = deps.target.cfg_flags();
         let against = ScriptCompile {
             uri: &uri,
+            source_map: &source_map,
             lib_dir: Some(&layout.lib_dir),
             import_roots: &deps.import_roots,
             cfg_flags: flags,
@@ -302,6 +306,7 @@ pub fn compile_app_with_skin(
             module,
             source: String::new(),
             bytecode: Some(image),
+            source_map: Default::default(),
         });
     }
     // Routing data for a multi-page app. The pages themselves are already in
@@ -313,6 +318,7 @@ pub fn compile_app_with_skin(
     });
     let mut ir = loaded.ir;
     ir.script_source = String::new();
+    ir.script_map = lumen_ir::source_map::SourceMap::default();
     ir.external_scripts.clear();
     // Every catalogue travels in the artifact, so an app compiled here reads
     // in its languages with no `locale/` directory beside it. A loose file
@@ -520,7 +526,8 @@ pub fn check_app(
     // same grouping `build_app` runs: one language's checker false-fails on
     // another's syntax, so a mixed app checked as one blob could never pass.
     let uri = entry_path.display().to_string();
-    for (language, source) in grouped_script_sources(&ir, dir, grouping)? {
+    for script in grouped_script_sources(&ir, dir, grouping)? {
+        let (language, source) = (script.language, script.source);
         let Some(check) = registered.get(&language).and_then(|l| l.check) else {
             return Err(RunError::Script(format!(
                 "{uri}: no script host for the `{language}` language is loaded to check its \
@@ -531,7 +538,7 @@ pub fn check_app(
                 )
             )));
         };
-        check_per_target(check, &source, &uri, &layout.lib_dir, targets)?;
+        check_per_target(check, &source, &uri, &script.map, &layout.lib_dir, targets)?;
     }
     Ok(CheckReport {
         element_count: count_elements(&ir.root),
@@ -550,6 +557,7 @@ fn check_per_target(
     check: lumen_script::language::CheckFn,
     source: &str,
     uri: &str,
+    source_map: &lumen_ir::source_map::SourceMap,
     lib_dir: &Path,
     targets: &[CompileDeps],
 ) -> Result<(), RunError> {
@@ -558,6 +566,7 @@ fn check_per_target(
         let stubs = declared_fns(deps)?;
         let against = ScriptCompile {
             uri,
+            source_map,
             lib_dir: Some(lib_dir),
             import_roots: &deps.import_roots,
             cfg_flags: deps.target.cfg_flags(),

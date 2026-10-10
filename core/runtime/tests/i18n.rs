@@ -635,6 +635,7 @@ fn build_with_script(dir: &Path, root: Element, script: &str) -> lumen_core::app
             module: "lumen-candela-dev".to_string(),
             source: format!("import \"lumen.cdl\";\n\n{script}\n\nfn main() {{}}\n"),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })

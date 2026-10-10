@@ -102,6 +102,7 @@ fn boot() -> (Rc<RefCell<App>>, ScriptHostAccess, DomElement) {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(PROGRAM.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };

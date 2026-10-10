@@ -20,6 +20,7 @@ use bevy_ecs::prelude::{Resource, World};
 use lumen_core::prelude::App;
 use lumen_core::warn_line;
 use lumen_ir::fragment::FragmentComponent;
+use lumen_ir::source_map::SourceMap;
 
 use crate::{ScriptError, ScriptFn, ScriptHost, ScriptPrelude, ScriptValue};
 
@@ -35,6 +36,9 @@ pub struct ScriptProgram {
     pub bytecode: Option<Vec<u8>>,
     /// Where the program came from, named in a load error.
     pub uri: String,
+    /// Where each piece of [`Self::source`] was read from, so a load error
+    /// names the script file and line rather than [`Self::uri`].
+    pub source_map: SourceMap,
     /// The app's `lib/` directory, where a native library a script imports is
     /// looked for.
     pub lib_dir: Option<PathBuf>,
@@ -52,6 +56,9 @@ pub struct ScriptProgram {
 pub struct ScriptCompile<'a> {
     /// Where the program came from, named in a compile error.
     pub uri: &'a str,
+    /// Where each piece of the source was read from; see
+    /// [`ScriptError::relocate`].
+    pub source_map: &'a SourceMap,
     /// The app's `lib/` directory.
     pub lib_dir: Option<&'a std::path::Path>,
     /// Script libraries the app depends on.
@@ -166,9 +173,10 @@ where
 /// than one language, which a host needs to keep its signal mirror current
 /// with the others.
 pub type InstallFn = fn(&mut App, ScriptProgram, bool);
-/// Swap a live host's program for a hot reload: `(world, source, uri)`.
-/// `None` when the host is not installed.
-pub type ReloadFn = fn(&mut World, &str, &str) -> Option<Result<(), ScriptError>>;
+/// Swap a live host's program for a hot reload: `(world, source, uri, map)`,
+/// `map` saying where each piece of `source` was read from. `None` when the
+/// host is not installed.
+pub type ReloadFn = fn(&mut World, &str, &str, &SourceMap) -> Option<Result<(), ScriptError>>;
 /// Compile-check a program without running it: `(source, against)`.
 pub type CheckFn = fn(&str, &ScriptCompile<'_>) -> Result<(), String>;
 /// Compile a program to bytecode: `(source, against)`, giving the image and

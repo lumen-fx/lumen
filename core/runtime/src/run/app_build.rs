@@ -335,11 +335,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let programs: Vec<(String, ScriptProgram)> = if compiled_scripts.is_empty() {
         grouped_script_sources(&ir, &dir, grouping)?
             .into_iter()
-            .map(|(language, source)| {
+            .map(|script| {
                 (
-                    language,
+                    script.language,
                     ScriptProgram {
-                        source,
+                        source: script.source,
+                        source_map: script.map,
                         ..ScriptProgram::default()
                     },
                 )
@@ -354,6 +355,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                     ScriptProgram {
                         source: script.source,
                         bytecode: script.bytecode,
+                        source_map: script.source_map,
                         ..ScriptProgram::default()
                     },
                 )

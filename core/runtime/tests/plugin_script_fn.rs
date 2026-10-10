@@ -125,6 +125,7 @@ fn app_with(source: &str, plugin: impl Plugin + Send + 'static) -> EcsApp {
             module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })
@@ -287,6 +288,7 @@ fn a_plugin_function_survives_a_reload() {
             &mut app.world,
             "fn on_start() { let msg = native::greet(\"second\"); }\nfn main() {}\n",
             "reload.cdl",
+            &lumen_script::SourceMap::default(),
         )
         .expect("the host is installed")
         .expect("the reloaded script compiles");

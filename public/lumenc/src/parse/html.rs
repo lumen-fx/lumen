@@ -44,6 +44,7 @@ use lumen_ir::css::{canonical_style_property, parse_duration_ms};
 use lumen_ir::fragment::{
     Fragment, FragmentKind, FragmentOrigin, FragmentParam, FragmentTable, SLOT_TAG,
 };
+use lumen_ir::source_map::{SourceMap, line_at};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -146,6 +147,31 @@ pub struct ParsedMarkup {
     pub fragments: FragmentTable,
 }
 
+/// The inline `<script>` blocks a parse collects, joined in source order, and
+/// where each one was written.
+pub(crate) struct InlineScripts {
+    text: String,
+    map: SourceMap,
+    /// The markup file, as an error names it; empty for a pathless parse.
+    file: String,
+}
+
+impl InlineScripts {
+    fn new(file: &Path) -> Self {
+        Self {
+            text: String::new(),
+            map: SourceMap::default(),
+            file: file.display().to_string(),
+        }
+    }
+
+    /// Add one block whose text `body` starts at byte `at` of `markup`.
+    fn push(&mut self, body: &str, markup: &str, at: usize) {
+        self.map
+            .append(&mut self.text, body, &self.file, line_at(markup, at));
+    }
+}
+
 /// Parse a Lumen-markup string into a [`LayoutIR`].
 ///
 /// `<script>` tags are collected into `LayoutIR::script_source` and
@@ -189,7 +215,7 @@ pub fn parse_markup(
     let spliced =
         crate::parse::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
     let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
-    let mut script_source = String::new();
+    let mut script_source = InlineScripts::new(self_path);
     let mut external_scripts = Vec::new();
     let mut lint_findings: Vec<LintFinding> = Vec::new();
     let fragments = collect_declarations(
@@ -231,10 +257,15 @@ pub fn parse_markup(
         0,
     )?;
     crate::parse::fragments::inline(&mut root, &fragments, &mut lint_findings)?;
+    // Lines were counted in the spliced markup; an error names the file the
+    // author wrote, which has no include bodies in it.
+    let mut script_map = script_source.map;
+    script_map.place_in(&script_source.text, src);
     Ok(ParsedMarkup {
         ir: LayoutIR {
             root,
-            script_source,
+            script_source: script_source.text,
+            script_map,
             external_scripts,
             skin,
             frameless,
@@ -299,7 +330,7 @@ pub fn collect_fragments(
     let spliced =
         crate::parse::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
     let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
-    let mut script_source = String::new();
+    let mut script_source = InlineScripts::new(self_path);
     let mut external_scripts = Vec::new();
     let mut lint_findings = Vec::new();
     collect_declarations(
@@ -325,7 +356,7 @@ fn collect_declarations(
     src: &str,
     self_path: &Path,
     external: &FragmentTable,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     lint_findings: &mut Vec<LintFinding>,
 ) -> Result<FragmentTable, ParseError> {
@@ -750,7 +781,7 @@ pub fn fragment_from_markup(
     let mut body = Vec::new();
     let mut attrs = Attributes::default();
     let mut slots = Vec::new();
-    let mut script_buf = String::new();
+    let mut script_buf = InlineScripts::new(Path::new(""));
     let mut external_scripts = Vec::new();
     let mut lint_findings = Vec::new();
     build_children(
@@ -1013,7 +1044,7 @@ fn extract_menubar(
 fn build_composed_widget(
     node: roxmltree::Node,
     tag: &str,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
@@ -1930,7 +1961,7 @@ fn apply_authored_attributes(
 #[allow(clippy::too_many_arguments)]
 fn build_element(
     node: roxmltree::Node,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
@@ -2170,7 +2201,7 @@ fn build_children(
     attrs: &mut Attributes,
     children: &mut Vec<Element>,
     slots: &mut Vec<InterpolationSlot>,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
@@ -2219,10 +2250,11 @@ fn build_children(
                 if let Some(script_src) = child.attribute("src") {
                     external_scripts.push(script_src.to_string());
                 } else if let Some(s) = child.text() {
-                    if !script_buf.is_empty() {
-                        script_buf.push('\n');
-                    }
-                    script_buf.push_str(s);
+                    let at = child
+                        .children()
+                        .find(|n| n.is_text())
+                        .map_or(child.range().start, |n| n.range().start);
+                    script_buf.push(s, src, at);
                 }
                 continue;
             }
@@ -2305,7 +2337,7 @@ fn build_fragment_use(
     node: roxmltree::Node,
     tag: String,
     key: String,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
@@ -2371,7 +2403,7 @@ fn build_fragment_use(
 #[allow(clippy::too_many_arguments)]
 fn build_slot(
     node: roxmltree::Node,
-    script_buf: &mut String,
+    script_buf: &mut InlineScripts,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,

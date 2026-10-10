@@ -338,6 +338,7 @@ fn compile_dir(
     crate::parse::fragments::link(&mut fragments)
         .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     ir.script_source = String::new();
+    ir.script_map = lumen_ir::source_map::SourceMap::default();
     ir.external_scripts.clear();
 
     // The catalogues travel in the artifact, the same as on the fat path, and
@@ -386,24 +387,30 @@ fn grouped_script_sources(
         table: &table,
         engine: engine.as_deref(),
     };
-    let mut externals: Vec<(&str, String)> = Vec::with_capacity(ir.external_scripts.len());
+    let mut externals: Vec<lumen_modules::language::ScriptFile<'_>> =
+        Vec::with_capacity(ir.external_scripts.len());
     for rel in &ir.external_scripts {
         let path = src_dir.join(rel);
         let body =
             std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
-        externals.push((rel.as_str(), body));
+        externals.push(lumen_modules::language::ScriptFile {
+            rel: rel.as_str(),
+            file: path.display().to_string(),
+            body,
+        });
     }
     Ok(grouping
-        .group(&ir.script_source, &externals)
+        .group(&ir.script_source, &ir.script_map, &externals)
         .into_iter()
-        .map(|(language, source)| lumen_ir::artifact::CompiledScript {
+        .map(|script| lumen_ir::artifact::CompiledScript {
             module: table
-                .source_provider(&language)
+                .source_provider(&script.language)
                 .map(|p| p.module.clone())
                 .unwrap_or_default(),
-            engine: language,
-            source,
+            engine: script.language,
+            source: script.source,
             bytecode: None,
+            source_map: script.map,
         })
         .collect())
 }

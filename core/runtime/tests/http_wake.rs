@@ -106,6 +106,7 @@ fn main() {{}}
             module: "lumen-candela-dev".to_string(),
             source,
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })

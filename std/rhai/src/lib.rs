@@ -27,7 +27,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
     CallFailure, CallOutcome, Credentials, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext,
-    ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
+    ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue, SourceMap,
 };
 use parking_lot::Mutex;
 use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Module, Scope};
@@ -1970,22 +1970,6 @@ impl RhaiHost {
         &mut self.engine
     }
 
-    /// Compile `source` with the exact engine settings `lumenc run`
-    /// loads with, WITHOUT evaluating the top level (no side effects -
-    /// no file I/O, no notifications, no signal writes).
-    ///
-    /// `lumenc check` calls this so a script that would die at load -
-    /// e.g. one exceeding the parser's expression-depth limit - fails
-    /// the check instead of false-passing while the window renders with
-    /// every handler dead. Returns the same structured
-    /// [`ScriptError::Compile`] shape [`ScriptHost::load`] produces.
-    pub fn compile_check(&self, source: &str) -> Result<(), ScriptError> {
-        self.engine
-            .compile(source)
-            .map(|_| ())
-            .map_err(|e| parse_compile_error(e, "<inline>"))
-    }
-
     /// Look up a per-id handler installed via the `on(event, id, fn)`
     /// Rhai builtin. Returns the fn name to call instead of
     /// `on_<event>(id)` for this specific id, or `None` to fall back to
@@ -2831,6 +2815,10 @@ pub struct ScriptRhaiPlugin {
     /// Inline Rhai source loaded on app start. Use a string literal or
     /// `include_str!("path.rhai")`.
     pub source: String,
+    /// The name compile errors give the source.
+    pub uri: String,
+    /// Where each piece of the source was read from.
+    pub source_map: SourceMap,
     /// Extension callbacks invoked on the inner `rhai::Engine` after
     /// Lumen's built-in registrations but before the script AST is
     /// compiled. Use this to register app-specific native bindings
@@ -2845,8 +2833,18 @@ impl ScriptRhaiPlugin {
     pub fn new(source: impl Into<String>) -> Self {
         Self {
             source: source.into(),
+            uri: "<inline>".to_string(),
+            source_map: SourceMap::default(),
             extensions: Vec::new(),
         }
+    }
+
+    /// Name the source in compile errors, and say where each piece of it was
+    /// read from so an error names the script file and line.
+    pub fn with_origin(mut self, uri: impl Into<String>, source_map: SourceMap) -> Self {
+        self.uri = uri.into();
+        self.source_map = source_map;
+        self
     }
 
     /// Register a callback that runs on the inner `rhai::Engine` before
@@ -2870,7 +2868,10 @@ impl Plugin for ScriptRhaiPlugin {
         // Everything else - load + banner + `on_start` re-stash +
         // resource install + the full system set with its 7bfc0f2
         // ordering - is host-generic and lives in lumen-script.
-        ScriptPlugin::new(host, self.source).build(app);
+        ScriptPlugin::new(host, self.source)
+            .with_uri(self.uri)
+            .with_source_map(self.source_map)
+            .build(app);
     }
 }
 
@@ -2893,15 +2894,16 @@ pub fn language() -> lumen_script::ScriptLanguage {
     let mut language = lumen_script::ScriptLanguage::new(LANGUAGE, install, access);
     language.reload = Some(reload_script::<RhaiHost>);
     language.check = Some(|source, against| {
-        RhaiHost::new()
-            .compile_check(source)
-            .map_err(|e| format!("{}: {e}", against.uri))
+        ScriptHost::compile_check(&RhaiHost::new(), source, against.uri)
+            .map_err(|e| e.relocate(against.uri, against.source_map).to_string())
     });
     language
 }
 
 fn install(app: &mut App, program: lumen_script::ScriptProgram, multi_host: bool) {
-    app.add_plugin(ScriptRhaiPlugin::new(program.source));
+    app.add_plugin(
+        ScriptRhaiPlugin::new(program.source).with_origin(program.uri, program.source_map),
+    );
     lumen_scene::script_host::install::<RhaiHost>(app, multi_host);
 }
 

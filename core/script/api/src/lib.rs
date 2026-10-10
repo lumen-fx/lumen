@@ -106,6 +106,7 @@ pub use language::{
     MarkupBlock, MarkupBlockError, ScriptCompile, ScriptHostAccess, ScriptLanguage,
     ScriptLanguageAppExt, ScriptLanguages, ScriptProgram, UnknownLanguage, install_program,
 };
+pub use lumen_ir::source_map::SourceMap;
 pub use runtime::*;
 pub use script_fn::{
     Arity0, CallScratch, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptField, ScriptFn, ScriptFnAppExt,
@@ -145,6 +146,39 @@ pub enum ScriptError {
 }
 
 impl ScriptError {
+    /// Point a compile error in a concatenated program at the file and line
+    /// the author wrote.
+    ///
+    /// `uri` is the program's own name and `map` says where each of its
+    /// pieces was read from. An error about another file (a module the
+    /// program imports) already names that file and is returned unchanged,
+    /// as is a runtime error or one with no known line.
+    #[must_use]
+    pub fn relocate(self, uri: &str, map: &lumen_ir::source_map::SourceMap) -> Self {
+        match self {
+            Self::Compile {
+                uri: at,
+                line,
+                col,
+                message,
+            } if at == uri && line > 0 => match map.locate(line) {
+                Some((file, line)) if !file.is_empty() => Self::Compile {
+                    uri: file.to_owned(),
+                    line,
+                    col,
+                    message,
+                },
+                _ => Self::Compile {
+                    uri: at,
+                    line,
+                    col,
+                    message,
+                },
+            },
+            other => other,
+        }
+    }
+
     /// Build a `Compile` with no specific position info. Equivalent to
     /// the previous `Compile(String)` shape; used by backends that
     /// can't surface line/col yet.

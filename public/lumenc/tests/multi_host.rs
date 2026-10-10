@@ -134,6 +134,7 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
             &mut app.world,
             &lua_src,
             "<inline>",
+            &lumen_script::SourceMap::default(),
         )
         .expect("the candela host is installed")
         .is_err(),
@@ -147,11 +148,17 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
                 &mut app.world,
                 &candela_src,
                 "<inline>",
+                &lumen_script::SourceMap::default(),
             ),
         ),
         (
             "lua",
-            lumen_script::reload_script::<lumen_lua::LuaHost>(&mut app.world, &lua_src, "<inline>"),
+            lumen_script::reload_script::<lumen_lua::LuaHost>(
+                &mut app.world,
+                &lua_src,
+                "<inline>",
+                &lumen_script::SourceMap::default(),
+            ),
         ),
     ];
     for (name, result) in reloads {

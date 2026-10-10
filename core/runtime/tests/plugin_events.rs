@@ -52,6 +52,7 @@ fn app_with_plugin(tag: &str, config: &str, source: &str) -> EcsApp {
             module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })

@@ -383,15 +383,13 @@ pub(crate) fn hot_reload(world: &mut World) {
             .map(|r| r.0.clone())
             .unwrap_or_default();
         for (language, reload) in reloaders {
-            let source = grouped
-                .iter()
-                .find(|(l, _)| *l == language)
-                .map(|(_, s)| s.as_str())
-                .unwrap_or("");
-            if source.trim().is_empty() {
+            let Some(script) = grouped.iter().find(|g| g.language == language) else {
+                continue;
+            };
+            if script.source.trim().is_empty() {
                 continue;
             }
-            if let Some(Err(e)) = reload(world, source, "<inline>") {
+            if let Some(Err(e)) = reload(world, &script.source, "<inline>", &script.map) {
                 eprintln!("lumenc hot-reload: {language} script load failed: {e}");
             }
         }

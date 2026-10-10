@@ -127,11 +127,16 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// program, and a program compiled to bytecode carries no source; the
 /// flattened `script_source` field is gone.
 ///
+/// `16`: [`CompiledScript`] gains `source_map`, and
+/// [`crate::layout_ir::LayoutIR`] gains `script_map`, so an error in a program
+/// shipped as source names the script file and line the author wrote rather
+/// than the markup file.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 15;
+pub const FORMAT_VERSION: u16 = 16;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -197,6 +202,9 @@ pub struct CompiledScript {
     /// The program compiled ahead of time, for a language that has a bytecode
     /// form; `None` for one that runs from [`Self::source`].
     pub bytecode: Option<Vec<u8>>,
+    /// Where each piece of [`Self::source`] was read from. Empty for a program
+    /// compiled to bytecode.
+    pub source_map: crate::source_map::SourceMap,
 }
 
 /// The precompiled application: everything the runtime needs to spawn the UI
@@ -429,12 +437,14 @@ mod tests {
                     module: "toy-host".to_string(),
                     source: "let x = 1;".to_string(),
                     bytecode: None,
+                    source_map: Default::default(),
                 },
                 CompiledScript {
                     engine: "candela".to_string(),
                     module: "lumen-candela".to_string(),
                     source: String::new(),
                     bytecode: Some(vec![0xCD, 0x1B, 0x00, 0xFF]),
+                    source_map: Default::default(),
                 },
             ],
             pages: Some(CompiledPages {

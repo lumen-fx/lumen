@@ -75,6 +75,7 @@ fn app_with(program: &[u8]) -> CompiledApp {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(program.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }
@@ -343,6 +344,7 @@ fn an_engine_this_build_cannot_run_is_named() {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(vec![0]),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };

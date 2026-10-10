@@ -78,6 +78,7 @@ fn app_with(source: &str, plugins: Vec<Box<dyn FnOnce(RunOptions) -> RunOptions>
             module: "lumen-candela-dev".to_string(),
             source: source.to_string(),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })
@@ -203,6 +204,7 @@ fn a_registration_after_the_hosts_have_bound_changes_nothing() {
         &mut app.world,
         "fn probe_late() { native::late(); }\nfn main() {}\n",
         "reload.cdl",
+        &lumen_script::SourceMap::default(),
     )
     .expect("the host is installed")
     .expect_err("the late function is not callable");

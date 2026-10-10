@@ -40,7 +40,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
     CallFailure, CallOutcome, Credentials, ScriptCommand, ScriptContext, ScriptError, ScriptFn,
-    ScriptFnStore, ScriptHost, ScriptNs, ScriptValue,
+    ScriptFnStore, ScriptHost, ScriptNs, ScriptValue, SourceMap,
 };
 use mlua::{
     Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value as LuaValue, Variadic,
@@ -2366,13 +2366,16 @@ fn register_typed_signal_builtins(lua: &Lua, signals: &SignalMirror) -> mlua::Re
 /// shape. Lua embeds `[string "uri"]:LINE: message`; parse the line out
 /// so LSP / banner layers get a position without re-parsing.
 fn lua_compile_error(e: mlua::Error, uri: &str) -> ScriptError {
-    let message = e.to_string();
-    let line = message
-        .split("]:")
-        .nth(1)
-        .and_then(|rest| rest.split(':').next())
-        .and_then(|n| n.trim().parse::<u32>().ok())
-        .unwrap_or(0);
+    let text = e.to_string();
+    // Lua writes the position into the message itself, as
+    // `[string "<chunk name>"]:<line>: <what>`. The line moves into the
+    // structured position, where it can be mapped back to the script file, and
+    // the message keeps only what went wrong.
+    let parsed = text.split_once("]:").and_then(|(_, rest)| {
+        let (line, what) = rest.split_once(':')?;
+        Some((line.trim().parse::<u32>().ok()?, what.trim().to_string()))
+    });
+    let (line, message) = parsed.unwrap_or((0, text));
     ScriptError::Compile {
         uri: uri.to_string(),
         line,
@@ -2400,6 +2403,10 @@ type LuaExtension = Box<dyn FnOnce(&mut Lua) + Send + 'static>;
 pub struct ScriptLuaPlugin {
     /// Inline Lua source loaded on app start.
     pub source: String,
+    /// The name compile errors give the source.
+    pub uri: String,
+    /// Where each piece of the source was read from.
+    pub source_map: SourceMap,
     /// Extension callbacks invoked on the inner `mlua::Lua` after
     /// Lumen's built-in registrations but before the script is loaded.
     /// Use this to register app-specific native globals (`page()`, FFI,
@@ -2412,8 +2419,18 @@ impl ScriptLuaPlugin {
     pub fn new(source: impl Into<String>) -> Self {
         Self {
             source: source.into(),
+            uri: "<inline>".to_string(),
+            source_map: SourceMap::default(),
             extensions: Vec::new(),
         }
+    }
+
+    /// Name the source in compile errors, and say where each piece of it was
+    /// read from so an error names the script file and line.
+    pub fn with_origin(mut self, uri: impl Into<String>, source_map: SourceMap) -> Self {
+        self.uri = uri.into();
+        self.source_map = source_map;
+        self
     }
 
     /// Register a callback that runs on the inner `mlua::Lua` before the
@@ -2434,7 +2451,10 @@ impl Plugin for ScriptLuaPlugin {
         for ext in self.extensions {
             ext(host.lua_mut());
         }
-        ScriptPlugin::new(host, self.source).build(app);
+        ScriptPlugin::new(host, self.source)
+            .with_uri(self.uri)
+            .with_source_map(self.source_map)
+            .build(app);
     }
 }
 
@@ -2459,13 +2479,15 @@ pub fn language() -> lumen_script::ScriptLanguage {
     language.check = Some(|source, against| {
         LuaHost::new()
             .compile_check(source, against.uri)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.relocate(against.uri, against.source_map).to_string())
     });
     language
 }
 
 fn install(app: &mut App, program: lumen_script::ScriptProgram, multi_host: bool) {
-    app.add_plugin(ScriptLuaPlugin::new(program.source));
+    app.add_plugin(
+        ScriptLuaPlugin::new(program.source).with_origin(program.uri, program.source_map),
+    );
     lumen_scene::script_host::install::<LuaHost>(app, multi_host);
 }
 

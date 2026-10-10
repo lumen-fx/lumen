@@ -143,6 +143,7 @@ impl Harness {
                 module: "lumen-candela-dev".to_string(),
                 source: format!("import \"lumen.cdl\";\n\n{script}\n\nfn main() {{}}\n"),
                 bytecode: None,
+                source_map: Default::default(),
             }],
             pages: Some(CompiledPages {
                 entry: "index".to_string(),

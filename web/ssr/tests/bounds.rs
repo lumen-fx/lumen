@@ -65,6 +65,7 @@ fn app() -> CompiledApp {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(FETCHES.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }

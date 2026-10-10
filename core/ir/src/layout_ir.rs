@@ -107,6 +107,10 @@ pub struct LayoutIR {
     /// characters that confuse the XML parser (`<`, `<=`, `&`) - those
     /// references land in [`external_scripts`].
     pub script_source: String,
+    /// Where each inline block in [`Self::script_source`] was written: its
+    /// markup file and the line its text starts on, so an error in it names
+    /// that line.
+    pub script_map: crate::source_map::SourceMap,
     /// Paths from every `<script src="..."/>` reference, in source
     /// order. The runtime (`lumenc::run::load_ir`) resolves them
     /// relative to the app directory and concatenates with
