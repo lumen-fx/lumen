@@ -16,7 +16,8 @@ use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use sha1::Sha1;
@@ -25,7 +26,7 @@ use ureq::Agent;
 use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::{Connector as _, DefaultConnector};
 
-use crate::idle::IdleConnector;
+use crate::wait::WaitConnector;
 
 /// How much is read from the socket before the progress callback is offered
 /// another figure.
@@ -130,6 +131,63 @@ pub struct Limits {
     pub max_bytes: Option<u64>,
 }
 
+/// What a cancelled transfer reports through `download_error`: the whole
+/// message, so a handler can tell a cancel from a failure by comparing it.
+pub const CANCELLED: &str = "cancelled";
+
+/// Which of the two ways a transfer ends got there first.
+const RUNNING: u8 = 0;
+const CANCELLED_STATE: u8 = 1;
+const FINISHED: u8 = 2;
+
+/// The switch one transfer shares with whoever may cancel it.
+///
+/// A transfer ends exactly once, either finished (its file in place, or its
+/// failure decided) or cancelled. Whichever side flips the switch first
+/// decides, so a cancel that loses the race to a finishing transfer answers
+/// false and the transfer's own outcome is the one reported.
+#[derive(Debug, Clone, Default)]
+pub struct Control(Arc<AtomicU8>);
+
+impl Control {
+    /// Cancel the transfer. True when it was still running, and so will not
+    /// report an outcome of its own.
+    pub fn cancel(&self) -> bool {
+        self.0
+            .compare_exchange(
+                RUNNING,
+                CANCELLED_STATE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Whether the transfer has been cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == CANCELLED_STATE
+    }
+
+    /// Settle the transfer as finished. False when a cancel got there first,
+    /// in which case the outcome is not the transfer's to report.
+    pub fn finish(&self) -> bool {
+        match self
+            .0
+            .compare_exchange(RUNNING, FINISHED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(state) => state == FINISHED,
+        }
+    }
+
+    /// Whether this is the same transfer's switch.
+    #[must_use]
+    pub fn same(&self, other: &Control) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// What a finished transfer wrote.
 #[derive(Debug, Clone)]
 pub struct Transferred {
@@ -225,11 +283,16 @@ pub fn hex(bytes: &[u8]) -> String {
 /// `progress` is offered the running byte count and the size the server
 /// declared, as often as bytes arrive; throttling it is the caller's business.
 /// The destination is replaced only by a complete, verified file.
+///
+/// A cancel through `control` stops the transfer within one poll of the
+/// connection, removes the temp file, and fails with [`CANCELLED`]; a
+/// destination is never replaced once the transfer has been cancelled.
 pub fn to_file(
     url: &str,
     dest: &Path,
     checksum: &Checksum,
     limits: &Limits,
+    control: &Control,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<Transferred, Failure> {
     let dir = match dest.parent() {
@@ -239,7 +302,14 @@ pub fn to_file(
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let temp = temp_path(dest, &dir)?;
 
-    let outcome = stream(url, &temp, checksum, limits, progress);
+    let outcome = stream(url, &temp, checksum, limits, control, progress);
+    // Settled before the rename, so a cancel either lands first and the file
+    // never appears, or loses and the finished file is reported.
+    let outcome = match outcome {
+        Ok(_) if !control.finish() => Err(CANCELLED.to_string()),
+        Err(_) if control.is_cancelled() => Err(CANCELLED.to_string()),
+        other => other,
+    };
     match outcome {
         Ok((received, total)) => match fs::rename(&temp, dest) {
             Ok(()) => Ok(Transferred {
@@ -281,13 +351,15 @@ fn stream(
     temp: &Path,
     checksum: &Checksum,
     limits: &Limits,
+    control: &Control,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(u64, Option<u64>), Failure> {
     // No deadline covers the whole transfer: one would kill exactly the large
     // downloads this module exists for. Resolution and the connection are
     // bounded by ureq; every wait for the server after that is capped by
-    // `IdleConnector`, so a body that keeps arriving runs as long as it takes
-    // and one that stops for longer than the timeout fails. Redirects (ten
+    // `WaitConnector`, so a body that keeps arriving runs as long as it takes
+    // and one that stops for longer than the timeout fails. The same
+    // transport is how a cancel reaches a quiet connection. Redirects (ten
     // deep) and TLS (rustls over the web-PKI roots) are ureq's defaults.
     let timeout = limits.timeout_ms.map(Duration::from_millis);
     let config = Agent::config_builder()
@@ -295,14 +367,14 @@ fn stream(
         .timeout_resolve(timeout)
         .timeout_connect(timeout)
         .build();
-    let agent = match timeout {
-        Some(limit) => Agent::with_parts(
-            config,
-            DefaultConnector::new().chain(IdleConnector { limit }),
-            DefaultResolver::default(),
-        ),
-        None => Agent::new_with_config(config),
-    };
+    let agent = Agent::with_parts(
+        config,
+        DefaultConnector::new().chain(WaitConnector {
+            limit: timeout,
+            control: control.clone(),
+        }),
+        DefaultResolver::default(),
+    );
 
     let mut reply = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
     let status = reply.status().as_u16();
@@ -327,6 +399,9 @@ fn stream(
     let mut received: u64 = 0;
 
     loop {
+        if control.is_cancelled() {
+            return Err(CANCELLED.to_string());
+        }
         let n = reader
             .read(&mut buf)
             .map_err(|e| format!("{url}: {e} after {received} bytes"))?;

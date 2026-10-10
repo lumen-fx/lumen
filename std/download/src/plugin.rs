@@ -4,8 +4,8 @@
 //! The engine has no download surface of its own; everything an app observes
 //! comes from here, through the generic seams every plugin uses:
 //!
-//! - the one script function registers through the app's `ScriptFnRegistry`,
-//!   so every host (Rhai, Lua, candela) binds it before the program loads;
+//! - the two script functions register through the app's `ScriptFnRegistry`,
+//!   so every host (Rhai, Lua, candela) binds them before the program loads;
 //! - progress, completion, and failure are [`PluginEvent`]s on the
 //!   plugin-event bus, keyed by the tag the call named, so a per-tag
 //!   `on("download_done", tag, fn)` registration wins over the
@@ -20,7 +20,7 @@
 //! call, claims the tag, pushes a job, and wakes the event loop, and
 //! [`tick_downloads`] starts what the queue holds on the next tick.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ use lumen_module::lumen_script::{
     push_plugin_event,
 };
 
-use crate::transfer::{self, Checksum, Limits};
+use crate::transfer::{self, CANCELLED, Checksum, Control, Limits};
 
 /// The namespace the function lives in: `download::to_file(..)` in Rhai and
 /// candela, `download.to_file(..)` in Lua.
@@ -60,16 +60,17 @@ struct Job {
     dest: PathBuf,
     tag: String,
     checksum: Checksum,
+    control: Control,
 }
 
 /// The handles a script-function body captures: the job queue, the waker that
-/// gets a parked event loop to run the tick that drains it, and the set of
-/// tags with a transfer in flight.
+/// gets a parked event loop to run the tick that drains it, and the tags with
+/// a transfer in flight, each with the switch that cancels it.
 #[derive(Clone, Default)]
 struct Shared {
     queue: Arc<Mutex<Vec<Job>>>,
     waker: Arc<Mutex<Option<EventLoopWaker>>>,
-    live: Arc<Mutex<HashSet<String>>>,
+    live: Arc<Mutex<HashMap<String, Control>>>,
 }
 
 impl Shared {
@@ -90,11 +91,11 @@ impl Shared {
     /// One meaning per tag: a tag already downloading is not superseded,
     /// because the events both transfers would fire carry the same key and
     /// nothing downstream could tell them apart.
-    fn claim(&self, tag: &str, max_concurrent: usize) -> Result<(), String> {
+    fn claim(&self, tag: &str, max_concurrent: usize) -> Result<Control, String> {
         let Ok(mut live) = self.live.lock() else {
             return Err("the module's job table is poisoned".to_string());
         };
-        if live.contains(tag) {
+        if live.contains_key(tag) {
             return Err(format!(
                 "a download tagged `{tag}` is already running; wait for it or use another tag"
             ));
@@ -105,15 +106,44 @@ impl Shared {
                  `max_concurrent` in the module's config or wait for one to finish"
             ));
         }
-        live.insert(tag.to_string());
-        Ok(())
+        let control = Control::default();
+        live.insert(tag.to_string(), control.clone());
+        Ok(control)
     }
 
-    /// Release a tag once its transfer has reported.
-    fn release(&self, tag: &str) {
-        if let Ok(mut live) = self.live.lock() {
+    /// Release a tag once its transfer has ended. Only the transfer that
+    /// holds the tag releases it: a cancelled one may end after the tag has
+    /// been claimed again.
+    fn release(&self, tag: &str, control: &Control) {
+        if let Ok(mut live) = self.live.lock()
+            && live.get(tag).is_some_and(|held| held.same(control))
+        {
             live.remove(tag);
         }
+    }
+
+    /// Cancel the transfer running under `tag`, answering whether there was
+    /// one to cancel.
+    ///
+    /// The tag and its concurrency slot are free once this returns, and the
+    /// cancel is reported as the tag's `download_error`, the last event the
+    /// transfer sends. A transfer that has already finished is not cancelled:
+    /// its own outcome is on its way, and this answers false.
+    fn cancel(&self, tag: &str) -> bool {
+        let tag = tag.trim();
+        let Ok(mut live) = self.live.lock() else {
+            return false;
+        };
+        let Some(control) = live.get(tag) else {
+            return false;
+        };
+        if !control.cancel() {
+            return false;
+        }
+        live.remove(tag);
+        drop(live);
+        error(tag, CANCELLED.to_string());
+        true
     }
 }
 
@@ -131,12 +161,13 @@ struct DownloadState {
     waker_wired: bool,
 }
 
-/// Downloads for a Lumen app: install it and `download::to_file` exists.
+/// Downloads for a Lumen app: install it and `download::to_file` and
+/// `download::cancel` exist.
 ///
 /// Ships as the bundled `lumen-download` runtime module (an app declares
 /// `lumen-download = { bundled = true }` under `[dependencies]`), and works the
 /// same added as an ordinary plugin in a static build. Without it the function
-/// does not exist and a script call fails with the host's ordinary
+/// do not exist and a script call fails with the host's ordinary
 /// unknown-function error.
 pub struct DownloadPlugin {
     limits: Limits,
@@ -218,6 +249,7 @@ impl Plugin for DownloadPlugin {
 /// nothing it can declare, and the whole namespace would degrade to untyped
 /// variadic calls there.
 fn script_fns(shared: &Shared, max_concurrent: usize) -> Vec<ScriptFn> {
+    let cancelling = shared.clone();
     let shared = shared.clone();
     vec![
         ScriptFn::new("to_file")
@@ -246,6 +278,16 @@ fn script_fns(shared: &Shared, max_concurrent: usize) -> Vec<ScriptFn> {
                     &checksum,
                 )))
             }),
+        ScriptFn::new("cancel")
+            .ns(ScriptNs::Named(NAMESPACE.to_string()))
+            .doc(
+                "Cancel the download running under a tag; it reports `download_error` with the \
+                 message `cancelled`, and the tag is free again. False when nothing is running \
+                 under that tag.",
+            )
+            .param("tag", T::Str)
+            .ret(T::Bool)
+            .build(move |cx| Ok(ScriptValue::Bool(cancelling.cancel(&cx.str_arg(0))))),
     ]
 }
 
@@ -284,15 +326,19 @@ fn accept(
             return false;
         }
     };
-    if let Err(message) = shared.claim(&tag, max_concurrent) {
-        error(&tag, message);
-        return false;
-    }
+    let control = match shared.claim(&tag, max_concurrent) {
+        Ok(control) => control,
+        Err(message) => {
+            error(&tag, message);
+            return false;
+        }
+    };
     shared.push(Job {
         url,
         dest: app_paths::resolve(path),
         tag,
         checksum,
+        control,
     });
     true
 }
@@ -337,26 +383,41 @@ fn tick_downloads(
 /// instead; the transfer must still leave the loop, because a download is
 /// unbounded in time by definition.
 fn spawn_transfer(spawn: Option<Arc<dyn Spawn>>, job: Job, limits: Limits, shared: Shared) {
+    // Cancelled while it waited for this tick: the cancel has already been
+    // reported and the tag freed, so there is nothing to start.
+    if job.control.is_cancelled() {
+        return;
+    }
     // Kept outside the closure so a job that never starts still frees its tag
     // and says so; the closure owns everything else.
-    let unstarted = (job.tag.clone(), shared.clone());
+    let unstarted = (job.tag.clone(), job.control.clone(), shared.clone());
     let run = move || {
         let Job {
             url,
             dest,
             tag,
             checksum,
+            control,
         } = job;
         // Throttled: a fast link delivers chunks far faster than a UI can
         // read them, and every event costs a handler call on the tick thread.
         let mut last = Instant::now();
         let mut progress = |received, total: Option<u64>| {
-            if last.elapsed() >= PROGRESS_INTERVAL {
+            if last.elapsed() >= PROGRESS_INTERVAL && !control.is_cancelled() {
                 last = Instant::now();
                 report_progress(&tag, received, total);
             }
         };
-        match transfer::to_file(&url, &dest, &checksum, &limits, &mut progress) {
+        let outcome = transfer::to_file(&url, &dest, &checksum, &limits, &control, &mut progress);
+        // A cancel that got in first has reported and freed the tag already;
+        // this transfer says nothing more. Otherwise the tag is freed before
+        // the outcome goes out, so a handler can start the next transfer
+        // under it.
+        if !control.finish() {
+            return;
+        }
+        shared.release(&tag, &control);
+        match outcome {
             Ok(done) => {
                 // One last figure, unthrottled, so a progress bar reaches its
                 // end before the done handler runs.
@@ -370,7 +431,6 @@ fn spawn_transfer(spawn: Option<Arc<dyn Spawn>>, job: Job, limits: Limits, share
             }
             Err(message) => error(&tag, message),
         }
-        shared.release(&tag);
     };
     match spawn {
         Some(spawn) => spawn.spawn_blocking(Box::new(run)),
@@ -379,9 +439,11 @@ fn spawn_transfer(spawn: Option<Arc<dyn Spawn>>, job: Job, limits: Limits, share
                 .name("lumen-download".into())
                 .spawn(run);
             if let Err(e) = spawned {
-                let (tag, shared) = unstarted;
-                error(&tag, format!("no thread to download on: {e}"));
-                shared.release(&tag);
+                let (tag, control, shared) = unstarted;
+                if control.finish() {
+                    shared.release(&tag, &control);
+                    error(&tag, format!("no thread to download on: {e}"));
+                }
             }
         }
     }

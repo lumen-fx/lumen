@@ -266,13 +266,17 @@ is put in place; give it an empty string to take whatever arrives. Either way th
 destination is written by a rename at the end, so a transfer that fails leaves
 no half file where the real one goes.
 
+`download::cancel(tag)` stops a running transfer and reports it through
+`on_download_error(tag, "cancelled")`, which is how a cancel button on a
+download works.
+
 Reach for it over `fetch` when the answer is large or binary, when you want it
 on disk, when a progress bar has to move, or when you have a checksum to check
 it against. The full surface is in the scripting reference for each host
 ([candela](../reference/scripting-candela.md#downloads),
 [Rhai](../reference/scripting-rhai.md#downloads),
-[Lua](../reference/scripting-lua.md#downloads)); Lua spells the call
-`download.to_file(..)`.
+[Lua](../reference/scripting-lua.md#downloads)); Lua spells the calls
+`download.to_file(..)` and `download.cancel(..)`.
 
 On Windows nothing loads a module beside the executable, so this surface
 exists only in a

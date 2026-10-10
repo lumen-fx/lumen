@@ -1262,6 +1262,7 @@ host declares the namespace from what the module registered.
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `download::to_file(url: string, path: string, tag: string, checksum: string)` | `bool` | Start downloading `url` to `path`, reporting under `tag`. True once the transfer is running, false when the call was refused. |
+| `download::cancel(tag: string)` | `bool` | Cancel the download running under `tag`. False when nothing runs under it. |
 
 Every argument is required, which is what keeps the call typed; there is no
 shorter form that omits the checksum. `checksum` is `sha256:` followed by 64
@@ -1285,6 +1286,15 @@ fallback, the same routing every event gets.
 
 Every refusal arrives as `download_error` under the tag the call named, and
 the call itself answers false.
+
+`download::cancel(tag)` stops a running transfer, however quiet its server has gone,
+removes the partial file, and leaves the destination as it was. The tag and its
+`max_concurrent` slot are free as soon as the call returns, so the next
+`download::to_file` under the same tag starts at once, and the cancel arrives as the
+tag's last event: `download_error` with the message `cancelled`, which a
+handler can compare against to tell a cancel from a failure. A transfer that
+has already finished is not cancelled; its own outcome is reported and the call
+answers false.
 
 ```rust
 fn on_start() {
