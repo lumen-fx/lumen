@@ -40,9 +40,9 @@ pub enum EventKind {
     /// Pointer press + release on the same element.
     Click,
     /// Two clicks within the double-click window. On a double-click tick
-    /// the plain [`EventKind::Click`] for the same element is suppressed,
-    /// matching the script runtime's "press twice fast = the double
-    /// action, not the single action *and* the double" semantics.
+    /// the plain [`EventKind::Click`] for the same element is suppressed:
+    /// press twice fast is the double action, not the single action *and*
+    /// the double.
     DoubleClick,
     /// Press held past the long-press threshold.
     LongPress,
@@ -154,8 +154,8 @@ pub(crate) struct PendingUiEvents(Vec<(EventKind, String)>);
 
 /// Fold this tick's pointer-derived messages into [`PendingUiEvents`].
 ///
-/// Applies the same double-click suppression as the script dispatcher:
-/// when a [`DoubleClickEvent`] fires for an entity, that entity's plain
+/// Applies double-click suppression: when a [`DoubleClickEvent`] fires
+/// for an entity, that entity's plain
 /// [`ClickEvent`]s this tick are dropped so a double-click counts as
 /// exactly one double, not two clicks plus a double.
 pub(crate) fn collect_ui_events(
