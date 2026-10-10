@@ -109,3 +109,45 @@ fn a_quick_pair_of_clicks_reaches_on_click_twice_and_on_double_click_once() {
     assert_eq!(text_of(&mut app, "clicks").as_deref(), Some("2"));
     assert_eq!(text_of(&mut app, "doubles").as_deref(), Some("1"));
 }
+
+fn entity_of(app: &mut App, id: &str) -> bevy_ecs::entity::Entity {
+    let mut q = app.world.query::<(bevy_ecs::entity::Entity, &LumenId)>();
+    q.iter(&app.world)
+        .find(|(_, lid)| lid.0 == id)
+        .map(|(e, _)| e)
+        .unwrap_or_else(|| panic!("no element {id}"))
+}
+
+fn focused(app: &App, id_entity: bevy_ecs::entity::Entity) -> bool {
+    app.world
+        .get::<lumen_core::input::Focused>(id_entity)
+        .is_some()
+}
+
+const FORM: &str = r#"
+<root padding="20" gap="10">
+  <input id="name" width="200px" />
+  <button id="save" text="Save" width="200px" height="40px" />
+</root>
+"#;
+
+/// Clicking a button focuses it, as it does in a browser, and the field that
+/// held focus gives it up.
+#[test]
+fn clicking_a_button_focuses_it() {
+    let mut app = build_and_tick(FORM, 6);
+    let (name, save) = (entity_of(&mut app, "name"), entity_of(&mut app, "save"));
+    let p = centre_of(&mut app, "name");
+    click(&mut app, p);
+    assert!(focused(&app, name), "clicking the field focuses it");
+    let p = centre_of(&mut app, "save");
+    click(&mut app, p);
+    assert!(focused(&app, save), "clicking the button focuses it");
+    assert!(!focused(&app, name), "the field gave focus up");
+    assert!(
+        app.world
+            .get::<lumen_core::input::FocusVisible>(save)
+            .is_none(),
+        "pointer focus carries no keyboard focus ring"
+    );
+}

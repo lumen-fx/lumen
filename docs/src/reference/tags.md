@@ -81,7 +81,7 @@ These apply to any element unless the entry says otherwise.
 | `id` | text | Names the element for CSS `#id`, script lookup, and `<menu>` targeting. |
 | `class` | space-separated names | Names for CSS `.class` matching. |
 | `style` | typography role | Sets `font-size` from a role name when `font-size` is not authored. Roles: `display-xl`, `display-lg`, `display-md`, `display-sm`, `headline-lg`, `headline-md`, `headline-sm`, `title-lg`, `title-md`, `title-sm`, `body-lg`, `body-md`, `body-sm`, `label-lg`, `label-md`, `label-sm`, `caption`, `overline`. |
-| `tab-index` | integer | Keyboard focus order. `-1` removes the element from Tab order. |
+| `tab-index` | integer | Keyboard focus order, and makes the element focusable by a click. `-1` removes the element from Tab order; a click still focuses it. |
 | `dir` | `ltr`, `rtl`, `auto` | Writing direction; inherited by descendants. Defaults to the app locale's direction. |
 | `lang` | BCP-47 tag | Language for text shaping and accessibility; inherited. |
 | `translatable` | catalogue key | Resolves every string the element shows through the loaded translation catalogue: the text from the message the key names, `placeholder` from `<key>.placeholder`, and `alt` from `<key>.alt`. An attribute the markup does not write is not translated. The text falls back to the authored `text`, then to the key itself, unless the element names one of the other strings. `lumenc i18n extract` collects these keys. |

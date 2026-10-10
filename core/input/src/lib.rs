@@ -954,14 +954,7 @@ impl Plugin for InputPlugin {
             TickStage::Systems,
             request_window_drag_on_titlebar_press.after(dispatch_clicks),
         );
-        // Tiles / buttons stay keyboard-only (clicking them shouldn't
-        // steal focus from a textbox the user just typed into). Inputs
-        // are the exception - click-to-focus is the universal text-edit
-        // gesture and worth opting in by default.
-        app.add_systems(
-            TickStage::Systems,
-            focus_input_on_click.after(dispatch_clicks),
-        );
+        app.add_systems(TickStage::Systems, focus_on_press.after(dispatch_clicks));
         app.add_systems(
             TickStage::Systems,
             cycle_focus_on_tab
@@ -1329,25 +1322,50 @@ pub fn point_clipped_by_ancestors(
     false
 }
 
-/// Press-to-focus: pressing a [`TextInput`] entity focuses it on the
-/// press (Qt timing - the caret must land and start blinking before the
-/// button is released, and a press-drag selection needs focus even when
-/// the release happens outside the field); pressing anywhere else clears
-/// input focus. Without the clear, the placeholder stays hidden after
-/// users tap "outside" an input.
-pub fn focus_input_on_click(
+/// What [`focus_on_press`] reads of an element: whether it has a tab index,
+/// whether it is a text field, and whether it is disabled.
+type FocusProbe = (
+    Has<TabIndex>,
+    Has<TextInput>,
+    Has<lumen_core::components::Disabled>,
+);
+
+/// Press-to-focus, as a browser focuses on `mousedown`: pressing an element
+/// focuses the nearest focusable at or above it, a [`TextInput`] or an
+/// element with a [`TabIndex`]. The press usually lands on a child that is
+/// not focusable itself (a button's text, a control's knob), so the walk goes
+/// up to the element that is. A disabled focusable on the way stops the walk:
+/// pressing a disabled button focuses nothing.
+///
+/// Focus lands on the press rather than the release (Qt timing too): the
+/// caret must land and start blinking before the button is released, and a
+/// press-drag selection needs focus even when the release happens outside the
+/// field. Pressing where nothing is focusable clears input focus. Without the
+/// clear, the placeholder stays hidden after users tap "outside" an input.
+pub fn focus_on_press(
     mut commands: Commands,
     mut presses: MessageReader<PointerPressed>,
     hovered: Query<Entity, With<Hovered>>,
     mut tracker: ResMut<FocusTracker>,
-    inputs: Query<(), With<TextInput>>,
+    nodes: Query<FocusProbe>,
+    parents: Query<&ChildOf>,
 ) {
+    let is_input = |e: Entity| nodes.get(e).is_ok_and(|(_, input, _)| input);
     for press in presses.read() {
         if !matches!(press.button, PointerButton::Primary) {
             continue;
         }
-        let target = hovered.single().ok();
-        match target.filter(|e| inputs.contains(*e)) {
+        let mut cur = hovered.single().ok();
+        let target = loop {
+            let Some(e) = cur else { break None };
+            if let Ok((tab, input, disabled)) = nodes.get(e)
+                && (tab || input)
+            {
+                break (!disabled).then_some(e);
+            }
+            cur = parents.get(e).ok().map(|c| c.parent());
+        };
+        match target {
             Some(e) => {
                 if let Some(prev) = tracker.0
                     && prev != e
@@ -1366,7 +1384,7 @@ pub fn focus_input_on_click(
             }
             None => {
                 if let Some(prev) = tracker.0
-                    && inputs.contains(prev)
+                    && is_input(prev)
                 {
                     // Only clear focus when the *previously* focused
                     // entity was an input. Buttons / tiles can hold
@@ -1379,54 +1397,6 @@ pub fn focus_input_on_click(
                 }
             }
         }
-    }
-}
-
-/// On every [`ClickEvent`], move focus to the clicked entity - or, when
-/// the click landed on a non-focusable CHILD (a button's text child, a
-/// control's knob/dot), to the nearest [`TabIndex`]-bearing ancestor
-/// (insert [`Focused`], remove from previous holder, update
-/// [`FocusTracker`]).
-///
-/// W5 hit-shadowing fix: matching only `click.entity` meant clicking a
-/// `<button>` never focused it once buttons grew hit-testable text
-/// children - which silently broke every downstream focus consumer
-/// (dialog focus save/restore recorded the wrong previous holder). Same
-/// ancestor-walk contract as `lumen_primitives`' control dispatchers.
-pub fn focus_on_click(
-    mut commands: Commands,
-    mut clicks: MessageReader<ClickEvent>,
-    mut tracker: ResMut<FocusTracker>,
-    focusables: Query<&TabIndex, Without<lumen_core::components::Disabled>>,
-    parents: Query<&ChildOf>,
-) {
-    for click in clicks.read() {
-        // Nearest focusable: the entity itself, else the first
-        // TabIndex-bearing (enabled) ancestor.
-        let mut cur = Some(click.entity);
-        let target = loop {
-            let Some(e) = cur else { break None };
-            if focusables.contains(e) {
-                break Some(e);
-            }
-            cur = parents.get(e).ok().map(|c| c.parent());
-        };
-        let Some(target) = target else {
-            continue;
-        };
-        if let Some(prev) = tracker.0
-            && prev != target
-        {
-            commands
-                .entity(prev)
-                .remove::<(Focused, lumen_core::input::FocusVisible)>();
-        }
-        // Pointer focus never carries the keyboard-only marker.
-        commands
-            .entity(target)
-            .insert(Focused)
-            .remove::<lumen_core::input::FocusVisible>();
-        tracker.0 = Some(target);
     }
 }
 
@@ -1854,7 +1824,7 @@ fn block_top_of(
 /// - `Select` (line range) for triple press - uses
 ///   [`select_line_at_byte`].
 ///
-/// Runs after `dispatch_clicks` (and alongside `focus_input_on_click`,
+/// Runs after `dispatch_clicks` (and alongside `focus_on_press`,
 /// which focuses the input on the same press).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn text_pointer_to_caret(
@@ -3083,11 +3053,27 @@ mod focus_visible_tests {
     use lumen_core::components::DocumentOrder;
     use lumen_core::input::FocusVisible;
 
+    /// Press the primary button over `e`, the element the hit test put the
+    /// pointer on.
+    fn press_on(world: &mut World, e: Entity) {
+        world.entity_mut(e).insert(Hovered);
+        world
+            .resource_mut::<Messages<PointerPressed>>()
+            .write(PointerPressed {
+                position: Vec2::ZERO,
+                button: PointerButton::Primary,
+                local: None,
+            });
+        world.run_system_once(focus_on_press).unwrap();
+        world.entity_mut(e).remove::<Hovered>();
+        world.resource_mut::<Messages<PointerPressed>>().clear();
+    }
+
     #[test]
     fn tab_focus_carries_focus_visible_click_focus_does_not() {
         let mut world = World::new();
         world.init_resource::<Messages<KeyPressed>>();
-        world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<PointerPressed>>();
         world.insert_resource(FocusTracker(None));
         let a = world.spawn((TabIndex(0), DocumentOrder(0))).id();
         let b = world.spawn((TabIndex(0), DocumentOrder(1))).id();
@@ -3109,15 +3095,7 @@ mod focus_visible_tests {
         );
 
         // Click b -> b gains Focused WITHOUT FocusVisible; a loses both.
-        world
-            .resource_mut::<Messages<ClickEvent>>()
-            .write(ClickEvent {
-                entity: b,
-                position: Vec2::ZERO,
-                button: PointerButton::Primary,
-                local: None,
-            });
-        world.run_system_once(focus_on_click).unwrap();
+        press_on(&mut world, b);
         assert!(world.get::<Focused>(b).is_some(), "click focuses b");
         assert!(
             world.get::<FocusVisible>(b).is_none(),
@@ -3127,27 +3105,17 @@ mod focus_visible_tests {
         assert!(world.get::<FocusVisible>(a).is_none(), "a lost the marker");
     }
 
-    /// W5 hit-shadowing regression: a click that lands on a button's
-    /// TEXT CHILD (no TabIndex) must still focus the button - the same
-    /// ancestor-resolve contract the control dispatchers use. Without
-    /// it, dialog focus save/restore recorded the wrong previous
-    /// holder because opener buttons never actually took focus.
+    /// A press that lands on a button's TEXT CHILD (no TabIndex) focuses
+    /// the button, the same ancestor walk the control dispatchers use, so
+    /// dialog focus save/restore records the opener as the previous holder.
     #[test]
     fn click_on_text_child_focuses_button_ancestor() {
         let mut world = World::new();
-        world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<PointerPressed>>();
         world.insert_resource(FocusTracker(None));
         let button = world.spawn((TabIndex(0), DocumentOrder(0))).id();
         let text_child = world.spawn(ChildOf(button)).id();
-        world
-            .resource_mut::<Messages<ClickEvent>>()
-            .write(ClickEvent {
-                entity: text_child,
-                position: Vec2::ZERO,
-                button: PointerButton::Primary,
-                local: None,
-            });
-        world.run_system_once(focus_on_click).unwrap();
+        press_on(&mut world, text_child);
         assert!(
             world.get::<Focused>(button).is_some(),
             "focus resolves to the TabIndex-bearing ancestor"
@@ -3159,11 +3127,11 @@ mod focus_visible_tests {
         );
     }
 
-    /// A click on a child of a DISABLED focusable must not focus it.
+    /// A press on a child of a DISABLED focusable does not focus it.
     #[test]
     fn click_on_child_of_disabled_button_does_not_focus() {
         let mut world = World::new();
-        world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<PointerPressed>>();
         world.insert_resource(FocusTracker(None));
         let button = world
             .spawn((
@@ -3173,15 +3141,7 @@ mod focus_visible_tests {
             ))
             .id();
         let text_child = world.spawn(ChildOf(button)).id();
-        world
-            .resource_mut::<Messages<ClickEvent>>()
-            .write(ClickEvent {
-                entity: text_child,
-                position: Vec2::ZERO,
-                button: PointerButton::Primary,
-                local: None,
-            });
-        world.run_system_once(focus_on_click).unwrap();
+        press_on(&mut world, text_child);
         assert_eq!(world.resource::<FocusTracker>().0, None);
         assert!(world.get::<Focused>(button).is_none());
     }
