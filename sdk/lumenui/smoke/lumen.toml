@@ -1,0 +1,4 @@
+# Read from the directory the smoke app runs in; no introspection server, so
+# a CI run binds no port.
+[mcp]
+port = 0

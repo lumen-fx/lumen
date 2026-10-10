@@ -25,7 +25,7 @@ dir="${1:?usage: collect-release-assets.sh <artifact-dir>}"
 cd "$dir"
 
 shopt -s nullglob
-files=(*.tar.gz *.zip *.msi)
+files=(*.tar.gz *.zip *.msi *.tar.zst lumenui-engine-*.json)
 if [ "${#files[@]}" -eq 0 ]; then
   echo "collect-release-assets.sh: every build leg failed, nothing to publish" >&2
   exit 1

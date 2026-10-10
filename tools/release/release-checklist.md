@@ -18,6 +18,8 @@ the workflow generates them rather than anyone typing them.
 | `lumen-modules-<target>.tar.gz` | the same Unix legs, one each           |
 | `lumen-linkkit-<target>.tar.gz` | every leg, one each                    |
 | `lumen-enginekit-<target>.tar.gz` | every leg, one each                  |
+| `lumenui-engine-<target>.tar.zst` | `lumenui-engine.yml`, every target   |
+| `lumenui-engine-<target>.json` | `lumenui-engine.yml`, every target     |
 | `lumen-windows-x86_64.msi`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-x86_64.zip`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-aarch64.msi`    | GitHub Actions, `windows-11-arm`       |
@@ -48,6 +50,18 @@ on Windows) and every file that link read. `lumenc package` replays it to give
 each app an engine carrying only the capabilities the app uses. Like the link
 kit it is published on every platform, `install.sh` never fetches it, and
 `lumenc` downloads it the first time a package needs it.
+
+`lumenui-engine-<target>.tar.zst` carries the prebuilt engine the published
+`lumenui` crate links: the compiled crates of `lumenui-engine` (sdk/rust) for
+that target, the proc-macro libraries they use, and any native library they
+link without carrying, collected by `tools/release/lumenui-engine.py`.
+`lumenui-engine-<target>.json` is its manifest (the rustc that built it, the
+target, the Lumen version, every file with its checksum), published on its own
+so an app's build checks the compiler before downloading the archive.
+`lumenui`'s build script fetches both from the release tagged with its own
+version; `install.sh` never does. Each set is proven before it uploads: an app
+depending on `lumenui` alone is built from it, with a check that no engine
+crate compiled, and run headless.
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches
@@ -495,12 +509,15 @@ That table is the whole list. Every other crate in the workspace is
 the launcher beside the installed binary, so a `cargo install lumenc` gets the
 engine without any of its pieces being registry packages.
 
-Neither crates.io package can go out yet. `lumenc` names many `lumen-*` crates
-as dependencies and `lumenui` names the engine, and cargo will not publish a
-crate whose dependency is not on the registry. Until that is unwound,
-`tools/release/publish-crates.py --plan` refuses to start and lists exactly
-which crates are in the way, and `cargo publish -p lumenc --dry-run` names the
-first of them.
+Neither crates.io package goes out yet. `lumenc` names many `lumen-*` crates
+as dependencies, and cargo will not publish a crate whose dependency is not on
+the registry. Until that is unwound, `tools/release/publish-crates.py --plan`
+refuses to start and lists exactly which crates are in the way, and
+`cargo publish -p lumenc --dry-run` names the first of them. `lumenui`
+(sdk/lumenui) names no engine crate, since its build script downloads the
+release's `lumenui-engine-<target>` assets instead, so it sits outside the
+workspace and outside that script's order; nothing publishes it yet, and a
+publish of it must come after the release carrying its version's assets.
 
 The crates.io job fails when the plan refuses, with the list on the run
 summary. A release whose crates.io leg is red uploaded nothing to crates.io;

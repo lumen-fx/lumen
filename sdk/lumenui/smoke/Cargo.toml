@@ -1,0 +1,15 @@
+# An app shaped the way a user's is: one dependency, `lumenui`, and nothing of
+# the engine. CI copies it out of the checkout, points the path below at this
+# repository's sdk/lumenui and `LUMEN_ENGINE_ARTIFACTS` at the engine set the
+# same run built, then checks that the build compiled none of the engine and
+# that the app runs. See tools/release/lumenui-engine.py.
+[workspace]
+
+[package]
+name = "lumenui-smoke"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lumenui = { path = ".." }
