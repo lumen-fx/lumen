@@ -232,8 +232,8 @@ as a runtime failure of the handler.
 
 | Handler | Arguments |
 | --- | --- |
-| `on_click(id)` | Element id. Suppressed when a double-click fires on the same element in the same tick. |
-| `on_double_click(id)` | Element id. |
+| `on_click(id)` | Element id. Fires on every click, the second of a quick pair included, as a DOM `click` does. |
+| `on_double_click(id)` | Element id. Fires once for a quick pair of clicks, after the `on_click` of the second. |
 | `on_long_press(id)` | Element id. |
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |

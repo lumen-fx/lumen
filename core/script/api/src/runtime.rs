@@ -537,8 +537,8 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         // `on_double_click(id)` functions with the entity's LumenId. Run
         // after lumen-input's dispatch_clicks so the Click message is
         // populated for this tick. Click + double-click are dispatched
-        // together so we can suppress the trailing on_click when a
-        // DoubleClickEvent fires on the same entity.
+        // together so a double-click's `on_double_click` follows the
+        // `on_click` of the click that completed it.
         app.add_systems(
             TickStage::Systems,
             dispatch_clicks_and_doubles::<H>
@@ -1782,10 +1782,11 @@ fn collect_ordered_unique(items: impl IntoIterator<Item = Entity>) -> Vec<Entity
 }
 
 /// Forward this tick's `ClickEvent` / `DoubleClickEvent` messages to the
-/// script's `on_click(id)` / `on_double_click(id)` handlers. When both
-/// fire for the same entity in the same tick the trailing `on_click` is
-/// suppressed - a double-click counts as exactly one `on_double_click`,
-/// not two clicks plus one double.
+/// script's `on_click(id)` / `on_double_click(id)` handlers.
+///
+/// Every click reaches `on_click`, the second of a quick pair included, and a
+/// double-click reaches `on_double_click` in addition, after the click that
+/// completed it: the order a browser fires `click` and `dblclick` in.
 ///
 /// Exposed so the embedder can order same-tick consumers against it -
 /// the reactive-binding readers run `.after` this system so a signal a
@@ -1798,30 +1799,14 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
-    // Collect double-click targets first; the second-of-pair Click was
-    // also pushed this tick (dispatch_clicks fires Click on every
-    // release, regardless of double-click status).
-    //
     // Ordered, deduped list in first-seen message order. Iterating a
     // `HashSet` directly gives a nondeterministic dispatch order when two
     // entities are double-clicked in one tick, which violates the
-    // deterministic-dispatch invariant (the single-click path below is
-    // already message-ordered).
+    // deterministic-dispatch invariant (the click path below is already
+    // message-ordered).
     let double_order: Vec<Entity> = collect_ordered_unique(doubles.read().map(|ev| ev.entity));
 
-    let mut first_click_to_fire: Vec<ClickEvent> = Vec::new();
     for click in clicks.read() {
-        // Doubled entities drop their single Clicks entirely -
-        // double-click is the canonical signal; the script receives
-        // on_double_click only. (`double_order` is tiny - at most a couple
-        // of double-clicks per tick - so a linear `contains` is cheaper
-        // than a `HashSet`.)
-        if !double_order.contains(&click.entity) {
-            first_click_to_fire.push(*click);
-        }
-    }
-
-    for click in first_click_to_fire {
         let id_str = ids.get(click.entity).map(|i| i.0.as_str()).unwrap_or("");
         if let Err(e) = route_event(&mut *host, "click", "on_click", id_str, &mut out) {
             warn_line!("{}: on_click failed: {e}", prefix(host.lang()));

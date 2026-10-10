@@ -529,10 +529,8 @@ mod pipeline_integration_tests {
     // `clear_property_store_dirty` wiped the dirty flag the same tick -
     // derived signals froze at their startup value forever (counter stuck
     // at "clicks: 0" through any number of confirmed ClickEvents).
-    // Two identical bump buttons: the second assertion clicks `bump2`
-    // because two rapid clicks on the SAME entity fall inside the
-    // double-click window and route to `on_double_click` (by design),
-    // which would test press semantics rather than derivation recompute.
+    // Two identical bump buttons, so the second assertion exercises a second
+    // element as well as a second write.
     const CLICK_MARKUP: &str = r#"
 <root>
   <button id="bump" text="+1" />
@@ -607,8 +605,6 @@ mod pipeline_integration_tests {
         );
 
         // Second click keeps working (dirty window re-opens every write).
-        // Different button: a rapid same-entity second click would be
-        // folded into a double-click (see CLICK_MARKUP comment).
         click_on(&mut app, "bump2");
         app.tick();
         let texts = all_texts(&mut app);
@@ -651,7 +647,7 @@ mod pipeline_integration_tests {
             texts.iter().any(|t| t == "1 items"),
             "initial derived value missing; TextContents = {texts:?}"
         );
-        // Two buttons so the second click is not taken for a double click.
+        // Two buttons, so each click lands on its own element.
         for (button, want) in [("add", "2 items"), ("add2", "3 items")] {
             click_on(&mut app, button);
             app.tick();
