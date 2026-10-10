@@ -262,6 +262,7 @@ pub fn assemble(
 ) -> Result<Vec<PathBuf>, String> {
     let mut gates: Vec<Element> = Vec::new();
     let mut script_source = String::new();
+    let mut script_map = lumen_ir::source_map::SourceMap::default();
     let mut external_scripts: Vec<String> = Vec::new();
     let mut watch: Vec<PathBuf> = Vec::new();
 
@@ -316,10 +317,7 @@ pub fn assemble(
         gates.push(gate);
 
         if !pir.script_source.trim().is_empty() {
-            if !script_source.is_empty() {
-                script_source.push('\n');
-            }
-            script_source.push_str(&pir.script_source);
+            script_map.append_mapped(&mut script_source, &pir.script_source, &pir.script_map);
         }
         for ext in pir.external_scripts {
             if !external_scripts.contains(&ext) {
@@ -343,6 +341,7 @@ pub fn assemble(
     // attrs (skin, class, window flags) stay as the entry parsed them.
     ir.root.children = gates;
     ir.script_source = script_source;
+    ir.script_map = script_map;
     ir.external_scripts = external_scripts;
 
     Ok(watch)

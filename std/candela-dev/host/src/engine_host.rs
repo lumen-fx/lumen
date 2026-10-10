@@ -799,6 +799,9 @@ pub struct ScriptCandelaPlugin {
     /// Source URI reported in compile errors. Defaults to `<inline>`; set it to
     /// the entry file path so an error names a file the author wrote.
     pub uri: Option<String>,
+    /// Where each piece of the source was read from, so a compile error names
+    /// the script file and line.
+    pub source_map: lumen_script::SourceMap,
     /// Where a `dylib "..."` import looks for its library: the app's `lib/`.
     pub library_dir: Option<PathBuf>,
     /// Script libraries the app depends on, as the name a script imports
@@ -820,6 +823,7 @@ impl ScriptCandelaPlugin {
         Self {
             source: source.into(),
             uri: None,
+            source_map: lumen_script::SourceMap::default(),
             library_dir: None,
             import_roots: Vec::new(),
             cfg_flags: Vec::new(),
@@ -848,6 +852,14 @@ impl ScriptCandelaPlugin {
     #[must_use]
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
+        self
+    }
+
+    /// Say where each piece of the source was read from, so a compile error
+    /// names the script file and line instead of the URI.
+    #[must_use]
+    pub fn with_source_map(mut self, map: lumen_script::SourceMap) -> Self {
+        self.source_map = map;
         self
     }
 
@@ -887,7 +899,7 @@ impl Plugin for ScriptCandelaPlugin {
         for ext in self.extensions {
             ext(host.engine_mut());
         }
-        let mut plugin = ScriptPlugin::new(host, self.source);
+        let mut plugin = ScriptPlugin::new(host, self.source).with_source_map(self.source_map);
         if let Some(uri) = self.uri {
             plugin = plugin.with_uri(uri);
         }

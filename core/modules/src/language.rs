@@ -25,6 +25,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use lumen_ir::source_map::SourceMap;
 use serde::Deserialize;
 
 use crate::{DepCfg, DependenciesCfg, ModuleSource};
@@ -261,7 +262,29 @@ impl LanguageTable {
 /// An app's scripts split by the language that runs them: one entry per
 /// language, each holding that language's whole program, sorted by language
 /// name. Empty when the app ships no script.
-pub type GroupedScripts = Vec<(String, String)>;
+pub type GroupedScripts = Vec<GroupedScript>;
+
+/// One language's whole program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupedScript {
+    /// The language's name.
+    pub language: String,
+    /// Every piece the language owns, concatenated in source order.
+    pub source: String,
+    /// Where each piece of [`Self::source`] was read from.
+    pub map: SourceMap,
+}
+
+/// One external script file an app's markup names.
+#[derive(Debug, Clone)]
+pub struct ScriptFile<'a> {
+    /// The path the `<script src>` wrote, which picks the language.
+    pub rel: &'a str,
+    /// The file as an error names it.
+    pub file: String,
+    /// The file's text.
+    pub body: String,
+}
 
 /// Which language each part of an app's script belongs to.
 ///
@@ -328,28 +351,43 @@ impl ScriptGrouping<'_> {
         needed
     }
 
-    /// Split an app's script by language. `inline` is the inline block,
-    /// `externals` each external file's path and text, in source order.
-    pub fn group(&self, inline: &str, externals: &[(&str, String)]) -> GroupedScripts {
-        let rels: Vec<&str> = externals.iter().map(|(rel, _)| *rel).collect();
+    /// Split an app's script by language. `inline` is the inline blocks and
+    /// `inline_map` where each of them was written; `externals` is each
+    /// external file, in source order.
+    pub fn group(
+        &self,
+        inline: &str,
+        inline_map: &SourceMap,
+        externals: &[ScriptFile<'_>],
+    ) -> GroupedScripts {
+        let rels: Vec<&str> = externals.iter().map(|f| f.rel).collect();
         let mut sources: GroupedScripts = Vec::new();
-        let mut push = |language: String, body: &str| {
-            if body.trim().is_empty() {
-                return;
-            }
-            match sources.iter_mut().find(|(l, _)| *l == language) {
-                Some((_, acc)) => {
-                    acc.push('\n');
-                    acc.push_str(body);
+        fn slot(sources: &mut GroupedScripts, language: String) -> &mut GroupedScript {
+            let i = match sources.iter().position(|g| g.language == language) {
+                Some(i) => i,
+                None => {
+                    sources.push(GroupedScript {
+                        language,
+                        source: String::new(),
+                        map: SourceMap::default(),
+                    });
+                    sources.len() - 1
                 }
-                None => sources.push((language, body.to_string())),
-            }
-        };
-        push(self.inline_language(&rels), inline);
-        for (rel, body) in externals {
-            push(self.external_language(rel), body);
+            };
+            &mut sources[i]
         }
-        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        if !inline.trim().is_empty() {
+            let g = slot(&mut sources, self.inline_language(&rels));
+            g.map.append_mapped(&mut g.source, inline, inline_map);
+        }
+        for f in externals {
+            if f.body.trim().is_empty() {
+                continue;
+            }
+            let g = slot(&mut sources, self.external_language(f.rel));
+            g.map.append(&mut g.source, &f.body, &f.file, 1);
+        }
+        sources.sort_by(|a, b| a.language.cmp(&b.language));
         sources
     }
 }
@@ -516,26 +554,46 @@ mod tests {
             table: &t,
             engine: None,
         };
+        let file = |rel: &'static str, body: &str| ScriptFile {
+            rel,
+            file: format!("src/{rel}"),
+            body: body.into(),
+        };
+        let mut inline_map = SourceMap::default();
+        inline_map.append(&mut String::new(), "inline();", "main.lmn", 4);
+        let sources = |grouped: &GroupedScripts| -> Vec<(String, String)> {
+            grouped
+                .iter()
+                .map(|g| (g.language.clone(), g.source.clone()))
+                .collect()
+        };
         let grouped = g.group(
             "inline();",
-            &[("a.old", "a();".into()), ("b.old", "b();".into())],
+            &inline_map,
+            &[file("a.old", "a();"), file("b.old", "b();")],
         );
         assert_eq!(
-            grouped,
+            sources(&grouped),
             vec![("old".into(), "inline();\na();\nb();".into())]
         );
+        assert_eq!(grouped[0].map.locate(1), Some(("main.lmn", 4)));
+        assert_eq!(grouped[0].map.locate(2), Some(("src/a.old", 1)));
+        assert_eq!(grouped[0].map.locate(3), Some(("src/b.old", 1)));
 
         let mixed = g.group(
             "inline();",
-            &[("a.old", "a();".into()), ("m.toy", "m();".into())],
+            &inline_map,
+            &[file("a.old", "a();"), file("m.toy", "m();")],
         );
         assert_eq!(
-            mixed,
+            sources(&mixed),
             vec![
                 ("old".into(), "a();".into()),
                 ("toy".into(), "inline();\nm();".into())
             ]
         );
+        assert_eq!(mixed[0].map.locate(1), Some(("src/a.old", 1)));
+        assert_eq!(mixed[1].map.locate(2), Some(("src/m.toy", 1)));
         assert_eq!(g.languages(true, &[]), vec!["toy".to_string()]);
         assert!(g.languages(false, &[]).is_empty());
     }
@@ -547,8 +605,18 @@ mod tests {
             table: &t,
             engine: Some("old"),
         };
-        let grouped = g.group("i();", &[("m.toy", "m();".into())]);
-        assert_eq!(grouped, vec![("old".into(), "i();\nm();".into())]);
+        let grouped = g.group(
+            "i();",
+            &SourceMap::default(),
+            &[ScriptFile {
+                rel: "m.toy",
+                file: "m.toy".into(),
+                body: "m();".into(),
+            }],
+        );
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].language, "old");
+        assert_eq!(grouped[0].source, "i();\nm();");
     }
 
     #[test]

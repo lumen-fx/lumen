@@ -36,6 +36,7 @@ pub mod css_vars;
 pub mod fragment;
 pub mod interpolate;
 pub mod layout_ir;
+pub mod source_map;
 pub mod translate;
 pub mod values;
 

@@ -67,6 +67,7 @@ fn build_app_in(dir: &Path) {
             module: "lumen-candela-dev".to_string(),
             source: SOURCE.to_string(),
             bytecode: None,
+            source_map: Default::default(),
         }],
         ..Default::default()
     })

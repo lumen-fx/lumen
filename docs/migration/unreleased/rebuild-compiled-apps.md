@@ -9,7 +9,7 @@ This affects you if you load a precompiled app: `lumenc run --artifact`, a
 or an SDK. Loading an old one fails with an error that says:
 
 ```
-unsupported artifact version 10 (this build reads 15)
+unsupported artifact version 13 (this build reads 16)
 ```
 
 Rebuild it with the new `lumenc`:

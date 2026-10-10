@@ -91,6 +91,7 @@ fn boot() -> (App, ScriptHostAccess, DomElement) {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(POINTER.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };

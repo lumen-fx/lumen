@@ -118,6 +118,7 @@ impl Harness {
                 module: "lumen-candela-dev".to_string(),
                 source: SCRIPT.to_string(),
                 bytecode: None,
+                source_map: Default::default(),
             }],
             ..Default::default()
         })

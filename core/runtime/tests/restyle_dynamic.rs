@@ -110,6 +110,7 @@ impl Harness {
                 module: "lumen-candela-dev".to_string(),
                 source: script.to_string(),
                 bytecode: None,
+                source_map: Default::default(),
             }]
         };
         let bytes = artifact::serialize(&CompiledApp {

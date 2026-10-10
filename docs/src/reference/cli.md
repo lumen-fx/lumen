@@ -93,7 +93,9 @@ app's [registry packages](lumen-toml.md#registry-packages) resolve first,
 which may write `lumen.lock`; a requirement that does not resolve exits 1.
 `--offline` resolves from what is already downloaded.
 Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
-prints the parse error and exits 1. A missing `<dir>` exits 2.
+prints the parse error and exits 1. A missing `<dir>` exits 2. A script error
+names the file and line it is on: the script file, or the markup file for an
+inline `<script>` block.
 
 The check covers the markup, the stylesheet, and every script, including the
 `lmn!` markup blocks a candela script writes: a block with no single root, a

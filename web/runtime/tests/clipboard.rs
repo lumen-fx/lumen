@@ -60,6 +60,7 @@ async fn a_script_writes_and_reads_the_page_clipboard() {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(CLIPBOARD.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     };
@@ -115,6 +116,7 @@ async fn a_read_the_browser_answers_or_refuses_still_reaches_on_clipboard() {
             module: "lumen-candela".to_string(),
             source: String::new(),
             bytecode: Some(CLIPBOARD.to_vec()),
+            source_map: Default::default(),
         }],
         ..CompiledApp::default()
     }

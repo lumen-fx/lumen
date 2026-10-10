@@ -110,6 +110,7 @@ fn install(app: &mut App, program: ScriptProgram, multi_host: bool) {
     }
     let mut plugin = ScriptCandelaPlugin::new(program.source)
         .with_uri(program.uri)
+        .with_source_map(program.source_map)
         .with_import_roots(program.import_roots)
         .with_cfg_flags(&program.cfg_flags);
     if let Some(dir) = program.lib_dir {
@@ -183,12 +184,12 @@ pub fn compiler(against: &ScriptCompile<'_>) -> Result<CandelaHost, String> {
 fn check(source: &str, against: &ScriptCompile<'_>) -> Result<(), String> {
     compiler(against)?
         .compile_check(source, against.uri)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.relocate(against.uri, against.source_map).to_string())
 }
 
 /// Compile `source` to a `.cdlb` image.
 fn compile(source: &str, against: &ScriptCompile<'_>) -> Result<(Vec<u8>, Vec<String>), String> {
     compiler(against)?
         .compile_bytecode(source, against.uri)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.relocate(against.uri, against.source_map).to_string())
 }

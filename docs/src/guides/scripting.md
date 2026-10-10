@@ -42,6 +42,8 @@ A script reaches the app through `<script src="main.cdl"/>`, or an inline
 `<script>` block, which is read as candela. Files of the same language join
 into one program, so two `.cdl` files share their functions the way two halves
 of one file would, and each still opens with its own `import "lumen.cdl";`.
+An error in that program still names the file and line you wrote: the script
+file for a `<script src>`, and the markup file for an inline block.
 
 ### How a script runs
 

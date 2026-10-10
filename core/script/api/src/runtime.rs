@@ -205,6 +205,7 @@ pub struct ScriptPlugin<H: ScriptHost + Resource<Mutability = Mutable>> {
     host: H,
     source: String,
     uri: String,
+    source_map: lumen_ir::source_map::SourceMap,
 }
 
 impl<H: ScriptHost + Resource<Mutability = Mutable>> ScriptPlugin<H> {
@@ -215,12 +216,20 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> ScriptPlugin<H> {
             host,
             source: source.into(),
             uri: "<inline>".to_string(),
+            source_map: lumen_ir::source_map::SourceMap::default(),
         }
     }
 
     /// Override the source URI reported in compile errors.
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = uri.into();
+        self
+    }
+
+    /// Say where each piece of the source was read from, so a compile error
+    /// names the script file and line instead of the URI.
+    pub fn with_source_map(mut self, map: lumen_ir::source_map::SourceMap) -> Self {
+        self.source_map = map;
         self
     }
 }
@@ -259,7 +268,11 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             }
             app.world.resource_mut::<ScriptFnRegistry>().seal();
         }
-        if let Err(e) = self.host.load(&self.source, &self.uri) {
+        if let Err(e) = self
+            .host
+            .load(&self.source, &self.uri)
+            .map_err(|e| e.relocate(&self.uri, &self.source_map))
+        {
             // Unmissable, multi-line stderr banner - a load failure kills
             // every handler / signal / derivation while the window keeps
             // rendering, which historically read as "the app ignores
@@ -562,10 +575,11 @@ pub fn reload_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     world: &mut World,
     source: &str,
     uri: &str,
+    map: &lumen_ir::source_map::SourceMap,
 ) -> Option<Result<(), ScriptError>> {
     world
         .get_resource_mut::<H>()
-        .map(|mut host| host.replace(source, uri))
+        .map(|mut host| host.replace(source, uri).map_err(|e| e.relocate(uri, map)))
 }
 
 // ---------------------------------------------------------------------
