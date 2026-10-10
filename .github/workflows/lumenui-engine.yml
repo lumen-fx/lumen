@@ -1,0 +1,208 @@
+name: lumenui-engine
+
+# The prebuilt engine the published `lumenui` crate links, and the proof that
+# an app builds from it.
+#
+# `lumenui` (sdk/lumenui) holds no engine code: its build script downloads,
+# for its own version and the app's target, the compiled crates of
+# `lumenui-engine` (sdk/rust) and points rustc at them. Each leg here makes
+# that set for one target with tools/release/lumenui-engine.py (`build`, then
+# `collect`), producing lumenui-engine-<target>.tar.zst and its manifest
+# lumenui-engine-<target>.json, and then proves it the way a user would meet
+# it: an app outside the checkout (sdk/lumenui/smoke), depending on `lumenui`
+# alone, is built against the set through LUMEN_ENGINE_ARTIFACTS, its
+# `cargo build -v` log is checked for any engine crate compiling
+# (lumenui-engine.py `check`), and it runs headless.
+#
+# Every leg builds natively for its own target. The set carries proc-macro
+# libraries, which run inside the compiler, so a set is only usable on a
+# machine of its own target; there is nothing to cross-compile.
+#
+# Two ways in:
+#
+#   - build-toolchain.yml calls it with `all_targets`, so a release and the
+#     nightly build the set for every desktop target the toolchain archives
+#     cover; the archive and the manifest land as run artifacts beside the
+#     others, and the publishing job lists them in sha256sums.txt.
+#   - A pull request that touches the SDK or this machinery runs it for the
+#     three operating systems ci.yml tests, Linux x86_64, macOS on Apple
+#     Silicon and Windows x86_64, which is what proves the shape on each.
+#     workflow_dispatch runs the same three against any branch.
+
+on:
+  workflow_call:
+    inputs:
+      all_targets:
+        description: Build every desktop target, not only one per operating system.
+        type: boolean
+        required: false
+        default: false
+  pull_request:
+    paths:
+      - sdk/rust/**
+      - sdk/lumenui/**
+      - core/widget-macros/**
+      - tools/release/lumenui-engine.py
+      - rust-toolchain.toml
+      - .github/workflows/lumenui-engine.yml
+  workflow_dispatch:
+    inputs:
+      all_targets:
+        description: Build every desktop target, not only one per operating system.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  engine:
+    name: engine (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    # One release-profile build of the engine graph, then an app linked
+    # against it twice over (the smoke build and its run).
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        # The six targets build-toolchain.yml ships, or the three a pull
+        # request proves. The runner for each is the one build-toolchain.yml
+        # uses, for the reasons it gives.
+        include: >-
+          ${{ fromJSON(inputs.all_targets && '[
+            {"target": "linux-x86_64", "os": "ubuntu-24.04"},
+            {"target": "linux-aarch64", "os": "ubuntu-24.04-arm"},
+            {"target": "macos-aarch64", "os": "macos-latest"},
+            {"target": "macos-x86_64", "os": "macos-26-intel"},
+            {"target": "windows-x86_64", "os": "windows-latest"},
+            {"target": "windows-aarch64", "os": "windows-11-arm"}
+          ]' || '[
+            {"target": "linux-x86_64", "os": "ubuntu-24.04"},
+            {"target": "macos-aarch64", "os": "macos-latest"},
+            {"target": "windows-x86_64", "os": "windows-latest"}
+          ]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # Same as build-toolchain.yml: the Arm64 Windows image has no rustup,
+      # and rust-toolchain.toml still names the version.
+      - name: Install rustup (Arm64 Windows)
+        if: matrix.target == 'windows-aarch64'
+        shell: pwsh
+        run: |
+          if (Get-Command rustup -ErrorAction SilentlyContinue) { exit 0 }
+          $url = 'https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe'
+          Invoke-WebRequest -Uri $url -OutFile rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain none --no-modify-path
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc -vV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: .github/scripts/linux-deps.sh
+
+      # The archive is compressed by the zstd command. The hosted images
+      # carry it; the install covers one that does not.
+      - name: Make sure zstd is there
+        run: |
+          if command -v zstd >/dev/null; then zstd --version; exit 0; fi
+          case "$RUNNER_OS" in
+            Linux)   sudo apt-get install -y --no-install-recommends zstd ;;
+            macOS)   brew install zstd ;;
+            Windows) choco install zstandard -y --no-progress ;;
+          esac
+          zstd --version
+
+      - name: Build the engine
+        run: >-
+          python tools/release/lumenui-engine.py build
+          --target-dir target/lumenui-engine
+          --messages "$RUNNER_TEMP/lumenui-engine.jsonl"
+
+      - name: Collect the engine set
+        run: >-
+          python tools/release/lumenui-engine.py collect
+          --messages "$RUNNER_TEMP/lumenui-engine.jsonl"
+          --out "$RUNNER_TEMP/lumenui-engine"
+
+      # The published crate is its own workspace, so the workspace's fmt and
+      # clippy gates never see it; this is where they run, on one leg, since
+      # neither depends on the platform.
+      - name: Lint the published crate
+        if: matrix.target == 'linux-x86_64'
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: |
+          cargo fmt --manifest-path sdk/lumenui/Cargo.toml -- --check
+          cargo fmt --manifest-path sdk/lumenui/smoke/Cargo.toml -- --check
+          cargo clippy --manifest-path sdk/lumenui/Cargo.toml --all-targets -- -D warnings
+
+      # The app a user writes, outside the checkout so nothing of the
+      # workspace (its config, its lockfile, its target directory) reaches it.
+      # It names the release's compiler the way `lumenc new` makes an app do,
+      # and finds `lumenui` at this checkout's sdk/lumenui.
+      - name: Build an app against the set
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/smoke"
+          rm -rf "$app"
+          cp -R sdk/lumenui/smoke "$app"
+          python - "$app" "$GITHUB_WORKSPACE" <<'PY'
+          import pathlib, re, sys
+          app, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          manifest = app / "Cargo.toml"
+          lumenui = (repo / "sdk" / "lumenui").as_posix()
+          manifest.write_text(
+              manifest.read_text().replace('path = ".."', f'path = "{lumenui}"')
+          )
+          channel = re.search(
+              r'^channel\s*=\s*"([^"]+)"', (repo / "rust-toolchain.toml").read_text(), re.M
+          ).group(1)
+          (app / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{channel}"\n')
+          PY
+          cat "$app/Cargo.toml" "$app/rust-toolchain.toml"
+          cd "$app"
+          cargo build -v 2>&1 | tee "$RUNNER_TEMP/smoke-build.log"
+
+      - name: Check that no engine crate compiled
+        run: >-
+          python tools/release/lumenui-engine.py check
+          --app "$RUNNER_TEMP/smoke"
+          --log "$RUNNER_TEMP/smoke-build.log"
+
+      - name: Run the app headless
+        working-directory: ${{ runner.temp }}/smoke
+        run: |
+          set -euo pipefail
+          exe=target/debug/lumenui-smoke
+          if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
+          "./$exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumenui-engine-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}.tar.zst
+            ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 7

@@ -4,7 +4,9 @@ name: release
 # a GitHub release, in the exact shape tools/release/install.sh expects: one
 # lumen-<target>.tar.gz per Unix target, lumen-windows-x86_64.msi as the
 # Windows install channel plus lumen-windows-x86_64.zip as the portable
-# archive, and lumen-web.tar.gz for the browser runtime. build-toolchain.yml
+# archive, lumen-web.tar.gz for the browser runtime, and per target the
+# prebuilt engine the Rust SDK links (lumenui-engine-<target>.tar.zst plus its
+# manifest, lumenui-engine-<target>.json). build-toolchain.yml
 # builds every one of them and explains why each archive holds what it holds;
 # this workflow decides when that happens and where the result lands.
 #
@@ -475,7 +477,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi artifacts/sha256sums.txt)
+          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi artifacts/*.tar.zst artifacts/lumenui-engine-*.json artifacts/sha256sums.txt)
           if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" "${files[@]}" \
               --repo "${{ github.repository }}" --clobber

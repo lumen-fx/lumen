@@ -54,6 +54,11 @@ name: build-toolchain
 # Windows it is lumen.dll, recorded by the static launcher's build, which
 # links it too. The leg packages apps against it before anything uploads.
 #
+# Every target also gets lumenui-engine-<target>.tar.zst and its manifest
+# lumenui-engine-<target>.json: the compiled crates the published `lumenui`
+# crate downloads by version and links, so a Rust SDK app compiles none of the
+# engine. lumenui-engine.yml builds and proves them.
+#
 # It also builds one artifact that belongs to no platform: lumen-web.tar.gz,
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
@@ -881,6 +886,17 @@ jobs:
             lumen-${{ matrix.target }}.msi
           if-no-files-found: error
           retention-days: 1
+
+  # The prebuilt engine the published `lumenui` crate links, one set per
+  # target, each proven by an app built from it before it uploads. Its own
+  # workflow because pull requests that touch the SDK run it too; see
+  # lumenui-engine.yml. Its own legs rather than steps of the ones above,
+  # which already compile the graph three times each.
+  lumenui-engine:
+    name: lumenui engine
+    uses: ./.github/workflows/lumenui-engine.yml
+    with:
+      all_targets: true
 
   # One build for every platform, which is why the browser runtime is a job of
   # its own rather than a leg of the matrix above.
