@@ -9,14 +9,18 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumenui --example counter          # hot-reloads examples/main.lmn live
-//! cargo run -p lumenui --example counter --release # markup/CSS embedded, no watcher
+//! cargo run -p lumenui-engine --example counter          # hot-reloads examples/main.lmn live
+//! cargo run -p lumenui-engine --example counter --release # markup/CSS embedded, no watcher
 //! ```
 //!
 //! The UI comes from [`lumen_source!`]: in a debug `cargo run` it is read from
 //! `examples/main.lmn` / `examples/main.css` on disk and hot-reloaded by the
 //! runtime watcher (edit the markup and the window updates live); a
 //! `--release` build `include_str!`-embeds the same files.
+
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
 
 use lumenui::prelude::*;
 

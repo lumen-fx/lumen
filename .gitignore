@@ -56,3 +56,8 @@ apps/*/lib/
 # Cargo.lock, rather than trusting a second lockfile to stay in step with
 # the first one by hand.
 /public/lumen-dylib/Cargo.lock
+# The published Rust SDK and its smoke app are workspaces of their own.
+/sdk/lumenui/target
+/sdk/lumenui/Cargo.lock
+/sdk/lumenui/smoke/target
+/sdk/lumenui/smoke/Cargo.lock

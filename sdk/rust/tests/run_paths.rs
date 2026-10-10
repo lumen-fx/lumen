@@ -3,6 +3,10 @@
 //! before any window could exist. One app at a time, same as the FFI
 //! headless suite: an app publishes process-global state.
 
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 

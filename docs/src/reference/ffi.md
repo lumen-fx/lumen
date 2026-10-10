@@ -415,26 +415,79 @@ Handlers and watches fire on Lumen's tick thread. See `sdk/python/README.md`.
 
 ## Rust SDK
 
-The `lumenui` crate in `sdk/rust` is the Rust entry point. It does not go
-through the C ABI: it links the runtime directly and exposes it in its native
-ECS shape, so a handler is an ordinary `bevy_ecs` system scheduled beside the
-framework's own.
+The `lumenui` crate is the Rust entry point. It does not go through the C ABI:
+it exposes the engine in its native ECS shape, so a handler is an ordinary
+`bevy_ecs` system scheduled beside the framework's own.
 
-`lumenui` reaches everything an app writes against through the engine and
-re-exports it. That is what lets a packaged Rust app link the shared library
-beside it instead of compiling the engine into itself: one copy of each Lumen
-type exists, the one inside the library, so a signal set through the SDK and
-one set by a script are the same signal. The one piece outside the engine is
-the markup parser (`lumenc`, as a library), which compiles into the app; its
-own dependencies still resolve into the engine.
+### Installing
+
+Add `lumenui` and pin the Rust toolchain the Lumen release was built with:
+
+```toml
+# Cargo.toml
+[dependencies]
+lumenui = "X.Y.Z"
+```
+
+```toml
+# rust-toolchain.toml, beside Cargo.toml
+[toolchain]
+channel = "<the rustc that Lumen X.Y.Z names>"
+```
+
+Your build compiles your code and `lumenui`, and none of the engine. Each Lumen
+release ships the engine's compiled crates for every desktop target, and
+`lumenui`'s build script downloads the set for its own version: the release
+tagged `vX.Y.Z`, checked against that release's `sha256sums.txt`. The set is
+large, so it is downloaded once per version and kept in the user cache
+directory (`~/.cache/lumen/lumenui-engine/` on Linux, under `XDG_CACHE_HOME`
+when that is set; `~/Library/Caches/lumen/lumenui-engine/` on macOS;
+`%LOCALAPPDATA%\lumen\lumenui-engine\` on Windows). Delete a version's
+directory there to reclaim the space.
+
+Three rules follow from linking compiled crates:
+
+- **The compiler is pinned.** Compiled Rust crates are readable only by the
+  exact `rustc` that produced them. When the toolchain in use differs, the
+  build stops before compiling anything and names the version to put in
+  `rust-toolchain.toml`. `lumenc new` writes that file for a Rust template.
+- **Name the engine's crates through `lumenui`.** `bevy_ecs`, `glam`, and the
+  `lumen-*` crates are already inside the engine. A dependency of your own on
+  any of them compiles a second copy, whose types are not the engine's, so
+  nothing typed against it fits. `lumenui::prelude::*` brings the everyday
+  items, the ECS derives (`Component`, `Resource`, `Message`, `Bundle`) and
+  `Widget` among them; `lumenui::bevy_ecs`, `lumenui::glam` and the other
+  re-exports reach the rest. Import the prelude with a glob: the `bevy_ecs`
+  derives find their crate through the `bevy_ecs` name it brings in.
+- **Build on the machine you target.** The set carries the proc-macro
+  libraries your derives run, and those are built for one kind of machine, so
+  cross-compiling is refused. The targets are `x86_64` and `aarch64` Linux,
+  macOS, and Windows. On Linux the final link needs the development packages
+  of the system libraries the engine links (GTK 3, X11, xkbcommon, Wayland),
+  as a source build does.
+
+The engine set's features are fixed by the release: it carries the full
+default stack. Set `LUMEN_ENGINE_ARTIFACTS` to the directory of an unpacked
+set to build against it instead of the release's, which is how a Lumen
+checkout tests an unreleased version: `tools/release/lumenui-engine.py build`
+then `collect` makes one.
 
 ### Linking the engine
 
-A Rust app does not open the C library. It links the engine as a Rust library,
-which is a separate build of the same code: `public/lumen-dylib`, whose output is
-`liblumen_engine.{so,dylib}`. The C library exports the `extern "C"` surface
-and nothing else, and one crate cannot produce both forms, so they are two
-crates.
+An app on the published `lumenui` links the engine statically, from the
+release's compiled crates, on every platform. `lumenc run` builds and runs such
+an app with cargo. `lumenc package` does not package it yet: it expects the
+shared engine library that only a build against a Lumen checkout produces, and
+exits 1 naming that library.
+
+In a Lumen checkout the SDK's code is the `lumenui-engine` crate in `sdk/rust`,
+which an app can depend on by path under the name `lumenui`
+(`lumenui = { package = "lumenui-engine", path = "..." }`); that compiles the
+engine from source. There, a Rust app does not open the C library either. It
+links the engine as a Rust library, which is a separate build of the same code:
+`public/lumen-dylib`, whose output is `liblumen_engine.{so,dylib}`. The C
+library exports the `extern "C"` surface and nothing else, and one crate cannot
+produce both forms, so they are two crates.
 
 `lumenc build` and `lumenc package` compile a Rust app with `-C
 prefer-dynamic`, which is what makes cargo take the shared form of that library

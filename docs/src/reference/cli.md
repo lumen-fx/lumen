@@ -450,6 +450,9 @@ A Rust app links the engine rather than opening it, so what travels beside it
 comes out of its own build: the engine library cargo produced and the shared
 Rust standard library both were compiled against. On Windows no linkable
 engine exists, so the runtime is inside the executable and nothing travels.
+That holds for an app built against a Lumen checkout's SDK crate; an app on
+the published `lumenui` links the release's prebuilt engine statically, and
+packaging it exits 1 naming the engine library its build did not produce.
 
 On Linux and macOS every other kind carries the shared runtime too: the
 runtime library there links `liblumen_engine`, so the engine and the Rust

@@ -4807,7 +4807,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumenui"
+name = "lumenui-engine"
 version = "0.0.10"
 dependencies = [
  "glam 0.33.3",

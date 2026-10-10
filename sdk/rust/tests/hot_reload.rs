@@ -16,6 +16,10 @@
 //! `LUMEN_HOT_RELOAD_POLL=1` selects the deterministic mtime-diff driver so the
 //! test doesn't ride on cross-platform fs-event timing.
 
+// In an app this is the published `lumenui` crate; inside the workspace the
+// engine crate it re-exports stands in for it under the same name.
+extern crate lumenui_engine as lumenui;
+
 use lumenui::components::TextContent;
 use lumenui::ecs_app::App as EcsApp;
 use lumenui::runtime::RunOptions;

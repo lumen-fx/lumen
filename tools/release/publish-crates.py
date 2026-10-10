@@ -18,8 +18,8 @@ What it does, in order:
      purpose: cargo strips them from the published manifest, so a dev-only
      edge (lumenc -> lumen-devtools, for one) is not a publish-order edge and
      would otherwise turn the graph cyclic.
-  2. Reduces that graph to the crates reachable from the roots (`lumenui`,
-     `lumenc`, `lumen-launcher`) that are not `publish = false`, and topo-sorts
+  2. Reduces that graph to the crates reachable from the roots (`lumenc`,
+     `lumen-launcher`) that are not `publish = false`, and topo-sorts
      it. A crate must exist on crates.io before anything that depends on it can
      be verified, so the order is the whole point.
   3. Preflights every crate: the version must already be absent from the
@@ -60,10 +60,13 @@ CRATES_IO_API = "https://crates.io/api/v1/crates"
 USER_AGENT = "lumen-release (https://github.com/lumen-fx/lumen)"
 
 # The published entry points. Everything else in the list is here because one
-# of these needs it: `lumenui` is the Rust SDK, `lumenc` is the CLI people
-# `cargo install`, and `lumen-launcher` is the stub `lumenc package` turns into
-# an app executable, which a source install has no other way to obtain.
-DEFAULT_ROOTS = ("lumenui", "lumenc", "lumen-launcher")
+# of these needs it: `lumenc` is the CLI people `cargo install`, and
+# `lumen-launcher` is the stub `lumenc package` turns into an app executable,
+# which a source install has no other way to obtain. The Rust SDK, `lumenui`,
+# is not a workspace crate: it depends on no other crate here (its build
+# script downloads the release's prebuilt engine), so it is not part of this
+# order.
+DEFAULT_ROOTS = ("lumenc", "lumen-launcher")
 
 # crates.io meters publishing with a leaky bucket: an account may create a
 # burst of new crates and then earns one back every ten minutes, and may

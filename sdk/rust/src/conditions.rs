@@ -4,6 +4,7 @@
 //! be gated declaratively:
 //!
 //! ```
+//! # extern crate lumenui_engine as lumenui;
 //! use lumenui::prelude::*;
 //!
 //! fn reset(mut signals: Signals) {

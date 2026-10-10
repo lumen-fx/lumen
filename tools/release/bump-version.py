@@ -54,12 +54,21 @@ REQUIRED = {
     "Cargo.toml": "the workspace version",
     # Outside the workspace, so it cannot inherit and spells the version out.
     "public/lumen-dylib/Cargo.toml": "the linkable engine's version",
+    # The published Rust SDK: outside the workspace, so it spells the version
+    # out, and the version is the release whose prebuilt engine it downloads.
+    "sdk/lumenui/Cargo.toml": "the Rust SDK's version",
     # The Python SDK ships at the version of the ABI it binds, and
     # sdk/python/tests/test_version.py fails when the two disagree.
     "sdk/python/lumen/_version.py": "the Python SDK's version",
     # Every crate this repository builds is recorded here by version.
     "Cargo.lock": "the resolved versions",
 }
+
+
+# Crates of this tree that the lockfile does not record, because nothing in the
+# workspace builds them: `lumenui` depends on no crate here, and the release's
+# engine is what it pairs with. Its version is the tree's all the same.
+OUTSIDE_LOCK = {"sdk/lumenui/Cargo.toml"}
 
 
 class Edit(NamedTuple):
@@ -152,7 +161,9 @@ def rewrite_manifest(path: Path, local: set[str], old: str, new: str) -> Edit:
     """
     lines = path.read_text(encoding="utf-8").split("\n")
     changed = 0
-    builds_here = package_name(path) in local
+    builds_here = (
+        package_name(path) in local or path.relative_to(ROOT).as_posix() in OUTSIDE_LOCK
+    )
 
     for section, entry, span in entries(lines):
         if not carries_tree_version(section, entry, builds_here):
