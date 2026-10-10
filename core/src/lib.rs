@@ -98,9 +98,9 @@ pub mod prelude {
     };
     pub use crate::render_world::{
         AnimationsActive, Brush, ExtractFn, ExtractSchedule, ExtractSet, ExtractedClipBox,
-        ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
-        ExtractedText, FrameDirty, Rect, Render, RenderStage, ScrollbarDrawRect, SurfaceCapture,
-        SurfaceFrame, Viewport, install_extract_pipeline,
+        ExtractedImage, ExtractedOpacityGroup, ExtractedOutline, ExtractedRect, ExtractedScrollbar,
+        ExtractedShadow, ExtractedText, FrameDirty, Rect, Render, RenderStage, ScrollbarDrawRect,
+        SurfaceCapture, SurfaceFrame, Viewport, install_extract_pipeline,
     };
     #[allow(deprecated)]
     pub use crate::signals::Signals;

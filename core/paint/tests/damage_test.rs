@@ -182,6 +182,38 @@ fn replacing_a_native_leaf_with_a_rect_is_a_change() {
     assert!(changed(&prev, &curr));
 }
 
+/// An image leaf rebuilt over the same pixels, at the same place, is unchanged, so a frame that
+/// shows a picture no longer always counts as changed; new pixels or a move are a change.
+#[test]
+fn an_image_over_the_same_pixels_is_unchanged() {
+    use lumen_assets::ExtractedImageBlob;
+    use lumen_core::render_world::ExtractedImage;
+    let rgba: Arc<[u8]> = Arc::from(vec![255u8; 4 * 4]);
+    let blob = peniko::Blob::new(Arc::new(vec![255u8; 4 * 4]));
+    let image = |origin: (f32, f32), rgba: &Arc<[u8]>, blob: &peniko::Blob<u8>| {
+        container(vec![Arc::new(Node::Image {
+            image: ExtractedImage {
+                origin: glam::Vec2::new(origin.0, origin.1),
+                size: glam::Vec2::new(20.0, 20.0),
+                width: 2,
+                height: 2,
+                rgba: rgba.clone(),
+                fit: Default::default(),
+                order: 0,
+                alpha: 1.0,
+                background: None,
+            },
+            blob: Some(Arc::new(ExtractedImageBlob(blob.clone()))),
+        })])
+    };
+    let prev = image((10.0, 10.0), &rgba, &blob);
+    assert!(!changed(&prev, &image((10.0, 10.0), &rgba, &blob)));
+    assert!(changed(&prev, &image((12.0, 10.0), &rgba, &blob)));
+    let other: Arc<[u8]> = Arc::from(vec![0u8; 4 * 4]);
+    let other_blob = peniko::Blob::new(Arc::new(vec![0u8; 4 * 4]));
+    assert!(changed(&prev, &image((10.0, 10.0), &other, &other_blob)));
+}
+
 /// A native leaf that declares no area still repaints when its revision moves: it falls back to
 /// the viewport rather than freeze on screen.
 #[test]

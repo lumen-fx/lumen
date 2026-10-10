@@ -75,7 +75,7 @@ fn extract_solids(main: &mut World, render: &mut World) {
     let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
         .filter_map(|(e, transform, solid)| {
-            let placed = place.place(e, transform, None)?;
+            let placed = place.place(e, transform)?;
             Some((
                 e,
                 ExtractedNative {
@@ -438,8 +438,9 @@ fn render_tree(root: &Arc<Node>, painters: NativePainters) -> Vec<u8> {
     renderer.read_rgba8().expect("readback")
 }
 
-/// Opacity has one owner, the painter. A bounds clip composites nothing, so asking to be clipped
-/// cannot change what a leaf's alpha comes out as.
+/// A bounds clip composites nothing, so asking to be clipped cannot change what a leaf's alpha
+/// comes out as. An ancestor's opacity is a group layer the walker composites over the painter's
+/// pixels, so it never reaches the painter's own figure.
 #[test]
 fn asking_for_a_bounds_clip_does_not_change_the_leafs_alpha() {
     if let Some(why) = gpu_unavailable_reason() {
@@ -461,6 +462,7 @@ fn asking_for_a_bounds_clip_does_not_change_the_leafs_alpha() {
         let tree = Arc::new(Node::Opacity {
             alpha: 0.5,
             child: native_node((16.0, 16.0, 32.0, 32.0), clip_to_bounds),
+            key: None,
         });
         render_tree(&tree, painters.clone())
     };
@@ -472,10 +474,15 @@ fn asking_for_a_bounds_clip_does_not_change_the_leafs_alpha() {
         pixel(&unclipped, 32, 32),
         "the clip must not composite: same painter, same pixels",
     );
+    let (_, g, _) = pixel(&clipped, 32, 32);
+    assert!(
+        (100..=160).contains(&g),
+        "the group fades the painter's green by half: {g}"
+    );
     assert_eq!(
         seen_opacity.lock().expect("lock").as_slice(),
-        [0.5, 0.5],
-        "the ancestor opacity reaches the painter, both times",
+        [1.0, 1.0],
+        "the group's fade is the layer's, not the painter's, both times",
     );
 }
 

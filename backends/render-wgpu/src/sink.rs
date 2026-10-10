@@ -4,26 +4,81 @@
 //! sub-scenes: [`Painter::begin_fragment`] redirects encoding into a fresh
 //! scene, and replaying one is a `Scene::append`, so a repeated appearance is
 //! encoded once and appended at every position it takes.
+//!
+//! An offscreen layer is a sub-scene too, recorded in frame coordinates. The
+//! frame draws it as an image whose pixels a texture of the layer's size
+//! supplies; the renderer renders the recorded sub-scene into that texture
+//! before it renders the frame (see [`VelloPainter::take_offscreen`]).
 
-use lumen_paint::{Fragment, GlyphRun, MaskKind, Painter, Shape};
+use lumen_paint::{Fragment, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use vello::Scene;
 use vello::kurbo::{Affine, Rect, Stroke};
-use vello::peniko::{BlendMode, BrushRef, Color, Compose, Fill, ImageBrush, Mix};
+use vello::peniko::{
+    BlendMode, Blob, BrushRef, Color, Compose, Fill, ImageAlphaType, ImageBrush, ImageData,
+    ImageFormat, ImageQuality, ImageSampler, Mix,
+};
 
 /// Names this backend in [`Painter::backend_id`] and
 /// [`lumen_core::native::NativePaintCtx::backend_id`]. [`Painter::native`]
 /// on this backend's sink is a [`VelloPainter`].
 pub const BACKEND_ID: &str = "lumen.render-wgpu";
 
+/// The longest side an offscreen layer may have: the largest image vello's
+/// atlas holds.
+const MAX_LAYER_SIDE: u32 = 8192;
+
 /// A [`Painter`] encoding into a [`vello::Scene`].
-#[derive(Default)]
 pub struct VelloPainter {
     scene: Scene,
     /// Fragments being recorded, innermost last. Encoding goes to the top
     /// of this stack when it is not empty.
     recording: Vec<Scene>,
+    /// Offscreen layers being recorded, innermost last, with their bounds.
+    /// Encoding goes to the top when no fragment is recording.
+    offscreen: Vec<(Scene, Rect)>,
+    /// Layers closed this frame, in the order they closed, waiting for the
+    /// renderer to render them into their textures.
+    finished: Vec<FinishedLayer>,
+    /// The longest side an offscreen layer may have here.
+    max_layer_side: u32,
+}
+
+impl Default for VelloPainter {
+    fn default() -> Self {
+        Self {
+            scene: Scene::new(),
+            recording: Vec::new(),
+            offscreen: Vec::new(),
+            finished: Vec::new(),
+            max_layer_side: MAX_LAYER_SIDE,
+        }
+    }
+}
+
+/// A closed offscreen layer waiting to be rendered: what it painted, where,
+/// and the image the frame draws it through.
+pub(crate) struct FinishedLayer {
+    /// The layer's paint, in frame coordinates.
+    pub(crate) scene: Scene,
+    /// Where the layer sits in the frame, in whole target pixels.
+    pub(crate) bounds: Rect,
+    /// The image a texture of the layer's size stands in for.
+    pub(crate) image: ImageData,
+    /// The layer as handed out; its texture goes once nothing holds it.
+    pub(crate) layer: Weak<GpuLayer>,
+    /// How many layers it was painted inside of. A layer draws only layers
+    /// nested deeper than itself.
+    pub(crate) depth: usize,
+}
+
+/// A rasterized offscreen layer as the frame draws it.
+pub(crate) struct GpuLayer {
+    /// The image the layer's texture stands in for.
+    pub(crate) image: ImageData,
+    /// Where the layer sits in the frame.
+    pub(crate) bounds: Rect,
 }
 
 impl VelloPainter {
@@ -48,12 +103,35 @@ impl VelloPainter {
     pub fn reset(&mut self) {
         self.scene.reset();
         self.recording.clear();
+        self.offscreen.clear();
+        self.finished.clear();
+    }
+
+    /// The offscreen layers closed since the last call. Each must be rendered
+    /// into a texture standing in for its image before the frame renders,
+    /// and a layer drawn inside another (a greater `depth`) before the one
+    /// that draws it.
+    pub(crate) fn take_offscreen(&mut self) -> Vec<FinishedLayer> {
+        std::mem::take(&mut self.finished)
+    }
+
+    /// Refuse offscreen layers with a side longer than `side`, the largest
+    /// texture the device makes, when that is less than vello's own limit.
+    pub(crate) fn limit_layer_side(&mut self, side: u32) {
+        self.max_layer_side = side.min(MAX_LAYER_SIDE);
     }
 
     /// Where the next call encodes: the innermost open fragment, else the
-    /// frame.
+    /// innermost open offscreen layer, else the frame. A fragment never
+    /// spans a layer, so an open one is always the innermost.
     fn target(&mut self) -> &mut Scene {
-        self.recording.last_mut().unwrap_or(&mut self.scene)
+        if let Some(fragment) = self.recording.last_mut() {
+            return fragment;
+        }
+        match self.offscreen.last_mut() {
+            Some((layer, _)) => layer,
+            None => &mut self.scene,
+        }
     }
 }
 
@@ -158,11 +236,12 @@ impl Painter for VelloPainter {
     }
 
     fn layer_depth(&self) -> usize {
-        self.recording
-            .last()
-            .unwrap_or(&self.scene)
-            .encoding()
-            .n_open_clips as usize
+        let scene = match (self.recording.last(), self.offscreen.last()) {
+            (Some(fragment), _) => fragment,
+            (None, Some((layer, _))) => layer,
+            (None, None) => &self.scene,
+        };
+        scene.encoding().n_open_clips as usize
     }
 
     fn draw_blurred_rounded_rect(
@@ -214,6 +293,64 @@ impl Painter for VelloPainter {
             return false;
         };
         self.target().append(scene, Some(transform));
+        true
+    }
+
+    fn begin_offscreen(&mut self, bounds: Rect) -> bool {
+        let (w, h) = (bounds.width().round(), bounds.height().round());
+        let side = 1.0..=f64::from(self.max_layer_side);
+        if !side.contains(&w) || !side.contains(&h) {
+            return false;
+        }
+        self.offscreen.push((Scene::new(), bounds));
+        true
+    }
+
+    fn end_offscreen(&mut self) -> Option<OffscreenLayer> {
+        let (mut scene, bounds) = self.offscreen.pop()?;
+        while scene.encoding().n_open_clips > 0 {
+            scene.pop_layer();
+        }
+        // A blob of its own gives the layer an image id no other image has;
+        // the renderer stands a texture in for its pixels.
+        let image = ImageData {
+            data: Blob::new(Arc::new([0u8; 0])),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: bounds.width().round() as u32,
+            height: bounds.height().round() as u32,
+        };
+        let layer = Arc::new(GpuLayer {
+            image: image.clone(),
+            bounds,
+        });
+        self.finished.push(FinishedLayer {
+            scene,
+            bounds,
+            image,
+            layer: Arc::downgrade(&layer),
+            depth: self.offscreen.len(),
+        });
+        Some(OffscreenLayer::new(layer))
+    }
+
+    fn draw_offscreen(&mut self, layer: &OffscreenLayer, alpha: f32) -> bool {
+        let Some(layer) = layer.downcast::<GpuLayer>() else {
+            return false;
+        };
+        // One layer pixel per target pixel: the layer sits on whole pixels.
+        let brush = ImageBrush {
+            image: layer.image.clone(),
+            sampler: ImageSampler {
+                quality: ImageQuality::Low,
+                alpha: alpha.clamp(0.0, 1.0),
+                ..ImageSampler::default()
+            },
+        };
+        self.target().draw_image(
+            &brush,
+            Affine::translate((layer.bounds.x0, layer.bounds.y0)),
+        );
         true
     }
 

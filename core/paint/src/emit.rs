@@ -631,6 +631,73 @@ fn font_blob(font_id: u64, font_data: &std::sync::Arc<Vec<u8>>) -> Blob<u8> {
     })
 }
 
+/// Shapes `text` in target pixels the way [`draw_text`] paints it, and
+/// returns the run with the x its glyphs start at once aligned.
+fn shape_text<S: TextShaper + ?Sized>(
+    shaper: &mut S,
+    text: &ExtractedText,
+    dpr: f32,
+) -> (Option<ShapedRun>, f32) {
+    use lumen_core::components::TextAlign;
+    let container_width = text.container_width * dpr;
+    // Shape the full run for glyph painting using the text's configured wrap and `max_lines`.
+    let shape_opts = ShapeOptions {
+        width: Some(container_width),
+        wrap: WrapMode::from(text.wrap),
+        max_lines: text.max_lines,
+        family: text.family.clone(),
+        weight: text.weight,
+        line_height: Some(text.line_height_px * dpr),
+    };
+    let shaped = shaper.shape(&text.text, text.size_px * dpr, shape_opts);
+    let measured = shaped.as_ref().map(|r| r.width).unwrap_or(0.0);
+    let align_dx = match text.align {
+        TextAlign::Start => 0.0,
+        TextAlign::Center => ((container_width - measured) / 2.0).max(0.0),
+        TextAlign::End => (container_width - measured).max(0.0),
+    };
+    (shaped, text.origin.x * dpr + align_dx)
+}
+
+/// The box in target pixels that holds everything [`draw_text`] paints for
+/// `text`: every line of its glyphs, with room for ascenders, descenders, and
+/// overhang, its selection, and its caret. Text that overflows its container
+/// is inside it too. Shaping goes through the same shaper and options as the
+/// paint, so the shape is a cache hit when the run is painted after.
+pub fn text_bounds<S: TextShaper + ?Sized>(shaper: &mut S, text: &ExtractedText, dpr: f32) -> Rect {
+    let origin = text.origin * dpr;
+    let size = (text.size_px * dpr) as f64;
+    let line_height = (text.line_height_px * dpr) as f64;
+    let (shaped, draw_x) = shape_text(shaper, text, dpr);
+    let (draw_x, base_y) = (draw_x as f64, origin.y as f64);
+    // The container, which selection bands and the caret stay inside, and
+    // the first line.
+    let mut x0 = (origin.x as f64).min(draw_x);
+    let mut x1 = (origin.x as f64 + (text.container_width * dpr) as f64).max(draw_x);
+    let (mut y0, mut y1) = (0.0f64, 0.0f64);
+    if let Some(run) = &shaped {
+        x1 = x1.max(draw_x + run.width as f64);
+        for g in &run.glyphs {
+            x0 = x0.min(draw_x + g.x as f64);
+            x1 = x1.max(draw_x + (g.x + g.advance) as f64);
+            y0 = y0.min(g.y as f64);
+            y1 = y1.max(g.y as f64);
+        }
+    }
+    // A caret on an empty line after the last newline sits below every glyph.
+    let newlines = text.text.matches('\n').count() as f64;
+    y1 = y1.max(newlines * line_height);
+    // A glyph reaches past its advance and above its baseline by up to about
+    // its size; a caret is a few pixels wide.
+    let caret = (text.caret_width_px * dpr) as f64;
+    Rect::new(
+        x0 - size,
+        base_y + y0 - size * 1.5,
+        x1 + size + caret,
+        base_y + y1 + size,
+    )
+}
+
 /// Draws one [`ExtractedText`] using the supplied shaper.
 ///
 /// The un-scaled run is passed by reference alongside the running device-
@@ -649,34 +716,15 @@ pub fn draw_text<S: TextShaper + ?Sized>(
     dpr: f32,
     opacity: f32,
 ) {
-    use lumen_core::components::TextAlign;
     let origin = text.origin * dpr;
     let size_px = text.size_px * dpr;
-    let container_width = text.container_width * dpr;
     // `ExtractedText::line_height_px` is already resolved (CSS `line-height`
     // or the `DEFAULT_LINE_HEIGHT_MULTIPLIER` fallback) in logical px;
     // scale it by the same `dpr` factor as `size_px` so the shaper's
     // `Metrics` and the newline-caret math below stay in the same space.
     let line_height_px = text.line_height_px * dpr;
     let fill = folded(text.fill, opacity);
-    // Shape the full run for glyph painting using the text's configured wrap and `max_lines`.
-    let wrap = WrapMode::from(text.wrap);
-    let shape_opts = ShapeOptions {
-        width: Some(container_width),
-        wrap,
-        max_lines: text.max_lines,
-        family: text.family.clone(),
-        weight: text.weight,
-        line_height: Some(line_height_px),
-    };
-    let shaped = shaper.shape(&text.text, size_px, shape_opts);
-    let measured = shaped.as_ref().map(|r| r.width).unwrap_or(0.0);
-    let align_dx = match text.align {
-        TextAlign::Start => 0.0,
-        TextAlign::Center => ((container_width - measured) / 2.0).max(0.0),
-        TextAlign::End => (container_width - measured).max(0.0),
-    };
-    let draw_x = origin.x + align_dx;
+    let (shaped, draw_x) = shape_text(shaper, text, dpr);
     // The geometry index is only consumed by the caret + selection branches;
     // building it for every text node (the common no-caret label) wasted a
     // per-node pass. Build it lazily only when one of those is present.
@@ -1622,6 +1670,28 @@ mod tests {
                 width,
             })
         }
+    }
+
+    /// A run's bounds hold every glyph, past its container when it overflows,
+    /// with room above the baseline and below it, and down to the line a
+    /// trailing newline opens.
+    #[test]
+    fn text_bounds_hold_an_overflowing_run_and_its_lines() {
+        let mut shaper = MonoShaper { advance: 10.0 };
+        let text = label(&"a".repeat(30));
+        let b = text_bounds(&mut shaper, &text, 1.0);
+        // From x 10, 30 glyphs of 10 end at 310, past the 200 wide container.
+        assert!(b.x0 <= 10.0 && b.x1 >= 310.0, "{b:?}");
+        // A 16 px glyph on the baseline at y 20 reaches up to about y 4.
+        assert!(b.y0 <= 4.0 && b.y1 >= 20.0, "{b:?}");
+
+        let mut two_lines = label("ab\n");
+        two_lines.line_height_px = 20.0;
+        let b = text_bounds(&mut shaper, &two_lines, 1.0);
+        assert!(
+            b.y1 >= 20.0 + 20.0,
+            "the caret line after the newline: {b:?}"
+        );
     }
 
     /// A shaped label paints one glyph run per non-empty segment, shifted by

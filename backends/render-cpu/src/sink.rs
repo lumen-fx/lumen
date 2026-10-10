@@ -4,12 +4,21 @@
 //! The context is immediate-mode with state: each call sets the transform,
 //! fill rule, and paint it needs, then draws. It has no fragments, so the
 //! walker paints every leaf in place.
+//!
+//! An offscreen layer is a second context the size of the layer. While one
+//! is open every call goes to it, shifted from frame coordinates to the
+//! layer's own; closing it rasterizes the layer into a pixmap the frame then
+//! draws as an image, faded by a tint rather than a compositing layer.
 
-use lumen_paint::{GlyphRun, MaskKind, Painter, Shape};
+use lumen_paint::{GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
+use vello_common::paint::{Tint, TintMode};
 use vello_cpu::kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use vello_cpu::peniko::{BlendMode, Brush, BrushRef, Color, Fill, ImageBrush};
+use vello_cpu::peniko::{
+    BlendMode, Brush, BrushRef, Color, Fill, ImageBrush, ImageQuality, ImageSampler,
+};
 use vello_cpu::{Image, ImageSource, Mask, PaintType, Pixmap, RenderContext, Resources};
 
 /// Names this backend in [`Painter::backend_id`] and
@@ -29,6 +38,25 @@ pub struct CpuPainter {
     /// Decoded image pixels, premultiplied once and kept by blob id. An entry
     /// a frame does not draw is dropped when the next frame starts.
     images: HashMap<u64, (ImageSource, bool)>,
+    /// Maps frame coordinates into this painter's target: identity for the
+    /// frame, a shift to the layer's corner for an offscreen layer.
+    base: Affine,
+    /// The offscreen layer open inside this painter, if any. Every call goes
+    /// to it, and through it to any layer open inside that one.
+    offscreen: Option<Box<Offscreen>>,
+}
+
+/// An offscreen layer being painted: its own painter, and where it sits in
+/// the frame.
+struct Offscreen {
+    painter: CpuPainter,
+    bounds: Rect,
+}
+
+/// A rasterized offscreen layer: premultiplied pixels and where they go.
+struct CpuLayer {
+    pixels: ImageSource,
+    bounds: Rect,
 }
 
 impl std::fmt::Debug for CpuPainter {
@@ -49,6 +77,27 @@ impl CpuPainter {
             resources: Resources::new(),
             depth: 0,
             images: HashMap::new(),
+            base: Affine::IDENTITY,
+            offscreen: None,
+        }
+    }
+
+    /// The painter calls go to: the innermost open offscreen layer, else
+    /// this one.
+    fn active(&mut self) -> &mut CpuPainter {
+        match self.offscreen {
+            Some(ref mut layer) => layer.painter.active(),
+            None => self,
+        }
+    }
+
+    /// Close every offscreen layer still open, dropping what it painted and
+    /// handing the shared caches back.
+    fn abandon_offscreen(&mut self) {
+        if let Some(mut layer) = self.offscreen.take() {
+            layer.painter.abandon_offscreen();
+            std::mem::swap(&mut layer.painter.resources, &mut self.resources);
+            std::mem::swap(&mut layer.painter.images, &mut self.images);
         }
     }
 
@@ -60,6 +109,7 @@ impl CpuPainter {
     /// Start a frame of `width` x `height` pixels: forget the previous
     /// frame's drawing and fill the target with `clear`.
     pub fn begin_frame(&mut self, width: u16, height: u16, clear: Color) {
+        self.abandon_offscreen();
         if self.size() == (width, height) {
             self.ctx.reset();
         } else {
@@ -75,6 +125,7 @@ impl CpuPainter {
     /// Rasterize the frame into `target`, which must be the frame's size.
     /// Closes any layer a caller left open first.
     pub fn render_into(&mut self, target: &mut Pixmap) {
+        self.abandon_offscreen();
         while self.depth > 0 {
             self.pop_layer();
         }
@@ -83,9 +134,11 @@ impl CpuPainter {
     }
 
     /// The vello_cpu context the frame is painted into, for a painter that
-    /// draws with vello_cpu directly. Leave every layer it opens closed.
+    /// draws with vello_cpu directly. Leave every layer it opens closed. The
+    /// walker never paints a native leaf into an offscreen layer, so this is
+    /// the frame's context whenever a native painter asks.
     pub fn render_context(&mut self) -> &mut RenderContext {
-        &mut self.ctx
+        &mut self.active().ctx
     }
 
     /// The paint for a brush, decoding an image's pixels the first time a
@@ -113,7 +166,7 @@ impl CpuPainter {
     /// Set the state every draw call starts from.
     fn prepare(&mut self, transform: Affine, brush: BrushRef<'_>, brush_transform: Option<Affine>) {
         let paint = self.paint(brush);
-        self.ctx.set_transform(transform);
+        self.ctx.set_transform(self.base * transform);
         self.ctx.set_paint(paint);
         self.ctx
             .set_paint_transform(brush_transform.unwrap_or(Affine::IDENTITY));
@@ -138,12 +191,14 @@ impl Painter for CpuPainter {
         brush_transform: Option<Affine>,
         shape: &Shape<'_>,
     ) {
-        self.prepare(transform, brush, brush_transform);
-        self.ctx.set_fill_rule(style);
+        let this = self.active();
+        this.prepare(transform, brush, brush_transform);
+        this.ctx.set_fill_rule(style);
+        let this = &mut this.ctx;
         match shape {
-            Shape::Rect(r) => self.ctx.fill_rect(r),
-            Shape::RoundedRect(r) => self.ctx.fill_path(&r.to_path(TOLERANCE)),
-            Shape::Path(p) => self.ctx.fill_path(p),
+            Shape::Rect(r) => this.fill_rect(r),
+            Shape::RoundedRect(r) => this.fill_path(&r.to_path(TOLERANCE)),
+            Shape::Path(p) => this.fill_path(p),
         }
     }
 
@@ -155,12 +210,14 @@ impl Painter for CpuPainter {
         brush_transform: Option<Affine>,
         shape: &Shape<'_>,
     ) {
-        self.prepare(transform, brush, brush_transform);
-        self.ctx.set_stroke(style.clone());
+        let this = self.active();
+        this.prepare(transform, brush, brush_transform);
+        this.ctx.set_stroke(style.clone());
+        let this = &mut this.ctx;
         match shape {
-            Shape::Rect(r) => self.ctx.stroke_rect(r),
-            Shape::RoundedRect(r) => self.ctx.stroke_path(&r.to_path(TOLERANCE)),
-            Shape::Path(p) => self.ctx.stroke_path(p),
+            Shape::Rect(r) => this.stroke_rect(r),
+            Shape::RoundedRect(r) => this.stroke_path(&r.to_path(TOLERANCE)),
+            Shape::Path(p) => this.stroke_path(p),
         }
     }
 
@@ -172,28 +229,33 @@ impl Painter for CpuPainter {
         transform: Affine,
         clip: &Shape<'_>,
     ) {
-        self.ctx.set_transform(transform);
-        self.ctx.set_fill_rule(clip_style);
+        let this = self.active();
+        this.ctx.set_transform(this.base * transform);
+        this.ctx.set_fill_rule(clip_style);
         let path = to_path(clip);
-        self.ctx.push_layer(
+        this.ctx.push_layer(
             Some(&path),
             Some(blend),
             Some(alpha.clamp(0.0, 1.0)),
             None,
             None,
         );
-        self.depth += 1;
+        this.depth += 1;
     }
 
     fn pop_layer(&mut self) {
-        if self.depth > 0 {
-            self.ctx.pop_layer();
-            self.depth -= 1;
+        let this = self.active();
+        if this.depth > 0 {
+            this.ctx.pop_layer();
+            this.depth -= 1;
         }
     }
 
     fn layer_depth(&self) -> usize {
-        self.depth
+        match &self.offscreen {
+            Some(layer) => layer.painter.layer_depth(),
+            None => self.depth,
+        }
     }
 
     /// vello_cpu masks with a pixmap the size of the target, so the mask is
@@ -208,12 +270,18 @@ impl Painter for CpuPainter {
         mask: &mut dyn FnMut(&mut dyn Painter),
         content: &mut dyn FnMut(&mut dyn Painter),
     ) {
+        if let Some(layer) = self.offscreen.as_deref_mut() {
+            return layer
+                .painter
+                .draw_masked(kind, transform, region, mask, content);
+        }
         let (width, height) = self.size();
         let region = to_path(region);
         let mut aside = CpuPainter::new(width, height);
+        aside.base = self.base;
         std::mem::swap(&mut aside.resources, &mut self.resources);
         std::mem::swap(&mut aside.images, &mut self.images);
-        aside.ctx.set_transform(transform);
+        aside.ctx.set_transform(self.base * transform);
         aside.ctx.set_fill_rule(Fill::NonZero);
         aside.ctx.push_clip_layer(&region);
         aside.depth = 1;
@@ -227,7 +295,7 @@ impl Painter for CpuPainter {
             MaskKind::Alpha => Mask::new_alpha(&pixels),
         };
 
-        self.ctx.set_transform(transform);
+        self.ctx.set_transform(self.base * transform);
         self.ctx.set_fill_rule(Fill::NonZero);
         self.ctx
             .push_layer(Some(&region), None, None, Some(coverage), None);
@@ -247,10 +315,11 @@ impl Painter for CpuPainter {
         radius: f64,
         std_dev: f64,
     ) {
-        self.ctx.set_transform(transform);
-        self.ctx.set_paint(color);
-        self.ctx.reset_paint_transform();
-        self.ctx
+        let this = self.active();
+        this.ctx.set_transform(this.base * transform);
+        this.ctx.set_paint(color);
+        this.ctx.reset_paint_transform();
+        this.ctx
             .fill_blurred_rounded_rect(&rect, radius as f32, std_dev as f32, false);
     }
 
@@ -259,15 +328,16 @@ impl Painter for CpuPainter {
         if w == 0 || h == 0 {
             return;
         }
+        let this = self.active();
         let paint = PaintType::Image(Image {
-            image: self.image_source(&image.image),
+            image: this.image_source(&image.image),
             sampler: image.sampler,
         });
-        self.ctx.set_transform(transform);
-        self.ctx.set_paint(paint);
-        self.ctx.reset_paint_transform();
-        self.ctx.set_fill_rule(Fill::NonZero);
-        self.ctx
+        this.ctx.set_transform(this.base * transform);
+        this.ctx.set_paint(paint);
+        this.ctx.reset_paint_transform();
+        this.ctx.set_fill_rule(Fill::NonZero);
+        this.ctx
             .fill_rect(&Rect::new(0.0, 0.0, f64::from(w), f64::from(h)));
     }
 
@@ -275,10 +345,11 @@ impl Painter for CpuPainter {
         if run.glyphs.is_empty() {
             return;
         }
-        self.prepare(run.transform, run.brush, None);
-        self.ctx.set_fill_rule(Fill::NonZero);
-        self.ctx
-            .glyph_run(&mut self.resources, run.font)
+        let this = self.active();
+        this.prepare(run.transform, run.brush, None);
+        this.ctx.set_fill_rule(Fill::NonZero);
+        this.ctx
+            .glyph_run(&mut this.resources, run.font)
             .font_size(run.font_size)
             // The GPU backend paints unhinted outlines; the same pixels here.
             .hint(false)
@@ -288,6 +359,76 @@ impl Painter for CpuPainter {
                 x: g.x,
                 y: g.y,
             }));
+    }
+
+    fn begin_offscreen(&mut self, bounds: Rect) -> bool {
+        if let Some(layer) = self.offscreen.as_deref_mut() {
+            return layer.painter.begin_offscreen(bounds);
+        }
+        let (w, h) = (bounds.width().round(), bounds.height().round());
+        if !(1.0..=f64::from(u16::MAX)).contains(&w) || !(1.0..=f64::from(u16::MAX)).contains(&h) {
+            return false;
+        }
+        let mut painter = CpuPainter::new(w as u16, h as u16);
+        painter.base = Affine::translate((-bounds.x0, -bounds.y0));
+        // The layer paints with this painter's glyph caches and decoded
+        // images, and hands them back when it closes.
+        std::mem::swap(&mut painter.resources, &mut self.resources);
+        std::mem::swap(&mut painter.images, &mut self.images);
+        self.offscreen = Some(Box::new(Offscreen { painter, bounds }));
+        true
+    }
+
+    fn end_offscreen(&mut self) -> Option<OffscreenLayer> {
+        let layer = self.offscreen.as_deref_mut()?;
+        if layer.painter.offscreen.is_some() {
+            return layer.painter.end_offscreen();
+        }
+        let Offscreen {
+            mut painter,
+            bounds,
+        } = *self.offscreen.take()?;
+        let (w, h) = painter.size();
+        let mut pixels = Pixmap::new(w, h);
+        painter.render_into(&mut pixels);
+        std::mem::swap(&mut painter.resources, &mut self.resources);
+        std::mem::swap(&mut painter.images, &mut self.images);
+        Some(OffscreenLayer::new(Arc::new(CpuLayer {
+            pixels: ImageSource::Pixmap(Arc::new(pixels)),
+            bounds,
+        })))
+    }
+
+    fn draw_offscreen(&mut self, layer: &OffscreenLayer, alpha: f32) -> bool {
+        let Some(layer) = layer.downcast::<CpuLayer>() else {
+            return false;
+        };
+        let alpha = alpha.clamp(0.0, 1.0);
+        let this = self.active();
+        let (w, h) = (layer.bounds.width(), layer.bounds.height());
+        this.ctx
+            .set_transform(this.base * Affine::translate((layer.bounds.x0, layer.bounds.y0)));
+        // One layer pixel per target pixel: the layer sits on whole pixels.
+        this.ctx.set_paint(PaintType::Image(Image {
+            image: layer.pixels.clone(),
+            sampler: ImageSampler {
+                quality: ImageQuality::Low,
+                ..ImageSampler::default()
+            },
+        }));
+        this.ctx.reset_paint_transform();
+        this.ctx.set_fill_rule(Fill::NonZero);
+        // The pixels are premultiplied, so scaling every channel by the
+        // alpha fades them.
+        if alpha < 1.0 {
+            this.ctx.set_tint(Some(Tint {
+                color: Color::new([1.0, 1.0, 1.0, alpha]),
+                mode: TintMode::Multiply,
+            }));
+        }
+        this.ctx.fill_rect(&Rect::new(0.0, 0.0, w, h));
+        this.ctx.reset_tint();
+        true
     }
 
     fn backend_id(&self) -> &'static str {

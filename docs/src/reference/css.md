@@ -467,6 +467,15 @@ integer are clamped with a warning.
 | `popup-gap` | number | `4` |
 | `draggable` | `true`, `yes` | `false` |
 
+`opacity` fades an element together with everything inside it, as one
+picture, the way CSS does: an opaque child still hides its parent's background,
+and the two fade once. Nested opacities compound. An element with no visible
+children fades its background, border, and text one by one, so where its own
+border or text overlaps its background, the background shows through faintly.
+The renderer keeps the picture of a faded element with children from one frame
+to the next while nothing inside it changes, so animating its `opacity` does
+not repaint its contents.
+
 `disabled-opacity` sets how much a disabled element dims when neither
 `:disabled { bg }` nor `:disabled { opacity }` was authored.
 `knob-color`, `knob-inset`, `thumb-size`, and `popup-gap` reach widget
