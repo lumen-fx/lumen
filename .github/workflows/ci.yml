@@ -170,12 +170,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # A red test on main still leaves a sound build behind.
           cache-on-failure: true
-      # The `lumenc new` templates, each downloaded from the repository it is
-      # maintained in. A release ships them beside the toolchain and the suite
-      # reads them from disk the way an installed lumenc does, so a run
-      # without them leaves every case that scaffolds skipping itself.
-      # `shell: bash` because the Windows leg defaults to PowerShell; curl and
-      # tar are on all three runner images.
+      # The `lumenc new` templates, each downloaded from the `main` branch of
+      # the repository it is maintained in. A release ships them beside the
+      # toolchain and the suite reads them from disk the way an installed
+      # lumenc does, so a run without them leaves every case that scaffolds
+      # skipping itself. `shell: bash` because the Windows leg defaults to
+      # PowerShell; git, curl and tar are on all three runner images.
       - name: Fetch the app templates
         if: needs.changes.outputs.rust == 'true'
         shell: bash

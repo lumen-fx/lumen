@@ -186,7 +186,7 @@ pub fn template_dir(name: &str) -> Result<PathBuf, Error> {
 /// Write the `name` template into `dest`, creating `dest` and every directory
 /// under it.
 ///
-/// The archive a template repository publishes holds the app tree and nothing
+/// The copy `tools/fetch-templates.sh` downloads holds the app tree and nothing
 /// else, so every file in it is copied as it is. Returns the paths written,
 /// relative to `dest`, slash-joined and sorted.
 pub fn write_template(name: &str, dest: &Path) -> Result<Vec<String>, Error> {

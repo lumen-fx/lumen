@@ -1,11 +1,13 @@
 # Release checklist
 
-How to cut a Lumen release. `.github/workflows/build-toolchain.yml` builds the
-assets and `.github/workflows/release.yml` publishes them and starts every
-channel that follows; a tag push is the only trigger for any of it, and no
-target has a manual upload step. Asset names are load-bearing, because
-`tools/release/install.sh` looks them up verbatim, so the workflow generates
-them rather than anyone typing them.
+How to cut a Lumen release. A release is one click: running
+`.github/workflows/release.yml` by hand checks `main`, updates the license
+report, and tags the release, and the tag starts the run that builds the
+assets with `.github/workflows/build-toolchain.yml`, publishes them, starts
+every channel that follows, and moves `main` to the next version. No step is
+done by hand and no target has a manual upload step. Asset names are
+load-bearing, because `tools/release/install.sh` looks them up verbatim, so
+the workflow generates them rather than anyone typing them.
 
 | Asset                          | Built by                              |
 | ------------------------------- | -------------------------------------- |
@@ -80,13 +82,16 @@ binary the two Linux archives do, copied in rather than rebuilt.
 ## One-time setup
 
 - Actions enabled on the repository (already on).
-- Publishing the release needs no secrets: the release job uses the built-in
-  `GITHUB_TOKEN` (`contents: write`, scoped to that job only).
-- Moving `main` to the next version afterwards needs one, `REPIN_DEPLOY_KEY`,
-  holding the private half of the repository's write deploy key. The ruleset on
-  `main` requires a pull request and lets deploy keys past it, so this is what a
-  workflow pushes there with. `grammar-pins.yml` uses the same key for the same
-  reason.
+- `REPIN_DEPLOY_KEY`, holding the private half of the repository's write
+  deploy key. The release writes to the repository three times, and each write
+  goes over SSH with this key: the license commit and the version bump to
+  `main`, whose ruleset requires a pull request and lets deploy keys past it,
+  and the release tag itself. A push made with the workflow's own
+  `GITHUB_TOKEN` would raise no workflow events, so a tag pushed that way would
+  start no release and a commit pushed that way would get no `ci` run.
+  `grammar-pins.yml` uses the same key to repin the editor grammars.
+- Publishing the release needs no other secret: the release job uses the
+  built-in `GITHUB_TOKEN` (`contents: write`, scoped to that job only).
 - Publishing to the package managers afterwards does need credentials, one per
   channel; see the section on them below.
 - Pushing the server image needs no secret either: the image job uses the
@@ -97,50 +102,90 @@ binary the two Linux archives do, copied in rather than rebuilt.
 
 ## Cutting a release
 
-1. Make sure `main` is green in the `ci` workflow.
+Run the `release` workflow on `main` and type the version to release:
 
-   If the dependency set moved since the last release, regenerate the license
-   report in the same pass: `cargo about generate about.hbs -o
-   THIRD-PARTY-LICENSES`, then commit it. Every archive, the MSI, and every
-   app `lumenc package` writes carries this file, so a stale one ships the
-   wrong license text. If the command stops on a license it does not
-   recognise, read that license and add it to the `accepted` list in
-   `about.toml`, rather than dropping the crate from the report.
-2. Check that `version` in the workspace `Cargo.toml` is the version you are
-   about to tag. It usually is already, because the previous release set it
-   (step 9). If it is not, run `tools/release/bump-version.py <version>`,
-   commit, push, and wait for green. The tag has to match this value: the
-   release workflow compares them first and publishes nothing if they differ,
-   because the MSI's version, the install receipt, and `lumenc --version` all
-   read from these two places.
-3. Read `docs/migration/unreleased/` on the commit you are about to tag. Those
-   notes are this release's migration guide, and their headings go into the
-   release body, so fix a note now rather than after the tag. A breaking pull
-   request that merged without one needs its note added first (CONTRIBUTING.md,
-   Breaking changes).
-4. Check that every template repository under `lumen-fx` (`blank`, `hello`,
-   `counter`, `form`, `todo`, `dashboard`, `settings`, `hotkeys`) has a
-   release tagged `vX.Y.Z`. A template release is named for the Lumen release
-   it is for, and the build fetches that tag; a repository without it fails
-   the build before anything is published. Tag any that lack it (a pushed
-   tag publishes the release, and a tag re-pushed before Lumen `vX.Y.Z` is
-   out republishes it) and wait for their `release` workflows.
-5. Tag and push:
+```sh
+gh workflow run release -f version=X.Y.Z
+```
 
-   ```sh
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
+or open the Actions tab, pick `release`, choose "Run workflow" with `main` as
+the branch, and type `X.Y.Z` into the version box. That is the whole release.
+Everything after it happens in CI.
 
-6. The `release` workflow then, automatically, for each target:
+`X.Y.Z` is the version the workspace `Cargo.toml` on `main` already carries.
+The previous release set it (see [After the release](#after-the-release)), so
+it is usually the next patch. Typing it back is the confirmation: the run stops
+if it differs, so a release is never cut for a version you did not expect. To
+release a different version, set it first with
+`tools/release/bump-version.py <version>`, land that as a pull request, and
+type the new number.
+
+Before you click, read `docs/migration/unreleased/` on `main`. Those notes are
+this release's migration guide, and their headings go into the release body,
+so fix a note now rather than after the tag. A breaking pull request that
+merged without one needs its note added first (CONTRIBUTING.md, Breaking
+changes). The run checks that every note has a heading and shows the section
+it will publish on its summary page; it cannot tell whether the notes are
+complete.
+
+## What the click does
+
+The run you start is the cut. It builds nothing; it decides what is released
+and tags it, in three jobs.
+
+1. **check what is being released.** The commit released is the one `main` was
+   at when you clicked. The job refuses to go on, and says why, when:
+   - the run was started on a branch other than `main`;
+   - the typed version is not the one in `Cargo.toml`;
+   - `vX.Y.Z` is already tagged, or is not newer than the last release;
+   - `ci` on that commit already finished without passing;
+   - a migration note does not start with a `# ` heading.
+
+   Nothing has been written anywhere when this job fails.
+2. **regenerate the third-party licenses.** Runs `cargo about generate
+   about.hbs -o THIRD-PARTY-LICENSES` with the cargo-about version pinned in
+   `release.yml`. Every archive, the MSI, and every app `lumenc package` writes
+   carries this file, so a stale one ships the wrong license text. If the file
+   changed, the job commits it straight to `main`, on top of the commit you
+   clicked on, as `chore(license): bring THIRD-PARTY-LICENSES up to date for
+   vX.Y.Z`. If the command stops on a license it does not recognise, read that
+   license and add it to the `accepted` list in `about.toml` (by pull request),
+   rather than dropping the crate from the report.
+3. **tag the release.** Waits for the `ci` run on `main` for the commit to tag:
+   the license commit if there was one, otherwise the commit you clicked on.
+   It gives up after two hours. When that run passes, it pushes `vX.Y.Z` on
+   that commit and then looks for the release run the tag started, and links
+   it from the summary page.
+
+Two clicks cannot race: every cut shares one concurrency group, so a second
+click waits for the first and then stops on the tag the first one pushed.
+
+A `v` tag pushed by hand starts the same release run, but skips every check
+above and the license update. The click is the way to cut a release.
+
+## What the release run does
+
+The tag push starts `release.yml` again, this time as the release itself:
+
+1. Checks that the tag matches the workspace version. They cannot disagree on
+   a tag the click pushed; the check is there for a hand-pushed one, since the
+   MSI's version, the install receipt, and `lumenc --version` all read from
+   these two places.
+2. Settles the `lumenc new` templates: one commit of each template repository
+   under `lumen-fx` (`blank`, `hello`, `counter`, `form`, `todo`, `dashboard`,
+   `settings`, `hotkeys`), read from that repository's `main` once, so every
+   build leg packages the same trees. The template repositories are not tagged
+   for a Lumen release; whatever is on their `main` when the release builds is
+   what it ships. The commits are on the build's summary page and in the
+   release body.
+3. For each target:
    - checks out at the tag and builds `lumenc`, `liblumen`, the launcher
      stub, and `lumen-server` in release mode (`cargo build --release` with
      `-p lumenc`, `-p lumen`, `-p lumen-launcher`, and `-p lumen-server`; the
      workspace `[profile.release]` already strips symbols, so there is no
      separate strip step);
-   - downloads the `lumenc new` templates with `tools/fetch-templates.sh`, one
-     per template from the repository it is maintained in under `lumen-fx`,
-     each from the release tagged `vX.Y.Z` there;
+   - downloads the templates at the commits settled above with
+     `tools/fetch-templates.sh`;
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
      library, `bin/lumen-launcher`, and `bin/lumen-server` into one archive,
      all in the *same* `bin/` directory, along with the three trees `lumenc` reads from beside
@@ -170,14 +215,6 @@ binary the two Linux archives do, copied in rather than rebuilt.
      did get built into `sha256sums.txt`, creates the release for the tag if
      it does not exist, and uploads the archives and the checksum file.
 
-   The release body is GitHub's generated list of merged pull requests. When
-   the tag is a plain `vX.Y.Z` and its tree has migration notes in `docs/migration/unreleased/`,
-   `tools/release/migration-notes.sh` puts a section above that list:
-   `## Migrating from <previous release>`, a link to
-   `https://docs.lumenfx.dev/migration/vX.Y.Z/`, and the heading of each note.
-   A release with no notes gets the generated list alone. The body is written
-   only when the release is created, so a re-run leaves an edited body alone.
-
    Beside the per-target archives it builds the browser runtime once, as
    `lumen-web.tar.gz`. That pair is WebAssembly, so it is the same file on
    every platform; `lumenc web` downloads it the first time a site needs it,
@@ -187,12 +224,19 @@ binary the two Linux archives do, copied in rather than rebuilt.
 
    A single failed target does not block the others: the publish step runs
    even if a build leg failed, and only what succeeded gets uploaded.
-   Re-running the workflow after a fix is safe, because `gh release upload
-   --clobber` replaces same-named assets rather than erroring on them.
 
-7. The same run then goes on to the four channels a release feeds, each in the
-   workflow that owns it and each checked out at the tag: `publish.yml` for the
-   language registries, `publish-packages.yml` for the OS package managers,
+4. Writes the release body. When the tag's tree has migration notes in
+   `docs/migration/unreleased/`, `tools/release/migration-notes.sh` puts a
+   section at the top: `## Migrating from <previous release>`, a link to
+   `https://docs.lumenfx.dev/migration/vX.Y.Z/`, and the heading of each note.
+   A `## Templates` section follows, naming the commit of each template. Below
+   both comes GitHub's generated list of merged pull requests. The body is
+   written only when the release is created, so a re-run leaves an edited body
+   alone.
+
+5. Goes on to the four channels a release feeds, each in the workflow that
+   owns it and each checked out at the tag: `publish.yml` for the language
+   registries, `publish-packages.yml` for the OS package managers,
    `publish-extensions.yml` for the editor marketplaces, and `site-rebuild.yml`
    for the docs site. They appear as jobs of the release run rather than as
    runs of their own.
@@ -230,83 +274,131 @@ binary the two Linux archives do, copied in rather than rebuilt.
    in the same commit. A release carrying an unchanged extension publishes
    nothing and says which registry already holds that version.
 
-8. Work through [Verify](#verify) against the published release.
+6. Moves `main` to the next version; see [After the release](#after-the-release).
 
-9. Check that `main` moved on. The release's last job commits
-   `chore: set the workspace version to X.Y.Z+1` straight to `main`, so the tag
-   push is the whole release and there is nothing left to merge.
+When the run is done, work through [Verify](#verify) against the published
+release.
 
-   The same commit moves the migration notes the tag shipped with from
-   `docs/migration/unreleased/` to `docs/migration/vX.Y.Z/`, with
-   `tools/release/release-fragments.sh`. It moves exactly the notes in the
-   tag's tree, so a note merged after the tag stays in `unreleased/` for the
-   next release. The notes move even when the version does not because `main`
-   is already at the next version; then the commit is
-   `docs: file the vX.Y.Z migration notes under their release` and carries
-   only the move.
+## When a job fails
 
-   From there `main` carries a version with no release behind it, which is the
-   point: `main` builds identify themselves as the version they will become,
-   and step 2 of the next release has nothing left to do. The template
-   repositories can be tagged for that version at any point in the cycle;
-   `main` builds do not need it, since they fetch the newest template release.
+Every job says what stopped it. What to do depends on how far the release got,
+and the tag is the line: before it, start again; after it, re-run.
 
-   That is safe because nothing turns a version number into a download
-   address. Every version-keyed lookup asks the releases page what exists:
-   `lumenc` resolves the release its toolchain files come from through
-   `releases/latest` (or through its install receipt), the update check
-   compares against `releases/latest`, and `public/lumenc/build.rs` confirms
-   the tag it needs is published before fetching source from it. A number with
-   no tag behind it resolves to nothing and says so.
+**Before the tag** (the run you clicked). Nothing outward-facing has happened,
+so fix the cause and click again. A second click is always safe here.
 
-   The commit is pushed over SSH with the write deploy key in
-   `REPIN_DEPLOY_KEY`, and `ci` runs against it on `main` like any other
-   commit. Pushing it with the workflow's own `GITHUB_TOKEN` instead would land
-   it with no run behind it at all, and the ruleset on `main` takes no pusher
-   but a deploy key.
+- `check what is being released` failed. Nothing was written. Its message
+  names the fix: type the right version, start from `main`, fix `main` until
+  `ci` passes, or fix the migration note it names.
+- `regenerate the third-party licenses` failed on an unknown license. Add it to
+  `about.toml` by pull request, wait for it to merge, and click again.
+- The license commit could not be pushed. Either `main` moved after you
+  clicked, and clicking again picks up `main` as it is now, or the deploy key
+  is gone or no longer bypasses the ruleset on `main`; restore it first.
+- `tag the release` failed waiting for `ci`. A license commit, if there was
+  one, is already on `main`, which does no harm. Fix what failed on `main` (or
+  re-run the failed `ci` jobs if it was a flake) and click again; the next cut
+  finds the license file current and waits on `main`'s new head. A `ci` run
+  reported as cancelled means a newer push to `main` replaced it; click again.
+- `tag the release` failed after pushing the tag, because no release run
+  appeared. Look in the Actions tab first; GitHub can be slow to start a run. If
+  there is still none, the tag push raised no event. Delete the tag
+  (`git push origin :refs/tags/vX.Y.Z`), check that `REPIN_DEPLOY_KEY` is a
+  deploy key and not some other credential, and click again.
 
-   The bump is always the next patch, whatever kind of release the tag was.
-   To go somewhere else, run `tools/release/bump-version.py 0.2.0` and land
-   that. The script takes the version to set and moves every place the version
-   is written out: the workspace package, each internal dependency pin,
-   `public/lumen-dylib` (outside the workspace, so it cannot inherit one),
-   `Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
-   comes out unchanged, so a file that grew a version literal nobody told it
-   about stops the bump instead of shipping a skew.
+**After the tag** (the release run). The tag is public, so never delete and
+re-cut it; repair the run instead.
 
-   If `main` is still on the version you tagged, look at the
-   `move main to the next version` job in the release run. It reports what it
-   decided and does nothing when the decision is not its to make:
+- A build leg failed. Fix the cause on `main` if it is in the tree; if it was
+  a runner or network failure, open the release run and choose "Re-run failed
+  jobs". That re-runs only what failed and what depends on it, and the publish
+  job uploads with `gh release upload --clobber`, which replaces same-named
+  assets rather than failing on them. "Re-run all jobs" is safe too, but it
+  rebuilds every target and settles the templates afresh from their `main`.
+  A fix that has to change the tree cannot reach this release: the tag is
+  fixed, so ship it in the next one.
+- A channel failed (registries, package managers, extensions, site). Re-run
+  that job from the release run, or start its own workflow from the Actions
+  tab; each one publishes only what is missing.
+- The server image failed. Re-run that job from the release run; it copies
+  that run's binaries, so it has no trigger of its own.
+- The bump failed. See [After the release](#after-the-release).
 
-   - The job never ran, because the release job did not finish. Fix what
-     failed and re-run the workflow; the bump follows the release, and a
-     release that published only some of its archives still reaches it.
-   - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes keep
-     their version and their migration notes stay in `unreleased/` for the
-     plain release that follows. Run `tools/release/bump-version.py` yourself.
-   - `main is at N, at or past ...`. The bump already landed, or this is a
-     re-run of an older release. The notes still move if they have not.
-   - `nothing to commit`. The version and the notes are already where they
-     belong. Nothing to do.
-   - `a file that always moves did not`. A version literal changed shape, or
-     one appeared somewhere new. The job names the file; teach
-     `bump-version.py` about it and bump by hand this once.
-   - `main is dirty the moment it is checked out`. Something rewrites a tracked
-     file as the runner checks it out, and the bump commit would carry it. Find
-     what, because the commit goes to `main` unreviewed.
-   - `no REPIN_DEPLOY_KEY` or `could not be pushed to main`. The key is gone
-     from the repository secrets, or it no longer bypasses the ruleset on
-     `main`. The job fails rather than opening a pull request instead, so that
-     a broken push is repaired now and not discovered by the next release
-     failing its tag-versus-version check. The job log shows the commit it
-     could not push. Restore the key, then run `tools/release/bump-version.py`
-     and `tools/release/release-fragments.sh vX.Y.Z` and land the result by
-     hand this once.
+## After the release
 
-   Re-running a release is safe: the first run leaves `main` past the version
-   the tag was cut for with the notes moved, and every later run of that tag,
-   or of an older one, reads `main`, finds both already there, and stops
-   without committing.
+Check that `main` moved on. The release's last job commits
+`chore: set the workspace version to X.Y.Z+1` straight to `main`, so the
+click is the whole release and there is nothing left to merge.
+
+The same commit moves the migration notes the tag shipped with from
+`docs/migration/unreleased/` to `docs/migration/vX.Y.Z/`, with
+`tools/release/release-fragments.sh`. It moves exactly the notes in the
+tag's tree, so a note merged after the tag stays in `unreleased/` for the
+next release. The notes move even when the version does not because `main`
+is already at the next version; then the commit is
+`docs: file the vX.Y.Z migration notes under their release` and carries
+only the move.
+
+From there `main` carries a version with no release behind it, which is the
+point: `main` builds identify themselves as the version they will become,
+and the next click releases exactly that version.
+
+That is safe because nothing turns a version number into a download
+address. Every version-keyed lookup asks the releases page what exists:
+`lumenc` resolves the release its toolchain files come from through
+`releases/latest` (or through its install receipt), the update check
+compares against `releases/latest`, and `public/lumenc/build.rs` confirms
+the tag it needs is published before fetching source from it. A number with
+no tag behind it resolves to nothing and says so.
+
+The commit is pushed over SSH with the write deploy key in
+`REPIN_DEPLOY_KEY`, and `ci` runs against it on `main` like any other
+commit. Pushing it with the workflow's own `GITHUB_TOKEN` instead would land
+it with no run behind it at all, and the ruleset on `main` takes no pusher
+but a deploy key.
+
+The bump is always the next patch, whatever kind of release the tag was.
+To go somewhere else, run `tools/release/bump-version.py 0.2.0` and land
+that. The script takes the version to set and moves every place the version
+is written out: the workspace package, each internal dependency pin,
+`public/lumen-dylib` (outside the workspace, so it cannot inherit one),
+`Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
+comes out unchanged, so a file that grew a version literal nobody told it
+about stops the bump instead of shipping a skew.
+
+If `main` is still on the version you released, look at the
+`move main to the next version` job in the release run. It reports what it
+decided and does nothing when the decision is not its to make:
+
+- The job never ran, because the release job did not finish. Fix what
+  failed and re-run the workflow; the bump follows the release, and a
+  release that published only some of its archives still reaches it.
+- `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes keep
+  their version and their migration notes stay in `unreleased/` for the
+  plain release that follows. Run `tools/release/bump-version.py` yourself.
+- `main is at N, at or past ...`. The bump already landed, or this is a
+  re-run of an older release. The notes still move if they have not.
+- `nothing to commit`. The version and the notes are already where they
+  belong. Nothing to do.
+- `a file that always moves did not`. A version literal changed shape, or
+  one appeared somewhere new. The job names the file; teach
+  `bump-version.py` about it and bump by hand this once.
+- `main is dirty the moment it is checked out`. Something rewrites a tracked
+  file as the runner checks it out, and the bump commit would carry it. Find
+  what, because the commit goes to `main` unreviewed.
+- `no REPIN_DEPLOY_KEY` or `could not be pushed to main`. The key is gone
+  from the repository secrets, or it no longer bypasses the ruleset on
+  `main`. The job fails rather than opening a pull request instead, so that
+  a broken push is repaired now and not discovered by the next release
+  failing its tag-versus-version check. The job log shows the commit it
+  could not push. Restore the key, then run `tools/release/bump-version.py`
+  and `tools/release/release-fragments.sh vX.Y.Z` and land the result by
+  hand this once.
+
+Re-running a release is safe: the first run leaves `main` past the version
+the tag was cut for with the notes moved, and every later run of that tag,
+or of an older one, reads `main`, finds both already there, and stops
+without committing.
 
 ## Why liblumen goes in bin/, not lib/
 
@@ -638,7 +730,7 @@ Start a nightly by hand from the Actions tab when you want one outside the
 schedule.
 
 None of the publishing workflows starts on its own. `release.yml` calls all
-four, and the only thing that starts `release.yml` is a `v`-prefixed tag, so a
+four, only from the run a `v`-prefixed tag starts, so a
 nightly reaches none of them: not crates.io or PyPI, not the package managers,
 not the editor marketplaces, not the docs site. Running one by hand from the
 Actions tab is the only way to point it at a nightly, and
@@ -650,8 +742,8 @@ belongs in that list of calls rather than on a trigger of its own.
 
 - `linux-aarch64` (`ubuntu-24.04-arm`), `macos-x86_64` (`macos-26-intel`)
   and `windows-aarch64` (`windows-11-arm`) are not covered by `ci.yml`'s own
-  matrix, so a portability regression on any of them is only caught when a
-  release tag is pushed, not on every pull request.
+  matrix, so a portability regression on any of them is only caught by the
+  nightly or a release, not on every pull request.
 - The MSI is unsigned. Every download trips SmartScreen until there is a
   code-signing certificate to sign it with. The community repository takes an
   unsigned package, so this does not hold winget up, but a winget install runs
