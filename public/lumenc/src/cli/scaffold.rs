@@ -193,8 +193,44 @@ pub fn write_template(name: &str, dest: &Path) -> Result<Vec<String>, Error> {
     let source = template_dir(name)?;
     let mut written = Vec::new();
     copy_dir(&source, dest, "", &mut written)?;
+    if let Some(file) = pin_rust_toolchain(dest, RUST_CHANNEL)? {
+        written.push(file);
+    }
     written.sort();
     Ok(written)
+}
+
+/// The Rust toolchain this release's prebuilt engine was compiled with, which
+/// lumenc's build script reads from the toolchain pin it was built under.
+const RUST_CHANNEL: Option<&str> = option_env!("LUMEN_RUST_CHANNEL");
+
+/// The file that pins a Rust SDK app's toolchain.
+const RUST_TOOLCHAIN: &str = "rust-toolchain.toml";
+
+/// Pin a scaffolded Rust SDK app (a template with a `Cargo.toml`) to `channel`.
+///
+/// The Rust SDK links the release's prebuilt engine, which only the exact
+/// compiler that built it can read, so an app has to build with that one; a
+/// `rust-toolchain.toml` beside the manifest is how rustup is told. A template
+/// that brings its own pin keeps it. Returns the file written, if any.
+fn pin_rust_toolchain(dest: &Path, channel: Option<&str>) -> Result<Option<String>, Error> {
+    let pin = dest.join(RUST_TOOLCHAIN);
+    let Some(channel) = channel else {
+        return Ok(None);
+    };
+    if !dest.join("Cargo.toml").is_file() || pin.exists() || dest.join("rust-toolchain").exists() {
+        return Ok(None);
+    }
+    let text = format!(
+        "# The Rust SDK links the Lumen release's prebuilt engine, which only the\n\
+         # compiler that built it can read. Move this with the lumenui version.\n\
+         [toolchain]\nchannel = \"{channel}\"\n"
+    );
+    std::fs::write(&pin, text).map_err(|source| Error::Io {
+        path: pin.clone(),
+        source,
+    })?;
+    Ok(Some(RUST_TOOLCHAIN.to_string()))
 }
 
 /// Copy everything under `from` into `to`, recording each file as
@@ -333,6 +369,45 @@ mod tests {
         let err = write_template("blank", &dest).unwrap_err();
         assert!(matches!(err, Error::Io { .. }));
         assert!(err.to_string().contains("occupied"));
+    }
+
+    #[test]
+    fn a_rust_sdk_template_is_pinned_to_the_release_toolchain() {
+        let root = scratch_dir("rust-pin");
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
+        let written = pin_rust_toolchain(&root, Some("1.97.0")).unwrap();
+        assert_eq!(written.as_deref(), Some("rust-toolchain.toml"));
+        let pin = std::fs::read_to_string(root.join("rust-toolchain.toml")).unwrap();
+        assert!(pin.contains("[toolchain]\nchannel = \"1.97.0\"\n"), "{pin}");
+    }
+
+    #[test]
+    fn a_markup_template_or_an_existing_pin_is_left_alone() {
+        let markup = scratch_dir("rust-pin-markup");
+        assert_eq!(pin_rust_toolchain(&markup, Some("1.97.0")).unwrap(), None);
+        assert!(!markup.join("rust-toolchain.toml").exists());
+
+        let own = scratch_dir("rust-pin-own");
+        std::fs::write(own.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
+        std::fs::write(
+            own.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(pin_rust_toolchain(&own, Some("1.97.0")).unwrap(), None);
+        let pin = std::fs::read_to_string(own.join("rust-toolchain.toml")).unwrap();
+        assert!(pin.contains("\"x\""));
+    }
+
+    #[test]
+    fn this_build_knows_the_toolchain_it_pins() {
+        // A checkout build reads it from the workspace pin.
+        let pin = include_str!("../../../../rust-toolchain.toml");
+        let channel = RUST_CHANNEL.expect("build.rs sets LUMEN_RUST_CHANNEL");
+        assert!(
+            pin.contains(&format!("channel = \"{channel}\"")),
+            "{channel}"
+        );
     }
 
     #[test]

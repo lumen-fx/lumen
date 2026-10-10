@@ -616,6 +616,11 @@ README at the app root and the app's code under `src/`, starting with
 The scripted templates use candela, except `dashboard`, which is Lua, and
 `hotkeys`, which is Rhai. `blank` ships no script.
 
+A template that is a Rust SDK app (one with a `Cargo.toml`) also gets a
+`rust-toolchain.toml` naming the compiler this release's prebuilt engine was
+built with, unless the template brings its own. The gallery above has no such
+template yet. See [Rust SDK](ffi.md#rust-sdk) for why the compiler is pinned.
+
 `--list` (or `-l`) prints the gallery with one-line descriptions and exits 0.
 An existing `<name>` exits 1 without writing anything. An unknown template
 exits 2 and names the available set.
