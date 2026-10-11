@@ -1,15 +1,19 @@
 name: publish-packages
 
 # Keeps the OS package managers in step with a GitHub release. The manifests
-# under tools/release/{aur,homebrew,scoop,winget} are rewritten to point at the
-# release that just went out, and each one is pushed to the repository that
-# serves it:
+# under tools/release/{aur,homebrew,winget} and the Scoop manifest at
+# bucket/lumen.json are rewritten to point at the release that just went out,
+# and each one is pushed to the repository that serves it:
 #
 #   AUR         ssh://aur@aur.archlinux.org/lumen-bin.git
 #   Homebrew    lumen-fx/homebrew-lumen, Formula/lumen.rb
-#   Scoop       lumen-fx/scoop-lumen, bucket/lumen.json
+#   Scoop       this repository's main, bucket/lumen.json
 #   winget      a pull request against microsoft/winget-pkgs, raised by
 #               wingetcreate
+#
+# The Lumen repository is its own Scoop bucket (`scoop bucket add lumen
+# https://github.com/lumen-fx/lumen`), so the scoop job commits the rewritten
+# manifest straight to main.
 #
 # Nothing here has to exist for this workflow to be safe to run. Every
 # publishing job checks its own precondition first and, when the secret or the
@@ -32,9 +36,9 @@ name: publish-packages
 #                         to that one repository with Contents: read and write
 #                         is enough.
 #
-#   SCOOP_BUCKET_TOKEN    A repository lumen-fx/scoop-lumen holding a bucket/
-#                         directory, and a token with write access to it, on
-#                         the same terms as the tap.
+#   REPIN_DEPLOY_KEY      The write deploy key release.yml already pushes the
+#                         tag and the version bump with. The scoop job commits
+#                         the bucket to main with it and needs nothing else.
 #
 #   WINGET_TOKEN          A classic token with public_repo scope, belonging to
 #                         an account that has forked microsoft/winget-pkgs.
@@ -161,6 +165,11 @@ jobs:
           ' > tools/release/aur/.SRCINFO
           cat tools/release/aur/.SRCINFO
 
+      # The Scoop manifest is not in the artifact: the scoop job rewrites it
+      # on main itself. Adding it would also move the artifact's root from
+      # tools/release up to the repository root (upload-artifact roots it at
+      # the paths' common ancestor), and the jobs below read manifests/aur/
+      # and manifests/homebrew/.
       - uses: actions/upload-artifact@v4
         with:
           name: package-manifests
@@ -168,7 +177,6 @@ jobs:
             tools/release/aur/PKGBUILD
             tools/release/aur/.SRCINFO
             tools/release/homebrew/lumen.rb
-            tools/release/scoop/lumen.json
             tools/release/winget/
           # .SRCINFO is a dotfile, and this action drops those unless told not
           # to. Without this the AUR job would push a package with no metadata.
@@ -286,6 +294,25 @@ jobs:
           git commit -m "lumen $VERSION"
           git push
 
+  # The bucket is this repository, so the Scoop manifest lands on main rather
+  # than in a repository of its own. The commit is a function of the release's
+  # sha256sums.txt and nothing else, which is what lets a job push it to main
+  # directly; it goes over SSH with the deploy key for the reasons release.yml's
+  # bump job gives.
+  #
+  # The manifest is rewritten on main, not taken from the prepare job's
+  # artifact: that copy started from the tagged tree, and anything merged into
+  # bucket/lumen.json after the tag would be reverted by copying it over.
+  #
+  # release.yml's bump job pushes to main at about the same time. The two
+  # touch different files, so neither has to know about the other: each
+  # attempt here reads main, rewrites the manifest against that exact commit,
+  # and pushes it as a fast-forward, and a refused push is answered by reading
+  # main again. The bump does the same on its side.
+  #
+  # A re-run, or a run for an older release after a newer one went out, finds
+  # main's bucket at or past the version it was asked for and stops, so the
+  # bucket never walks backwards.
   scoop:
     name: scoop
     needs: [release, prepare]
@@ -296,48 +323,75 @@ jobs:
       group: publish-packages-scoop
       cancel-in-progress: false
     steps:
-      - name: Check the bucket is reachable
+      - name: Check the deploy key is set
         id: gate
         env:
-          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          DEPLOY_KEY: ${{ secrets.REPIN_DEPLOY_KEY }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::notice::SCOOP_BUCKET_TOKEN is not set; the bucket was not updated"
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! git ls-remote "https://x-access-token:$TOKEN@github.com/lumen-fx/scoop-lumen.git" >/dev/null 2>&1; then
-            echo "::notice::lumen-fx/scoop-lumen is not reachable with SCOOP_BUCKET_TOKEN; the bucket was not updated"
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::notice::REPIN_DEPLOY_KEY is not set; the bucket on main was not updated"
             echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         if: steps.gate.outputs.ok == 'true'
         with:
-          name: package-manifests
-          path: manifests
+          ref: main
+          lfs: false
 
-      - name: Push lumen ${{ needs.release.outputs.version }} to the bucket
+      - name: Commit lumen ${{ needs.release.outputs.version }} to the bucket on main
         if: steps.gate.outputs.ok == 'true'
         env:
-          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          DEPLOY_KEY: ${{ secrets.REPIN_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
-          git clone "https://x-access-token:$TOKEN@github.com/lumen-fx/scoop-lumen.git" bucket-repo
-          mkdir -p bucket-repo/bucket
-          cp manifests/scoop/lumen.json bucket-repo/bucket/lumen.json
-          cd bucket-repo
+          set -euo pipefail
+
+          sums="$(mktemp)"
+          key_file="$(mktemp)"
+          trap 'rm -f "${sums}" "${key_file}"' EXIT
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -o "${sums}" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/sha256sums.txt"
+
+          printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bucket/lumen.json
-          if git diff --cached --quiet; then
-            echo "::notice::the bucket already carries $VERSION"
-            exit 0
-          fi
-          git commit -m "lumen $VERSION"
-          git push
+
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard FETCH_HEAD
+
+            current="$(sed -n 's/^ *"version": "\([^"]*\)".*/\1/p' bucket/lumen.json | head -n 1)"
+            if [ "${current}" = "${VERSION}" ]; then
+              echo "::notice::the bucket on main already carries ${VERSION}"
+              exit 0
+            fi
+            oldest="$(printf '%s\n%s\n' "${current}" "${VERSION}" | sort -V | head -n 1)"
+            if [ "${oldest}" = "${VERSION}" ]; then
+              echo "::notice::the bucket on main carries ${current}, newer than ${VERSION}; left alone"
+              exit 0
+            fi
+
+            # The script rewrites every manifest; only the bucket is committed.
+            tools/release/update-package-manifests.sh "${VERSION}" "${sums}"
+            git add bucket/lumen.json
+            git commit -qm "chore: point the Scoop bucket at ${TAG}"
+
+            if git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
+              echo "::notice::the bucket on main carries ${VERSION} at $(git rev-parse --short HEAD)"
+              exit 0
+            fi
+            echo "::notice::attempt ${attempt} to push the bucket to main was refused; reading main again"
+          done
+
+          echo "publish-packages.yml: the bucket could not be pushed to main. Either the deploy" >&2
+          echo "key no longer bypasses the ruleset, or main is moving faster than this can" >&2
+          echo "follow. Run this workflow again for ${TAG}." >&2
+          exit 1
 
   winget:
     name: winget

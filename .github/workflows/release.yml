@@ -73,11 +73,11 @@ on:
 
 # contents: write is granted to the one job whose token writes to the
 # repository, the one that publishes the release, and packages: write to the
-# one that pushes the server image. The license, tag and bump jobs write to
-# the repository over SSH with a deploy key instead, for the reasons the bump
-# job's comment gives, so their tokens stay read-only; the cut's jobs add
-# actions: read to see `ci` runs. build-toolchain.yml declares its own
-# read-only token for the builds.
+# one that pushes the server image. The license, tag and bump jobs, and the
+# Scoop bucket commit in publish-packages.yml, write to the repository over SSH
+# with a deploy key instead, for the reasons the bump job's comment gives, so
+# their tokens stay read-only; the cut's jobs add actions: read to see `ci`
+# runs. build-toolchain.yml declares its own read-only token for the builds.
 permissions:
   contents: read
 
@@ -592,8 +592,12 @@ jobs:
   # quietly restores the flow this replaced would hide a missing key or a
   # changed ruleset until the next release fails its tag-versus-manifest check.
   #
-  # Only main moves here. The publishing jobs above check out the tag this run
-  # was started by, so none of them is disturbed by main moving under them.
+  # Main moves in one other place: the scoop job in publish-packages.yml
+  # commits the Scoop manifest (bucket/lumen.json) there, at about the same
+  # time. The two touch different files and each re-reads main before every
+  # attempt, so whichever pushes second is refused once, reads main again, and
+  # lands on top. Every other publishing job checks out the tag this run was
+  # started by, so none of them is disturbed by main moving under them.
   bump:
     name: move main to the next version
     needs: release

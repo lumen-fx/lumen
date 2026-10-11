@@ -1,10 +1,12 @@
 {
     "##": [
-        "Scoop manifest for the Lumen toolchain. It lives in the bucket",
-        "lumen-fx/scoop-lumen as bucket/lumen.json, which is what",
-        "`scoop install lumen-fx/lumen` reads, and",
-        ".github/workflows/publish-packages.yml pushes this file there on every",
-        "release.",
+        "Scoop manifest for the Lumen toolchain. The Lumen repository is its own",
+        "bucket: `scoop bucket add lumen https://github.com/lumen-fx/lumen`",
+        "clones it, and Scoop reads the manifests in its bucket/ directory.",
+        "Every release rewrites this file on main with",
+        "tools/release/update-package-manifests.sh, from the scoop job in",
+        ".github/workflows/publish-packages.yml, so main always carries the",
+        "newest stable release.",
         "",
         "The source is the portable Windows zip, not the MSI: scoop owns where an",
         "app lives and how it is removed, and the MSI would install a second copy",
@@ -24,18 +26,18 @@
         "machine, so an Arm64 machine gets the native build instead of the x64",
         "one it would otherwise run under emulation."
     ],
-    "version": "0.0.3",
+    "version": "0.0.9",
     "description": "Toolchain for Lumen, a markup-first UI framework for native desktop apps",
     "homepage": "https://lumenfx.dev",
     "license": "MPL-2.0",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-x86_64.zip",
-            "hash": "00970037031eafa4bbd033c15f5d95791bb511bafba6655545377094a7e2fe34"
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.9/lumen-windows-x86_64.zip",
+            "hash": "327e017f5d60b2cc31ca1e358f8553f516567d9bf393091ea0d9f2dbd7b3263d"
         },
         "arm64": {
-            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-aarch64.zip",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.9/lumen-windows-aarch64.zip",
+            "hash": "6ae342a3bb187bcc3eefce669fd11f93c910dc82f0d16b528f1461c069b8a073"
         }
     },
     "extract_dir": "bin",

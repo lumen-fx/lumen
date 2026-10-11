@@ -50,6 +50,7 @@ sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
 tools/             the release plumbing and the editor plugins
+bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
 ```
 
 ## Crate map

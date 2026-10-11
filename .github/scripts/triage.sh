@@ -82,7 +82,7 @@ area_for() {
     # fit for both the native backend and its capability shim. Deliberate.
     backends/http-ureq/*|capabilities/http-fetch/*) echo A-Runtime ;;
     public/lumenc/*|public/lumenc-plugin/*) echo A-CLI ;;
-    tools/release/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
+    tools/release/*|bucket/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
     tools/vscode-lumen/*|tools/jetbrains-lumen/*|tools/zed-lumen/*|tools/tree-sitter-lumen/*) echo A-Editor-Plugin ;;
     apps/*) echo C-Examples ;;
   esac
