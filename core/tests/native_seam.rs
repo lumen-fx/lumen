@@ -340,10 +340,11 @@ fn a_leaf_inside_a_scroll_container_moves_with_the_content() {
     );
 }
 
-/// Inherited opacity reaches the plugin as a number it folds into its own drawing, the same way the
-/// built-in extractors fold it into their colours.
+/// The plugin folds its own opacity into its drawing, the same way the built-in extractors fold it
+/// into their colours. A fading ancestor is a group layer composited over the leaf's pixels, so its
+/// opacity never reaches the payload; applying it there as well would fade the leaf twice.
 #[test]
-fn inherited_opacity_reaches_the_payload() {
+fn only_the_leaf_s_own_opacity_reaches_the_payload() {
     let mut app = App::new();
     install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
@@ -368,8 +369,8 @@ fn inherited_opacity_reaches_the_payload() {
         .downcast_ref::<SparklinePayload>()
         .expect("the plugin's own payload type");
     assert!(
-        (payload.opacity - 0.25).abs() < 1e-6,
-        "own opacity times the ancestor's, got {}",
+        (payload.opacity - 0.5).abs() < 1e-6,
+        "the leaf's own opacity, without the ancestor's, got {}",
         payload.opacity,
     );
 }
