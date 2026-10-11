@@ -205,10 +205,13 @@ hands a pending screenshot the result. The `Painter` trait is the one
 definition of a frame: fill, stroke, clip and opacity layers, masks, blurred rounded
 rects for shadows, images, and glyph runs, in peniko and kurbo types. A new backend implements
 `Painter` over its draw target and gets every primitive the walker knows,
-drawn the way the other backends draw it. A sink that can record and replay
-encoded work also implements the fragment methods, and the walker then
-encodes each repeated appearance once; a sink that cannot leaves them at
-their defaults and paints every leaf in place.
+drawn the way the other backends draw it. For glyph runs that takes one step
+of its own: `draw_glyphs` fills outline runs through
+`lumen_paint::GlyphOutlines`, which hands every backend the same flattened
+polygons, and draws only the colour-glyph runs it declines natively. A sink
+that can record and replay encoded work also implements the fragment
+methods, and the walker then encodes each repeated appearance once; a sink
+that cannot leaves them at their defaults and paints every leaf in place.
 
 A backend reaches a launch by registering into `RenderBackends` (in
 `lumen_core::render_backend`, through `lumen_core::backends::register_backend`)

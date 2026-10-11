@@ -10,7 +10,7 @@
 //! layer's own; closing it rasterizes the layer into a pixmap the frame then
 //! draws as an image, faded by a tint rather than a compositing layer.
 
-use lumen_paint::{GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
+use lumen_paint::{GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,6 +38,9 @@ pub struct CpuPainter {
     /// Decoded image pixels, premultiplied once and kept by blob id. An entry
     /// a frame does not draw is dropped when the next frame starts.
     images: HashMap<u64, (ImageSource, bool)>,
+    /// Outline glyphs, flattened the way every backend draws them. Shared
+    /// like the other caches: an open offscreen layer or mask holds it.
+    outlines: GlyphOutlines,
     /// Maps frame coordinates into this painter's target: identity for the
     /// frame, a shift to the layer's corner for an offscreen layer.
     base: Affine,
@@ -77,6 +80,7 @@ impl CpuPainter {
             resources: Resources::new(),
             depth: 0,
             images: HashMap::new(),
+            outlines: GlyphOutlines::new(),
             base: Affine::IDENTITY,
             offscreen: None,
         }
@@ -98,6 +102,7 @@ impl CpuPainter {
             layer.painter.abandon_offscreen();
             std::mem::swap(&mut layer.painter.resources, &mut self.resources);
             std::mem::swap(&mut layer.painter.images, &mut self.images);
+            std::mem::swap(&mut layer.painter.outlines, &mut self.outlines);
         }
     }
 
@@ -117,6 +122,7 @@ impl CpuPainter {
         }
         self.depth = 0;
         self.images.retain(|_, (_, used)| std::mem::take(used));
+        self.outlines.end_frame();
         self.ctx.set_paint(clear);
         self.ctx
             .fill_rect(&Rect::new(0.0, 0.0, f64::from(width), f64::from(height)));
@@ -281,6 +287,7 @@ impl Painter for CpuPainter {
         aside.base = self.base;
         std::mem::swap(&mut aside.resources, &mut self.resources);
         std::mem::swap(&mut aside.images, &mut self.images);
+        std::mem::swap(&mut aside.outlines, &mut self.outlines);
         aside.ctx.set_transform(self.base * transform);
         aside.ctx.set_fill_rule(Fill::NonZero);
         aside.ctx.push_clip_layer(&region);
@@ -290,6 +297,7 @@ impl Painter for CpuPainter {
         aside.render_into(&mut pixels);
         std::mem::swap(&mut aside.resources, &mut self.resources);
         std::mem::swap(&mut aside.images, &mut self.images);
+        std::mem::swap(&mut aside.outlines, &mut self.outlines);
         let coverage = match kind {
             MaskKind::Luminance => Mask::new_luminance(&pixels),
             MaskKind::Alpha => Mask::new_alpha(&pixels),
@@ -341,11 +349,30 @@ impl Painter for CpuPainter {
             .fill_rect(&Rect::new(0.0, 0.0, f64::from(w), f64::from(h)));
     }
 
+    /// Outline glyphs are filled as the polygons [`GlyphOutlines`] flattens
+    /// them to, so they match every other backend; vello_cpu's own glyph
+    /// renderer draws only the colour-glyph runs it declines.
     fn draw_glyphs(&mut self, run: &GlyphRun<'_>) {
         if run.glyphs.is_empty() {
             return;
         }
         let this = self.active();
+        let mut outlines = std::mem::take(&mut this.outlines);
+        // The polygons are in frame pixels and the fill maps them through
+        // `base`, so the glyphs worth filling are the ones over this
+        // target's own pixels, located in the frame.
+        let (width, height) = this.size();
+        let visible = this.base.inverse().transform_rect_bbox(Rect::new(
+            0.0,
+            0.0,
+            f64::from(width),
+            f64::from(height),
+        ));
+        let drawn = outlines.draw(this, run, visible);
+        this.outlines = outlines;
+        if drawn {
+            return;
+        }
         this.prepare(run.transform, run.brush, None);
         this.ctx.set_fill_rule(Fill::NonZero);
         this.ctx
@@ -375,6 +402,7 @@ impl Painter for CpuPainter {
         // images, and hands them back when it closes.
         std::mem::swap(&mut painter.resources, &mut self.resources);
         std::mem::swap(&mut painter.images, &mut self.images);
+        std::mem::swap(&mut painter.outlines, &mut self.outlines);
         self.offscreen = Some(Box::new(Offscreen { painter, bounds }));
         true
     }
@@ -393,6 +421,7 @@ impl Painter for CpuPainter {
         painter.render_into(&mut pixels);
         std::mem::swap(&mut painter.resources, &mut self.resources);
         std::mem::swap(&mut painter.images, &mut self.images);
+        std::mem::swap(&mut painter.outlines, &mut self.outlines);
         Some(OffscreenLayer::new(Arc::new(CpuLayer {
             pixels: ImageSource::Pixmap(Arc::new(pixels)),
             bounds,

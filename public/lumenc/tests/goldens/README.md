@@ -16,8 +16,14 @@ is the check that an app looks the same whichever renderer draws it.
 cargo test -p lumenc --test golden
 ```
 
-The cases run with the rest of the suite, on CI too. A few are `#[ignore]`d,
-each with its reason in the attribute; run those with `-- --ignored`.
+The cases run with the rest of the suite, on CI too. A case with a known
+reason not to run is `#[ignore]`d with the reason in the attribute; run those
+with `-- --ignored`.
+
+Text draws the same on both backends because glyph outlines are flattened
+once, in `lumen-paint`, and both rasterizers fill the same polygons. A text
+case that passes on one backend and not the other points at that shared
+flattening or at a sink that bypasses it, not at the fonts.
 
 Text is shaped with the font files in `fonts/` and nothing installed on the
 machine, so every machine draws the same glyphs, and a machine with no fonts

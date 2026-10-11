@@ -35,6 +35,7 @@
 pub mod cache;
 pub mod emit;
 pub mod frame;
+pub mod glyphs;
 pub mod layers;
 pub mod recording;
 pub mod svg;
@@ -47,6 +48,7 @@ pub use emit::{
     peniko_color, text_bounds,
 };
 pub use frame::{answer_capture, capture_requested, clear_color, paint_frame, wants_frame};
+pub use glyphs::{GLYPH_TOLERANCE, GlyphOutlines};
 pub use layers::{LayerCache, LayerStats};
 pub use peniko;
 pub use peniko::kurbo;
@@ -254,6 +256,10 @@ pub trait Painter: Send + 'static {
     fn draw_image(&mut self, image: &ImageBrush, transform: Affine);
 
     /// Fill one run of glyphs.
+    ///
+    /// A sink fills outline runs through [`GlyphOutlines`], so every backend
+    /// draws the same glyph edges, and draws the colour-glyph runs it
+    /// declines its own way.
     fn draw_glyphs(&mut self, run: &GlyphRun<'_>);
 
     /// Start recording into a fragment instead of the frame. Returns `false`

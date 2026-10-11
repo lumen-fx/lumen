@@ -27,6 +27,8 @@ glam.workspace = true
 # The vocabulary every sink already speaks: vello and vello_cpu both take
 # peniko brushes and kurbo shapes, from the same release of each.
 peniko.workspace = true
+# Reads the glyph outlines the `glyphs` module flattens for every sink.
+skrifa.workspace = true
 # The SVG tree an asset holds; painted through the trait at frame time.
 usvg.workspace = true
 # Bounded LRU for the fragment cache.

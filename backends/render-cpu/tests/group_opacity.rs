@@ -5,9 +5,13 @@
 use bevy_ecs::entity::Entity;
 use bevy_ecs::hierarchy::ChildOf;
 use lumen_core::app::App;
-use lumen_core::components::{Border, Color, Edges, Fill, Opacity, ShadowSpec, Transform, Visuals};
+use lumen_core::components::{
+    Border, Color, Edges, Fill, Opacity, ShadowSpec, TextContent, TextStyle, Transform, Visuals,
+};
 use lumen_core::render_world::Viewport;
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
+use lumen_text::ShaperService;
+use lumen_text_cosmic::CosmicShaper;
 
 const W: u32 = 120;
 const H: u32 = 120;
@@ -300,4 +304,77 @@ fn a_resize_forgets_the_layers() {
     let resized = scene.frame(2);
     assert_eq!(scene.stats().layers, 0);
     assert_eq!(resized.len(), (W * 70 * 4) as usize);
+}
+
+/// A label 80 px down the frame, deeper than the layer of the faded group
+/// around it is tall, so a glyph placed or culled in the group's own coordinates rather
+/// than the frame's misses: inside a group at `opacity`, or with the alpha
+/// on its colour instead when `faded` is false. Frames 0 to 2 paint the
+/// group directly, into a kept layer, and from it; the stats are the last
+/// frame's.
+fn label(opacity: f32, faded: bool) -> (Vec<Vec<u8>>, lumen_paint::LayerStats) {
+    let mut app = App::new();
+    app.add_plugin(CpuRendererPlugin::new(W, H));
+    app.render_world
+        .insert_non_send(ShaperService::new(CosmicShaper::new()));
+    for world in [&mut app.world, &mut app.render_world] {
+        let mut vp = world.resource_mut::<Viewport>();
+        vp.size = glam::Vec2::new(W as f32, H as f32);
+        vp.clear = Color::rgb(1.0, 1.0, 1.0);
+    }
+    let alpha = if faded { 1.0 } else { opacity };
+    let text = (
+        at(13.0, 80.0, 100.0, 30.0),
+        TextContent("Hamburg".to_string()),
+        TextStyle {
+            color: Color::rgba(0.0, 0.0, 0.0, alpha),
+            size_px: 24.0,
+            ..Default::default()
+        },
+    );
+    if faded {
+        let group = app
+            .world
+            .spawn((
+                at(10.0, 80.0, 106.0, 30.0),
+                solid(1.0, 1.0, 1.0),
+                Opacity(opacity),
+            ))
+            .id();
+        app.world.spawn((text, ChildOf(group)));
+    } else {
+        app.world.spawn(text);
+    }
+    let ticker = app
+        .world
+        .spawn((at(0.0, 0.0, 4.0, 4.0), solid(0.0, 1.0, 0.0)))
+        .id();
+    let frames = (0..3)
+        .map(|n| {
+            app.world
+                .get_mut::<Visuals>(ticker)
+                .expect("the ticker")
+                .fill = Some(Fill::Solid(Color::rgb(n as f32 / 3.0, 1.0, 0.0)));
+            app.tick();
+            app.render_world.non_send::<CpuRenderer>().read_rgba8()
+        })
+        .collect();
+    let stats = app.render_world.non_send::<CpuRenderer>().layer_stats();
+    (frames, stats)
+}
+
+/// Text in a faded group fills the same flattened glyphs at the same place
+/// as the label drawn unfaded at the group's alpha, painted directly, into
+/// the kept layer, and composited from it.
+#[test]
+fn text_in_a_faded_group_matches_the_label_at_its_alpha() {
+    let (expected, _) = label(0.5, false);
+    let ink = expected[0].chunks_exact(4).filter(|p| p[0] < 200).count();
+    assert!(ink > 100, "the label painted no text: {ink} pixels");
+    let (faded, stats) = label(0.5, true);
+    assert_eq!((stats.renders, stats.hits), (1, 1), "{stats:?}");
+    for (n, frame) in faded.iter().enumerate() {
+        let d = max_diff(frame, &expected[n], W);
+        assert!(d <= 2, "frame {n} strays {d} from the unfaded label");
+    }
 }

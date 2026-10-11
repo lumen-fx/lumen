@@ -9,8 +9,15 @@
 //! frame draws it as an image whose pixels a texture of the layer's size
 //! supplies; the renderer renders the recorded sub-scene into that texture
 //! before it renders the frame (see [`VelloPainter::take_offscreen`]).
+//!
+//! Outline glyphs reach the scene as the polygons [`GlyphOutlines`] flattens
+//! them to, the same lines every backend fills. Each flattened glyph is kept
+//! encoded, and a run copies those encodings into the scene under one
+//! translation per glyph: the layout vello's own glyph runs resolve to, so a
+//! frame of text costs a copy per glyph rather than a re-encode.
 
-use lumen_paint::{Fragment, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
+use lumen_paint::glyphs::{Contours, GlyphShape, brush_transform};
+use lumen_paint::{Fragment, GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
 use std::any::Any;
 use std::sync::{Arc, Weak};
 use vello::Scene;
@@ -19,6 +26,7 @@ use vello::peniko::{
     BlendMode, Blob, BrushRef, Color, Compose, Fill, ImageAlphaType, ImageBrush, ImageData,
     ImageFormat, ImageQuality, ImageSampler, Mix,
 };
+use vello_encoding::{Encoding, PathTag, Transform};
 
 /// Names this backend in [`Painter::backend_id`] and
 /// [`lumen_core::native::NativePaintCtx::backend_id`]. [`Painter::native`]
@@ -43,6 +51,12 @@ pub struct VelloPainter {
     finished: Vec<FinishedLayer>,
     /// The longest side an offscreen layer may have here.
     max_layer_side: u32,
+    /// Outline glyphs, flattened the way every backend draws them and kept
+    /// encoded.
+    outlines: GlyphOutlines<EncodedGlyph>,
+    /// The frame's target bounds, when the renderer has said; glyphs
+    /// outside them are not encoded.
+    visible: Option<Rect>,
 }
 
 impl Default for VelloPainter {
@@ -53,6 +67,45 @@ impl Default for VelloPainter {
             offscreen: Vec::new(),
             finished: Vec::new(),
             max_layer_side: MAX_LAYER_SIDE,
+            outlines: GlyphOutlines::new(),
+            visible: None,
+        }
+    }
+}
+
+/// One flattened glyph as vello path segments, relative to the glyph's
+/// origin: the tags and the coordinates a path encoder writes for it.
+struct EncodedGlyph {
+    tags: Box<[PathTag]>,
+    data: Box<[u32]>,
+    segments: u32,
+    /// The segments' bounding box, relative to the glyph's origin.
+    bounds: Rect,
+}
+
+impl GlyphShape for EncodedGlyph {
+    fn from_contours(contours: Contours<'_>) -> Self {
+        let bounds = contours.bounds();
+        let mut encoding = Encoding::new();
+        let mut path = encoding.encode_path(true);
+        for contour in contours.iter() {
+            let mut points = contour.iter();
+            let Some(&[x, y]) = points.next() else {
+                continue;
+            };
+            path.move_to(x, y);
+            for &[x, y] in points {
+                path.line_to(x, y);
+            }
+            path.close();
+        }
+        // No path marker: a run's glyphs end in one path object together.
+        let segments = path.finish(false);
+        Self {
+            tags: encoding.path_tags.into(),
+            data: encoding.path_data.into(),
+            segments,
+            bounds,
         }
     }
 }
@@ -81,6 +134,52 @@ pub(crate) struct GpuLayer {
     pub(crate) bounds: Rect,
 }
 
+/// Encode `run`'s outline glyphs into `encoding` as one filled path, each
+/// glyph's cached segments under a translation to where it lands, closed by
+/// the run's brush. Mirrors how vello resolves a glyph run of its own.
+/// Glyphs wholly outside `visible`, in target pixels, are left out.
+fn encode_outline_run(
+    encoding: &mut Encoding,
+    outlines: &mut GlyphOutlines<EncodedGlyph>,
+    run: &GlyphRun<'_>,
+    visible: Option<Rect>,
+) {
+    let start = encoding.stream_offsets();
+    let segments_before = encoding.n_path_segments;
+    encoding.encode_fill_style(Fill::NonZero);
+    outlines.for_each(run, |origin, glyph| {
+        if glyph.segments == 0
+            || visible.is_some_and(|v| !(glyph.bounds + origin.to_vec2()).overlaps(v))
+        {
+            return;
+        }
+        encoding.path_tags.push(PathTag::TRANSFORM);
+        encoding.transforms.push(Transform {
+            matrix: [1.0, 0.0, 0.0, 1.0],
+            translation: [origin.x as f32, origin.y as f32],
+        });
+        encoding.path_tags.extend_from_slice(&glyph.tags);
+        encoding.path_data.extend_from_slice(&glyph.data);
+        encoding.n_path_segments += glyph.segments;
+    });
+    if encoding.n_path_segments == segments_before {
+        // Nothing to fill: leave the encoding as it was.
+        encoding.path_tags.truncate(start.path_tags);
+        encoding.transforms.truncate(start.transforms);
+        encoding.styles.truncate(start.styles);
+        return;
+    }
+    // The brush maps through the transform current at the path marker.
+    let paint = brush_transform(run).unwrap_or(Affine::IDENTITY);
+    encoding.path_tags.push(PathTag::TRANSFORM);
+    encoding.transforms.push(Transform::from_kurbo(&paint));
+    encoding.path_tags.push(PathTag::PATH);
+    encoding.n_paths += 1;
+    encoding.encode_brush(run.brush, 1.0);
+    // The transform and style streams moved behind the encoder's back.
+    encoding.force_next_transform_and_style();
+}
+
 impl VelloPainter {
     /// A painter over an empty scene.
     pub fn new() -> Self {
@@ -98,6 +197,13 @@ impl VelloPainter {
         self.target()
     }
 
+    /// Tell the painter the frame's target is `width` x `height` pixels, so
+    /// glyphs wholly outside it are not encoded. Until it is told, every
+    /// glyph is.
+    pub fn set_target_size(&mut self, width: u32, height: u32) {
+        self.visible = Some(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)));
+    }
+
     /// Empty the scene for the next frame, dropping any recording a caller
     /// left open.
     pub fn reset(&mut self) {
@@ -105,6 +211,7 @@ impl VelloPainter {
         self.recording.clear();
         self.offscreen.clear();
         self.finished.clear();
+        self.outlines.end_frame();
     }
 
     /// The offscreen layers closed since the last call. Each must be rendered
@@ -260,7 +367,27 @@ impl Painter for VelloPainter {
         self.target().draw_image(image, transform);
     }
 
+    /// Outline glyphs are filled as the polygons [`GlyphOutlines`] flattens
+    /// them to, so they match every other backend; vello's own glyph
+    /// encoding draws only the colour-glyph runs it declines.
     fn draw_glyphs(&mut self, run: &GlyphRun<'_>) {
+        if self.outlines.has_outlines(run) {
+            let mut outlines = std::mem::take(&mut self.outlines);
+            // A fragment replays under a transform of its own, so nothing
+            // recorded into one is culled. An offscreen layer records in
+            // frame coordinates and keeps only what falls inside its bounds;
+            // the frame keeps what falls inside its target.
+            let visible = if !self.recording.is_empty() {
+                None
+            } else if let Some(&(_, bounds)) = self.offscreen.last() {
+                Some(bounds)
+            } else {
+                self.visible
+            };
+            encode_outline_run(self.target().encoding_mut(), &mut outlines, run, visible);
+            self.outlines = outlines;
+            return;
+        }
         self.target()
             .draw_glyphs(run.font)
             .font_size(run.font_size)
@@ -438,6 +565,59 @@ mod tests {
         assert_eq!(painter.layer_depth(), 1);
         painter.pop_layer();
         assert_eq!(painter.layer_depth(), 0);
+    }
+
+    /// An outline run encodes as one filled path of the glyphs' flattened
+    /// lines; a run with nothing in view, or nothing to draw, encodes
+    /// nothing.
+    #[test]
+    fn an_outline_run_encodes_one_path_of_lines() {
+        use lumen_text::GlyphPosition;
+        use vello::peniko::{Blob, FontData};
+        let font_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../public/lumenc/tests/goldens/fonts/NotoSans-Regular.ttf"
+        );
+        let bytes = std::fs::read(font_path).expect("the pinned golden font");
+        let font = FontData::new(Blob::new(Arc::new(bytes)), 0);
+        let glyphs = [50, 51].map(|id| GlyphPosition {
+            id,
+            x: (id - 50) as f32 * 12.0,
+            y: 0.0,
+            advance: 12.0,
+            byte_start: 0,
+            byte_end: 1,
+        });
+        let run = |glyphs, x| GlyphRun {
+            font: &font,
+            font_size: 16.0,
+            normalized_coords: &[],
+            transform: Affine::translate((x, 30.0)),
+            brush: Color::WHITE.into(),
+            glyphs,
+        };
+        let mut painter = VelloPainter::new();
+        painter.set_target_size(64, 64);
+        painter.draw_glyphs(&run(&[], 4.0));
+        painter.draw_glyphs(&run(&glyphs, 400.0));
+        assert!(painter.scene().encoding().is_empty(), "nothing in view");
+
+        painter.draw_glyphs(&run(&glyphs, 4.0));
+        let encoding = painter.scene().encoding();
+        assert_eq!(encoding.n_paths, 1, "one path for the run");
+        assert!(encoding.n_path_segments > 20);
+        assert!(
+            encoding
+                .path_tags
+                .iter()
+                .filter(|t| t.is_path_segment())
+                .all(|t| t.path_segment_type() == vello_encoding::PathSegmentType::LINE_TO),
+            "lines only"
+        );
+        assert!(
+            encoding.resources.glyph_runs.is_empty(),
+            "vello's glyph path unused"
+        );
     }
 
     /// The escape hatch hands out the sink itself, and through it the scene

@@ -526,7 +526,6 @@ fn no_drive(_: &mut App) {}
 /// pointer-hovered, and disabled - all in one frame. `:active` needs the
 /// same (single) pointer, so the pressed state is its own case below.
 #[test]
-#[ignore = "the CPU backend draws curved glyph edges just past the golden tolerance"]
 fn golden_button_states() {
     run_case(
         "button_states",
@@ -772,7 +771,6 @@ fn golden_scroll_offset() {
 /// current behavior - when ellipsis lands, this golden shifts and must
 /// be re-baselined deliberately.
 #[test]
-#[ignore = "the CPU backend draws curved glyph edges past the golden tolerance"]
 fn golden_text_ellipsis() {
     run_case(
         "text_ellipsis",

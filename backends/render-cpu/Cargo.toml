@@ -42,3 +42,5 @@ lumen-paint = { workspace = true }
 toml.workspace = true
 # The SVG compositing test parses the drawings it paints.
 usvg.workspace = true
+# The group opacity test shapes the label it fades.
+lumen-text-cosmic = { workspace = true }
