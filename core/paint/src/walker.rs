@@ -1178,4 +1178,534 @@ mod tests {
             other => panic!("expected RoundedRect, got {other:?}"),
         }
     }
+
+    /// What a [`GroupSink`] was asked to do, in order.
+    #[derive(Clone, Debug, PartialEq)]
+    enum Call {
+        Fill,
+        Push { alpha: f32, clip: Rect },
+        Pop,
+        Begin(Rect),
+        End,
+        Draw { alpha: f32, bounds: Rect },
+    }
+
+    /// A sink that paints offscreen as the walker sees it: layers are their bounds, and each call
+    /// is logged so a test reads what the walker asked for.
+    #[derive(Default)]
+    struct GroupSink {
+        calls: Vec<Call>,
+        depth: usize,
+        open: Vec<Rect>,
+        refuse_begin: bool,
+        refuse_draw: bool,
+    }
+
+    impl crate::Painter for GroupSink {
+        fn fill(
+            &mut self,
+            _: Fill,
+            _: Affine,
+            _: peniko::BrushRef<'_>,
+            _: Option<Affine>,
+            _: &Shape<'_>,
+        ) {
+            self.calls.push(Call::Fill);
+        }
+        fn stroke(
+            &mut self,
+            _: &peniko::kurbo::Stroke,
+            _: Affine,
+            _: peniko::BrushRef<'_>,
+            _: Option<Affine>,
+            _: &Shape<'_>,
+        ) {
+        }
+        fn push_layer(
+            &mut self,
+            _: Fill,
+            _: peniko::BlendMode,
+            alpha: f32,
+            _: Affine,
+            clip: &Shape<'_>,
+        ) {
+            let clip = match clip {
+                Shape::Rect(r) => *r,
+                _ => Rect::ZERO,
+            };
+            self.calls.push(Call::Push { alpha, clip });
+            self.depth += 1;
+        }
+        fn pop_layer(&mut self) {
+            self.calls.push(Call::Pop);
+            self.depth -= 1;
+        }
+        fn draw_masked(
+            &mut self,
+            _: crate::MaskKind,
+            _: Affine,
+            _: &Shape<'_>,
+            _: &mut dyn FnMut(&mut dyn crate::Painter),
+            content: &mut dyn FnMut(&mut dyn crate::Painter),
+        ) {
+            content(self);
+        }
+        fn layer_depth(&self) -> usize {
+            self.depth
+        }
+        fn draw_blurred_rounded_rect(
+            &mut self,
+            _: Affine,
+            _: Rect,
+            _: peniko::Color,
+            _: f64,
+            _: f64,
+        ) {
+        }
+        fn draw_image(&mut self, _: &peniko::ImageBrush, _: Affine) {}
+        fn draw_glyphs(&mut self, _: &crate::GlyphRun<'_>) {}
+        fn begin_offscreen(&mut self, bounds: Rect) -> bool {
+            if self.refuse_begin {
+                return false;
+            }
+            self.calls.push(Call::Begin(bounds));
+            self.open.push(bounds);
+            true
+        }
+        fn end_offscreen(&mut self) -> Option<crate::OffscreenLayer> {
+            let bounds = self.open.pop()?;
+            self.calls.push(Call::End);
+            Some(crate::OffscreenLayer::new(Arc::new(bounds)))
+        }
+        fn draw_offscreen(&mut self, layer: &crate::OffscreenLayer, alpha: f32) -> bool {
+            let Some(bounds) = layer.downcast::<Rect>() else {
+                return false;
+            };
+            if self.refuse_draw {
+                return false;
+            }
+            self.calls.push(Call::Draw {
+                alpha,
+                bounds: *bounds,
+            });
+            true
+        }
+        fn backend_id(&self) -> &'static str {
+            "test.group"
+        }
+        fn native(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn solid(x: f32, y: f32, w: f32, h: f32) -> Arc<Node> {
+        Arc::new(Node::Rect {
+            bounds: LumenRect {
+                origin: glam::Vec2::new(x, y),
+                size: glam::Vec2::new(w, h),
+            },
+            brush: lumen_core::render_world::Brush::Solid(lumen_core::components::Color::rgb(
+                0.0, 0.0, 1.0,
+            )),
+            corner: 0.0,
+            corners: None,
+        })
+    }
+
+    fn group(alpha: f32, key: Option<u64>, child: Arc<Node>) -> Arc<Node> {
+        Arc::new(Node::Opacity { alpha, child, key })
+    }
+
+    /// Walks `scene` into `sink` as one frame of a 100 x 100 target and returns the calls.
+    fn frame(
+        sink: GroupSink,
+        layers: Option<&mut LayerCache>,
+        scene: &Node,
+    ) -> (Vec<Call>, GroupSink) {
+        let mut target: PaintTarget = Box::new(sink);
+        match layers {
+            Some(layers) => {
+                layers.begin_frame(1.0, 100, 100);
+                let mut ctx = WalkContext::new(&mut target, None, None).with_layer_cache(layers);
+                walk_node(&mut ctx, scene);
+                if let Some(layers) = ctx.layers.as_deref_mut() {
+                    layers.end_frame();
+                }
+            }
+            None => walk_node(&mut WalkContext::new(&mut target, None, None), scene),
+        }
+        let mut sink = target
+            .native()
+            .downcast_mut::<GroupSink>()
+            .map(std::mem::take)
+            .expect("the test sink");
+        assert!(
+            sink.open.is_empty() && sink.depth == 0,
+            "every layer closed"
+        );
+        (std::mem::take(&mut sink.calls), sink)
+    }
+
+    fn fills(calls: &[Call]) -> usize {
+        calls.iter().filter(|c| **c == Call::Fill).count()
+    }
+
+    /// A kept group paints directly the first frame, into a kept layer the second, and from the
+    /// layer alone after that, at whatever alpha the frame asks.
+    #[test]
+    fn a_still_group_paints_once_then_composites_its_layer() {
+        let mut layers = LayerCache::default();
+        let scene = group(0.5, Some(7), solid(10.0, 10.0, 20.0, 20.0));
+        let device = Rect::new(9.0, 9.0, 31.0, 31.0);
+
+        let (calls, sink) = frame(GroupSink::default(), Some(&mut layers), &scene);
+        assert_eq!(
+            calls,
+            vec![
+                Call::Push {
+                    alpha: 0.5,
+                    clip: device
+                },
+                Call::Fill,
+                Call::Pop
+            ],
+            "first seen: painted directly in a faded layer",
+        );
+
+        let (calls, sink) = frame(sink, Some(&mut layers), &scene);
+        assert_eq!(
+            calls,
+            vec![
+                Call::Begin(device),
+                Call::Fill,
+                Call::End,
+                Call::Draw {
+                    alpha: 0.5,
+                    bounds: device
+                },
+            ],
+            "held still: rasterized into a kept layer",
+        );
+        assert_eq!(layers.stats().renders, 1);
+        assert_eq!(layers.stats().layers, 1);
+
+        let faded = group(0.25, Some(7), solid(10.0, 10.0, 20.0, 20.0));
+        let (calls, _) = frame(sink, Some(&mut layers), &faded);
+        assert_eq!(
+            calls,
+            vec![Call::Draw {
+                alpha: 0.25,
+                bounds: device
+            }],
+            "a new alpha composites the kept pixels, painting none of the subtree",
+        );
+        assert_eq!(layers.stats().hits, 1);
+    }
+
+    /// A sink that turns down an offscreen layer, or cannot composite the kept one, still gets
+    /// the group painted, directly.
+    #[test]
+    fn a_refused_layer_falls_back_to_direct_paint() {
+        let scene = group(0.5, Some(1), solid(10.0, 10.0, 20.0, 20.0));
+
+        let mut layers = LayerCache::default();
+        let no_begin = GroupSink {
+            refuse_begin: true,
+            ..Default::default()
+        };
+        let (_, sink) = frame(no_begin, Some(&mut layers), &scene);
+        let (calls, _) = frame(sink, Some(&mut layers), &scene);
+        assert!(!calls.iter().any(|c| matches!(c, Call::Begin(_))));
+        assert_eq!(fills(&calls), 1, "painted directly: {calls:?}");
+        assert!(matches!(calls[0], Call::Push { alpha, .. } if alpha == 0.5));
+        assert_eq!(layers.stats().renders, 0);
+
+        let mut layers = LayerCache::default();
+        let no_draw = GroupSink {
+            refuse_draw: true,
+            ..Default::default()
+        };
+        let (_, sink) = frame(no_draw, Some(&mut layers), &scene);
+        let (_, sink) = frame(sink, Some(&mut layers), &scene);
+        assert_eq!(layers.stats().layers, 1, "the layer was kept");
+        let (calls, _) = frame(sink, Some(&mut layers), &scene);
+        assert_eq!(layers.stats().hits, 1);
+        assert_eq!(
+            fills(&calls),
+            1,
+            "the kept layer did not draw, so the group paints: {calls:?}"
+        );
+    }
+
+    /// A group wholly outside the target paints nothing, and one holding a native leaf is never
+    /// kept: its painter may draw past the sink.
+    #[test]
+    fn off_target_and_native_groups_are_never_kept() {
+        let mut layers = LayerCache::default();
+        let away = group(0.5, Some(2), solid(500.0, 500.0, 20.0, 20.0));
+        let (calls, _) = frame(GroupSink::default(), Some(&mut layers), &away);
+        assert!(calls.is_empty(), "{calls:?}");
+
+        let native = Arc::new(Node::Native {
+            extension_id: "test.chart".into(),
+            payload: Arc::new(()),
+            bounds: LumenRect {
+                origin: glam::Vec2::new(40.0, 40.0),
+                size: glam::Vec2::new(10.0, 10.0),
+            },
+            revision: 0,
+            clip_to_bounds: false,
+        });
+        let scene = group(
+            0.5,
+            Some(3),
+            Arc::new(Node::Container {
+                children: vec![solid(10.0, 10.0, 20.0, 20.0), native],
+            }),
+        );
+        let mut sink = GroupSink::default();
+        for _ in 0..3 {
+            let (calls, next) = frame(sink, Some(&mut layers), &scene);
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| matches!(c, Call::Begin(_) | Call::Draw { .. }))
+            );
+            assert_eq!(
+                calls.first(),
+                Some(&Call::Push {
+                    alpha: 0.5,
+                    clip: Rect::new(9.0, 9.0, 51.0, 51.0)
+                }),
+                "the layer spans the rect and the native leaf",
+            );
+            sink = next;
+        }
+        assert_eq!(layers.stats().layers, 0);
+    }
+
+    /// Full alpha paints the subtree with no layer, zero alpha paints nothing, and without a layer
+    /// cache a faded group paints in a layer of its own every frame.
+    #[test]
+    fn opacity_extremes_and_uncached_groups() {
+        let (calls, _) = frame(
+            GroupSink::default(),
+            None,
+            &group(1.0, Some(1), solid(0.0, 0.0, 4.0, 4.0)),
+        );
+        assert_eq!(calls, vec![Call::Fill]);
+        let (calls, _) = frame(
+            GroupSink::default(),
+            None,
+            &group(0.0, Some(1), solid(0.0, 0.0, 4.0, 4.0)),
+        );
+        assert!(calls.is_empty());
+        let (calls, _) = frame(
+            GroupSink::default(),
+            None,
+            &group(0.5, Some(1), solid(0.0, 0.0, 4.0, 4.0)),
+        );
+        assert_eq!(fills(&calls), 1);
+        assert!(matches!(calls[0], Call::Push { .. }));
+    }
+
+    /// A group's layer covers what its subtree paints: a clip bounds it, a transform moves it, and
+    /// a nested group adds nothing of its own.
+    #[test]
+    fn group_bounds_follow_clips_transforms_and_nested_groups() {
+        let layer_of = |child: Arc<Node>| {
+            let (calls, _) = frame(GroupSink::default(), None, &group(0.5, None, child));
+            match calls.first() {
+                Some(Call::Push { clip, .. }) => *clip,
+                other => panic!("expected the group's layer first, got {other:?}"),
+            }
+        };
+        let clipped = Arc::new(Node::Clip {
+            shape: ClipShape::Rect(LumenRect {
+                origin: glam::Vec2::new(10.0, 10.0),
+                size: glam::Vec2::new(20.0, 20.0),
+            }),
+            child: solid(0.0, 0.0, 100.0, 100.0),
+        });
+        assert_eq!(layer_of(clipped), Rect::new(9.0, 9.0, 31.0, 31.0));
+
+        let moved = Arc::new(Node::Transform {
+            matrix: Affine2::translate(5.0, 0.0),
+            child: solid(0.0, 0.0, 10.0, 10.0),
+        });
+        assert_eq!(layer_of(moved), Rect::new(4.0, -1.0, 16.0, 11.0));
+
+        let nested = group(0.5, None, solid(20.0, 20.0, 10.0, 10.0));
+        assert_eq!(layer_of(nested), Rect::new(19.0, 19.0, 31.0, 31.0));
+    }
+
+    /// Two rects overlap in their shared part and not at all when apart.
+    #[test]
+    fn intersection_is_the_shared_part_or_nothing() {
+        let r = |x: f32, y: f32, w: f32, h: f32| LumenRect {
+            origin: glam::Vec2::new(x, y),
+            size: glam::Vec2::new(w, h),
+        };
+        let shared = intersection(r(0.0, 0.0, 10.0, 10.0), r(5.0, 5.0, 10.0, 10.0));
+        assert_eq!(shared.origin, glam::Vec2::new(5.0, 5.0));
+        assert_eq!(shared.size, glam::Vec2::new(5.0, 5.0));
+        let apart = intersection(r(0.0, 0.0, 10.0, 10.0), r(20.0, 0.0, 10.0, 10.0));
+        assert_eq!(apart.size, glam::Vec2::ZERO);
+    }
+
+    fn image(blob: Option<Arc<dyn std::any::Any + Send + Sync>>, rgba: &Arc<[u8]>) -> Arc<Node> {
+        Arc::new(Node::Image {
+            image: lumen_core::render_world::ExtractedImage {
+                origin: glam::Vec2::new(5.0, 5.0),
+                size: glam::Vec2::new(4.0, 4.0),
+                width: 2,
+                height: 2,
+                rgba: rgba.clone(),
+                fit: lumen_core::components::ImageFit::Fill,
+                order: 0,
+                alpha: 1.0,
+                background: None,
+            },
+            blob,
+        })
+    }
+
+    /// An image is unchanged while it shares its pixels and its blob; a new blob, a missing one,
+    /// or a payload of another type is a change.
+    #[test]
+    fn an_image_changes_with_its_blob() {
+        let rgba: Arc<[u8]> = Arc::from(vec![255u8; 16]);
+        let blob = |b: &peniko::Blob<u8>| -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+            Some(Arc::new(lumen_assets::ExtractedImageBlob(b.clone())))
+        };
+        let pixels = peniko::Blob::new(Arc::new(vec![255u8; 16]));
+        let other = peniko::Blob::new(Arc::new(vec![255u8; 16]));
+        assert!(!subtree_changed(&image(None, &rgba), &image(None, &rgba)));
+        assert!(!subtree_changed(
+            &image(blob(&pixels), &rgba),
+            &image(blob(&pixels), &rgba)
+        ));
+        assert!(subtree_changed(
+            &image(blob(&pixels), &rgba),
+            &image(blob(&other), &rgba)
+        ));
+        assert!(subtree_changed(
+            &image(blob(&pixels), &rgba),
+            &image(None, &rgba)
+        ));
+        let foreign: Option<Arc<dyn std::any::Any + Send + Sync>> = Some(Arc::new(0u8));
+        assert!(subtree_changed(
+            &image(foreign.clone(), &rgba),
+            &image(foreign, &rgba)
+        ));
+    }
+
+    fn svg(asset: &lumen_assets::Handle<lumen_assets::SvgData>, alpha: f32) -> Arc<Node> {
+        Arc::new(Node::Svg {
+            payload: Arc::new(lumen_assets::ExtractedSvg {
+                origin: glam::Vec2::new(0.0, 0.0),
+                size: glam::Vec2::new(20.0, 20.0),
+                intrinsic: glam::Vec2::new(10.0, 10.0),
+                asset: asset.clone(),
+                fit: lumen_core::components::ImageFit::Fill,
+                order: 0,
+                alpha,
+            }),
+        })
+    }
+
+    /// An SVG is unchanged while it paints the same decode the same way; another decode, another
+    /// alpha, or a payload of another type is a change.
+    #[test]
+    fn an_svg_changes_with_its_decode_and_placement() {
+        let decode = || -> lumen_assets::Handle<lumen_assets::SvgData> {
+            let tree = usvg::Tree::from_str(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#,
+                &usvg::Options::default(),
+            )
+            .expect("valid svg");
+            lumen_assets::SvgData {
+                intrinsic: glam::Vec2::new(10.0, 10.0),
+                tree,
+                id: lumen_assets::SvgData::next_id(),
+                source_bytes: 0,
+            }
+            .into()
+        };
+        let a = decode();
+        let b = decode();
+        assert!(!subtree_changed(&svg(&a, 1.0), &svg(&a, 1.0)));
+        assert!(subtree_changed(&svg(&a, 1.0), &svg(&a, 0.5)));
+        assert!(subtree_changed(&svg(&a, 1.0), &svg(&b, 1.0)));
+        let foreign = || {
+            Arc::new(Node::Svg {
+                payload: Arc::new(0u8),
+            })
+        };
+        assert!(subtree_changed(&foreign(), &foreign()));
+    }
+
+    fn label() -> Arc<Node> {
+        Arc::new(Node::Text {
+            run: lumen_core::render_world::ExtractedText {
+                origin: glam::Vec2::new(10.0, 20.0),
+                text: "Save".to_string(),
+                size_px: 16.0,
+                fill: lumen_core::components::Color::rgba(0.0, 0.0, 0.0, 1.0),
+                caret: None,
+                selection: None,
+                selection_color: None,
+                selection_foreground: None,
+                caret_color: None,
+                order: 0,
+                container_width: 200.0,
+                align: lumen_core::components::TextAlign::Start,
+                wrap: lumen_core::components::TextWrap::None,
+                max_lines: None,
+                family: None,
+                weight: 400,
+                line_height_px: 20.0,
+                caret_width_px: 1.0,
+            },
+        })
+    }
+
+    /// A faded label's layer holds the box its shaper measures, in the same logical pixels at any
+    /// scale factor; without a shaper the layer falls back to the frame diff's rough box.
+    #[test]
+    fn a_faded_label_is_measured_by_its_shaper() {
+        let scene = group(0.5, None, label());
+        let mut shaper = lumen_text::NullShaper;
+        let mut target: PaintTarget = Box::<GroupSink>::default();
+        walk_node(
+            &mut WalkContext::new_with_dpr(&mut target, None, Some(&mut shaper), 2.0),
+            &scene,
+        );
+        let sink = target
+            .native()
+            .downcast_mut::<GroupSink>()
+            .expect("the test sink");
+        // The container from x 10 to 210 and the line at y 20, padded by the 16 px size (and the
+        // caret, and 1.5 sizes above the baseline), then by a pixel, all at dpr 2.
+        assert_eq!(
+            sink.calls.first(),
+            Some(&Call::Push {
+                alpha: 0.5,
+                clip: Rect::new(-14.0, -10.0, 456.0, 74.0)
+            }),
+        );
+
+        let (calls, _) = frame(GroupSink::default(), None, &scene);
+        let rough = node_bounds(&label(), GROUP_EXTENT, Affine::IDENTITY);
+        let want = Rect::new(
+            f64::from((rough.origin.x - 1.0).floor()),
+            f64::from((rough.origin.y - 1.0).floor()),
+            f64::from((rough.origin.x + rough.size.x + 1.0).ceil()),
+            f64::from((rough.origin.y + rough.size.y + 1.0).ceil()),
+        );
+        assert!(
+            matches!(calls.first(), Some(Call::Push { clip, .. }) if *clip == want),
+            "{calls:?} vs {want:?}"
+        );
+    }
 }

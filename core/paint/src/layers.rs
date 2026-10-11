@@ -263,3 +263,166 @@ fn forget(bytes: &mut usize, entry: &mut Entry) {
 fn layer_bytes(bounds: Rect) -> usize {
     (bounds.width().max(0.0) as usize) * (bounds.height().max(0.0) as usize) * BYTES_PER_PIXEL
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_core::components::Color;
+    use lumen_core::render_world::{Brush, Rect as LumenRect};
+
+    fn content(color: f32) -> Arc<Node> {
+        Arc::new(Node::Rect {
+            bounds: LumenRect {
+                origin: glam::Vec2::ZERO,
+                size: glam::Vec2::new(10.0, 10.0),
+            },
+            brush: Brush::Solid(Color::rgb(color, 0.0, 0.0)),
+            corner: 0.0,
+            corners: None,
+        })
+    }
+
+    fn square(side: f64) -> Rect {
+        Rect::new(0.0, 0.0, side, side)
+    }
+
+    fn layer() -> OffscreenLayer {
+        OffscreenLayer::new(Arc::new(()))
+    }
+
+    /// Plans `groups` (key, side) for one frame, storing a layer wherever the plan says render.
+    /// Returns what each group was told, as `'c'`omposite, `'r'`ender or `'d'`irect.
+    fn frame(cache: &mut LayerCache, groups: &[(u64, f64)]) -> String {
+        cache.begin_frame(1.0, 100, 100);
+        let node = content(1.0);
+        let plans = groups
+            .iter()
+            .map(|&(key, side)| match cache.plan(key, &node, square(side)) {
+                Plan::Composite(_) => 'c',
+                Plan::Render => {
+                    cache.store(key, layer());
+                    'r'
+                }
+                Plan::Direct => 'd',
+            })
+            .collect();
+        cache.end_frame();
+        plans
+    }
+
+    /// Lowering the budget drops the largest kept layers first, until the rest fit, and a group
+    /// that would not fit then paints directly.
+    #[test]
+    fn a_lower_budget_drops_the_largest_layers_first() {
+        let mut cache = LayerCache::default();
+        assert_eq!(cache.budget(), DEFAULT_LAYER_BUDGET);
+        let groups = [(1, 10.0), (2, 20.0), (3, 5.0)];
+        assert_eq!(frame(&mut cache, &groups), "ddd");
+        assert_eq!(frame(&mut cache, &groups), "rrr");
+        assert_eq!(cache.stats().bytes, (100 + 400 + 25) * 4);
+
+        cache.set_budget(600);
+        assert_eq!(cache.budget(), 600);
+        let stats = cache.stats();
+        assert_eq!(
+            (stats.layers, stats.bytes),
+            (2, 500),
+            "the 20 x 20 layer went"
+        );
+        assert_eq!(
+            frame(&mut cache, &groups),
+            "cdc",
+            "the dropped group no longer fits"
+        );
+
+        cache.set_budget(0);
+        assert_eq!(cache.stats().layers, 0);
+        assert_eq!(cache.stats().bytes, 0);
+        cache.set_budget(0);
+        assert_eq!(cache.stats().layers, 0, "nothing left to drop");
+    }
+
+    /// One frame rasterizes no more layers than its limit; the rest wait for a later frame.
+    #[test]
+    fn renders_are_spread_over_frames() {
+        let mut cache = LayerCache::default();
+        cache.set_renders_per_frame(1);
+        let groups = [(1, 4.0), (2, 4.0), (3, 4.0)];
+        assert_eq!(frame(&mut cache, &groups), "ddd");
+        assert_eq!(frame(&mut cache, &groups), "rdd");
+        assert_eq!(frame(&mut cache, &groups), "crd");
+        assert_eq!(frame(&mut cache, &groups), "ccr");
+        let stats = cache.stats();
+        assert_eq!((stats.renders, stats.hits, stats.layers), (3, 3, 3));
+        assert_eq!(stats.direct, 3 + 2 + 1);
+    }
+
+    /// A key painted twice in one frame names two groups, so neither keeps a layer.
+    #[test]
+    fn a_key_seen_twice_in_a_frame_is_not_kept() {
+        let mut cache = LayerCache::default();
+        assert_eq!(frame(&mut cache, &[(1, 4.0)]), "d");
+        assert_eq!(frame(&mut cache, &[(1, 4.0)]), "r");
+        assert_eq!(frame(&mut cache, &[(1, 4.0), (1, 4.0)]), "cd");
+        assert_eq!(cache.stats().layers, 0);
+        assert_eq!(cache.stats().bytes, 0);
+    }
+
+    /// A group that moves or changes repaints directly and loses its layer; one that stops
+    /// painting is forgotten when the frame ends; a new scale factor forgets every layer.
+    #[test]
+    fn changes_drop_layers() {
+        let mut cache = LayerCache::default();
+        frame(&mut cache, &[(1, 4.0), (2, 4.0)]);
+        assert_eq!(frame(&mut cache, &[(1, 4.0), (2, 4.0)]), "rr");
+        assert_eq!(
+            frame(&mut cache, &[(1, 6.0), (2, 4.0)]),
+            "dc",
+            "group 1 grew"
+        );
+        assert_eq!(cache.stats().layers, 1);
+
+        cache.begin_frame(1.0, 100, 100);
+        assert!(matches!(
+            cache.plan(2, &content(0.5), square(4.0)),
+            Plan::Direct
+        ));
+        cache.end_frame();
+        assert_eq!(cache.stats().layers, 0, "group 2 painted differently");
+
+        assert_eq!(frame(&mut cache, &[(2, 4.0)]), "d", "changed back");
+        assert_eq!(frame(&mut cache, &[(2, 4.0)]), "r");
+        assert_eq!(frame(&mut cache, &[]), "");
+        assert_eq!(
+            frame(&mut cache, &[(2, 4.0)]),
+            "d",
+            "forgotten while it did not paint"
+        );
+
+        assert_eq!(frame(&mut cache, &[(2, 4.0)]), "r");
+        cache.begin_frame(2.0, 100, 100);
+        assert_eq!(cache.stats().layers, 0, "painted for another scale factor");
+        assert!(matches!(
+            cache.plan(2, &content(1.0), square(4.0)),
+            Plan::Direct
+        ));
+    }
+
+    /// The debug form names the budget and the counters, and clearing drops every layer.
+    #[test]
+    fn debug_and_clear() {
+        let mut cache = LayerCache::new(1024);
+        frame(&mut cache, &[(1, 4.0)]);
+        frame(&mut cache, &[(1, 4.0)]);
+        let debug = format!("{cache:?}");
+        assert!(
+            debug.contains("budget: 1024") && debug.contains("layers: 1"),
+            "{debug}"
+        );
+        cache.clear();
+        assert_eq!(cache.stats().layers, 0);
+        assert_eq!(cache.stats().bytes, 0);
+        assert_eq!(cache.target_rect(), Rect::new(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(LayerCache::default().target_rect(), Rect::ZERO);
+    }
+}
