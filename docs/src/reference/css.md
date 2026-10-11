@@ -72,10 +72,11 @@ reconsider: `.a .b .c` binds `.b` to the closest matching ancestor, and
 `.a ~ .b ~ .c` binds `.b` to the closest matching earlier sibling. A
 selector that would only match through a farther candidate misses.
 
-Sibling steps resolve when the stylesheet is applied to the document.
-Restyles that run against one element on its own (a `<for>` row, a class
-change from a script, an OS theme flip) walk ancestors only, so a rule
-that needs a sibling step is not reapplied there.
+Sibling steps resolve wherever the cascade runs: when the stylesheet is
+applied to the document, and when an element restyles after a class change
+from a script or an OS theme flip. A row a `<for>` adds after the app starts
+is resolved on its own before it joins the tree, so a rule that needs an
+ancestor or a sibling step reaches it at the next restyle of the document.
 
 ### Pseudo-classes
 
@@ -145,12 +146,22 @@ Declarations are ordered by, in decreasing priority:
 Markup attributes beat CSS, for every property both surfaces can set.
 `<tile width="50px"/>` keeps its width against `.t { width: 100px }`.
 
-`flex-direction` is the one property CSS wins: `<row>`, `<column>`,
-`<scroll>`, and the other layout tags carry a direction that comes from
-the tag rather than from anything you wrote, so a stylesheet can change
-it. `<overlay>` and `<dialog>` take `position: absolute` and a full
-`inset` from their tag too, but those two count as markup and a
-stylesheet cannot move them.
+What a tag is by default is a user-agent default, not markup, so any
+stylesheet rule overrides it: the direction of `<row>`,
+`<column>`, `<scroll>` and the other layout tags, the `position: absolute`
+and full `inset` of `<overlay>` and `<dialog>`, the centring of a
+`<dialog>`'s content, a `<spacer>`'s `grow`, and the vertical axis of a
+`<scroll>`. `scroll="x"` on an element is markup: it lays the children out
+in a row and outranks the tag's direction.
+
+An element resolves from scratch each time it restyles: after a class or id
+change from a script, a `set_style`, a theme flip or a breakpoint crossing.
+A property that no rule, attribute or inline style sets any more goes back
+to its initial value, so removing a class takes with it everything only that
+class set. What the runtime itself holds while it runs stays: a hidden
+`<if>`'s `display: none`, an open popup's placement, a virtualized row's
+slot, a hover or press tint, a `:disabled` patch, and a transition in
+flight, which heads for the new value from wherever it is.
 
 One exception keeps skins from repainting your surfaces: when you set a
 resting `bg` (in CSS or as an attribute, a colour, gradient, or image), a

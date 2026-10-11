@@ -396,26 +396,29 @@ pub(crate) fn register_styles(
     // Order in `TickStage::Systems`:
     //   1. `detect_media_change`   - theme / viewport-breakpoint flip -> bump
     //   2. `reapply_styles_on_root_class_change` - root class flip -> bump
-    //   3. `apply_dom_commands` - script spawns / class edits -> bump
-    //   4. `reconcile_if_blocks` - a newly mounted body -> bump
-    //   5. `reapply_computed_styles` - consume the bump, re-resolve entities
+    //   3. `apply_dom_commands` - script tree edits -> bump; class, id and
+    //      inline-style edits -> `StyleDirty` on the element
+    //   4. `reconcile_if_blocks` - a newly mounted body -> `StyleDirty`
+    //   5. `reconcile_for_blocks` - a row whose class or id moved ->
+    //      `StyleDirty`
+    //   6. `reapply_computed_styles` - restyle the document on a bump, or
+    //      each `StyleDirty` element's subtree
     //
     // The `apply_dom_commands` edge is what keeps a scripted DOM edit
-    // single-frame. Every spawn, reparent, class edit and inline-style
-    // write bumps `StyleVersion` at the end of that system, and
-    // `reapply_computed_styles` is the only thing that turns the bump into
-    // real components: a fresh `spawn("label")` carries no cascaded
-    // `TextStyle`, `Visuals` or box `Style` until it runs. Without the
-    // edge the consumer can be scheduled ahead of the producer, so a
-    // script that rebuilds a subtree paints one frame of unstyled,
-    // wrongly-measured nodes before the cascade lands on the next tick -
-    // the whole pane visibly flashes on every edit that rebuilds it.
+    // single-frame. `reapply_computed_styles` is the only thing that turns
+    // a bump or a mark into real components: a fresh `spawn("label")`
+    // carries no cascaded `TextStyle`, `Visuals` or box `Style` until it
+    // runs. Without the edge the consumer can be scheduled ahead of the
+    // producer, so a script that rebuilds a subtree paints one frame of
+    // unstyled, wrongly-measured nodes before the cascade lands on the next
+    // tick - the whole pane visibly flashes on every edit that rebuilds it.
     //
     // The `reconcile_if_blocks` edge does the same job for the elements a
     // `<if>` gate mounts. Those carry the attributes the load-time cascade
     // resolved, so without a re-resolve a page reached by navigation comes
     // up in whatever color scheme the app booted with rather than the one
-    // now in force.
+    // now in force. The `reconcile_for_blocks` edge does it for a kept row
+    // whose record changed its class.
     //
     // It runs ahead of the asset pipeline's cache lookup for the same
     // single-frame reason: a restyle that points `bg` at an image, and
@@ -432,6 +435,7 @@ pub(crate) fn register_styles(
             .after(reapply_styles_on_root_class_change)
             .after(lumen_scene::dom::apply_dom_commands)
             .after(crate::spawn::reconcile_if_blocks)
+            .after(crate::spawn::reconcile_for_blocks)
             .before(lumen_assets::spawn_pending_decodes),
     );
 }

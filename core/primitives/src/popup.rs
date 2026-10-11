@@ -19,25 +19,26 @@ use glam::Vec2;
 use lumen_core::components::Style;
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
+use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
 
 use crate::tabs::DropdownButton;
 
 /// Marker on a `<dropdown>` / `<menu>` floating panel. Carries the
 /// open-state signal so the dismissal + edge-flip systems can query the
-/// panel by its bound signal, plus the panel's authored vertical inset
-/// so the flip system can restore it when the panel closes.
+/// panel by its bound signal.
+///
+/// While the panel is open, the edge-flip holds its `inset` in
+/// [`StyleOverrides`]; on close it lets go and the panel is back where its
+/// styles place it, as they stand then.
 #[derive(Component, Clone, Debug)]
+#[require(StyleOverrides)]
 pub struct PopupPanel {
     /// Open-state signal (`__dropdown_open:*` / `__menu_open:*`).
     pub open_signal: String,
-    /// Authored `inset.top` (px) - the resting placement below the
-    /// trigger, restored on close.
-    pub default_top: f32,
-    /// Authored `inset.bottom` (px), restored on close.
-    pub default_bottom: f32,
-    /// Whether the flip system has overwritten the authored inset for
-    /// the current open session (so it restores exactly once on close).
-    pub positioned: bool,
+}
+
+impl StyleOwner for PopupPanel {
+    const RANK: u8 = 20;
 }
 
 /// Which side of the anchor a popup prefers on its primary axis.
@@ -107,7 +108,7 @@ const POPUP_GAP: f32 = 4.0;
 
 /// Gap between a popup panel and the control that opens it, in logical
 /// pixels. Sits on the trigger entity.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct PopupGap(pub f32);
 
 impl Default for PopupGap {
@@ -197,26 +198,28 @@ fn press_hits_popup(
 /// the panel sizes to its option list in both orientations. Menu panels
 /// have no queryable trigger and are left untouched here - their
 /// dismissal still works via [`dismiss_popups_on_outside_press`].
+///
+/// The placement is held in [`StyleOverrides`] while the panel is open, so
+/// a restyle meanwhile keeps it, and let go of on close.
 pub fn flip_open_dropdown_panels(
     viewport: Option<Res<Viewport>>,
     store: Res<PropertyStore>,
     headers: Query<(&DropdownButton, &Transform, Option<&PopupGap>)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
-    mut panels: Query<(Entity, &mut PopupPanel, &mut Style)>,
+    mut panels: Query<(Entity, &PopupPanel, &mut Style, &mut StyleOverrides)>,
 ) {
     let Some(viewport) = viewport else {
         return;
     };
     let vp = viewport.size;
-    for (panel_e, mut panel, mut style) in &mut panels {
+    for (panel_e, panel, mut style, mut overrides) in &mut panels {
         let open = store.get_global_bool(&panel.open_signal) == Some(true);
+        let placed = overrides.held_by::<PopupPanel>().is_some();
         if !open {
-            // Restore the authored resting inset once, on close.
-            if panel.positioned {
-                style.inset.top = panel.default_top;
-                style.inset.bottom = panel.default_bottom;
-                panel.positioned = false;
+            // Back to where its styles place it, once, on close.
+            if placed {
+                overrides.release::<PopupPanel>().write_style(&mut style);
             }
             continue;
         }
@@ -227,12 +230,34 @@ pub fn flip_open_dropdown_panels(
         else {
             continue;
         };
+        // Where the styles place it; only the vertical edges move.
+        let resting = overrides
+            .below::<PopupPanel>(
+                StyleFields::INSET,
+                &Live {
+                    style: Some(&style),
+                    ..Live::default()
+                },
+            )
+            .inset
+            .unwrap_or(style.inset);
+        let place = |top: f32| StyleValues {
+            inset: Some(lumen_core::components::Edges {
+                top,
+                bottom: f32::NAN,
+                ..resting
+            }),
+            ..StyleValues::default()
+        };
         // Release the panel to content height so layout can measure it,
         // then position precisely once it has a size.
-        if !panel.positioned {
-            style.inset.top = panel.default_top;
-            style.inset.bottom = f32::NAN;
-            panel.positioned = true;
+        if !placed {
+            let live = Live {
+                style: Some(&style),
+                ..Live::default()
+            };
+            let out = overrides.hold::<PopupPanel>(place(resting.top), &live);
+            out.write_style(&mut style);
         }
         let Ok(panel_t) = transforms.get(panel_e) else {
             continue;
@@ -256,8 +281,12 @@ pub fn flip_open_dropdown_panels(
         );
         let local_top = origin.y - cb_t.absolute.y;
         if !edge_eq(style.inset.top, local_top) {
-            style.inset.top = local_top;
-            style.inset.bottom = f32::NAN;
+            let live = Live {
+                style: Some(&style),
+                ..Live::default()
+            };
+            let out = overrides.hold::<PopupPanel>(place(local_top), &live);
+            out.write_style(&mut style);
         }
     }
 }
@@ -346,9 +375,6 @@ mod tests {
         let panel = world
             .spawn(PopupPanel {
                 open_signal: "__dropdown_open:fruit".to_string(),
-                default_top: 40.0,
-                default_bottom: -1.0,
-                positioned: false,
             })
             .id();
         (world, panel)
@@ -448,9 +474,6 @@ mod tests {
             .spawn((
                 PopupPanel {
                     open_signal: "__dropdown_open:fruit".to_string(),
-                    default_top: 40.0,
-                    default_bottom: -1.0,
-                    positioned: false,
                 },
                 Style::default(),
                 // Pre-measured 80 px-tall panel (layout would supply this).

@@ -552,12 +552,30 @@ artifact is run with, so a packaged app finds its files wherever it is copied.
 A runtime built without the source-load path can run only artifacts, and links
 no parser at all.
 
-Some styling is re-resolved after spawn. A theme flip, a media-query change, or
-a root class change bumps a style version, and a system rebuilds a synthetic
-element per entity from its tag, classes, and id and re-runs selector matching
-against the retained stylesheet. Interaction pseudo-classes do not take that
-path: the cascade lowers `:hover`, `:focus`, `:active`, and `:disabled` into a
-state component at parse time, and a system swaps between the stored variants.
+Styling is re-resolved after spawn, from scratch. A theme flip, a media-query
+change, a root class change or a tree edit bumps a style version, which
+restyles the whole document; a class, id, inline-style or disabled change on
+one element marks it `StyleDirty`, which restyles its subtree. The restyle
+walks top-down with `lumen_ir::css::RestyleWalk`: each element is resolved
+from its tag, classes, id and place in the tree, with its markup declarations
+(the `MarkupStyle` component, recorded by the parser for what an author wrote
+and for the geometry of the widgets it builds) and its inline style ranking
+above every rule, so it comes out as the first cascade made it. Every style
+component is then rebuilt by `lumen_scene::computed::ComputedStyle`, the same
+computation spawning runs, and a property nothing sets any more returns to its
+initial value. A tag's defaults live in the user-agent sheet for the same
+reason: the parser writes no style values of its own into the IR.
+
+Runtime systems that own a style value while they run (a hidden `<if>`'s
+`display`, an open popup's `inset`, a virtualized row's slot, a progress
+fill's width, a toggle's checked fill, the hover and press tints, the state
+patches) hold it in the `StyleOverrides` component instead of writing the live
+component behind the cascade's back. Holders stack by rank; a restyle records
+the new resting values there and keeps the held ones on top, and a holder that
+lets go lands on the element's styles as they stand then. Interaction
+pseudo-classes reach that layer through state components: the cascade lowers
+`:hover`, `:focus`, `:active`, and `:disabled` into them, and a system swaps
+between the stored variants.
 
 `<for>` and `<if>` are not resolved at spawn time. They stay as markers that
 reconcilers in the `Systems` stage keep in sync with the data behind them.

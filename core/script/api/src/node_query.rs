@@ -445,50 +445,59 @@ pub fn node_computed_style(handle: u64, property: &str) -> Option<String> {
 }
 
 /// The fully-cascaded [`Attributes`](lumen_ir::layout_ir::Attributes) for
-/// `handle`: the stylesheet cascade (resolved against the live ancestor
-/// chain) with the element's inline-style overrides applied on top. Shared
-/// by `computed_style(prop)` and the full-map `computed_style()`
-/// introspection getter. Reflects the last committed tick.
+/// `handle`: the element resolved from scratch the way a restyle resolves
+/// it, from its tag, classes and id, its place in the live tree, and its own
+/// markup and inline-style declarations, which outrank every rule. Shared by
+/// `computed_style(prop)` and the full-map `computed_style()` introspection
+/// getter. Reflects the last committed tick.
 pub fn resolved_attributes(handle: u64) -> lumen_ir::layout_ir::Attributes {
     let details = dom_details_snapshot();
-    let entity = NodeRef(handle).entity();
-
-    // Resolve the cascade against the live tree when we have a stylesheet
-    // and the node is in the index; fall back to inline-only otherwise.
-    let mut attrs = lumen_ir::layout_ir::Attributes::default();
-    if let (Some(entity), Some(sheet)) = (entity, details.sheet.as_ref()) {
+    // The element's own declarations: its markup's, then its inline
+    // style's, so the inline tier wins.
+    let declarations = |handle: u64| -> Vec<(String, String)> {
+        details
+            .detail(handle)
+            .map(|d| {
+                d.markup_style
+                    .iter()
+                    .chain(&d.inline_style)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let resolved = NodeRef(handle).entity().and_then(|entity| {
+        let sheet = details.sheet.as_ref()?;
         let index = dom_index_snapshot();
-        if let Some(rec) = index.record(entity) {
-            let mut el = lumen_ir::layout_ir::Element {
-                tag: rec.tag.clone(),
-                ..Default::default()
-            };
-            el.attrs.classes = rec.classes.clone();
-            el.attrs.id = rec.id.clone();
-            let ancestors = ancestor_infos(&index, entity);
-            let _ = lumen_ir::css::reapply_with_ancestors(
-                &mut el,
-                sheet,
-                &details.media,
-                &ancestors,
-                record_position(rec),
-            );
-            attrs = el.attrs;
+        let rec = index.record(entity)?;
+        let subject = subject_info(rec).with_declarations(declarations(handle));
+        // An ancestor's own declarations reach this element through what
+        // it inherits.
+        let mut ancestors: Vec<AncestorInfo> = index
+            .ancestors(entity)
+            .into_iter()
+            .filter_map(|e| {
+                let info = subject_info(index.record(e)?);
+                Some(info.with_declarations(declarations(NodeHandle::new(e).pack())))
+            })
+            .collect();
+        ancestors.reverse();
+        Some(lumen_ir::css::resolve_element(
+            &subject,
+            sheet,
+            &details.media,
+            &ancestors,
+        ))
+    });
+    // Without a stylesheet, or for a node not in the index, the element's
+    // own declarations are all there is.
+    resolved.unwrap_or_else(|| {
+        let mut attrs = lumen_ir::layout_ir::Attributes::default();
+        for (prop, value) in declarations(handle) {
+            let _ = lumen_ir::css::apply_inline_declaration(&prop, &value, &mut attrs);
         }
-    }
-    // Markup attributes outrank every rule; inline style (the highest
-    // tier) outranks them.
-    if let Some(detail) = details.detail(handle) {
-        for (prop, value) in &detail.markup_style {
-            if prop != "flex-direction" {
-                let _ = lumen_ir::css::apply_inline_declaration(prop, value, &mut attrs);
-            }
-        }
-        for (prop, value) in &detail.inline_style {
-            let _ = lumen_ir::css::apply_inline_declaration(prop, value, &mut attrs);
-        }
-    }
-    attrs
+        attrs
+    })
 }
 
 // ---------------------------------------------------------------------------

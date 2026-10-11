@@ -48,6 +48,18 @@ impl From<(Vec2, Vec2)> for Transform {
     }
 }
 
+/// Marks an element whose own styling inputs changed (its classes, its id,
+/// its inline style, its disabled state): the next restyle recomputes it
+/// and everything under it, and nothing else. A change that can restyle
+/// any element in the document (a theme, a breakpoint, a tree edit that
+/// moves siblings) bumps [`StyleVersion`] instead.
+///
+/// Here for the reason [`StyleVersion`] is: the writers and the reader are
+/// in different crates.
+#[derive(Component, Clone, Copy, Debug, Default)]
+#[component(storage = "SparseSet")]
+pub struct StyleDirty;
+
 /// Monotonic counter bumped whenever a class / palette / media-feature
 /// change invalidates computed style for at least one entity. Downstream
 /// consumers (the cascade re-resolver, the `Visuals` recompute) observe

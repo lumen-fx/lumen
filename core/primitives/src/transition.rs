@@ -212,7 +212,7 @@ pub struct TransitionSpec {
 }
 
 /// Every [`TransitionSpec`] declared for an entity, in source order.
-#[derive(Component, Clone, Debug, Default)]
+#[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct TransitionSpecs(pub Vec<TransitionSpec>);
 
 impl TransitionSpecs {
@@ -308,9 +308,10 @@ pub fn step_opacity_transitions(
 
 /// Sample every active [`BackgroundTransition`] into the entity's solid
 /// [`Visuals::fill`]. Gradient fills are never animated (the component
-/// is dropped on sight). Skips entities whose fill is currently owned by
-/// the hover / press tint FSM (their snapshot components are present) -
-/// the last writer would flicker otherwise.
+/// is dropped on sight). A fill some runtime system holds in
+/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) (a hover
+/// or press tint, a toggle's state) is that system's to paint, so the
+/// restyle tween is retired rather than left to fight over the colour.
 #[allow(clippy::type_complexity)]
 pub fn step_background_transitions(
     mut commands: Commands,
@@ -321,15 +322,13 @@ pub fn step_background_transitions(
         &BackgroundTransition,
         &mut Visuals,
         Option<&lumen_core::components::Visible>,
-        Option<&crate::hover::HoverBaseColor>,
-        Option<&crate::hover::PressBaseColor>,
+        Option<&lumen_core::style_overrides::StyleOverrides>,
     )>,
 ) {
+    use lumen_core::style_overrides::StyleFields;
     let now = tick.now;
-    for (entity, tween, mut vis, visible, hover_base, press_base) in &mut q {
-        if hover_base.is_some() || press_base.is_some() {
-            // Hover/press FSM owns the fill right now; retire the
-            // restyle tween rather than fight over the color.
+    for (entity, tween, mut vis, visible, overrides) in &mut q {
+        if overrides.is_some_and(|o| o.held().contains(StyleFields::FILL)) {
             commands.entity(entity).remove::<BackgroundTransition>();
             continue;
         }

@@ -10,8 +10,10 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use crate::computed::{ComputedStyle, StyleContext};
 use lumen_core::components::AuthoredStrings;
-use lumen_core::nav::PATH_SIGNAL;
+use lumen_core::style_overrides::{Live, StyleOwner, StyleValues};
+
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
 use lumen_ir::interpolate::{Scope, element_carries_placeholder, substitute_element};
@@ -48,6 +50,12 @@ impl From<lumen_ir::layout_ir::IfModeSpec> for IfMode {
 /// just distinguishes dialogs from generic `<if>` blocks.
 #[derive(bevy_ecs::component::Component, Clone, Copy, Debug, Default)]
 pub struct DialogMarker;
+
+/// The typography role an element was written with (`style="title-lg"`).
+/// Its text size is computed from it, and a restyle recomputes that from
+/// here; the attribute is the element's own, not a style a rule can set.
+#[derive(bevy_ecs::component::Component, Clone, Debug, PartialEq, Eq)]
+pub struct TypographyRole(pub std::sync::Arc<str>);
 
 /// `autofocus="true"` marker: when the containing `<dialog>` opens,
 /// [`manage_dialog_lifecycle`] moves focus here first.
@@ -86,7 +94,14 @@ pub struct DialogSession {
 /// Marker for an `<if signal="...">` block. The reconciler mounts /
 /// dismounts the subtree based on the named signal's truthiness, or -
 /// when [`Self::eq`] is `Some`- on value equality.
+///
+/// A hidden [`IfMode::Hide`] block holds `display: none` in
+/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) (spec
+/// section 17.4: space is released and the relayout comes free via
+/// `Changed<Style>`), and lets go when it shows, so it shows with the
+/// display its styles give it then.
 #[derive(bevy_ecs::component::Component, Clone, Debug)]
+#[require(lumen_core::style_overrides::StyleOverrides)]
 pub struct IfMarker {
     /// Signal name to evaluate.
     pub signal_name: String,
@@ -100,16 +115,19 @@ pub struct IfMarker {
     /// When `Some(expected)`, mounts only when `Signals[signal_name] == expected`.
     /// When `None`, mounts when `Signals[signal_name]` is non-empty and not literal `"false"`/`"0"`.
     pub eq: Option<String>,
-    /// [`IfMode::Hide`] only: the `Style.display` value the block had
-    /// before the last hide, restored on the next show. Hide flows
-    /// through `Display::None` (spec section 17.4 - space is released and the
-    /// relayout comes free via `Changed<Style>`).
-    pub saved_display: lumen_core::components::Display,
     /// [`IfMode::Hide`] only: the visibility state last applied to the
     /// entity (`None` = never applied). The reconciler only touches
     /// `Style` / `Visible` on a transition - re-inserting every tick
     /// kept `FrameDirty` permanently set (D5).
     pub applied_visible: Option<bool>,
+}
+
+impl StyleOwner for IfMarker {
+    const RANK: u8 = 20;
+}
+
+impl StyleOwner for ForMarker {
+    const RANK: u8 = 20;
 }
 
 /// Marker for a `<for each="...">` block. The reconciler reads the referenced [`ArraySignals`] entry each tick,
@@ -119,7 +137,12 @@ pub struct IfMarker {
 /// anything else (reorder, mid-insert, mid-remove) is a full despawn-and-respawn. A row whose key is kept but whose
 /// record changed is updated in place, on the entities it already has. `key_field` names the record field the keys
 /// come from; without it the item index is the key.
+///
+/// A virtualized block holds its width and height in
+/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides), sized
+/// to every row it could show.
 #[derive(bevy_ecs::component::Component, Clone, Debug)]
+#[require(lumen_core::style_overrides::StyleOverrides)]
 pub struct ForMarker {
     /// Name of the `ArraySignals` entry to iterate.
     pub array_name: String,
@@ -454,7 +477,7 @@ pub fn resolve_strings(
 /// `disabled-bg` nor an explicit `:disabled { opacity }` was authored.
 /// CSS `disabled-opacity` (`Attributes::disabled_opacity_default`)
 /// overrides it; this is the single Rust-side fallback.
-const DISABLED_OPACITY_DEFAULT: f32 = 0.5;
+pub(crate) const DISABLED_OPACITY_DEFAULT: f32 = 0.5;
 
 /// Read a `<toggle>` / `<switch>` track palette out of the cascaded
 /// attributes: the resting `bg` while unchecked, `:checked { bg }` while
@@ -488,8 +511,9 @@ pub fn track_style_over(
 /// the content and never sizes the element. An `<image>` keeps its `src` as
 /// its one source, so a `bg` image on one is ignored.
 ///
-/// A `bg` or `bg-fit` left unset changes nothing, the way every other value a
-/// restyle does not name stays where it was.
+/// `attrs` is the element's whole resolved style: with no `bg` left, an
+/// image the element had is taken away, and with no `bg-fit` the image
+/// covers the box.
 pub fn apply_background_image(
     ent: &mut bevy_ecs::world::EntityWorldMut<'_>,
     tag: &str,
@@ -520,16 +544,12 @@ pub fn apply_background_image(
                 });
                 ent.insert(ImageSource(source));
             }
-            let fit = attrs
-                .bg_fit
-                .map(ImageFit::from)
-                .or(current.map(|bg| bg.fit))
-                .unwrap_or(ImageFit::Cover);
+            let fit = attrs.bg_fit.map(ImageFit::from).unwrap_or(ImageFit::Cover);
             if current != Some(BackgroundImage { fit }) {
                 ent.insert(BackgroundImage { fit });
             }
         }
-        Some(_) => {
+        Some(_) | None => {
             if current.is_some() {
                 ent.remove::<(
                     BackgroundImage,
@@ -539,14 +559,6 @@ pub fn apply_background_image(
                     ImageLoadFailed,
                     Enqueued,
                 )>();
-            }
-        }
-        None => {
-            if let (Some(bg), Some(fit)) = (current, attrs.bg_fit) {
-                let fit = ImageFit::from(fit);
-                if bg.fit != fit {
-                    ent.insert(BackgroundImage { fit });
-                }
             }
         }
     }
@@ -615,35 +627,30 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         el.attrs.format.as_deref(),
     );
     let text = strings.text.clone();
-    let mut style = Style::from(&el.attrs);
-    apply_ua_style_defaults(&el.tag, &el.attrs, &mut style);
-    // The content of a scroll container keeps its own size instead of
-    // being squeezed into the viewport - that is what there is to scroll.
-    // Every layout here is flex, so without this a `height: 900` block
-    // inside a 200px-tall scroller shrinks to 200 and the scrollbar has
-    // nothing to travel over. Qt's `QScrollArea` keeps its widget's size
-    // hint and Slint's `ScrollView` its content's preferred size; on the
-    // web the same shape needs `flex-shrink: 0` written by hand. An
-    // authored `shrink` still wins. The parent is spawned before its
-    // children, so its `Scroll` marker is already in place.
-    if el.attrs.shrink.is_none() && parent.is_some_and(|p| world.get::<Scroll>(p).is_some()) {
-        style.shrink = 0.0;
-    }
-    let is_boundary = is_relayout_boundary(&style, el);
+    // Every style component, from the one computation a restyle runs too.
+    // The parent is spawned before its children, so its `Scroll` marker is
+    // already in place.
+    let in_scroll = parent.is_some_and(|p| world.get::<Scroll>(p).is_some());
+    let computed = ComputedStyle::new(
+        &StyleContext::of_attrs(&el.tag, &el.attrs, in_scroll),
+        &el.attrs,
+    );
+    let knob_geometry = computed.knob_geometry.unwrap_or_default();
+    let knob_fill = computed.knob_fill;
     let doc_order = next_document_order(world);
     let mut entity = world.spawn((
-        style,
         DirtyLayout,
         lumen_core::components::DocumentOrder(doc_order),
     ));
     if let Some(p) = parent {
         entity.insert(ChildOf(p));
     }
-    if is_boundary {
-        entity.insert(RelayoutBoundary);
-    }
-    if let Some(v) = Option::<Visuals>::from(&el.attrs) {
-        entity.insert(v);
+    computed.insert(&mut entity);
+    // The typography role an element was written with (`style="title-lg"`)
+    // is part of what its text style is computed from, so a restyle reads
+    // it back.
+    if let Some(role) = el.attrs.style_role.as_deref() {
+        entity.insert(TypographyRole(role.into()));
     }
     // A use site the build could not finish: the script fills it by calling
     // the function this names. Arguments arrive in parameter order, laid out
@@ -669,105 +676,22 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             selection_anchor: None,
             multiline: el.attrs.multiline.unwrap_or(default_multiline),
         });
-        // Caret / selected-glyph paint overrides ride a separate
-        // component so non-input text never carries the extra row.
-        // Absent => the renderer falls back (caret = text fill, selected
-        // glyphs keep their fill), so only spawn it when authored.
-        if el.attrs.caret_color.is_some() || el.attrs.selection_text_color.is_some() {
-            entity.insert(TextInputPaint {
-                caret_color: el.attrs.caret_color.map(Into::into),
-                selection_foreground: el.attrs.selection_text_color.map(Into::into),
-            });
-        }
-        // `caret-width` / `password-character` (markup attrs or the CSS
-        // properties) win; each component's own `Default` carries the
-        // runtime's `CARET_WIDTH_PX` / `PASSWORD_MASK_CHAR` fallback.
-        // Only meaningful on `<input>` / `<textarea>`, same as
-        // `TextInputPaint` above.
-        entity.insert(
-            el.attrs
-                .caret_width
-                .map(lumen_core::components::CaretWidth)
-                .unwrap_or_default(),
-        );
-        entity.insert(
-            el.attrs
-                .password_character
-                .map(lumen_core::components::PasswordCharacter)
-                .unwrap_or_default(),
-        );
     }
-    if el.tag == "toggle" {
+    if matches!(el.tag.as_str(), "toggle" | "switch" | "checkbox") {
         entity.insert(Toggleable {
             checked: el.attrs.checked.unwrap_or(false),
         });
-        let track = track_style_over(lumen_primitives::TrackStyle::default(), &el.attrs);
-        entity.insert(track);
-        // `sync_track_fill` needs a fill to write into even when no skin
-        // or author CSS styled the track.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals {
-                fill: Some(Fill::Solid(track.unchecked_bg)),
-                radius: 12.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            });
-        }
     }
     if el.tag == "switch" {
-        entity.insert(Toggleable {
-            checked: el.attrs.checked.unwrap_or(false),
-        });
-        let track = track_style_over(lumen_primitives::TrackStyle::default(), &el.attrs);
-        entity.insert(track);
         // Explicit a11y role: a switch is announced as `Role::Switch`, not
         // the `Role::CheckBox` that a bare `Toggleable` would derive.
         entity.insert(lumen_core::components::A11yRole::Switch);
-        // `sync_track_fill` needs a fill to write into even with no
-        // skin / CSS.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals {
-                fill: Some(Fill::Solid(track.unchecked_bg)),
-                radius: 14.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            });
-        }
     }
     if el.tag == "slider" {
         entity.insert(SliderValue::from(&el.attrs));
-        // UA fallback track fill - same rationale as the `<toggle>`
-        // block above: with no skin or author CSS the slider must
-        // still paint a groove.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals {
-                fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
-                radius: 4.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            });
-        }
     }
-    if el.tag == "checkbox" {
-        entity.insert(Toggleable {
-            checked: el.attrs.checked.unwrap_or(false),
-        });
-        let defaults = lumen_primitives::CheckboxStyle::default();
-        entity.insert(lumen_primitives::CheckboxStyle {
-            // `checkbox:checked { bg }` routes here via checked_bg;
-            // the accent constant is the single Rust fallback.
-            checked_bg: el
-                .attrs
-                .checked_bg
-                .map(Into::into)
-                .unwrap_or(defaults.checked_bg),
-        });
-        if el.attrs.indeterminate {
-            entity.insert(lumen_primitives::Indeterminate);
-        }
+    if el.tag == "checkbox" && el.attrs.indeterminate {
+        entity.insert(lumen_primitives::Indeterminate);
     }
     if el.tag == "radio"
         && let (Some(group), Some(value)) = (&el.attrs.radio_group, &el.attrs.radio_value)
@@ -775,15 +699,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(lumen_primitives::RadioButton {
             group: group.clone(),
             value: value.clone(),
-        });
-        let defaults = lumen_primitives::RadioStyle::default();
-        entity.insert(lumen_primitives::RadioStyle {
-            // `radio:selected { bg }` routes here via selected_bg.
-            selected_bg: el
-                .attrs
-                .selected_bg
-                .map(Into::into)
-                .unwrap_or(defaults.selected_bg),
         });
     }
     if el.tag == "progress" {
@@ -800,84 +715,20 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             text: None,
         });
         entity.insert(bar);
-        // `progress-chunk` (markup attr or the CSS property) wins;
-        // `ProgressChunk::default()` carries the runtime's own
-        // indeterminate-fill-fraction constant when unauthored.
-        entity.insert(
-            el.attrs
-                .progress_chunk
-                .map(lumen_primitives::progress::ProgressChunk)
-                .unwrap_or_default(),
-        );
-        // UA fallback track fill so a skinless `<progress>` still
-        // paints a groove (same rationale as `<slider>`).
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals {
-                fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
-                radius: 3.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            });
-        }
     }
     // Synthetic widget-part markers from the parser desugars.
     if let Some(part) = el.attrs.part {
         match part {
             lumen_ir::layout_ir::WidgetPart::CheckboxBox => {
                 entity.insert(lumen_primitives::CheckboxBox);
-                // The sync system mutates `Visuals` (fill swap) and
-                // needs a slot even when no skin styled the box.
-                if entity.get::<Visuals>().is_none() {
-                    entity.insert(Visuals {
-                        fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
-                        radius: 4.0,
-                        corner_radii: None,
-                        shadows: Vec::new(),
-                        border: None,
-                    });
-                }
             }
             lumen_ir::layout_ir::WidgetPart::RadioDot => {
                 entity.insert(lumen_primitives::RadioDot);
-                if entity.get::<Visuals>().is_none() {
-                    entity.insert(Visuals {
-                        fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
-                        radius: 9.0,
-                        corner_radii: None,
-                        shadows: Vec::new(),
-                        border: None,
-                    });
-                }
             }
             lumen_ir::layout_ir::WidgetPart::ProgressFill => {
                 entity.insert(lumen_primitives::ProgressFill);
-                // The fill needs a paintable Visuals even without a
-                // skin; accent-ish fallback, any CSS rule wins.
-                if entity.get::<Visuals>().is_none() {
-                    entity.insert(Visuals {
-                        fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_CHECKED_BG)),
-                        radius: 3.0,
-                        corner_radii: None,
-                        shadows: Vec::new(),
-                        border: None,
-                    });
-                }
             }
         }
-    }
-    // UA fallback field chrome for text inputs: an unstyled `<input>`
-    // is otherwise invisible, with no edge to aim the caret at. A
-    // subtle translucent fill works on both light and dark app themes;
-    // any skin or author rule wins.
-    if matches!(el.tag.as_str(), "input" | "textarea") && entity.get::<Visuals>().is_none() {
-        entity.insert(Visuals {
-            fill: Some(Fill::Solid(Color::rgba(0.5, 0.5, 0.5, 0.18))),
-            radius: 4.0,
-            corner_radii: None,
-            shadows: Vec::new(),
-            border: None,
-        });
     }
     // Attach Validation only when validation-specific attrs are set.
     // `<slider min max>` already enforces bounds in SliderValue itself -
@@ -936,36 +787,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             signal_name: signal_name.clone(),
             value: value.clone(),
         });
-        // Track fills: author `bg` (or transparent) while unselected,
-        // `:selected { bg }` (or the built-in accent) while this button
-        // carries `Selected`. `sync_tab_button_visuals` swaps the fill
-        // at runtime - same pattern as the `<toggle>` checked/unchecked
-        // pair above.
-        let defaults = lumen_primitives::TabButtonStyle::default();
-        entity.insert(lumen_primitives::TabButtonStyle {
-            selected_bg: el
-                .attrs
-                .selected_bg
-                .map(Into::into)
-                .unwrap_or(defaults.selected_bg),
-            unselected_bg: el
-                .attrs
-                .bg
-                .as_ref()
-                .and_then(|b| Fill::try_from(b).ok()?.as_solid())
-                .unwrap_or(defaults.unselected_bg),
-        });
-        // The selected/unselected swap needs a fill to write into even
-        // when no skin or author CSS styled the button.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals {
-                fill: Some(Fill::Solid(defaults.unselected_bg)),
-                radius: 0.0,
-                corner_radii: None,
-                shadows: Vec::new(),
-                border: None,
-            });
-        }
     }
     if let Some(spec) = &el.attrs.dropdown_button {
         entity.insert(lumen_primitives::DropdownButton {
@@ -994,17 +815,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .map(|(value, label, _)| (value.clone(), label.clone()))
                 .collect(),
         ));
-        // `popup-gap` (markup attr or the CSS property) wins;
-        // `PopupGap::default()` carries the runtime's own gap constant
-        // when unauthored. Sits on the trigger (this header entity) -
-        // `flip_open_dropdown_panels` reads it off the same `DropdownButton`
-        // row it already queries.
-        entity.insert(
-            el.attrs
-                .popup_gap
-                .map(lumen_primitives::popup::PopupGap)
-                .unwrap_or_default(),
-        );
     }
     if let Some((value_signal, value, open_signal)) = &el.attrs.dropdown_option {
         entity.insert(lumen_primitives::DropdownOptionButton {
@@ -1029,13 +839,9 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(TabIndex(-1));
     }
     if let Some(open_signal) = &el.attrs.popup_panel {
-        let inset = el.attrs.inset.unwrap_or_default();
         entity.insert((
             lumen_primitives::PopupPanel {
                 open_signal: open_signal.clone(),
-                default_top: inset.top,
-                default_bottom: inset.bottom,
-                positioned: false,
             },
             // Top-layer paint band: the panel must paint over all
             // later-document-order content (inputs, textareas) it
@@ -1048,22 +854,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     {
         entity.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src)));
     }
-    if let Some(f) = el.attrs.image_fit {
-        entity.insert(ImageFit::from(f));
-    }
     apply_background_image(&mut entity, &el.tag, &el.attrs);
-    if let Some(o) = el.attrs.opacity {
-        entity.insert(Opacity(o));
-    }
-    let transitions = el.attrs.effective_transitions();
-    if !transitions.is_empty() {
-        let specs: Vec<lumen_primitives::TransitionSpec> =
-            transitions.iter().map(Into::into).collect();
-        entity.insert(lumen_primitives::TransitionSpecs(specs));
-    }
-    if let Some(ts) = Option::<TextStyle>::from(&el.attrs) {
-        entity.insert(ts);
-    }
     if let Some(tab) = el.attrs.tab_index {
         entity.insert(TabIndex(tab));
     }
@@ -1072,9 +863,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     }
     if el.attrs.default_button {
         entity.insert(DefaultButton);
-    }
-    if let Some(z) = el.attrs.z_index {
-        entity.insert(lumen_core::components::ZIndex(z));
     }
     // The spec a `bind-text` write is rendered through: `resolve_strings`
     // formatted the text this element spawned with, and
@@ -1198,109 +986,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if let Some(lang) = &el.attrs.lang {
         entity.insert(lumen_core::components::Lang::from(lang.as_str()));
     }
-    if let Some(ix) = Option::<lumen_primitives::Interaction>::from(&el.attrs) {
-        entity.insert(ix);
-    }
-    // `disabled-opacity` (markup attr or the CSS property) wins;
-    // `DISABLED_OPACITY_DEFAULT` is the single Rust-side fallback, shared
-    // by both the runtime-patch path below and the static spawn-time
-    // path further down.
-    let disabled_opacity_default = el
-        .attrs
-        .disabled_opacity_default
-        .unwrap_or(DISABLED_OPACITY_DEFAULT);
-    // State-routed text-color / opacity / box-shadow swaps (`:hover` /
-    // `:focus` / `:active` CSS). `:focus-visible` shares the focus slot.
-    {
-        let to_shadows = |v: &Option<Vec<lumen_ir::layout_ir::ShadowSpec>>| {
-            v.as_ref()
-                .map(|list| list.iter().copied().map(Into::into).collect())
-        };
-        // `:disabled` styling swaps at runtime only when the disabled
-        // state can change at runtime - i.e. the element carries a
-        // `bind-disabled` binding. Statically `disabled="true"` markup
-        // (no binding) keeps the spawn-time fast path below; giving it a
-        // runtime patch too would double-apply.
-        let disabled_patch = if el.attrs.bind_disabled.is_some() {
-            lumen_primitives::StatePatch {
-                text_color: el.attrs.disabled_text_color.map(Into::into),
-                // Default disabled look when no `:disabled { bg }` /
-                // `:disabled { opacity }` rule supplied one: dim the
-                // whole entity (mirrors the static spawn path).
-                opacity: el.attrs.disabled_opacity.or({
-                    if el.attrs.disabled_bg.is_none() && el.attrs.opacity.is_none() {
-                        Some(disabled_opacity_default)
-                    } else {
-                        None
-                    }
-                }),
-                shadows: to_shadows(&el.attrs.disabled_shadows),
-                bg: el.attrs.disabled_bg.map(Into::into),
-            }
-        } else {
-            lumen_primitives::StatePatch::default()
-        };
-        let sv = lumen_primitives::StateVisuals {
-            hover: lumen_primitives::StatePatch {
-                text_color: el.attrs.hover_text_color.map(Into::into),
-                opacity: el.attrs.hover_opacity,
-                shadows: to_shadows(&el.attrs.hover_shadows),
-                bg: None,
-            },
-            focus: lumen_primitives::StatePatch {
-                text_color: el.attrs.focus_text_color.map(Into::into),
-                opacity: el.attrs.focus_opacity,
-                shadows: to_shadows(&el.attrs.focus_shadows),
-                bg: None,
-            },
-            focus_visible: lumen_primitives::StatePatch {
-                text_color: el.attrs.focus_visible_text_color.map(Into::into),
-                opacity: el.attrs.focus_visible_opacity,
-                shadows: to_shadows(&el.attrs.focus_visible_shadows),
-                bg: None,
-            },
-            active: lumen_primitives::StatePatch {
-                text_color: el.attrs.active_text_color.map(Into::into),
-                opacity: el.attrs.active_opacity,
-                shadows: to_shadows(&el.attrs.active_shadows),
-                bg: None,
-            },
-            drag_over: lumen_primitives::StatePatch {
-                text_color: el.attrs.drag_over_text_color.map(Into::into),
-                opacity: el.attrs.drag_over_opacity,
-                shadows: to_shadows(&el.attrs.drag_over_shadows),
-                bg: el.attrs.drag_over_bg.map(Into::into),
-            },
-            disabled: disabled_patch,
-        };
-        if !sv.is_empty() {
-            // A state text-color swap needs a TextStyle slot to write
-            // into even when the resting style authored none.
-            let needs_text = sv.hover.text_color.is_some()
-                || sv.focus.text_color.is_some()
-                || sv.focus_visible.text_color.is_some()
-                || sv.active.text_color.is_some()
-                || sv.drag_over.text_color.is_some()
-                || sv.disabled.text_color.is_some();
-            if needs_text && entity.get::<TextStyle>().is_none() {
-                entity.insert(TextStyle::default());
-            }
-            // A state shadow / background swap needs a Visuals to write
-            // into.
-            let needs_visuals = sv.hover.shadows.is_some()
-                || sv.focus.shadows.is_some()
-                || sv.focus_visible.shadows.is_some()
-                || sv.active.shadows.is_some()
-                || sv.drag_over.shadows.is_some()
-                || sv.drag_over.bg.is_some()
-                || sv.disabled.shadows.is_some()
-                || sv.disabled.bg.is_some();
-            if needs_visuals && entity.get::<Visuals>().is_none() {
-                entity.insert(Visuals::default());
-            }
-            entity.insert(sv);
-        }
-    }
     if el.attrs.draggable {
         entity.insert(lumen_primitives::Draggable);
     }
@@ -1327,56 +1012,10 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             entity.insert(lumen_core::components::Disabled);
         }
     } else if el.attrs.disabled {
+        // Without a binding the marker is static for the element's whole
+        // life, and its `:disabled` styles are its own (see
+        // `ComputedStyle`).
         entity.insert(lumen_core::components::Disabled);
-        // `:disabled` text-color / opacity / box-shadow apply once at
-        // spawn - without a binding the Disabled marker is static for
-        // the entity's whole life.
-        if let Some(c) = el.attrs.disabled_text_color {
-            match entity.get_mut::<TextStyle>() {
-                Some(mut ts) => ts.color = c.into(),
-                None => {
-                    entity.insert(TextStyle {
-                        color: c.into(),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-        if let Some(o) = el.attrs.disabled_opacity {
-            entity.insert(Opacity(o));
-        }
-        if let Some(shadows) = &el.attrs.disabled_shadows {
-            let shadows: Vec<ShadowSpec> = shadows.iter().copied().map(Into::into).collect();
-            match entity.get_mut::<Visuals>() {
-                Some(mut v) => v.shadows = shadows,
-                None => {
-                    entity.insert(Visuals {
-                        shadows,
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-        if let Some(c) = el.attrs.disabled_bg {
-            let fill = Some(Fill::Solid(c.into()));
-            match entity.get_mut::<Visuals>() {
-                Some(mut v) => v.fill = fill,
-                None => {
-                    entity.insert(Visuals {
-                        fill,
-                        radius: el.attrs.radius.unwrap_or(0.0),
-                        corner_radii: el.attrs.radius_corners,
-                        shadows: Vec::new(),
-                        border: None,
-                    });
-                }
-            }
-        } else if el.attrs.opacity.is_none() && el.attrs.disabled_opacity.is_none() {
-            // Default disabled look when no `:disabled { bg }` /
-            // `:disabled { opacity }` rule supplied one: dim the whole
-            // entity.
-            entity.insert(Opacity(disabled_opacity_default));
-        }
     }
     if let Some(axis) = el.attrs.scroll {
         let mut scroll = Scroll {
@@ -1424,90 +1063,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             entity.insert((scroll, ScrollOffset::default()));
         }
     }
-    // CSS `scrollbar-*` properties -> the runtime `ScrollbarStyle`.
-    // Inserted whenever any one of them is authored (harmless on
-    // non-scroll entities); the component's `Default` carries the
-    // no-stylesheet fallback for everything not specified. The guard
-    // used to only check `scrollbar_color` / `scrollbar_width`, so an
-    // element authoring only e.g. `scrollbar-thickness` silently got no
-    // `ScrollbarStyle` at all - the same silent-drop shape as the
-    // `TextStyle` guard in `lumen_ir::convert`, just for this component;
-    // every scrollbar field the cascade can produce is listed here now.
-    //
-    // `scrollbar-track-hover` / `scrollbar-hover-boost` are also
-    // applied on a restyle (`restyle::apply_reapplied_attrs`);
-    // `scrollbar-thickness(-thin)`, `-margin`, `-min-thumb`, and the fade
-    // timings are read here only.
-    if el.attrs.scrollbar_color.is_some()
-        || el.attrs.scrollbar_width.is_some()
-        || el.attrs.scrollbar_thickness.is_some()
-        || el.attrs.scrollbar_thickness_thin.is_some()
-        || el.attrs.scrollbar_margin.is_some()
-        || el.attrs.scrollbar_min_thumb.is_some()
-        || el.attrs.scrollbar_track_hover.is_some()
-        || el.attrs.scrollbar_hover_boost.is_some()
-        || el.attrs.scrollbar_fade_delay_ms.is_some()
-        || el.attrs.scrollbar_fade_duration_ms.is_some()
-    {
-        let mut sb = lumen_core::input::ScrollbarStyle::default();
-        if let Some((thumb, track)) = el.attrs.scrollbar_color {
-            sb.thumb = thumb.into();
-            sb.track = track.map(Into::into);
-        }
-        if let Some(w) = el.attrs.scrollbar_width {
-            sb.width = w.into();
-        }
-        if let Some(v) = el.attrs.scrollbar_thickness {
-            sb.thickness = v;
-        }
-        if let Some(v) = el.attrs.scrollbar_thickness_thin {
-            sb.thickness_thin = v;
-        }
-        if let Some(v) = el.attrs.scrollbar_margin {
-            sb.margin = v;
-        }
-        if let Some(v) = el.attrs.scrollbar_min_thumb {
-            sb.min_thumb = v;
-        }
-        if let Some(c) = el.attrs.scrollbar_track_hover {
-            sb.hover_track = c.into();
-        }
-        if let Some(v) = el.attrs.scrollbar_hover_boost {
-            sb.hover_boost = v;
-        }
-        // `ScrollbarStyle` stores fade timings in seconds; the CSS
-        // properties parse as milliseconds (`Nms` / `Ns`, shared with
-        // `transition-duration`), so both convert here at the single
-        // point of consumption.
-        if let Some(ms) = el.attrs.scrollbar_fade_delay_ms {
-            sb.fade_delay_secs = ms as f32 / 1000.0;
-        }
-        if let Some(ms) = el.attrs.scrollbar_fade_duration_ms {
-            sb.fade_secs = ms as f32 / 1000.0;
-        }
-        entity.insert(sb);
-    }
-
-    // Knob / thumb geometry: `knob-inset` / `thumb-size` (markup attrs or
-    // the CSS properties) win; `KnobGeometry::default()`'s own
-    // `KNOB_INSET` / `THUMB_SIZE` constants are the single Rust-side
-    // fallback per field. Lives on the track entity itself (`<toggle>` /
-    // `<switch>` / `<slider>`) - `sync_toggle_visuals` / `sync_switch_visuals`
-    // / `sync_slider_thumb` read it off the same parent row they already
-    // query for `Toggleable` / `SliderValue`.
-    let knob_geometry = lumen_primitives::controls::KnobGeometry {
-        inset: el
-            .attrs
-            .knob_inset
-            .unwrap_or(lumen_primitives::controls::KNOB_INSET),
-        thumb_size: el
-            .attrs
-            .thumb_size
-            .unwrap_or(lumen_primitives::controls::THUMB_SIZE),
-    };
-    if matches!(el.tag.as_str(), "toggle" | "switch" | "slider") {
-        entity.insert(knob_geometry);
-    }
     let id = entity.id();
     // `<toggle>` / `<slider>` spawn a knob / thumb child so their state
     // is visible without author CSS. Both are absolute-positioned small
@@ -1516,11 +1071,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // Knob / thumb fill: `knob-color` (markup attr or the CSS
     // `knob-color:` property, UA-seeded by the skins) wins; the runtime
     // `KNOB_FILL` constant is the single Rust-side fallback.
-    let knob_fill: Color = el
-        .attrs
-        .knob_color
-        .map(Into::into)
-        .unwrap_or(lumen_primitives::controls::KNOB_FILL);
     if el.tag == "toggle" {
         world.spawn((
             knob_style(28.0, knob_geometry.inset),
@@ -1596,18 +1146,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             cascaded_body: None,
             row_items: Vec::new(),
         });
-        // Virtualized for-blocks pin rows via `position: absolute` against
-        // this entity. Author-supplied flex defaults shrink it to content
-        // width (= the absolute children, which then shrink to content
-        // themselves, ad infinitum). Force width = 100% so the for-block
-        // fills its scroll parent, giving rows a real reference rect.
-        if el.attrs.virtualized
-            && let Some(mut style) = world
-                .entity_mut(id)
-                .get_mut::<lumen_core::components::Style>()
-        {
-            style.width = lumen_core::components::Length::Percent(100.0);
-        }
     } else if (el.tag == "if" || el.tag == "dialog")
         && let Some(name) = &el.attrs.if_signal
     {
@@ -1617,7 +1155,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             currently_mounted: false,
             mode: el.attrs.if_mode.into(),
             eq: el.attrs.if_eq.clone(),
-            saved_display: lumen_core::components::Display::Flex,
             applied_visible: None,
         });
         if el.tag == "dialog" {
@@ -1684,16 +1221,16 @@ pub fn reconcile_if_blocks(
         &mut IfMarker,
         Option<&bevy_ecs::hierarchy::Children>,
     )>,
-    mut styles: bevy_ecs::system::Query<&mut lumen_core::components::Style>,
+    mut styles: bevy_ecs::system::Query<(
+        &mut lumen_core::components::Style,
+        &mut lumen_core::style_overrides::StyleOverrides,
+    )>,
     fade_targets: bevy_ecs::system::Query<(
         Option<&lumen_primitives::TransitionSpecs>,
         Option<&lumen_core::components::Opacity>,
     )>,
     mut commands: bevy_ecs::system::Commands,
 ) {
-    // Set when a body is mounted below, so the end of the pass can raise
-    // `StyleVersion`.
-    let mut mounted = false;
     for (parent_id, mut marker, children) in markers.iter_mut() {
         let value: Option<std::sync::Arc<str>> = store.get_global_str(&marker.signal_name);
         let value_str: Option<&str> = value.as_deref();
@@ -1713,9 +1250,14 @@ pub fn reconcile_if_blocks(
                         // built from. That is the state the web emitter wrote
                         // the same branch with, which is what lets a browser
                         // adopt it instead of rebuilding it.
-                        spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
+                        spawn_body_child(
+                            &mut commands,
+                            tmpl,
+                            parent_id,
+                            Placeholders::Resolved,
+                            BodyChild::Gated,
+                        );
                     }
-                    mounted = true;
                     // Entering transition on the block itself (children
                     // handle their own via `spawn_body_child`).
                     if let Ok((specs, cur)) = fade_targets.get(parent_id)
@@ -1739,9 +1281,14 @@ pub fn reconcile_if_blocks(
                 // visibility state.
                 if now_truthy && !marker.currently_mounted {
                     for tmpl in &marker.body {
-                        spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
+                        spawn_body_child(
+                            &mut commands,
+                            tmpl,
+                            parent_id,
+                            Placeholders::Resolved,
+                            BodyChild::Gated,
+                        );
                     }
-                    mounted = true;
                     marker.currently_mounted = true;
                 }
                 // D5: apply visibility only on a transition. The
@@ -1774,36 +1321,27 @@ pub fn reconcile_if_blocks(
                     }
                 }
                 // section 17.4: hide releases the block's layout space via
-                // Display::None; show restores the prior display. The
-                // Style mutation trips Changed<Style> -> DirtyLayout, so
-                // siblings reflow on this same tick's LayoutSync.
-                if let Ok(mut style) = styles.get_mut(parent_id) {
-                    use lumen_core::components::Display;
-                    if now_truthy {
-                        if matches!(style.display, Display::None) {
-                            style.display = marker.saved_display;
-                        }
-                    } else if !matches!(style.display, Display::None) {
-                        marker.saved_display = style.display;
-                        style.display = Display::None;
-                    }
+                // Display::None; show lets go of it. The Style mutation
+                // trips Changed<Style> -> DirtyLayout, so siblings reflow on
+                // this same tick's LayoutSync.
+                if let Ok((mut style, mut overrides)) = styles.get_mut(parent_id) {
+                    let out = if now_truthy {
+                        overrides.release::<IfMarker>()
+                    } else {
+                        let live = Live {
+                            style: Some(&style),
+                            ..Live::default()
+                        };
+                        let hidden = StyleValues {
+                            display: Some(lumen_core::components::Display::None),
+                            ..StyleValues::default()
+                        };
+                        overrides.hold::<IfMarker>(hidden, &live)
+                    };
+                    out.write_style(&mut style);
                 }
             }
         }
-    }
-    if mounted {
-        // A body carries the attributes the load-time cascade resolved,
-        // against the color scheme and viewport the app started with.
-        // Nothing re-resolves them on their own, so a page reached by
-        // navigation after `set_color_scheme` - or a dialog opened after
-        // the OS flipped to dark - would mount in the scheme the app
-        // booted with. Raising the style version is what puts the newly
-        // mounted elements in front of the cascade re-resolver, which
-        // reads the live scheme. Queued rather than taken as a `ResMut`
-        // param so it lands with the spawns at the next sync point.
-        commands.queue(|world: &mut bevy_ecs::world::World| {
-            lumen_core::components::StyleVersion::bump(world);
-        });
     }
 }
 
@@ -2328,32 +1866,39 @@ pub fn reconcile_for_blocks(
             // the for-block sizes to 0 (no flex children - every row is
             // position: absolute) and rows escape upward into the
             // scroll's siblings (e.g. the toolbar/header) because the
-            // containing block has no height to clip against. Preserve
-            // every other Style field via copy-then-mutate so author
-            // CSS on the for-block (padding, etc.) stays intact.
-            let content_h = items.len() as f32 * row_h;
-            let mut new_style = styles.get(parent_id).cloned().unwrap_or_default();
-            new_style.width = lumen_core::components::Length::Percent(100.0);
-            new_style.height = lumen_core::components::Length::Px(content_h);
+            // containing block has no height to clip against. The size is
+            // held over the block's own styles, so author CSS on it
+            // (padding, etc.) stays intact and a restyle keeps the size.
+            //
             // Taffy's default `flex_shrink: 1.0` clamps the for-block
             // down to the parent scroll viewport even when we set an
             // explicit `height: content_h`. Pin `min_height` to the
             // same value so Taffy can't shrink it - that's what gives
             // the scroll a content extent larger than the viewport
             // (without it the user can't scroll down past viewport).
-            new_style.min_height = lumen_core::components::Length::Px(content_h);
-            // D4: only insert when the computed style actually differs.
-            // The unconditional insert sat *before* the cache-signature
-            // early-continue below, so every steady tick re-triggered
+            let content_h = items.len() as f32 * row_h;
+            let extent = lumen_core::components::Length::Px(content_h);
+            // D4: only write when the size differs. An
+            // unconditional write every steady tick re-triggered
             // Changed<Style> -> DirtyLayout -> relayout -> FrameDirty - a
             // permanent per-tick relayout/repaint loop on virtualized
             // for-blocks.
             if styles
                 .get(parent_id)
-                .map(|s| *s != new_style)
+                .map(|s| s.height != extent || s.min_height != extent)
                 .unwrap_or(true)
             {
-                commands.entity(parent_id).insert(new_style);
+                let held = StyleValues {
+                    width: Some(lumen_core::components::Length::Percent(100.0)),
+                    height: Some(extent),
+                    min_height: Some(extent),
+                    ..StyleValues::default()
+                };
+                commands.entity(parent_id).queue(
+                    move |mut ent: bevy_ecs::world::EntityWorldMut<'_>| {
+                        lumen_core::style_overrides::hold_on::<ForMarker>(&mut ent, held);
+                    },
+                );
             }
 
             // Desired `(index, key)` pairs for the current window. Keys
@@ -2485,30 +2030,38 @@ pub fn reconcile_for_blocks(
                 for tmpl in template.iter() {
                     // Substitute placeholders; run the cascade only on
                     // the per-row fallback path (pre-cascaded otherwise).
-                    let mut inst = substitute_in_element_with_css(
+                    let inst = substitute_in_element_with_css(
                         tmpl,
                         &scope,
                         if per_row_cascade { row_css } else { None },
                     );
-                    // Override the row's positioning so it lands at the
-                    // correct absolute slot inside the for-block.
-                    // Pin the row vertically at `top = i * row_h` and
-                    // left = 0; let `width=100%` + `height=row_h` set
-                    // dims explicitly. Setting `right` / `bottom` here
-                    // would over-constrain taffy (it expects either
-                    // inset OR size, not both on the same axis) and the
-                    // row collapses to content width.
-                    inst.attrs.position = Some(lumen_ir::layout_ir::PositionSpec::Absolute);
-                    inst.attrs.inset = Some(lumen_ir::layout_ir::Edges {
-                        top: *i as f32 * row_h,
-                        right: f32::NAN,
-                        bottom: f32::NAN,
-                        left: 0.0,
-                        ..lumen_ir::layout_ir::Edges::default()
-                    });
-                    inst.attrs.height = Some(lumen_ir::layout_ir::LengthSpec::Px(row_h));
-                    inst.attrs.width = Some(lumen_ir::layout_ir::LengthSpec::Percent(100.0));
-                    spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
+                    // The row lands in the absolute slot its index gives
+                    // it inside the for-block: pinned at `top = i * row_h`
+                    // and left = 0, with `width=100%` + `height=row_h`
+                    // setting its size. Setting `right` / `bottom` too
+                    // would over-constrain taffy (it expects either inset
+                    // OR size, not both on the same axis) and the row
+                    // collapses to content width.
+                    let slot = StyleValues {
+                        position: Some(lumen_core::components::Position::Absolute),
+                        inset: Some(lumen_core::components::Edges {
+                            top: *i as f32 * row_h,
+                            right: f32::NAN,
+                            bottom: f32::NAN,
+                            left: 0.0,
+                            ..lumen_core::components::Edges::default()
+                        }),
+                        height: Some(lumen_core::components::Length::Px(row_h)),
+                        width: Some(lumen_core::components::Length::Percent(100.0)),
+                        ..StyleValues::default()
+                    };
+                    spawn_body_child(
+                        &mut commands,
+                        &inst,
+                        parent_id,
+                        Placeholders::Resolved,
+                        BodyChild::VirtualRow(Box::new(slot)),
+                    );
                 }
                 new_win.push((*i, key.clone()));
                 new_items.push(item.clone());
@@ -2615,7 +2168,13 @@ pub fn reconcile_for_blocks(
                         .reporting_to(&report_missing);
                     for tmpl in &marker.body {
                         let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                        spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
+                        spawn_body_child(
+                            &mut commands,
+                            &inst,
+                            parent_id,
+                            Placeholders::Resolved,
+                            BodyChild::Row,
+                        );
                     }
                 }
             }
@@ -2649,7 +2208,13 @@ pub fn reconcile_for_blocks(
                 .reporting_to(&report_missing);
             for tmpl in &marker.body {
                 let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
+                spawn_body_child(
+                    &mut commands,
+                    &inst,
+                    parent_id,
+                    Placeholders::Resolved,
+                    BodyChild::Row,
+                );
             }
         }
         marker.cached_keys = new_keys;
@@ -2839,7 +2404,6 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
         Has<Focused>,
         Has<BindText>,
     )>();
-    let mut restyle = false;
     for (entity, attrs, changes) in patches {
         if world.get_entity(entity).is_err() {
             continue;
@@ -2861,12 +2425,14 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
             }
         }
         let mut e = world.entity_mut(entity);
+        // A new id, class or typography role can change what the element's
+        // styles are, so the element restyles.
         if changes.id {
             match &attrs.id {
                 Some(id) => e.insert(LumenId(id.clone())),
                 None => e.remove::<LumenId>(),
             };
-            restyle = true;
+            e.insert(lumen_core::components::StyleDirty);
         }
         if changes.classes {
             if attrs.classes.is_empty() {
@@ -2874,7 +2440,7 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
             } else {
                 e.insert(LumenClasses::from(attrs.classes.clone()));
             }
-            restyle = true;
+            e.insert(lumen_core::components::StyleDirty);
         }
         if changes.src && e.get::<LumenTag>().is_some_and(|t| &*t.0 == "image") {
             match &attrs.src {
@@ -2882,10 +2448,12 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
                 None => e.remove::<lumen_assets::ImageSource>(),
             };
         }
-        if changes.style_role
-            && let Some(ts) = Option::<TextStyle>::from(&*attrs)
-        {
-            e.insert(ts);
+        if changes.style_role {
+            match attrs.style_role.as_deref() {
+                Some(role) => e.insert(TypographyRole(role.into())),
+                None => e.remove::<TypographyRole>(),
+            };
+            e.insert(lumen_core::components::StyleDirty);
         }
         // An empty payload is the element's `id`, so a new id moves it too.
         if changes.drag_payload || changes.id {
@@ -2894,10 +2462,6 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
                 None => e.remove::<lumen_os_dnd::DragSource>(),
             };
         }
-    }
-    // A new id or class can change which rules match the element.
-    if restyle {
-        lumen_core::components::StyleVersion::bump(world);
     }
 }
 
@@ -2923,7 +2487,7 @@ fn body_has_dynamic_selector_attrs(body: &[Element]) -> bool {
 /// placeholder substitution. Used to build the cascade-once template
 /// cache for virtualized `<for>` rows.
 fn cascade_element_tree(el: &mut Element, sheet: &lumen_ir::css::Stylesheet) {
-    let _ = lumen_ir::css::reapply_single(el, sheet);
+    lumen_ir::css::reapply_detached(el, sheet, &lumen_ir::css::MediaContext::default());
     for child in el.children.iter_mut() {
         cascade_element_tree(child, sheet);
     }
@@ -2992,10 +2556,33 @@ fn spawn_body_child(
     el: &Element,
     parent: Entity,
     placeholders: Placeholders,
+    kind: BodyChild,
 ) {
     let el = el.clone();
     commands.queue(move |world: &mut World| {
         let id = spawn_subtree(world, &el, Some(parent), placeholders);
+        match kind {
+            // A gated body carries the attributes the load-time cascade
+            // resolved, against the color scheme and viewport the app
+            // started with, so a page reached by navigation after
+            // `set_color_scheme`, or a dialog opened after the OS flipped
+            // to dark, would mount in the scheme the app booted with. The
+            // restyle that runs before the frame resolves it against the
+            // live ones.
+            BodyChild::Gated => {
+                world
+                    .entity_mut(id)
+                    .insert(lumen_core::components::StyleDirty);
+            }
+            BodyChild::Row => {}
+            // A virtualized row sits in the slot its index gives it, which
+            // the reconciler holds over whatever the row's styles say.
+            BodyChild::VirtualRow(slot) => {
+                let mut ent = world.entity_mut(id);
+                ent.insert(VirtualRow);
+                lumen_core::style_overrides::hold_on::<VirtualRow>(&mut ent, *slot);
+            }
+        }
         // Mount-direction transition (the CSS `@starting-style`
         // analogue): an element entering the tree with a
         // `transition: opacity ...` declaration starts fully transparent
@@ -3010,6 +2597,27 @@ fn spawn_body_child(
             world.entity_mut(id).insert(bundle);
         }
     });
+}
+
+/// What a body element [`spawn_body_child`] mounts is.
+enum BodyChild {
+    /// The body of an `<if>` that just opened.
+    Gated,
+    /// A `<for>` row, which its template's cascade already styled.
+    Row,
+    /// A virtualized `<for>` row, held in the slot given.
+    VirtualRow(Box<StyleValues>),
+}
+
+/// Marker on a virtualized `<for>` row. The slot it sits in is held in
+/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) over
+/// the row's own styles.
+#[derive(bevy_ecs::component::Component, Clone, Copy, Debug, Default)]
+#[require(lumen_core::style_overrides::StyleOverrides)]
+pub struct VirtualRow;
+
+impl StyleOwner for VirtualRow {
+    const RANK: u8 = 20;
 }
 
 /// Put a virtualized `<for>` block's mounted rows back in row-index
@@ -3071,9 +2679,9 @@ fn mount_fade_bundle(
 /// `run::loading::load_ir`), so a skinless app still gets a sizing
 /// floor without a Rust-side table to keep in sync.
 ///
-/// Three cases don't fit a plain CSS rule and stay here, running at spawn
-/// time after the cascade and inline attrs have been folded into
-/// `attrs`:
+/// Four cases don't fit a plain CSS rule and stay here, running at spawn
+/// and at every restyle after the cascade and inline attrs have been folded
+/// into `attrs`:
 ///
 /// - `<switch>` wants its UA `min-width` only when `width` is ALSO
 ///   unset (an explicit width already gives it a usable footprint).
@@ -3093,6 +2701,11 @@ fn mount_fade_bundle(
 ///   dividing the window between them. The gate is spelled `<if>`, and an
 ///   author's own `<if>` is an ordinary in-flow element, so the rule keys
 ///   on the signal rather than the tag and cannot be a `ua.css` selector.
+/// - A `<dialog>` covers its parent: `position: absolute` with every
+///   inset `0`, unless a rule or an attribute placed it. The rule would fit
+///   in `ua.css`, but that sheet also reaches the web target's stylesheet,
+///   where a modal dialog sits in the browser's top layer and has to stay
+///   `position: fixed`.
 /// - `<input>` / `<textarea>` default to `overflow: hidden` only when
 ///   neither the `overflow` shorthand nor `overflow-x` / `overflow-y`
 ///   was authored anywhere. `lumen_ir::css` never expands the `overflow`
@@ -3103,13 +2716,21 @@ fn mount_fade_bundle(
 ///   shorthand-only `overflow: visible`, instead of losing to it as the
 ///   current behavior requires - so this checks the fully-resolved
 ///   `attrs` directly instead.
-pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style) {
+pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, page_gate: bool, style: &mut Style) {
     if tag == "switch" && attrs.width.is_none() && attrs.min_width.is_none() {
         style.min_width = Length::Px(52.0);
     }
-    if tag == "if" && attrs.if_signal.as_deref() == Some(PATH_SIGNAL) && attrs.position.is_none() {
+    if page_gate && attrs.position.is_none() {
         style.position = Position::Absolute;
         style.inset = Edges::default();
+    }
+    if tag == "dialog" {
+        if attrs.position.is_none() {
+            style.position = Position::Absolute;
+        }
+        if attrs.inset.is_none() {
+            style.inset = Edges::default();
+        }
     }
     if matches!(tag, "input" | "textarea") {
         // Long values scroll horizontally under the caret-keep-visible
@@ -3157,7 +2778,7 @@ mod ua_style_tests {
 
     fn ua_style(attrs: &Attributes) -> Style {
         let mut style = Style::from(attrs);
-        apply_ua_style_defaults("scroll", attrs, &mut style);
+        apply_ua_style_defaults("scroll", attrs, false, &mut style);
         style
     }
 
@@ -3230,47 +2851,6 @@ fn knob_style(size: f32, inset_px: f32) -> Style {
     }
 }
 
-/// Should this entity carry [`RelayoutBoundary`]? An entity qualifies
-/// when:
-///
-/// 1. Explicit `layout-boundary="true"` markup attr - author override.
-/// 2. The entity is a scroll container - `<scroll>`, or either axis
-///    overflowing as `Scroll`. It clips its content, so descendants
-///    reflowing don't affect the parent's own size beyond what the
-///    already-known clip box allows.
-/// 3. Both `width` and `height` are fixed `Px` and the entity cannot be
-///    flex-shrunk (`shrink: 0`) - its size is then constraint-imposed,
-///    so descendants can re-flow internally without changing the
-///    parent's measured dimensions.
-///
-/// The `shrink: 0` half of rule 3 is what keeps the boundary sound. On an
-/// overflowing line a shrinkable item is squeezed down to its automatic
-/// minimum size, which is the smaller of its content's min-content size
-/// and its authored width - so under the CSS default `flex-shrink: 1` a
-/// purely internal change can still move the item's own outer box, and
-/// stopping the dirty walk there would leave ancestors holding stale
-/// geometry.
-///
-/// Pattern: Flutter's `_relayoutBoundary`, set on `RenderObjects` that
-/// pass the same constraint test.
-fn is_relayout_boundary(style: &Style, el: &Element) -> bool {
-    if el.attrs.layout_boundary {
-        return true;
-    }
-    // `<scroll>` carries its axis on `attrs.scroll` and never sets the
-    // `overflow` properties, so the style check alone missed the one tag
-    // whose whole job is scrolling.
-    if el.attrs.scroll.is_some()
-        || matches!(style.overflow_x, Overflow::Scroll)
-        || matches!(style.overflow_y, Overflow::Scroll)
-    {
-        return true;
-    }
-    matches!(style.width, Length::Px(_))
-        && matches!(style.height, Length::Px(_))
-        && style.shrink == 0.0
-}
-
 #[cfg(test)]
 mod body_spawn_tests {
     //! The reconciler spawn path must produce the same widget behavior
@@ -3318,7 +2898,6 @@ mod body_spawn_tests {
             currently_mounted: false,
             mode: IfMode::Hide,
             eq: None,
-            saved_display: lumen_core::components::Display::Flex,
             applied_visible: None,
         });
         world.run_system_once(reconcile_if_blocks).unwrap();
@@ -3527,7 +3106,6 @@ mod escape_tests {
             currently_mounted: true,
             mode: IfMode::Hide,
             eq: None,
-            saved_display: lumen_core::components::Display::Flex,
             applied_visible: None,
         }
     }
@@ -3676,7 +3254,6 @@ mod dialog_contract_tests {
             currently_mounted: true,
             mode: IfMode::Hide,
             eq: None,
-            saved_display: lumen_core::components::Display::Flex,
             applied_visible: None,
         }
     }
@@ -3964,8 +3541,7 @@ mod dialog_contract_tests {
 mod css_spawn_wiring_tests {
     //! Phase 2 (skin-tokens): CSS-authored values resolved into
     //! `Attributes` must reach the runtime at SPAWN, not only via a live
-    //! restyle recompute - `restyle::apply_reapplied_attrs` already wires
-    //! these, so a value that only shows up after a theme flip and not on
+    //! restyle - a value that only shows up after a theme flip and not on
     //! first launch is exactly the bug these tests pin.
     use super::*;
 

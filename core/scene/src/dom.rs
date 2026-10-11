@@ -16,11 +16,11 @@
 //!
 //! Structure edits reuse the same spawn / despawn / hierarchy path the
 //! `<for>` reconciler uses, so layout, style and paint stay consistent. A
-//! class, attribute or inline-style change bumps
-//! [`StyleVersion`](lumen_core::components::StyleVersion), which is what a
-//! host with a cascade of its own listens on; a host whose platform resolves
-//! CSS itself, such as a browser page, has nothing reading it and pays a
-//! counter increment.
+//! class, id, disabled or inline-style change marks the element
+//! [`StyleDirty`](lumen_core::components::StyleDirty), and a structure edit
+//! bumps [`StyleVersion`](lumen_core::components::StyleVersion); those are
+//! what a host with a cascade of its own listens on. A host whose platform
+//! resolves CSS itself, such as a browser page, has nothing reading them.
 
 use std::collections::HashMap;
 
@@ -28,7 +28,7 @@ use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
     DirtyLayout, Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag,
-    StyleVersion, TextContent, TextInput,
+    StyleDirty, StyleVersion, TextContent, TextInput,
 };
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
 use lumen_core::prelude::{App, TickStage};
@@ -314,34 +314,40 @@ pub fn apply_dom_commands(world: &mut World) {
                 }
             }
             ScriptCommand::SetAttr { node, name, value } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    style_dirty |= set_attr(world, entity, &name, &value);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && set_attr(world, entity, &name, &value)
+                {
+                    world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::RemoveAttr { node, name } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    style_dirty |= remove_attr(world, entity, &name);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && remove_attr(world, entity, &name)
+                {
+                    world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::SetClasses { target_id, classes } => {
-                style_dirty |= set_classes(world, &target_id, &classes);
+                for entity in set_classes(world, &target_id, &classes) {
+                    world.entity_mut(entity).insert(StyleDirty);
+                }
             }
             ScriptCommand::ClassAdd { node, class } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     class_edit(world, entity, &class, ClassOp::Add);
-                    style_dirty = true;
+                    world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::ClassRemove { node, class } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     class_edit(world, entity, &class, ClassOp::Remove);
-                    style_dirty = true;
+                    world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::ClassToggle { node, class } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     class_edit(world, entity, &class, ClassOp::Toggle);
-                    style_dirty = true;
+                    world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::SetStyleProp { node, name, value } => {
@@ -349,8 +355,7 @@ pub fn apply_dom_commands(world: &mut World) {
                     let mut e = world.entity_mut(entity);
                     let mut style = e.take::<InlineStyle>().unwrap_or_default();
                     style.set(&name, value);
-                    e.insert(style);
-                    style_dirty = true;
+                    e.insert((style, StyleDirty));
                 }
             }
             ScriptCommand::RemoveStyleProp { node, name } => {
@@ -360,7 +365,7 @@ pub fn apply_dom_commands(world: &mut World) {
                         style.remove(&name);
                         e.insert(style);
                     }
-                    style_dirty = true;
+                    e.insert(StyleDirty);
                 }
             }
             ScriptCommand::BindEvent {
@@ -592,7 +597,8 @@ fn remove_attr(world: &mut World, entity: Entity, name: &str) -> bool {
 
 /// Assign the whole class list of every element `target_id` names
 /// (`set_class`), or of the page root when it names `<root>`
-/// (`set_root_class`). Returns whether any list changed.
+/// (`set_root_class`). Returns the elements whose list changed, which are
+/// the ones to restyle.
 ///
 /// The root has no `id` to look up, so it is read from
 /// [`DocumentRoot`](crate::spawn::DocumentRoot), which the spawn pass
@@ -600,23 +606,23 @@ fn remove_attr(world: &mut World, entity: Entity, name: &str) -> bool {
 ///
 /// A non-root element has no equivalent of the desktop's root-class watcher
 /// (`reapply_styles_on_root_class_change`), so rewriting its class list only
-/// restyles if this bumps `StyleVersion`. Without the bump the cascade
+/// restyles if the caller marks it [`StyleDirty`]. Unmarked, the cascade
 /// re-resolver never re-walks the entity, the new class's rules never land,
 /// and a `transition` on the swapped property never runs.
-fn set_classes(world: &mut World, target_id: &str, classes: &str) -> bool {
+fn set_classes(world: &mut World, target_id: &str, classes: &str) -> Vec<Entity> {
     let new_classes: Vec<String> = classes.split_whitespace().map(str::to_string).collect();
     if target_id == "<root>" {
         let Some(root) = world
             .get_resource::<crate::spawn::DocumentRoot>()
             .map(|r| r.0)
         else {
-            return false;
+            return Vec::new();
         };
         world
             .entity_mut(root)
             .insert(LumenClasses::from(new_classes));
         // The root's own restyle is the watcher's, on the host that has one.
-        return false;
+        return Vec::new();
     }
     let mut query = world.query::<(Entity, &LumenId, Option<&LumenClasses>)>();
     let targets: Vec<(Entity, bool)> = query
@@ -624,9 +630,11 @@ fn set_classes(world: &mut World, target_id: &str, classes: &str) -> bool {
         .filter(|(_, id, _)| id.0 == target_id)
         .map(|(entity, _, current)| (entity, class_list_differs(current, &new_classes)))
         .collect();
-    let mut changed = false;
+    let mut changed = Vec::new();
     for (entity, differs) in targets {
-        changed |= differs;
+        if differs {
+            changed.push(entity);
+        }
         world
             .entity_mut(entity)
             .insert(LumenClasses::from(new_classes.clone()));

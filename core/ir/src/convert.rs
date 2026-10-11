@@ -50,138 +50,131 @@ pub fn typography_role_to_px(role: &str) -> Option<f32> {
 impl From<&Attributes> for Style {
     /// The element's layout style from its resolved attributes: the CSS
     /// initial values, with every property the attributes set written over
-    /// them by [`Attributes::patch_style`].
-    fn from(attrs: &Attributes) -> Self {
-        let mut style = Style::default();
-        attrs.patch_style(&mut style);
-        style
-    }
-}
-
-impl Attributes {
-    /// Write every layout property these attributes set onto `style`,
-    /// leaving the fields they leave unset as they are.
+    /// them.
     ///
     /// This is the one mapping from attributes to [`Style`]. Spawning an
-    /// element applies it to the initial values (`Style::from`), and a
-    /// restyle (a class change, a `@media` breakpoint, a theme flip)
-    /// applies the re-resolved cascade to the live component, so the two
-    /// can never disagree about which properties reach layout.
-    pub fn patch_style(&self, style: &mut Style) {
-        if let Some(d) = self.display {
+    /// element and a restyle (a class change, a `@media` breakpoint, a
+    /// theme flip) both build the style through here from the element's
+    /// whole resolution, so the two can never disagree about which
+    /// properties reach layout, and a property nothing sets any more is
+    /// back at its initial value.
+    fn from(attrs: &Attributes) -> Self {
+        let mut style = Style::default();
+        if let Some(d) = attrs.display {
             style.display = d.into();
         }
-        if let Some(w) = self.width {
+        if let Some(w) = attrs.width {
             style.width = w.into();
         }
-        if let Some(h) = self.height {
+        if let Some(h) = attrs.height {
             style.height = h.into();
         }
-        if let Some(f) = self.flex {
+        if let Some(f) = attrs.flex {
             style.flex_direction = FlexDirection::from(f);
         }
-        if let Some(p) = self.padding {
+        if let Some(p) = attrs.padding {
             style.padding = p.into();
         }
-        if let Some(m) = self.margin {
+        if let Some(m) = attrs.margin {
             style.margin = m.into();
         }
         // `gap` sets both axes; `row-gap` / `column-gap` then override
         // their own axis. Percent gaps ride in the `Gap` pct slots.
-        if let Some(v) = self.gap {
+        if let Some(v) = attrs.gap {
             style.gap = Gap::from(v);
         }
-        if let Some(r) = self.gap_row {
+        if let Some(r) = attrs.gap_row {
             style.gap.row = r;
         }
-        if let Some(c) = self.gap_column {
+        if let Some(c) = attrs.gap_column {
             style.gap.column = c;
         }
-        if let Some(p) = self.gap_row_pct.or(self.gap_pct) {
+        if let Some(p) = attrs.gap_row_pct.or(attrs.gap_pct) {
             style.gap.row_pct = Some(p);
         }
-        if let Some(p) = self.gap_column_pct.or(self.gap_pct) {
+        if let Some(p) = attrs.gap_column_pct.or(attrs.gap_pct) {
             style.gap.column_pct = Some(p);
         }
-        if let Some(g) = self.grow {
+        if let Some(g) = attrs.grow {
             style.grow = g;
         }
-        if let Some(a) = self.align {
+        if let Some(a) = attrs.align {
             style.align = a.into();
         }
-        if let Some(j) = self.justify {
+        if let Some(j) = attrs.justify {
             style.justify = j.into();
         }
-        if let Some(a) = self.align_self {
+        if let Some(a) = attrs.align_self {
             style.align_self = Some(a.into());
         }
-        if let Some(j) = self.justify_items {
+        if let Some(j) = attrs.justify_items {
             style.justify_items = Some(j.into());
         }
-        if let Some(j) = self.justify_self {
+        if let Some(j) = attrs.justify_self {
             style.justify_self = Some(j.into());
         }
-        if let Some(t) = self.grid_template.as_ref() {
+        if let Some(t) = attrs.grid_template.as_ref() {
             style.grid_template = Some(t.into());
         }
-        if let Some(r) = self.grid_row {
+        if let Some(r) = attrs.grid_row {
             style.grid_row = r;
         }
-        if let Some(c) = self.grid_column {
+        if let Some(c) = attrs.grid_column {
             style.grid_column = c;
         }
-        if let Some(p) = self.position {
+        if let Some(p) = attrs.position {
             style.position = p.into();
         }
-        if let Some(i) = self.inset {
+        if let Some(i) = attrs.inset {
             style.inset = i.into();
         }
-        if let Some(v) = self.min_width {
+        if let Some(v) = attrs.min_width {
             style.min_width = v.into();
         }
-        if let Some(v) = self.min_height {
+        if let Some(v) = attrs.min_height {
             style.min_height = v.into();
         }
-        if let Some(v) = self.max_width {
+        if let Some(v) = attrs.max_width {
             style.max_width = v.into();
         }
-        if let Some(v) = self.max_height {
+        if let Some(v) = attrs.max_height {
             style.max_height = v.into();
         }
-        if self.aspect_ratio.is_some() {
-            style.aspect_ratio = self.aspect_ratio;
+        if attrs.aspect_ratio.is_some() {
+            style.aspect_ratio = attrs.aspect_ratio;
         }
         // `overflow` is shorthand for both axes; `overflow-x` /
         // `overflow-y` override their own axis.
-        if let Some(o) = self.overflow_x.or(self.overflow) {
+        if let Some(o) = attrs.overflow_x.or(attrs.overflow) {
             style.overflow_x = o.into();
         }
-        if let Some(o) = self.overflow_y.or(self.overflow) {
+        if let Some(o) = attrs.overflow_y.or(attrs.overflow) {
             style.overflow_y = o.into();
         }
-        if let Some(s) = self.shrink {
+        if let Some(s) = attrs.shrink {
             style.shrink = s;
         }
-        if let Some(b) = self.basis {
+        if let Some(b) = attrs.basis {
             style.basis = b.into();
         }
-        if let Some(w) = self.flex_wrap {
+        if let Some(w) = attrs.flex_wrap {
             style.flex_wrap = w.into();
         }
-        if let Some(a) = self.align_content {
+        if let Some(a) = attrs.align_content {
             style.align_content = Some(a.into());
         }
         // CSS border-style folds into computed widths: no solid style =>
         // zero widths (no layout space, no paint).
-        if self.border_style.is_some() || self.border_width.is_some() {
-            style.border = self
+        if attrs.border_style.is_some() || attrs.border_width.is_some() {
+            style.border = attrs
                 .effective_border()
                 .map(|(widths, _)| widths.into())
                 .unwrap_or_default();
         }
-        if let Some(b) = self.box_sizing {
+        if let Some(b) = attrs.box_sizing {
             style.box_sizing = b.into();
         }
+        style
     }
 }
 

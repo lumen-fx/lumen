@@ -7,20 +7,36 @@
 
 //! Smoke tests for the markup parser.
 
-use lumenc::layout_ir::{FlexAxis, LengthSpec, ScrollAxisSpec};
+use lumenc::layout_ir::{FlexAxis, LayoutIR, LengthSpec, ScrollAxisSpec};
 use lumenc::parse_html;
 use lumenc::spawn::SpawnIntoWorld;
+
+/// Parse `markup` and run the user-agent sheet over it, which is where a
+/// tag's own defaults (a `<column>`'s direction, an `<overlay>`'s
+/// placement) come from. A bare parse carries only what the markup wrote.
+fn parse_with_ua(markup: &str) -> LayoutIR {
+    let mut ir = parse_html(markup).expect("parse");
+    let mut sheet = lumenc::parse_css(lumenc::skins::UA).expect("ua.css parses");
+    for rule in &mut sheet.rules {
+        rule.origin = lumen_ir::css::Origin::UserAgent;
+    }
+    lumenc::apply_css(&mut ir, &sheet).expect("cascade");
+    ir
+}
 
 #[test]
 fn empty_root_parses() {
     let ir = parse_html("<root/>").expect("parse");
     assert_eq!(ir.root.tag, "root");
     assert_eq!(ir.root.children.len(), 0);
-    // D3: per-tag sizing defaults are UA-origin now - applied at spawn
-    // where author CSS / inline attrs left the field unset, no longer
-    // baked into the parse-time (inline-origin) attrs.
+    // A tag's defaults are user-agent rules, not values the parser writes
+    // into the element, so the cascade can rebuild them.
     assert_eq!(ir.root.attrs.width, None);
-    assert_eq!(ir.root.attrs.flex, Some(FlexAxis::Column));
+    assert_eq!(ir.root.attrs.flex, None);
+    assert_eq!(
+        parse_with_ua("<root/>").root.attrs.flex,
+        Some(FlexAxis::Column)
+    );
 }
 
 #[test]
@@ -48,7 +64,7 @@ fn tile_with_attrs() {
 
 #[test]
 fn scroll_defaults_to_y_axis() {
-    let ir = parse_html(r##"<root><scroll/></root>"##).expect("parse");
+    let ir = parse_with_ua(r##"<root><scroll/></root>"##);
     let s = &ir.root.children[0];
     assert_eq!(s.attrs.scroll, Some(ScrollAxisSpec::Y));
 }
@@ -607,15 +623,15 @@ fn binding_to_a_fragment_argument_is_rejected() {
 #[test]
 fn dialog_desugars_to_absolute_if_with_hide_mode() {
     let ir =
-        parse_html(r##"<root><dialog open="show_settings"><label text="hi"/></dialog></root>"##)
-            .expect("html");
+        parse_with_ua(r##"<root><dialog open="show_settings"><label text="hi"/></dialog></root>"##);
     let dlg = &ir.root.children[0];
     assert_eq!(dlg.tag, "dialog");
-    assert_eq!(
-        dlg.attrs.position,
-        Some(lumenc::layout_ir::PositionSpec::Absolute)
-    );
-    let inset = dlg.attrs.inset.expect("dialog default inset=0");
+    // Its placement is a user-agent default the style computation applies,
+    // so a rule or an attribute can still move it.
+    let mut style = lumen_core::components::Style::from(&dlg.attrs);
+    lumenc::spawn::apply_ua_style_defaults(&dlg.tag, &dlg.attrs, false, &mut style);
+    assert_eq!(style.position, lumen_core::components::Position::Absolute);
+    let inset = style.inset;
     assert_eq!(
         (inset.top, inset.right, inset.bottom, inset.left),
         (0.0, 0.0, 0.0, 0.0)
@@ -782,7 +798,7 @@ fn default_skin_is_parseable_css() {
 
 #[test]
 fn overlay_defaults_position_absolute() {
-    let ir = parse_html(r##"<root><overlay/></root>"##).expect("html");
+    let ir = parse_with_ua(r##"<root><overlay/></root>"##);
     let ov = &ir.root.children[0];
     assert_eq!(ov.tag, "overlay");
     assert_eq!(
@@ -1979,7 +1995,6 @@ fn if_hide_uses_display_none_and_writes_only_on_transition() {
                 currently_mounted: false,
                 mode: lumenc::spawn::IfMode::Hide,
                 eq: None,
-                saved_display: Display::Flex,
                 applied_visible: None,
             },
         ))
@@ -2253,7 +2268,7 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
 /// floating panel.
 #[test]
 fn menu_panel_is_vertical_absolute_overlay() {
-    let ir = parse_html(
+    let ir = parse_with_ua(
         r##"<root>
             <menu id="ctx">
                 <menuitem id="copy" label="Copy" />
@@ -2261,8 +2276,7 @@ fn menu_panel_is_vertical_absolute_overlay() {
                 <menuitem id="paste" label="Paste" />
             </menu>
         </root>"##,
-    )
-    .expect("parse");
+    );
     // <menu> collapses to an <if eq="true" mode="hide"> gate...
     let if_block = &ir.root.children[0];
     assert_eq!(if_block.tag, "if");
@@ -3086,10 +3100,9 @@ fn bind_scroll_drives_offset_and_pushes_back_on_settle() {
     use lumen_core::input::{Scroll, ScrollOffset};
     use lumen_core::property_store::PropertyStore;
 
-    let ir = parse_html(
+    let ir = parse_with_ua(
         r##"<root><scroll bind-scroll="feed_pos" height="100"><label text="row"/></scroll></root>"##,
-    )
-    .expect("parse");
+    );
     let mut world = World::new();
     world.insert_resource(PropertyStore::default());
     let _root = ir.spawn_into(&mut world);

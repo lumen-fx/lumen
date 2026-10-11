@@ -6,16 +6,18 @@
 //! [`StatePatch`] per state); this module's [`apply_state_visuals`]
 //! system swaps the live [`TextStyle`] / [`Opacity`] /
 //! [`Visuals::shadows`] / [`Visuals::fill`] values as the interaction
-//! markers come and go, restoring the captured idle baseline when every
-//! state ends. Swaps snap (no tween), matching CSS state rules without
-//! a `transition` - exactly like the border swap in
-//! [`crate::hover::apply_state_borders`].
+//! markers come and go, holding them in
+//! [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) and
+//! letting go onto the element's own styles when every state ends. Swaps
+//! snap (no tween), matching CSS state rules without a `transition` -
+//! exactly like the border swap in [`crate::hover::apply_state_borders`].
 //!
 //! `:disabled` reacts to the
 //! [`Disabled`](lumen_core::components::Disabled) marker at runtime
 //! (Wave 3: `bind-disabled` can add / remove it live). Statically
-//! disabled markup without a binding still takes the spawn-time fast
-//! path in `lumenc::spawn`; the patch here drives every dynamic case.
+//! disabled markup without a binding takes its `:disabled` styles as its
+//! own computed style (`lumen_scene::computed`); the patch here drives
+//! every dynamic case.
 //! [`eject_interaction_on_disable`] strips `Hovered` / `Pressed` /
 //! focus the moment an entity becomes disabled (moving keyboard focus
 //! to the next focusable) so no interaction state lingers on a
@@ -27,6 +29,7 @@ use lumen_core::components::{
 };
 use lumen_core::input::FocusVisible;
 use lumen_core::prelude::*;
+use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
 
 /// One state's property patch. Only authored fields swap; the rest keep
 /// the idle value.
@@ -57,7 +60,8 @@ impl StatePatch {
 /// Author-set per-state style patches. Pressed wins over focused wins
 /// over hovered on a per-field basis (mirrors the cascade order skins
 /// author these rules in); disabled stamps over everything.
-#[derive(Component, Clone, Debug, Default)]
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+#[require(StyleOverrides)]
 pub struct StateVisuals {
     /// `:hover` patch.
     pub hover: StatePatch,
@@ -90,34 +94,15 @@ impl StateVisuals {
             && self.drag_over.is_empty()
             && self.disabled.is_empty()
     }
-
-    /// `true` when any patch authors a background - only then does
-    /// [`apply_state_visuals`] manage [`Visuals::fill`] (so it never
-    /// fights the tweened hover / press tint path on entities that
-    /// don't swap backgrounds by state).
-    pub fn manages_fill(&self) -> bool {
-        self.hover.bg.is_some()
-            || self.focus.bg.is_some()
-            || self.focus_visible.bg.is_some()
-            || self.active.bg.is_some()
-            || self.drag_over.bg.is_some()
-            || self.disabled.bg.is_some()
-    }
 }
 
-/// Idle baseline captured before the first swap so every field can be
-/// restored exactly when all interaction states end.
-#[derive(Component, Clone, Debug)]
-pub struct StateStyleBase {
-    /// Idle `TextStyle.color` (when the entity has a `TextStyle`).
-    pub text_color: Option<Color>,
-    /// Idle `Opacity` value; `None` = the component was absent.
-    pub opacity: Option<f32>,
-    /// Idle `Visuals.shadows` stack.
-    pub shadows: Vec<ShadowSpec>,
-    /// Idle `Visuals.fill`; only restored when the entity's
-    /// [`StateVisuals::manages_fill`].
-    pub fill: Option<Fill>,
+/// Marks an element whose state patch [`apply_state_visuals`] holds, and
+/// names its layer in [`StyleOverrides`].
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct StatePatched;
+
+impl StyleOwner for StatePatched {
+    const RANK: u8 = 30;
 }
 
 /// Plugin: registers [`eject_interaction_on_disable`] then
@@ -127,8 +112,8 @@ pub struct StateStylePlugin;
 impl Plugin for StateStylePlugin {
     fn build(self, app: &mut App) {
         // Ejection runs first (with a sync point in between) so the
-        // baseline `apply_state_visuals` captures on the disable tick is
-        // the true idle style, not a half-faded hover tint.
+        // `:disabled` swap on the disable tick lands on the true idle
+        // style, not a half-faded hover tint.
         app.add_systems(
             TickStage::Systems,
             eject_interaction_on_disable.before(apply_state_visuals),
@@ -145,7 +130,12 @@ impl Plugin for StateStylePlugin {
 }
 
 /// Swap text color / opacity / shadows / background per interaction
-/// state and restore the captured baseline when idle.
+/// state, and let them go when every state ends.
+///
+/// The swapped values are held in [`StyleOverrides`], so a restyle while a
+/// state is on keeps them, and letting go lands on what the element's
+/// styles say by then. Only the fields some active state authors are held;
+/// the rest stay the element's own.
 ///
 /// Every component this system attaches goes through `try_insert`. The
 /// entity under the pointer is the one most likely to leave the tree on this
@@ -165,7 +155,8 @@ pub fn apply_state_visuals(
             Option<&mut TextStyle>,
             Option<&mut Visuals>,
             Option<&Opacity>,
-            Option<&StateStyleBase>,
+            &mut StyleOverrides,
+            Has<StatePatched>,
             Option<&Hovered>,
             Option<&Focused>,
             Option<&lumen_core::input::FocusVisible>,
@@ -184,19 +175,30 @@ pub fn apply_state_visuals(
     mut idle: Query<
         (
             Entity,
-            &StateVisuals,
-            &StateStyleBase,
             Option<&mut TextStyle>,
             Option<&mut Visuals>,
             Option<&Opacity>,
+            &mut StyleOverrides,
         ),
         (
+            With<StatePatched>,
+            With<StateVisuals>,
             Without<Hovered>,
             Without<Focused>,
             Without<Pressed>,
             Without<Disabled>,
             Without<DropHovered>,
         ),
+    >,
+    mut orphaned: Query<
+        (
+            Entity,
+            Option<&mut TextStyle>,
+            Option<&mut Visuals>,
+            Option<&Opacity>,
+            &mut StyleOverrides,
+        ),
+        (With<StatePatched>, Without<StateVisuals>),
     >,
 ) {
     let primary_down = pointer.map(|p| p.primary_down).unwrap_or(false);
@@ -206,7 +208,8 @@ pub fn apply_state_visuals(
         text,
         vis,
         opacity,
-        base,
+        mut overrides,
+        patched,
         hovered,
         focused,
         focus_visible,
@@ -250,84 +253,73 @@ pub fn apply_state_visuals(
                 patch.bg = p.bg;
             }
         }
-        if patch.is_empty() && base.is_none() {
-            // Nothing to apply and nothing previously applied (an active
-            // marker whose patches are all authored for other states -
-            // e.g. `Disabled` present but only `:hover` styled).
-            continue;
-        }
-        // Capture the idle baseline once, before the first swap.
-        let base = match base {
-            Some(b) => b.clone(),
-            None => {
-                let b = StateStyleBase {
-                    text_color: text.as_ref().map(|t| t.color),
-                    opacity: opacity.map(|o| o.0),
-                    shadows: vis.as_ref().map(|v| v.shadows.clone()).unwrap_or_default(),
-                    fill: vis.as_ref().and_then(|v| v.fill.clone()),
-                };
-                commands.entity(entity).try_insert(b.clone());
-                b
-            }
+        let values = StyleValues {
+            text_color: patch.text_color.filter(|_| text.is_some()),
+            opacity: patch.opacity.map(Some),
+            shadows: patch.shadows.filter(|_| vis.is_some()),
+            fill: patch
+                .bg
+                .filter(|_| vis.is_some())
+                .map(|c| Some(Fill::Solid(c))),
+            ..StyleValues::default()
         };
-        if let Some(mut t) = text {
-            let want = patch.text_color.or(base.text_color).unwrap_or(t.color);
-            if t.color != want {
-                t.color = want;
+        let out = if values.fields().is_empty() {
+            // Nothing to apply (an active marker whose patches are all
+            // authored for other states - e.g. `Disabled` present but only
+            // `:hover` styled).
+            if !patched {
+                continue;
             }
-        }
-        match patch.opacity.or(base.opacity) {
-            Some(want) => {
-                if opacity.map(|o| o.0) != Some(want) {
-                    commands.entity(entity).try_insert(Opacity(want));
-                }
+            commands.entity(entity).remove::<StatePatched>();
+            overrides.release::<StatePatched>()
+        } else {
+            if overrides.held_by::<StatePatched>() == Some(&values) {
+                continue;
             }
-            None => {
-                if opacity.is_some() {
-                    commands.entity(entity).remove::<Opacity>();
-                }
+            if !patched {
+                commands.entity(entity).try_insert(StatePatched);
             }
-        }
-        if let Some(mut v) = vis {
-            let want = patch.shadows.unwrap_or_else(|| base.shadows.clone());
-            if v.shadows != want {
-                v.shadows = want;
-            }
-            if sv.manages_fill() {
-                let want = patch.bg.map(Fill::Solid).or_else(|| base.fill.clone());
-                if v.fill != want {
-                    v.fill = want;
-                }
-            }
-        }
+            let live = Live {
+                style: None,
+                visuals: vis.as_deref(),
+                text: text.as_deref(),
+                opacity,
+            };
+            overrides.hold::<StatePatched>(values, &live)
+        };
+        write_out(&mut commands, entity, &out, text, vis, opacity);
     }
-    for (entity, sv, base, text, vis, opacity) in &mut idle {
-        if let (Some(mut t), Some(idle_color)) = (text, base.text_color)
-            && t.color != idle_color
-        {
-            t.color = idle_color;
+    // Idle, or a restyle took the state patches away.
+    for (entity, text, vis, opacity, mut overrides) in idle.iter_mut().chain(orphaned.iter_mut()) {
+        let out = overrides.release::<StatePatched>();
+        write_out(&mut commands, entity, &out, text, vis, opacity);
+        commands.entity(entity).remove::<StatePatched>();
+    }
+}
+
+/// Write `out` onto the element's text, paint and opacity.
+fn write_out(
+    commands: &mut Commands,
+    entity: Entity,
+    out: &StyleValues,
+    text: Option<Mut<TextStyle>>,
+    vis: Option<Mut<Visuals>>,
+    opacity: Option<&Opacity>,
+) {
+    if let Some(mut t) = text {
+        out.write_text(&mut t);
+    }
+    if let Some(mut v) = vis {
+        out.write_visuals(&mut v);
+    }
+    match out.opacity_change(opacity) {
+        Some(Some(o)) => {
+            commands.entity(entity).try_insert(o);
         }
-        match base.opacity {
-            Some(v) => {
-                if opacity.map(|o| o.0) != Some(v) {
-                    commands.entity(entity).try_insert(Opacity(v));
-                }
-            }
-            None => {
-                if opacity.is_some() {
-                    commands.entity(entity).remove::<Opacity>();
-                }
-            }
+        Some(None) => {
+            commands.entity(entity).remove::<Opacity>();
         }
-        if let Some(mut v) = vis {
-            if v.shadows != base.shadows {
-                v.shadows = base.shadows.clone();
-            }
-            if sv.manages_fill() && v.fill != base.fill {
-                v.fill = base.fill.clone();
-            }
-        }
-        commands.entity(entity).remove::<StateStyleBase>();
+        None => {}
     }
 }
 
@@ -338,9 +330,8 @@ pub fn apply_state_visuals(
 /// * `Hovered` / `Pressed` are removed (with their transient tween
 ///   components) - the hover tint / press tint end immediately, and a
 ///   pending release will not click (`dispatch_clicks` requires
-///   `Pressed`). Fills mid-tween are pinned back to their captured base
-///   color so the baseline the `:disabled` swap captures is the true
-///   idle style.
+///   `Pressed`). The tinted fill is let go of at once, so the
+///   `:disabled` swap lands on the true idle style.
 /// * Keyboard focus moves to the next focusable in tab order (same
 ///   `(TabIndex, DocumentOrder)` ordering `cycle_focus_on_tab` uses,
 ///   wrapping; hidden and disabled entities skipped), or clears when
@@ -351,9 +342,7 @@ pub fn eject_interaction_on_disable(
     mut commands: Commands,
     newly_disabled: Query<Entity, Added<Disabled>>,
     mut tracker: ResMut<FocusTracker>,
-    mut visuals: Query<&mut Visuals>,
-    hover_bases: Query<&crate::hover::HoverBaseColor>,
-    press_bases: Query<&crate::hover::PressBaseColor>,
+    mut tinted: Query<(&mut Visuals, &mut StyleOverrides)>,
     focus_visibles: Query<(), With<FocusVisible>>,
     focusables: Query<(Entity, &TabIndex, Option<&DocumentOrder>), Without<Disabled>>,
     tab_info: Query<(&TabIndex, Option<&DocumentOrder>)>,
@@ -362,26 +351,20 @@ pub fn eject_interaction_on_disable(
     styles: Query<&lumen_core::components::Style>,
 ) {
     for entity in &newly_disabled {
-        // Pin a mid-tween fill back to its captured base before the
-        // tween components disappear.
-        let base = hover_bases
-            .get(entity)
-            .map(|b| b.0)
-            .or_else(|_| press_bases.get(entity).map(|b| b.0));
-        if let (Ok(mut vis), Ok(base)) = (visuals.get_mut(entity), base)
-            && let Some(Fill::Solid(slot)) = vis.fill.as_mut()
-            && *slot != base
-        {
-            *slot = base;
+        if let Ok((mut vis, mut overrides)) = tinted.get_mut(entity) {
+            overrides
+                .release::<crate::hover::HoverTween>()
+                .write_visuals(&mut vis);
+            overrides
+                .release::<crate::hover::PressTween>()
+                .write_visuals(&mut vis);
         }
         commands.entity(entity).remove::<(
             Hovered,
             Pressed,
             Focused,
             FocusVisible,
-            crate::hover::HoverBaseColor,
             crate::hover::HoverTween,
-            crate::hover::PressBaseColor,
             crate::hover::PressTween,
         )>();
 
@@ -503,7 +486,7 @@ mod tests {
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, idle);
         assert!(world.get::<Opacity>(e).is_none(), "idle Opacity was absent");
         assert!(world.get::<Visuals>(e).unwrap().shadows.is_empty());
-        assert!(world.get::<StateStyleBase>(e).is_none());
+        assert!(world.get::<StatePatched>(e).is_none());
     }
 
     /// Focus ring: an `input:focus { box-shadow: ... }` rule (routed into
@@ -602,7 +585,7 @@ mod tests {
             "idle bg restored on marker remove"
         );
         assert!(world.get::<Opacity>(e).is_none());
-        assert!(world.get::<StateStyleBase>(e).is_none());
+        assert!(world.get::<StatePatched>(e).is_none());
     }
 
     /// Disabled wins over hover/press patches when markers coexist for

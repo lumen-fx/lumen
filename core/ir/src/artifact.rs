@@ -132,11 +132,18 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// shipped as source names the script file and line the author wrote rather
 /// than the markup file.
 ///
+/// `17`: a tag's defaults (a `<column>`'s direction, an `<overlay>`'s
+/// placement) are user-agent rules in the combined stylesheet rather than
+/// values the parser writes into [`crate::layout_ir::Attributes`], and the
+/// parts a widget expands into carry their geometry in `markup_styles`. A
+/// restyle rebuilds an element from those, so an artifact written before
+/// would lose its tags' defaults the first time it restyled.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 16;
+pub const FORMAT_VERSION: u16 = 17;
 
 /// The navigable page set of a compiled multi-page app.
 ///

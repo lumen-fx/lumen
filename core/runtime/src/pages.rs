@@ -244,6 +244,15 @@ fn stem(name: &str) -> String {
 
 // -- IR assembly (graft pages under `<if>` gates) ----------------------------
 
+/// Give a page's gate one of its styles as markup would, so a restyle
+/// rebuilds it; see [`lumen_ir::css::apply_markup_declaration`].
+#[cfg(feature = "runtime-parse")]
+fn built_style(attrs: &mut Attributes, property: &str, value: &str) {
+    if let Err(e) = lumen_ir::css::apply_markup_declaration(property, value, attrs) {
+        unreachable!("a page gate's own style does not apply: {property}: {value}: {e}");
+    }
+}
+
 /// Graft every page in `plan` into `ir` (parsed from the entry file) as
 /// sibling `<if signal="route.path" eq="<key>">` gates, parsing each page
 /// against the app-wide `fragments` table and merging every page's scripts.
@@ -300,6 +309,11 @@ pub fn assemble(
         attrs.if_signal = Some(nav::PATH_SIGNAL.to_string());
         attrs.if_eq = Some(page.key.clone());
         attrs.if_mode = IfModeSpec::Render;
+        // A page lays out as its `<root>` would: in a column, which an
+        // `<if>` does not take from its tag the way a `<root>` does.
+        if !is_entry && attrs.flex.is_none() {
+            built_style(&mut attrs, "flex-direction", "column");
+        }
         let gate = Element {
             tag: "if".to_string(),
             attrs,

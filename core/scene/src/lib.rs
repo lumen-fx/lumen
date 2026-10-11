@@ -19,6 +19,7 @@
 #![warn(missing_docs)]
 
 pub mod compiler_plugins;
+pub mod computed;
 pub mod dom;
 pub mod fragments;
 pub mod i18n;

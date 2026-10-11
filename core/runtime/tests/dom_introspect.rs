@@ -7,7 +7,7 @@
 //! every script host and the C-ABI share. No window is opened.
 
 use lumen_ir::css::{Declaration, Origin, Rule, Stylesheet, parse_selector_list};
-use lumen_ir::layout_ir::{Attributes, DisplaySpec, Edges, Element, LayoutIR, LengthSpec};
+use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use lumen_script::introspect as ins;
 use lumen_script::node_query;
@@ -61,18 +61,26 @@ fn introspection_read_side_headless() {
 
     // root#app.app (400x300) > column.list > [ button#save.row (100x40, pad 4),
     // label#hidden (display:none) ].
+    // Styled the way the parser styles an attribute, so a restyle that
+    // rebuilds an element from its markup keeps them.
+    let style = |el: &mut Element, decls: &[(&str, &str)]| {
+        for (property, value) in decls {
+            lumen_ir::css::apply_markup_declaration(property, value, &mut el.attrs)
+                .expect("a style the markup can write");
+        }
+    };
     let mut save = el("button", Some("save"), &["row"], vec![]);
-    save.attrs.width = Some(LengthSpec::Px(100.0));
-    save.attrs.height = Some(LengthSpec::Px(40.0));
-    save.attrs.padding = Some(Edges::all(4.0));
+    style(
+        &mut save,
+        &[("width", "100"), ("height", "40"), ("padding", "4")],
+    );
 
     let mut hidden = el("label", Some("hidden"), &[], vec![]);
-    hidden.attrs.display = Some(DisplaySpec::None);
+    style(&mut hidden, &[("display", "none")]);
 
     let column = el("column", Some("list"), &["list"], vec![save, hidden]);
     let mut root = el("root", Some("app"), &["app"], vec![column]);
-    root.attrs.width = Some(LengthSpec::Px(400.0));
-    root.attrs.height = Some(LengthSpec::Px(300.0));
+    style(&mut root, &[("width", "400"), ("height", "300")]);
 
     let sheet = Stylesheet {
         rules: vec![

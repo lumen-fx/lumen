@@ -204,7 +204,7 @@ paints a half-styled intermediate.
 
 Adding and removing classes is the preferred way to change appearance, because
 the element re-resolves against the stylesheet and keeps every rule and custom
-property it inherits. Reach for `set_style` only for a value that belongs to
+property it inherits, and a class removed takes with it whatever only it set. Reach for `set_style` only for a value that belongs to
 one element alone, such as a computed position; what it writes sits above every
 rule, so a later class change cannot take it back. Clear it with `style_remove`
 and the element takes the stylesheet's value for that property again, if a rule

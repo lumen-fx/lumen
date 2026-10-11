@@ -31,7 +31,10 @@
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Color, Fill, TextContent, Visuals};
+use lumen_core::components::{Color, TextContent, Visuals};
+use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+
+use crate::held::{hold_fill, release_fill};
 use lumen_core::prelude::*;
 
 use crate::controls::ToggleChanged;
@@ -44,7 +47,7 @@ const MARK_INDETERMINATE: &str = "\u{2013}"; // en dash
 /// Per-checkbox fill for the checked / indeterminate box state,
 /// resolved at spawn from `checkbox:checked { bg: ... }` (routed through
 /// `Attributes::checked_bg`) with the accent fallback.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct CheckboxStyle {
     /// Box fill while checked or indeterminate.
     pub checked_bg: Color,
@@ -58,21 +61,20 @@ impl Default for CheckboxStyle {
     }
 }
 
-/// Marker on the `.checkbox-box` child tile.
+/// Marker on the `.checkbox-box` child tile. Its checked fill is held in
+/// [`StyleOverrides`] over the box's own.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(StyleOverrides)]
 pub struct CheckboxBox;
+
+impl StyleOwner for CheckboxBox {
+    const RANK: u8 = 20;
+}
 
 /// Tri-state marker on the checkbox ROOT: renders a dash regardless of
 /// `checked` until the first user toggle removes it.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Indeterminate;
-
-/// Resting box fill captured on first sync, restored when the box
-/// leaves the checked / indeterminate state - the resting fill comes
-/// from CSS (`.checkbox-box { bg: ... }`), which the runtime can only
-/// observe after spawn.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct CheckboxBaseFill(pub Option<Color>);
 
 /// Plugin: registers the visual sync + indeterminate-clear systems.
 /// The toggle behavior itself ships with [`crate::ControlsPlugin`].
@@ -111,8 +113,8 @@ pub fn clear_indeterminate_on_user_toggle(
 
 /// Keep every `.checkbox-box` child in step with its parent state:
 ///
-/// - fill: `checked_bg` while checked OR indeterminate, the captured
-///   resting fill otherwise;
+/// - fill: `checked_bg` while checked OR indeterminate, the box's own
+///   fill otherwise;
 /// - mark glyph: `MARK_CHECKED` checked, `MARK_INDETERMINATE` indeterminate,
 ///   empty otherwise.
 ///
@@ -128,35 +130,23 @@ pub fn sync_checkbox_visuals(
             Entity,
             &ChildOf,
             &mut Visuals,
+            &mut StyleOverrides,
             Option<&mut TextContent>,
-            Option<&CheckboxBaseFill>,
         ),
         With<CheckboxBox>,
     >,
 ) {
-    for (box_e, child_of, mut vis, text, base) in &mut boxes {
+    for (box_e, child_of, mut vis, mut overrides, text) in &mut boxes {
         let Ok((t, indeterminate, style)) = parents_q.get(child_of.parent()) else {
             continue;
         };
         let indeterminate = indeterminate.is_some();
-        // Capture the resting (CSS-authored) fill once, before the first
-        // swap can overwrite it (see [`capture_baseline`]); correct even
-        // for a checkbox spawned already-checked.
-        let base_fill = crate::baseline::capture_baseline(
-            &mut commands,
-            box_e,
-            base,
-            vis.fill.as_ref().and_then(Fill::as_solid),
-            |b| b.0,
-            CheckboxBaseFill,
-        );
-        let want_fill = if t.checked || indeterminate {
-            Some(style.checked_bg)
+        // The checked fill is held over the box's own (CSS-authored) fill,
+        // which is what the box shows again unchecked.
+        if t.checked || indeterminate {
+            hold_fill::<CheckboxBox>(&mut overrides, &mut vis, style.checked_bg);
         } else {
-            base_fill
-        };
-        if vis.fill.as_ref().and_then(Fill::as_solid) != want_fill {
-            vis.fill = want_fill.map(Fill::Solid);
+            release_fill::<CheckboxBox>(&mut overrides, &mut vis);
         }
         let mark = if indeterminate {
             MARK_INDETERMINATE

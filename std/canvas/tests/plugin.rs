@@ -16,7 +16,7 @@ use lumen_canvas::{Canvas, CanvasPlugin, UA_SIZE};
 use lumen_core::app::App as EcsApp;
 use lumen_core::components::{ImageComponent, Transform};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
-use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, LengthSpec};
+use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 
 /// The app directory, the DOM snapshot, and the canvas store are all
@@ -43,9 +43,13 @@ fn canvas_element(id: &str, size: Option<(f32, f32)>) -> Element {
         id: Some(id.to_string()),
         ..Default::default()
     };
+    // Declared the way the parser declares a `width="..."` attribute, so a
+    // restyle that rebuilds the element from its markup keeps the size.
     if let Some((w, h)) = size {
-        attrs.width = Some(LengthSpec::Px(w));
-        attrs.height = Some(LengthSpec::Px(h));
+        for (property, value) in [("width", w), ("height", h)] {
+            lumen_ir::css::apply_markup_declaration(property, &value.to_string(), &mut attrs)
+                .expect("a size the markup can write");
+        }
     }
     Element {
         tag: lumen_canvas::TAG.to_string(),
