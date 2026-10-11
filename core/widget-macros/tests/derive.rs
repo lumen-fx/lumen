@@ -26,9 +26,9 @@ fn derive_emits_widget_impl_with_tag_and_name() {
 #[test]
 fn spawn_populates_props_from_attribute_bag() {
     let mut app = App::new();
-    let parent = app.world.spawn_empty().id();
+    let id = app.world.spawn_empty().id();
     let attrs: Attributes = [("greeting", "Hi"), ("repeat", "7")].into();
-    let id = Hello::spawn(parent, &attrs, &mut app.world);
+    Hello::spawn(id, &attrs, &mut app.world);
     let h = app
         .world
         .entity(id)
@@ -42,11 +42,11 @@ fn spawn_populates_props_from_attribute_bag() {
 #[test]
 fn spawn_leaves_state_fields_at_default() {
     let mut app = App::new();
-    let parent = app.world.spawn_empty().id();
+    let id = app.world.spawn_empty().id();
     // `shown` is a state field - even when an attribute named "shown"
     // is present the derive must ignore it.
     let attrs: Attributes = [("greeting", "Hi"), ("shown", "true")].into();
-    let id = Hello::spawn(parent, &attrs, &mut app.world);
+    Hello::spawn(id, &attrs, &mut app.world);
     let h = app.world.entity(id).get::<Hello>().unwrap();
     assert!(!h.shown, "state fields must not be filled from attrs");
 }
@@ -54,9 +54,9 @@ fn spawn_leaves_state_fields_at_default() {
 #[test]
 fn missing_attribute_keeps_default_value() {
     let mut app = App::new();
-    let parent = app.world.spawn_empty().id();
+    let id = app.world.spawn_empty().id();
     let attrs = Attributes::new();
-    let id = Hello::spawn(parent, &attrs, &mut app.world);
+    Hello::spawn(id, &attrs, &mut app.world);
     let h = app.world.entity(id).get::<Hello>().unwrap();
     assert_eq!(h.greeting, "");
     assert_eq!(h.repeat, 0);
@@ -69,6 +69,20 @@ fn derived_plugin_installs_into_app() {
     assert_eq!(p.name(), "HelloPlugin");
     app.add_plugin(HelloPlugin);
     assert!(app.is_plugin_added::<HelloPlugin>());
+}
+
+#[test]
+fn register_publishes_the_tag_and_the_spawn_markup_calls() {
+    Hello::register();
+    assert!(lumen_widget::is_widget_tag_registered("hello"));
+    let spawn = lumen_widget::widget_spawner("hello").expect("a widget is registered");
+    let mut app = App::new();
+    let id = app.world.spawn_empty().id();
+    spawn(id, &[("greeting", "Yo")].into(), &mut app.world);
+    assert_eq!(app.world.get::<Hello>(id).unwrap().greeting, "Yo");
+    // Registering the bare tag afterwards keeps the widget's spawn.
+    lumen_widget::register_widget_tag("hello");
+    assert!(lumen_widget::widget_spawner("hello").is_some());
 }
 
 #[derive(Component, DeriveWidget, Default)]

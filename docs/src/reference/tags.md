@@ -779,4 +779,6 @@ Pair it with `<root frameless="true">`.
 ## Custom tags
 
 A Rust plugin can register additional tags, which then parse like
-built-in ones. See [Authoring plugins](../contributing/plugins.md).
+built-in ones. An element written with a `#[derive(Widget)]` tag becomes that
+widget, its props read from the element's attributes. See
+[Authoring plugins](../contributing/plugins.md#custom-tags).

@@ -31,9 +31,9 @@ fn the_derive_compiles_against_the_sdk_alone() {
 #[test]
 fn the_derived_spawn_reads_props_from_the_attribute_bag() {
     let mut world = lumenui::bevy_ecs::world::World::new();
-    let parent = world.spawn_empty().id();
+    let entity = world.spawn_empty().id();
     let attrs = Attributes::from([("label", "seven"), ("count", "7")]);
-    let entity = Badge::spawn(parent, &attrs, &mut world);
+    Badge::spawn(entity, &attrs, &mut world);
     let badge = world.get::<Badge>(entity).expect("spawned badge");
     assert_eq!(badge.label, "seven");
     assert_eq!(badge.count, 7);

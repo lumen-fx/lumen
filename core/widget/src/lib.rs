@@ -15,8 +15,9 @@
 //!    generates calls `<Type>::register()` in its `build`, publishing
 //!    `Widget::parser_tag` into the registry the parser consults after
 //!    its built-in table.
-//! 5. Provide a spawn fn that turns a parsed `<tag attr="...">` into an
-//!    ECS entity carrying the marker + the author-specified props.
+//! 5. Provide a spawn fn that turns the element spawned for a parsed
+//!    `<tag attr="...">` into the widget: the marker + the author-specified
+//!    props.
 //!
 //! The first three steps are repeated verbatim per widget. This crate
 //! defines the minimal surface that the `Widget` derive macro
@@ -64,35 +65,65 @@
 //! calls `<Type>::register()` when it is added, so adding that plugin
 //! before the parser runs is enough for `<my-thing>` markup to be
 //! accepted; no edit to the built-in table is needed.
+//!
+//! The parser keeps every attribute such an element was written with, and
+//! the spawner, once it has spawned the element, looks the tag up with
+//! [`widget_spawner`] and hands the element and its [`Attributes`] to the
+//! widget's [`Widget::spawn`]. So `<my-thing greeting="hi"/>` ends up an
+//! element carrying the widget's component with `greeting` set.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use bevy_ecs::prelude::*;
 
+/// What builds the widget an element with a registered tag stands for: the
+/// tag's [`Widget::spawn`].
+pub type WidgetSpawnFn = fn(Entity, &Attributes, &mut World);
+
 /// Process-wide registry of user-installed widget tags. The lumenc HTML
 /// parser consults [`is_widget_tag_registered`] after its built-in
-/// [`KNOWN_TAGS`] miss so custom widgets registered by the host app
+/// `KNOWN_TAGS` miss so custom widgets registered by the host app
 /// (typically through `T::register()` emitted by the `Widget` derive)
-/// are accepted instead of rejected as `UnknownTag`.
-static REGISTERED_WIDGET_TAGS: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+/// are accepted instead of rejected as `UnknownTag`, and the spawner asks
+/// [`widget_spawner`] what to build on the element it spawned for one.
+///
+/// A tag registered by name alone maps to `None`: something else (a runtime
+/// module's systems, say) gives the element its behavior.
+static REGISTERED_WIDGET_TAGS: OnceLock<Mutex<HashMap<&'static str, Option<WidgetSpawnFn>>>> =
+    OnceLock::new();
+
+fn registry() -> &'static Mutex<HashMap<&'static str, Option<WidgetSpawnFn>>> {
+    REGISTERED_WIDGET_TAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Register `tag` so the lumenc HTML parser accepts `<tag ...>` markup.
 ///
-/// Called by `Widget` derive output (`<Type>::register()`) at app
-/// startup, BEFORE the parser runs. Subsequent calls with the same tag
-/// are no-ops (the set is a [`HashSet`]). The supplied string must live
-/// for the lifetime of the process - passing a `&'static` literal is
-/// the expected pattern (the derive does this).
+/// For a tag whose element needs no [`Widget`] built on it. A widget calls
+/// [`register_widget`] instead, which also says what to build. Subsequent
+/// calls with the same tag are no-ops, and never take a registered widget's
+/// spawn away. The supplied string must live for the lifetime of the
+/// process.
 pub fn register_widget_tag(tag: &'static str) {
-    if let Ok(mut set) = REGISTERED_WIDGET_TAGS
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-    {
-        set.insert(tag);
+    if let Ok(mut map) = registry().lock() {
+        map.entry(tag).or_insert(None);
+    }
+}
+
+/// Register `W`: the lumenc HTML parser accepts `<tag ...>` for its
+/// [`Widget::parser_tag`], and every element spawned for that tag is handed,
+/// with its authored attributes, to [`Widget::spawn`].
+///
+/// Called by `Widget` derive output (`<Type>::register()`, which the
+/// generated plugin's `build` calls) at app startup, before the parser runs.
+/// Registering again is a no-op; a second widget registered for the same tag
+/// replaces the first.
+pub fn register_widget<W: Widget>() {
+    if let Ok(mut map) = registry().lock() {
+        map.insert(W::parser_tag(), Some(W::spawn));
     }
 }
 
@@ -109,35 +140,42 @@ pub fn register_widget_tag_owned(tag: &str) {
     if is_widget_tag_registered(tag) {
         return;
     }
-    if let Ok(mut set) = REGISTERED_WIDGET_TAGS
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-    {
+    if let Ok(mut map) = registry().lock() {
         // Checked again under the lock: two threads racing the same new tag
         // must leak one string, not two.
-        if !set.contains(tag) {
-            set.insert(Box::leak(tag.to_string().into_boxed_str()));
+        if !map.contains_key(tag) {
+            map.insert(Box::leak(tag.to_string().into_boxed_str()), None);
         }
     }
 }
 
-/// Returns `true` when `tag` was registered via [`register_widget_tag`]
-/// earlier in this process. Consulted by `public/lumenc/src/parse/html.rs`'s
-/// `KNOWN_TAGS` fallback path.
+/// Returns `true` when `tag` was registered via [`register_widget_tag`],
+/// [`register_widget`] or [`register_widget_tag_owned`] earlier in this
+/// process. Consulted by `public/lumenc/src/parse/html.rs`'s `KNOWN_TAGS`
+/// fallback path.
 pub fn is_widget_tag_registered(tag: &str) -> bool {
     REGISTERED_WIDGET_TAGS
         .get()
         .and_then(|m| m.lock().ok())
-        .map(|s| s.contains(tag))
-        .unwrap_or(false)
+        .is_some_and(|m| m.contains_key(tag))
 }
 
-/// Untyped attribute bag handed to [`Widget::spawn`] by the parser.
+/// The [`Widget::spawn`] registered for `tag`, if a [`Widget`] was
+/// registered for it with [`register_widget`].
+pub fn widget_spawner(tag: &str) -> Option<WidgetSpawnFn> {
+    REGISTERED_WIDGET_TAGS
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|m| m.get(tag).copied().flatten())
+}
+
+/// Untyped attribute bag handed to [`Widget::spawn`]: every attribute the
+/// element was written with in markup.
 ///
-/// Mirrors the `roxmltree::Node::attributes()` iterator output: a flat
-/// `(name, value)` list keyed by attribute name. The parser owns the
-/// concrete representation; this crate keeps an enum-free wrapper so
-/// authors don't pull a parser dep just to write a widget.
+/// A flat `(name, value)` map keyed by attribute name, the values as
+/// authored. The parser owns the concrete representation; this crate keeps an
+/// enum-free wrapper so authors don't pull a parser dep just to write a
+/// widget.
 #[derive(Debug, Default, Clone)]
 pub struct Attributes {
     inner: HashMap<String, String>,
@@ -229,11 +267,17 @@ pub trait Widget: Sized + Send + Sync + 'static {
     /// makes the lumenc parser accept the tag.
     fn parser_tag() -> &'static str;
 
-    /// Build a widget entity under `parent` from `attrs`, returning
-    /// the new entity. The derive emits a default body that creates a
-    /// fresh entity, parses `#[widget(prop)]` fields out of `attrs`,
-    /// and inserts the component.
-    fn spawn(parent: Entity, attrs: &Attributes, world: &mut World) -> Entity;
+    /// Make `entity` this widget, reading its props out of `attrs`.
+    ///
+    /// The spawner calls this for every element whose tag the widget was
+    /// registered for ([`register_widget`]), once the element's own
+    /// components are in place and before its children spawn: `entity` is
+    /// that element and `attrs` every attribute it was written with. The
+    /// derive emits a body that parses the `#[widget(prop)]` fields out of
+    /// `attrs` over the struct's `Default` and inserts the component on
+    /// `entity`. Outside markup, spawn the entity first
+    /// (`world.spawn_empty().id()`) and hand it in.
+    fn spawn(entity: Entity, attrs: &Attributes, world: &mut World);
 }
 
 #[cfg(test)]

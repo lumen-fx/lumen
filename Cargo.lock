@@ -4475,6 +4475,7 @@ dependencies = [
  "lumen-os-dnd",
  "lumen-primitives",
  "lumen-script",
+ "lumen-widget",
  "tracing",
 ]
 

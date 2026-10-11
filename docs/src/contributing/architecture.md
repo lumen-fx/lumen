@@ -603,7 +603,9 @@ per-row state.
 Custom tags come from the widget registry. `#[derive(Widget)]` registers the
 tag string at startup, and the markup parser consults the registry after its
 built-in tag table misses, so an unknown tag is still an error but a registered
-one is not.
+one is not. The parser keeps a custom element's attributes as written, and the
+spawner, once it has built the element, hands it and those attributes to the
+`Widget::spawn` registered for the tag, which inserts the widget's component.
 
 ## Layout, text, and rendering
 

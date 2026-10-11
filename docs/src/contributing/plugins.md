@@ -614,6 +614,36 @@ depends on the Rust SDK, the expansion names `lumen-widget`, `lumen-core` and
 `bevy_ecs` through `lumenui`, so the derive needs no dependency on any of the
 three.
 
+Each element written with the tag becomes the widget. The spawner builds the
+element as it builds any other, with its layout, style and id, then hands it,
+with every attribute it was written with, to the widget's `Widget::spawn`. The
+derived `spawn` reads each `#[widget(prop)]` field from the attribute of the
+same name, parsed with `FromStr` over the struct's `Default`, and inserts the
+component on the element; `#[widget(state)]` fields are never read from
+markup. So, with `GaugePlugin` added:
+
+```rust
+#[derive(Component, Default, Widget)]
+#[widget(tag = "gauge")]
+struct Gauge {
+    #[widget(prop)]
+    label: String,
+    #[widget(prop)]
+    level: u32,
+}
+```
+
+`<gauge id="fuel" label="fuel" level="7"/>` is an element with the id `fuel`
+carrying `Gauge { label: "fuel", level: 7 }`, which the widget's systems find
+with `Query<&Gauge>`. Attributes the markup vocabulary also knows, such as
+`width` or `id`, take effect on the element and reach `spawn` too. A `{...}`
+placeholder in a widget's attribute reaches `spawn` as written, unresolved.
+Outside markup, spawn the entity first and hand it to `spawn` yourself:
+`Gauge::spawn(world.spawn_empty().id(), &attrs, world)`. A tag registered by
+name alone (`register_widget_tag`, or a runtime module's
+`register_widget_tag_owned`) has no `spawn`: its element is a plain element
+with that tag, which the plugin's own systems pick up by `LumenTag`.
+
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
 and `lumenc package` run the parser on a machine where nothing was opened, so
