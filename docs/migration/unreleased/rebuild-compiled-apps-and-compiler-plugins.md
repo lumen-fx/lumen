@@ -1,9 +1,10 @@
 # Rebuild every `.lmna` artifact and every compiler plugin
 
 The compiled-app format moved on: a tag's defaults now travel as rules in the
-artifact's stylesheet rather than as values in its tree, so the runtime refuses
+artifact's stylesheet rather than as values in its tree, and an element with a
+custom widget tag keeps the attributes it was written with. The runtime refuses
 an artifact written by an earlier toolchain, which would lose those defaults
-the first time an element restyled.
+the first time an element restyled and hand its widgets no attributes.
 
 This affects you if you load a precompiled app (`lumenc run --artifact`, a
 `.lmna` written by `lumenc build`, or `lumen_app_new_from_lmna` from the C ABI
@@ -11,7 +12,7 @@ or an SDK), or if your app declares compiler plugins under `[[plugins]]`.
 Loading an old artifact fails with an error that says:
 
 ```
-unsupported artifact version 16 (this build reads 17)
+unsupported artifact version 16 (this build reads 18)
 ```
 
 Rebuild the artifact with the new `lumenc`:

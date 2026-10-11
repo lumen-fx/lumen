@@ -139,11 +139,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// restyle rebuilds an element from those, so an artifact written before
 /// would lose its tags' defaults the first time it restyled.
 ///
+/// `18`: [`crate::layout_ir::Attributes`] gains `widget_attributes`, the
+/// attributes an element with a registered custom tag was written with, so
+/// the widget registered for the tag is handed them when the tree spawns.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 17;
+pub const FORMAT_VERSION: u16 = 18;
 
 /// The navigable page set of a compiled multi-page app.
 ///

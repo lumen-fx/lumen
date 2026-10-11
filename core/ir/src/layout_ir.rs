@@ -1299,6 +1299,16 @@ pub struct Attributes {
     /// Empty on every element outside a fragment body, and emptied on the
     /// copy that reaches the tree.
     pub deferred: Vec<DeferredAttr>,
+    /// Every attribute an element with a registered custom tag was written
+    /// with, as `(name, value)` in the order they were written; `None` on an
+    /// element whose tag is built in.
+    ///
+    /// The markup vocabulary cannot say what a custom widget's attributes
+    /// mean, so the parser keeps them as authored and the spawner hands them
+    /// to the widget registered for the tag. `Some` with an empty list is a
+    /// custom element written without attributes, which still gets its
+    /// widget.
+    pub widget_attributes: Option<Vec<(String, String)>>,
 }
 
 /// One attribute of a fragment body element, kept as authored.

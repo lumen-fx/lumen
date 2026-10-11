@@ -300,9 +300,9 @@ mod tests {
     #[test]
     fn widget_spawn_inserts_component_with_attrs() {
         let mut app = App::new();
-        let parent = app.world.spawn_empty().id();
+        let e = app.world.spawn_empty().id();
         let attrs: Attributes = [("text", "Save"), ("delay_ms", "750")].into();
-        let e = TooltipSource::spawn(parent, &attrs, &mut app.world);
+        TooltipSource::spawn(e, &attrs, &mut app.world);
         let src = app
             .world
             .entity(e)
@@ -315,9 +315,9 @@ mod tests {
     #[test]
     fn widget_spawn_keeps_defaults_on_missing_attrs() {
         let mut app = App::new();
-        let parent = app.world.spawn_empty().id();
+        let e = app.world.spawn_empty().id();
         let attrs = Attributes::new();
-        let e = TooltipSource::spawn(parent, &attrs, &mut app.world);
+        TooltipSource::spawn(e, &attrs, &mut app.world);
         let src = app.world.entity(e).get::<TooltipSource>().unwrap();
         assert_eq!(src.text, "");
         assert_eq!(src.delay_ms, 500);

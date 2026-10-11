@@ -32,9 +32,11 @@ fn main() {
     // widget-specific systems (none here - Hello is a marker).
     app.add_plugin(HelloPlugin);
 
-    let parent = app.world.spawn_empty().id();
+    // Markup spawns the element for `<hello greeting="...">` and hands it
+    // to `Hello::spawn`; outside markup, spawn the entity yourself.
+    let entity = app.world.spawn_empty().id();
     let attrs: Attributes = [("greeting", "Hi from the derive!")].into();
-    let entity = Hello::spawn(parent, &attrs, &mut app.world);
+    Hello::spawn(entity, &attrs, &mut app.world);
 
     let hello = app.world.entity(entity).get::<Hello>().unwrap();
     println!(

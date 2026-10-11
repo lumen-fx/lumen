@@ -24,14 +24,18 @@
 //!     fn name() -> &'static str { "Hello" }
 //!     fn parser_tag() -> &'static str { "hello" }
 //!     fn spawn(
-//!         _parent: ::bevy_ecs::prelude::Entity,
+//!         entity: ::bevy_ecs::prelude::Entity,
 //!         attrs: &::lumen_widget::Attributes,
 //!         world: &mut ::bevy_ecs::prelude::World,
-//!     ) -> ::bevy_ecs::prelude::Entity {
+//!     ) {
 //!         let mut value: Hello = ::core::default::Default::default();
 //!         if let Some(v) = attrs.get("greeting") { value.greeting = v.into(); }
-//!         world.spawn(value).id()
+//!         world.entity_mut(entity).insert(value);
 //!     }
+//! }
+//!
+//! impl Hello {
+//!     pub fn register() { ::lumen_widget::register_widget::<Hello>(); }
 //! }
 //!
 //! /// Plugin registering `Hello` with the App.
@@ -41,6 +45,7 @@
 //! impl ::lumen_core::app::Plugin for HelloPlugin {
 //!     fn name(&self) -> &'static str { "HelloPlugin" }
 //!     fn build(self, _app: &mut ::lumen_core::app::App) {
+//!         Hello::register();
 //!         // Widget-specific systems remain hand-written: authors
 //!         // call `app.add_systems(TickStage::Systems, my_system)`
 //!         // alongside `app.add_plugin(HelloPlugin)`. Future
@@ -65,7 +70,8 @@
 //!   skip emitting a fresh Plugin struct; the author is providing their
 //!   own. The derive only emits the `Widget` impl in that case.
 //! - `#[widget(prop)]` on a field - parse from the attribute bag in
-//!   `Widget::spawn`. Field type must implement [`std::str::FromStr`]
+//!   `Widget::spawn`, read off the attribute of the field's name (an
+//!   element written `<hello greeting="hi"/>` sets `greeting`). Field type must implement [`std::str::FromStr`]
 //!   or be a `String` (special-cased: copied verbatim).
 //! - `#[widget(state)]` on a field - leave at the struct's `Default`
 //!   value; never read from the attribute bag. Marker.
@@ -170,13 +176,13 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #tag
             }
             fn spawn(
-                _parent: #ecs::prelude::Entity,
+                entity: #ecs::prelude::Entity,
                 attrs: &#widget::Attributes,
                 world: &mut #ecs::prelude::World,
-            ) -> #ecs::prelude::Entity {
+            ) {
                 let mut value: #ident = ::core::default::Default::default();
                 #(#prop_writes)*
-                #ecs::prelude::World::spawn(world, value).id()
+                #ecs::prelude::World::entity_mut(world, entity).insert(value);
             }
         }
 
@@ -186,10 +192,10 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #tag,
                 "` markup tag with the lumenc HTML parser. Call this at app startup before `lumenc::run::run_app` so the parser accepts `<",
                 #tag,
-                " ...>` instead of rejecting it as `UnknownTag`. Subsequent calls are no-ops.",
+                " ...>` instead of rejecting it as `UnknownTag`, and every element spawned for it becomes this widget. Subsequent calls are no-ops.",
             )]
             pub fn register() {
-                #widget::register_widget_tag(#tag);
+                #widget::register_widget::<#ident>();
             }
         }
     };

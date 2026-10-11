@@ -2026,6 +2026,13 @@ fn build_element(
             "radio" => Some(-1),
             _ => None,
         },
+        // A registered custom tag keeps its attributes as authored, for the
+        // widget the spawner hands them to; `apply_attribute` fills it.
+        widget_attributes: if KNOWN_TAGS.contains(&tag.as_str()) {
+            None
+        } else {
+            Some(Vec::new())
+        },
         ..Default::default()
     };
 
@@ -2366,6 +2373,11 @@ fn apply_attribute(
     attrs: &mut Attributes,
     ctx: &mut AttrCtx<'_>,
 ) -> Result<bool, ParseError> {
+    // A custom widget reads its own attributes out of the authored bag, so
+    // every one is kept, whatever the vocabulary below makes of it.
+    if let Some(bag) = &mut attrs.widget_attributes {
+        bag.push((name.to_string(), value.to_string()));
+    }
     let mut recognised = true;
     match name {
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
@@ -3142,5 +3154,56 @@ mod include_tests {
         .expect("parse");
         assert_eq!(ir.root.children.len(), 1);
         assert_eq!(ir.root.children[0].attrs.classes, vec!["a>b".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod widget_tag_tests {
+    use super::*;
+
+    fn bag(el: &Element) -> Vec<(&str, &str)> {
+        el.attrs
+            .widget_attributes
+            .as_ref()
+            .expect("a custom tag keeps its attributes")
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_custom_tag_keeps_every_attribute_it_was_written_with() {
+        lumen_widget::register_widget_tag("parse-bag-gauge");
+        let ir = parse_html(concat!(
+            "<root>",
+            "<parse-bag-gauge id=\"g\" label=\"fuel\" width=\"40\"/>",
+            "<parse-bag-gauge/>",
+            "<label text=\"hi\"/>",
+            "</root>",
+        ))
+        .expect("parse");
+        let kids = &ir.root.children;
+        // Attributes the vocabulary knows still take effect, and are kept too.
+        assert_eq!(
+            bag(&kids[0]),
+            [("id", "g"), ("label", "fuel"), ("width", "40")]
+        );
+        assert_eq!(kids[0].attrs.id.as_deref(), Some("g"));
+        assert!(bag(&kids[1]).is_empty());
+        assert!(kids[2].attrs.widget_attributes.is_none());
+        assert!(ir.root.attrs.widget_attributes.is_none());
+    }
+
+    #[test]
+    fn a_custom_tag_in_a_fragment_body_is_handed_the_use_sites_argument() {
+        lumen_widget::register_widget_tag("parse-bag-meter");
+        let ir = parse_html(concat!(
+            "<root>",
+            "<template name=\"Meter\"><parse-bag-meter label=\"{name}\"/></template>",
+            "<Meter name=\"oil\"/>",
+            "</root>",
+        ))
+        .expect("parse");
+        assert_eq!(bag(&ir.root.children[0]), [("label", "oil")]);
     }
 }
