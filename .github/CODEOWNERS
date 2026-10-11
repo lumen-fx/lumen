@@ -24,6 +24,7 @@
 
 # What a release builds, signs, and publishes, and what users download.
 /tools/release/         @FizzWizzleDazzle
+/bucket/                @FizzWizzleDazzle
 /tools/setup-lumen/     @FizzWizzleDazzle
 
 # Licensing and contribution terms.

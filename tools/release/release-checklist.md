@@ -98,12 +98,13 @@ binary the two Linux archives do, copied in rather than rebuilt.
 
 - Actions enabled on the repository (already on).
 - `REPIN_DEPLOY_KEY`, holding the private half of the repository's write
-  deploy key. The release writes to the repository three times, and each write
-  goes over SSH with this key: the license commit and the version bump to
-  `main`, whose ruleset requires a pull request and lets deploy keys past it,
-  and the release tag itself. A push made with the workflow's own
-  `GITHUB_TOKEN` would raise no workflow events, so a tag pushed that way would
-  start no release and a commit pushed that way would get no `ci` run.
+  deploy key. The release writes to the repository four times, and each write
+  goes over SSH with this key: the license commit, the version bump, and the
+  Scoop bucket commit to `main`, whose ruleset requires a pull request and lets
+  deploy keys past it, and the release tag itself. A push made with the
+  workflow's own `GITHUB_TOKEN` would raise no workflow events, so a tag pushed
+  that way would start no release and a commit pushed that way would get no
+  `ci` run.
   `grammar-pins.yml` uses the same key to repin the editor grammars.
 - Publishing the release needs no other secret: the release job uses the
   built-in `GITHUB_TOKEN` (`contents: write`, scoped to that job only).
@@ -585,12 +586,19 @@ working registration to lose either way.
 ## Publishing to the package managers
 
 Lumen is also published to Homebrew, the AUR, scoop, and winget. The manifests
-live in this directory, one per manager, and
-`.github/workflows/publish-packages.yml`, which `release.yml` calls with the
-tag it just published, takes them to the repository that serves each one: the
-AUR over SSH, the tap (`lumen-fx/homebrew-lumen`) and the bucket
-(`lumen-fx/scoop-lumen`) over a push, and winget as a pull request against
-`microsoft/winget-pkgs` raised by `wingetcreate`.
+live in this directory, one per manager, except Scoop's, which is
+`bucket/lumen.json` at the repository root because this repository is the
+Scoop bucket. `.github/workflows/publish-packages.yml`, which `release.yml`
+calls with the tag it just published, takes each one to where it is served:
+the AUR over SSH, the tap (`lumen-fx/homebrew-lumen`) over a push, the bucket
+as a commit to `main` pushed with the `REPIN_DEPLOY_KEY` deploy key, and winget
+as a pull request against `microsoft/winget-pkgs` raised by `wingetcreate`.
+
+The bucket commit lands on `main` at about the same time as the version bump.
+Both jobs read `main` again before every push attempt, so the one that pushes
+second is refused once and lands on top; neither needs anything from you. A
+re-run for a release older than the one `main`'s bucket carries leaves it
+alone.
 
 The version and checksums in the manifests come from the release's
 `sha256sums.txt`. `tools/release/update-package-manifests.sh <version>` does
@@ -609,9 +617,9 @@ Two of the four channels need something once, by hand:
   `manifests/l/LumenFX/Lumen/<version>/` in a pull request against
   `microsoft/winget-pkgs`. `wingetcreate` updates an existing package but
   cannot create one, so every release after the first is automatic.
-- **The tap and the bucket.** Create `lumen-fx/homebrew-lumen` and
-  `lumen-fx/scoop-lumen`. They can be empty; the workflow writes
-  `Formula/lumen.rb` and `bucket/lumen.json` into them.
+- **The tap.** Create `lumen-fx/homebrew-lumen`. It can be empty; the
+  workflow writes `Formula/lumen.rb` into it. The Scoop bucket needs nothing:
+  it is this repository.
 
 The AUR needs no manual first step: the first push to
 `ssh://aur@aur.archlinux.org/lumen-bin.git` creates the package.

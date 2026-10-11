@@ -10,16 +10,19 @@
 # sha256sums.txt existed cannot be used here, because there is nothing to write
 # into the manifests.
 #
-# Rewritten in place:
+# Rewritten in place, the first four under tools/release/:
 #
 #   aur/PKGBUILD                              pkgver, pkgrel, both archive sums
 #   homebrew/lumen.rb                         version, four URLs, four sums
-#   scoop/lumen.json                          version, the zip URL and its sum
 #   winget/LumenFX.Lumen*.yaml                versions, the MSI URL and its sum
+#   bucket/lumen.json (at the repository      version, both zip URLs and sums
+#   root)
 #
 # .github/workflows/publish-packages.yml runs this once per release and then
-# pushes each file to the repository that serves it. Run it by hand to see what
-# a release would publish, or to repair a manifest that drifted.
+# pushes each file to the repository that serves it. The Scoop manifest is the
+# exception: the Lumen repository is the bucket, so that file is committed to
+# main instead. Run this by hand to see what a release would publish, or to
+# repair a manifest that drifted.
 #
 # Every rewrite is checked afterwards: the script fails if a file does not end
 # up carrying the version and the checksum it was told to, so a manifest that
@@ -41,6 +44,7 @@ case "$VERSION" in
 esac
 
 DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+SCOOP="$DIR/../../bucket/lumen.json"
 RELEASES="https://github.com/lumen-fx/lumen/releases/download"
 
 # --- the checksums ------------------------------------------------------------
@@ -178,10 +182,16 @@ rewrite_sums "$DIR/homebrew/lumen.rb" rb
 
 # --- scoop --------------------------------------------------------------------
 
-edit "$DIR/scoop/lumen.json" \
+# The bucket is committed back to main on every release, so it carries the
+# last published version rather than the one the other manifests hold.
+SCOOP_OLD="$(sed -n 's/^ *"version": "\([^"]*\)".*/\1/p' "$SCOOP" | head -n 1)"
+[ -n "$SCOOP_OLD" ] || { echo "update-package-manifests.sh: no version in $SCOOP" >&2; exit 1; }
+SCOOP_OLD_RE="$(printf '%s' "$SCOOP_OLD" | sed 's/\./\\./g')"
+
+edit "$SCOOP" \
   -e "s|^\( *\)\"version\": \".*\"|\1\"version\": \"$VERSION\"|" \
-  -e "s|/download/v$OLD_RE/|/download/v$VERSION/|g"
-rewrite_sums "$DIR/scoop/lumen.json" json
+  -e "s|/download/v$SCOOP_OLD_RE/|/download/v$VERSION/|g"
+rewrite_sums "$SCOOP" json
 
 # --- winget -------------------------------------------------------------------
 
@@ -213,9 +223,11 @@ for h in "$MACOS_ARM" "$MACOS_X86" "$LINUX_ARM" "$LINUX_X86"; do
   carries "$DIR/homebrew/lumen.rb" "$h" "a checksum"
 done
 
-carries "$DIR/scoop/lumen.json" "\"version\": \"$VERSION\"" "version $VERSION"
-carries "$DIR/scoop/lumen.json" "$WINDOWS_ZIP" "the windows zip checksum"
-carries "$DIR/scoop/lumen.json" "$WINDOWS_ARM_ZIP" "the windows arm64 zip checksum"
+carries "$SCOOP" "\"version\": \"$VERSION\"" "version $VERSION"
+carries "$SCOOP" "$WINDOWS_ZIP" "the windows zip checksum"
+carries "$SCOOP" "$WINDOWS_ARM_ZIP" "the windows arm64 zip checksum"
+carries "$SCOOP" "/download/v$VERSION/lumen-windows-x86_64.zip" "the v$VERSION zip URL"
+carries "$SCOOP" "/download/v$VERSION/lumen-windows-aarch64.zip" "the v$VERSION arm64 zip URL"
 
 for file in "$DIR"/winget/LumenFX.Lumen*.yaml; do
   carries "$file" "^PackageVersion: $VERSION\$" "version $VERSION"
@@ -225,12 +237,16 @@ carries "$DIR/winget/LumenFX.Lumen.installer.yaml" "$WINDOWS_ARM_MSI" \
         "the arm64 msi checksum"
 
 # Nothing may still point at the release that was there before.
-for file in "$DIR/aur/PKGBUILD" "$DIR/homebrew/lumen.rb" "$DIR/scoop/lumen.json" \
+for file in "$DIR/aur/PKGBUILD" "$DIR/homebrew/lumen.rb" \
             "$DIR"/winget/LumenFX.Lumen*.yaml; do
   if [ "$OLD" != "$VERSION" ] && grep -q -- "/v$OLD_RE/" "$file"; then
     echo "update-package-manifests.sh: $file still links to v$OLD" >&2
     exit 1
   fi
 done
+if [ "$SCOOP_OLD" != "$VERSION" ] && grep -q -- "/v$SCOOP_OLD_RE/" "$SCOOP"; then
+  echo "update-package-manifests.sh: $SCOOP still links to v$SCOOP_OLD" >&2
+  exit 1
+fi
 
 echo "package manifests now point at v$VERSION"

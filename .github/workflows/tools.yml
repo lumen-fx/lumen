@@ -93,7 +93,7 @@ jobs:
           area zed tools/zed-lumen \
             "^tools/zed-lumen/|$self"
           area release tools/release \
-            "^tools/release/|^tools/setup-lumen/|^tools/fetch-templates\.sh$|^\.github/scripts/|^\.githooks/|$self"
+            "^tools/release/|^bucket/|^tools/setup-lumen/|^tools/fetch-templates\.sh$|^\.github/scripts/|^\.githooks/|$self"
           # the SDK version has to equal the workspace version, and the test
           # that checks it reads the root manifest
           area python sdk/python \
@@ -253,8 +253,13 @@ jobs:
         if: hashFiles('tools/release/update-package-manifests.sh') != ''
         run: |
           set -euo pipefail
-          work="$RUNNER_TEMP/release"
-          cp -r tools/release "$work"
+          # the Scoop manifest sits at the repository root, so the copy
+          # keeps the two directories in the same places relative to each
+          # other
+          work="$RUNNER_TEMP/tree"
+          mkdir -p "$work/tools"
+          cp -r tools/release "$work/tools/release"
+          cp -r bucket "$work/bucket"
           sums="$RUNNER_TEMP/sha256sums.txt"
           : > "$sums"
           n=0
@@ -266,16 +271,18 @@ jobs:
             printf '%064d  %s\n' "$n" "$asset" >> "$sums"
           done
 
-          "$work/update-package-manifests.sh" 9.9.9 "$sums"
+          "$work/tools/release/update-package-manifests.sh" 9.9.9 "$sums"
 
           cd "$work"
-          for manifest in aur/PKGBUILD homebrew/lumen.rb scoop/lumen.json \
-                          winget/LumenFX.Lumen.installer.yaml; do
+          for manifest in tools/release/aur/PKGBUILD tools/release/homebrew/lumen.rb \
+                          bucket/lumen.json tools/release/winget/LumenFX.Lumen.installer.yaml; do
             if ! grep -q '9\.9\.9' "$manifest"; then
               echo "$manifest did not pick up the version" >&2
               exit 1
             fi
           done
+          # Scoop rejects a bucket manifest that does not parse
+          python3 -m json.tool bucket/lumen.json > /dev/null
 
   # Two literal jobs, not a matrix: a skipped matrix job never expands, so
   # its per-version required contexts would wait forever on unrelated PRs.

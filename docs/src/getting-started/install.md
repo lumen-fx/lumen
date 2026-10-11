@@ -173,9 +173,13 @@ compiles them into the executable instead.
 ### Scoop
 
 ```
-scoop bucket add lumen https://github.com/lumen-fx/scoop-lumen
+scoop bucket add lumen https://github.com/lumen-fx/lumen
 scoop install lumen
 ```
+
+The Lumen repository is the bucket, so adding it clones the repository. The
+earlier `lumen-fx/scoop-lumen` bucket no longer receives releases; if you added
+it, run `scoop bucket rm lumen` first, then the two commands above.
 
 Scoop installs the portable zip rather than the MSI, so the two never end up
 side by side. It puts `lumenc`, `lumen-server`, and `lumen-lsp` on your `PATH`.
