@@ -85,9 +85,9 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   `Painter` trait, the walker that turns the retained node tree into painter
   calls, the leaf emitters (rects, gradients, borders, shadows, images, SVGs,
   text, the caret and selection), the fragment cache, the layer cache faded
-  groups are kept in, and `Recording`, a painter that keeps its calls to
-  replay later. Every render backend paints
-  through it, so the backends agree on a frame by construction.
+  groups are kept in, the glyph flattening every backend fills text with, and
+  `Recording`, a painter that keeps its calls to replay later. Every render
+  backend paints through it, so the backends agree on a frame by construction.
 
 ### Backends
 
@@ -658,7 +658,16 @@ has held still for a frame, a scale or size change drops every kept layer, a
 group holding a native leaf is never kept, and the cache holds at most a fixed
 budget of pixels; a group it does not keep paints directly. The GPU sink
 renders the layers a frame closes packed into shared textures, one vello pass
-per texture rather than one per layer. The frame logic around the walk is shared
+per texture rather than one per layer. Text is the one shape the walker does
+not leave to each rasterizer's own curve flattening, because two rasterizers
+flattening a glyph's curves their own ways draw visibly different edges at
+text sizes. `GlyphOutlines` in `lumen-paint` reads each glyph's outline,
+flattens it once per glyph, size, and variation instance in target pixels,
+and caches the polygons; both sinks fill those same polygons, the GPU sink
+keeping them pre-encoded for vello, and text inside an offscreen layer fills
+them through the layer's transform like any other shape. Colour glyphs (COLR
+and bitmap faces) are the exception and draw through each backend's own glyph
+renderer. The frame logic around the walk is shared
 too, in `lumen-paint`'s `frame` module: both backends diff the tree against
 the previous frame's, skip the frame entirely when nothing visible changed
 (leaving the last one on screen), and answer a screenshot request from the

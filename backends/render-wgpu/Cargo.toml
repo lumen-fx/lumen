@@ -28,6 +28,10 @@ glam.workspace = true
 # drops vello's `wgpu_default` alias -- see the direct per-OS `wgpu` dep
 # below, which owns the single-backend selection.
 vello.workspace = true
+# The scene encoding vello renders, named directly so a glyph run's flattened
+# polygons are encoded once and copied into each frame (see `sink.rs`). The
+# release vello 0.9 depends on, so the link carries one copy.
+vello_encoding = "0.9"
 pollster = "1.0"
 thiserror.workspace = true
 # GPU init spans (the `lumen::render::gpu_init` target, shown by

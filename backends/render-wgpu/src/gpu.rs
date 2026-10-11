@@ -354,11 +354,14 @@ impl GpuCore {
     /// Paint the render world's retained scene and render it into the
     /// frame texture.
     pub(crate) fn render(&mut self, render_world: &mut World) -> Result<(), String> {
-        self.painter
+        let (width, height) = (self.frame.width, self.frame.height);
+        let sink = self
+            .painter
             .native()
             .downcast_mut::<VelloPainter>()
-            .expect("the GPU renderer paints through a VelloPainter")
-            .reset();
+            .expect("the GPU renderer paints through a VelloPainter");
+        sink.reset();
+        sink.set_target_size(width, height);
         lumen_paint::paint_frame(
             render_world,
             &mut self.painter,

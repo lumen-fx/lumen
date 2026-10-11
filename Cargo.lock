@@ -4232,6 +4232,7 @@ dependencies = [
  "lumen-text",
  "peniko",
  "rustc-hash 2.1.3",
+ "skrifa 0.44.0",
  "tracing",
  "usvg",
 ]
@@ -4347,6 +4348,7 @@ dependencies = [
  "lumen-core",
  "lumen-paint",
  "lumen-text",
+ "lumen-text-cosmic",
  "raw-window-handle",
  "softbuffer",
  "toml 1.1.4+spec-1.1.0",
@@ -4389,6 +4391,7 @@ dependencies = [
  "tracing",
  "usvg",
  "vello",
+ "vello_encoding",
  "wgpu",
 ]
 
