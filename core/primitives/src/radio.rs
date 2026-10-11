@@ -29,7 +29,10 @@
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Color, DocumentOrder, Fill, Selected, Visuals};
+use lumen_core::components::{Color, DocumentOrder, Selected, Visuals};
+use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+
+use crate::held::{hold_fill, release_fill};
 use lumen_core::prelude::*;
 use lumen_core::property_store::PropertyStore;
 
@@ -43,14 +46,20 @@ pub struct RadioButton {
     pub value: String,
 }
 
-/// Marker on the `.radio-dot` child tile.
+/// Marker on the `.radio-dot` child tile. Its selected fill is held in
+/// [`StyleOverrides`] over the dot's own.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(StyleOverrides)]
 pub struct RadioDot;
+
+impl StyleOwner for RadioDot {
+    const RANK: u8 = 20;
+}
 
 /// Per-radio fill for the selected dot state, resolved at spawn from
 /// `radio:selected { bg: ... }` (routed through
 /// `Attributes::selected_bg`) with the accent fallback.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct RadioStyle {
     /// Dot fill while this member is selected.
     pub selected_bg: Color,
@@ -63,12 +72,6 @@ impl Default for RadioStyle {
         }
     }
 }
-
-/// Resting dot fill captured on first sync (CSS-authored), restored on
-/// deselect - same capture pattern as
-/// [`crate::checkbox::CheckboxBaseFill`].
-#[derive(Component, Clone, Copy, Debug)]
-pub struct RadioBaseFill(pub Option<Color>);
 
 /// Plugin: registers selection dispatch, marker/visual sync, roving
 /// tab index, and arrow-key navigation.
@@ -354,34 +357,19 @@ pub fn radio_group_keys(
 }
 
 /// Keep every `.radio-dot` child in step with its parent's [`Selected`]
-/// marker: `selected_bg` while selected, the captured resting fill
-/// otherwise.
+/// marker: `selected_bg` while selected, the dot's own fill otherwise.
 pub fn sync_radio_visuals(
-    mut commands: Commands,
     parents_q: Query<(Has<Selected>, &RadioStyle), With<RadioButton>>,
-    mut dots: Query<(Entity, &ChildOf, &mut Visuals, Option<&RadioBaseFill>), With<RadioDot>>,
+    mut dots: Query<(&ChildOf, &mut Visuals, &mut StyleOverrides), With<RadioDot>>,
 ) {
-    for (dot_e, child_of, mut vis, base) in &mut dots {
+    for (child_of, mut vis, mut overrides) in &mut dots {
         let Ok((selected, style)) = parents_q.get(child_of.parent()) else {
             continue;
         };
-        // Capture the resting fill once, before the first swap (see
-        // [`crate::baseline::capture_baseline`]).
-        let base_fill = crate::baseline::capture_baseline(
-            &mut commands,
-            dot_e,
-            base,
-            vis.fill.as_ref().and_then(Fill::as_solid),
-            |b| b.0,
-            RadioBaseFill,
-        );
-        let want = if selected {
-            Some(style.selected_bg)
+        if selected {
+            hold_fill::<RadioDot>(&mut overrides, &mut vis, style.selected_bg);
         } else {
-            base_fill
-        };
-        if vis.fill.as_ref().and_then(Fill::as_solid) != want {
-            vis.fill = want.map(Fill::Solid);
+            release_fill::<RadioDot>(&mut overrides, &mut vis);
         }
     }
 }

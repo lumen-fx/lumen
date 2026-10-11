@@ -57,7 +57,9 @@ above the normal declarations of its origin.
 Four layers stack, lowest first:
 
 1. The built-in colour palette, exposed as custom properties.
-2. The always-on baseline that gives controls their minimum sizes.
+2. The always-on baseline: what each tag is by default (a `<column>` stacks
+   downwards, an `<overlay>` covers its parent, a `<spacer>` takes the space
+   left) and the minimum sizes of the controls.
 3. The skin, when the app opts into one.
 4. Your own CSS.
 
@@ -69,8 +71,9 @@ skin.
 Above all of that sit inline markup attributes. `<tile width="50px" />` wins
 over `.tile { width: 100px }`. That is deliberate: an attribute is a statement
 about one element, and it stays true no matter which stylesheet loads later. It
-holds for every property both surfaces can write; the layout tags' own
-direction is the exception, and CSS can change that with `flex-direction`.
+holds for every property both surfaces can write. A tag's own defaults are not
+attributes but rules in the baseline, so `.toolbar { flex-direction: row }`
+turns a `<column>` sideways.
 
 ## Custom properties and theming
 
@@ -126,7 +129,9 @@ script can override the choice with `set_color_scheme`, which accepts
 Styling reacts to class changes. A script can set the root's class list, set
 the class list of an element by id, or add, remove, and toggle a class on a
 node it holds. Any of those re-resolves the affected elements against the
-stylesheet, including the custom-property scopes they inherit:
+stylesheet, including the custom-property scopes they inherit. The element is
+resolved from scratch, the way it was when the app started, so removing a class
+takes with it every property only that class set:
 
 ```rust
 // candela

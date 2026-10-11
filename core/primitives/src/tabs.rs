@@ -12,6 +12,9 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::input::{ClickEvent, FocusTracker, Key, KeyPressed, MenuClicked, NamedKey};
 use lumen_core::prelude::*;
+use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+
+use crate::held::hold_fill;
 
 /// Strip-button marker. `(signal_name, tab_value)` - clicking writes
 /// `Signals[signal_name] = tab_value`. Authored only by the
@@ -35,7 +38,8 @@ pub const TAB_SELECTED_BG: Color = Color::rgb(0.20, 0.78, 0.81);
 /// as the [`Selected`] marker is added to / removed from the button -
 /// same pattern as [`crate::controls::ToggleStyle`] /
 /// [`crate::controls::sync_toggle_visuals`] for `<toggle>`.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(StyleOverrides)]
 pub struct TabButtonStyle {
     /// Fill shown while this button carries [`Selected`] (`:selected {
     /// bg: ... }` or [`TAB_SELECTED_BG`]).
@@ -43,6 +47,10 @@ pub struct TabButtonStyle {
     /// Fill shown while unselected (author `bg` / class default, or
     /// fully transparent when neither supplied one).
     pub unselected_bg: Color,
+}
+
+impl StyleOwner for TabButtonStyle {
+    const RANK: u8 = 20;
 }
 
 impl Default for TabButtonStyle {
@@ -219,11 +227,10 @@ pub fn sync_tab_selected(
 
 /// Keep a tab-strip button's visuals in step with whether it currently
 /// carries [`Selected`]: swap [`Visuals::fill`] between
-/// [`TabButtonStyle::selected_bg`] / [`TabButtonStyle::unselected_bg`],
-/// and rebase any captured [`crate::hover::HoverBaseColor`] /
-/// [`crate::hover::PressBaseColor`] snapshot onto the new fill so a
-/// tint release doesn't restore the stale pre-swap color - mirrors
-/// [`crate::controls::sync_toggle_visuals`]'s track-fill handling.
+/// [`TabButtonStyle::selected_bg`] / [`TabButtonStyle::unselected_bg`].
+/// The fill is held in [`StyleOverrides`] under the hover and press tints,
+/// so a tint releases onto the current state colour rather than a stale
+/// one - mirrors [`crate::controls::sync_track_fill`].
 ///
 /// Runs every tick rather than gating on a change filter: unlike
 /// `Toggleable::checked` (a `bool` that only ever changes via an
@@ -241,31 +248,18 @@ pub fn sync_tab_button_visuals(
             &TabButtonStyle,
             Option<&Selected>,
             &mut Visuals,
-            Option<&mut crate::hover::HoverBaseColor>,
-            Option<&mut crate::hover::PressBaseColor>,
+            &mut StyleOverrides,
         ),
         With<TabStripButton>,
     >,
 ) {
-    for (style, selected, mut vis, hover_base, press_base) in &mut buttons {
+    for (style, selected, mut vis, mut overrides) in &mut buttons {
         let target = if selected.is_some() {
             style.selected_bg
         } else {
             style.unselected_bg
         };
-        if vis.fill.as_ref().and_then(Fill::as_solid) != Some(target) {
-            vis.fill = Some(Fill::Solid(target));
-        }
-        if let Some(mut base) = hover_base
-            && base.0 != target
-        {
-            base.0 = target;
-        }
-        if let Some(mut base) = press_base
-            && base.0 != target
-        {
-            base.0 = target;
-        }
+        hold_fill::<TabButtonStyle>(&mut overrides, &mut vis, target);
     }
 }
 
@@ -647,12 +641,6 @@ mod tests {
         };
         let general = world.spawn(strip("general")).id();
         let advanced = world.spawn(strip("advanced")).id();
-        // Attach a HoverBaseColor to `general` up front to exercise the
-        // rebase path - a stale hover snapshot must track the fill swap
-        // so releasing the hover doesn't restore the pre-swap color.
-        world
-            .entity_mut(general)
-            .insert(crate::hover::HoverBaseColor(style.unselected_bg));
 
         let mut schedule = Schedule::default();
         schedule.add_systems((sync_tab_selected, sync_tab_button_visuals).chain());
@@ -670,8 +658,8 @@ mod tests {
         assert_eq!(fill_of(&world, general), style.unselected_bg);
         assert_eq!(fill_of(&world, advanced), style.unselected_bg);
 
-        // `general` becomes active: its fill (and hover-base snapshot)
-        // swap to the selected color; `advanced` stays unselected.
+        // `general` becomes active: its fill swaps to the selected color;
+        // `advanced` stays unselected.
         world
             .resource_mut::<PropertyStore>()
             .set_global_str("active", "general");
@@ -682,13 +670,22 @@ mod tests {
             "selected tab repaints to selected_bg"
         );
         assert_eq!(fill_of(&world, advanced), style.unselected_bg);
+        // A hover tint over it fades from, and lets go onto, the selected
+        // fill.
+        let live_vis = world.get::<Visuals>(general).unwrap().clone();
         assert_eq!(
             world
-                .get::<crate::hover::HoverBaseColor>(general)
+                .get::<StyleOverrides>(general)
                 .unwrap()
-                .0,
-            style.selected_bg,
-            "hover-base snapshot rebases onto the new fill"
+                .below::<crate::hover::HoverTween>(
+                    lumen_core::style_overrides::StyleFields::FILL,
+                    &lumen_core::style_overrides::Live {
+                        visuals: Some(&live_vis),
+                        ..Default::default()
+                    },
+                )
+                .fill,
+            Some(Some(Fill::Solid(style.selected_bg))),
         );
 
         // Activation moves to `advanced`: `general` must revert.

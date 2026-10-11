@@ -447,6 +447,41 @@ overrides it with an ordinary rule. Only defaults that CSS cannot express, such
 as one that applies conditionally on another property being unset, stay in
 Rust.
 
+## Holding a style value
+
+An element's style components are rebuilt from the cascade whenever it
+restyles, so a value a plugin writes into `Style`, `Visuals`, `TextStyle` or
+`Opacity` directly is gone at the next class change or theme flip. A plugin
+that owns a value while something is true (an element it hides, places, tints
+or sizes) holds it in `lumen_core::style_overrides::StyleOverrides` instead:
+
+```rust
+use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
+
+#[derive(Component)]
+#[require(StyleOverrides)]
+struct Collapsed;
+
+impl StyleOwner for Collapsed {
+    const RANK: u8 = 20;
+}
+
+fn collapse(mut q: Query<(&mut Style, &mut StyleOverrides), With<Collapsed>>) {
+    for (mut style, mut overrides) in &mut q {
+        let held = StyleValues { display: Some(Display::None), ..Default::default() };
+        let live = Live { style: Some(&style), ..Default::default() };
+        overrides.hold::<Collapsed>(held, &live).write_style(&mut style);
+    }
+}
+```
+
+`hold` returns what the element shows now, which the caller writes; `release`
+lets go and returns what the element's styles give it then. Holders stack by
+`RANK`, so `below` reads what is under a layer, which is what a tint blends
+from. `hold_on` and `release_on` do the same through an `EntityWorldMut`. Make
+the component that marks your elements require `StyleOverrides`, so every one
+of them carries the layer before your system first runs.
+
 ## Constraints to respect
 
 - **Do not add backend dependencies to `lumen-core`.** If your plugin needs a
@@ -1294,7 +1329,12 @@ The hooks, in pipeline order:
   synthesize the stylesheet.
 - `transform_ir` receives the parsed tree after multi-page assembly and
   before asset resolution and the cascade, so an injected element gets its
-  asset paths resolved and its styles applied like a hand-written one.
+  asset paths resolved and its styles applied like a hand-written one. Give an
+  injected element its styles with
+  `lumenc_plugin::lumen_ir::css::apply_markup_declaration`, which records them
+  the way the parser records an attribute. A value written straight into an
+  `Attributes` field is lost the first time the element restyles, because a
+  restyle rebuilds the element from that record.
 - `lint` reads the cascaded tree and returns findings, printed beside the
   built-in lint findings. They are advisory, never fail the build, and are
   not baked into the compiled artifact.

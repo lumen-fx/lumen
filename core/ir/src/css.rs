@@ -118,6 +118,26 @@ impl Stylesheet {
         set
     }
 
+    /// Whether any selector steps across siblings (`+` or `~`), at the top
+    /// level or inside `:is()` / `:where()` / `:not()`. Only then does a
+    /// walk that re-resolves elements need to hand each one its siblings.
+    pub fn uses_sibling_combinators(&self) -> bool {
+        fn walk(sel: &SelectorBuf) -> bool {
+            sel.chain.iter().any(|(link, compound)| {
+                matches!(
+                    link,
+                    Combinator::AdjacentSibling | Combinator::GeneralSibling
+                ) || compound.pseudo_classes.iter().any(|p| match p {
+                    PseudoClass::Is(args) | PseudoClass::Where(args) | PseudoClass::Not(args) => {
+                        args.iter().any(walk)
+                    }
+                    _ => false,
+                })
+            })
+        }
+        self.rules.iter().flat_map(|r| &r.selectors).any(walk)
+    }
+
     /// Every top-level `:root { --name: value }` custom-property
     /// declaration in the stylesheet, folded in rule order (last wins).
     /// Structural variants (`:root.dark { ... }`) are excluded - only the
@@ -647,15 +667,13 @@ pub fn apply_css_with_media(
     css: &Stylesheet,
     media: &MediaContext,
 ) -> Result<Vec<CssWarning>, ParseError> {
-    let inherited: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let parents: Vec<ElementRef> = Vec::new();
     let mut warnings = Vec::new();
     apply_to_element(
         &mut ir.root,
         css,
         media,
-        &inherited,
-        &InheritedText::default(),
+        &Scope::default(),
         &parents,
         1,
         1,
@@ -773,8 +791,7 @@ fn apply_to_element(
     el: &mut Element,
     css: &Stylesheet,
     media: &MediaContext,
-    inherited_vars: &std::collections::HashMap<String, String>,
-    inherited_text: &InheritedText,
+    scope: &Scope,
     parents: &[ElementRef],
     child_index: i32,
     sibling_count: i32,
@@ -782,27 +799,105 @@ fn apply_to_element(
     warnings: &mut Vec<CssWarning>,
 ) {
     let me = ElementRef::from_element(el, child_index, sibling_count).with_siblings(siblings);
-    let is_root = parents.is_empty();
     let has_element_children = !el.children.is_empty();
+    // Out of the attributes for the pass, so the cascade can borrow them
+    // whole while `:empty` reads the text; no rule writes it.
+    let text_body = el.attrs.text.take();
+    let child_scope = cascade_one(
+        &mut el.attrs,
+        css,
+        media,
+        scope,
+        parents,
+        &me,
+        has_element_children,
+        text_body.as_deref(),
+        warnings,
+    );
+    el.attrs.text = text_body;
+
+    // Recurse into children with the up-to-date var + text scope.
+    let mut new_parents: Vec<ElementRef> = parents.to_vec();
+    new_parents.push(me);
+    let n = el.children.len() as i32;
+    // One identity list per parent, shared by reference with every child,
+    // so `+` / `~` steps can walk leftwards through real siblings.
+    let child_refs: Option<Rc<[ElementRef]>> = if el.children.is_empty() {
+        None
+    } else {
+        Some(
+            el.children
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ElementRef::from_element(c, (i as i32) + 1, n))
+                .collect(),
+        )
+    };
+    for (i, child) in el.children.iter_mut().enumerate() {
+        apply_to_element(
+            child,
+            css,
+            media,
+            &child_scope,
+            &new_parents,
+            (i as i32) + 1,
+            n,
+            child_refs.clone(),
+            warnings,
+        );
+    }
+}
+
+/// What an element hands its children in the cascade: the custom
+/// properties in force under it and the text properties they inherit.
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    vars: std::collections::HashMap<String, String>,
+    text: InheritedText,
+}
+
+/// Resolve one element's attributes against the stylesheet, in place, and
+/// return the scope its children inherit.
+///
+/// `attrs` comes in holding what the element itself declares, which is
+/// inline origin: it beats every rule, and the restore at the end puts it
+/// back over them. `me` is the element's identity for selector matching,
+/// `parents` its ancestors root-first, and `scope` what its parent hands
+/// down.
+#[allow(clippy::too_many_arguments)]
+fn cascade_one(
+    attrs: &mut Attributes,
+    css: &Stylesheet,
+    media: &MediaContext,
+    scope: &Scope,
+    parents: &[ElementRef],
+    me: &ElementRef,
+    has_element_children: bool,
+    text_body: Option<&str>,
+    warnings: &mut Vec<CssWarning>,
+) -> Scope {
+    let inherited_vars = &scope.vars;
+    let inherited_text = &scope.text;
+    let is_root = parents.is_empty();
 
     // Snapshot pre-CSS (inline-set) attrs so origin precedence still
     // beats user CSS on a per-field basis.
-    let inline_snapshot = el.attrs.clone();
+    let inline_snapshot = attrs.clone();
 
     // Inheritance base (CSS-inherited text props): apply the parent's
     // computed value as a specificity-0 base, only where this element
     // has no inline value yet. Any matching rule (applied below) or the
     // inline origin (restored below) overrides it.
-    inherited_text.apply_base(&mut el.attrs);
+    inherited_text.apply_base(attrs);
 
     // Collect matching rules, cascade-sorted (ascending - later wins).
     let matched = collect_matching_rules(
         css,
         media,
-        &me,
+        me,
         parents,
         has_element_children,
-        el.attrs.text.as_deref(),
+        text_body,
         is_root,
     );
 
@@ -868,13 +963,7 @@ fn apply_to_element(
                 continue;
             }
         };
-        match apply_decl_for_pseudo(
-            &ctx,
-            &decl.name,
-            &resolved,
-            &m.matched_pseudo,
-            &mut el.attrs,
-        ) {
+        match apply_decl_for_pseudo(&ctx, &decl.name, &resolved, &m.matched_pseudo, attrs) {
             Ok(true) => {
                 if canonical_property_name(&decl.name) == "bg" {
                     let p = &m.matched_pseudo;
@@ -902,7 +991,7 @@ fn apply_to_element(
 
     // Origin precedence: inline > CSS. Restore any field the inline
     // pass had populated.
-    restore_inline_origin(&mut el.attrs, &inline_snapshot);
+    restore_inline_origin(attrs, &inline_snapshot);
 
     // An author background wins over a user-agent one, whatever state the
     // skin attached its rule to. `bg` and `:hover { bg }` live in separate
@@ -920,10 +1009,10 @@ fn apply_to_element(
         matches!(plain_bg_origin, Some(Origin::Author)) || inline_snapshot.bg.is_some();
     if authored_bg {
         if hover_bg_origin == Some(Origin::UserAgent) {
-            el.attrs.hover_bg = None;
+            attrs.hover_bg = None;
         }
         if press_bg_origin == Some(Origin::UserAgent) {
-            el.attrs.press_bg = None;
+            attrs.press_bg = None;
         }
     }
 
@@ -935,7 +1024,7 @@ fn apply_to_element(
     // Inline `delay=` / `offset=` attrs parsed as `Some` and win; the
     // runtime default (500 ms / 12 px) is the single Rust-side
     // fallback when neither the author nor a skin supplied a value.
-    if let Some(tooltip) = el.attrs.tooltip.as_mut() {
+    if let Some(tooltip) = attrs.tooltip.as_mut() {
         if tooltip.delay_ms.is_none() {
             tooltip.delay_ms = vars
                 .get("lumen-tooltip-delay")
@@ -950,39 +1039,8 @@ fn apply_to_element(
 
     // Compute the inherited text scope for children from this element's
     // now-resolved values (which already fold in the inherited base).
-    let child_text = InheritedText::from_computed(&el.attrs, inherited_text);
-
-    // Recurse into children with the up-to-date var + text scope.
-    let mut new_parents: Vec<ElementRef> = parents.to_vec();
-    new_parents.push(me);
-    let n = el.children.len() as i32;
-    // One identity list per parent, shared by reference with every child,
-    // so `+` / `~` steps can walk leftwards through real siblings.
-    let child_refs: Option<Rc<[ElementRef]>> = if el.children.is_empty() {
-        None
-    } else {
-        Some(
-            el.children
-                .iter()
-                .enumerate()
-                .map(|(i, c)| ElementRef::from_element(c, (i as i32) + 1, n))
-                .collect(),
-        )
-    };
-    for (i, child) in el.children.iter_mut().enumerate() {
-        apply_to_element(
-            child,
-            css,
-            media,
-            &vars,
-            &child_text,
-            &new_parents,
-            (i as i32) + 1,
-            n,
-            child_refs.clone(),
-            warnings,
-        );
-    }
+    let text = InheritedText::from_computed(attrs, inherited_text);
+    Scope { vars, text }
 }
 
 /// CSS-inherited text properties carried down the element tree. Per the
@@ -1359,19 +1417,14 @@ pub fn parse_selector_list(src: &str) -> Result<Vec<SelectorBuf>, String> {
 }
 
 /// Test whether `sel` matches `subject`, consulting `ancestors`
-/// (root-first, the same order [`reapply_with_ancestors`] expects) for
+/// (root-first, the same order [`RestyleWalk::new`] takes) for
 /// descendant / child combinators. Wraps the cascade matcher
 /// ([`match_selector`]) so `query()` and traversal share the exact match
 /// semantics of the live cascade.
 ///
-/// Sibling combinators (`+`, `~`) fail here: an [`AncestorInfo`] chain
-/// carries no sibling identity, so a selector with a sibling step never
-/// matches. The full-tree cascade, which walks real siblings, matches
-/// them.
-///
-/// `has_element_children` is assumed true and inline text is assumed
-/// absent for the subject, matching the ancestor-pass convention; `:empty`
-/// therefore matches conservatively.
+/// Sibling combinators (`+`, `~`) walk `subject.siblings` and each
+/// ancestor's; without them a selector with a sibling step never matches.
+/// `:empty` reads `subject.has_element_children` and `subject.text`.
 pub fn selector_matches(
     sel: &SelectorBuf,
     subject: &AncestorInfo,
@@ -1383,10 +1436,10 @@ pub fn selector_matches(
     let ctx = NodeCtx {
         el: &me,
         ancestors: &parents,
-        siblings: None,
+        siblings: me.siblings.as_deref(),
         sibling_index: me.sibling_index(),
-        has_element_children: true,
-        text_body: None,
+        has_element_children: subject.has_element_children,
+        text_body: subject.text.as_deref(),
         is_root,
     };
     match_selector(sel, &ctx).is_some()
@@ -1713,15 +1766,8 @@ fn sel_parse_anb(src: &str) -> Result<AnB, String> {
 
 /// Inline-set fields (origin: inline) beat CSS. Restore any field the
 /// inline snapshot had populated.
-///
-/// The exception is `flex`, which the markup parser fills in from the tag
-/// itself (`<row>` / `<column>` / `<scroll>` ...) rather than from
-/// anything the author wrote; restoring it would make `flex-direction`
-/// unsettable from CSS on those tags.
 fn restore_inline_origin(target: &mut Attributes, inline: &Attributes) {
-    let cascaded_flex = target.flex;
     overlay_set_fields(target, inline);
-    target.flex = cascaded_flex;
 }
 
 /// Copy every style field `src` sets onto `target`, leaving the fields
@@ -2109,53 +2155,45 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     }
 }
 
-/// Re-apply CSS rules to a single substituted element with overwrite
-/// semantics - used by the `<for>` reconciler against runtime-
-/// substituted template elements where classes are computed from
-/// per-row data. Resolves `@media` blocks against the default (empty)
-/// [`MediaContext`]; use [`reapply_single_with_media`] to honour the
-/// live OS theme / viewport.
-pub fn reapply_single(el: &mut Element, css: &Stylesheet) -> Result<(), ParseError> {
-    reapply_single_with_media(el, css, &MediaContext::default())
-}
-
-/// Same as [`reapply_single`] but resolves `@media` blocks against a
-/// live [`MediaContext`]. Used by the runtime theme-flip re-resolver so
-/// a `prefers-color-scheme` / viewport-width flip restyles already-
-/// spawned entities without a respawn.
+/// Resolve a detached element (one with no ancestors to hand it a scope,
+/// such as a `<for>` row being built before it joins the tree) against the
+/// stylesheet, and write what the cascade resolved over its attributes.
 ///
-/// Copies back every property the cascade resolved, the same set the
-/// first resolution applies. A property the cascade didn't set is left
-/// untouched, so inline authoring values on non-flipped props survive.
-pub fn reapply_single_with_media(
-    el: &mut Element,
-    css: &Stylesheet,
-    media: &MediaContext,
-) -> Result<(), ParseError> {
-    // No ancestor context here - flatten every rule's `--*` into a
-    // first-value-wins seed so a lone element's `var()` still resolves
-    // against globals it can't reach through the (empty) chain. The
-    // `<for>` reconciler is the caller.
-    let mut inherited: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+/// The element's own declarations ([`Attributes::markup_styles`]) rank above
+/// every rule, as they did in the first cascade. Every `--*` property any
+/// rule declares seeds the scope, first value wins, so a `var()` still
+/// resolves against globals the missing ancestors would have carried. A
+/// property no rule and no declaration sets keeps the value `el` already
+/// had: the element's place in the tree decides the rest, and the restyle
+/// that runs once it is in place resolves it whole.
+pub fn reapply_detached(el: &mut Element, css: &Stylesheet, media: &MediaContext) {
+    let mut seed = Scope::default();
     for rule in &css.rules {
         for decl in &rule.declarations {
             if let Some(name) = decl.name.strip_prefix("--") {
-                inherited
+                seed.vars
                     .entry(name.to_string())
                     .or_insert_with(|| decl.value.clone());
             }
         }
     }
-    reapply_probe(
-        el,
+    let node = AncestorInfo::new(
+        el.tag.clone(),
+        el.attrs.classes.clone(),
+        el.attrs.id.clone(),
+    )
+    .with_content(!el.children.is_empty(), el.attrs.text.clone())
+    .with_declarations(el.attrs.markup_styles.clone());
+    let mut walk = RestyleWalk {
         css,
         media,
-        &[],
-        &inherited,
-        &InheritedText::default(),
-        SiblingPosition::default(),
-    );
-    Ok(())
+        parents: Vec::new(),
+        scopes: vec![seed],
+        last: None,
+        warnings: Vec::new(),
+    };
+    let resolved = walk.resolve(&node);
+    overlay_set_fields(&mut el.attrs, &resolved);
 }
 
 /// Where an element sits among its element siblings. The structural
@@ -2189,11 +2227,46 @@ impl Default for SiblingPosition {
     }
 }
 
-/// Public identity of one ancestor in the cascade chain handed to
-/// [`reapply_with_ancestors`]. Mirrors the internal `ElementRef` but is
-/// part of the crate's public surface so the runtime can build a chain
-/// from ECS `ChildOf` + `LumenTag` / `LumenClasses` / `LumenId`
-/// components without reaching into cascade internals.
+/// The element siblings sharing one parent, in document order: what a `+`
+/// or `~` step walks leftwards through. Built once per parent and shared by
+/// every child of it.
+#[derive(Clone)]
+pub struct Siblings(Rc<[ElementRef]>);
+
+impl Siblings {
+    /// The siblings' identities, `(tag, classes, id)` in document order.
+    pub fn new(items: impl IntoIterator<Item = (String, Vec<String>, Option<String>)>) -> Self {
+        let items: Vec<(String, Vec<String>, Option<String>)> = items.into_iter().collect();
+        let count = items.len() as i32;
+        Self(
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(i, (tag, classes, id))| ElementRef {
+                    tag,
+                    classes,
+                    id,
+                    child_index: i as i32 + 1,
+                    sibling_count: count,
+                    siblings: None,
+                })
+                .collect(),
+        )
+    }
+}
+
+impl std::fmt::Debug for Siblings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|s| (&s.tag, &s.classes, &s.id)))
+            .finish()
+    }
+}
+
+/// One element of a live tree as the cascade sees it: what selectors match
+/// on, and what the element itself declares. The runtime builds these from
+/// an entity's components to re-resolve it, and to walk the ancestors of
+/// the element a selector query or `computed_style` asks about.
 #[derive(Debug, Clone)]
 pub struct AncestorInfo {
     /// Markup tag (`root`, `tile`, ...). Empty for a plain layout
@@ -2210,12 +2283,23 @@ pub struct AncestorInfo {
     pub child_index: i32,
     /// Total sibling count including self. Defaults to 1.
     pub sibling_count: i32,
+    /// Every element sibling, self included, for `+` / `~`. `None` makes
+    /// those steps fail rather than guess.
+    pub siblings: Option<Siblings>,
+    /// Whether the element has element children, for `:empty`.
+    pub has_element_children: bool,
+    /// The element's own text, for `:empty`.
+    pub text: Option<String>,
+    /// What the element declares about itself, `(property, value)` in the
+    /// order they apply: its markup's styling attributes, then what a
+    /// script set with `set_style`. These outrank every rule.
+    pub declarations: Vec<(String, String)>,
 }
 
 impl AncestorInfo {
     /// Construct from tag / classes / id with sibling position defaulted
-    /// to `1 of 1`. Use [`Self::with_position`] to thread real positions
-    /// when they're cheaply available.
+    /// to `1 of 1`, element children assumed and no declarations of its
+    /// own. The `with_*` builders fill in the rest when the caller has it.
     pub fn new(tag: impl Into<String>, classes: Vec<String>, id: Option<String>) -> Self {
         Self {
             tag: tag.into(),
@@ -2223,6 +2307,10 @@ impl AncestorInfo {
             id,
             child_index: 1,
             sibling_count: 1,
+            siblings: None,
+            has_element_children: true,
+            text: None,
+            declarations: Vec::new(),
         }
     }
 
@@ -2234,6 +2322,26 @@ impl AncestorInfo {
         self
     }
 
+    /// Builder: set the sibling list, for `+` / `~`.
+    pub fn with_siblings(mut self, siblings: Option<Siblings>) -> Self {
+        self.siblings = siblings;
+        self
+    }
+
+    /// Builder: say whether the element has element children and what text
+    /// it holds, for `:empty`.
+    pub fn with_content(mut self, has_element_children: bool, text: Option<String>) -> Self {
+        self.has_element_children = has_element_children;
+        self.text = text;
+        self
+    }
+
+    /// Builder: set what the element declares about itself.
+    pub fn with_declarations(mut self, declarations: Vec<(String, String)>) -> Self {
+        self.declarations = declarations;
+        self
+    }
+
     fn to_ref(&self) -> ElementRef {
         ElementRef {
             tag: self.tag.clone(),
@@ -2241,60 +2349,140 @@ impl AncestorInfo {
             id: self.id.clone(),
             child_index: self.child_index,
             sibling_count: self.sibling_count,
-            siblings: None,
+            siblings: self.siblings.as_ref().map(|s| s.0.clone()),
         }
     }
 }
 
-/// Ancestor-aware sibling of [`reapply_single_with_media`]. Re-runs the
-/// cascade for one already-spawned element against a real ancestor chain
-/// (root-first ordering), so a runtime theme flip re-resolves the cases
-/// the empty-parent path can't:
+/// A walk down a live tree that resolves each element from scratch: from
+/// its identity, its place in the tree, and what it declares about itself,
+/// against the stylesheet. It is the first cascade's walk over the document,
+/// one element at a time, so an element resolved here comes out as it did
+/// then, and a property nothing sets any more is unset.
 ///
-/// * descendant / child combinators - `.theme-dark .card` matches only
-///   when a `.theme-dark` ancestor is actually present, and `parent >
-///   child` binds to the *immediate* parent only, and
-/// * per-theme custom-property scopes toggled by an ancestor class -
-///   `:root.theme-dark { --bg: ... }` consumed by `.card { bg: var(--bg) }`
-///   re-resolves on the descendant because the ancestor's `--*` scope is
-///   walked into the element's `var()` seed.
-///
-/// The var seed is computed by [`ancestor_var_scope`] (root vars first,
-/// each ancestor overriding earlier ones in cascade order); the element's
-/// own matched rules then fold their `--*` on top inside
-/// [`apply_to_element`]. Copy-back is the same as for
-/// [`reapply_single_with_media`].
-///
-/// `position` is where `el` sits among its element siblings, and decides
-/// the structural pseudo-classes. Pass the real position: the default
-/// (`1 of 1`) makes `:first-child` and `:last-child` match the element
-/// whether or not it is either one.
-pub fn reapply_with_ancestors(
-    el: &mut Element,
+/// Resolve an element, [`enter`](Self::enter) it to resolve its children,
+/// and [`leave`](Self::leave) it after. Each child sees the custom
+/// properties and inherited text its parent resolved, and ancestor
+/// selectors match on the chain entered so far.
+pub struct RestyleWalk<'a> {
+    css: &'a Stylesheet,
+    media: &'a MediaContext,
+    /// The elements entered, root-first.
+    parents: Vec<ElementRef>,
+    /// What each level hands down; the last is the current one's.
+    scopes: Vec<Scope>,
+    /// The element resolved last, and the scope its children inherit.
+    last: Option<(ElementRef, Scope)>,
+    warnings: Vec<CssWarning>,
+}
+
+impl<'a> RestyleWalk<'a> {
+    /// A walk whose next element is a child of `ancestors` (root-first);
+    /// with none, the next element is a document root. Each ancestor is
+    /// resolved on the way down, so the scope it hands on is the one the
+    /// first cascade handed on.
+    pub fn new(css: &'a Stylesheet, media: &'a MediaContext, ancestors: &[AncestorInfo]) -> Self {
+        let mut walk = Self {
+            css,
+            media,
+            parents: Vec::with_capacity(ancestors.len() + 8),
+            scopes: vec![Scope::default()],
+            last: None,
+            warnings: Vec::new(),
+        };
+        for ancestor in ancestors {
+            walk.resolve(ancestor);
+            walk.enter();
+        }
+        walk
+    }
+
+    /// Resolve `node`, a child of the element entered last.
+    ///
+    /// The result holds the element's identity and every style property
+    /// the cascade gave it, and nothing else.
+    pub fn resolve(&mut self, node: &AncestorInfo) -> Attributes {
+        let mut attrs = Attributes {
+            classes: node.classes.clone(),
+            id: node.id.clone(),
+            ..Default::default()
+        };
+        for (property, value) in &node.declarations {
+            match apply_declaration("markup", property, value, &mut attrs) {
+                Ok(true) => {}
+                Ok(false) => self.warnings.push(CssWarning {
+                    selector: format!("<{}>", node.tag),
+                    property: property.clone(),
+                    message: "unknown property (declaration ignored)".to_string(),
+                }),
+                Err(e) => self.warnings.push(CssWarning {
+                    selector: format!("<{}>", node.tag),
+                    property: property.clone(),
+                    message: e.to_string(),
+                }),
+            }
+        }
+        let me = node.to_ref();
+        let scope = cascade_one(
+            &mut attrs,
+            self.css,
+            self.media,
+            self.scopes.last().expect("a walk always has a scope"),
+            &self.parents,
+            &me,
+            node.has_element_children,
+            node.text.as_deref(),
+            &mut self.warnings,
+        );
+        self.last = Some((me, scope));
+        attrs
+    }
+
+    /// Descend into the element resolved last.
+    pub fn enter(&mut self) {
+        let (me, scope) = self
+            .last
+            .take()
+            .expect("enter() follows the resolve() of the element entered");
+        self.parents.push(me);
+        self.scopes.push(scope);
+    }
+
+    /// Climb back out of the element entered last.
+    pub fn leave(&mut self) {
+        self.parents.pop();
+        if self.scopes.len() > 1 {
+            self.scopes.pop();
+        }
+        self.last = None;
+    }
+
+    /// The declarations skipped so far, deduplicated, emptying the list.
+    pub fn take_warnings(&mut self) -> Vec<CssWarning> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = std::mem::take(&mut self.warnings);
+        out.retain(|w| seen.insert((w.selector.clone(), w.property.clone(), w.message.clone())));
+        out
+    }
+}
+
+/// Resolve one element of a live tree from scratch, given its ancestors
+/// root-first; see [`RestyleWalk`]. What the dynamic DOM's
+/// `computed_style` answers with.
+pub fn resolve_element(
+    node: &AncestorInfo,
     css: &Stylesheet,
     media: &MediaContext,
     ancestors: &[AncestorInfo],
-    position: SiblingPosition,
-) -> Result<(), ParseError> {
-    let parents: Vec<ElementRef> = ancestors.iter().map(AncestorInfo::to_ref).collect();
-    let (inherited, inherited_text) = ancestor_var_scope(css, media, &parents);
-    reapply_probe(
-        el,
-        css,
-        media,
-        &parents,
-        &inherited,
-        &inherited_text,
-        position,
-    );
-    Ok(())
+) -> Attributes {
+    RestyleWalk::new(css, media, ancestors).resolve(node)
 }
 
 /// Apply one inline-style declaration (`element.style` layer) onto
-/// `attrs`, overriding whatever the stylesheet cascade resolved. This is
-/// the highest cascade tier for the dynamic DOM `set_style` surface; the
-/// runtime calls it after [`reapply_with_ancestors`] so an inline value
-/// beats every author / UA rule, mirroring DOM inline-style precedence.
+/// `attrs`, overriding whatever the stylesheet cascade resolved. A restyle
+/// passes these to [`RestyleWalk`] after the markup's own, so an inline
+/// value beats every author / UA rule, mirroring DOM inline-style
+/// precedence.
 /// Returns `Ok(true)` when the property was recognized and applied,
 /// `Ok(false)` for an unknown property (ignored), `Err` for an
 /// unparseable value.
@@ -2304,6 +2492,32 @@ pub fn apply_inline_declaration(
     attrs: &mut Attributes,
 ) -> Result<bool, ParseError> {
     apply_declaration("inline-style", name, value, attrs)
+}
+
+/// Give an element a style as its markup would: the value lands in `attrs`,
+/// and the declaration joins [`Attributes::markup_styles`] under the
+/// spelling the cascade files it under.
+///
+/// For the boxes a compiler builds itself (the parts of a `<dropdown>` or a
+/// `<menu>`, a page's gate) rather than ones an author wrote. The record is
+/// what a restyle rebuilds an element's markup tier from, so a value written
+/// into an `Attributes` field alone is gone the first time a class, a theme
+/// or a breakpoint re-resolves the element. Returns what
+/// [`apply_inline_declaration`] returns; nothing is recorded unless the
+/// declaration applied.
+pub fn apply_markup_declaration(
+    name: &str,
+    value: &str,
+    attrs: &mut Attributes,
+) -> Result<bool, ParseError> {
+    let applied = apply_declaration("markup", name, value, attrs)?;
+    if applied {
+        let property = canonical_style_property(name).unwrap_or(name);
+        attrs
+            .markup_styles
+            .push((property.to_string(), value.to_string()));
+    }
+    Ok(applied)
 }
 
 /// Read one resolved CSS property off `attrs` as a canonical string, for
@@ -2717,133 +2931,6 @@ pub fn matched_rules_for(
             }
         })
         .collect()
-}
-
-/// Accumulate the custom-property (`--*`) scope contributed by an
-/// ancestor chain, walking root-first. For each ancestor we collect the
-/// var declarations of every rule that matches it (given that ancestor's
-/// own parents), in cascade order, so a later / more-specific /
-/// `!important` ancestor declaration overrides an earlier one. The
-/// result seeds the subject element's cascade, so a var scope gated on an
-/// ancestor class (`:root.theme-dark { --bg }`) is visible to a
-/// descendant's `var(--bg)`.
-fn ancestor_var_scope(
-    css: &Stylesheet,
-    media: &MediaContext,
-    ancestors: &[ElementRef],
-) -> (std::collections::HashMap<String, String>, InheritedText) {
-    let mut vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut text = InheritedText::default();
-    for (k, anc) in ancestors.iter().enumerate() {
-        let anc_parents = &ancestors[..k];
-        let is_root = k == 0;
-        // Ancestors always have at least the subject below them, so
-        // `has_element_children` is true; they never carry inline text.
-        let matched = collect_matching_rules(css, media, anc, anc_parents, true, None, is_root);
-        let mut var_units: Vec<&Declaration> = Vec::new();
-        for m in &matched {
-            for decl in &css.rules[m.rule_idx].declarations {
-                if decl.name.starts_with("--") {
-                    var_units.push(decl);
-                }
-            }
-        }
-        var_units.sort_by_key(|d| d.important);
-        for decl in var_units {
-            if let Some(name) = decl.name.strip_prefix("--") {
-                vars.insert(name.to_string(), decl.value.clone());
-            }
-        }
-        // Accumulate the CSS-inherited text props this ancestor's own
-        // matched rules compute, so a theme flip re-resolves e.g.
-        // `root { text-color: var(--lumen-text) }` down to a bare
-        // `<label>` that matches no rule of its own (mirrors the
-        // parse-time InheritedText walk).
-        let mut probe_attrs = Attributes {
-            classes: anc.classes.clone(),
-            id: anc.id.clone(),
-            ..Default::default()
-        };
-        let mut units: Vec<(&MatchedRule, &Declaration)> = Vec::new();
-        for m in &matched {
-            for decl in &css.rules[m.rule_idx].declarations {
-                if decl.name.starts_with("--") {
-                    continue;
-                }
-                units.push((m, decl));
-            }
-        }
-        units.sort_by_key(|(_, decl)| decl.important);
-        for (m, decl) in units {
-            if m.matched_pseudo.any() {
-                continue;
-            }
-            let name = canonical_property_name(&decl.name);
-            if !matches!(
-                name,
-                "text-color"
-                    | "font-size"
-                    | "font-family"
-                    | "font-weight"
-                    | "text-align"
-                    | "wrap"
-                    | "max-lines"
-                    | "line-height"
-            ) {
-                continue;
-            }
-            let Ok(resolved) = resolve_vars("ancestor", name, &decl.value, &vars) else {
-                continue;
-            };
-            let _ = apply_declaration("ancestor", name, &resolved, &mut probe_attrs);
-        }
-        text = InheritedText::from_computed(&probe_attrs, &text);
-    }
-    (vars, text)
-}
-
-/// Shared body of the two runtime re-apply entry points: cascade a
-/// probe (an attr-stripped clone carrying only the element's own
-/// classes / id) against `parents` + a pre-seeded `inherited` var scope,
-/// then copy every property it resolved back onto `el`.
-#[allow(clippy::too_many_arguments)]
-fn reapply_probe(
-    el: &mut Element,
-    css: &Stylesheet,
-    media: &MediaContext,
-    parents: &[ElementRef],
-    inherited: &std::collections::HashMap<String, String>,
-    inherited_text: &InheritedText,
-    position: SiblingPosition,
-) {
-    let mut probe = el.clone();
-    probe.attrs = Attributes {
-        classes: el.attrs.classes.clone(),
-        id: el.attrs.id.clone(),
-        ..Default::default()
-    };
-    let mut warnings = Vec::new();
-    apply_to_element(
-        &mut probe,
-        css,
-        media,
-        inherited,
-        inherited_text,
-        parents,
-        position.child_index,
-        position.sibling_count,
-        None,
-        &mut warnings,
-    );
-    copy_back_reapplied(el, &probe);
-}
-
-/// Copy the cascade result from `probe` back onto `el`, only where the
-/// cascade produced a value so inline authoring values on properties no
-/// rule sets survive. Every property the cascade can write comes back, the
-/// same set the first resolution applies.
-fn copy_back_reapplied(el: &mut Element, probe: &Element) {
-    overlay_set_fields(&mut el.attrs, &probe.attrs);
 }
 
 fn resolve_vars(

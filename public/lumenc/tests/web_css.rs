@@ -6,8 +6,8 @@
 //! that owns the originals.
 //!
 //! The emitter cannot see either of these. One is the set of per-tag
-//! defaults the markup parser bakes into `Attributes` instead of writing
-//! as CSS, which web/src/reset.css copies. The other is the skins
+//! defaults in the user-agent sheet, which web/src/reset.css copies for a
+//! page that has nothing else. The other is the skins
 //! this crate parses, which are the largest body of Lumen CSS there is and
 //! the first thing a missing property rewrite would show up in.
 

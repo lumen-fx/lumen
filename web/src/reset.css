@@ -5,20 +5,18 @@
  * Three things live here. One is the handful of browser defaults Lumen
  * does not share: a Lumen element is a flex box, a page fills its window,
  * and a control inherits its text rather than picking its own. The second
- * is the per-tag defaults Lumen bakes into markup instead of into a
- * stylesheet - a `<column>` stacking downwards, an `<overlay>` covering
- * its parent, a `<spacer>` eating the space that is left. The third is
- * the parts a control is painted out of - a knob, a thumb, a tick, a
- * fill - which the desktop draws from entities that never reach the IR.
+ * is the per-tag defaults - a `<column>` stacking downwards, an `<overlay>`
+ * covering its parent, a `<spacer>` eating the space that is left. The
+ * third is the parts a control is painted out of - a knob, a thumb, a
+ * tick, a fill - which the desktop draws from entities that never reach
+ * the IR.
  *
- * That second half is a copy, and the original is `build_element` in
- * public/lumenc/src/parse/html.rs, which sets the same defaults on
- * `Attributes`. Change one and change the other; the parity test in
- * public/lumenc/tests/web_css.rs is what notices when they disagree.
- *
- * The per-tag defaults Lumen writes as an ordinary stylesheet instead
- * (crates/runtime/src/skins/ua.css) are not repeated here: they reach the
- * browser through styles.css like every other rule.
+ * That second half is a copy, and the original is the tag rules at the
+ * top of core/runtime/src/skins/ua.css, which reach the browser through
+ * styles.css like every other rule, and for a `<dialog>`, which a browser
+ * places itself, `apply_ua_style_defaults` in core/scene/src/spawn.rs.
+ * Change one and change the other; the parity test in
+ * public/lumenc/tests/web_css.rs is what notices when a tag goes missing.
  *
  * Every selector is wrapped in :where() so it weighs nothing, and the
  * file is written first. Anything the app says therefore wins, whatever

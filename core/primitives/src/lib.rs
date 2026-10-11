@@ -7,11 +7,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod baseline;
 pub mod checkbox;
 pub mod controls;
 pub mod cursor;
 pub mod drag;
+mod held;
 pub mod hover;
 pub mod physics;
 pub mod popup;
@@ -30,8 +30,8 @@ pub mod validation;
 pub mod wake;
 
 pub use checkbox::{
-    CheckboxBaseFill, CheckboxBox, CheckboxPlugin, CheckboxStyle, Indeterminate,
-    clear_indeterminate_on_user_toggle, sync_checkbox_visuals,
+    CheckboxBox, CheckboxPlugin, CheckboxStyle, Indeterminate, clear_indeterminate_on_user_toggle,
+    sync_checkbox_visuals,
 };
 pub use controls::{
     ControlsPlugin, KnobGeometry, SliderChanged, SliderDragOrigin, SliderThumb, ToggleChanged,
@@ -41,8 +41,8 @@ pub use controls::{
 pub use cursor::{CursorPlugin, update_cursor_request};
 pub use drag::{DragConfig, DragPlugin, DragState, Draggable};
 pub use hover::{
-    BaseBorder, FocusOutlineSpec, HoverBaseColor, HoverTintPlugin, HoverTween, Interaction,
-    PressBaseColor, PressTween, apply_state_borders,
+    FocusOutlineSpec, HoverTintPlugin, HoverTween, Interaction, PressTween, StateBorderHeld,
+    apply_state_borders,
 };
 pub use lumen_core::prelude::{Scroll, ScrollAxis, ScrollOffset};
 pub use popup::{
@@ -59,8 +59,8 @@ pub use progress::{
     apply_progress_bindings, sync_progress_fill,
 };
 pub use radio::{
-    RadioBaseFill, RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks,
-    radio_group_keys, sync_radio_selected, sync_radio_tab_index, sync_radio_visuals,
+    RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks, radio_group_keys,
+    sync_radio_selected, sync_radio_tab_index, sync_radio_visuals,
 };
 pub use scroll::{ScrollPlugin, accumulate_wheel};
 pub use scrollbar::update_scrollbars;

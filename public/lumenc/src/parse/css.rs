@@ -1196,7 +1196,7 @@ mod cascade_tests {
     }
 
     #[test]
-    fn reapply_single_with_media_selects_dark_rule() {
+    fn reapply_detached_selects_dark_rule() {
         // The runtime theme-flip re-resolver rebuilds a `tag.class`
         // target and cascades it against the live MediaContext. Under a
         // dark context, the `@media (prefers-color-scheme: dark)` bg
@@ -1222,7 +1222,7 @@ mod cascade_tests {
             color_scheme: Some(ColorSchemePreference::Dark),
             ..Default::default()
         };
-        reapply_single_with_media(&mut el, &css, &dark).expect("reapply");
+        reapply_detached(&mut el, &css, &dark);
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "dark @media rule selected under dark context");
 
@@ -1239,14 +1239,14 @@ mod cascade_tests {
             color_scheme: Some(ColorSchemePreference::Light),
             ..Default::default()
         };
-        reapply_single_with_media(&mut el2, &css, &light).expect("reapply");
+        reapply_detached(&mut el2, &css, &light);
         let c2 = solid(el2.attrs.bg.as_ref().expect("bg"));
         assert!(c2.r > 0.99, "base rule kept under light context");
     }
 
     #[test]
-    fn reapply_single_copies_back_paint_and_box_props() {
-        // Regression: pre-W4.7 `reapply_single` only restored a text/box
+    fn reapply_detached_copies_back_paint_and_box_props() {
+        // Regression: pre-W4.7 the single-element re-apply only restored a text/box
         // subset, so a theme flip couldn't restyle bg / radius / width /
         // margin / opacity / shadow / hover-bg / press-bg. All must now
         // round-trip through the cascade.
@@ -1273,7 +1273,7 @@ mod cascade_tests {
             },
             ..Default::default()
         };
-        reapply_single(&mut el, &css).expect("reapply");
+        reapply_detached(&mut el, &css, &MediaContext::default());
         let a = &el.attrs;
         assert!(a.bg.is_some(), "bg copied back");
         assert_eq!(a.radius, Some(9.0), "radius copied back");
@@ -1295,7 +1295,7 @@ mod cascade_tests {
     /// gives. Alignment, positioning, overflow and the grid properties
     /// were once dropped on this path.
     #[test]
-    fn reapply_single_matches_the_first_resolution() {
+    fn reapply_detached_matches_the_first_resolution() {
         let css = parse_css(
             r#"
             .every {
@@ -1332,7 +1332,7 @@ mod cascade_tests {
             },
             ..Default::default()
         };
-        reapply_single(&mut el, &css).expect("reapply");
+        reapply_detached(&mut el, &css, &MediaContext::default());
         assert_eq!(format!("{:?}", el.attrs), format!("{first:?}"));
     }
 
@@ -1355,6 +1355,24 @@ mod cascade_tests {
             b.top.is_nan() && b.right.is_nan() && b.bottom.is_nan() && b.left.is_nan(),
             "unnamed sides stay auto: {b:?}"
         );
+    }
+
+    /// Resolve `el` from scratch under `ancestors`, the way a restyle does.
+    fn resolve(
+        el: &Element,
+        css: &Stylesheet,
+        media: &MediaContext,
+        ancestors: &[AncestorInfo],
+        position: SiblingPosition,
+    ) -> Attributes {
+        let node = AncestorInfo::new(
+            el.tag.clone(),
+            el.attrs.classes.clone(),
+            el.attrs.id.clone(),
+        )
+        .with_position(position)
+        .with_content(false, None);
+        resolve_element(&node, css, media, ancestors)
     }
 
     fn card_el() -> Element {
@@ -1384,22 +1402,20 @@ mod cascade_tests {
         // Root flipped to theme-dark -> descendant rule wins.
         let root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(&mut el, &css, &media, &[root], SiblingPosition::default())
-            .expect("reapply");
+        el.attrs = resolve(&el, &css, &media, &[root], SiblingPosition::default());
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant .theme-dark .card selected");
 
         // Root not theme-dark -> base rule keeps winning.
         let root_light = AncestorInfo::new("root", vec!["theme-light".into()], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(
-            &mut el2,
+        el2.attrs = resolve(
+            &el2,
             &css,
             &media,
             &[root_light],
             SiblingPosition::default(),
-        )
-        .expect("reapply");
+        );
         let c2 = solid(el2.attrs.bg.as_ref().expect("bg"));
         assert!(c2.r > 0.99, "base .card kept without .theme-dark ancestor");
     }
@@ -1421,27 +1437,19 @@ mod cascade_tests {
 
         let dark_root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(
-            &mut el,
-            &css,
-            &media,
-            &[dark_root],
-            SiblingPosition::default(),
-        )
-        .expect("reapply");
+        el.attrs = resolve(&el, &css, &media, &[dark_root], SiblingPosition::default());
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant var(--bg) resolved to dark scope");
 
         let plain_root = AncestorInfo::new("root", vec![], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(
-            &mut el2,
+        el2.attrs = resolve(
+            &el2,
             &css,
             &media,
             &[plain_root],
             SiblingPosition::default(),
-        )
-        .expect("reapply");
+        );
         let c2 = solid(el2.attrs.bg.as_ref().expect("bg"));
         assert!(c2.r > 0.99, "var(--bg) resolved to :root default");
     }
@@ -1457,8 +1465,7 @@ mod cascade_tests {
         // Immediate parent is `.parent` -> matches.
         let parent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(&mut el, &css, &media, &[parent], SiblingPosition::default())
-            .expect("reapply");
+        el.attrs = resolve(&el, &css, &media, &[parent], SiblingPosition::default());
         assert!(
             el.attrs.bg.is_some(),
             "direct child of .parent matches parent > child"
@@ -1469,14 +1476,13 @@ mod cascade_tests {
         let grandparent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let middle = AncestorInfo::new("tile", vec!["mid".into()], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(
-            &mut el2,
+        el2.attrs = resolve(
+            &el2,
             &css,
             &media,
             &[grandparent, middle],
             SiblingPosition::default(),
-        )
-        .expect("reapply");
+        );
         assert!(
             el2.attrs.bg.is_none(),
             "grandchild of .parent does not match parent > child"
@@ -1499,22 +1505,20 @@ mod cascade_tests {
         let row = AncestorInfo::new("row", vec![], None);
 
         let mut middle = card_el();
-        reapply_with_ancestors(
-            &mut middle,
+        middle.attrs = resolve(
+            &middle,
             &css,
             &media,
             std::slice::from_ref(&row),
             SiblingPosition::new(2, 3),
-        )
-        .expect("reapply");
+        );
         assert!(
             solid(middle.attrs.bg.as_ref().expect("bg")).g > 0.99,
             "the second of three siblings is not the last child"
         );
 
         let mut last = card_el();
-        reapply_with_ancestors(&mut last, &css, &media, &[row], SiblingPosition::new(3, 3))
-            .expect("reapply");
+        last.attrs = resolve(&last, &css, &media, &[row], SiblingPosition::new(3, 3));
         assert!(
             solid(last.attrs.bg.as_ref().expect("bg")).g < 0.01,
             "the third of three siblings is the last child"

@@ -10,8 +10,11 @@
 
 use bevy_ecs::message::{Message, MessageReader, MessageWriter, Messages};
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Fill, Visuals};
+use lumen_core::components::Visuals;
 use lumen_core::prelude::*;
+use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+
+use crate::held::hold_fill;
 
 /// Track fill for an unchecked `<toggle>` when neither markup nor CSS
 /// supplied one. Matches the default skin's `#555555`.
@@ -41,7 +44,7 @@ pub const THUMB_SIZE: f32 = 16.0;
 /// [`KnobGeometry::thumb_size`]). An entity without this component uses
 /// [`KnobGeometry::default`], which reproduces today's hardcoded geometry
 /// exactly.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct KnobGeometry {
     /// Gap between the knob and the track edge, in logical pixels.
     pub inset: f32,
@@ -66,7 +69,8 @@ impl Default for KnobGeometry {
 /// Both controls share one component because they share one skin family:
 /// they differ in shape and in how the knob moves, not in what the track
 /// is painted with.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(StyleOverrides)]
 pub struct TrackStyle {
     /// Track fill while checked (`:checked { bg: ... }` or the default
     /// accent).
@@ -78,6 +82,10 @@ pub struct TrackStyle {
     /// checked/unchecked fill, which the generic disabled-opacity dim
     /// then covers.
     pub disabled_bg: Option<Color>,
+}
+
+impl StyleOwner for TrackStyle {
+    const RANK: u8 = 20;
 }
 
 impl Default for TrackStyle {
@@ -618,50 +626,30 @@ pub fn cancel_slider_drag_on_escape(
 /// state calls for. This is the single owner of a track's
 /// [`Visuals::fill`]; the per-widget sync systems only move the knob.
 ///
-/// It runs every tick rather than on `Changed<Toggleable>`, because the
-/// state is not the only thing that repaints a track: the restyle pass
-/// re-applies the resting `bg` on a theme or media flip, and a gate on
-/// state change would leave that repaint standing and the control stuck
-/// looking off. Writes happen only when the fill differs, so an idle
-/// frame still triggers no change detection.
-///
-/// A track whose fill the hover / press tint FSM currently owns keeps
-/// its tint; the captured [`crate::hover::HoverBaseColor`] /
-/// [`crate::hover::PressBaseColor`] snapshot is rebased instead, so the
-/// tint releases onto the new state color rather than the stale one.
-/// A restyle tween aimed at the resting fill is retired for the same
-/// reason: state, not the cascade, decides what a track shows.
+/// The state fill is held in [`StyleOverrides`] under the hover and press
+/// tints, so a tint blends from it and lets go onto it, and a restyle
+/// keeps it: state, not the cascade, decides what a track shows. It runs
+/// every tick rather than on `Changed<Toggleable>`, because the state is
+/// not the only thing that moves the fill: a restyle recomputes the
+/// [`TrackStyle`] palette on a theme or media flip. Writes happen only
+/// when the fill differs, so an idle frame still triggers no change
+/// detection.
 #[allow(clippy::type_complexity)]
 pub fn sync_track_fill(
-    mut commands: Commands,
     mut tracks: Query<(
-        Entity,
         &Toggleable,
         &TrackStyle,
         Has<lumen_core::components::Disabled>,
         &mut Visuals,
-        Option<&mut crate::hover::HoverBaseColor>,
-        Option<&mut crate::hover::PressBaseColor>,
+        &mut StyleOverrides,
     )>,
 ) {
-    for (entity, t, style, disabled, mut vis, hover_base, press_base) in &mut tracks {
-        let target = style.fill_for(t.checked, disabled);
-        let tinted = hover_base.is_some() || press_base.is_some();
-        if let Some(mut base) = hover_base {
-            base.0 = target;
-        }
-        if let Some(mut base) = press_base {
-            base.0 = target;
-        }
-        if tinted {
-            continue;
-        }
-        if vis.fill.as_ref().and_then(Fill::as_solid) != Some(target) {
-            vis.fill = Some(Fill::Solid(target));
-            commands
-                .entity(entity)
-                .remove::<crate::transition::BackgroundTransition>();
-        }
+    for (t, style, disabled, mut vis, mut overrides) in &mut tracks {
+        hold_fill::<TrackStyle>(
+            &mut overrides,
+            &mut vis,
+            style.fill_for(t.checked, disabled),
+        );
     }
 }
 
@@ -1093,37 +1081,54 @@ mod track_tests {
     }
 
     #[test]
-    fn track_repaints_after_a_restyle_overwrites_its_fill() {
-        // The restyle pass re-applies the resting `bg` on a theme or media
-        // flip. Gating the repaint on `Changed<Toggleable>` left a checked
-        // track stuck on the unchecked color from then on.
+    fn track_follows_a_restyled_palette() {
+        // A restyle recomputes the palette on a theme or media flip, and
+        // the state fill has to move with it. Gating the repaint on
+        // `Changed<Toggleable>` once left a checked track on the old color.
         let mut world = World::new();
         let on = spawn_track(&mut world, true, false);
         world.run_system_once(sync_track_fill).unwrap();
-        world.get_mut::<Visuals>(on).unwrap().fill = Some(Fill::Solid(Color::rgb(0.5, 0.5, 0.5)));
+        world.get_mut::<TrackStyle>(on).unwrap().checked_bg = Color::rgb(0.0, 0.0, 1.0);
         world.run_system_once(sync_track_fill).unwrap();
-        assert_eq!(fill_of(&world, on), Some(Color::rgb(0.0, 1.0, 0.0)));
+        assert_eq!(fill_of(&world, on), Some(Color::rgb(0.0, 0.0, 1.0)));
     }
 
     #[test]
-    fn tinted_track_rebases_instead_of_stomping_the_tint() {
+    fn a_tint_over_the_track_lets_go_onto_its_state_fill() {
+        use lumen_core::style_overrides::{Live, StyleOverrides, StyleValues};
         let mut world = World::new();
         let on = spawn_track(&mut world, true, false);
-        let tint = Color::rgb(1.0, 0.0, 0.0);
-        world
-            .entity_mut(on)
-            .insert(crate::hover::HoverBaseColor(Color::rgb(0.5, 0.5, 0.5)));
-        world.get_mut::<Visuals>(on).unwrap().fill = Some(Fill::Solid(tint));
         world.run_system_once(sync_track_fill).unwrap();
+        // A hover tint laid over the checked track.
+        let tint = Color::rgb(1.0, 0.0, 0.0);
+        let mut ent = world.entity_mut(on);
+        let vis = ent.get::<Visuals>().unwrap().clone();
+        let out = ent
+            .get_mut::<StyleOverrides>()
+            .unwrap()
+            .hold::<crate::hover::HoverTween>(
+                StyleValues {
+                    fill: Some(Some(Fill::Solid(tint))),
+                    ..StyleValues::default()
+                },
+                &Live {
+                    visuals: Some(&vis),
+                    ..Live::default()
+                },
+            );
+        out.write_visuals(&mut ent.get_mut::<Visuals>().unwrap());
+        world.run_system_once(sync_track_fill).unwrap();
+        assert_eq!(fill_of(&world, on), Some(tint), "the tint stays on top");
+        let mut ent = world.entity_mut(on);
+        let out = ent
+            .get_mut::<StyleOverrides>()
+            .unwrap()
+            .release::<crate::hover::HoverTween>();
+        out.write_visuals(&mut ent.get_mut::<Visuals>().unwrap());
         assert_eq!(
             fill_of(&world, on),
-            Some(tint),
-            "the hover tween owns the fill mid-tint"
-        );
-        assert_eq!(
-            world.get::<crate::hover::HoverBaseColor>(on).unwrap().0,
-            Color::rgb(0.0, 1.0, 0.0),
-            "the tint must release onto the current state color"
+            Some(Color::rgb(0.0, 1.0, 0.0)),
+            "the tint lets go onto the checked fill"
         );
     }
 

@@ -281,6 +281,9 @@ pub(crate) struct StyleInvalidationCache {
     /// only when old and new widths land on opposite sides of one of
     /// these - a plain drag-resize inside a band never re-resolves.
     width_breakpoints: Vec<f32>,
+    /// Some selector steps across siblings (`+` / `~`), so an element's
+    /// class change can restyle the siblings after it.
+    sibling_combinators: bool,
 }
 
 /// Which `@media` features the stylesheet contains at least one rule
@@ -312,6 +315,7 @@ impl StyleInvalidationCache {
             classes,
             media_features,
             width_breakpoints: breakpoints,
+            sibling_combinators: sheet.uses_sibling_combinators(),
         }
     }
 
@@ -455,51 +459,47 @@ pub(crate) fn detect_media_change(world: &mut World) {
     }
 }
 
-/// W4.7 consumer: re-run the CSS cascade against every selector-reachable
-/// entity (those carrying a [`LumenTag`] - i.e. spawned with a `class` or
-/// `id`) and rewrite the affected style components in place. Runs only
-/// after [`StyleVersion`] has moved (theme / media / root-class flip), so
-/// steady-state ticks cost one integer compare.
+/// Re-resolve elements whose styles may have changed and rebuild their
+/// style components from scratch.
 ///
-/// Reuses [`lumen_ir::css::reapply_single_with_media`] (the same
-/// cascade path the `<for>` reconciler uses for runtime-substituted rows)
-/// against the live [`RuntimeStylesheet`] and [`MediaContext`]. Every
-/// property the cascade resolved is copied back; a property the cascade
-/// didn't set is left untouched so non-flipped inline values survive.
+/// Two triggers. A bump of [`StyleVersion`] (a theme, a breakpoint, a root
+/// class, a tree edit) restyles every element of the document. An element
+/// marked [`StyleDirty`] (its own classes, id, inline style or disabled
+/// state changed) restyles itself and everything under it, which is every
+/// element whose styles such a change can reach. A steady tick costs one
+/// integer compare and one empty query.
 ///
-/// The element's own [`InlineStyle`] (the `set_style` / `element.style`
-/// layer) folds on top of the stylesheet result, so an inline value beats
-/// every author and skin rule. An app with no stylesheet at all still
-/// gets its inline layer applied.
+/// Each element is resolved the way the first cascade resolved it, through
+/// [`lumen_ir::css::RestyleWalk`]: from its tag, classes, id and place in
+/// the tree, with what its markup declares and what a script set with
+/// `set_style` ranking above every rule, against the user-agent sheet, the
+/// skin and the app's stylesheet. The walk runs top-down, so each element
+/// inherits from the parent it just resolved. The result replaces the
+/// element's style components through
+/// [`ComputedStyle::commit`](lumen_scene::computed::ComputedStyle::commit):
+/// a property nothing sets any more goes back to its initial value, and a
+/// value a runtime system holds in
+/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) stays on
+/// top of it.
 pub(crate) fn reapply_computed_styles(world: &mut World) {
+    use lumen_core::components::{LumenTag, StyleDirty};
     let version = world
         .get_resource::<StyleVersion>()
         .map(|v| v.0)
         .unwrap_or(0);
-    if world
+    let full = world
         .get_resource::<AppliedStyleVersion>()
-        .is_some_and(|a| a.0 == version)
-    {
+        .is_none_or(|a| a.0 != version);
+    let mut dirty_q = world.query_filtered::<Entity, With<StyleDirty>>();
+    let dirty: Vec<Entity> = dirty_q.iter(world).collect();
+    if !full && dirty.is_empty() {
         return;
     }
-    let sheet = world
-        .get_resource::<RuntimeStylesheet>()
-        .map(|s| s.0.clone());
-    let media = world
-        .get_resource::<LastMediaContext>()
-        .map(|m| m.0)
-        .unwrap_or_default();
+    for &entity in &dirty {
+        world.entity_mut(entity).remove::<StyleDirty>();
+    }
+    world.insert_resource(AppliedStyleVersion(version));
 
-    use lumen_core::components::{LumenClasses, LumenId, LumenTag};
-    // Rebuild a minimal `tag.class#id` cascade target for each reachable
-    // entity, then resolve it against the live stylesheet + context.
-    // W4.7 (ancestor pass): every entity carrying a `LumenTag` is a
-    // cascade target; its ancestor chain (built below from `ChildOf`)
-    // lets descendant / child combinators and ancestor-scoped `var()`
-    // re-resolve on the flip.
-    #[allow(clippy::type_complexity)]
-    let mut q = world.query::<(Entity, &LumenTag, Option<&LumenClasses>, Option<&LumenId>)>();
-    let entities: Vec<Entity> = q.iter(world).map(|(e, ..)| e).collect();
     // The app's stylesheet styles the app's document. A tree mounted as a
     // root of its own beside it (a dev tool's panel, styled by its own
     // sheet when it was spawned) is left alone, as the first cascade left
@@ -507,1150 +507,299 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
     let document = world
         .get_resource::<lumen_scene::spawn::DocumentRoot>()
         .map(|r| r.0);
-    // Sibling positions for the whole tree, once. The structural
-    // pseudo-classes read them, and computing them per element would
-    // re-walk each parent's child list once per child.
-    let positions = sibling_positions(world);
-
-    for entity in entities {
-        if document.is_some_and(|root| topmost_ancestor(world, entity) != root) {
-            continue;
+    let roots: Vec<Entity> = if full {
+        match document {
+            Some(root) => vec![root],
+            None => {
+                let mut q = world.query_filtered::<Entity, (With<LumenTag>, Without<ChildOf>)>();
+                q.iter(world).collect()
+            }
         }
-        // Reconstruct the subject element from its identity components.
-        let Some(mut el) = entity_to_element(world, entity) else {
-            continue;
+    } else {
+        // With a `+` / `~` rule in the sheet, an element's change reaches
+        // the siblings after it, so its parent's subtree restyles.
+        let siblings = world
+            .get_resource::<StyleInvalidationCache>()
+            .is_some_and(|c| c.sibling_combinators);
+        let dirty: Vec<Entity> = dirty
+            .iter()
+            .copied()
+            .filter(|&e| world.get_entity(e).is_ok())
+            .map(|e| match world.get::<ChildOf>(e) {
+                Some(c) if siblings => c.parent(),
+                _ => e,
+            })
+            .collect();
+        // The topmost dirty elements: one under another restyles with it.
+        let set: std::collections::HashSet<Entity> = dirty.iter().copied().collect();
+        dirty
+            .iter()
+            .copied()
+            .filter(|&e| document.is_none_or(|root| topmost_ancestor(world, e) == root))
+            .filter(|&e| !ancestors_of(world, e).iter().any(|a| set.contains(a)))
+            .collect::<std::collections::BTreeSet<Entity>>()
+            .into_iter()
+            .collect()
+    };
+    if roots.is_empty() {
+        return;
+    }
+
+    let media = world
+        .get_resource::<LastMediaContext>()
+        .map(|m| m.0)
+        .unwrap_or_default();
+    // Restyle tweens only make sense while the window can animate: an
+    // unfocused or occluded window's redraw scheduler is paused, so a tween
+    // started there would freeze mid-flight until focus returns. Snap
+    // instead, which is what every native toolkit shows when the OS theme
+    // flips a background window.
+    let animate = world
+        .get_resource::<lumen_core::window_backend::RedrawScheduler>()
+        .map(|s| !s.paused)
+        .unwrap_or(true);
+    let sheet = world
+        .remove_resource::<RuntimeStylesheet>()
+        .map(|s| s.0)
+        .unwrap_or_default();
+    let siblings = sheet.uses_sibling_combinators();
+    let mut warnings = Vec::new();
+    for root in roots {
+        let ancestors: Vec<lumen_ir::css::AncestorInfo> = ancestors_of(world, root)
+            .into_iter()
+            .rev()
+            .map(|a| {
+                let place = place_of(world, a, siblings);
+                cascade_node(world, a, place, !tagged_children(world, a).is_empty())
+            })
+            .collect();
+        let mut walk = lumen_ir::css::RestyleWalk::new(&sheet, &media, &ancestors);
+        let place = place_of(world, root, siblings);
+        restyle_subtree(world, &mut walk, root, place, siblings, animate);
+        warnings.extend(walk.take_warnings());
+    }
+    world.insert_resource(RuntimeStylesheet(sheet));
+    for w in warnings {
+        tracing::debug!("restyle: {w}");
+    }
+}
+
+/// Where an element sits among its element siblings, and who they are
+/// when the stylesheet steps across siblings.
+#[derive(Default)]
+struct Place {
+    position: lumen_ir::css::SiblingPosition,
+    siblings: Option<lumen_ir::css::Siblings>,
+}
+
+/// Resolve `entity` against `walk` and everything under it, rebuilding
+/// each element's style components.
+fn restyle_subtree(
+    world: &mut World,
+    walk: &mut lumen_ir::css::RestyleWalk<'_>,
+    entity: Entity,
+    place: Place,
+    siblings: bool,
+    animate: bool,
+) {
+    use lumen_core::components::LumenTag;
+    let children: Vec<Entity> = world
+        .get::<bevy_ecs::hierarchy::Children>(entity)
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    let element = world.get::<LumenTag>(entity).is_some();
+    // A renderer-internal leaf (a toggle's knob, say) has no styles of its
+    // own to resolve.
+    if !element && children.is_empty() {
+        return;
+    }
+    let tagged: Vec<Entity> = children
+        .iter()
+        .copied()
+        .filter(|&k| world.get::<LumenTag>(k).is_some())
+        .collect();
+    let node = cascade_node(world, entity, place, !tagged.is_empty());
+    let mut attrs = walk.resolve(&node);
+    if element {
+        commit_resolved(world, entity, &mut attrs, animate);
+    }
+    if children.is_empty() {
+        return;
+    }
+    // One sibling list per parent, shared by every child of it.
+    let peers =
+        siblings.then(|| lumen_ir::css::Siblings::new(tagged.iter().map(|&k| identity(world, k))));
+    let count = tagged.len() as i32;
+    let mut index = 0;
+    walk.enter();
+    for child in children {
+        // `tagged` is `children` with the non-elements left out, so the
+        // elements come up in its order.
+        let place = if tagged.get(index) == Some(&child) {
+            index += 1;
+            Place {
+                position: lumen_ir::css::SiblingPosition::new(index as i32, count),
+                siblings: peers.clone(),
+            }
+        } else {
+            Place::default()
         };
-        let mut resolved = false;
-        if let Some(sheet) = sheet.as_ref() {
-            // Walk `ChildOf` up to the root, reading each ancestor's identity
-            // components, then reverse to root-first order for the cascade.
-            let ancestors = build_ancestor_chain(world, entity, &positions);
-            let position = positions.get(&entity).copied().unwrap_or_default();
-            if lumen_ir::css::reapply_with_ancestors(&mut el, sheet, &media, &ancestors, position)
-                .is_err()
-            {
-                continue;
-            }
-            resolved = true;
-        }
-        // Markup attributes outrank every rule, as in the first cascade.
-        resolved |= overlay_markup_style(world, entity, &mut el.attrs);
-        // Highest cascade tier, applied last so it wins.
-        resolved |= overlay_inline_style(world, entity, &mut el.attrs);
-        if resolved {
-            apply_reapplied_attrs(world, entity, &el.attrs);
-        }
+        restyle_subtree(world, walk, child, place, siblings, animate);
     }
-    world.insert_resource(AppliedStyleVersion(version));
+    walk.leave();
 }
 
-/// The root of the tree `entity` sits in: the last `ChildOf` parent up
-/// from it, or `entity` itself when it has none.
-fn topmost_ancestor(world: &World, entity: Entity) -> Entity {
-    use bevy_ecs::hierarchy::ChildOf;
-    let mut cur = entity;
-    // Same cap as the ancestor-chain walk: the cascade must never hang.
-    for _ in 0..256 {
-        match world.get::<ChildOf>(cur) {
-            Some(c) => cur = c.parent(),
-            None => break,
-        }
-    }
-    cur
-}
-
-/// Fold an entity's [`InlineStyle`] declarations onto an already-cascaded
-/// [`Attributes`], returning whether anything landed. This is the DOM
-/// `element.style` tier: it runs after the stylesheet pass so an inline
-/// value overrides every author and skin rule, matching the precedence
-/// `lumen_script::node_query::resolved_attributes` reports through
-/// `computed_style`.
-///
-/// A property the value parser rejects is skipped and logged, mirroring
-/// CSS error recovery; one bad `set_style` never discards the rest of the
-/// element's inline layer.
-fn overlay_inline_style(world: &World, entity: Entity, attrs: &mut Attributes) -> bool {
-    let Some(inline) = world.get::<lumen_core::components::InlineStyle>(entity) else {
-        return false;
+/// Build the element's style components from what the cascade resolved
+/// for it and commit them over the live ones.
+fn commit_resolved(world: &mut World, entity: Entity, attrs: &mut Attributes, animate: bool) {
+    use lumen_core::components::{BindDisabled, Disabled, LumenTag};
+    use lumen_ir::layout_ir::WidgetPart;
+    use lumen_scene::computed::{ComputedStyle, StyleContext};
+    let Some(tag) = world.get::<LumenTag>(entity).map(|t| t.0.clone()) else {
+        return;
     };
-    let mut applied = false;
-    for (property, value) in &inline.0 {
-        match lumen_ir::css::apply_inline_declaration(property, value, attrs) {
-            Ok(true) => applied = true,
-            Ok(false) => {
-                tracing::debug!("set_style: unknown property {property:?}, ignored")
-            }
-            Err(e) => tracing::warn!("set_style: {property}: {e}"),
-        }
-    }
-    applied
-}
-
-/// Fold an entity's [`MarkupStyle`](lumen_core::components::MarkupStyle)
-/// onto an already-cascaded [`Attributes`], returning whether anything
-/// landed. The first cascade ranks a styling attribute above every rule;
-/// this pass rebuilds the element from its tag, classes and id, so without
-/// it a tag rule (`toggle { height: 36 }`) would overwrite the attribute
-/// the markup wrote (`<toggle height="28px">`).
-fn overlay_markup_style(world: &World, entity: Entity, attrs: &mut Attributes) -> bool {
-    let Some(markup) = world.get::<lumen_core::components::MarkupStyle>(entity) else {
-        return false;
+    // What the element was written with that its styles are computed from
+    // but no rule can set.
+    attrs.style_role = world
+        .get::<lumen_scene::spawn::TypographyRole>(entity)
+        .map(|r| r.0.to_string());
+    let in_scroll = world
+        .get::<ChildOf>(entity)
+        .is_some_and(|c| world.get::<lumen_core::input::Scroll>(c.parent()).is_some());
+    let has = |world: &World, f: fn(&bevy_ecs::world::EntityRef<'_>) -> bool| {
+        world.get_entity(entity).is_ok_and(|e| f(&e))
     };
-    let mut applied = false;
-    for (property, value) in markup.0.iter() {
-        // `flex-direction` stays with the cascade, as in the first one:
-        // see `restore_inline_origin` in `lumen_ir::css`.
-        if property == "flex-direction" {
-            continue;
-        }
-        match lumen_ir::css::apply_inline_declaration(property, value, attrs) {
-            Ok(true) => applied = true,
-            Ok(false) => {}
-            Err(e) => tracing::debug!("markup style {property}: {e}"),
-        }
-    }
-    applied
+    let part = if has(world, |e| e.contains::<lumen_primitives::CheckboxBox>()) {
+        Some(WidgetPart::CheckboxBox)
+    } else if has(world, |e| e.contains::<lumen_primitives::RadioDot>()) {
+        Some(WidgetPart::RadioDot)
+    } else if has(world, |e| e.contains::<lumen_primitives::ProgressFill>()) {
+        Some(WidgetPart::ProgressFill)
+    } else {
+        None
+    };
+    let bind_disabled = has(world, |e| e.contains::<BindDisabled>());
+    let ctx = StyleContext {
+        tag: &tag,
+        static_disabled: has(world, |e| e.contains::<Disabled>()) && !bind_disabled,
+        bind_disabled,
+        part,
+        tab_strip: has(world, |e| e.contains::<lumen_primitives::TabStripButton>()),
+        dropdown_button: has(world, |e| e.contains::<lumen_primitives::DropdownButton>()),
+        radio: has(world, |e| e.contains::<lumen_primitives::RadioButton>()),
+        page_gate: world
+            .get::<lumen_scene::spawn::IfMarker>(entity)
+            .is_some_and(|m| m.signal_name == lumen_core::nav::PATH_SIGNAL),
+        virtualized_for: world
+            .get::<lumen_scene::spawn::ForMarker>(entity)
+            .is_some_and(|m| m.virtualized),
+        in_scroll,
+        layout_boundary: attrs.layout_boundary,
+    };
+    let computed = ComputedStyle::new(&ctx, attrs);
+    let mut ent = world.entity_mut(entity);
+    computed.commit(&mut ent, animate);
+    lumen_scene::spawn::apply_background_image(&mut ent, &tag, attrs);
 }
 
-/// Build a cascade target [`Element`] from an entity's identity
-/// components (`LumenTag` / `LumenClasses` / `LumenId`). Returns `None`
-/// when the entity carries no `LumenTag` (not a selector-reachable
-/// element).
-fn entity_to_element(world: &World, entity: Entity) -> Option<Element> {
+/// An element's tag, classes and id, as selectors match them.
+fn identity(world: &World, e: Entity) -> (String, Vec<String>, Option<String>) {
     use lumen_core::components::{LumenClasses, LumenId, LumenTag};
-    let tag = world.get::<LumenTag>(entity)?;
-    let mut el = Element {
-        tag: tag.0.to_string(),
-        ..Default::default()
-    };
-    if let Some(c) = world.get::<LumenClasses>(entity) {
-        el.attrs.classes = c.0.iter().map(|s| s.to_string()).collect();
-    }
-    if let Some(i) = world.get::<LumenId>(entity) {
-        el.attrs.id = Some(i.0.clone());
-    }
-    Some(el)
+    (
+        world
+            .get::<LumenTag>(e)
+            .map(|t| t.0.to_string())
+            .unwrap_or_default(),
+        world
+            .get::<LumenClasses>(e)
+            .map(|c| c.0.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default(),
+        world.get::<LumenId>(e).map(|i| i.0.clone()),
+    )
 }
 
-/// Walk the `ChildOf` chain from `entity` up to the root, collecting each
-/// ancestor's identity into an [`lumen_ir::css::AncestorInfo`], and
-/// return the chain in root-first order (the order the cascade matcher
-/// expects). A plain layout container with no `LumenTag` contributes an
-/// empty-tag entry so child-combinator depth stays exact - the immediate
-/// parent is always the immediate parent, tagged or not. Each ancestor
-/// carries its real sibling position too, so `.row:first-child .cell`
-/// selects on the row the cascade is actually standing under.
-fn build_ancestor_chain(
+/// The children of `e` that are elements. Only those count as siblings: a
+/// renderer-internal child added beside a row does not shift the row's
+/// `:nth-child`.
+fn tagged_children(world: &World, e: Entity) -> Vec<Entity> {
+    world
+        .get::<bevy_ecs::hierarchy::Children>(e)
+        .map(|c| {
+            c.iter()
+                .filter(|&k| world.get::<lumen_core::components::LumenTag>(k).is_some())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Where `entity` sits under its parent, read off the parent's children.
+/// The walk hands this down instead for every element below its root.
+fn place_of(world: &World, entity: Entity, siblings: bool) -> Place {
+    let Some(parent) = world.get::<ChildOf>(entity).map(|c| c.parent()) else {
+        return Place::default();
+    };
+    let peers = tagged_children(world, parent);
+    let Some(i) = peers.iter().position(|&p| p == entity) else {
+        return Place::default();
+    };
+    Place {
+        position: lumen_ir::css::SiblingPosition::new(i as i32 + 1, peers.len() as i32),
+        siblings: siblings
+            .then(|| lumen_ir::css::Siblings::new(peers.iter().map(|&k| identity(world, k)))),
+    }
+}
+
+/// One element as the cascade sees it: its identity and `place`, whether
+/// it has element children and what text it holds (for `:empty`), and its
+/// own declarations, its markup's and then its inline style's.
+fn cascade_node(
     world: &World,
     entity: Entity,
-    positions: &SiblingPositions,
-) -> Vec<lumen_ir::css::AncestorInfo> {
-    use bevy_ecs::hierarchy::ChildOf;
-    use lumen_core::components::{LumenClasses, LumenId, LumenTag};
-    let mut chain = Vec::new();
-    let mut cur = entity;
-    // Cap the walk so a pathological cycle can't spin forever (bevy_ecs
-    // guards its hierarchy, but the cascade must never hang the tick).
-    for _ in 0..256 {
-        let Some(parent) = world.get::<ChildOf>(cur).map(|c| c.parent()) else {
-            break;
-        };
-        let tag = world
-            .get::<LumenTag>(parent)
-            .map(|t| t.0.to_string())
-            .unwrap_or_default();
-        let classes = world
-            .get::<LumenClasses>(parent)
-            .map(|c| c.0.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default();
-        let id = world.get::<LumenId>(parent).map(|i| i.0.clone());
-        chain.push(
-            lumen_ir::css::AncestorInfo::new(tag, classes, id)
-                .with_position(positions.get(&parent).copied().unwrap_or_default()),
-        );
-        cur = parent;
+    place: Place,
+    has_element_children: bool,
+) -> lumen_ir::css::AncestorInfo {
+    use lumen_core::components::{InlineStyle, MarkupStyle};
+    let (tag, classes, id) = identity(world, entity);
+    let text = world
+        .get::<lumen_core::components::TextContent>(entity)
+        .map(|t| t.0.clone());
+    let mut declarations: Vec<(String, String)> = world
+        .get::<MarkupStyle>(entity)
+        .map(|m| m.0.to_vec())
+        .unwrap_or_default();
+    if let Some(inline) = world.get::<InlineStyle>(entity) {
+        declarations.extend(inline.0.iter().cloned());
     }
-    // Walked leaf->root; the matcher wants outer-first (root->parent).
-    chain.reverse();
-    chain
+    lumen_ir::css::AncestorInfo::new(tag, classes, id)
+        .with_position(place.position)
+        .with_siblings(place.siblings)
+        .with_content(has_element_children, text)
+        .with_declarations(declarations)
 }
 
-/// Sibling positions keyed by entity. An entity absent from the map has
-/// no position to report and falls back to `SiblingPosition::default()`
-/// (an only child), which is what a document root is.
-type SiblingPositions = std::collections::HashMap<Entity, lumen_ir::css::SiblingPosition>;
-
-/// Where every element sits among the element siblings sharing its
-/// parent, for the structural pseudo-classes. Only entities carrying a
-/// [`LumenTag`] count as siblings: that is the marker every spawned
-/// markup element gets and nothing else does, so a renderer-internal
-/// child added beside a row does not shift the row's `:nth-child`.
-fn sibling_positions(world: &mut World) -> SiblingPositions {
-    use bevy_ecs::hierarchy::Children;
-    use bevy_ecs::query::With;
-    use lumen_core::components::LumenTag;
-    use lumen_ir::css::SiblingPosition;
-
-    let mut tagged = world.query_filtered::<Entity, With<LumenTag>>();
-    let tagged: std::collections::HashSet<Entity> = tagged.iter(world).collect();
-
-    let mut parents = world.query::<&Children>();
-    let mut out = SiblingPositions::new();
-    for children in parents.iter(world) {
-        let siblings: Vec<Entity> = children.iter().filter(|e| tagged.contains(e)).collect();
-        let count = siblings.len() as i32;
-        for (i, entity) in siblings.into_iter().enumerate() {
-            out.insert(entity, SiblingPosition::new(i as i32 + 1, count));
+/// `entity`'s ancestors, nearest first.
+fn ancestors_of(world: &World, entity: Entity) -> Vec<Entity> {
+    let mut out = Vec::new();
+    let mut cur = entity;
+    // The same cap the cascade's ancestor walk always had: a restyle must
+    // never hang the tick.
+    for _ in 0..256 {
+        match world.get::<ChildOf>(cur) {
+            Some(c) => {
+                out.push(c.parent());
+                cur = c.parent();
+            }
+            None => break,
         }
     }
     out
 }
 
-/// Patch the cascade result from [`reapply_computed_styles`]
-/// onto an entity's live style components. Field-level so props the
-/// cascade didn't touch keep their spawn-time values; inserts an absent
-/// [`Visuals`] / [`TextStyle`] / [`Interaction`] only when the cascade
-/// produced a value for it.
-fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) {
-    use lumen_core::components::{
-        Color, Fill, Opacity, ShadowSpec, Style, TextInput, TextInputPaint, TextStyle, Visuals,
-    };
-    use lumen_primitives::{
-        BackgroundTransition, BorderColorTransition, OpacityTransition, TextColorTransition,
-        TransitionProperty, TransitionSpecs, retarget,
-    };
-    // Restyle tweens only make sense while the window can actually
-    // animate: an unfocused / occluded window's redraw scheduler is
-    // paused, so a tween inserted there freezes mid-flight until focus
-    // returns (the app parks between events). Snap instead - matching
-    // what the user sees from every native toolkit when the OS theme
-    // flips a background window.
-    let can_animate = world
-        .get_resource::<lumen_core::window_backend::RedrawScheduler>()
-        .map(|s| !s.paused)
-        .unwrap_or(true);
-    let mut ent = world.entity_mut(entity);
-    // Set when any restyle tween (`*Transition`) is inserted below, so
-    // the end of the pass can raise `AnimationsActive` - without the
-    // wake the app can sleep mid-tween and freeze a theme flip halfway
-    // between the light and dark fills.
-    let mut inserted_tween = false;
-
-    // Refresh the entity's transition declarations first so the value
-    // writes below observe the restyled `transition:` list.
-    let eff_transitions = attrs.effective_transitions();
-    if !eff_transitions.is_empty() {
-        let specs: Vec<lumen_primitives::TransitionSpec> =
-            eff_transitions.iter().map(Into::into).collect();
-        ent.insert(TransitionSpecs(specs));
-    }
-    let specs = ent.get::<TransitionSpecs>().cloned();
-    let spec_for = |p: TransitionProperty| {
-        if !can_animate {
-            return None;
-        }
-        specs
-            .as_ref()
-            .and_then(|s| s.for_property(p))
-            .filter(|s| !s.duration.is_zero())
-            .copied()
-    };
-
-    // Layout props on the always-present `Style`, through the same
-    // mapping spawning uses (`Attributes::patch_style`), so a restyle
-    // reaches every property the initial resolution does. Written only
-    // when something moved: the layout crate's `Changed<Style>` watcher
-    // marks `DirtyLayout` on any mutable access.
-    if let Some(live) = ent.get::<Style>() {
-        let mut next = live.clone();
-        attrs.patch_style(&mut next);
-        if next != *live
-            && let Some(mut style) = ent.get_mut::<Style>()
-        {
-            *style = next;
-        }
-    }
-
-    // Sibling paint order.
-    if let Some(z) = attrs.z_index {
-        ent.insert(lumen_core::components::ZIndex(z));
-    }
-
-    // Paint props -> `Visuals`. A `bg` image replaces the element's colour,
-    // which the asset pipeline then paints in its place.
-    let want_fill = attrs.bg.as_ref().and_then(|bg| Fill::try_from(bg).ok());
-    if matches!(attrs.bg, Some(lumen_ir::layout_ir::BgSpec::Image(_)))
-        && let Some(mut v) = ent.get_mut::<Visuals>()
-        && v.fill.is_some()
-    {
-        v.fill = None;
-    }
-    let tag = ent
-        .get::<lumen_core::components::LumenTag>()
-        .map(|t| t.0.to_string())
-        .unwrap_or_default();
-    lumen_scene::spawn::apply_background_image(&mut ent, &tag, attrs);
-    let want_radius = attrs.radius;
-    let want_shadows: Vec<ShadowSpec> = attrs.shadows.iter().copied().map(Into::into).collect();
-    let border_authored = attrs.border_style.is_some();
-    let want_border: Option<lumen_core::components::Border> =
-        attrs
-            .effective_border()
-            .map(|(widths, color)| lumen_core::components::Border {
-                widths: widths.into(),
-                color: color.into(),
-                side_colors: attrs
-                    .effective_border_colors(color)
-                    .map(|cs| cs.map(Into::into)),
-            });
-    if want_fill.is_some() || want_radius.is_some() || !want_shadows.is_empty() || border_authored {
-        // Hover / press tint FSM currently owns the fill? Snap instead
-        // of starting a competing restyle tween.
-        let fill_owned_by_state_fsm = ent.get::<lumen_primitives::HoverBaseColor>().is_some()
-            || ent.get::<lumen_primitives::PressBaseColor>().is_some();
-        let rest_color = want_fill.as_ref().and_then(Fill::as_solid);
-        if let Some(current_vis) = ent.get::<Visuals>().cloned() {
-            // CSS transition trigger: a computed-style change on an
-            // entity with a matching `transition:` declaration tweens
-            // from the CURRENT value (retarget semantics - an in-flight
-            // tween restarts from its live interpolated value, which is
-            // exactly what the component holds right now).
-            let mut bg_tween: Option<BackgroundTransition> = None;
-            let mut border_tween: Option<BorderColorTransition> = None;
-            if let (Some(Fill::Solid(new)), Some(spec)) = (
-                want_fill.as_ref(),
-                spec_for(TransitionProperty::BackgroundColor),
-            ) && !fill_owned_by_state_fsm
-                && let Some(cur) = current_vis.fill.as_ref().and_then(Fill::as_solid)
-            {
-                bg_tween = retarget(cur, *new, &spec).map(BackgroundTransition);
-            }
-            if border_authored
-                && let (Some(new_border), Some(cur_border), Some(spec)) = (
-                    want_border.as_ref(),
-                    current_vis.border.as_ref(),
-                    spec_for(TransitionProperty::BorderColor),
-                )
-                && new_border.widths == cur_border.widths
-            {
-                border_tween =
-                    retarget(cur_border.color, new_border.color, &spec).map(BorderColorTransition);
-            }
-            let mut v = ent.get_mut::<Visuals>().expect("checked above");
-            if let Some(f) = want_fill
-                && bg_tween.is_none()
-            {
-                v.fill = Some(f);
-            }
-            // else: the driver animates fill from current -> new.
-            if let Some(r) = want_radius {
-                v.radius = r;
-            }
-            if attrs.radius.is_some() || attrs.radius_corners.is_some() {
-                v.corner_radii = attrs.radius_corners;
-            }
-            if !want_shadows.is_empty() {
-                v.shadows = want_shadows;
-            }
-            if border_authored && border_tween.is_none() {
-                v.border = want_border;
-            }
-            // The hover / press tint snapshotted the resting colour on
-            // entry and fades back to that snapshot on exit. A new resting
-            // colour is what it must fade back to, or leaving the element
-            // undoes the restyle.
-            if fill_owned_by_state_fsm && let Some(rest) = rest_color {
-                if let Some(mut base) = ent.get_mut::<lumen_primitives::HoverBaseColor>() {
-                    base.0 = rest;
-                }
-                if let Some(mut base) = ent.get_mut::<lumen_primitives::PressBaseColor>() {
-                    base.0 = rest;
-                }
-            }
-            if let Some(t) = bg_tween {
-                ent.insert(t);
-                inserted_tween = true;
-            }
-            if let Some(t) = border_tween {
-                ent.insert(t);
-                inserted_tween = true;
-            }
-        } else {
-            ent.insert(Visuals {
-                fill: want_fill,
-                radius: want_radius.unwrap_or(0.0),
-                corner_radii: attrs.radius_corners,
-                shadows: want_shadows,
-                border: want_border,
-            });
-        }
-    }
-
-    // Text props -> `TextStyle`.
-    let role_size = attrs
-        .style_role
-        .as_deref()
-        .and_then(crate::spawn::typography_role_to_px);
-    let want_size = attrs.font_size.or(role_size);
-    // `lumen_ir::layout_ir::LineHeightSpec` -> `lumen_core::components::LineHeightSpec`,
-    // a 1:1 variant mapping. `lumen-core` cannot depend on `lumen-ir` (the
-    // dependency would cycle), so the two enums are separate types and this
-    // is the one place, at the IR/ECS boundary, that converts between them.
-    let want_line_height = attrs.line_height.map(|lh| match lh {
-        lumen_ir::layout_ir::LineHeightSpec::Multiplier(m) => {
-            lumen_core::components::LineHeightSpec::Multiplier(m)
-        }
-        lumen_ir::layout_ir::LineHeightSpec::Px(px) => {
-            lumen_core::components::LineHeightSpec::Px(px)
-        }
-    });
-    if attrs.text_color.is_some()
-        || want_size.is_some()
-        || attrs.text_align.is_some()
-        || attrs.text_wrap.is_some()
-        || attrs.max_lines.is_some()
-        || attrs.font_family.is_some()
-        || attrs.font_weight.is_some()
-        || attrs.selection_color.is_some()
-        || want_line_height.is_some()
-    {
-        let text_tween: Option<TextColorTransition> = match (
-            attrs.text_color,
-            spec_for(TransitionProperty::TextColor),
-            ent.get::<TextStyle>(),
-        ) {
-            (Some(new), Some(spec), Some(ts)) => {
-                retarget(ts.color, new.into(), &spec).map(TextColorTransition)
-            }
-            _ => None,
-        };
-        if let Some(mut ts) = ent.get_mut::<TextStyle>() {
-            if let Some(c) = attrs.text_color
-                && text_tween.is_none()
-            {
-                ts.color = c.into();
-            }
-            if let Some(s) = want_size {
-                ts.size_px = s;
-            }
-            if let Some(a) = attrs.text_align {
-                ts.align = a.into();
-            }
-            if let Some(w) = attrs.text_wrap {
-                ts.wrap = w.into();
-            }
-            if attrs.max_lines.is_some() {
-                ts.max_lines = attrs.max_lines;
-            }
-            if let Some(f) = attrs.font_family.as_deref() {
-                ts.family = Some(std::sync::Arc::<str>::from(f));
-            }
-            if let Some(w) = attrs.font_weight {
-                ts.weight = w;
-            }
-            if attrs.selection_color.is_some() {
-                ts.selection_color = attrs.selection_color.map(Into::into);
-            }
-            if want_line_height.is_some() {
-                ts.line_height = want_line_height;
-            }
-        } else {
-            let d = TextStyle::default();
-            ent.insert(TextStyle {
-                color: attrs.text_color.map(Into::into).unwrap_or(d.color),
-                size_px: want_size.unwrap_or(d.size_px),
-                align: attrs.text_align.map(Into::into).unwrap_or(d.align),
-                wrap: attrs.text_wrap.map(Into::into).unwrap_or(d.wrap),
-                max_lines: attrs.max_lines,
-                family: attrs
-                    .font_family
-                    .as_deref()
-                    .map(std::sync::Arc::<str>::from),
-                weight: attrs.font_weight.unwrap_or(d.weight),
-                selection_color: attrs.selection_color.map(Into::into),
-                line_height: want_line_height.or(d.line_height),
-            });
-        }
-        if let Some(t) = text_tween {
-            ent.insert(t);
-            inserted_tween = true;
-        }
-    }
-
-    // Text-input caret / selected-glyph paint -> `TextInputPaint`. Gated
-    // on the entity actually being a text input (`caret-color` /
-    // `selection-text-color` are inert elsewhere) so the restyle flip
-    // never adds the component to plain text nodes.
-    if ent.contains::<TextInput>()
-        && (attrs.caret_color.is_some() || attrs.selection_text_color.is_some())
-    {
-        let want_caret = attrs.caret_color.map(Into::into);
-        let want_sel_fg = attrs.selection_text_color.map(Into::into);
-        if let Some(mut paint) = ent.get_mut::<TextInputPaint>() {
-            if attrs.caret_color.is_some() {
-                paint.caret_color = want_caret;
-            }
-            if attrs.selection_text_color.is_some() {
-                paint.selection_foreground = want_sel_fg;
-            }
-        } else {
-            ent.insert(TextInputPaint {
-                caret_color: want_caret,
-                selection_foreground: want_sel_fg,
-            });
-        }
-    }
-
-    // `caret-width` / `password-character` -> per-entity override
-    // components, split off from `TextInputPaint` rather than added to it
-    // so they never touch that component's existing struct literals
-    // elsewhere in the tree (same reasoning as `TextInputPaint`'s own doc
-    // comment - `core/scene/src/spawn.rs` already constructs one
-    // exhaustively). Gated on `TextInput` for the same reason as the
-    // paint block above.
-    if ent.contains::<TextInput>() {
-        if let Some(w) = attrs.caret_width {
-            ent.insert(lumen_core::components::CaretWidth(w));
-        }
-        if let Some(c) = attrs.password_character {
-            ent.insert(lumen_core::components::PasswordCharacter(c));
-        }
-    }
-
-    // Opacity - tweened when a `transition: opacity ...` declaration is
-    // present. An element that never had an opacity starts from the
-    // computed `1`, as in CSS, and gets the component the tween drives.
-    if let Some(o) = attrs.opacity {
-        match spec_for(TransitionProperty::Opacity) {
-            Some(spec) => {
-                let cur = ent.get::<Opacity>().copied().unwrap_or(Opacity(1.0));
-                if let Some(t) = retarget(cur.0, o, &spec) {
-                    if !ent.contains::<Opacity>() {
-                        ent.insert(cur);
-                    }
-                    ent.insert(OpacityTransition(t));
-                    inserted_tween = true;
-                } else if !ent.contains::<Opacity>() {
-                    ent.insert(Opacity(o));
-                }
-            }
-            None => {
-                ent.insert(Opacity(o));
-            }
-        }
-    }
-
-    // Overlay-scrollbar styling (CSS `scrollbar-color` / `scrollbar-width`
-    // / `scrollbar-track-hover` / `scrollbar-hover-boost`) - re-resolved on
-    // theme / media flips so a dark skin can retint the bars.
-    // `scrollbar-thickness(-thin)`, `-margin`, `-min-thumb` and the fade
-    // timings are read at spawn only.
-    if attrs.scrollbar_color.is_some()
-        || attrs.scrollbar_width.is_some()
-        || attrs.scrollbar_track_hover.is_some()
-        || attrs.scrollbar_hover_boost.is_some()
-    {
-        let mut sb = ent
-            .get::<lumen_core::input::ScrollbarStyle>()
-            .copied()
-            .unwrap_or_default();
-        if let Some((thumb, track)) = attrs.scrollbar_color {
-            sb.thumb = thumb.into();
-            sb.track = track.map(Into::into);
-        }
-        if let Some(w) = attrs.scrollbar_width {
-            sb.width = w.into();
-        }
-        if let Some(c) = attrs.scrollbar_track_hover {
-            sb.hover_track = c.into();
-        }
-        if let Some(b) = attrs.scrollbar_hover_boost {
-            sb.hover_boost = b;
-        }
-        ent.insert(sb);
-    }
-
-    // Interaction tints + state borders -> `lumen_primitives::Interaction`.
-    let want_hover: Option<Color> = attrs.hover_bg.map(Into::into);
-    let want_press: Option<Color> = attrs.press_bg.map(Into::into);
-    let want_hover_border: Option<lumen_core::components::Border> =
-        attrs.hover_border.map(Into::into);
-    let want_focus_border: Option<lumen_core::components::Border> =
-        attrs.focus_border.map(Into::into);
-    let want_focus_outline: Option<lumen_primitives::FocusOutlineSpec> =
-        attrs.focus_outline.map(Into::into);
-    let want_focus_visible_outline: Option<lumen_primitives::FocusOutlineSpec> =
-        attrs.focus_visible_outline.map(Into::into);
-    if want_hover.is_some()
-        || want_press.is_some()
-        || want_hover_border.is_some()
-        || want_focus_border.is_some()
-        || want_focus_outline.is_some()
-        || want_focus_visible_outline.is_some()
-    {
-        if let Some(mut ix) = ent.get_mut::<lumen_primitives::Interaction>() {
-            if let Some(h) = want_hover {
-                ix.hover_tint = Some(h);
-            }
-            if let Some(p) = want_press {
-                ix.press_tint = Some(p);
-            }
-            if want_hover_border.is_some() {
-                ix.hover_border = want_hover_border;
-            }
-            if want_focus_border.is_some() {
-                ix.focus_border = want_focus_border;
-            }
-            if want_focus_outline.is_some() {
-                ix.focus_outline = want_focus_outline;
-            }
-            if want_focus_visible_outline.is_some() {
-                ix.focus_visible_outline = want_focus_visible_outline;
-            }
-        } else {
-            ent.insert(lumen_primitives::Interaction {
-                hover_tint: want_hover,
-                press_tint: want_press,
-                focus_outline: want_focus_outline,
-                focus_visible_outline: want_focus_visible_outline,
-                hover_border: want_hover_border,
-                focus_border: want_focus_border,
-            });
-        }
-    }
-
-    // Stateful track fills: `<toggle>` / `<switch>` / tab-strip buttons
-    // own their live fill via TrackStyle / TabButtonStyle (the sync
-    // systems swap it as state flips). The generic Visuals write above
-    // painted the resting `bg` - correct the palette from the re-resolved
-    // state fills and repaint per the CURRENT state so a theme flip
-    // doesn't stomp a checked track back to the unchecked color.
-    {
-        use lumen_core::components::Visuals as V;
-        let checked = ent
-            .get::<lumen_core::components::Toggleable>()
-            .map(|t| t.checked);
-        let disabled = ent.contains::<lumen_core::components::Disabled>();
-        if let Some(checked) = checked
-            && let Some(mut ts) = ent.get_mut::<lumen_primitives::TrackStyle>()
-        {
-            *ts = lumen_scene::spawn::track_style_over(*ts, attrs);
-            let live = ts.fill_for(checked, disabled);
-            if let Some(mut base) = ent.get_mut::<lumen_primitives::HoverBaseColor>() {
-                base.0 = live;
-            }
-            if let Some(mut base) = ent.get_mut::<lumen_primitives::PressBaseColor>() {
-                base.0 = live;
-            }
-            if let Some(mut v) = ent.get_mut::<V>() {
-                v.fill = Some(Fill::Solid(live));
-            }
-            // The generic pass above may have queued a restyle tween
-            // toward the resting `bg` - retire it, the state fill is
-            // authoritative here.
-            ent.remove::<BackgroundTransition>();
-        }
-        let selected = ent
-            .get::<lumen_primitives::TabStripButton>()
-            .is_some()
-            .then(|| ent.get::<lumen_core::components::Selected>().is_some());
-        if let Some(selected) = selected
-            && let Some(mut ts) = ent.get_mut::<lumen_primitives::TabButtonStyle>()
-        {
-            if let Some(Ok(Fill::Solid(c))) = attrs.bg.as_ref().map(Fill::try_from) {
-                ts.unselected_bg = c;
-            }
-            if let Some(c) = attrs.selected_bg {
-                ts.selected_bg = c.into();
-            }
-            let live = if selected {
-                ts.selected_bg
-            } else {
-                ts.unselected_bg
-            };
-            if let Some(mut base) = ent.get_mut::<lumen_primitives::HoverBaseColor>() {
-                base.0 = live;
-            }
-            if let Some(mut base) = ent.get_mut::<lumen_primitives::PressBaseColor>() {
-                base.0 = live;
-            }
-            if let Some(mut v) = ent.get_mut::<V>() {
-                v.fill = Some(Fill::Solid(live));
-            }
-            ent.remove::<BackgroundTransition>();
-        }
-    }
-
-    // State-routed text-color / opacity / box-shadow swaps - mirror the
-    // spawn-time StateVisuals assembly so a theme flip restyles them.
-    {
-        let to_shadows = |v: &Option<Vec<lumen_ir::layout_ir::ShadowSpec>>| {
-            v.as_ref()
-                .map(|list| list.iter().copied().map(Into::into).collect())
-        };
-        // The runtime `:disabled` patch exists only on `bind-disabled`
-        // entities (spawn parity - static disabled styling applied once
-        // at spawn); the marker component tells us which ones.
-        let disabled_patch = if ent.get::<lumen_core::components::BindDisabled>().is_some() {
-            lumen_primitives::StatePatch {
-                text_color: attrs.disabled_text_color.map(Into::into),
-                opacity: attrs.disabled_opacity.or({
-                    if attrs.disabled_bg.is_none() && attrs.opacity.is_none() {
-                        // `disabled-opacity` is the CSS-authored version of
-                        // this fallback; `0.5` remains the last-resort
-                        // constant when no CSS supplies it either.
-                        Some(attrs.disabled_opacity_default.unwrap_or(0.5))
-                    } else {
-                        None
-                    }
-                }),
-                shadows: to_shadows(&attrs.disabled_shadows),
-                bg: attrs.disabled_bg.map(Into::into),
-            }
-        } else {
-            lumen_primitives::StatePatch::default()
-        };
-        let sv = lumen_primitives::StateVisuals {
-            hover: lumen_primitives::StatePatch {
-                text_color: attrs.hover_text_color.map(Into::into),
-                opacity: attrs.hover_opacity,
-                shadows: to_shadows(&attrs.hover_shadows),
-                bg: None,
-            },
-            focus: lumen_primitives::StatePatch {
-                text_color: attrs.focus_text_color.map(Into::into),
-                opacity: attrs.focus_opacity,
-                shadows: to_shadows(&attrs.focus_shadows),
-                bg: None,
-            },
-            focus_visible: lumen_primitives::StatePatch {
-                text_color: attrs.focus_visible_text_color.map(Into::into),
-                opacity: attrs.focus_visible_opacity,
-                shadows: to_shadows(&attrs.focus_visible_shadows),
-                bg: None,
-            },
-            active: lumen_primitives::StatePatch {
-                text_color: attrs.active_text_color.map(Into::into),
-                opacity: attrs.active_opacity,
-                shadows: to_shadows(&attrs.active_shadows),
-                bg: None,
-            },
-            drag_over: lumen_primitives::StatePatch {
-                text_color: attrs.drag_over_text_color.map(Into::into),
-                opacity: attrs.drag_over_opacity,
-                shadows: to_shadows(&attrs.drag_over_shadows),
-                bg: attrs.drag_over_bg.map(Into::into),
-            },
-            disabled: disabled_patch,
-        };
-        if !sv.is_empty() {
-            ent.insert(sv);
-        }
-    }
-
-    // Entity borrow ends here; the trailing passes go through `world`.
-    let _ = ent;
-
-    // `caret-blink` -> the global `CaretBlink` resource. There is no
-    // per-entity blink state (one shared phase drives every focused
-    // input's caret), so a CSS override only has one place to land; gate
-    // on the entity actually being the kind `caret-blink` targets so an
-    // unrelated element's cascade never repaints the shared period.
-    if let Some(ms) = attrs.caret_blink_ms
-        && world.get::<TextInput>(entity).is_some()
-        && let Some(mut blink) = world.get_resource_mut::<lumen_core::components::CaretBlink>()
-    {
-        blink.period = std::time::Duration::from_millis(ms as u64);
-    }
-
-    // Knob / thumb child fill (`knob-color`): the knob entities carry no
-    // tag of their own, so the flip re-resolves the parent's knob-color
-    // and pushes it onto the child here.
-    if let Some(knob) = attrs.knob_color {
-        let children: Vec<Entity> = world
-            .get::<bevy_ecs::hierarchy::Children>(entity)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-        for child in children {
-            let is_knob = world.get::<lumen_primitives::ToggleKnob>(child).is_some()
-                || world.get::<lumen_primitives::SliderThumb>(child).is_some();
-            if is_knob && let Some(mut v) = world.get_mut::<Visuals>(child) {
-                v.fill = Some(Fill::Solid(knob.into()));
-            }
-        }
-    }
-
-    // Keep the loop awake while any restyle tween is in flight (the
-    // step systems keep re-requesting until done).
-    if inserted_tween
-        && let Some(anim) = world.get_resource::<lumen_core::render_world::AnimationsActive>()
-    {
-        anim.request();
-    }
-}
-
-#[cfg(test)]
-mod apply_reapplied_attrs_tests {
-    //! `apply_reapplied_attrs` is the live-reapply half of the seven
-    //! Phase-2 properties Phase 1 whitelisted in `copy_back_reapplied`
-    //! but could not finish wiring (no component field existed yet):
-    //! `line_height`, `caret_width`, `caret_blink_ms`,
-    //! `password_character`, `scrollbar_track_hover` and
-    //! `scrollbar_hover_boost` (`disabled_opacity_default` was already
-    //! wired). These tests call the field-level reapply directly - the
-    //! cascade itself is exercised elsewhere (`lumen_ir::css` tests).
-    use super::*;
-    use lumen_core::components::{
-        CaretBlink, CaretWidth, LineHeightSpec as CoreLineHeightSpec, PasswordCharacter, TextInput,
-        TextStyle,
-    };
-    use lumen_core::input::ScrollbarStyle;
-    use lumen_ir::layout_ir::{Attributes, LineHeightSpec as IrLineHeightSpec, Rgba};
-
-    /// A live `line-height` reapply overwrites an existing `TextStyle`'s
-    /// `line_height` field, converting the IR spec to the core mirror
-    /// type 1:1.
-    #[test]
-    fn line_height_reapply_updates_existing_text_style() {
-        let mut world = World::new();
-        let e = world.spawn(TextStyle::default()).id();
-        let attrs = Attributes {
-            line_height: Some(IrLineHeightSpec::Multiplier(1.5)),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        assert_eq!(
-            world.get::<TextStyle>(e).unwrap().line_height,
-            Some(CoreLineHeightSpec::Multiplier(1.5))
-        );
-    }
-
-    /// A CSS `line-height: <px>` reapply carries through as
-    /// `LineHeightSpec::Px`, not folded into a multiplier.
-    #[test]
-    fn line_height_reapply_preserves_px_variant() {
-        let mut world = World::new();
-        let e = world.spawn(TextStyle::default()).id();
-        let attrs = Attributes {
-            line_height: Some(IrLineHeightSpec::Px(19.0)),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        assert_eq!(
-            world.get::<TextStyle>(e).unwrap().line_height,
-            Some(CoreLineHeightSpec::Px(19.0))
-        );
-    }
-
-    /// `caret-width` / `password-character` reapply onto a `TextInput`
-    /// entity inserts the override components; an entity that isn't a
-    /// `TextInput` never gains them (matches the spawn-time gating on
-    /// `TextInputPaint`).
-    #[test]
-    fn caret_width_and_password_character_reapply_gated_on_text_input() {
-        let mut world = World::new();
-        let input = world.spawn(TextInput::default()).id();
-        let plain = world.spawn(TextStyle::default()).id();
-        let attrs = Attributes {
-            caret_width: Some(3.5),
-            password_character: Some('#'),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, input, &attrs);
-        apply_reapplied_attrs(&mut world, plain, &attrs);
-
-        assert_eq!(world.get::<CaretWidth>(input), Some(&CaretWidth(3.5)));
-        assert_eq!(
-            world.get::<PasswordCharacter>(input),
-            Some(&PasswordCharacter('#'))
-        );
-        assert!(
-            world.get::<CaretWidth>(plain).is_none(),
-            "non-text-input entity must not gain a CaretWidth override"
-        );
-        assert!(
-            world.get::<PasswordCharacter>(plain).is_none(),
-            "non-text-input entity must not gain a PasswordCharacter override"
-        );
-    }
-
-    /// `scrollbar-track-hover` / `scrollbar-hover-boost` reapply patches
-    /// the fields on an existing `ScrollbarStyle`, leaving the rest of
-    /// the component (thumb / track / width / margin / ...) untouched.
-    #[test]
-    fn scrollbar_track_hover_and_hover_boost_reapply_patch_existing_style() {
-        let mut world = World::new();
-        let base = ScrollbarStyle::default();
-        let e = world.spawn(base).id();
-        let attrs = Attributes {
-            scrollbar_track_hover: Some(Rgba {
-                r: 1.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.5,
-            }),
-            scrollbar_hover_boost: Some(2.0),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        let sb = world.get::<ScrollbarStyle>(e).unwrap();
-        assert_eq!(sb.hover_boost, 2.0);
-        assert_eq!(sb.hover_track.r, 1.0);
-        assert_eq!(sb.hover_track.a, 0.5);
-        // Untouched fields keep the pre-existing default.
-        assert_eq!(sb.thumb, base.thumb);
-        assert_eq!(sb.margin, base.margin);
-    }
-
-    /// `caret-blink` reapply on a `TextInput` entity updates the shared
-    /// `CaretBlink` resource's period; absent a `TextInput`, the global
-    /// resource is left alone (there is no per-entity blink state to
-    /// target, so an unrelated element must not repaint it).
-    #[test]
-    fn caret_blink_reapply_updates_global_resource_when_gated() {
-        let mut world = World::new();
-        world.insert_resource(CaretBlink {
-            visible: true,
-            phase: std::time::Instant::now(),
-            period: std::time::Duration::from_millis(530),
-        });
-        let plain = world.spawn(TextStyle::default()).id();
-        let attrs = Attributes {
-            caret_blink_ms: Some(250),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, plain, &attrs);
-        assert_eq!(
-            world.resource::<CaretBlink>().period,
-            std::time::Duration::from_millis(530),
-            "non-text-input entity must not repaint the shared blink period"
-        );
-
-        let input = world.spawn(TextInput::default()).id();
-        apply_reapplied_attrs(&mut world, input, &attrs);
-        assert_eq!(
-            world.resource::<CaretBlink>().period,
-            std::time::Duration::from_millis(250)
-        );
-    }
-
-    /// A restyle writes every layout property the cascade resolved onto the
-    /// live `Style`, exactly as spawning would have: justify, align,
-    /// position, inset, overflow and the grid properties were once missing
-    /// from the restyle path, so a class added from a script or a `@media`
-    /// breakpoint crossing never moved them.
-    #[test]
-    fn restyle_reaches_every_layout_property() {
-        use lumen_core::components::Style;
-        use lumen_ir::layout_ir::{
-            AlignContentSpec, BorderStyleSpec, BoxSizingSpec, DisplaySpec, Edges, FlexAlign,
-            FlexAxis, FlexJustify, FlexWrapSpec, GridTemplateSpec, LengthSpec, OverflowSpec,
-            PositionSpec, TrackSizeSpec,
-        };
-        let edges = |v: f32| Edges {
-            left: v,
-            right: v + 1.0,
-            top: v + 2.0,
-            bottom: v + 3.0,
-            ..Default::default()
-        };
-        let attrs = Attributes {
-            display: Some(DisplaySpec::Grid),
-            width: Some(LengthSpec::Px(120.0)),
-            height: Some(LengthSpec::Percent(50.0)),
-            flex: Some(FlexAxis::Column),
-            padding: Some(edges(1.0)),
-            margin: Some(edges(5.0)),
-            gap: Some(4.0),
-            gap_row: Some(6.0),
-            gap_pct: Some(3.0),
-            grow: Some(1.0),
-            align: Some(FlexAlign::Center),
-            justify: Some(FlexJustify::End),
-            align_self: Some(FlexAlign::End),
-            justify_items: Some(FlexAlign::Center),
-            justify_self: Some(FlexAlign::Start),
-            grid_template: Some(GridTemplateSpec {
-                rows: vec![TrackSizeSpec::Auto],
-                columns: vec![TrackSizeSpec::Fixed(100.0), TrackSizeSpec::Fr(1.0)],
-            }),
-            grid_row: Some((1, 2)),
-            grid_column: Some((1, 4)),
-            position: Some(PositionSpec::Absolute),
-            inset: Some(edges(10.0)),
-            min_width: Some(LengthSpec::Px(10.0)),
-            min_height: Some(LengthSpec::Px(11.0)),
-            max_width: Some(LengthSpec::Px(500.0)),
-            max_height: Some(LengthSpec::Px(600.0)),
-            aspect_ratio: Some(2.0),
-            overflow: Some(OverflowSpec::Hidden),
-            overflow_y: Some(OverflowSpec::Scroll),
-            shrink: Some(0.0),
-            basis: Some(LengthSpec::Px(30.0)),
-            flex_wrap: Some(FlexWrapSpec::Wrap),
-            align_content: Some(AlignContentSpec::Center),
-            border_style: Some(BorderStyleSpec::Solid),
-            border_width: Some(edges(2.0)),
-            box_sizing: Some(BoxSizingSpec::ContentBox),
-            ..Default::default()
-        };
-        let mut world = World::new();
-        let e = world.spawn(Style::default()).id();
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        let live = world.get::<Style>(e).unwrap().clone();
-        assert_eq!(live, Style::from(&attrs), "restyle and spawn agree");
-
-        // Every field moved off its initial value, so the attributes above
-        // exercise every property kind. Destructured without `..`: a new
-        // `Style` field fails to compile here until the test covers it.
-        let d = Style::default();
-        let Style {
-            display,
-            width,
-            height,
-            flex_direction,
-            padding,
-            margin,
-            gap,
-            grow,
-            align,
-            justify,
-            align_self,
-            justify_items,
-            justify_self,
-            grid_template,
-            grid_row,
-            grid_column,
-            position,
-            inset,
-            min_width,
-            min_height,
-            max_width,
-            max_height,
-            aspect_ratio,
-            overflow_x,
-            overflow_y,
-            shrink,
-            basis,
-            flex_wrap,
-            align_content,
-            border,
-            box_sizing,
-        } = live;
-        assert_ne!(display, d.display, "display");
-        assert_ne!(width, d.width, "width");
-        assert_ne!(height, d.height, "height");
-        assert_ne!(flex_direction, d.flex_direction, "flex-direction");
-        assert_ne!(padding, d.padding, "padding");
-        assert_ne!(margin, d.margin, "margin");
-        assert_ne!(gap, d.gap, "gap");
-        assert_ne!(grow, d.grow, "grow");
-        assert_ne!(align, d.align, "align");
-        assert_ne!(justify, d.justify, "justify");
-        assert_ne!(align_self, d.align_self, "align-self");
-        assert_ne!(justify_items, d.justify_items, "justify-items");
-        assert_ne!(justify_self, d.justify_self, "justify-self");
-        assert_ne!(grid_template, d.grid_template, "grid-template");
-        assert_ne!(grid_row, d.grid_row, "grid-row");
-        assert_ne!(grid_column, d.grid_column, "grid-column");
-        assert_ne!(position, d.position, "position");
-        assert_ne!(inset, d.inset, "inset");
-        assert_ne!(min_width, d.min_width, "min-width");
-        assert_ne!(min_height, d.min_height, "min-height");
-        assert_ne!(max_width, d.max_width, "max-width");
-        assert_ne!(max_height, d.max_height, "max-height");
-        assert_ne!(aspect_ratio, d.aspect_ratio, "aspect-ratio");
-        assert_ne!(overflow_x, d.overflow_x, "overflow-x");
-        assert_ne!(overflow_y, d.overflow_y, "overflow-y");
-        assert_ne!(shrink, d.shrink, "shrink");
-        assert_ne!(basis, d.basis, "basis");
-        assert_ne!(flex_wrap, d.flex_wrap, "flex-wrap");
-        assert_ne!(align_content, d.align_content, "align-content");
-        assert_ne!(border, d.border, "border");
-        assert_ne!(box_sizing, d.box_sizing, "box-sizing");
-        assert_eq!(gap.row, 6.0, "row-gap overrides the gap shorthand");
-        assert_eq!(gap.column, 4.0, "gap shorthand fills the other axis");
-    }
-
-    /// A resting `bg` that changes while the element is hovered or pressed
-    /// becomes the colour the hover and press tints fade back to. They
-    /// once faded back to the colour they snapshotted on entry, so leaving
-    /// a button undid the `active` class its click handler had added.
-    #[test]
-    fn restyle_while_hovered_rebases_the_tint_snapshots() {
-        use lumen_core::components::{Color, Fill, Visuals};
-        use lumen_ir::layout_ir::BgSpec;
-        use lumen_primitives::{HoverBaseColor, PressBaseColor};
-        let old = Color::rgba(0.0, 0.0, 0.0, 0.0);
-        let mut world = World::new();
-        let e = world
-            .spawn((
-                Visuals {
-                    fill: Some(Fill::Solid(old)),
-                    ..Default::default()
-                },
-                HoverBaseColor(old),
-                PressBaseColor(old),
-            ))
-            .id();
-        let blue = Rgba {
-            r: 0.0,
-            g: 0.0,
-            b: 1.0,
-            a: 1.0,
-        };
-        let attrs = Attributes {
-            bg: Some(BgSpec::Solid(blue)),
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        let want: Color = blue.into();
-        assert_eq!(world.get::<HoverBaseColor>(e).unwrap().0, want);
-        assert_eq!(world.get::<PressBaseColor>(e).unwrap().0, want);
-    }
-
-    /// An element with an opacity transition and no authored opacity fades
-    /// from the computed `1` the first time a rule gives it one. With no
-    /// `Opacity` component to start from, the change once snapped.
-    #[test]
-    fn opacity_transition_starts_from_one_when_none_was_authored() {
-        use lumen_core::components::Opacity;
-        use lumen_ir::layout_ir::{EasingIr, TransitionIr, TransitionPropertyIr};
-        use lumen_primitives::OpacityTransition;
-        let mut world = World::new();
-        let e = world.spawn_empty().id();
-        let attrs = Attributes {
-            opacity: Some(0.2),
-            transitions: vec![TransitionIr {
-                property: TransitionPropertyIr::Opacity,
-                duration_ms: 6000,
-                easing: EasingIr::Linear,
-            }],
-            ..Default::default()
-        };
-        apply_reapplied_attrs(&mut world, e, &attrs);
-        let tween = world
-            .get::<OpacityTransition>(e)
-            .expect("the change tweens");
-        assert_eq!((tween.0.from, tween.0.to), (1.0, 0.2));
-        assert_eq!(world.get::<Opacity>(e), Some(&Opacity(1.0)));
-    }
-
-    /// A restyle that resolves nothing new leaves `Style` untouched, so it
-    /// does not mark the element's layout dirty.
-    #[test]
-    fn restyle_without_layout_changes_leaves_style_unchanged() {
-        use lumen_core::components::Style;
-        let mut world = World::new();
-        let e = world.spawn(Style::default()).id();
-        world.clear_trackers();
-        let tick = world.change_tick();
-        apply_reapplied_attrs(&mut world, e, &Attributes::default());
-        let changed = world
-            .entity(e)
-            .get_change_ticks::<Style>()
-            .unwrap()
-            .is_changed(tick, world.change_tick());
-        assert!(!changed, "an unchanged restyle must not touch Style");
-    }
+/// The root of the tree `entity` sits in: the last `ChildOf` parent up
+/// from it, or `entity` itself when it has none.
+fn topmost_ancestor(world: &World, entity: Entity) -> Entity {
+    ancestors_of(world, entity)
+        .last()
+        .copied()
+        .unwrap_or(entity)
 }

@@ -28,10 +28,10 @@
 //! empty-string substitution until the per-entity consumer system lands.
 
 use crate::layout_ir::{
-    Attributes, BindKind, BindSpec, DeferredAttr, Element, FlexAlign, FlexAxis, FlexJustify,
-    FragmentUse, InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec, LintFinding, LintKind,
-    LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScriptRefs, ScrollAxisSpec,
-    TextAlignSpec, TextWrapSpec, WidgetRole,
+    Attributes, BindKind, BindSpec, DeferredAttr, Element, FlexAlign, FlexJustify, FragmentUse,
+    InterpolationSlot, LayoutIR, LineHeightSpec, LintFinding, LintKind, LintSeverity, OutlineSpec,
+    OverflowSpec, ParseError, PositionSpec, ScriptRefs, ScrollAxisSpec, TextAlignSpec,
+    TextWrapSpec, WidgetRole,
 };
 use crate::values::{
     bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges, parse_length,
@@ -1029,6 +1029,26 @@ fn extract_menubar(
     Ok(Some(bar))
 }
 
+/// Give an element one of the styles the parser decides for it, as if the
+/// markup had written it on the element; see
+/// [`lumen_ir::css::apply_markup_declaration`] for why it goes through the
+/// markup record rather than straight into a field.
+fn set_built_style(attrs: &mut Attributes, property: &str, value: &str) {
+    match lumen_ir::css::apply_markup_declaration(property, value, attrs) {
+        Ok(true) => {}
+        other => unreachable!(
+            "the parser wrote a style it cannot apply: {property}: {value} ({other:?})"
+        ),
+    }
+}
+
+/// [`set_built_style`] for every declaration in `decls`, in order.
+fn set_built_styles(attrs: &mut Attributes, decls: &[(&str, &str)]) {
+    for (property, value) in decls {
+        set_built_style(attrs, property, value);
+    }
+}
+
 /// Collapse an authoring tag that stands for a composed widget - `<tooltip>`,
 /// `<tabs>`, `<dropdown>`, `<menu>`, `<date-picker>`, `<time-picker>` - into
 /// the primitive subtree it means, and reject the child tags that are only
@@ -1161,21 +1181,14 @@ fn build_composed_widget(
             let mut btn = Element {
                 tag: "button".to_string(),
                 attrs: Attributes {
-                    height: Some(LengthSpec::Px(36.0)),
-                    grow: Some(1.0),
                     tab_index: Some(0),
-                    padding: Some(crate::layout_ir::Edges {
-                        left: 12.0,
-                        right: 12.0,
-                        top: 0.0,
-                        bottom: 0.0,
-                        ..crate::layout_ir::Edges::default()
-                    }),
                     ..Attributes::default()
                 },
                 children: Vec::new(),
                 ..Default::default()
             };
+            // Its height, padding and share of the strip are theme
+            // metrics on `.tab-btn` in the user-agent sheet.
             btn.attrs.text = Some(tab_label);
             btn.attrs.classes = vec!["tab-btn".to_string()];
             btn.attrs.tab_strip = Some((signal_name.clone(), tab_name.clone()));
@@ -1216,29 +1229,18 @@ fn build_composed_widget(
         }
         // Seed the default active tab so the first body mounts at
         // startup. Stored on the synthetic strip via a marker the
-        // spawn pass converts into a Signals seed.
-        // Synthetic elements bypass `build_element`'s default-setting
-        // pass, so we set `flex` explicitly here (otherwise children
-        // stack at the same position because taffy gets no direction).
+        // spawn pass converts into a Signals seed. The strip and the
+        // column take their direction from their tags, as written ones do,
+        // and their width and spacing from `.tab-strip` / `.tabs` in the
+        // user-agent sheet.
         let mut strip = Element {
             tag: "row".to_string(),
-            attrs: Attributes {
-                flex: Some(FlexAxis::Row),
-                width: Some(LengthSpec::Percent(100.0)),
-                ..Attributes::default()
-            },
             children: tab_buttons,
             ..Default::default()
         };
         strip.attrs.classes = vec!["tab-strip".to_string()];
-        strip.attrs.gap = Some(4.0);
         let mut column = Element {
             tag: "column".to_string(),
-            attrs: Attributes {
-                flex: Some(FlexAxis::Column),
-                width: Some(LengthSpec::Percent(100.0)),
-                ..Attributes::default()
-            },
             children: std::iter::once(strip).chain(tab_bodies).collect(),
             ..Default::default()
         };
@@ -1378,21 +1380,13 @@ fn build_composed_widget(
         // Panel - absolute-positioned overlay with the options stack.
         let mut panel = Element {
             tag: "column".to_string(),
-            attrs: Attributes {
-                flex: Some(FlexAxis::Column),
-                position: Some(PositionSpec::Absolute),
-                inset: Some(crate::layout_ir::Edges {
-                    left: 0.0,
-                    right: 0.0,
-                    top: 40.0,
-                    bottom: -1.0,
-                    ..crate::layout_ir::Edges::default()
-                }),
-                ..Attributes::default()
-            },
             children: options,
             ..Default::default()
         };
+        set_built_styles(
+            &mut panel.attrs,
+            &[("position", "absolute"), ("inset", "40 0 -1 0")],
+        );
         panel.attrs.classes = vec!["dropdown-panel".to_string()];
         // Tag the panel so the runtime can dismiss it on an outside
         // click and flip it above the trigger near the viewport bottom.
@@ -1415,12 +1409,10 @@ fn build_composed_widget(
         // `dropdown { ... }` rule reach the control the same way they
         // reach a `<button>`; the parts it expands into are reachable by
         // class beneath it.
-        let mut attrs = Attributes {
-            flex: Some(FlexAxis::Column),
-            // Anchors the floating panel.
-            position: Some(PositionSpec::Relative),
-            ..Attributes::default()
-        };
+        // Its column direction comes from the `dropdown` rule in the
+        // user-agent sheet, and like every element it anchors the floating
+        // panel inside it.
+        let mut attrs = Attributes::default();
         let mut slots: Vec<InterpolationSlot> = Vec::new();
         apply_authored_attributes(
             node,
@@ -1493,21 +1485,10 @@ fn build_composed_widget(
                         .attribute("label")
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| item_id.clone());
+                    // Row height and padding are theme metrics on
+                    // `.menu-item` in the user-agent sheet.
                     let mut btn = Element {
                         tag: "button".to_string(),
-                        attrs: Attributes {
-                            height: Some(LengthSpec::Px(28.0)),
-                            width: Some(LengthSpec::Percent(100.0)),
-                            padding: Some(crate::layout_ir::Edges {
-                                left: 12.0,
-                                right: 12.0,
-                                top: 0.0,
-                                bottom: 0.0,
-                                ..crate::layout_ir::Edges::default()
-                            }),
-                            ..Attributes::default()
-                        },
-                        children: Vec::new(),
                         ..Default::default()
                     };
                     btn.attrs.text = Some(label);
@@ -1519,14 +1500,11 @@ fn build_composed_widget(
                     body.push(btn);
                 }
                 "separator" => {
+                    // A rule line, not a gap: `.menu-separator` in the
+                    // user-agent sheet keeps it one pixel tall rather
+                    // than taking the grow a written `<spacer>` gets.
                     let mut sep = Element {
                         tag: "spacer".to_string(),
-                        attrs: Attributes {
-                            height: Some(LengthSpec::Px(1.0)),
-                            width: Some(LengthSpec::Percent(100.0)),
-                            ..Attributes::default()
-                        },
-                        children: Vec::new(),
                         ..Default::default()
                     };
                     sep.attrs.classes = vec!["menu-separator".to_string()];
@@ -1541,33 +1519,21 @@ fn build_composed_widget(
                 }
             }
         }
-        // Synthetic elements bypass `build_element`'s per-tag default
-        // pass (same caveat as the `<tabs>` strip), so the overlay
-        // geometry must be set explicitly here. Without it the panel
-        // spawned as a plain in-flow Row: menu items laid out inline
-        // horizontally in the document flow instead of stacking in a
-        // floating panel (spec section 8 - a menu panel is an overlay that
-        // never participates in ancestor layout). `right` / `bottom`
-        // stay `NaN` (= auto) so the panel shrink-wraps its items; the
+        // A floating panel that never takes part in its ancestors' layout
+        // (spec section 8). It is an `<overlay>`, so its column direction
+        // comes from the tag and its minimum width from `.menu-panel` in
+        // the user-agent sheet; its placement is its own. `right` /
+        // `bottom` stay `auto` so the panel shrink-wraps its items; the
         // items' `width: 100%` then equalises them to the widest.
         let mut panel = Element {
             tag: "overlay".to_string(),
-            attrs: Attributes {
-                flex: Some(FlexAxis::Column),
-                position: Some(PositionSpec::Absolute),
-                inset: Some(crate::layout_ir::Edges {
-                    left: 0.0,
-                    top: 0.0,
-                    right: f32::NAN,
-                    bottom: f32::NAN,
-                    ..crate::layout_ir::Edges::default()
-                }),
-                min_width: Some(LengthSpec::Px(160.0)),
-                ..Attributes::default()
-            },
             children: body,
             ..Default::default()
         };
+        set_built_styles(
+            &mut panel.attrs,
+            &[("position", "absolute"), ("inset", "0 auto auto 0")],
+        );
         panel.attrs.classes = vec!["menu-panel".to_string()];
         panel.attrs.id = Some(menu_id);
         // Same popup wiring as the dropdown panel: outside-click
@@ -1630,9 +1596,8 @@ fn build_composed_widget(
                 "YYYY-MM-DD".to_string()
             });
         }
-        if attrs.width.is_none() {
-            attrs.width = Some(LengthSpec::Px(180.0));
-        }
+        // Its default width is `.date-picker` / `.time-picker` in the
+        // user-agent sheet.
         // In the Tab order like every other text field, unless the author
         // took it out.
         if attrs.tab_index.is_none() {
@@ -1713,24 +1678,14 @@ fn synthesize_widget_parts(
                 attrs.signal_seed = Some((group.clone(), value.clone()));
             }
         }
-        // The row the box and the caption sit on. Recorded as a declaration
-        // as well as a value, because a target that ranks a rule above an
-        // element's own styling reads the record rather than the field, and
-        // the two surfaces have to space the caption the same way. Written
-        // here rather than in `ua.css` for the reason the `.dropdown-button`
-        // rule there gives: a skin does not get to move the caption onto the
-        // box.
+        // The row the box and the caption sit on. Written here rather than
+        // in `ua.css` for the reason the `.dropdown-button` rule there
+        // gives: a skin does not get to move the caption onto the box.
         if attrs.align.is_none() {
-            attrs.align = Some(FlexAlign::Center);
-            attrs
-                .markup_styles
-                .push(("align".to_string(), "center".to_string()));
+            set_built_style(attrs, "align", "center");
         }
         if attrs.gap.is_none() {
-            attrs.gap = Some(8.0);
-            attrs
-                .markup_styles
-                .push(("gap".to_string(), "8".to_string()));
+            set_built_style(attrs, "gap", "8");
         }
         let (part, label_class) = if tag == "checkbox" {
             (crate::layout_ir::WidgetPart::CheckboxBox, "checkbox-label")
@@ -1742,12 +1697,12 @@ fn synthesize_widget_parts(
             tag: "tile".to_string(),
             attrs: Attributes {
                 part: Some(part),
-                shrink: Some(0.0),
                 ..Attributes::default()
             },
             children: Vec::new(),
             ..Default::default()
         };
+        set_built_style(&mut indicator.attrs, "flex-shrink", "0");
         indicator.attrs.classes = vec![box_class.to_string()];
         let mut synthesized = vec![indicator];
         if let Some(label) = attrs.text.take() {
@@ -1782,22 +1737,18 @@ fn synthesize_widget_parts(
             tag: "tile".to_string(),
             attrs: Attributes {
                 part: Some(crate::layout_ir::WidgetPart::ProgressFill),
-                position: Some(PositionSpec::Absolute),
-                inset: Some(crate::layout_ir::Edges {
-                    left: 0.0,
-                    top: 0.0,
-                    // NaN = auto: the explicit width / 100% height must
-                    // not be over-constrained by the far edges (same
-                    // convention as the toggle-knob seed style).
-                    right: f32::NAN,
-                    bottom: f32::NAN,
-                    ..crate::layout_ir::Edges::default()
-                }),
                 ..Attributes::default()
             },
             children: Vec::new(),
             ..Default::default()
         };
+        // The far edges stay `auto`: the explicit width and 100% height
+        // must not be over-constrained by them (same convention as the
+        // toggle-knob seed style).
+        set_built_styles(
+            &mut fill.attrs,
+            &[("position", "absolute"), ("inset", "0 auto auto 0")],
+        );
         fill.attrs.classes = vec![
             crate::layout_ir::WidgetPart::ProgressFill
                 .class()
@@ -2037,74 +1988,19 @@ fn build_element(
     }
 
     let mut attrs = Attributes {
-        // Apply tag defaults that act like CSS user-agent styles. The web
-        // target carries the same defaults as real CSS in
-        // web/src/reset.css, which has to change with these;
-        // public/lumenc/tests/web_css.rs is what notices when it does not.
-        // `<scroll>` and `<root>` are columns by default; the horizontal
-        // axis is opt-in via `scroll="x"` (handled in apply_attribute,
-        // which then also flips `flex` so the children stack left->right).
-        flex: match tag.as_str() {
-            // `<for>` defaults to column because the common case is a
-            // vertical list of rows - author opts out by wrapping the
-            // body in an explicit `<row>` or setting another flex
-            // direction on a parent.
-            "column" | "scroll" | "root" | "overlay" | "for" | "dialog" => Some(FlexAxis::Column),
-            "row" | "title-bar" | "checkbox" | "radio" | "progress" => Some(FlexAxis::Row),
-            _ => None,
-        },
-        position: if matches!(tag.as_str(), "overlay" | "dialog") {
-            Some(PositionSpec::Absolute)
-        } else {
-            None
-        },
-        inset: if matches!(tag.as_str(), "overlay" | "dialog") {
-            Some(crate::layout_ir::Edges {
-                left: 0.0,
-                right: 0.0,
-                top: 0.0,
-                bottom: 0.0,
-                ..crate::layout_ir::Edges::default()
-            })
-        } else {
-            None
-        },
-        align: if tag == "dialog" {
-            Some(FlexAlign::Center)
-        } else {
-            None
-        },
-        justify: if tag == "dialog" {
-            Some(FlexJustify::Center)
-        } else {
-            None
-        },
-        // Per-tag default sizing (root/title-bar dimensions, control
-        // minimums) is a true user-agent layer now: it lives in
-        // `lumen_runtime::skins::UA` (`core/runtime/src/skins/ua.css`),
-        // an always-on stylesheet folded into the cascade beneath any
-        // skin and beneath author CSS - not in these parse-time
-        // `Attributes` fields, and not fully in Rust either. Two cases
-        // that don't fit a plain CSS rule (a `<switch>` `min-width` that
-        // only applies when `width` is also unset, and the `<input>` /
-        // `<textarea>` `overflow: hidden` default backing off a shorthand
-        // `overflow` authored anywhere) stay in
-        // `lumen_runtime::spawn::apply_ua_style_defaults`, applied at
-        // spawn time (D3 / task #29). The old parse-time width / height /
-        // min-width tables that used to sit in these `Attributes` fields
-        // are gone: they made the defaults inline-origin -
-        // `restore_inline_origin` then re-applied them *over* author CSS
-        // after the cascade, so rules like `button { min-width: 40px }`
-        // could never win. The label / button height + min-width entries
-        // were dropped outright: the `TextShaper::measure` wiring
-        // supplies real text intrinsic sizes, which those hardcoded
-        // defaults overrode unhelpfully (e.g. a 4-line label forced to
-        // 24px).
-        scroll: if tag == "scroll" {
-            Some(ScrollAxisSpec::Y)
-        } else {
-            None
-        },
+        // A tag's default styles (a `<column>`'s direction, an
+        // `<overlay>`'s placement, a `<spacer>`'s grow, control sizing
+        // floors) are user-agent rules in `core/runtime/src/skins/ua.css`,
+        // not values written here. Written here they would be inline
+        // origin, which outranks every rule, and a restyle that rebuilds
+        // the element from the cascade could not rebuild them. The web
+        // target keeps its own copy of them in web/src/reset.css. Two
+        // cases that don't fit a plain CSS rule (a `<switch>` `min-width`
+        // that only applies when `width` is also unset, and the `<input>`
+        // / `<textarea>` `overflow: hidden` default backing off a
+        // shorthand `overflow` authored anywhere) stay in
+        // `lumen_scene::spawn::apply_ua_style_defaults`, which spawning
+        // and a restyle both run.
         // <input> seeds an empty editable buffer so the focus router
         // and the renderer have something to point at without the
         // author having to write `text=""`.
@@ -2130,8 +2026,6 @@ fn build_element(
             "radio" => Some(-1),
             _ => None,
         },
-        // `<spacer />` defaults grow=1 so it eats the remaining axis.
-        grow: if tag == "spacer" { Some(1.0) } else { None },
         ..Default::default()
     };
 
@@ -2519,11 +2413,12 @@ fn apply_attribute(
                 }
             };
             attrs.scroll = Some(axis);
-            // Horizontal scrollers default their flex axis to row so
-            // children stack left->right; vertical / both keep column
-            // (the tag default).
-            if matches!(axis, ScrollAxisSpec::X) && attrs.flex == Some(FlexAxis::Column) {
-                attrs.flex = Some(FlexAxis::Row);
+            // A horizontal scroller stacks its children left to right;
+            // vertical and both keep the direction the tag has. Written as
+            // the element's own style, so it outranks the tag's `column`
+            // from the user-agent sheet the way any attribute does.
+            if matches!(axis, ScrollAxisSpec::X) {
+                set_built_style(attrs, "flex-direction", "row");
             }
         }
         "sensitivity" => attrs.sensitivity = Some(parse_f32(tag, name, value)?),

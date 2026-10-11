@@ -790,9 +790,6 @@ mod tests {
         let panel = world
             .spawn(PopupPanel {
                 open_signal: OPEN.into(),
-                default_top: 40.0,
-                default_bottom: -1.0,
-                positioned: false,
             })
             .id();
         let mut rows = [Entity::PLACEHOLDER; 3];
@@ -1111,9 +1108,6 @@ mod tests {
         let panel = world
             .spawn(PopupPanel {
                 open_signal: MENU_OPEN.into(),
-                default_top: 0.0,
-                default_bottom: f32::NAN,
-                positioned: false,
             })
             .id();
         let mut items = [Entity::PLACEHOLDER; 3];

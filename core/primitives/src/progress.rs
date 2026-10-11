@@ -25,10 +25,11 @@
 //!   `TabIndex` and none of these systems consume input.
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{BindValue, Length, Style, Transform, Visible};
+use lumen_core::components::{BindValue, Edges, Length, Style, Transform, Visible};
 use lumen_core::prelude::*;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::render_world::AnimationsActive;
+use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
 use lumen_core::time::Instant;
 
 /// Runtime fallback for the indeterminate sweep period. The single
@@ -42,7 +43,7 @@ pub const PROGRESS_PERIOD_MS: u32 = 1200;
 const INDETERMINATE_FILL_FRACTION: f32 = 0.3;
 
 /// Width of the indeterminate chunk as a fraction of the track.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct ProgressChunk(pub f32);
 
 impl Default for ProgressChunk {
@@ -90,9 +91,15 @@ impl Default for ProgressBar {
     }
 }
 
-/// Marker on the fill child spawned inside every `<progress>`.
+/// Marker on the fill child spawned inside every `<progress>`. Its width
+/// and left edge are [`sync_progress_fill`]'s, held in [`StyleOverrides`].
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(StyleOverrides)]
 pub struct ProgressFill;
+
+impl StyleOwner for ProgressFill {
+    const RANK: u8 = 20;
+}
 
 /// Plugin: registers the fill sync system.
 ///
@@ -183,7 +190,7 @@ fn bounce(t: f32) -> f32 {
 pub fn sync_progress_fill(
     mut commands: Commands,
     bars: Query<(&ProgressBar, &Transform, Option<&ProgressChunk>)>,
-    mut fills: Query<(Entity, &ChildOf, &mut Style), With<ProgressFill>>,
+    mut fills: Query<(Entity, &ChildOf, &mut Style, &mut StyleOverrides), With<ProgressFill>>,
     parents: Query<&ChildOf>,
     visibles: Query<&Visible>,
     // `Without<ProgressFill>` keeps this read disjoint from the `&mut
@@ -196,10 +203,32 @@ pub fn sync_progress_fill(
     let epoch = *epoch.get_or_insert_with(Instant::now);
     let now = Instant::now();
     let mut any_indeterminate_visible = false;
-    for (fill_e, child_of, mut style) in &mut fills {
+    for (fill_e, child_of, mut style, mut overrides) in &mut fills {
         let parent = child_of.parent();
         let Ok((bar, tr, chunk)) = bars.get(parent) else {
             continue;
+        };
+        // The fill's width and left edge are the bar's to drive, held over
+        // whatever its styles say so a restyle keeps them; the other edges
+        // stay the styles'.
+        let mut drive = |style: &mut Mut<Style>, width: Length, left: f32| {
+            let live = Live {
+                style: Some(style),
+                ..Live::default()
+            };
+            let resting = overrides
+                .below::<ProgressFill>(StyleFields::INSET, &live)
+                .inset
+                .unwrap_or(style.inset);
+            let held = StyleValues {
+                width: Some(width),
+                inset: Some(Edges { left, ..resting }),
+                ..StyleValues::default()
+            };
+            overrides
+                .hold::<ProgressFill>(held, &live)
+                .write_style(style);
+            commands.entity(fill_e).insert(DirtyLayout);
         };
         match bar.value {
             Some(v) => {
@@ -207,9 +236,7 @@ pub fn sync_progress_fill(
                 let pct = (v / denom).clamp(0.0, 1.0) * 100.0;
                 let target = Length::Percent(pct);
                 if style.width != target || style.inset.left != 0.0 {
-                    style.width = target;
-                    style.inset.left = 0.0;
-                    commands.entity(fill_e).insert(DirtyLayout);
+                    drive(&mut style, target, 0.0);
                 }
             }
             None => {
@@ -234,9 +261,7 @@ pub fn sync_progress_fill(
                     || style.inset.left.is_nan()
                     || (style.inset.left - left).abs() > 0.25
                 {
-                    style.width = target_w;
-                    style.inset.left = left;
-                    commands.entity(fill_e).insert(DirtyLayout);
+                    drive(&mut style, target_w, left);
                 }
             }
         }
