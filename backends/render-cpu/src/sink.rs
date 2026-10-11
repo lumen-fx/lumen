@@ -813,4 +813,156 @@ mod tests {
             "{debug}"
         );
     }
+
+    fn paint(painter: &mut CpuPainter, color: [f32; 4], rect: Rect) {
+        painter.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::new(color).into(),
+            None,
+            &Shape::Rect(rect),
+        );
+    }
+
+    /// Offscreen layers nest: the calls go to the innermost one, an inner layer composites into
+    /// its parent, and the parent composites into the frame where it was painted.
+    #[test]
+    fn offscreen_layers_nest() {
+        let mut painter = CpuPainter::new(16, 16);
+        painter.begin_frame(16, 16, black());
+        assert!(painter.begin_offscreen(Rect::new(0.0, 0.0, 16.0, 16.0)));
+        paint(
+            &mut painter,
+            [1.0, 0.0, 0.0, 1.0],
+            Rect::new(0.0, 0.0, 8.0, 16.0),
+        );
+        assert!(painter.begin_offscreen(Rect::new(8.0, 8.0, 16.0, 16.0)));
+        painter.push_layer(
+            Fill::NonZero,
+            BlendMode::default(),
+            1.0,
+            Affine::IDENTITY,
+            &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+        );
+        assert_eq!(painter.layer_depth(), 1, "the inner layer's depth");
+        paint(
+            &mut painter,
+            [0.0, 1.0, 0.0, 1.0],
+            Rect::new(0.0, 0.0, 16.0, 16.0),
+        );
+        painter.pop_layer();
+        let inner = painter.end_offscreen().expect("the inner layer");
+        assert_eq!(painter.layer_depth(), 0);
+        assert!(painter.draw_offscreen(&inner, 1.0));
+        let outer = painter.end_offscreen().expect("the outer layer");
+        assert!(painter.end_offscreen().is_none(), "nothing left open");
+        assert!(painter.draw_offscreen(&outer, 1.0));
+
+        let target = frame(&mut painter, 16, 16);
+        let px = |x, y| {
+            let p = target.sample(x, y);
+            (p.r, p.g, p.b)
+        };
+        assert_eq!(px(2, 2), (255, 0, 0), "the outer layer's own paint");
+        assert_eq!(
+            px(12, 12),
+            (0, 255, 0),
+            "the inner layer, clipped to its bounds"
+        );
+        assert_eq!(px(12, 2), (0, 0, 0), "outside both paints");
+    }
+
+    /// A layer with no pixels, or too many, is turned down, and painting stays on the frame.
+    #[test]
+    fn an_unsized_layer_is_refused() {
+        let mut painter = CpuPainter::new(8, 8);
+        painter.begin_frame(8, 8, black());
+        assert!(!painter.begin_offscreen(Rect::new(2.0, 2.0, 2.0, 6.0)));
+        assert!(!painter.begin_offscreen(Rect::new(0.0, 0.0, 1.0e6, 4.0)));
+        assert!(painter.end_offscreen().is_none());
+        paint(
+            &mut painter,
+            [1.0, 0.0, 0.0, 1.0],
+            Rect::new(0.0, 0.0, 8.0, 8.0),
+        );
+        assert_eq!(frame(&mut painter, 8, 8).sample(4, 4).r, 255);
+    }
+
+    /// A layer another kind of sink made is not drawn.
+    #[test]
+    fn a_foreign_layer_is_not_drawn() {
+        let mut painter = CpuPainter::new(4, 4);
+        painter.begin_frame(4, 4, black());
+        assert!(!painter.draw_offscreen(&OffscreenLayer::new(Arc::new(1u8)), 1.0));
+        assert!(
+            frame(&mut painter, 4, 4)
+                .data()
+                .iter()
+                .all(|p| p.r == 0 && p.g == 0)
+        );
+    }
+
+    /// A mask inside an offscreen layer masks the layer's content, which then composites with
+    /// the layer.
+    #[test]
+    fn a_mask_paints_inside_an_offscreen_layer() {
+        let mut painter = CpuPainter::new(16, 16);
+        painter.begin_frame(16, 16, black());
+        assert!(painter.begin_offscreen(Rect::new(0.0, 0.0, 16.0, 16.0)));
+        painter.draw_masked(
+            MaskKind::Alpha,
+            Affine::IDENTITY,
+            &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+            &mut |p| {
+                p.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::new([1.0, 1.0, 1.0, 1.0]).into(),
+                    None,
+                    &Shape::Rect(Rect::new(0.0, 0.0, 8.0, 16.0)),
+                )
+            },
+            &mut |p| {
+                p.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::new([0.0, 0.0, 1.0, 1.0]).into(),
+                    None,
+                    &Shape::Rect(Rect::new(0.0, 0.0, 16.0, 16.0)),
+                )
+            },
+        );
+        let layer = painter.end_offscreen().expect("the layer");
+        assert!(painter.draw_offscreen(&layer, 1.0));
+        let target = frame(&mut painter, 16, 16);
+        assert_eq!(target.sample(4, 8).b, 255, "under the mask");
+        assert_eq!(target.sample(12, 8).b, 0, "outside the mask");
+    }
+
+    /// A frame that starts with layers still open drops them, nested ones included, and paints
+    /// on the frame again with the caches handed back.
+    #[test]
+    fn a_new_frame_abandons_open_layers() {
+        let mut painter = CpuPainter::new(8, 8);
+        painter.begin_frame(8, 8, black());
+        assert!(painter.begin_offscreen(Rect::new(0.0, 0.0, 8.0, 8.0)));
+        assert!(painter.begin_offscreen(Rect::new(0.0, 0.0, 4.0, 4.0)));
+        paint(
+            &mut painter,
+            [0.0, 1.0, 0.0, 1.0],
+            Rect::new(0.0, 0.0, 8.0, 8.0),
+        );
+        painter.begin_frame(8, 8, black());
+        assert!(painter.end_offscreen().is_none(), "nothing still open");
+        assert!(
+            frame(&mut painter, 8, 8).data().iter().all(|p| p.g == 0),
+            "the layers' paint is gone"
+        );
+        paint(
+            &mut painter,
+            [1.0, 0.0, 0.0, 1.0],
+            Rect::new(0.0, 0.0, 8.0, 8.0),
+        );
+        assert_eq!(frame(&mut painter, 8, 8).sample(4, 4).r, 255);
+    }
 }

@@ -355,4 +355,25 @@ mod tests {
         assert!(!sink.append_fragment(&foreign, Affine::IDENTITY));
         assert!(sink.is_empty());
     }
+
+    /// A sink that does not override the offscreen calls has no offscreen layers: it refuses to
+    /// open one, has none to end, and composites no layer, painting nothing.
+    #[test]
+    fn a_sink_without_offscreen_layers_refuses_every_layer_call() {
+        let mut sink = Recording::default();
+        assert!(!sink.begin_offscreen(Rect::new(0.0, 0.0, 4.0, 4.0)));
+        assert!(sink.end_offscreen().is_none());
+        let foreign = OffscreenLayer::new(Arc::new(3u8));
+        assert!(!sink.draw_offscreen(&foreign, 0.5));
+        assert!(sink.is_empty());
+    }
+
+    /// A layer hands its pixels back only to the sink type that made it.
+    #[test]
+    fn an_offscreen_layer_downcasts_only_to_the_type_it_wraps() {
+        let layer = OffscreenLayer::new(Arc::new(7u32));
+        assert_eq!(layer.downcast::<u32>(), Some(&7));
+        assert!(layer.downcast::<String>().is_none());
+        assert_eq!(format!("{layer:?}"), "OffscreenLayer");
+    }
 }
