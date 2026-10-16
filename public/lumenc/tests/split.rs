@@ -9,7 +9,7 @@
 use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenAttributes, LumenId, Transform};
-use lumen_core::input::FocusTracker;
+use lumen_core::input::{CursorKeyword, CursorRequest, FocusTracker, PointerMoved, PointerState};
 use lumen_core::prelude::Viewport;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
 use lumen_primitives::SplitGutter;
@@ -78,6 +78,23 @@ fn run(app: &mut App, kinds: Vec<SimulateKind>) {
     }
 }
 
+/// Rest the pointer on the gutter's middle and read the cursor the window
+/// would be asked for.
+fn cursor_over_gutter(app: &mut App) -> CursorKeyword {
+    let (_, g) = gutter(app);
+    let at = g.absolute + g.size / 2.0;
+    app.world.resource_mut::<PointerState>().position = Some(at);
+    app.world.write_message(PointerMoved {
+        position: at,
+        local: None,
+        pointer: Default::default(),
+    });
+    for _ in 0..4 {
+        app.tick();
+    }
+    app.world.resource::<CursorRequest>().cursor.keyword
+}
+
 fn key(name: &str) -> SimulateKind {
     serde_json::from_value(serde_json::json!({ "kind": "key", "key": name })).expect("a key")
 }
@@ -108,6 +125,11 @@ fn row_split() {
     let right = rect(&mut app, "right");
     assert_eq!(g.size.x, 6.0, "the gutter's share of the axis");
     assert_eq!(g.size.y, 200.0, "the gutter stretches across");
+    assert_eq!(
+        cursor_over_gutter(&mut app),
+        CursorKeyword::ColResize,
+        "a row's gutter shows the column-resize cursor"
+    );
     assert_eq!(left.size.x, 197.0);
     assert_eq!(right.size.x, 197.0);
     let attrs = app
@@ -172,6 +194,11 @@ fn column_split() {
     let (_, g) = gutter(&mut app);
     assert_eq!(g.size.y, 6.0);
     assert_eq!(g.size.x, 300.0);
+    assert_eq!(
+        cursor_over_gutter(&mut app),
+        CursorKeyword::RowResize,
+        "a column's gutter shows the row-resize cursor"
+    );
     let at = g.absolute + g.size / 2.0;
     run(
         &mut app,

@@ -1,6 +1,7 @@
 //! `<split>` in a real page: the browser lays the panes out, and the page's
 //! app drags and steps the gutter, measuring the panes off the browser's
-//! boxes and writing the `flex-basis` it holds onto them.
+//! boxes and writing the `flex-basis` it holds onto them, and marks the
+//! gutter with its axis for the resize cursor.
 //!
 //! ```sh
 //! cargo test -p lumen-web-runtime --target wasm32-unknown-unknown --test split
@@ -203,4 +204,23 @@ fn the_page_drags_and_steps_the_gutter() {
     tick(&mut app);
     assert_eq!(width(&left), 100.0);
     assert_eq!(width(&right), 300.0);
+
+    // The app put the row's class on the gutter, and the site's reset
+    // turns it into the column-resize cursor.
+    let class = gutter.get_attribute("class").unwrap_or_default();
+    let classes: Vec<&str> = class.split_whitespace().collect();
+    assert!(classes.contains(&"split-gutter-row"), "{class}");
+    assert!(!classes.contains(&"split-gutter-column"), "{class}");
+    let document = web_sys::window().unwrap().document().unwrap();
+    let reset = document.create_element("style").unwrap();
+    reset.set_text_content(Some(lumen_web::RESET_CSS));
+    document.body().unwrap().append_child(&reset).unwrap();
+    let cursor = web_sys::window()
+        .unwrap()
+        .get_computed_style(&gutter)
+        .unwrap()
+        .unwrap()
+        .get_property_value("cursor")
+        .unwrap();
+    assert_eq!(cursor, "col-resize");
 }

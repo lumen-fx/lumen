@@ -743,9 +743,10 @@ does. The keyword is required, as on the web.
 The pointer shows the cursor of the element under it. The value inherits, so a
 container's cursor reaches everything inside it until a descendant declares
 its own; an element that declares one receives hover even with no background.
-The user-agent sheet gives `<input>` and `<textarea>` `cursor: text` and `<a>`
-`cursor: pointer`; every other element, buttons included, shows the arrow
-until a stylesheet says otherwise. The thumb of a scrollbar or a `<slider>`
+The user-agent sheet gives `<input>` and `<textarea>` `cursor: text`, `<a>`
+`cursor: pointer`, and a `<split>`'s gutters `col-resize` in a row and
+`row-resize` in a column; every other element, buttons included, shows the
+arrow until a stylesheet says otherwise. The thumb of a scrollbar or a `<slider>`
 shows `grab` under the pointer and `grabbing` while dragged; no selector
 reaches those parts.
 

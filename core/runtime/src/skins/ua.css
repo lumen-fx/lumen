@@ -135,6 +135,11 @@ progress { width: 100%; height: 6; }
    a gutter drag keeps. */
 :where(.split-pane) { min-width: 0; min-height: 0; }
 :where(.split-gutter) { grow: 0; flex-shrink: 0; flex-basis: 6; }
+/* The pointer over a gutter shows which way it moves: the split puts
+   `split-gutter-row` on the gutters of a row and `split-gutter-column` on
+   those of a column. */
+:where(.split-gutter-row) { cursor: col-resize; }
+:where(.split-gutter-column) { cursor: row-resize; }
 :where(.date-picker, .time-picker) { width: 180; }
 /* A separator is a rule line, not a gap: it keeps its pixel rather than
    taking the grow `spacer` gives the tag it is spelled with. */

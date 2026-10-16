@@ -266,6 +266,8 @@ CSS, so a bare app still has usable controls. Any rule of yours wins.
 - `.checkbox-box`, `.radio-dot`: 18 by 18.
 - `.split-pane`: `min-width: 0`, `min-height: 0`.
 - `.split-gutter`: `flex-basis: 6`, neither growing nor shrinking.
+- `.split-gutter-row`: `cursor: col-resize`; `.split-gutter-column`:
+  `cursor: row-resize`.
 
 `<input>` and `<textarea>` also default to `overflow: hidden` on both
 axes unless you author `overflow`, `overflow-x`, or `overflow-y`.
@@ -374,7 +376,11 @@ sizes are not saved or bound to a signal.
 
 The panes carry the class `split-pane` and the gutters `split-gutter`, and
 every skin styles the gutters by that class, `:hover` and `:focus`
-included. The gutter's thickness is its `flex-basis`, 6 by default. A
+included. A gutter also carries the class of its split's axis,
+`split-gutter-row` or `split-gutter-column`, which follows the split's
+`flex-direction` as it lays out; the pointer over a gutter shows
+`col-resize` in a row and `row-resize` in a column. The gutter's thickness
+is its `flex-basis`, 6 by default. A
 `<for>` or an `<if>` written as a child of the split is one pane. On the web
 the split, its panes and its gutters are the same elements, and the page's
 app does the dragging and the keys.

@@ -65,6 +65,16 @@
   touch-action: none;
 }
 
+/* The pointer over a gutter shows which way it moves; the page's app puts
+   the class for the split's axis on each gutter. */
+:where(.split-gutter-row) {
+  cursor: col-resize;
+}
+
+:where(.split-gutter-column) {
+  cursor: row-resize;
+}
+
 /* An overlay floats out of the flow and covers the nearest positioned
    ancestor. */
 :where(.lm-overlay) {

@@ -69,6 +69,7 @@ wasm-bindgen-test.workspace = true
 # which takes dictionaries nothing in the crate itself constructs. Naming them
 # here keeps them out of the module a page loads.
 web-sys = { workspace = true, features = [
+    "CssStyleDeclaration",
     "EventTarget",
     "HtmlElement",
     "HtmlInputElement",
