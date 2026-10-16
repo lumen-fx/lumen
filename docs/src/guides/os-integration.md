@@ -212,6 +212,10 @@ form: `on("file_picked", "import", "handle_import")`.
 Cancelling still calls back once, with an empty path, so you can clear a
 loading state.
 
+A Rust app opens the same dialogs with `FileDialog`, which also takes a
+starting folder, and gets the result in a callback; see
+[Dialogs and the clipboard](../reference/ffi.md#dialogs-and-the-clipboard).
+
 ## Clipboard
 
 Text copy, cut, and paste work inside text inputs with the usual keyboard
@@ -247,7 +251,9 @@ save_clipboard_image("shots/in.png"); // write the clipboard image to disk
 ```
 
 Both paths are relative to the app directory. Neither call reports back; a
-failure logs to stderr.
+failure logs to stderr. A Rust app reads and writes clipboard images as pixels
+in memory instead, with no file in between; see
+[Dialogs and the clipboard](../reference/ffi.md#dialogs-and-the-clipboard).
 
 ## Opening links and files
 

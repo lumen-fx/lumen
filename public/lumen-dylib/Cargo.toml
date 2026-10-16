@@ -94,6 +94,11 @@ lumen-script = { path = "../../core/script/api", default-features = false, featu
 ] }
 lumen-widget = { path = "../../core/widget" }
 lumen-widget-macros = { path = "../../core/widget-macros" }
+# The file dialogs and the clipboard, which the Rust SDK gives a typed API.
+# Already in the engine through the runtime; named here so the SDK reaches
+# this copy.
+lumen-os-clipboard = { path = "../../os/clipboard" }
+lumen-os-filedialog = { path = "../../os/filedialog" }
 # Same spec as the workspace pin; spelled out because this manifest cannot
 # inherit it. `std` is required for the multi-threaded executor; see the
 # workspace Cargo.toml's bevy_ecs comment.

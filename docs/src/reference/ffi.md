@@ -619,6 +619,47 @@ and the crate's `host-rhai` feature were removed when the script hosts became
 runtime modules, and `script_fn` and `native_fn` above replace them, reaching
 every language the app runs.
 
+### Dialogs and the clipboard
+
+`FileDialog` opens the native file dialogs, the same ones the script
+functions open. Pick the kind with `FileDialog::open()`, `open_multiple()`,
+`save()` or `pick_folder()`, add `filter(label, &["png"])`, a starting
+`directory(path)` and a suggested `file_name(name)`, then hand it a callback.
+From a system, queue it with `commands.queue(dialog.then(callback))`; with the
+world in hand, `dialog.show(world, callback)`. The callback runs on the main
+thread on a tick after the dialog closes, with the world and the chosen paths,
+and with no paths when the user cancelled.
+
+```rust
+use lumenui::prelude::*;
+
+fn open_document(mut commands: Commands) {
+    commands.queue(
+        FileDialog::open()
+            .filter("Images", &["png"])
+            .then(|world: &mut World, paths| {
+                if let Some(path) = paths.into_iter().next() {
+                    world.insert_resource(OpenFile(path));
+                }
+            }),
+    );
+}
+```
+
+`Clipboard` is a system parameter over the system clipboard: `text()` and
+`set_text(text)`, and `image()` and `set_image(&image)` for images as RGBA8
+pixels in memory (`RgbaImage`, four bytes per pixel, rows top to bottom). A
+system that takes it runs on the main thread. With no clipboard the reads find
+nothing and the writes return `false`.
+
+```rust
+fn paste(clipboard: Clipboard) {
+    if let Some(image) = clipboard.image() {
+        println!("pasted {}x{}", image.width(), image.height());
+    }
+}
+```
+
 Runnable examples live in `sdk/rust/examples`.
 
 ### Canvas

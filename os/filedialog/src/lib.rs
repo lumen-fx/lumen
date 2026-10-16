@@ -32,6 +32,15 @@
 //! loop pumps), so there it refuses and reports an empty result: a macOS
 //! app needs an async backend for dialogs to reach the user.
 //!
+//! ## From Rust
+//!
+//! [`FileDialog`] is the typed form of the same request for Rust code (the
+//! SDK re-exports it): pick the kind, add filters, a starting folder and a
+//! suggested name, and pass a callback. The dialog runs through the same
+//! [`FileDialogService`] the script functions use, and its result comes back
+//! through the same command, which hands it to the callback, on the main
+//! thread with the world, instead of to the script.
+//!
 //! ## Why a request id + drain instead of a oneshot channel?
 //!
 //! Returning a oneshot to the caller would require the caller to poll
@@ -50,13 +59,14 @@
 pub mod capability;
 
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
 use lumen_core::app::{App, Plugin};
-use lumen_core::command::{Command, CommandQueue, apply_property_commands};
+use lumen_core::command::{Command, CommandQueue, CommandRegistry, apply_property_commands};
 use lumen_core::task::{BoxFuture, Spawn, SpawnService};
 use lumen_core::tick::TickStage;
 use lumen_script::{PluginEvent, ScriptValue};
@@ -160,6 +170,8 @@ pub struct FileDialogRequest {
     pub filters: Vec<MimeFilter>,
     /// Optional default filename for Save dialogs.
     pub default_name: Option<String>,
+    /// The folder the dialog starts in; the platform's choice when `None`.
+    pub directory: Option<PathBuf>,
 }
 
 /// Cross-thread payload the task that ran a dialog pushes back to the
@@ -263,12 +275,24 @@ impl FileDialogService {
         queue: &CommandQueue,
         req: FileDialogRequest,
     ) -> RequestId {
+        let id = self.alloc_id();
+        self.open_with_id(id, spawn, queue, req);
+        id
+    }
+
+    /// Start the dialog `req` describes under an id already allocated.
+    fn open_with_id(
+        &self,
+        request_id: RequestId,
+        spawn: Option<&dyn Spawn>,
+        queue: &CommandQueue,
+        req: FileDialogRequest,
+    ) {
         let pending = PendingDialog {
-            request_id: self.alloc_id(),
+            request_id,
             kind: req.kind,
             tag: req.tag.clone(),
         };
-        let request_id = pending.request_id;
         let kind = req.kind;
         // The dialog is built inside each arm because only one of them runs
         // and an `rfd` builder cannot be handed to both.
@@ -280,7 +304,6 @@ impl FileDialogService {
             move || Box::pin(resolve(build_dialog(&spawned_req), kind)),
             move || blocking_resolve(build_dialog(&req), kind),
         );
-        request_id
     }
 }
 
@@ -341,6 +364,9 @@ fn build_dialog(req: &FileDialogRequest) -> AsyncFileDialog {
     }
     if let Some(name) = &req.default_name {
         dlg = dlg.set_file_name(name);
+    }
+    if let Some(dir) = &req.directory {
+        dlg = dlg.set_directory(dir);
     }
     dlg
 }
@@ -411,15 +437,194 @@ fn post_result(queue: &CommandQueue, result: FileDialogResultCommand) {
     }
 }
 
-/// Register the typed-command handler that turns a
-/// [`FileDialogResultCommand`] into the script event it fires, on the tick
-/// the command drain applies it. Without it the drain discards the payload
-/// and the script's `on_file_picked` never fires.
+/// What a dialog opened from Rust is handed when it closes: the world, and
+/// the chosen paths, empty when the user cancelled.
+type DialogCallback = Box<dyn FnOnce(&mut World, Vec<PathBuf>) + Send>;
+
+/// The callbacks of the dialogs opened from Rust that are still open, by
+/// request.
+#[derive(Resource, Default)]
+struct DialogCallbacks(Mutex<HashMap<RequestId, DialogCallback>>);
+
+impl DialogCallbacks {
+    fn insert(&self, id: RequestId, callback: DialogCallback) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, callback);
+    }
+
+    fn take(&self, id: RequestId) -> Option<DialogCallback> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&id)
+    }
+}
+
+/// Hand a resolved dialog to whoever opened it: the callback a [`FileDialog`]
+/// left for its request, or else the script, as the event its kind fires.
+fn deliver_result(world: &mut World, result: FileDialogResultCommand) {
+    let callback = world
+        .get_resource::<DialogCallbacks>()
+        .and_then(|c| c.take(result.request_id));
+    match callback {
+        Some(callback) => callback(world, result.paths),
+        None => {
+            world.write_message(PluginEvent::from(result));
+        }
+    }
+}
+
+/// Register the typed-command handler that hands a resolved
+/// [`FileDialogResultCommand`] to whoever opened the dialog, on the tick the
+/// command drain applies it: a [`FileDialog`] callback, or the script event
+/// the dialog's kind fires. Without it the drain discards the payload and
+/// the script's `on_file_picked` never fires.
 pub fn register_result_handler(app: &mut App) {
-    lumen_script::register_plugin_event_message(&mut app.world);
-    app.register_command::<FileDialogResultCommand, _>(|world, payload| {
-        world.write_message(PluginEvent::from(*payload));
-    });
+    install_into(&mut app.world);
+}
+
+/// The service, the callback table and the result handler, in a world that
+/// lacks any of them.
+fn install_into(world: &mut World) {
+    if !world.contains_resource::<FileDialogService>() {
+        world.insert_resource(FileDialogService::new());
+    }
+    world.init_resource::<DialogCallbacks>();
+    lumen_script::register_plugin_event_message(world);
+    let mut registry = world.get_resource_or_insert_with(CommandRegistry::default);
+    if registry
+        .lookup(&TypeId::of::<FileDialogResultCommand>())
+        .is_none()
+    {
+        registry.register::<FileDialogResultCommand, _>(|world, payload| {
+            deliver_result(world, *payload);
+        });
+    }
+}
+
+/// A native file dialog, for Rust code: the typed form of what the script
+/// functions `pick_file`, `pick_files`, `save_file` and `pick_folder` ask for.
+///
+/// ```no_run
+/// # use bevy_ecs::prelude::*;
+/// # use lumen_os_filedialog::FileDialog;
+/// fn open_document(mut commands: Commands) {
+///     commands.queue(
+///         FileDialog::open()
+///             .filter("Images", &["png", "jpg"])
+///             .directory("/home/me/art")
+///             .then(|_world: &mut World, paths| {
+///                 if let Some(path) = paths.first() {
+///                     println!("open {}", path.display());
+///                 }
+///             }),
+///     );
+/// }
+/// ```
+///
+/// The callback runs on the main thread, on a tick after the user closes the
+/// dialog, with the chosen paths: one for an open, a save or a folder, any
+/// number for [`FileDialog::open_multiple`], none when the user cancelled.
+/// The dialog resolves on the app's executor when one is installed, and
+/// blocks the tick it was opened on otherwise (see the crate docs, and the
+/// macOS caveat there).
+#[derive(Clone, Debug, Default)]
+pub struct FileDialog {
+    request: FileDialogRequest,
+}
+
+impl FileDialog {
+    fn of(kind: FileDialogKind) -> Self {
+        Self {
+            request: FileDialogRequest {
+                kind,
+                ..FileDialogRequest::default()
+            },
+        }
+    }
+
+    /// Pick one existing file.
+    pub fn open() -> Self {
+        Self::of(FileDialogKind::Open)
+    }
+
+    /// Pick any number of existing files.
+    pub fn open_multiple() -> Self {
+        Self::of(FileDialogKind::OpenMulti)
+    }
+
+    /// Pick where to save a file, which may not exist yet.
+    pub fn save() -> Self {
+        Self::of(FileDialogKind::Save)
+    }
+
+    /// Pick a folder.
+    pub fn pick_folder() -> Self {
+        Self::of(FileDialogKind::PickFolder)
+    }
+
+    /// Offer a filter: a label and the extensions it shows, without the dot.
+    /// The first filter added is the one selected.
+    pub fn filter(mut self, label: impl Into<String>, extensions: &[&str]) -> Self {
+        self.request.filters.push(MimeFilter {
+            label: label.into(),
+            exts: extensions.iter().map(|e| e.to_string()).collect(),
+        });
+        self
+    }
+
+    /// Start in `directory`.
+    pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.request.directory = Some(directory.into());
+        self
+    }
+
+    /// Suggest a file name, for a save dialog.
+    pub fn file_name(mut self, name: impl Into<String>) -> Self {
+        self.request.default_name = Some(name.into());
+        self
+    }
+
+    /// The request this dialog makes of the [`FileDialogService`].
+    pub fn request(&self) -> &FileDialogRequest {
+        &self.request
+    }
+
+    /// Open the dialog now and hand the result to `then` when it closes.
+    pub fn show(
+        self,
+        world: &mut World,
+        then: impl FnOnce(&mut World, Vec<PathBuf>) + Send + 'static,
+    ) -> RequestId {
+        install_into(world);
+        let service = world.resource::<FileDialogService>().clone();
+        let id = service.alloc_id();
+        // The callback is in place before the dialog can resolve: the
+        // blocking path posts its result before `open` returns.
+        world
+            .resource::<DialogCallbacks>()
+            .insert(id, Box::new(then));
+        let spawn = world.get_resource::<SpawnService>().cloned();
+        match world.get_resource::<CommandQueue>().cloned() {
+            Some(queue) => service.open_with_id(id, spawn.as_deref(), &queue, self.request),
+            None => {
+                warn!("lumen-os-filedialog: no CommandQueue in the world, dropping a dialog");
+                world.resource::<DialogCallbacks>().take(id);
+            }
+        }
+        id
+    }
+
+    /// The dialog as a command, for a system to queue with
+    /// `commands.queue(...)`; the result goes to `then` as with
+    /// [`FileDialog::show`].
+    pub fn then(
+        self,
+        then: impl FnOnce(&mut World, Vec<PathBuf>) + Send + 'static,
+    ) -> impl bevy_ecs::system::Command {
+        move |world: &mut World| {
+            self.show(world, then);
+        }
+    }
 }
 
 /// Plugin: registers the [`FileDialogService`] resource and the typed-
@@ -437,9 +642,6 @@ impl Plugin for FileDialogPlugin {
     }
 
     fn build(self, app: &mut App) {
-        if app.world.get_resource::<FileDialogService>().is_none() {
-            app.world.insert_resource(FileDialogService::new());
-        }
         register_result_handler(app);
         // Make sure the property-command drain runs (needed so the
         // typed command actually reaches the registered handler).
@@ -496,6 +698,92 @@ mod tests {
         assert!(r.tag.is_empty());
         assert!(r.filters.is_empty());
         assert!(r.default_name.is_none());
+        assert!(r.directory.is_none());
+    }
+
+    #[test]
+    fn the_typed_dialog_builds_the_request_the_service_takes() {
+        let d = FileDialog::save()
+            .filter("PNG", &["png"])
+            .filter("All", &[])
+            .directory("/art")
+            .file_name("sprite.png");
+        let r = d.request();
+        assert_eq!(r.kind, FileDialogKind::Save);
+        assert_eq!(
+            r.filters,
+            vec![
+                MimeFilter::from(("PNG", &["png"][..])),
+                MimeFilter::from(("All", &[][..]))
+            ]
+        );
+        assert_eq!(r.directory, Some(PathBuf::from("/art")));
+        assert_eq!(r.default_name.as_deref(), Some("sprite.png"));
+        assert_eq!(
+            FileDialog::open_multiple().request().kind,
+            FileDialogKind::OpenMulti
+        );
+        assert_eq!(
+            FileDialog::pick_folder().request().kind,
+            FileDialogKind::PickFolder
+        );
+    }
+
+    /// A dialog opened from Rust hands its result to its callback, with the
+    /// world, and the script hears nothing of it; a script's dialog still
+    /// reaches the script.
+    #[test]
+    fn a_rust_dialog_answers_its_callback_and_a_script_dialog_the_script() {
+        let mut app = App::new();
+        FileDialogPlugin.build(&mut app);
+        let got: Arc<Mutex<Option<Vec<PathBuf>>>> = Arc::default();
+        let sink = Arc::clone(&got);
+        let id = app.world.resource::<FileDialogService>().alloc_id();
+        app.world.resource::<DialogCallbacks>().insert(
+            id,
+            Box::new(move |world: &mut World, paths| {
+                assert!(world.contains_resource::<FileDialogService>());
+                *sink.lock().unwrap() = Some(paths);
+            }),
+        );
+        let queue = app.world.resource::<CommandQueue>().clone();
+        post_result(
+            &queue,
+            PendingDialog {
+                request_id: id,
+                kind: FileDialogKind::OpenMulti,
+                tag: String::new(),
+            }
+            .resolved(vec![PathBuf::from("/a.png"), PathBuf::from("/b.png")]),
+        );
+        app.tick();
+        assert_eq!(
+            *got.lock().unwrap(),
+            Some(vec![PathBuf::from("/a.png"), PathBuf::from("/b.png")])
+        );
+        assert_eq!(picked(&mut app), None, "the script hears nothing of it");
+
+        post_result(
+            &queue,
+            pending("hero").resolved(vec![PathBuf::from("/c.png")]),
+        );
+        app.tick();
+        assert_eq!(picked_paths(&mut app), Some("/c.png".to_string()));
+    }
+
+    /// Opening a typed dialog in a bare world installs what it needs to hear
+    /// back, and the callback survives until the result arrives.
+    #[test]
+    fn a_typed_dialog_installs_what_it_needs() {
+        let mut world = World::new();
+        install_into(&mut world);
+        assert!(world.contains_resource::<FileDialogService>());
+        assert!(
+            world
+                .resource::<CommandRegistry>()
+                .lookup(&TypeId::of::<FileDialogResultCommand>())
+                .is_some()
+        );
     }
 
     #[test]
