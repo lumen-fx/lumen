@@ -258,6 +258,23 @@ pub struct WindowCfg {
     pub size: Option<[u32; 2]>,
     /// When `true`, persists window position, size, and maximised state to `<state_dir>/<app-id>/window-state.toml` on close and restores from it on the next launch. Defaults to `false`.
     pub remember_state: Option<bool>,
+    /// Where a `<menubar>` is shown: the OS menu bar, or a bar drawn at the
+    /// top of the window. Linux has no OS bar, so it draws in the window
+    /// either way.
+    pub menubar: MenuBarChoice,
+}
+
+/// The value of `[window] menubar`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MenuBarChoice {
+    /// The platform's own menu bar where it has one (macOS, Windows), else
+    /// the bar drawn in the window.
+    #[default]
+    Native,
+    /// The bar drawn at the top of the window on every platform, styled by
+    /// the skin like any other element.
+    Window,
 }
 
 /// `[skin]` block.
@@ -1320,6 +1337,15 @@ mod tests {
         assert_eq!(gpu.render.backend.backend_name(), Some("gpu"));
         assert!(toml::from_str::<LumenToml>("[render]\nbackend = \"vulkan\"\n").is_err());
         assert!(toml::from_str::<LumenToml>("[render]\nthreads = 4\n").is_err());
+    }
+
+    #[test]
+    fn the_menubar_defaults_to_native_and_takes_window() {
+        let absent: LumenToml = toml::from_str("").unwrap();
+        assert_eq!(absent.window.menubar, MenuBarChoice::Native);
+        let window: LumenToml = toml::from_str("[window]\nmenubar = \"window\"\n").unwrap();
+        assert_eq!(window.window.menubar, MenuBarChoice::Window);
+        assert!(toml::from_str::<LumenToml>("[window]\nmenubar = \"os\"\n").is_err());
     }
 
     #[test]

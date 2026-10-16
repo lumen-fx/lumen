@@ -1,11 +1,12 @@
-//! The menu bar a platform with no native one draws in the window.
+//! The menu bar drawn in the window.
 //!
-//! macOS and Windows hand an app's `<menubar>` to the OS. Linux desktops
+//! macOS and Windows hand an app's `<menubar>` to the OS unless the app asks
+//! for the bar in the window (`[window] menubar = "window"`). Linux desktops
 //! have no menu bar convention for an app to join (GNOME has none at all),
-//! so there the same markup becomes an in-window bar at the top of the root:
-//! one button per `<menu>`, each opening that menu as a popup panel. Its
-//! items reach `on_menu` exactly as the native bar's do, and an item's
-//! `accel` works as a shortcut while the window has focus.
+//! so there the bar is always in the window. The in-window bar sits at the
+//! top of the root: one button per `<menu>`, each opening that menu as a
+//! popup panel. Its items reach `on_menu` exactly as the native bar's do,
+//! and an item's `accel` works as a shortcut while the window has focus.
 //!
 //! The parser leaves `<menubar>` out of the layout tree, and the cascade has
 //! already run when the runtime decides, so the bar is styled here against
@@ -13,14 +14,36 @@
 //! restyle resolves it with the rest of the document.
 
 use bevy_ecs::hierarchy::Children;
-use bevy_ecs::prelude::{Entity, World};
+use bevy_ecs::prelude::{Entity, Resource, World};
 use lumen_core::style_overrides::StyleOverrides;
 use lumen_ir::css::{MediaContext, apply_css_with_media};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, MenuEntrySpec};
 use lumen_primitives::{MenuAccelerators, ReservedEdge};
 
-/// Whether this platform shows an app's menu bar itself.
-pub(crate) const NATIVE_MENUBAR: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+use crate::config::MenuBarChoice;
+
+/// Whether this platform has a menu bar of its own to show an app's in.
+const PLATFORM_HAS_MENUBAR: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// Where this run shows the app's `<menubar>`, decided once from
+/// `[window] menubar` and kept for a hot reload to mount the bar the same
+/// way.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MenuBarPlacement {
+    /// True when the OS shows the bar; false when it is drawn in the window.
+    pub(crate) native: bool,
+}
+
+impl MenuBarPlacement {
+    /// The placement `choice` asks for on the platform this build runs on:
+    /// the OS bar only where there is one and the app did not ask for the
+    /// window.
+    pub(crate) fn of(choice: MenuBarChoice) -> Self {
+        Self {
+            native: choice == MenuBarChoice::Native && PLATFORM_HAS_MENUBAR,
+        }
+    }
+}
 
 /// Put the in-window menu bar at the top of `ir`'s root, styled, when the
 /// app declares a `<menubar>` and `native` says the platform has no bar of
@@ -129,6 +152,17 @@ mod tests {
         assert_eq!(ir.root.children[0].attrs.classes, vec!["menubar"]);
         assert_eq!(ir.root.children[1].tag, "column");
         assert_eq!(accels.len(), 1);
+    }
+
+    /// Asking for the window puts the bar in the window on every platform;
+    /// the default leaves it to the OS only where the OS has one.
+    #[test]
+    fn the_window_choice_is_in_window_everywhere() {
+        assert!(!MenuBarPlacement::of(MenuBarChoice::Window).native);
+        assert_eq!(
+            MenuBarPlacement::of(MenuBarChoice::Native).native,
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
     }
 
     /// With a native bar the tree is left alone.
