@@ -69,8 +69,8 @@ pub fn palette_root_css() -> String {
 }
 
 /// An at-rule the cascade does not implement, kept as authored for a
-/// consumer that does. The desktop cascade reads none of these; the web
-/// target writes them back out.
+/// consumer that does. The web target writes them back out; the desktop
+/// runtime reads the fonts a `@font-face` names.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AtRule {
     /// Lowercased, without the `@`: `keyframes`, `font-face`.
@@ -1047,7 +1047,7 @@ fn cascade_one(
 /// cascade, `color`/`font-size`/`text-align`/`text-wrap`/`max-lines`/
 /// `line-height`/`image-rendering` inherit from parent to child; custom
 /// properties inherit separately via the var map. Only slots that
-/// [`Attributes`] actually supports are modelled.
+/// [`Attributes`] supports are modelled.
 #[derive(Debug, Clone, Default)]
 struct Inherited {
     text_color: Option<Rgba>,

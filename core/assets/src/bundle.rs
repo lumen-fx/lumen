@@ -156,10 +156,7 @@ impl LumenBundle {
         self.index.contains_key(name)
     }
 
-    /// Borrow the entry bytes without copying. Used by the font-db
-    /// registration path which feeds the slice straight into
-    /// `cosmic_text::fontdb::Database::load_font_data` (which copies
-    /// internally anyway).
+    /// Borrow the entry bytes without copying.
     pub fn slice(&self, name: &str) -> Option<&[u8]> {
         let entry = self.index.get(name)?;
         let start = entry.offset as usize;

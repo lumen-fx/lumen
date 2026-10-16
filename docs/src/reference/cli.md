@@ -46,7 +46,7 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
-| `--assets` | path to a `.lpak` | none | Reads images, icons, and sounds from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk; fonts always come from disk. An unreadable archive exits 1. |
+| `--assets` | path to a `.lpak` | none | Reads images, icons, sounds, and the font files `@font-face` names from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
 | `--offline` | - | off | Resolves the app's registry packages from what is already downloaded and never reaches the network. A package that has not been downloaded exits 1. |
 

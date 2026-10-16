@@ -116,6 +116,9 @@ pub(crate) fn register_text(app: &mut App) -> Box<dyn TextShaper> {
     let layout_shaper = CosmicShaper::new();
     let render_shaper = CosmicShaper::new_sharing_db(&layout_shaper);
     app.world.insert_non_send(ShaperService::new(layout_shaper));
+    // The fonts the stylesheet's `@font-face` rules ship, loaded into both
+    // shapers whichever backend an embedder installs.
+    super::fonts::register(app);
     Box::new(render_shaper)
 }
 

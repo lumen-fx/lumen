@@ -224,6 +224,31 @@ impl ShapeOptions {
 /// not directly on `lumen-core`.
 pub use lumen_core::components::DEFAULT_LINE_HEIGHT_MULTIPLIER;
 
+/// The slant a [`FontFace`] declares, as CSS `font-style` spells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FontStyle {
+    /// Upright.
+    Normal,
+    /// Italic.
+    Italic,
+    /// Oblique.
+    Oblique,
+}
+
+/// A font an app ships, as one CSS `@font-face` rule declares it.
+#[derive(Clone, Debug)]
+pub struct FontFace {
+    /// The family text names it by: the rule's `font-family`, whatever the
+    /// font file calls itself.
+    pub family: String,
+    /// The font file's bytes.
+    pub data: Arc<Vec<u8>>,
+    /// The rule's `font-weight`; `None` keeps the weight the file declares.
+    pub weight: Option<u16>,
+    /// The rule's `font-style`; `None` keeps the style the file declares.
+    pub style: Option<FontStyle>,
+}
+
 /// Backend that turns strings into [`ShapedRun`]s.
 pub trait TextShaper {
     /// Shape `text` at `size_px` under the given [`ShapeOptions`].
@@ -314,6 +339,15 @@ pub trait TextShaper {
     /// [`lumen_core::components::MemoryBudget`]. No-op for a backend that
     /// caches nothing.
     fn set_capacity(&mut self, _entries: usize) {}
+
+    /// Make the faces in `face.data` available under `face.family`, so a
+    /// `font-family` naming it shapes with them from now on. Returns
+    /// `false` when the backend could not read a face out of the bytes, or
+    /// takes no fonts at all, which is the default.
+    fn register_font(&mut self, face: &FontFace) -> bool {
+        let _ = face;
+        false
+    }
 }
 
 /// The text shaper an app runs, held as a `NonSend` resource (font

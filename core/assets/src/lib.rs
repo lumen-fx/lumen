@@ -454,8 +454,7 @@ pub struct AssetServer {
     /// the built-in image and SVG loaders.
     loaders: AssetLoaders,
     /// The built-in `.lpak` source. Kept as its own field so
-    /// [`Self::register_bundle`] and the font-registration path in
-    /// `lumen-text-cosmic` can reach the bundles by type.
+    /// [`Self::register_bundle`] can reach the bundles by type.
     bundle_source: BundleSource,
     /// Additional byte sources, consulted after the bundles and before the
     /// filesystem, in registration order.
@@ -591,8 +590,7 @@ impl AssetServer {
     /// Register a `.lpak` bundle with the server. Subsequent decode
     /// lookups for `lumen://app/<path>` URIs route through every
     /// registered bundle in insertion order. Bundles are cheap to
-    /// clone (one `Arc<[u8]>` bump) so the same instance can be
-    /// shared with `lumen-text-cosmic`'s font_db registration pass.
+    /// clone (one `Arc<[u8]>` bump).
     ///
     /// Set [`Self::set_bundle_root`] as well to serve plain filesystem
     /// paths (`<app_dir>/icons/sun.png`) out of the archive.
@@ -609,8 +607,7 @@ impl AssetServer {
         self.bundle_source.set_root(root);
     }
 
-    /// Iterate the currently registered bundles. Used by the
-    /// font-registration helper in `lumen-text-cosmic`.
+    /// Iterate the currently registered bundles.
     pub fn bundles(&self) -> &[LumenBundle] {
         self.bundle_source.bundles()
     }

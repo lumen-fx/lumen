@@ -585,6 +585,20 @@ impl TextShaper for CosmicShaper {
         }
     }
 
+    /// Adds the faces to this shaper's font database. Everything memoised
+    /// about family resolution is dropped with it: a family that resolved to
+    /// the fallback a moment ago now names faces of its own.
+    fn register_font(&mut self, face: &lumen_text::FontFace) -> bool {
+        if font_db::register_face(self.font_system.db_mut(), face) == 0 {
+            return false;
+        }
+        self.cache.clear();
+        self.family_cache.clear();
+        self.weight_cache.clear();
+        self.family_name_cache.clear();
+        true
+    }
+
     fn shape(&mut self, text: &str, size_px: f32, opts: ShapeOptions) -> Option<ShapedRun> {
         if text.is_empty() {
             return None;
