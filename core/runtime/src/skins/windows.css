@@ -366,15 +366,19 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
  *         .color-area-thumb
  *       .color-hue            (the hue strip)
  *         .color-hue-thumb
- *       .color-hex            (tag=input, the color as #rrggbb)
+ *       .color-alpha          (with `alpha`: the backdrop of the alpha strip)
+ *         .color-alpha-fill   (the color from clear to opaque)
+ *         .color-alpha-thumb
+ *       .color-hex            (tag=input, #rrggbb, #rrggbbaa with `alpha`)
  */
 .color-input { bg: var(--lumen-input-bg); border: 1px solid var(--lumen-border); radius: var(--lumen-radius); }
 .color-input:focus { outline: 2 var(--lumen-focus-ring); }
 .color-swatch { radius: var(--lumen-radius-sm); border: 1px solid var(--lumen-border); }
 .color-panel { bg: var(--lumen-panel); border: 1px solid var(--lumen-border); radius: var(--lumen-radius); shadow: var(--lumen-shadow-panel); }
 .color-area, .color-area-white, .color-area-black { radius: var(--lumen-radius-sm); }
-.color-hue { radius: 6; }
-.color-area-thumb, .color-hue-thumb { shadow: 0 1px 3px #00000066; }
+.color-hue, .color-alpha, .color-alpha-fill { radius: 6; }
+.color-alpha { bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
+.color-area-thumb, .color-hue-thumb, .color-alpha-thumb { shadow: 0 1px 3px #00000066; }
 
 /* === Menu bar ===
  * Where the platform has no native menu bar (Linux), or the app sets

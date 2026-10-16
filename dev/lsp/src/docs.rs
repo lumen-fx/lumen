@@ -131,6 +131,7 @@ pub const ATTRS: &[&str] = &[
     "type",
     "pattern",
     "required",
+    "alpha",
     "password-character",
     "accel",
     "delay",
@@ -184,7 +185,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<image>`** - Bitmap or SVG. Attributes: `src`, `fit`, `width`, `height`, `opacity`."
         }
         "input" => {
-            "**`<input>`** - Single-line text input. `value` is the initial text. `placeholder`, `bind-text`, `on_text_input`. Validation attributes: `pattern`, `required`, `min`, `max`. `password-character` masks the rendered value. `type=\"number\"` holds a number stepped within `min` / `max` / `step`; `type=\"color\"` holds a `#rrggbb` color picked from a panel."
+            "**`<input>`** - Single-line text input. `value` is the initial text. `placeholder`, `bind-text`, `on_text_input`. Validation attributes: `pattern`, `required`, `min`, `max`. `password-character` masks the rendered value. `type=\"number\"` holds a number stepped within `min` / `max` / `step`; `type=\"color\"` holds a `#rrggbb` color picked from a panel; with `alpha` the alpha too, as `color(srgb r g b / a)`."
         }
         "textarea" => {
             "**`<textarea>`** - Multi-line text input: an `<input>` with `multiline` defaulting to true. Same attributes and events."
@@ -338,6 +339,9 @@ it. The text falls back to the authored `text`, then to the key itself. \
         }
         "pattern" => {
             "**`pattern`** - literal substring the value must contain to be valid. Not a regex. `<date-picker>` / `<time-picker>` attach a built-in shape check instead."
+        }
+        "alpha" => {
+            "**`alpha`** - boolean, on `<input type=\"color\">`. The alpha can be picked too; the value is written `color(srgb r g b / a)` as HTML's color well writes it."
         }
         "required" => {
             "**`required`** - boolean. The field is valid only when it is non-empty (a toggle must be checked, a slider above zero). Result mirrors into the `valid:<id>` signal."
@@ -493,8 +497,8 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
         // Every boolean attribute accepts the same set; completion
         // offers the canonical spelling of each side.
         "draggable" | "drop" | "drop-target" | "drag" | "frameless" | "disabled" | "autofocus"
-        | "default" | "required" | "multiline" | "checked" | "indeterminate" | "virtualized"
-        | "layout-boundary" => &["true", "false"],
+        | "default" | "required" | "alpha" | "multiline" | "checked" | "indeterminate"
+        | "virtualized" | "layout-boundary" => &["true", "false"],
         "position" => &["static", "relative", "absolute"],
         "align" => &["start", "end", "center", "stretch", "between"],
         "justify" => &["start", "end", "center", "between", "around"],

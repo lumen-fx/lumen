@@ -490,30 +490,42 @@ none of these parts.
 #### `type="color"`
 
 A color field, with the value and events of HTML's color input: it holds
-one sRGB color as `#rrggbb` in lowercase. A `value` that is not `#` and six
-hex digits is black, as a browser reads it.
+one sRGB color, written as HTML writes a color well's value. Without
+`alpha` that is `#rrggbb` in lowercase. With `alpha` the color has an alpha
+too and is written `color(srgb r g b / a)`, each component from 0 to 1, the
+`/ a` left out for an opaque color: `color(srgb 0 1 0 / 0.5)`.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `value` | `#rrggbb` | The initial color. Defaults to `#000000`. |
-| `bind-value` | signal | Holds the color as `#rrggbb`: the field writes it on every change and follows it when a script writes it. A signal nothing wrote yet starts at the field's color. |
+| `value` | color | The initial color. Defaults to opaque black. |
+| `alpha` | boolean | The alpha can be picked too, and the value carries it. Without it every color is made opaque. |
+| `bind-value` | signal | Holds the value: the field writes it on every change and follows it when a script writes it. A signal nothing wrote yet starts at the field's color. |
+
+A `value`, a typed color and a color a script writes to the bound signal are
+read as `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa` or `color(srgb r g b / a)`.
+Anything else is opaque black, as a browser reads a value it cannot parse.
+Named colors and `rgb()` are not read.
 
 The field is a compact face showing the color. A click, Enter or Space opens
 its panel below it (above it near the bottom of the window), and a click
 outside the field or Escape closes it. In the panel, the square picks
 saturation (across) and brightness (down) at the current hue, the strip
-below it picks the hue, and the text field takes a color typed as
-`#rrggbb` or `rrggbb` on Enter. Every change raises `input` with the new
-value, and closing the panel on a color other than the one it opened with
-raises `change`, as a browser's picker does. There is no alpha.
+below it picks the hue, with `alpha` a second strip picks the alpha from
+clear (left) to opaque (right), and the text field takes a color typed as
+`#rrggbb` or `rrggbb` on Enter, or `#rrggbbaa` with `alpha`. Every change
+raises `input` with the new value, and closing the panel on a color other
+than the one it opened with raises `change`, as a browser's picker does.
 
 Every part is styled by class. The face is `.color-input` and its swatch
 `.color-swatch`; the panel is `.color-panel`, holding `.color-area` with its
-`.color-area-thumb`, `.color-hue` with its `.color-hue-thumb`, and the
-`.color-hex` field. The area's shading and the hue strip are gradients in the
-user-agent sheet. On the web the field is the browser's own
-`<input type="color">`, which opens the browser's or the system's picker,
-and none of these parts are in the page.
+`.color-area-thumb`, `.color-hue` with its `.color-hue-thumb`, with `alpha`
+the `.color-alpha` strip (its backdrop) holding the `.color-alpha-fill`
+shading and the `.color-alpha-thumb`, and the `.color-hex` field. The area's
+shading and the hue strip are gradients in the user-agent sheet. On the web
+the field is the browser's own `<input type="color">`, which opens the
+browser's or the system's picker, and none of these parts are in the page.
+The page's input carries `alpha`, which a browser that does not implement it
+ignores: Chrome today shows an opaque picker and reports `#rrggbb`.
 
 ### `<textarea>`
 

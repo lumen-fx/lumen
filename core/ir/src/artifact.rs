@@ -144,7 +144,8 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// the widget registered for the tag is handed them when the tree spawns.
 ///
 /// `19`: [`crate::layout_ir::Attributes`] gains `input_type`, the `type` an
-/// `<input>` that holds something other than text was written with.
+/// `<input>` that holds something other than text was written with, and
+/// `alpha`, whether a color field picks alpha too.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

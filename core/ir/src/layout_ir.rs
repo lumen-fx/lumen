@@ -1114,6 +1114,10 @@ pub struct Attributes {
     /// `type="..."` on an `<input>` that is not a plain text field. `None`
     /// is `type="text"`. On a number field a `step` of `0` is `step="any"`.
     pub input_type: Option<InputType>,
+    /// `alpha` on an `<input type="color">`: the color's alpha can be
+    /// picked, and the value is written `color(srgb r g b / a)`, as HTML's
+    /// color well does.
+    pub alpha: bool,
     /// Synthesised by the `<dropdown>` parser pass on the header
     /// button. The runtime attaches a [`lumen_primitives::DropdownButton`]
     /// whose click flips the open signal and whose option metadata
@@ -1613,6 +1617,14 @@ pub enum WidgetPart {
     ColorHueThumb,
     /// The `.color-hex` text field in a color panel.
     ColorHex,
+    /// The `.color-alpha` strip in the panel of a color field with
+    /// `alpha`.
+    ColorAlpha,
+    /// The `.color-alpha-fill` over the alpha strip, shading from the clear
+    /// color to the opaque one.
+    ColorAlphaFill,
+    /// The `.color-alpha-thumb` marking the chosen alpha on the strip.
+    ColorAlphaThumb,
 }
 
 /// What an `<input>` holds when it is not text, from its `type` attribute.
@@ -1622,8 +1634,8 @@ pub enum InputType {
     /// `type="number"`: a number, typed or stepped with the arrow keys, the
     /// wheel, or the step buttons, within `min`, `max` and `step`.
     Number,
-    /// `type="color"`: an sRGB color, held as `#rrggbb`, picked from a
-    /// popup panel.
+    /// `type="color"`: an sRGB color, held as `#rrggbb` (or, with `alpha`,
+    /// `color(srgb r g b / a)`), picked from a popup panel.
     Color,
 }
 
@@ -1668,6 +1680,9 @@ impl WidgetPart {
             Self::ColorHue => "color-hue",
             Self::ColorHueThumb => "color-hue-thumb",
             Self::ColorHex => "color-hex",
+            Self::ColorAlpha => "color-alpha",
+            Self::ColorAlphaFill => "color-alpha-fill",
+            Self::ColorAlphaThumb => "color-alpha-thumb",
         }
     }
 }

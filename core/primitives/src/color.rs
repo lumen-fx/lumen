@@ -1,17 +1,22 @@
 //! `<input type="color">`: a swatch that opens a color panel.
 //!
 //! The field holds one sRGB color, written `#rrggbb` the way HTML's color
-//! input holds it. The face shows it in its `.color-swatch`; a click, Enter
-//! or Space opens the `.color-panel` below it (above it near the window's
-//! bottom edge), and a click outside it or Escape closes it again. The panel
-//! is three controls over one color:
+//! input holds it. With HTML's `alpha` attribute the color has an alpha too,
+//! and the value is written `color(srgb r g b / a)`, as HTML serializes a
+//! color well that takes one. The face shows the color in its
+//! `.color-swatch`; a click, Enter or Space opens the `.color-panel` below it
+//! (above it near the window's bottom edge), and a click outside it or
+//! Escape closes it again. The panel is a few controls over one color:
 //!
 //! - `.color-area`, saturation from left to right and value from top to
 //!   bottom at the current hue, with a `.color-area-thumb` on the chosen
 //!   point,
 //! - `.color-hue`, the hue strip, with a `.color-hue-thumb`,
-//! - `.color-hex`, a text field holding `#rrggbb`, which takes a typed color
-//!   on Enter.
+//! - with `alpha`, `.color-alpha`, the alpha strip: a `.color-alpha-fill`
+//!   shading from the clear color to the opaque one over the strip's own
+//!   backdrop, and a `.color-alpha-thumb`,
+//! - `.color-hex`, a text field holding `#rrggbb` (`#rrggbbaa` with
+//!   `alpha`), which takes a typed color on Enter.
 //!
 //! Every change raises [`ControlInput`], the DOM `input` event; closing the
 //! panel on a color other than the one it opened with raises it committed,
@@ -22,15 +27,15 @@
 //! Every visual is CSS: the panel, its parts and the thumbs are styled by
 //! class, the area's shading and the hue strip are gradients in the
 //! user-agent sheet. What this module holds in [`StyleOverrides`] is what
-//! the color decides: the swatch's fill, the area's hue, where the thumbs
-//! and the panel sit, and whether the panel shows.
+//! the color decides: the swatch's fill, the area's hue, the alpha strip's
+//! shading, where the thumbs and the panel sit, and whether the panel shows.
 
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::components::{
-    BindValue, Color, Display, Edges, Fill, Style, TextContent, Visuals, format_simple_color,
-    parse_simple_color,
+    BindValue, Color, Display, Edges, Fill, Style, TextContent, Visuals, format_color_value,
+    format_hex_color, parse_color_value,
 };
 use lumen_core::input::{ControlInput, FocusedKey};
 use lumen_core::prelude::*;
@@ -46,16 +51,19 @@ const PANEL_GAP: f32 = 4.0;
 #[derive(Component, Clone, Debug, PartialEq)]
 #[require(StyleOverrides)]
 pub struct ColorInput {
-    /// The color.
-    pub rgb: [u8; 3],
+    /// The color, alpha last. Always opaque without [`Self::alpha`].
+    pub rgba: [u8; 4],
+    /// Whether the field takes HTML's `alpha`: the alpha can be picked and
+    /// the value carries it.
+    pub alpha: bool,
     /// The hue (degrees), saturation and value the panel shows. Kept beside
-    /// [`Self::rgb`] because a gray has no hue of its own: dragging the area
+    /// [`Self::rgba`] because a gray has no hue of its own: dragging the area
     /// to its left edge must not throw away the hue the strip was on.
     pub hsv: [f32; 3],
     /// Whether the panel is showing.
     pub open: bool,
     /// The color the panel opened on, for the `change` on close.
-    opened_with: [u8; 3],
+    opened_with: [u8; 4],
     /// The value last exchanged with the bound signal.
     synced: Option<String>,
 }
@@ -65,43 +73,82 @@ impl StyleOwner for ColorInput {
 }
 
 impl ColorInput {
-    /// A closed field holding `rgb`.
-    pub fn new(rgb: [u8; 3]) -> Self {
+    /// A closed field holding `rgba`, made opaque unless the field takes
+    /// `alpha`.
+    pub fn new(rgba: [u8; 4], alpha: bool) -> Self {
+        let rgba = if alpha {
+            rgba
+        } else {
+            [rgba[0], rgba[1], rgba[2], 255]
+        };
         Self {
-            rgb,
-            hsv: rgb_to_hsv(rgb),
+            rgba,
+            alpha,
+            hsv: rgb_to_hsv(rgb_of(rgba)),
             open: false,
-            opened_with: rgb,
+            opened_with: rgba,
             synced: None,
         }
     }
 
-    /// The field's value, `#rrggbb`.
+    /// The field's value: `#rrggbb`, or `color(srgb r g b / a)` with
+    /// `alpha`.
     pub fn value(&self) -> String {
-        format_simple_color(self.rgb)
+        format_color_value(self.rgba, self.alpha)
+    }
+
+    /// The color as the panel's hex field shows it: `#rrggbb`, or
+    /// `#rrggbbaa` with `alpha`.
+    pub fn hex(&self) -> String {
+        format_hex_color(self.rgba, self.alpha)
+    }
+
+    /// `rgba` as this field holds it: opaque unless it takes `alpha`, the
+    /// way HTML sanitizes a color well's value.
+    pub fn sanitized(&self, rgba: [u8; 4]) -> [u8; 4] {
+        if self.alpha {
+            rgba
+        } else {
+            [rgba[0], rgba[1], rgba[2], 255]
+        }
     }
 
     /// Take a color from outside the panel (a typed hex, a signal, the
     /// browser), keeping the hue when the color is a gray.
-    pub fn set_rgb(&mut self, rgb: [u8; 3]) {
-        if rgb == self.rgb {
+    pub fn set_color(&mut self, rgba: [u8; 4]) {
+        let rgba = self.sanitized(rgba);
+        if rgba == self.rgba {
             return;
         }
-        let hsv = rgb_to_hsv(rgb);
+        let hsv = rgb_to_hsv(rgb_of(rgba));
         let keeps_hue = hsv[1] == 0.0 || hsv[2] == 0.0;
         self.hsv = if keeps_hue {
             [self.hsv[0], hsv[1], hsv[2]]
         } else {
             hsv
         };
-        self.rgb = rgb;
+        self.rgba = rgba;
     }
 
-    /// Take a color from the panel, as hue, saturation and value.
+    /// Take a color from the panel, as hue, saturation and value, keeping
+    /// the alpha.
     fn set_hsv(&mut self, hsv: [f32; 3]) {
         self.hsv = hsv;
-        self.rgb = hsv_to_rgb(hsv);
+        let [r, g, b] = hsv_to_rgb(hsv);
+        self.rgba = [r, g, b, self.rgba[3]];
     }
+
+    /// Take an alpha from the panel's alpha strip, 0 to 1.
+    fn set_alpha(&mut self, alpha: f32) {
+        if self.alpha {
+            self.rgba[3] = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+}
+
+/// The color channels of `rgba`, without its alpha.
+fn rgb_of(rgba: [u8; 4]) -> [u8; 3] {
+    [rgba[0], rgba[1], rgba[2]]
 }
 
 /// Which part of a color field an element is.
@@ -122,6 +169,12 @@ pub enum ColorPart {
     HueThumb,
     /// `.color-hex`, the hex text field.
     Hex,
+    /// `.color-alpha`, the alpha strip.
+    Alpha,
+    /// `.color-alpha-fill`, the strip's clear-to-opaque shading.
+    AlphaFill,
+    /// `.color-alpha-thumb`.
+    AlphaThumb,
 }
 
 impl StyleOwner for ColorPart {
@@ -211,8 +264,8 @@ fn set_open(
     }
     field.open = open;
     if open {
-        field.opened_with = field.rgb;
-    } else if field.rgb != field.opened_with {
+        field.opened_with = field.rgba;
+    } else if field.rgba != field.opened_with {
         out.write(ControlInput {
             entity,
             value: field.value(),
@@ -283,8 +336,8 @@ pub fn toggle_color_panels(
     }
 }
 
-/// What a drag on a panel holds: the field, and whether it is on the area or
-/// on the hue strip, with the element measured.
+/// What a drag on a panel holds: the field, and whether it is on the area,
+/// the hue strip or the alpha strip, with the element measured.
 #[derive(Clone, Copy, Debug)]
 pub struct ColorGrab {
     field: Entity,
@@ -316,13 +369,16 @@ pub fn drag_color_panels(
         *grab = hovered.iter().next().and_then(|t| {
             let (part_e, part) = part_of(t, &parents, &parts)?;
             let (on, control) = match part {
-                ColorPart::Area | ColorPart::Hue => (part, part_e),
-                ColorPart::AreaThumb | ColorPart::HueThumb => {
+                ColorPart::Area | ColorPart::Hue | ColorPart::Alpha => (part, part_e),
+                ColorPart::AreaThumb
+                | ColorPart::HueThumb
+                | ColorPart::AlphaThumb
+                | ColorPart::AlphaFill => {
                     let up = parents.get(part_e).ok()?.parent();
-                    let on = if part == ColorPart::AreaThumb {
-                        ColorPart::Area
-                    } else {
-                        ColorPart::Hue
+                    let on = match part {
+                        ColorPart::AreaThumb => ColorPart::Area,
+                        ColorPart::HueThumb => ColorPart::Hue,
+                        _ => ColorPart::Alpha,
                     };
                     (on, up)
                 }
@@ -348,15 +404,20 @@ pub fn drag_color_panels(
     {
         let frac = ((at - rect.absolute) / rect.size).clamp(Vec2::ZERO, Vec2::ONE);
         let [h, s, v] = field.hsv;
-        let hsv = match g.on {
-            ColorPart::Area => [h, frac.x, 1.0 - frac.y],
-            _ => [frac.x * 360.0, s, v],
-        };
-        let before = field.rgb;
-        if hsv != field.hsv {
-            field.set_hsv(hsv);
+        let before = field.rgba;
+        match g.on {
+            ColorPart::Alpha => field.set_alpha(frac.x),
+            on => {
+                let hsv = match on {
+                    ColorPart::Area => [h, frac.x, 1.0 - frac.y],
+                    _ => [frac.x * 360.0, s, v],
+                };
+                if hsv != field.hsv {
+                    field.set_hsv(hsv);
+                }
+            }
         }
-        if field.rgb != before {
+        if field.rgba != before {
             out.write(ControlInput {
                 entity: g.field,
                 value: field.value(),
@@ -370,7 +431,9 @@ pub fn drag_color_panels(
 }
 
 /// A color typed into the hex field and committed with Enter becomes the
-/// field's color. Text that is not a color is put back to the color it was.
+/// field's color: six hex digits, or eight with an alpha when the field
+/// takes `alpha`, with or without the `#`. Text that is not a color is put
+/// back to the color it was.
 pub fn commit_color_hex(
     mut commits: MessageReader<TextInputCommitted>,
     parents: Query<&ChildOf>,
@@ -395,22 +458,24 @@ pub fn commit_color_hex(
         } else {
             format!("#{typed}")
         };
-        match parse_simple_color(&with_hash) {
-            Some(rgb) if rgb != field.rgb => {
-                field.set_rgb(rgb);
+        let typed = parse_color_value(&with_hash).map(|c| field.sanitized(c));
+        match typed {
+            Some(rgba) if rgba != field.rgba => {
+                field.set_color(rgba);
                 out.write(ControlInput {
                     entity: e,
                     value: field.value(),
                     committed: false,
                 });
             }
-            _ => {
-                if let Ok(mut text) = texts.get_mut(commit.entity) {
-                    let value = field.value();
-                    if text.0 != value {
-                        text.0 = value;
-                    }
-                }
+            _ => {}
+        }
+        // The field shows the color in its own form, whether the typed text
+        // was one or not.
+        if let Ok(mut text) = texts.get_mut(commit.entity) {
+            let hex = field.hex();
+            if text.0 != hex {
+                text.0 = hex;
             }
         }
     }
@@ -514,7 +579,7 @@ pub fn sync_color_parts(
         let Ok((_, field)) = fields.get(field_e) else {
             continue;
         };
-        let [r, g, b] = field.rgb;
+        let [r, g, b, a] = field.rgba;
         let size = |e: Entity| transforms.get(e).map(|t| t.size).unwrap_or(Vec2::ZERO);
         let parent_size = parents
             .get(entity)
@@ -522,7 +587,7 @@ pub fn sync_color_parts(
             .unwrap_or(Vec2::ZERO);
         let values = match part {
             ColorPart::Swatch => StyleValues {
-                fill: Some(Some(Fill::Solid(Color::from_rgba8([r, g, b, 255])))),
+                fill: Some(Some(Fill::Solid(Color::from_rgba8([r, g, b, a])))),
                 ..StyleValues::default()
             },
             ColorPart::Panel => {
@@ -570,10 +635,14 @@ pub fn sync_color_parts(
                     ..StyleValues::default()
                 }
             }
-            ColorPart::HueThumb => {
+            ColorPart::HueThumb | ColorPart::AlphaThumb => {
                 let thumb = size(entity);
+                let along = match part {
+                    ColorPart::HueThumb => field.hsv[0] / 360.0,
+                    _ => f32::from(a) / 255.0,
+                };
                 let at = Vec2::new(
-                    field.hsv[0] / 360.0 * parent_size.x - thumb.x / 2.0,
+                    along * parent_size.x - thumb.x / 2.0,
                     (parent_size.y - thumb.y) / 2.0,
                 );
                 StyleValues {
@@ -581,19 +650,30 @@ pub fn sync_color_parts(
                     ..StyleValues::default()
                 }
             }
+            // The color from clear to opaque, left to right.
+            ColorPart::AlphaFill => StyleValues {
+                fill: Some(Some(Fill::Linear {
+                    angle_deg: 90.0,
+                    stops: vec![
+                        (0.0, Color::from_rgba8([r, g, b, 0])),
+                        (1.0, Color::from_rgba8([r, g, b, 255])),
+                    ],
+                })),
+                ..StyleValues::default()
+            },
             ColorPart::Hex => {
                 // A field being typed into keeps what is typed until Enter.
                 if !focused.contains(entity)
                     && let Some(mut text) = text
                 {
-                    let value = field.value();
-                    if text.0 != value {
-                        text.0 = value;
+                    let hex = field.hex();
+                    if text.0 != hex {
+                        text.0 = hex;
                     }
                 }
                 continue;
             }
-            ColorPart::Hue => continue,
+            ColorPart::Hue | ColorPart::Alpha => continue,
         };
         moved |= hold_part(&mut overrides, style.as_mut(), visuals.as_mut(), values);
     }
@@ -619,8 +699,8 @@ pub fn sync_color_bindings(
         match current {
             Some(written) if field.synced.as_deref() != Some(written.as_str()) => {
                 // Written elsewhere since the last exchange.
-                if let Some(rgb) = parse_simple_color(&written) {
-                    field.set_rgb(rgb);
+                if let Some(rgba) = parse_color_value(&written) {
+                    field.set_color(rgba);
                 }
                 field.synced = Some(written);
             }
@@ -658,9 +738,9 @@ mod tests {
     /// edge and back finds the same hue.
     #[test]
     fn a_gray_keeps_the_hue() {
-        let mut field = ColorInput::new([255, 0, 0]);
+        let mut field = ColorInput::new([255, 0, 0, 255], false);
         field.set_hsv([200.0, 1.0, 1.0]);
-        field.set_rgb([90, 90, 90]);
+        field.set_color([90, 90, 90, 255]);
         assert_eq!(field.hsv[0], 200.0);
         assert_eq!(field.value(), "#5a5a5a");
     }
@@ -675,7 +755,7 @@ mod tests {
         world.init_resource::<Messages<ControlInput>>();
         let field = world
             .spawn((
-                ColorInput::new([255, 0, 0]),
+                ColorInput::new([255, 0, 0, 255], false),
                 Transform::new(Vec2::new(10.0, 10.0), Vec2::new(48.0, 28.0)),
             ))
             .id();
@@ -746,7 +826,10 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(PropertyStore::default());
         let field = world
-            .spawn((ColorInput::new([0, 0, 255]), BindValue("tint".to_string())))
+            .spawn((
+                ColorInput::new([0, 0, 255, 255], false),
+                BindValue("tint".to_string()),
+            ))
             .id();
         let read = |world: &World| {
             world
@@ -760,7 +843,7 @@ mod tests {
         world
             .get_mut::<ColorInput>(field)
             .unwrap()
-            .set_rgb([1, 2, 3]);
+            .set_color([1, 2, 3, 255]);
         world.run_system_once(sync_color_bindings).unwrap();
         assert_eq!(read(&world).as_deref(), Some("#010203"));
 
@@ -768,6 +851,67 @@ mod tests {
             .resource_mut::<PropertyStore>()
             .set_global_str("tint", "#FFAA00");
         world.run_system_once(sync_color_bindings).unwrap();
-        assert_eq!(world.get::<ColorInput>(field).unwrap().rgb, [255, 170, 0]);
+        assert_eq!(
+            world.get::<ColorInput>(field).unwrap().rgba,
+            [255, 170, 0, 255]
+        );
+    }
+
+    /// With `alpha`, a press on the alpha strip picks the alpha, and the
+    /// value carries it in HTML's `color(srgb r g b / a)` form.
+    #[test]
+    fn the_alpha_strip_picks_the_alpha() {
+        let (mut world, field, area) = panel_world();
+        world
+            .entity_mut(field)
+            .insert(ColorInput::new([255, 0, 0, 255], true));
+        let panel = world.get::<ChildOf>(area).unwrap().parent();
+        let strip = world
+            .spawn((
+                ColorPart::Alpha,
+                ChildOf(panel),
+                Transform::new(Vec2::new(10.0, 160.0), Vec2::new(200.0, 12.0)),
+                Hovered,
+            ))
+            .id();
+        world.write_message(PointerPressed {
+            position: Vec2::new(60.0, 166.0),
+            button: PointerButton::Primary,
+            local: None,
+        });
+        world.run_system_once(drag_color_panels).unwrap();
+        assert_eq!(
+            inputs(&mut world),
+            vec![("color(srgb 1 0 0 / 0.25098)".to_string(), false)]
+        );
+        let color = world.get::<ColorInput>(field).unwrap();
+        assert_eq!(color.rgba, [255, 0, 0, 64]);
+        assert_eq!(color.hex(), "#ff000040");
+        world.entity_mut(strip).despawn();
+    }
+
+    /// The hex field takes eight digits on a field with `alpha`; one without
+    /// keeps its color opaque whatever is typed.
+    #[test]
+    fn the_hex_field_takes_an_alpha_only_with_alpha() {
+        for (alpha, want, shown) in [
+            (true, [0x33, 0x66, 0xff, 0x80], "#3366ff80"),
+            (false, [0x33, 0x66, 0xff, 0xff], "#3366ff"),
+        ] {
+            let mut world = World::new();
+            world.init_resource::<Messages<TextInputCommitted>>();
+            world.init_resource::<Messages<ControlInput>>();
+            let field = world.spawn(ColorInput::new([0, 0, 0, 255], alpha)).id();
+            let hex = world
+                .spawn((ColorPart::Hex, ChildOf(field), TextContent::default()))
+                .id();
+            world.write_message(TextInputCommitted {
+                entity: hex,
+                text: "3366ff80".to_string(),
+            });
+            world.run_system_once(commit_color_hex).unwrap();
+            assert_eq!(world.get::<ColorInput>(field).unwrap().rgba, want);
+            assert_eq!(world.get::<TextContent>(hex).unwrap().0, shown);
+        }
     }
 }
