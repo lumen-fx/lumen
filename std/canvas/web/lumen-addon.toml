@@ -74,6 +74,21 @@ params = ["id: string"]
 doc = "Fill the current path."
 
 [[function]]
+name = "fill_evenodd"
+params = ["id: string"]
+doc = "Fill the current path under the even-odd rule."
+
+[[function]]
+name = "clip"
+params = ["id: string"]
+doc = "Intersect the clip with the current path."
+
+[[function]]
+name = "clip_evenodd"
+params = ["id: string"]
+doc = "Intersect the clip with the current path, under the even-odd rule."
+
+[[function]]
 name = "stroke"
 params = ["id: string"]
 doc = "Stroke the current path."
@@ -87,6 +102,11 @@ doc = "Fill one rectangle, leaving the path alone."
 name = "stroke_rect"
 params = ["id: string", "x: float", "y: float", "width: float", "height: float"]
 doc = "Stroke one rectangle, leaving the path alone."
+
+[[function]]
+name = "clear_rect"
+params = ["id: string", "x: float", "y: float", "width: float", "height: float"]
+doc = "Make a rectangle transparent, through the transform and the clip."
 
 [[function]]
 name = "set_fill_rgba"
@@ -136,6 +156,12 @@ doc = "Multiply every later draw by this alpha, 0..1."
 name = "set_image_smoothing"
 params = ["id: string", "enabled: bool"]
 doc = "Smooth a buffer drawn at another size (the default), or keep its pixels sharp."
+
+[[function]]
+name = "set_global_composite_operation"
+params = ["id: string", "operation: string"]
+returns = "bool"
+doc = "Set how later draws combine with the canvas, by its HTML canvas name; false when it is not one."
 
 [[function]]
 name = "save"
@@ -251,6 +277,12 @@ name = "buffer_save_png"
 params = ["buffer: int", "path: string"]
 returns = "bool"
 doc = "Write a buffer out as a PNG."
+
+[[function]]
+name = "get_image_data"
+params = ["id: string", "x: int", "y: int", "width: int", "height: int"]
+returns = "int"
+doc = "Read a region of the canvas into a new buffer, filled once the canvas next encodes; 0 when refused."
 
 [[function]]
 name = "draw_buffer"

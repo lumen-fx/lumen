@@ -416,12 +416,19 @@ A canvas is retained. What a script draws stays until `canvas::clear`, or
 until `canvas::resize`, which empties it the same way writing `width` on an
 HTML canvas does. Drawing outside the element's box is clipped.
 
-Not here yet: `clear_rect`, clipping, blend and composite modes, gradients,
-patterns, shadows, `measure_text`, `stroke_text`, text alignment and
-baselines, `ellipse` and `arc_to`, dashed strokes, drawing an image file or
-another canvas directly, reading a composed canvas back, and
-a per-canvas device pixel ratio. Canvas does not exist on the web target,
-which refuses a native library among the dependencies of its build.
+A canvas composites like the HTML canvas: every `globalCompositeOperation`
+(the Porter-Duff operators and the blend modes), `clip` and `clear_rect`, and
+`get_image_data` to read what it composed back into a pixel buffer. A
+composite operation works on the canvas's own pixels, never on the page
+behind the element. In a web build the module's web half draws the same
+calls with the browser's Canvas 2D.
+
+Not here yet: gradients, patterns, shadows, `measure_text`, `stroke_text`,
+text alignment and baselines, `ellipse` and `arc_to`, dashed strokes, drawing
+an image file or another canvas directly, and a per-canvas device pixel
+ratio. On the GPU renderer, `copy`, `source-in`, `source-out`,
+`destination-in` and `destination-atop` under a clip also clear a band up to
+16 pixels wide just outside the clip's edge.
 
 ## Controls
 

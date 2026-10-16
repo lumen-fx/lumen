@@ -12,8 +12,15 @@
 //! ticks, so a script that sets a fill in one handler and draws in the next
 //! gets the fill it set.
 
+use std::sync::Arc;
+
 use lumen_module::lumen_paint::PixelImage;
 use lumen_module::lumen_paint::kurbo::{Affine, BezPath, Point};
+use lumen_module::lumen_paint::peniko::{BlendMode, Compose, Mix};
+
+/// Which parts of a path are inside it: nonzero (the default) or even-odd,
+/// the two rules `fill` and `clip` take on the HTML canvas.
+pub use lumen_module::lumen_paint::peniko::Fill as FillRule;
 
 use crate::color::Rgba;
 
@@ -67,6 +74,208 @@ impl LineJoin {
     }
 }
 
+/// How a draw is combined with what the canvas already holds: the HTML
+/// canvas's `globalCompositeOperation`, with the same names and the same
+/// default.
+///
+/// The operators work on the canvas's own pixels, never on what is behind
+/// the element: `destination-out` makes the canvas transparent where it
+/// draws and the page shows through, as it does in a browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum CompositeOperation {
+    /// Draw over what is there. The default.
+    #[default]
+    SourceOver,
+    /// Draw only where the canvas already has something, and clear the rest.
+    SourceIn,
+    /// Draw only where the canvas is empty, and clear the rest.
+    SourceOut,
+    /// Draw only over what is there, keeping its alpha.
+    SourceAtop,
+    /// Draw behind what is there.
+    DestinationOver,
+    /// Keep what is there only where the draw covers it.
+    DestinationIn,
+    /// Keep what is there only where the draw does not cover it: an eraser.
+    DestinationOut,
+    /// Keep what is there only where the draw covers it, with the draw
+    /// behind it.
+    DestinationAtop,
+    /// Add the colors.
+    Lighter,
+    /// Replace what is there with the draw, clearing everything else.
+    Copy,
+    /// Keep each only where the other is not.
+    Xor,
+    /// Multiply the colors.
+    Multiply,
+    /// Invert, multiply, invert.
+    Screen,
+    /// Multiply or screen, by the color underneath.
+    Overlay,
+    /// The darker of the two.
+    Darken,
+    /// The lighter of the two.
+    Lighten,
+    /// Brighten what is there to reflect the draw.
+    ColorDodge,
+    /// Darken what is there to reflect the draw.
+    ColorBurn,
+    /// Multiply or screen, by the draw's color.
+    HardLight,
+    /// A softer hard light.
+    SoftLight,
+    /// The difference of the two.
+    Difference,
+    /// Like difference, lower in contrast.
+    Exclusion,
+    /// The draw's hue, with the saturation and luminosity underneath.
+    Hue,
+    /// The draw's saturation, with the hue and luminosity underneath.
+    Saturation,
+    /// The draw's hue and saturation, with the luminosity underneath.
+    Color,
+    /// The draw's luminosity, with the hue and saturation underneath.
+    Luminosity,
+}
+
+impl CompositeOperation {
+    /// Every operation, in the order the HTML canvas lists them.
+    pub const ALL: [CompositeOperation; 26] = [
+        CompositeOperation::SourceOver,
+        CompositeOperation::SourceIn,
+        CompositeOperation::SourceOut,
+        CompositeOperation::SourceAtop,
+        CompositeOperation::DestinationOver,
+        CompositeOperation::DestinationIn,
+        CompositeOperation::DestinationOut,
+        CompositeOperation::DestinationAtop,
+        CompositeOperation::Lighter,
+        CompositeOperation::Copy,
+        CompositeOperation::Xor,
+        CompositeOperation::Multiply,
+        CompositeOperation::Screen,
+        CompositeOperation::Overlay,
+        CompositeOperation::Darken,
+        CompositeOperation::Lighten,
+        CompositeOperation::ColorDodge,
+        CompositeOperation::ColorBurn,
+        CompositeOperation::HardLight,
+        CompositeOperation::SoftLight,
+        CompositeOperation::Difference,
+        CompositeOperation::Exclusion,
+        CompositeOperation::Hue,
+        CompositeOperation::Saturation,
+        CompositeOperation::Color,
+        CompositeOperation::Luminosity,
+    ];
+
+    /// The HTML canvas spelling, as in `"destination-out"`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            CompositeOperation::SourceOver => "source-over",
+            CompositeOperation::SourceIn => "source-in",
+            CompositeOperation::SourceOut => "source-out",
+            CompositeOperation::SourceAtop => "source-atop",
+            CompositeOperation::DestinationOver => "destination-over",
+            CompositeOperation::DestinationIn => "destination-in",
+            CompositeOperation::DestinationOut => "destination-out",
+            CompositeOperation::DestinationAtop => "destination-atop",
+            CompositeOperation::Lighter => "lighter",
+            CompositeOperation::Copy => "copy",
+            CompositeOperation::Xor => "xor",
+            CompositeOperation::Multiply => "multiply",
+            CompositeOperation::Screen => "screen",
+            CompositeOperation::Overlay => "overlay",
+            CompositeOperation::Darken => "darken",
+            CompositeOperation::Lighten => "lighten",
+            CompositeOperation::ColorDodge => "color-dodge",
+            CompositeOperation::ColorBurn => "color-burn",
+            CompositeOperation::HardLight => "hard-light",
+            CompositeOperation::SoftLight => "soft-light",
+            CompositeOperation::Difference => "difference",
+            CompositeOperation::Exclusion => "exclusion",
+            CompositeOperation::Hue => "hue",
+            CompositeOperation::Saturation => "saturation",
+            CompositeOperation::Color => "color",
+            CompositeOperation::Luminosity => "luminosity",
+        }
+    }
+
+    /// Parse the HTML canvas spelling, or `None`.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<CompositeOperation> {
+        let name = name.trim().to_ascii_lowercase();
+        CompositeOperation::ALL
+            .into_iter()
+            .find(|op| op.name() == name)
+    }
+
+    /// Whether the operation also changes what the draw does not cover:
+    /// `copy`, `source-in`, `source-out`, `destination-in` and
+    /// `destination-atop` clear it. Every other operation leaves it alone.
+    #[must_use]
+    pub fn clears_outside_the_draw(self) -> bool {
+        matches!(
+            self,
+            CompositeOperation::Copy
+                | CompositeOperation::SourceIn
+                | CompositeOperation::SourceOut
+                | CompositeOperation::DestinationIn
+                | CompositeOperation::DestinationAtop
+        )
+    }
+
+    /// The blend a renderer composites a draw with.
+    #[must_use]
+    pub fn blend_mode(self) -> BlendMode {
+        let compose = |c: Compose| BlendMode::new(Mix::Normal, c);
+        let mix = |m: Mix| BlendMode::new(m, Compose::SrcOver);
+        match self {
+            CompositeOperation::SourceOver => BlendMode::default(),
+            CompositeOperation::SourceIn => compose(Compose::SrcIn),
+            CompositeOperation::SourceOut => compose(Compose::SrcOut),
+            CompositeOperation::SourceAtop => compose(Compose::SrcAtop),
+            CompositeOperation::DestinationOver => compose(Compose::DestOver),
+            CompositeOperation::DestinationIn => compose(Compose::DestIn),
+            CompositeOperation::DestinationOut => compose(Compose::DestOut),
+            CompositeOperation::DestinationAtop => compose(Compose::DestAtop),
+            CompositeOperation::Lighter => compose(Compose::Plus),
+            CompositeOperation::Copy => compose(Compose::Copy),
+            CompositeOperation::Xor => compose(Compose::Xor),
+            CompositeOperation::Multiply => mix(Mix::Multiply),
+            CompositeOperation::Screen => mix(Mix::Screen),
+            CompositeOperation::Overlay => mix(Mix::Overlay),
+            CompositeOperation::Darken => mix(Mix::Darken),
+            CompositeOperation::Lighten => mix(Mix::Lighten),
+            CompositeOperation::ColorDodge => mix(Mix::ColorDodge),
+            CompositeOperation::ColorBurn => mix(Mix::ColorBurn),
+            CompositeOperation::HardLight => mix(Mix::HardLight),
+            CompositeOperation::SoftLight => mix(Mix::SoftLight),
+            CompositeOperation::Difference => mix(Mix::Difference),
+            CompositeOperation::Exclusion => mix(Mix::Exclusion),
+            CompositeOperation::Hue => mix(Mix::Hue),
+            CompositeOperation::Saturation => mix(Mix::Saturation),
+            CompositeOperation::Color => mix(Mix::Color),
+            CompositeOperation::Luminosity => mix(Mix::Luminosity),
+        }
+    }
+}
+
+/// One region `clip` intersected the canvas's clip with: the path as it was
+/// at the call, the transform it was placed by, and the fill rule that says
+/// which of it is inside.
+#[derive(Clone, Debug)]
+pub struct Clip {
+    /// The path, in user space.
+    pub path: BezPath,
+    /// The transform in force at the `clip` call.
+    pub transform: Affine,
+    /// Nonzero or even-odd.
+    pub rule: FillRule,
+}
+
 /// One recorded canvas call.
 #[derive(Clone, Debug)]
 pub enum Op {
@@ -98,12 +307,19 @@ pub enum Op {
     Rect(f64, f64, f64, f64),
     /// Close the current subpath back to its start.
     ClosePath,
-    /// Fill the current path with the fill color.
-    Fill,
+    /// Fill the current path with the fill color, under a fill rule.
+    Fill(FillRule),
     /// Stroke the current path with the stroke color and width.
     Stroke,
     /// Fill one rectangle without touching the current path.
     FillRect(f64, f64, f64, f64),
+    /// Make a rectangle transparent, through the transform and the clip,
+    /// whatever the alpha and the composite operation.
+    ClearRect(f64, f64, f64, f64),
+    /// Intersect the clip with the current path, under a fill rule.
+    Clip(FillRule),
+    /// Set how later draws combine with what the canvas holds.
+    SetComposite(CompositeOperation),
     /// Stroke one rectangle without touching the current path.
     StrokeRect(f64, f64, f64, f64),
     /// Set the fill color.
@@ -163,6 +379,17 @@ pub enum Op {
     /// Set the drawing space, which erases the canvas the way writing
     /// `width` on an HTML canvas does.
     Resize(f32, f32),
+    /// Read the canvas as it is at this call into a buffer, its top-left
+    /// pixel at `(x, y)` in canvas units, as much of the canvas as the
+    /// buffer holds.
+    GetImageData {
+        /// Left edge, canvas units.
+        x: i64,
+        /// Top edge, canvas units.
+        y: i64,
+        /// The handle of the buffer the pixels land in.
+        buffer: u32,
+    },
     /// Draw a pixel buffer stretched into a box.
     DrawBufferScaled {
         /// The buffer's pixels as they were at the call.
@@ -268,6 +495,11 @@ pub struct GfxState {
     pub image_smoothing: bool,
     /// The font `fill_text` shapes with.
     pub font: FontSpec,
+    /// How draws combine with what the canvas holds.
+    pub composite: CompositeOperation,
+    /// The regions every draw is clipped to, all of them at once. Empty is
+    /// no clip. Shared, so `save` costs a reference count per region.
+    pub clips: Vec<Arc<Clip>>,
 }
 
 impl Default for GfxState {
@@ -282,6 +514,8 @@ impl Default for GfxState {
             global_alpha: 1.0,
             image_smoothing: true,
             font: FontSpec::default(),
+            composite: CompositeOperation::default(),
+            clips: Vec::new(),
         }
     }
 }
@@ -372,6 +606,12 @@ impl Gfx {
             Op::SetLineJoin(join) => self.state.line_join = *join,
             Op::SetGlobalAlpha(a) => self.state.global_alpha = a.clamp(0.0, 1.0) as f32,
             Op::SetImageSmoothing(on) => self.state.image_smoothing = *on,
+            Op::SetComposite(op) => self.state.composite = *op,
+            Op::Clip(rule) => self.state.clips.push(Arc::new(Clip {
+                path: self.path.clone(),
+                transform: self.state.transform,
+                rule: *rule,
+            })),
             Op::Save => self.stack.push(self.state.clone()),
             Op::Restore => {
                 // An unmatched `restore` leaves the state alone, which is
