@@ -1403,20 +1403,35 @@ pub struct FocusedKey {
     pub repeat: bool,
 }
 
-/// Emitted by the a11y inbound-action plumbing (and any other route)
-/// when assistive technology asks an entity to present a context menu.
+/// The user asked for a context menu on `entity`; the script event driver
+/// raises it as the DOM `contextmenu` event.
 ///
-/// - Producer: `handle_a11y_action` in `lumen-window-winit` for the
-///   `Action::ShowContextMenu` AccessKit action; pointer-secondary
-///   handlers in apps may also emit this directly.
-/// - Consumer: app code (typically scripts wired through `on_menu` /
-///   `on_context_menu` handlers) subscribes via `MessageReader`.
-/// - Mirrors `gtk_widget_show` of a `GtkPopoverMenu` and
-///   `QAbstractItemView::customContextMenuRequested` semantics.
+/// - Producers: `lumen-input` for a secondary-button press (a release on
+///   Windows, where the platform opens context menus on release, as a
+///   browser there does) on the hovered entity, and for the ContextMenu key
+///   or Shift+F10 on the focused entity; the accessibility bridge for an
+///   assistive technology's `ShowContextMenu` action; a page's backend for
+///   the browser's own `contextmenu` event.
+/// - Consumers: the DOM event driver (`contextmenu` handlers) and any
+///   `MessageReader<ContextMenuEvent>` in an app.
+/// - Mirrors the DOM `contextmenu` event and Qt's
+///   `QWidget::customContextMenuRequested`.
 #[derive(Message, Clone, Copy, Debug)]
-pub struct ShowContextMenu {
-    /// Entity the menu should attach to.
+pub struct ContextMenuEvent {
+    /// The element the menu is for.
     pub entity: Entity,
+    /// Where a menu opened for this request belongs, in window
+    /// coordinates: the pointer for a pointer request, below the element's
+    /// leading edge for a keyboard or assistive-technology request.
+    pub position: Vec2,
+    /// [`PointerButton::Secondary`] for a pointer request and
+    /// [`PointerButton::Primary`] otherwise, which is what the DOM event's
+    /// `button` reports (`2` and `0`).
+    pub button: PointerButton,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself (a page). `None` leaves it to Lumen's own
+    /// layout.
+    pub local: Option<Vec2>,
 }
 
 /// Emitted by window backends when the OS reports the window gained or

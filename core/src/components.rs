@@ -2718,9 +2718,9 @@ pub struct A11yScrollIntoViewRequests {
 /// - Written by the accessibility bridge (`lumen-a11y-accesskit`) when a
 ///   context-menu request arrives from an assistive technology.
 /// - Drained by a system in the application; mirrored to the
-///   [`crate::input::ShowContextMenu`] message bus by
-///   `forward_a11y_context_menu_requests` so script handlers and
-///   `MessageReader<ShowContextMenu>` subscribers receive a typed event.
+///   [`crate::input::ContextMenuEvent`] message bus by
+///   `forward_a11y_context_menu_requests`, so a request from an assistive
+///   technology reaches `contextmenu` handlers the way a right click does.
 #[derive(bevy_ecs::resource::Resource, Default, Debug)]
 pub struct A11yContextMenuRequests {
     /// Entities a context menu was requested on.

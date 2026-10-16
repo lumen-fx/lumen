@@ -22,6 +22,7 @@ host "lumen" {
     set_root_class(string);
     set_color_scheme(string);
     open_menu(string);
+    open_menu_at(string, float, float);
     close_menu(string);
     set_timeout(string, int);
     set_interval(string, int);
