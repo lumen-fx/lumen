@@ -17,7 +17,7 @@
 //!             // Hot-reloads from disk in `cargo run`; embedded in
 //!             // `cargo run --release`. Same line, both behaviours.
 //!             LumenDefaultPlugins
-//!                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
+//!                 .with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
 //!         )
 //!         // After the systems that write clicks, so a click is counted
 //!         // on the tick it lands.
@@ -82,7 +82,7 @@
 //! # extern crate lumenui_engine as lumenui;
 //! # use lumenui::prelude::*;
 //! # fn demo() -> lumenui::Result<()> { lumenui::App::new().add_plugins(
-//! LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
+//! LumenDefaultPlugins.with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css"))
 //! # ).run() }
 //! ```
 //!
@@ -97,7 +97,8 @@
 //! The macro selects the branch on `cfg(debug_assertions)`; the source line is
 //! identical either way. The disk/hot-reload path follows the app-dir
 //! convention - name the entry markup `main.lmn` and the stylesheet `main.css`
-//! and keep them in one directory (`lumenc run <dir>` uses the same layout).
+//! and keep them in a `src/` directory, with the app's `lumen.toml` beside it
+//! (`lumenc run <dir>` uses the same layout).
 //!
 //! Escape hatches remain. The explicit
 //! [`with_markup`](plugins::LumenPluginsBuilder::with_markup) /
@@ -134,6 +135,7 @@ pub mod dialog;
 pub mod dom;
 mod error;
 mod events;
+mod frame;
 pub mod plugins;
 pub mod signal;
 mod simple_impl;
@@ -142,6 +144,10 @@ pub use app::App;
 pub use conditions::{on_change, on_click, on_toggle};
 pub use error::{Error, Result};
 pub use events::{EventCtx, EventKind};
+pub use frame::Frame;
+/// How [`App::run_headless_rendered`] and [`App::screenshot`] run: the
+/// offscreen target's device pixel ratio and an optional tick bound.
+pub use lumen_runtime::HeadlessOptions;
 pub use plugins::{LumenDefaultPlugins, PluginGroup, PluginGroupBuilder, Source};
 pub use signal::Signals;
 
@@ -173,13 +179,10 @@ pub mod simple {
 // that way. Submodules reach them as `crate::lumen_core`, `crate::bevy_ecs`,
 // and so on.
 //
-// Which crate they are taken *through* decides how an app links the engine.
-// `lumen_engine` is the shared library, so naming it puts that library in the
-// app's link graph and an app built with `-C prefer-dynamic` leaves the
-// runtime outside its own binary. Windows has no such library - its linker
-// cannot produce one for a graph this size - so there the same items come
-// straight from the engine crate and the runtime is linked in. Either way
-// these are the same crates and the same types.
+// They are taken through `lumen_engine` except on Windows, where that crate
+// does not exist (its linker cannot produce the shared library it also
+// builds) and the same items come straight from the engine crate. Either way
+// these are the same crates and the same types, and an app links them in.
 #[cfg(windows)]
 pub use lumen::sdk::{
     bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_runtime, lumen_script,
@@ -247,7 +250,7 @@ pub mod prelude {
     // the engine's copy under that name, which is what the expansion finds.
     pub use crate::bevy_ecs;
 
-    pub use crate::{App, Error, Result};
+    pub use crate::{App, Error, Frame, HeadlessOptions, Result};
     pub use crate::{EventCtx, EventKind};
     pub use crate::{on_change, on_click, on_toggle};
 

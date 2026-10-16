@@ -193,6 +193,8 @@ USAGE:
                       lumen.toml sets [mcp] simulate = true or
                       [runtime] mcp = true, and the hot-reload watcher
                       stays off unless it sets [runtime] hot_reload = true.
+                      A Rust SDK app runs through cargo, and --headless,
+                      --size, --dpr and --ticks reach its App::run.
     --size WxH        Logical viewport (default: lumen.toml [window] size,
                       else 960x720).
     --dpr N           Scale the offscreen target; screenshot pixels are
@@ -337,25 +339,37 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
         }
     };
     let kind = lumenc::app_kind::resolve(&dir_path, cfg.app.kind);
-    if kind != lumenc::app_kind::AppKind::Markup {
-        if headless
-            || artifact.is_some()
-            || assets.is_some()
-            || size.is_some()
-            || dpr.is_some()
-            || ticks.is_some()
-        {
-            eprintln!(
-                "lumenc run: --headless / --artifact / --assets / --size / --dpr / --ticks apply \
-                 only to markup apps; {kind:?} apps run via their native toolchain"
-            );
-            return ExitCode::from(2);
-        }
-        return lumenc::app_kind::run_app_external(kind, &dir_path);
-    }
     if !headless && (size.is_some() || dpr.is_some() || ticks.is_some()) {
         eprintln!("lumenc run: --size / --dpr / --ticks require --headless");
         return ExitCode::from(2);
+    }
+    if kind != lumenc::app_kind::AppKind::Markup {
+        // A Rust app is its own program: the headless options travel to its
+        // process, where the SDK's `App::run` reads them. The other kinds
+        // have no such reader.
+        let hands_off_headless = kind == lumenc::app_kind::AppKind::Rust;
+        if artifact.is_some()
+            || assets.is_some()
+            || (!hands_off_headless
+                && (headless || size.is_some() || dpr.is_some() || ticks.is_some()))
+        {
+            eprintln!(
+                "lumenc run: {} apply only to markup apps; {kind:?} apps run via their \
+                 native toolchain",
+                if hands_off_headless {
+                    "--artifact / --assets"
+                } else {
+                    "--headless / --artifact / --assets / --size / --dpr / --ticks"
+                }
+            );
+            return ExitCode::from(2);
+        }
+        let env = if headless {
+            lumenc::app_kind::HeadlessHandoff { ticks, dpr, size }.to_env()
+        } else {
+            Vec::new()
+        };
+        return lumenc::app_kind::run_app_external(kind, &dir_path, &env);
     }
     // `[[hooks]]`: build native artifacts before the run (`prebuild`), then
     // run any `prerun` setup commands. `--no-hooks` skips both. `check`
@@ -817,7 +831,8 @@ The template defaults to `blank`, an empty <root> plus lumen.toml. Every
 template writes lumen.toml and a README at the app root and the app's code
 under src/, starting with src/main.lmn. The README explains the concepts the
 template demonstrates. A template that is a Rust SDK app (it has a
-Cargo.toml) also gets a rust-toolchain.toml naming the compiler this
+Cargo.toml) gets its package named after <name> and its lumenui dependency
+set to this release, plus a rust-toolchain.toml naming the compiler this
 release's prebuilt engine was built with, unless it brings its own.
 
     --list, -l        Print the template gallery with one-line

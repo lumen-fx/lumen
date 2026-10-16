@@ -4,18 +4,24 @@
 // lib.rs says why they come from there rather than from a dependency.
 use crate::{bevy_ecs, lumen_core, lumen_runtime, lumenc};
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use crate::error::{Error, Result};
 use crate::events::{EventCtx, EventKind, HandlerEntry, install_rust_handlers};
+use crate::frame::Frame;
 use crate::plugins::{AppPlugins, BootConfig, WindowMode};
 use crate::signal::Signals;
-use bevy_ecs::message::Message;
-use bevy_ecs::prelude::Resource;
+use bevy_ecs::message::{Message, MessageReader};
+use bevy_ecs::prelude::{Res, ResMut, Resource};
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_ecs::system::ScheduleSystem;
 use lumen_core::app::{App as EcsApp, Plugin};
+use lumen_core::input::CloseRequest;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
+use lumen_core::render_world::{FrameDirty, SurfaceCapture};
 use lumen_core::tick::TickStage;
-use lumen_runtime::{PluginInstaller, RunOptions};
+use lumen_runtime::app_kind::HeadlessHandoff;
+use lumen_runtime::{HeadlessOptions, PluginInstaller, RunOptions};
 
 type Deferred = Box<dyn FnOnce(&mut EcsApp) + 'static>;
 
@@ -328,7 +334,15 @@ impl App {
     /// embedded in release), or the explicit
     /// [`with_markup`](crate::plugins::LumenDefaultPlugins::with_markup) /
     /// `with_dir` paths.
+    ///
+    /// Started by `lumenc run <app> --headless`, the app takes
+    /// [`run_headless_rendered`](Self::run_headless_rendered) instead, with
+    /// the `--ticks`, `--dpr` and `--size` given there: lumenc hands them to
+    /// this process through [`HeadlessHandoff`].
     pub fn run(self) -> Result<()> {
+        if let Some(handoff) = HeadlessHandoff::from_env().map_err(Error::Setup)? {
+            return self.run_handed_off(handoff);
+        }
         let headless = self.boot.mode == WindowMode::Headless;
         let (opts, seeds, deferred) = self.into_run_options()?;
         if headless {
@@ -348,6 +362,83 @@ impl App {
         let (opts, seeds, deferred) = self.into_run_options()?;
         lumen_runtime::run_app_headless(with_hooks(opts, seeds, deferred), ticks)
             .map_err(Error::Run)
+    }
+
+    /// Run the whole pipeline with no window: layout, rendering on the app's
+    /// `[render] backend` into an offscreen target, scripts, and the
+    /// introspection server when `[mcp] simulate` is on. The same mode as
+    /// `lumenc run <app> --headless`; [`run_headless`](Self::run_headless)
+    /// is the cheaper one that ticks the app and paints nothing.
+    ///
+    /// `options.ticks` bounds the run; `None` runs until SIGINT / SIGTERM.
+    /// The viewport size is the window size
+    /// ([`with_size`](crate::plugins::LumenPluginsBuilder::with_size), else
+    /// `[window] size` in `lumen.toml`).
+    pub fn run_headless_rendered(self, options: HeadlessOptions) -> Result<()> {
+        let (opts, seeds, deferred) = self.into_run_options()?;
+        lumen_runtime::run_app_headless_rendered(with_hooks(opts, seeds, deferred), options)
+            .map_err(Error::Run)
+    }
+
+    /// Run like [`run_headless_rendered`](Self::run_headless_rendered) and
+    /// return the last frame it painted: the one the closing tick draws,
+    /// after `options.ticks` ticks (or after SIGINT / SIGTERM when that is
+    /// `None`). This is how an app screenshots itself or compares a frame
+    /// with a golden image in its own tests.
+    ///
+    /// ```no_run
+    /// # extern crate lumenui_engine as lumenui;
+    /// use lumenui::prelude::*;
+    ///
+    /// # fn demo() -> lumenui::Result<()> {
+    /// let frame = lumenui::App::new()
+    ///     .add_plugins(LumenDefaultPlugins.with_markup("<root/>").with_size(320, 240))
+    ///     .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })?;
+    /// frame.save_png("shot.png")?;
+    /// # Ok(()) }
+    /// ```
+    pub fn screenshot(mut self, options: HeadlessOptions) -> Result<Frame> {
+        let slot: Arc<Mutex<Option<SurfaceCapture>>> = Arc::default();
+        let shared = Arc::clone(&slot);
+        self.push_deferred(move |ecs| {
+            // The introspection server brings one when it is on; otherwise
+            // nothing in the stack answers a capture, so put one in both
+            // worlds: the request is made in the main one and answered by
+            // the renderer in the render one.
+            let capture = match ecs.world.get_resource::<SurfaceCapture>() {
+                Some(capture) => capture.clone(),
+                None => {
+                    let capture = SurfaceCapture::default();
+                    ecs.world.insert_resource(capture.clone());
+                    ecs.render_world.insert_resource(capture.clone());
+                    capture
+                }
+            };
+            *shared.lock().unwrap_or_else(PoisonError::into_inner) = Some(capture);
+            ecs.add_systems(TickStage::Systems, capture_on_close);
+        });
+        self.run_headless_rendered(options)?;
+        let capture = slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .ok_or_else(|| Error::Setup("the app never started, so nothing was painted".into()))?;
+        capture
+            .read()
+            .map(Frame::from)
+            .ok_or_else(|| Error::Setup("the renderer painted no frame for the screenshot".into()))
+    }
+
+    /// `run` under a [`HeadlessHandoff`]: the options lumenc was given, with
+    /// the size it names in place of the window's.
+    fn run_handed_off(mut self, handoff: HeadlessHandoff) -> Result<()> {
+        if let Some(size) = handoff.size {
+            self.boot.size = Some(size);
+        }
+        self.run_headless_rendered(HeadlessOptions {
+            dpr: handoff.dpr.unwrap_or(1.0),
+            ticks: handoff.ticks,
+        })
     }
 
     /// Build a *bare* ECS [`App`](EcsApp) carrying only the seeds, user
@@ -423,6 +514,21 @@ impl App {
         // again.
         let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         Ok((opts, self.seeds, self.deferred))
+    }
+}
+
+/// Ask for the frame the closing tick paints. The runtime writes the close
+/// before that tick, and a requested capture makes the renderer paint the
+/// frame however little changed; the dirty flag makes the tick reach the
+/// renderer at all.
+fn capture_on_close(
+    mut closes: MessageReader<CloseRequest>,
+    capture: Res<SurfaceCapture>,
+    mut dirty: ResMut<FrameDirty>,
+) {
+    if closes.read().count() > 0 {
+        capture.request();
+        dirty.dirty = true;
     }
 }
 
@@ -538,11 +644,25 @@ mod tests {
         ));
     }
 
+    /// A markup file under `src/` names the app around it: `lumen.toml` and
+    /// the `src/` lookup both start one directory up.
+    #[test]
+    fn disk_under_src_is_the_app_above_it() {
+        assert!(matches!(
+            Source::disk("/app/src/main.lmn"),
+            Source::Disk { dir } if dir == std::path::Path::new("/app")
+        ));
+        assert!(matches!(
+            Source::disk("src/main.lmn"),
+            Source::Disk { dir } if dir == std::path::Path::new(".")
+        ));
+    }
+
     /// The `lumen_source!` macro picks the variant by build profile: disk (+
     /// watcher) in debug, embedded in release. Same source line, both builds.
     #[test]
     fn lumen_source_macro_selects_by_profile() {
-        let src = crate::lumen_source!("examples/main.lmn", "examples/main.css");
+        let src = crate::lumen_source!("examples/src/main.lmn", "examples/src/main.css");
         if cfg!(debug_assertions) {
             assert!(matches!(src, Source::Disk { .. }));
         } else {
