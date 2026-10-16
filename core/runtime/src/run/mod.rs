@@ -617,6 +617,7 @@ mod tests {
 mod app_build;
 mod caret_scroll;
 mod check;
+mod fonts;
 mod hot_reload;
 mod i18n;
 mod introspection;

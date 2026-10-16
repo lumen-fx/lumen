@@ -296,8 +296,7 @@ Every image, icon, and sound the markup names is then read out of the archive.
 Lookups are keyed by the path relative to the app directory, the same path you
 write in the markup, so nothing in the app changes. A file the archive does not
 carry still comes from disk, which lets you keep one loose file for a quick edit
-without repacking. Fonts are the exception: they load through the system font
-database and are read from disk even when the archive carries them.
+without repacking. The font files a `@font-face` names load the same way.
 
 Pair it with an artifact to run an app as two files plus `lumen.toml`:
 

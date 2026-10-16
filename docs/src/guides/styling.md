@@ -211,6 +211,36 @@ page reached by navigation, or an `<if>` body mounted after a
 `set_color_scheme` call, comes up in the scheme that is in force rather than
 the one the app started in.
 
+## Fonts
+
+Text draws with the fonts installed on the machine unless the app ships its
+own. To ship one, put the font file in the app directory, outside `src/`, and
+declare it with `@font-face`:
+
+```css
+@font-face {
+  font-family: "Pixel UI";
+  src: url("fonts/pixel-ui.woff2") format("woff2"), url("fonts/pixel-ui.ttf");
+  font-weight: 400;
+  font-style: normal;
+}
+.toolbar { font-family: "Pixel UI", sans-serif; }
+```
+
+A `url()` names the file relative to the app directory, the same place an
+`<image src>` names one from. `font-family` is the name your rules use,
+whatever the file calls itself; `font-weight` and `font-style` say which
+weight and slant the file is, so several rules can share one family. The
+desktop tries the `src` files in order and loads the first TrueType or
+OpenType file it can read. `woff` and `woff2` files and `local()` entries are
+left to browsers, so list a `ttf` or `otf` beside them for the desktop; a rule
+that names only browser formats loads nothing on the desktop. A rule whose
+desktop files all fail to load prints a warning and its text draws with the
+fallback font.
+The file loads before the first frame lays out, a hot reload loads a rule you
+add, and [`lumenc package`](packaging.md) ships the file with the app. A
+[web build](web.md) ships it with the site.
+
 ## What is deliberately not here
 
 - **Pseudo-elements.** `::before` and `::after` are a parse error. Add an
@@ -220,9 +250,6 @@ the one the app started in.
   target and does nothing here. A desktop app animates through CSS
   transitions, started by a state change or by a script flipping a class; see
   [Animations](animations.md).
-- **Fonts an app ships.** A `@font-face` block reaches the web target, which
-  ships the file it names with the site; a desktop run ignores it and draws
-  with the fonts the system has. See [Web](web.md).
 - **Other at-rules.** Anything beyond `@import`, `@media`, `@keyframes` and
   `@font-face` is skipped with a warning, block and all.
 - **Inline `!important`.** Importance is authorable in a stylesheet, not in a
