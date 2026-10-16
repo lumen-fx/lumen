@@ -100,6 +100,12 @@ progress { width: 100%; height: 6; }
 :where(.menu-panel) { min-width: 160; }
 :where(.menu-item) { height: 28; width: 100%; padding: 0 12; }
 :where(.menu-separator) { height: 1; width: 100%; }
+/* The in-window menu bar (a platform with no native one): a full-width row
+   of compact buttons, each over its menu. The button's height floor is its
+   own, not a push button's. */
+:where(.menubar) { height: 32; align: center; }
+:where(.menubar-button) { height: 28; padding: 0 10; }
+.menubar-button { min-height: 0; }
 :where(.date-picker, .time-picker) { width: 180; }
 /* A separator is a rule line, not a gap: it keeps its pixel rather than
    taking the grow `spacer` gives the tag it is spelled with. */
