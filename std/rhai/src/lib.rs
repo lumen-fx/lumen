@@ -392,6 +392,23 @@ fn register_dom_mutators(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptCommand>
     engine.register_fn("has_class", |n: &mut Node, class: rhai::ImmutableString| {
         node_query::node_class_contains(n.handle, class.as_str())
     });
+    engine.register_fn("set_pointer_capture", |n: &mut Node, pointer_id: i64| {
+        if let Ok(id) = u64::try_from(pointer_id) {
+            lumen_script::event::set_pointer_capture(n.handle, id);
+        }
+    });
+    engine.register_fn(
+        "release_pointer_capture",
+        |n: &mut Node, pointer_id: i64| {
+            if let Ok(id) = u64::try_from(pointer_id) {
+                lumen_script::event::release_pointer_capture(n.handle, id);
+            }
+        },
+    );
+    engine.register_fn("has_pointer_capture", |n: &mut Node, pointer_id: i64| {
+        u64::try_from(pointer_id)
+            .is_ok_and(|id| lumen_script::event::has_pointer_capture(n.handle, id))
+    });
     engine.register_fn(
         "style_get",
         |n: &mut Node, name: rhai::ImmutableString| -> rhai::Dynamic {
@@ -767,6 +784,39 @@ fn register_dom_events(
     });
     engine.register_fn("delta_x", |_e: &mut Event| -> f64 { ev::event_delta().0 });
     engine.register_fn("delta_y", |_e: &mut Event| -> f64 { ev::event_delta().1 });
+    engine.register_fn("pointer_id", |_e: &mut Event| -> i64 {
+        ev::event_pointer().id as i64
+    });
+    engine.register_fn("pointer_type", |_e: &mut Event| -> String {
+        ev::event_pointer().kind.as_str().to_string()
+    });
+    engine.register_fn("is_primary", |_e: &mut Event| -> bool {
+        ev::event_pointer().is_primary
+    });
+    engine.register_fn("buttons", |_e: &mut Event| -> i64 {
+        i64::from(ev::event_pointer().buttons)
+    });
+    engine.register_fn("pressure", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().pressure)
+    });
+    engine.register_fn("tangential_pressure", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().tangential_pressure)
+    });
+    engine.register_fn("tilt_x", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().tilt_x)
+    });
+    engine.register_fn("tilt_y", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().tilt_y)
+    });
+    engine.register_fn("twist", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().twist)
+    });
+    engine.register_fn("width", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().width)
+    });
+    engine.register_fn("height", |_e: &mut Event| -> f64 {
+        f64::from(ev::event_pointer().height)
+    });
     engine.register_fn("position", |_e: &mut Event| -> rhai::Map {
         let (x, y) = ev::event_position_local();
         let (cx, cy) = ev::event_position_client();

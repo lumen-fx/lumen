@@ -591,6 +591,42 @@ fn introspection_fns() -> Vec<ScriptFn> {
             },
         ),
         f(
+            "node_set_pointer_capture",
+            "Send that pointer's events to the node until its buttons come up.",
+            &[node_param(), ("pointer", T::Int)],
+            T::Unit,
+            |cx| {
+                if let (Some(h), Ok(id)) = (raw(cx.int_arg(0)), u64::try_from(cx.int_arg(1))) {
+                    event::set_pointer_capture(h, id);
+                }
+                ScriptValue::Unit
+            },
+        ),
+        f(
+            "node_release_pointer_capture",
+            "Give that pointer back to hit testing, when the node holds it.",
+            &[node_param(), ("pointer", T::Int)],
+            T::Unit,
+            |cx| {
+                if let (Some(h), Ok(id)) = (raw(cx.int_arg(0)), u64::try_from(cx.int_arg(1))) {
+                    event::release_pointer_capture(h, id);
+                }
+                ScriptValue::Unit
+            },
+        ),
+        f(
+            "node_has_pointer_capture",
+            "Whether the node holds that pointer.",
+            &[node_param(), ("pointer", T::Int)],
+            T::Bool,
+            |cx| {
+                ScriptValue::Bool(match (raw(cx.int_arg(0)), u64::try_from(cx.int_arg(1))) {
+                    (Some(h), Ok(id)) => event::has_pointer_capture(h, id),
+                    _ => false,
+                })
+            },
+        ),
+        f(
             "node_z_index",
             "The paint order of that node.",
             &[node_param()],
@@ -806,6 +842,72 @@ fn event_fns() -> Vec<ScriptFn> {
             "The vertical scroll delta.",
             T::Float,
             || ScriptValue::F64(event::event_delta().1),
+        ),
+        accessor(
+            "event_pointer_id",
+            "The id of the pointer that produced the event.",
+            T::Int,
+            || ScriptValue::I64(event::event_pointer().id as i64),
+        ),
+        accessor(
+            "event_pointer_type",
+            "The pointer's device: \"mouse\", \"pen\" or \"touch\".",
+            T::Str,
+            || ScriptValue::Str(event::event_pointer().kind.as_str().to_string()),
+        ),
+        accessor(
+            "event_is_primary",
+            "Whether the pointer is the primary one of its kind.",
+            T::Bool,
+            || ScriptValue::Bool(event::event_pointer().is_primary),
+        ),
+        accessor(
+            "event_buttons",
+            "The buttons held, as a mask: 1 primary, 2 secondary, 4 middle, 32 eraser.",
+            T::Int,
+            || ScriptValue::I64(i64::from(event::event_pointer().buttons)),
+        ),
+        accessor(
+            "event_pressure",
+            "The normalized pressure, 0 to 1.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().pressure)),
+        ),
+        accessor(
+            "event_tangential_pressure",
+            "The normalized barrel pressure, -1 to 1.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().tangential_pressure)),
+        ),
+        accessor(
+            "event_tilt_x",
+            "The pen's tilt toward the right, in degrees.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().tilt_x)),
+        ),
+        accessor(
+            "event_tilt_y",
+            "The pen's tilt toward the user, in degrees.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().tilt_y)),
+        ),
+        accessor(
+            "event_twist",
+            "The pen's rotation about its axis, in degrees.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().twist)),
+        ),
+        accessor(
+            "event_width",
+            "The contact width, in pixels.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().width)),
+        ),
+        accessor(
+            "event_height",
+            "The contact height, in pixels.",
+            T::Float,
+            || ScriptValue::F64(f64::from(event::event_pointer().height)),
         ),
         accessor("event_shift", "Whether shift was held.", T::Bool, || {
             ScriptValue::Bool(event::event_modifiers().0)

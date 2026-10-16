@@ -311,11 +311,17 @@ HTTP request line comes back as a `-32700` parse error.
 | `lumen_screenshot` | `highlight_ids`, `highlight_lint`, `include_bounds_map` | A base64 PNG, its size, and optionally an entity bounds map. |
 | `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. Requires `[mcp] issues = true`. |
 
-Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`, `click`, `key`,
-`type`, and `scroll`. Point kinds take `x` and `y` in logical pixels, button
-kinds also take `button`, `key` takes `key` plus optional `shift`, `ctrl`,
-`alt`, and `super` modifiers, `type` takes `text`, and `scroll` takes `dx` and
-`dy`. One request is drained per tick, in order.
+Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`,
+`pointer_cancel`, `click`, `key`, `type`, and `scroll`. Point kinds take `x`
+and `y` in logical pixels, button kinds also take `button` (`primary`,
+`secondary`, `middle`, `back`, `forward`, or `eraser`), `key` takes `key` plus
+optional `shift`, `ctrl`, `alt`, and `super` modifiers, `type` takes `text`,
+and `scroll` takes `dx` and `dy`. The pointer kinds and `click` also take
+`pointer`, an object with the web `PointerEvent` fields `pointer_type`
+(`mouse`, `pen`, or `touch`), `pointer_id`, `is_primary`, `pressure`,
+`tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, and `height`, each
+optional; without it the event is the mouse's. One request is drained per
+tick, in order.
 
 `wait_for` names a message ring the call blocks on until the app records a
 matching event, which is how a driver knows an injected event landed rather

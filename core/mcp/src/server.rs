@@ -900,7 +900,7 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
         Err(e) => {
             return json!({
                 "error": format!("invalid simulate params: {e}"),
-                "hint": "kind is one of click | pointer_move | pointer_down | pointer_up | key | type | scroll",
+                "hint": "kind is one of click | pointer_move | pointer_down | pointer_up | pointer_cancel | key | type | scroll",
             });
         }
     };
@@ -978,7 +978,8 @@ fn describe_simulate(
 ) -> String {
     use crate::simulate::SimulateKind;
     let action = match &req.kind {
-        SimulateKind::PointerMove { x, y } => format!("pointer_move ({x}, {y})"),
+        SimulateKind::PointerMove { x, y, .. } => format!("pointer_move ({x}, {y})"),
+        SimulateKind::PointerCancel { x, y, .. } => format!("pointer_cancel ({x}, {y})"),
         SimulateKind::PointerDown { x, y, .. } => format!("pointer_down ({x}, {y})"),
         SimulateKind::PointerUp { x, y, .. } => format!("pointer_up ({x}, {y})"),
         SimulateKind::Click { x, y, .. } => format!("click ({x}, {y})"),

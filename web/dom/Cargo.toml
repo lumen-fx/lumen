@@ -69,6 +69,7 @@ web-sys = { workspace = true, features = [
     "MouseEvent",
     "Node",
     "NodeList",
+    "PointerEvent",
     "Text",
     "WheelEvent",
     "Window",

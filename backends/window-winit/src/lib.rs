@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 pub mod capability;
+mod pointer;
 
 use bevy_ecs::message::Messages;
 use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOccluded};
@@ -336,6 +337,7 @@ fn run(
         last_cursor: CursorShape::Default,
         close_committed: false,
         last_frame_at: None,
+        pointers: pointer::PointerTracker::default(),
     };
     {
         let size = glam::Vec2::new(handler.opts.size.0 as f32, handler.opts.size.1 as f32);
@@ -436,6 +438,9 @@ struct WinitHandler {
     /// a vsync-blocking present path and only bites on a headless /
     /// non-blocking one.
     last_frame_at: Option<std::time::Instant>,
+    /// Mouse buttons held and the live touch / pen contacts, for the pointer
+    /// data each message carries.
+    pointers: pointer::PointerTracker,
 }
 
 impl ApplicationHandler<UserEvent> for WinitHandler {
@@ -892,6 +897,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     msgs.write(PointerMoved {
                         position: p,
                         local: None,
+                        pointer: self.pointers.mouse().stamped(),
                     });
                 }
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
@@ -1095,8 +1101,22 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     }
                 }
             }
+            WindowEvent::Touch(touch) => {
+                let logical = touch.location.to_logical::<f32>(window.scale_factor());
+                let p = glam::Vec2::new(logical.x, logical.y);
+                let pen = pointer::pen_sample(touch.id);
+                if let Some(output) =
+                    self.pointers
+                        .touch(touch.phase, touch.id, p, touch.force, pen)
+                {
+                    self.write_pointer_output(output);
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let lumen_button = map_button(button);
+                let data = self
+                    .pointers
+                    .mouse_button(lumen_button, matches!(state, ElementState::Pressed));
                 let pos = self
                     .app
                     .world
@@ -1118,6 +1138,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                                 position: pos,
                                 button: lumen_button,
                                 local: None,
+                                pointer: data.stamped(),
                             });
                         }
                     }
@@ -1131,6 +1152,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                                 position: pos,
                                 button: lumen_button,
                                 local: None,
+                                pointer: data.stamped(),
                             });
                         }
                     }
@@ -1237,6 +1259,73 @@ fn idle_control_flow(wake_at: Option<std::time::Instant>, now: std::time::Instan
 }
 
 impl WinitHandler {
+    /// Write a touch or pen contact's message. The primary contact also
+    /// drives the pointer Lumen's own widgets follow (hover, press, drag),
+    /// the way a browser makes the primary touch act as the mouse.
+    fn write_pointer_output(&mut self, output: pointer::PointerOutput) {
+        use pointer::PointerOutput;
+        let world = &mut self.app.world;
+        let data = output.data();
+        let stamp = |d: PointerData| d.stamped();
+        if data.is_primary {
+            let mut state = world.resource_mut::<PointerState>();
+            match output {
+                PointerOutput::Moved(p, _) => state.position = Some(p),
+                PointerOutput::Pressed(p, button, _) => {
+                    state.position = Some(p);
+                    if button == PointerButton::Primary {
+                        state.primary_down = true;
+                    }
+                }
+                PointerOutput::Released(p, _, _) | PointerOutput::Cancelled(p, _) => {
+                    state.position = Some(p);
+                    state.primary_down = false;
+                }
+            }
+        }
+        match output {
+            PointerOutput::Moved(position, pointer) => {
+                world.write_message(PointerMoved {
+                    position,
+                    local: None,
+                    pointer: stamp(pointer),
+                });
+            }
+            PointerOutput::Pressed(position, button, pointer) => {
+                // The press lands where the contact is: hit testing reads
+                // the position the move carries first.
+                world.write_message(PointerMoved {
+                    position,
+                    local: None,
+                    pointer: stamp(pointer),
+                });
+                world.write_message(PointerPressed {
+                    position,
+                    button,
+                    local: None,
+                    pointer: stamp(pointer),
+                });
+            }
+            PointerOutput::Released(position, button, pointer) => {
+                world.write_message(PointerReleased {
+                    position,
+                    button,
+                    local: None,
+                    pointer: stamp(pointer),
+                });
+            }
+            PointerOutput::Cancelled(position, pointer) => {
+                world.write_message(lumen_core::input::PointerCancelled {
+                    position,
+                    pointer: stamp(pointer),
+                });
+            }
+        }
+        if let Some(mut sch) = world.get_resource_mut::<RedrawScheduler>() {
+            sch.pending = true;
+        }
+    }
+
     /// Graceful close, shared by the window close button
     /// ([`WindowEvent::CloseRequested`]) and Unix signals
     /// ([`UserEvent::CloseRequested`]).
@@ -1466,7 +1555,8 @@ fn map_button(b: MouseButton) -> PointerButton {
         MouseButton::Right => PointerButton::Secondary,
         MouseButton::Middle => PointerButton::Middle,
         MouseButton::Other(n) => PointerButton::Other(n),
-        MouseButton::Back | MouseButton::Forward => PointerButton::Other(0),
+        MouseButton::Back => PointerButton::Back,
+        MouseButton::Forward => PointerButton::Forward,
     }
 }
 

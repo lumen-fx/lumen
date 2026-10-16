@@ -362,3 +362,34 @@ fn pointer_state_reads_the_page_s_pointer() {
     assert_eq!(text(&app, &host, "pointerup_state_x"), "14");
     assert_eq!(text(&app, &host, "pointerup_state_buttons"), "0");
 }
+
+/// A pen reaches the handler with the browser's own readings: its type, id,
+/// pressure, tilt, twist and the buttons it holds, the eraser among them.
+#[wasm_bindgen_test]
+fn a_pen_reaches_the_handler_with_its_readings() {
+    let (mut app, host, pad) = boot();
+    let init = PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x(5);
+    init.set_client_y(5);
+    init.set_button(5);
+    init.set_buttons(32);
+    init.set_pointer_id(9);
+    init.set_pointer_type("pen");
+    init.set_is_primary(true);
+    init.set_pressure(0.75);
+    init.set_tilt_x(20);
+    init.set_twist(90);
+    let event = PointerEvent::new_with_event_init_dict("pointerdown", &init).unwrap();
+    pad.dispatch_event(&event).unwrap();
+    tick(&mut app);
+
+    assert_eq!(count(&app, &host, "pointerdown"), 1);
+    assert_eq!(text(&app, &host, "pointerdown_pointer_type"), "pen");
+    assert_eq!(float(&app, &host, "pointerdown_pointer_id"), 9.0);
+    assert_eq!(float(&app, &host, "pointerdown_button"), 5.0, "the eraser");
+    assert_eq!(float(&app, &host, "pointerdown_buttons"), 32.0);
+    assert_eq!(float(&app, &host, "pointerdown_pressure"), 0.75);
+    assert_eq!(float(&app, &host, "pointerdown_tilt_x"), 20.0);
+    assert_eq!(float(&app, &host, "pointerdown_twist"), 90.0);
+}

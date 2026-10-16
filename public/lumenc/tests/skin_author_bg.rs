@@ -106,6 +106,7 @@ fn the_author_background_survives_a_hover() {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
     app.tick();
@@ -175,6 +176,7 @@ fn an_author_background_image_survives_a_hover() {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
     app.tick();

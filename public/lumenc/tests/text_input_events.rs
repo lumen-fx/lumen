@@ -78,6 +78,7 @@ fn focus_and_type(app: &mut App, target: Entity, chars: &str) {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
     app.world.resource_mut::<PointerState>().primary_down = true;
     app.world
@@ -86,6 +87,7 @@ fn focus_and_type(app: &mut App, target: Entity, chars: &str) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
     app.world.resource_mut::<PointerState>().primary_down = false;

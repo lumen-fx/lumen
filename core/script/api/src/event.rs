@@ -53,8 +53,12 @@ pub struct EventData {
     pub alt: bool,
     /// Super / Cmd / Windows held.
     pub super_: bool,
-    /// Pointer button: `0` primary, `1` middle, `2` secondary, `-1` none.
+    /// Pointer button, the web `button` code: `0` primary, `1` middle, `2`
+    /// secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move).
     pub button: i64,
+    /// The pointer behind a pointer event: its id, device kind, held
+    /// buttons and pen / touch readings, as the web `PointerEvent` has them.
+    pub pointer: lumen_core::input::PointerData,
     /// Wheel scroll delta, logical pixels.
     pub delta: (f64, f64),
     /// Text value for `input` / `change` events.
@@ -147,6 +151,13 @@ pub fn event_modifiers() -> (bool, bool, bool, bool) {
 /// `ev.button()`.
 pub fn event_button() -> i64 {
     current_cell().read().map(|g| g.button).unwrap_or(-1)
+}
+
+/// The pointer behind the current pointer event: `ev.pointer_id()`,
+/// `ev.pointer_type()`, `ev.pressure()`, `ev.tilt_x()` and the rest read
+/// their field from this.
+pub fn event_pointer() -> lumen_core::input::PointerData {
+    current_cell().read().map(|g| g.pointer).unwrap_or_default()
 }
 
 /// `ev.delta()` as `(x, y)`.
@@ -358,11 +369,13 @@ pub fn restore_host_bindings(prior: Vec<EventBinding>) -> Vec<u64> {
     dropped
 }
 
-/// Drop all bindings (mainly for test isolation).
+/// Drop all bindings, and every pointer capture with them (mainly for test
+/// isolation).
 pub fn clear_all_bindings() {
     if let Ok(mut b) = bindings().write() {
         b.clear();
     }
+    clear_pointer_captures();
 }
 
 /// Snapshot of the bindings for `event_type`, in registration order.
@@ -513,6 +526,174 @@ pub fn dispatch(
     }
 
     current_event()
+}
+
+// ---------------------------------------------------------------------------
+// Pointer capture.
+//
+// `node.set_pointer_capture(id)` aims every later event of pointer `id` at
+// the node until the pointer's last button comes up, whatever is under the
+// pointer, the web's `setPointerCapture`. The state follows the web's two
+// steps: a call sets the *pending* target, which `has_pointer_capture` reads
+// at once; the event driver turns pending into *active* just before it
+// delivers that pointer's next event, firing `lostpointercapture` at the old
+// target and `gotpointercapture` at the new one. Process-wide like the
+// bindings, so every host and the C ABI share it.
+// ---------------------------------------------------------------------------
+
+/// One pointer's capture state.
+#[derive(Clone, Copy, Debug)]
+struct PointerCapture {
+    /// The pointer id.
+    id: u64,
+    /// A button is held: the only time a capture can be set.
+    down: bool,
+    /// The node a call asked for (packed handle).
+    pending: Option<u64>,
+    /// The node events go to now (packed handle).
+    active: Option<u64>,
+}
+
+static CAPTURES: std::sync::Mutex<Vec<PointerCapture>> = std::sync::Mutex::new(Vec::new());
+
+/// Set while any capture is pending or active, so a pointer move with none
+/// skips the lock.
+static ANY_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn with_captures<R>(f: impl FnOnce(&mut Vec<PointerCapture>) -> R) -> R {
+    let mut guard = CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
+    let r = f(&mut guard);
+    guard.retain(|c| c.down || c.pending.is_some() || c.active.is_some());
+    ANY_CAPTURE.store(
+        guard
+            .iter()
+            .any(|c| c.pending.is_some() || c.active.is_some()),
+        Ordering::Relaxed,
+    );
+    r
+}
+
+fn entry(captures: &mut Vec<PointerCapture>, id: u64) -> &mut PointerCapture {
+    if let Some(i) = captures.iter().position(|c| c.id == id) {
+        return &mut captures[i];
+    }
+    captures.push(PointerCapture {
+        id,
+        down: false,
+        pending: None,
+        active: None,
+    });
+    captures.last_mut().expect("just pushed")
+}
+
+/// `node.set_pointer_capture(pointer_id)`: aim pointer `pointer_id`'s events
+/// at `node` (packed handle) from its next event until its last button comes
+/// up. Does nothing, and returns `false`, while the pointer has no button
+/// held, as on the web.
+pub fn set_pointer_capture(node: u64, pointer_id: u64) -> bool {
+    with_captures(|captures| {
+        let c = entry(captures, pointer_id);
+        if !c.down {
+            return false;
+        }
+        c.pending = Some(node);
+        true
+    })
+}
+
+/// `node.release_pointer_capture(pointer_id)`: give pointer `pointer_id`
+/// back to hit testing, when `node` holds it. Another node's capture is
+/// left alone.
+pub fn release_pointer_capture(node: u64, pointer_id: u64) {
+    with_captures(|captures| {
+        let c = entry(captures, pointer_id);
+        if c.pending == Some(node) {
+            c.pending = None;
+        }
+    });
+}
+
+/// `node.has_pointer_capture(pointer_id)`: whether `node` holds pointer
+/// `pointer_id`, counting a capture set during this very handler.
+pub fn has_pointer_capture(node: u64, pointer_id: u64) -> bool {
+    with_captures(|captures| {
+        captures
+            .iter()
+            .any(|c| c.id == pointer_id && c.pending == Some(node))
+    })
+}
+
+/// Every pointer whose events go to a node now, as `(pointer id, node)`.
+/// A page reads this to hand the same capture to the browser.
+pub fn active_pointer_captures() -> Vec<(u64, u64)> {
+    if !ANY_CAPTURE.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    with_captures(|captures| {
+        captures
+            .iter()
+            .filter_map(|c| c.active.map(|node| (c.id, node)))
+            .collect()
+    })
+}
+
+/// Whether any pointer is captured or about to be.
+pub(crate) fn any_pointer_capture() -> bool {
+    ANY_CAPTURE.load(Ordering::Relaxed)
+}
+
+/// Pointer `id` went down: captures can be set on it from here.
+pub(crate) fn pointer_capture_down(id: u64) {
+    with_captures(|captures| entry(captures, id).down = true);
+}
+
+/// Pointer `id`'s last button came up (or it was cancelled): its capture is
+/// released at the next [`take_pointer_capture_change`].
+pub(crate) fn pointer_capture_up(id: u64) {
+    with_captures(|captures| {
+        let c = entry(captures, id);
+        c.down = false;
+        c.pending = None;
+    });
+}
+
+/// The node pointer `id`'s events go to now, if one holds it.
+pub(crate) fn active_pointer_capture(id: u64) -> Option<u64> {
+    if !ANY_CAPTURE.load(Ordering::Relaxed) {
+        return None;
+    }
+    with_captures(|captures| captures.iter().find(|c| c.id == id).and_then(|c| c.active))
+}
+
+/// Make pointer `id`'s pending capture the active one. Returns the node that
+/// lost it and the node that got it, when that changed anything.
+pub(crate) fn take_pointer_capture_change(id: u64) -> Option<(Option<u64>, Option<u64>)> {
+    if !ANY_CAPTURE.load(Ordering::Relaxed) {
+        return None;
+    }
+    with_captures(|captures| {
+        let c = captures.iter_mut().find(|c| c.id == id)?;
+        if c.pending == c.active {
+            return None;
+        }
+        let lost = c.active;
+        c.active = c.pending;
+        Some((lost, c.active))
+    })
+}
+
+/// Drop pointer `id`'s capture outright: the node holding it left the tree.
+pub(crate) fn forget_pointer_capture(id: u64) {
+    with_captures(|captures| {
+        let c = entry(captures, id);
+        c.pending = None;
+        c.active = None;
+    });
+}
+
+/// Drop every capture, as a reset does.
+pub fn clear_pointer_captures() {
+    with_captures(Vec::clear);
 }
 
 /// Serialises the process-global binding registry and current-event cell

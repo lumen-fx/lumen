@@ -51,12 +51,14 @@ fn click(app: &mut App, p: glam::Vec2) {
     app.world.write_message(PointerMoved {
         position: p,
         local: None,
+        pointer: Default::default(),
     });
     app.world.resource_mut::<PointerState>().primary_down = true;
     app.world.write_message(PointerPressed {
         position: p,
         button: PointerButton::Primary,
         local: None,
+        pointer: Default::default(),
     });
     app.tick();
     app.world.resource_mut::<PointerState>().primary_down = false;
@@ -64,6 +66,7 @@ fn click(app: &mut App, p: glam::Vec2) {
         position: p,
         button: PointerButton::Primary,
         local: None,
+        pointer: Default::default(),
     });
     app.tick();
 }

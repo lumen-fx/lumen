@@ -620,6 +620,9 @@ it to `event_off` to unbind.
 | `lumen::event_on(node: int, event_type: string, handler: string)` | `int` | Bind `handler` (a function name) for the bubble phase. Returns the off token, or `0` for an unknown node. |
 | `lumen::event_on_capture(node: int, event_type: string, handler: string)` | `int` | Same, for the capture phase. |
 | `lumen::event_off(token: int)` | | Unbind. |
+| `lumen::node_set_pointer_capture(node: int, pointer: int)` | | Send that pointer's events to `node` until its last button comes up. Does nothing while no button is held. |
+| `lumen::node_release_pointer_capture(node: int, pointer: int)` | | Give the pointer back to hit testing, when `node` holds it. |
+| `lumen::node_has_pointer_capture(node: int, pointer: int)` | `bool` | Whether `node` holds the pointer, counting a capture set in the running handler. |
 
 The handler takes one parameter, the event id, for every event type:
 `fn handle_click(ev: int)`. Annotate it the same way, and read the event
@@ -632,7 +635,16 @@ through the accessors below:
 | `lumen::event_type(ev: int)` | `string` | Event type name. |
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
-| `lumen::event_button(ev: int)` | `int` | `0` primary, `1` middle, `2` secondary. |
+| `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
+| `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
+| `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
+| `lumen::event_pointer_type(ev: int)` | `string` | `"mouse"`, `"pen"`, or `"touch"`. |
+| `lumen::event_is_primary(ev: int)` | `bool` | Whether the pointer is the primary one of its kind. |
+| `lumen::event_pressure(ev: int)` | `float` | Normalized pressure, `0` to `1`; `0.5` while pressed on a device without a sensor. |
+| `lumen::event_tangential_pressure(ev: int)` | `float` | Normalized barrel pressure, `-1` to `1`. |
+| `lumen::event_tilt_x(ev: int)` / `lumen::event_tilt_y(ev: int)` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
+| `lumen::event_twist(ev: int)` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
+| `lumen::event_width(ev: int)` / `lumen::event_height(ev: int)` | `float` | Contact size in logical pixels; `1` for a point device. |
 | `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target. |
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
 | `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
@@ -643,14 +655,23 @@ through the accessors below:
 
 ### Event types
 
-`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointerenter`,
-`pointerleave`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`,
-`submit`, `scroll`.
+`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointercancel`,
+`pointerenter`, `pointerleave`, `gotpointercapture`, `lostpointercapture`,
+`wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`, `submit`,
+`scroll`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
 `scroll` do not bubble. `keydown` and `keyup` target the focused element, or
 the document root when nothing is focused.
+
+A pointer event targets the element under its pointer. After
+`node_set_pointer_capture(node, pointer_id)` on an element, that pointer's events go to
+the element until its last button comes up, wherever the pointer moves;
+`gotpointercapture` fires on the element before the first of them and
+`lostpointercapture` after the release. A touch is captured by the element it
+went down on. `pointercancel` replaces `pointerup` when the system takes a
+touch or pen over mid-gesture.
 
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.
@@ -659,7 +680,9 @@ field is committed with Enter. Only `click` has a default action (link
 navigation); `prevent_default` on a click skips it.
 
 In a web build the pointer events come from the browser's Pointer Events, so a
-touch or a pen raises the same `pointerdown` and `pointerup` a mouse does.
+touch or a pen raises the same `pointerdown` and `pointerup` a mouse does, with
+the browser's readings for pressure, tilt and the rest, and a capture is handed
+to the browser's own `setPointerCapture`.
 `event_x` and `event_y` are measured from the target's box as the browser
 places it when the event happens. The page scrolls under a `wheel` handler as
 it does without one. A `click` handler on a link runs before the browser
@@ -702,7 +725,8 @@ names every host uses: `exists`, `valid`, `parent`, `first_child`,
 `remove`, `append`, `insert_before`, `set_parent`, `move_to`, `replace_with`,
 `get_attr`, `text`, `id`, `has_class`, `style_get`, `computed_style`,
 `computed_style_all`, `is_visible`, `z_index`, `classes`, `components`,
-`outer_markup`, `inner_markup`, `on`, `on_capture`. `exists()` tests the
+`outer_markup`, `inner_markup`, `on`, `on_capture`, `set_pointer_capture`,
+`release_pointer_capture`, `has_pointer_capture`. `exists()` tests the
 handle against `0`; `valid()` tests it against the current snapshot.
 
 `ArraySignal` methods mirror the `signal_array_*` builtins with the prefix
@@ -715,7 +739,9 @@ the table under [Signals](#signals) lists what each type argument reads and
 writes.
 
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
-`button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`, `shift`,
+`button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`,
+`pointer_id`, `pointer_type`, `is_primary`, `buttons`, `pressure`,
+`tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`, `shift`,
 `ctrl`, `alt`, `super_key`, `prevent_default`, `stop_propagation`,
 `stop_immediate_propagation`, `off`.
 

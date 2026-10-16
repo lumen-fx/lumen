@@ -9,12 +9,17 @@
 //! [`ScriptCommandEvent`] bus so the normal appliers pick them up.
 //!
 //! The full event set: `click`, `dblclick`, `pointerdown` / `pointerup` /
-//! `pointermove` / `pointerenter` / `pointerleave`, `wheel`, `keydown` /
-//! `keyup`, `input`, `change`, `focus`, `blur`, `submit`, `scroll`.
+//! `pointermove` / `pointercancel` / `pointerenter` / `pointerleave`,
+//! `gotpointercapture` / `lostpointercapture`, `wheel`, `keydown` / `keyup`,
+//! `input`, `change`, `focus`, `blur`, `submit`, `scroll`.
 //!
 //! Sources and current limitations:
-//! - Pointer events target the entity currently under the cursor (`Hovered`);
-//!   `pointerenter` / `pointerleave` come from the hover marker transitions.
+//! - Pointer events target the entity under the pointer: the one carrying
+//!   `Hovered` for the primary pointer, the one in `PointerTargets` for a
+//!   second finger. A pointer captured with `set_pointer_capture` targets
+//!   its capturing node instead, wherever it is, and a touch is captured by
+//!   the node it went down on, as on the web. `pointerenter` /
+//!   `pointerleave` come from the hover marker transitions.
 //! - `keydown` targets the focused entity (from the input router's
 //!   `FocusedKey`); `keyup` targets the focused entity. With nothing focused
 //!   both go to the document root, the way a browser sends them to the body,
@@ -58,15 +63,9 @@ fn ancestors_root_first(entity: Entity) -> Vec<u64> {
     chain
 }
 
-/// Map a [`PointerButton`] to the web `MouseEvent.button` code
-/// (`0` primary / left, `1` middle, `2` secondary / right).
+/// The web `button` code a pointer event carries.
 fn button_code(button: PointerButton) -> i64 {
-    match button {
-        PointerButton::Primary => 0,
-        PointerButton::Middle => 1,
-        PointerButton::Secondary => 2,
-        PointerButton::Other(code) => code as i64,
-    }
+    button.code()
 }
 
 /// W3C-ish key name for the event object's `key`.
@@ -100,8 +99,29 @@ fn key_string(key: &Key) -> String {
 /// once, whatever the number of hosts.
 #[derive(Resource, Default)]
 pub struct PendingDomEvents {
-    input: Vec<(EventData, Entity)>,
+    input: Vec<QueuedInput>,
     state: Vec<(EventData, Entity)>,
+}
+
+/// One input event waiting for delivery.
+struct QueuedInput {
+    data: EventData,
+    /// The entity under the pointer (or the focused one, for a key). A
+    /// captured pointer's event goes to its capturing node instead, and can
+    /// be delivered with nothing under it at all.
+    target: Option<Entity>,
+    /// What the event does to its pointer, for the capture bookkeeping;
+    /// `None` for an event that is not a pointer's own.
+    step: Option<PointerStep>,
+}
+
+/// What a pointer event does to its pointer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PointerStep {
+    Down,
+    Move,
+    Up,
+    Cancel,
 }
 
 /// How the dispatch reaches one installed host: offer it a handler token, and
@@ -155,22 +175,35 @@ fn drain_into<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World)
 pub fn deliver_input_events(world: &mut World) {
     // Fresh per-tick prevented-click set for the anchor-nav executor.
     event::clear_prevented_clicks();
-    deliver_pending(world, |pending| &mut pending.input);
+    let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
+        return;
+    };
+    let events = std::mem::take(&mut pending.input);
+    if events.is_empty() {
+        return;
+    }
+    let hosts = world
+        .get_resource::<EventHosts>()
+        .cloned()
+        .unwrap_or_default();
+    for queued in events {
+        match queued.step {
+            Some(step) => deliver_pointer(world, &hosts, queued, step),
+            None => {
+                if let Some(target) = queued.target {
+                    deliver(world, &hosts, queued.data, target);
+                }
+            }
+        }
+    }
 }
 
 /// Deliver the focus, hover, edit, commit and scroll events read this tick.
 pub fn deliver_state_events(world: &mut World) {
-    deliver_pending(world, |pending| &mut pending.state);
-}
-
-fn deliver_pending(
-    world: &mut World,
-    queue: fn(&mut PendingDomEvents) -> &mut Vec<(EventData, Entity)>,
-) {
     let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
         return;
     };
-    let events = std::mem::take(queue(&mut pending));
+    let events = std::mem::take(&mut pending.state);
     if events.is_empty() {
         return;
     }
@@ -181,6 +214,110 @@ fn deliver_pending(
     for (data, target) in events {
         deliver(world, &hosts, data, target);
     }
+}
+
+/// The live entity a packed node handle names, if it still exists.
+fn live_entity(world: &World, node: u64) -> Option<Entity> {
+    let handle = lumen_core::node::NodeHandle::unpack(node)?;
+    world.get_entity(handle.entity).ok().map(|e| e.id())
+}
+
+/// Deliver one pointer's event the way the web does around pointer capture:
+/// the capture a handler asked for takes effect just before the pointer's
+/// next event (`lostpointercapture` at the node that had it,
+/// `gotpointercapture` at the one that gets it), a captured pointer's event
+/// goes to the capturing node, and the capture ends after the pointer's last
+/// button comes up.
+fn deliver_pointer(world: &mut World, hosts: &EventHosts, queued: QueuedInput, step: PointerStep) {
+    let QueuedInput { data, target, .. } = queued;
+    let id = data.pointer.id;
+    if step == PointerStep::Down {
+        event::pointer_capture_down(id);
+        // A touch is captured by the node it went down on (the web's
+        // implicit capture for direct manipulation), so a finger that slides
+        // off keeps talking to the node it touched.
+        if data.pointer.kind == PointerKind::Touch
+            && let Some(t) = target
+        {
+            event::set_pointer_capture(lumen_core::node::NodeHandle::new(t).pack(), id);
+        }
+    }
+    apply_capture_change(world, hosts, &data);
+    let captured = event::active_pointer_capture(id).and_then(|node| {
+        let live = live_entity(world, node);
+        if live.is_none() {
+            // The capturing node left the tree: the capture ends and the
+            // document hears about it.
+            event::forget_pointer_capture(id);
+            if let Some(doc) = lumen_core::node::dom_index_snapshot().document() {
+                deliver(
+                    world,
+                    hosts,
+                    capture_event(&data, doc, "lostpointercapture"),
+                    doc,
+                );
+            }
+        }
+        live
+    });
+    if let Some(to) = captured.or(target) {
+        let mut data = data.clone();
+        if Some(to) != target {
+            // Local coordinates follow the node the event is delivered to.
+            let origin = world
+                .get::<Transform>(to)
+                .map(|t| t.absolute)
+                .unwrap_or(Vec2::ZERO);
+            data.local = (
+                data.client.0 - origin.x as f64,
+                data.client.1 - origin.y as f64,
+            );
+            data.target = lumen_core::node::NodeHandle::new(to).pack();
+        }
+        deliver(world, hosts, data, to);
+    }
+    let released = match step {
+        PointerStep::Cancel => true,
+        PointerStep::Up => data.pointer.buttons == 0,
+        PointerStep::Down | PointerStep::Move => false,
+    };
+    if released {
+        event::pointer_capture_up(id);
+        apply_capture_change(world, hosts, &data);
+    }
+}
+
+/// Fire `lostpointercapture` / `gotpointercapture` for a capture change
+/// pending on `data`'s pointer, and make the change.
+fn apply_capture_change(world: &mut World, hosts: &EventHosts, data: &EventData) {
+    let id = data.pointer.id;
+    let Some((lost, got)) = event::take_pointer_capture_change(id) else {
+        return;
+    };
+    if let Some(e) = lost.and_then(|node| live_entity(world, node)) {
+        deliver(
+            world,
+            hosts,
+            capture_event(data, e, "lostpointercapture"),
+            e,
+        );
+    }
+    if let Some(node) = got {
+        match live_entity(world, node) {
+            Some(e) => deliver(world, hosts, capture_event(data, e, "gotpointercapture"), e),
+            None => event::forget_pointer_capture(id),
+        }
+    }
+}
+
+/// A `gotpointercapture` / `lostpointercapture` event for `entity`, carrying
+/// the pointer of the event that caused it.
+fn capture_event(cause: &EventData, entity: Entity, event_type: &str) -> EventData {
+    let mut data = base(entity, event_type);
+    data.pointer = cause.pointer;
+    data.client = cause.client;
+    data.button = -1;
+    data
 }
 
 /// Deliver one already-built [`EventData`] targeting `target_entity`:
@@ -287,6 +424,7 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<PointerPressed>(world);
     register::<PointerReleased>(world);
     register::<PointerMoved>(world);
+    register::<PointerCancelled>(world);
     register::<MouseWheel>(world);
     register::<KeyPressed>(world);
     register::<KeyReleased>(world);
@@ -295,18 +433,27 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<TextInputCommitted>(world);
 }
 
+/// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so
+/// the system stays under the parameter limit.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct PointerReaders<'w, 's> {
+    presses: MessageReader<'w, 's, PointerPressed>,
+    releases: MessageReader<'w, 's, PointerReleased>,
+    moves: MessageReader<'w, 's, PointerMoved>,
+    cancels: Option<MessageReader<'w, 's, PointerCancelled>>,
+    targets: Option<Res<'w, PointerTargets>>,
+}
+
 /// Read this tick's pointer, click, wheel and key input as DOM events, for
-/// [`deliver_input_events`]. Pointer events target the hovered entity; key
-/// events target the focused entity, or the document root when nothing is
-/// focused.
+/// [`deliver_input_events`]. Pointer events target the hovered entity (a
+/// second finger, the entity in [`PointerTargets`]); key events target the
+/// focused entity, or the document root when nothing is focused.
 #[allow(clippy::too_many_arguments)]
 pub fn queue_pointer_and_key_events(
     mut pending: ResMut<PendingDomEvents>,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
-    mut presses: MessageReader<PointerPressed>,
-    mut releases: MessageReader<PointerReleased>,
-    mut moves: MessageReader<PointerMoved>,
+    mut pointers: PointerReaders,
     mut wheels: MessageReader<MouseWheel>,
     mut keyups: MessageReader<KeyReleased>,
     mut keydowns: MessageReader<FocusedKey>,
@@ -319,6 +466,11 @@ pub fn queue_pointer_and_key_events(
     let queue = &mut pending.input;
     let hovered_entity = hovered.iter().next();
     let focused_entity = focused.iter().next();
+    let plain = |data: EventData, target: Entity| QueuedInput {
+        data,
+        target: Some(target),
+        step: None,
+    };
 
     // click (targets the clicked entity directly).
     for c in clicks.read() {
@@ -330,7 +482,7 @@ pub fn queue_pointer_and_key_events(
             c.local,
         );
         data.button = button_code(c.button);
-        queue.push((data, c.entity));
+        queue.push(plain(data, c.entity));
     }
     // dblclick.
     for d in doubles.read() {
@@ -341,38 +493,105 @@ pub fn queue_pointer_and_key_events(
             d.position,
             None,
         );
-        queue.push((data, d.entity));
+        queue.push(plain(data, d.entity));
     }
-    // pointerdown / up / move / wheel target the hovered entity.
-    for p in presses.read() {
-        let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(base(e, "pointerdown"), &transforms, e, p.position, p.local);
-        data.button = button_code(p.button);
-        queue.push((data, e));
+    // pointerdown / up / move / cancel target the entity under their pointer,
+    // in the order they happened: a quick stroke presses, moves and releases
+    // inside one frame, and its moves belong between the press and the
+    // release.
+    let start = queue.len();
+    let under = |pointer: &PointerData| {
+        if pointer.is_primary {
+            hovered_entity
+        } else {
+            pointers.targets.as_ref().and_then(|t| t.get(pointer.id))
+        }
+    };
+    let pointer_event = |event_type: &str,
+                         target: Option<Entity>,
+                         position: Vec2,
+                         local: Option<Vec2>,
+                         pointer: PointerData,
+                         button: i64| {
+        let mut data = match target {
+            Some(e) => with_position(base(e, event_type), &transforms, e, position, local),
+            None => EventData {
+                event_type: event_type.to_string(),
+                client: (position.x as f64, position.y as f64),
+                ..Default::default()
+            },
+        };
+        data.pointer = pointer;
+        data.button = button;
+        data
+    };
+    for p in pointers.presses.read() {
+        let target = under(&p.pointer);
+        let data = pointer_event(
+            "pointerdown",
+            target,
+            p.position,
+            p.local,
+            p.pointer,
+            button_code(p.button),
+        );
+        queue.push(QueuedInput {
+            data,
+            target,
+            step: Some(PointerStep::Down),
+        });
     }
-    for p in releases.read() {
-        let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(base(e, "pointerup"), &transforms, e, p.position, p.local);
-        data.button = button_code(p.button);
-        queue.push((data, e));
+    for p in pointers.releases.read() {
+        let target = under(&p.pointer);
+        let data = pointer_event(
+            "pointerup",
+            target,
+            p.position,
+            p.local,
+            p.pointer,
+            button_code(p.button),
+        );
+        queue.push(QueuedInput {
+            data,
+            target,
+            step: Some(PointerStep::Up),
+        });
     }
-    for p in moves.read() {
-        let Some(e) = hovered_entity else { continue };
-        let data = with_position(base(e, "pointermove"), &transforms, e, p.position, p.local);
-        queue.push((data, e));
+    for p in pointers.moves.read() {
+        let target = under(&p.pointer);
+        // A move over nothing reaches a script only through a capture.
+        if target.is_none() && !event::any_pointer_capture() {
+            continue;
+        }
+        let data = pointer_event("pointermove", target, p.position, p.local, p.pointer, -1);
+        queue.push(QueuedInput {
+            data,
+            target,
+            step: Some(PointerStep::Move),
+        });
     }
+    for p in pointers.cancels.iter_mut().flat_map(|c| c.read()) {
+        let target = under(&p.pointer);
+        let data = pointer_event("pointercancel", target, p.position, None, p.pointer, -1);
+        queue.push(QueuedInput {
+            data,
+            target,
+            step: Some(PointerStep::Cancel),
+        });
+    }
+    queue[start..].sort_by_key(|q| q.data.pointer.order);
     for w in wheels.read() {
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);
         data.delta = (w.delta.x as f64, w.delta.y as f64);
-        queue.push((data, e));
+        queue.push(plain(data, e));
     }
     // keydown targets the entity the input router routed the key to.
     for k in keydowns.read() {
         let mut data = base(k.entity, "keydown");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
-        queue.push((data, k.entity));
+        queue.push(plain(data, k.entity));
     }
     // The router routes nothing while no element has focus (the same
     // `FocusTracker` it reads), and Tab is the focus move, not a key for
@@ -387,7 +606,7 @@ pub fn queue_pointer_and_key_events(
         let mut data = base(doc, "keydown");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
-        queue.push((data, doc));
+        queue.push(plain(data, doc));
     }
     // keyup targets the focused entity, or the document root.
     for k in keyups.read() {
@@ -397,7 +616,7 @@ pub fn queue_pointer_and_key_events(
         let mut data = base(e, "keyup");
         data.key = key_string(&k.key);
         set_mods(&mut data, &k.modifiers);
-        queue.push((data, e));
+        queue.push(plain(data, e));
     }
 }
 
@@ -754,6 +973,296 @@ pub(crate) mod text_event_tests {
         );
         event::clear_all_bindings();
         publish_dom_index(DomIndex::default());
+    }
+
+    /// One pointer tick: queue this tick's pointer messages, deliver them,
+    /// and clear the buffers so the next tick starts empty.
+    fn pointer_tick(world: &mut World) {
+        world
+            .run_system_once(queue_pointer_and_key_events)
+            .expect("system ran");
+        deliver_input_events(world);
+        world.resource_mut::<Messages<PointerPressed>>().clear();
+        world.resource_mut::<Messages<PointerReleased>>().clear();
+        world.resource_mut::<Messages<PointerMoved>>().clear();
+        world.resource_mut::<Messages<PointerCancelled>>().clear();
+    }
+
+    /// A world with two boxes side by side, `a` at x 0..100 and `b` at
+    /// x 100..200, ready for pointer ticks.
+    fn two_boxes() -> (World, Entity, Entity) {
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        world.init_resource::<PendingDomEvents>();
+        world.init_resource::<PointerTargets>();
+        let at = |x: f32| Transform {
+            absolute: Vec2::new(x, 0.0),
+            size: Vec2::new(100.0, 100.0),
+            ..Default::default()
+        };
+        let a = world.spawn(at(0.0)).id();
+        let b = world.spawn(at(100.0)).id();
+        (world, a, b)
+    }
+
+    /// What a handler saw: `(type, target, local x, pressure, buttons)`.
+    type Seen = Arc<Mutex<Vec<(String, Option<Entity>, f64, f32, u32)>>>;
+
+    fn record(node: u64, types: &[&str], seen: &Seen) {
+        for t in types {
+            let sink = Arc::clone(seen);
+            event::register_native_binding(
+                node,
+                (*t).to_string(),
+                false,
+                Arc::new(move || {
+                    let target = lumen_core::node::NodeHandle::unpack(event::event_target())
+                        .map(|h| h.entity);
+                    let p = event::event_pointer();
+                    sink.lock().unwrap().push((
+                        event::event_type(),
+                        target,
+                        event::event_position_local().0,
+                        p.pressure,
+                        p.buttons,
+                    ));
+                }),
+            );
+        }
+    }
+
+    fn pen(buttons: u32, pressure: f32) -> PointerData {
+        PointerData {
+            id: 7,
+            kind: PointerKind::Pen,
+            is_primary: true,
+            buttons,
+            pressure,
+            tilt_x: 30.0,
+            ..PointerData::default()
+        }
+    }
+
+    /// `set_pointer_capture` from a `pointerdown` handler aims the pointer's
+    /// later events at the node wherever the pointer goes, as on the web:
+    /// `gotpointercapture` before the next event, `lostpointercapture` after
+    /// the last button comes up, and the pen's readings on every event.
+    #[test]
+    fn a_captured_pointer_keeps_talking_to_its_node() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let (mut world, a, b) = two_boxes();
+        let node_a = lumen_core::node::NodeHandle::new(a).pack();
+        let node_b = lumen_core::node::NodeHandle::new(b).pack();
+        let seen: Seen = Arc::default();
+        record(
+            node_a,
+            &[
+                "pointermove",
+                "pointerup",
+                "gotpointercapture",
+                "lostpointercapture",
+            ],
+            &seen,
+        );
+        record(node_b, &["pointermove"], &seen);
+        let captured = Arc::new(Mutex::new(None::<bool>));
+        let flag = Arc::clone(&captured);
+        event::register_native_binding(
+            node_a,
+            "pointerdown".to_string(),
+            false,
+            Arc::new(move || {
+                let id = event::event_pointer().id;
+                assert!(!event::has_pointer_capture(node_a, id));
+                event::set_pointer_capture(node_a, id);
+                *flag.lock().unwrap() = Some(event::has_pointer_capture(node_a, id));
+            }),
+        );
+
+        // No button down: a capture cannot be set.
+        assert!(!event::set_pointer_capture(node_a, 7));
+
+        world.entity_mut(a).insert(Hovered);
+        world.write_message(PointerPressed {
+            position: Vec2::new(50.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: pen(1, 0.4),
+        });
+        pointer_tick(&mut world);
+        assert_eq!(
+            *captured.lock().unwrap(),
+            Some(true),
+            "has_pointer_capture reads the capture at once"
+        );
+
+        // The pen slides onto `b`: the move still goes to `a`, after `a` is
+        // told it got the pointer, with `a`'s local coordinates.
+        world.entity_mut(a).remove::<Hovered>();
+        world.entity_mut(b).insert(Hovered);
+        world.write_message(PointerMoved {
+            position: Vec2::new(150.0, 10.0),
+            local: None,
+            pointer: pen(1, 0.8),
+        });
+        pointer_tick(&mut world);
+        // And off every element (or out of the window): still `a`.
+        world.entity_mut(b).remove::<Hovered>();
+        world.write_message(PointerMoved {
+            position: Vec2::new(500.0, 10.0),
+            local: None,
+            pointer: pen(1, 0.9),
+        });
+        pointer_tick(&mut world);
+        world.write_message(PointerReleased {
+            position: Vec2::new(500.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: pen(0, 0.0),
+        });
+        pointer_tick(&mut world);
+        // Released: a move over `b` goes to `b` again.
+        world.entity_mut(b).insert(Hovered);
+        world.write_message(PointerMoved {
+            position: Vec2::new(150.0, 10.0),
+            local: None,
+            pointer: pen(0, 0.0),
+        });
+        pointer_tick(&mut world);
+
+        let s = |t: &str| t.to_string();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                (s("gotpointercapture"), Some(a), 0.0, 0.8, 1),
+                (s("pointermove"), Some(a), 150.0, 0.8, 1),
+                (s("pointermove"), Some(a), 500.0, 0.9, 1),
+                (s("pointerup"), Some(a), 500.0, 0.0, 0),
+                (s("lostpointercapture"), Some(a), 0.0, 0.0, 0),
+                (s("pointermove"), Some(b), 50.0, 0.0, 0),
+            ]
+        );
+        assert!(!event::has_pointer_capture(node_a, 7));
+        assert!(!event::any_pointer_capture());
+        event::clear_all_bindings();
+    }
+
+    /// A stroke that presses, moves and releases inside one tick reaches the
+    /// handlers in that order, though the three come in on three message
+    /// queues.
+    #[test]
+    fn a_stroke_inside_one_tick_keeps_its_order() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let (mut world, a, _) = two_boxes();
+        let node_a = lumen_core::node::NodeHandle::new(a).pack();
+        let seen: Seen = Arc::default();
+        record(node_a, &["pointerdown", "pointermove", "pointerup"], &seen);
+        world.entity_mut(a).insert(Hovered);
+        let down = pen(1, 0.2).stamped();
+        let moved = pen(1, 0.6).stamped();
+        let up = pen(0, 0.0).stamped();
+        world.write_message(PointerReleased {
+            position: Vec2::new(60.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: up,
+        });
+        world.write_message(PointerMoved {
+            position: Vec2::new(60.0, 10.0),
+            local: None,
+            pointer: moved,
+        });
+        world.write_message(PointerPressed {
+            position: Vec2::new(50.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: down,
+        });
+        pointer_tick(&mut world);
+        let order: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(t, ..)| t.clone())
+            .collect();
+        assert_eq!(order, ["pointerdown", "pointermove", "pointerup"]);
+        event::clear_all_bindings();
+    }
+
+    /// A finger is captured by the node it went down on, and a second
+    /// finger's events go to the node under it, not to the hovered one.
+    #[test]
+    fn touches_are_captured_where_they_land_and_aimed_per_finger() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let (mut world, a, b) = two_boxes();
+        let node_a = lumen_core::node::NodeHandle::new(a).pack();
+        let node_b = lumen_core::node::NodeHandle::new(b).pack();
+        let seen: Seen = Arc::default();
+        for node in [node_a, node_b] {
+            record(
+                node,
+                &["pointerdown", "pointermove", "pointercancel"],
+                &seen,
+            );
+        }
+        let finger = |id: u64, is_primary: bool| PointerData {
+            id,
+            kind: PointerKind::Touch,
+            is_primary,
+            buttons: 1,
+            pressure: 0.5,
+            ..PointerData::default()
+        };
+        // Finger 2 down on `a` (hovered), finger 3 down on `b`.
+        world.entity_mut(a).insert(Hovered);
+        world.resource_mut::<PointerTargets>().set(3, Some(b));
+        world.write_message(PointerPressed {
+            position: Vec2::new(10.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: finger(2, true),
+        });
+        world.write_message(PointerPressed {
+            position: Vec2::new(110.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: finger(3, false),
+        });
+        pointer_tick(&mut world);
+        // Finger 2 slides over `b`: still `a`'s.
+        world.entity_mut(a).remove::<Hovered>();
+        world.entity_mut(b).insert(Hovered);
+        world.write_message(PointerMoved {
+            position: Vec2::new(120.0, 10.0),
+            local: None,
+            pointer: finger(2, true),
+        });
+        world.write_message(PointerCancelled {
+            position: Vec2::new(120.0, 10.0),
+            pointer: finger(2, true),
+        });
+        pointer_tick(&mut world);
+        let s = |t: &str| t.to_string();
+        let got: Vec<(String, Option<Entity>)> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(t, e, ..)| (t.clone(), *e))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (s("pointerdown"), Some(a)),
+                (s("pointerdown"), Some(b)),
+                (s("pointermove"), Some(a)),
+                (s("pointercancel"), Some(a)),
+            ]
+        );
+        event::clear_all_bindings();
     }
 
     #[test]

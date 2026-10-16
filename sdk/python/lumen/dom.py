@@ -212,6 +212,32 @@ class Node:
         out = ctypes.c_int(0)
         return lib.lumen_node_valid(self._h, ctypes.byref(out)) == _OK and out.value != 0
 
+    # -- pointer capture --
+
+    def set_pointer_capture(self, pointer_id: int) -> None:
+        """Send pointer ``pointer_id``'s events to this node until its last
+        button comes up, wherever the pointer goes (``setPointerCapture``)."""
+
+        get_library().lumen_node_set_pointer_capture(self._h, pointer_id)
+
+    def release_pointer_capture(self, pointer_id: int) -> None:
+        """Give pointer ``pointer_id`` back to hit testing, when this node
+        holds it (``releasePointerCapture``)."""
+
+        get_library().lumen_node_release_pointer_capture(self._h, pointer_id)
+
+    def has_pointer_capture(self, pointer_id: int) -> bool:
+        """Whether this node holds pointer ``pointer_id``
+        (``hasPointerCapture``)."""
+
+        out = ctypes.c_int(0)
+        lib = get_library()
+        return (
+            lib.lumen_node_has_pointer_capture(self._h, pointer_id, ctypes.byref(out))
+            == _OK
+            and out.value != 0
+        )
+
     # -- static query entry points --
 
     @staticmethod
@@ -588,11 +614,67 @@ class Event:
         return (ev.delta_x, ev.delta_y) if ev else (0.0, 0.0)
 
     def button(self) -> int:
-        """The button for pointer events (0 primary, 1 middle, 2 secondary,
-        -1 none)."""
+        """The button for pointer events, the web ``button`` code (0 primary,
+        1 middle, 2 secondary, 3 back, 4 forward, 5 pen eraser, -1 none)."""
 
         ev = self._ev
         return ev.button if ev else -1
+
+    def pointer_id(self) -> int:
+        """The pointer's id; the mouse is 1."""
+
+        ev = self._ev
+        return ev.pointer_id if ev else 1
+
+    def pointer_type(self) -> str:
+        """The pointer's device: ``"mouse"``, ``"pen"`` or ``"touch"``."""
+
+        ev = self._ev
+        kinds = ("mouse", "pen", "touch")
+        return kinds[ev.pointer_type] if ev and ev.pointer_type < 3 else "mouse"
+
+    def is_primary(self) -> bool:
+        """Whether the pointer is the primary one of its kind."""
+
+        ev = self._ev
+        return bool(ev.is_primary) if ev else True
+
+    def buttons(self) -> int:
+        """The buttons held, as a web ``buttons`` mask (1 primary, 2
+        secondary, 4 middle, 8 back, 16 forward, 32 eraser)."""
+
+        ev = self._ev
+        return ev.buttons if ev else 0
+
+    def pressure(self) -> float:
+        """Normalized pressure, 0 to 1."""
+
+        ev = self._ev
+        return ev.pressure if ev else 0.0
+
+    def tangential_pressure(self) -> float:
+        """Normalized barrel pressure, -1 to 1."""
+
+        ev = self._ev
+        return ev.tangential_pressure if ev else 0.0
+
+    def tilt(self) -> tuple[float, float]:
+        """Pen tilt ``(tilt_x, tilt_y)`` in degrees."""
+
+        ev = self._ev
+        return (ev.tilt_x, ev.tilt_y) if ev else (0.0, 0.0)
+
+    def twist(self) -> float:
+        """Pen rotation about its axis, in degrees."""
+
+        ev = self._ev
+        return ev.twist if ev else 0.0
+
+    def contact_size(self) -> tuple[float, float]:
+        """Contact ``(width, height)`` in logical pixels."""
+
+        ev = self._ev
+        return (ev.width, ev.height) if ev else (1.0, 1.0)
 
     def modifiers(self) -> tuple[bool, bool, bool, bool]:
         """Modifier state ``(shift, ctrl, alt, super)``."""

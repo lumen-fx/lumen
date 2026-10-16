@@ -1414,6 +1414,51 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "The `id` attribute.",
     },
     BuiltinFn {
+        name: "node_set_pointer_capture",
+        params: &[
+            BuiltinParam {
+                name: "node",
+                ty: "int",
+            },
+            BuiltinParam {
+                name: "pointer",
+                ty: "int",
+            },
+        ],
+        ret: "()",
+        doc: "Send pointer `pointer`'s events to `node` until its buttons come up.",
+    },
+    BuiltinFn {
+        name: "node_release_pointer_capture",
+        params: &[
+            BuiltinParam {
+                name: "node",
+                ty: "int",
+            },
+            BuiltinParam {
+                name: "pointer",
+                ty: "int",
+            },
+        ],
+        ret: "()",
+        doc: "Give pointer `pointer` back to hit testing, when `node` holds it.",
+    },
+    BuiltinFn {
+        name: "node_has_pointer_capture",
+        params: &[
+            BuiltinParam {
+                name: "node",
+                ty: "int",
+            },
+            BuiltinParam {
+                name: "pointer",
+                ty: "int",
+            },
+        ],
+        ret: "bool",
+        doc: "Whether `node` holds pointer `pointer`.",
+    },
+    BuiltinFn {
         name: "node_class_contains",
         params: &[
             BuiltinParam {
@@ -1689,7 +1734,7 @@ pub const BUILTINS: &[BuiltinFn] = &[
             ty: "int",
         }],
         ret: "int",
-        doc: "Pointer button: 0 primary, 1 middle, 2 secondary.",
+        doc: "Pointer button: 0 primary, 1 middle, 2 secondary, 3 back, 4 forward, 5 eraser, -1 none.",
     },
     BuiltinFn {
         name: "event_x",
@@ -1771,6 +1816,105 @@ pub const BUILTINS: &[BuiltinFn] = &[
         }],
         ret: "bool",
         doc: "Whether Alt was held.",
+    },
+    BuiltinFn {
+        name: "event_pointer_id",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "int",
+        doc: "The id of the pointer that produced the event; the mouse is 1.",
+    },
+    BuiltinFn {
+        name: "event_pointer_type",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "string",
+        doc: "The pointer device: `\"mouse\"`, `\"pen\"` or `\"touch\"`.",
+    },
+    BuiltinFn {
+        name: "event_is_primary",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "bool",
+        doc: "Whether the pointer is the primary one of its kind.",
+    },
+    BuiltinFn {
+        name: "event_buttons",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "int",
+        doc: "Buttons held as a mask: 1 primary, 2 secondary, 4 middle, 8 back, 16 forward, 32 eraser.",
+    },
+    BuiltinFn {
+        name: "event_pressure",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Normalized pressure, 0 to 1; 0.5 while pressed on a device without a sensor.",
+    },
+    BuiltinFn {
+        name: "event_tangential_pressure",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Normalized barrel pressure, -1 to 1.",
+    },
+    BuiltinFn {
+        name: "event_tilt_x",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Pen tilt toward the right, -90 to 90 degrees.",
+    },
+    BuiltinFn {
+        name: "event_tilt_y",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Pen tilt toward the user, -90 to 90 degrees.",
+    },
+    BuiltinFn {
+        name: "event_twist",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Pen rotation about its axis, 0 to 359 degrees.",
+    },
+    BuiltinFn {
+        name: "event_width",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Contact width in pixels; 1 for a point device.",
+    },
+    BuiltinFn {
+        name: "event_height",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Contact height in pixels; 1 for a point device.",
     },
     BuiltinFn {
         name: "event_super",
