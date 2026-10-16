@@ -2,9 +2,10 @@
 //!
 //! This app carries no signals and no bindings. A single system reads the
 //! [`ClickEvent`] stream and mutates the clicked entity's [`Visuals`]
-//! component directly, cycling its fill through a palette. The renderer picks
-//! the new fill up on the same frame because `Visuals` is the very component it
-//! extracts from.
+//! component directly, cycling its fill through a palette. The system runs
+//! after [`ClickSet::Producers`], so it reads a click on the tick it lands, and
+//! the renderer picks the new fill up on that frame because `Visuals` is the
+//! very component it extracts from.
 //!
 //! Run with:
 //!
@@ -34,7 +35,10 @@ fn main() -> lumenui::Result<()> {
                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
                 .with_title("Lumen systems demo - direct Visuals mutation"),
         )
-        .add_systems(TickStage::Systems, recolor_clicked)
+        .add_systems(
+            TickStage::Systems,
+            recolor_clicked.after(ClickSet::Producers),
+        )
         .run()
 }
 

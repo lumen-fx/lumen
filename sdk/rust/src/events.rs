@@ -11,11 +11,11 @@
 //! [`PropertyStore`].
 //!
 //! Both systems are registered by the [`crate::simple::AppBuilder`] via
-//! [`lumenc::RunOptions::app_hooks`], ordered *before* the reactive
-//! binding readers (`apply_text_bindings` et al.) so a signal written by
-//! a handler is reflected by `bind-text="..."` markup on the very tick the
-//! event fired - the same same-tick guarantee the script path gets from
-//! `commit_external_properties`.
+//! [`lumenc::RunOptions::app_hooks`], ordered *after* every click producer
+//! ([`ClickSet::Producers`]) and *before* the reactive binding readers
+//! (`apply_text_bindings` et al.), so a handler sees its event on the tick
+//! the event fired and a signal it writes is reflected by `bind-text="..."`
+//! markup, and painted, on that same tick.
 
 // The engine's copy of each crate this module names. The re-export block in
 // lib.rs says why they come from there rather than from a dependency.
@@ -24,7 +24,7 @@ use crate::{bevy_ecs, lumen_core};
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_core::components::LumenId;
-use lumen_core::input::{ClickEvent, DoubleClickEvent, LongPressEvent};
+use lumen_core::input::{ClickEvent, ClickSet, DoubleClickEvent, LongPressEvent};
 use lumen_core::property_store::{Property, PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::tick::TickStage;
 use std::collections::{HashMap, HashSet};
@@ -229,9 +229,13 @@ pub(crate) fn dispatch_rust_handlers(world: &mut World) {
 ///
 /// Inserts the [`RustHandlers`] registry (seeded from `handlers`) and the
 /// [`PendingUiEvents`] queue, then schedules [`collect_ui_events`] ->
-/// [`dispatch_rust_handlers`] into [`TickStage::Systems`], ordered *before*
-/// the reactive binding readers so a handler's signal write is reflected by
-/// `bind-*` markup on the very tick the event fired.
+/// [`dispatch_rust_handlers`] into [`TickStage::Systems`], ordered after
+/// [`ClickSet::Producers`] and *before* the reactive binding readers so a
+/// handler's signal write is reflected by `bind-*` markup on the very tick
+/// the event fired. Without the first edge the collector could run ahead of
+/// the click it is waiting for and pick it up a tick late, on a tick that
+/// paints nothing, so a headless or idle app would show the old value until
+/// something else woke it.
 ///
 /// Shared by both the ECS-first [`crate::App`] (its `on_click` / `on` family)
 /// and the [`crate::simple::AppBuilder`] so the two surfaces dispatch through
@@ -249,7 +253,9 @@ pub(crate) fn install_rust_handlers(app: &mut lumen_core::app::App, handlers: Ve
     app.world.insert_resource(PendingUiEvents::default());
     app.add_systems(
         TickStage::Systems,
-        collect_ui_events.before(dispatch_rust_handlers),
+        collect_ui_events
+            .after(ClickSet::Producers)
+            .before(dispatch_rust_handlers),
     );
     app.add_systems(
         TickStage::Systems,

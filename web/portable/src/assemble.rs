@@ -27,6 +27,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::{Schedules, SingleThreadedExecutor};
 use lumen_core::app::Tick;
 use lumen_core::components::{InlineStyle, LumenAttributes, LumenClasses, LumenTag, TextContent};
+use lumen_core::input::ClickSet;
 use lumen_core::prelude::Children;
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::{PropertyKey, PropertyStore, commit_external_properties};
@@ -181,6 +182,7 @@ fn install_reconcilers(app: &mut App) {
     app.add_systems(
         TickStage::Systems,
         spawn::activate_dialog_default_on_enter
+            .in_set(ClickSet::Producers)
             .after(lumen_input::dispatch_focused_keys)
             .before(ScriptSet::Dispatch),
     );

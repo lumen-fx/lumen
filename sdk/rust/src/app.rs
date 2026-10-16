@@ -40,7 +40,7 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 /// # fn demo() -> lumenui::Result<()> {
 /// lumenui::App::new()
 ///     .add_plugins(LumenDefaultPlugins.with_markup("<root/>"))
-///     .add_systems(TickStage::Systems, bump)
+///     .add_systems(TickStage::Systems, bump.after(ClickSet::Producers))
 ///     .run()
 /// # }
 /// ```
@@ -48,7 +48,11 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 /// User systems are *real* `bevy_ecs` systems: take `Query` / `Res` / `ResMut` /
 /// `MessageReader` / [`Commands`](bevy_ecs::system::Commands) / [`Signals`](crate::Signals),
 /// and they are scheduled into the live [`TickStage`] schedule next to the
-/// framework's own systems. Nothing is stringly-typed.
+/// framework's own systems. Nothing is stringly-typed. A system that reads
+/// clicks orders itself after
+/// [`ClickSet::Producers`](lumen_core::input::ClickSet::Producers), as `bump`
+/// does: without the edge it may run before the click is written and see it a
+/// tick late, on a tick that paints nothing.
 #[derive(Default)]
 pub struct App {
     boot: BootConfig,
@@ -486,7 +490,17 @@ fn strip_script_blocks(src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glam::Vec2;
     use crate::plugins::{LumenDefaultPlugins, Source};
+    use bevy_ecs::entity::Entity;
+    use lumen_core::components::{LumenId, TextContent, Transform};
+    use lumen_core::input::{
+        Key, KeyPressed, Modifiers, NamedKey, PointerButton, PointerMoved, PointerPressed,
+        PointerReleased, PointerState,
+    };
+    use lumen_core::render_world::FrameDirty;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     /// An embedded source bakes markup / CSS into `RunOptions` and disables
     /// hot reload - the release / always-embed shape.
@@ -534,6 +548,197 @@ mod tests {
         } else {
             assert!(matches!(src, Source::Embedded { css: Some(_), .. }));
         }
+    }
+
+    /// The whole headless stack (input, layout, bindings, paint pipeline)
+    /// for `app`, ticked until its first frame is out.
+    fn headless_stack(app: App) -> EcsApp {
+        let dir = std::env::temp_dir().join(format!(
+            "lumenui_handler_frame_{}_{}",
+            std::process::id(),
+            {
+                static SEQ: AtomicUsize = AtomicUsize::new(0);
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            }
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        let app = app.add_plugins(LumenDefaultPlugins.with_dir(&dir));
+        let (opts, seeds, deferred) = app.into_run_options().expect("into_run_options");
+        let (mut ecs, _window) =
+            lumenc::build_headless_app(with_hooks(opts, seeds, deferred)).expect("headless app");
+        for _ in 0..4 {
+            ecs.tick();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        ecs
+    }
+
+    fn entity_by_id(ecs: &mut EcsApp, id: &str) -> Entity {
+        let mut q = ecs.world.query::<(Entity, &LumenId)>();
+        q.iter(&ecs.world)
+            .find(|(_, l)| l.0 == id)
+            .map(|(e, _)| e)
+            .unwrap_or_else(|| panic!("no #{id}"))
+    }
+
+    fn text_of(ecs: &mut EcsApp, id: &str) -> String {
+        let e = entity_by_id(ecs, id);
+        ecs.world
+            .get::<TextContent>(e)
+            .map(|t| t.0.clone())
+            .unwrap_or_default()
+    }
+
+    fn center_of(ecs: &mut EcsApp, id: &str) -> Vec2 {
+        let e = entity_by_id(ecs, id);
+        let t = *ecs.world.get::<Transform>(e).expect("laid out");
+        t.absolute + t.size * 0.5
+    }
+
+    /// A press and release over `id` on one tick, the way a simulated click
+    /// arrives; the window's present then clears the dirty flag.
+    fn click_and_tick(ecs: &mut EcsApp, id: &str) -> bool {
+        let at = center_of(ecs, id);
+        ecs.world.resource_mut::<FrameDirty>().dirty = false;
+        ecs.world.resource_mut::<PointerState>().position = Some(at);
+        ecs.world.write_message(PointerMoved {
+            position: at,
+            local: None,
+        });
+        ecs.world.write_message(PointerPressed {
+            position: at,
+            button: PointerButton::Primary,
+            local: None,
+        });
+        ecs.world.write_message(PointerReleased {
+            position: at,
+            button: PointerButton::Primary,
+            local: None,
+        });
+        ecs.tick();
+        ecs.world.resource::<FrameDirty>().dirty
+    }
+
+    /// Longer than the default double-click window.
+    const DOUBLE_CLICK_GAP: Duration = Duration::from_millis(350);
+    /// Longer than the default long-press threshold.
+    const LONG_PRESS_HOLD: Duration = Duration::from_millis(550);
+
+    const KINDS: &str = r#"<root padding="20" gap="10">
+  <button id="bump" width="120px" height="40px" text="+1" />
+  <label id="clicks" width="200px" height="30px" bind-text="clicks" text="0" />
+  <label id="doubles" width="200px" height="30px" bind-text="doubles" text="0" />
+  <label id="longs" width="200px" height="30px" bind-text="longs" text="0" />
+</root>"#;
+
+    const COUNTER: &str = r#"<root padding="20" gap="10">
+  <button id="bump" width="120px" height="40px" text="+1" />
+  <label id="clicks" width="200px" height="30px" bind-text="clicks" text="0" />
+</root>"#;
+
+    /// A Rust click handler's signal write shows on the tick the click
+    /// lands, and that tick raises a frame: a headless run parks once a
+    /// tick paints nothing, so a write that only surfaces a tick later
+    /// stays off screen until something else wakes the app (#514).
+    #[test]
+    fn click_handler_write_paints_on_its_own_tick() {
+        let mut ecs = headless_stack(
+            App::new()
+                .add_plugins(LumenDefaultPlugins.with_markup(COUNTER))
+                .insert_signal("clicks", 0i64)
+                .on_click("bump", |ctx| {
+                    let n = ctx.get_or::<i64>("clicks", 0) + 1;
+                    ctx.set("clicks", n);
+                }),
+        );
+        for expect in 1..=3 {
+            // Clicks spaced past the double-click window, which would
+            // otherwise turn the second one into a double-click.
+            if expect > 1 {
+                std::thread::sleep(DOUBLE_CLICK_GAP);
+            }
+            let dirty = click_and_tick(&mut ecs, "bump");
+            assert_eq!(
+                text_of(&mut ecs, "clicks"),
+                expect.to_string(),
+                "click {expect}: the label did not take the handler's write on the click's tick"
+            );
+            assert!(dirty, "click {expect}: the click's tick raised no frame");
+        }
+    }
+
+    /// Every closure handler kind writes on the tick its event fires and
+    /// raises that tick's frame: a double-click, a long press, the wildcard
+    /// `on`, and a click synthesized by Enter on the focused button (#514).
+    #[test]
+    fn every_handler_kind_paints_on_its_own_tick() {
+        let bump = |name: &'static str| {
+            move |ctx: &mut EventCtx<'_>| {
+                let n = ctx.get_or::<i64>(name, 0) + 1;
+                ctx.set(name, n);
+            }
+        };
+        let mut ecs = headless_stack(
+            App::new()
+                .add_plugins(LumenDefaultPlugins.with_markup(KINDS))
+                .on(EventKind::Click, None, bump("clicks"))
+                .on_double_click("bump", bump("doubles"))
+                .on_long_press("bump", bump("longs")),
+        );
+
+        // A click, then a second inside the double-click window.
+        assert!(
+            click_and_tick(&mut ecs, "bump"),
+            "the click raised no frame"
+        );
+        assert_eq!(text_of(&mut ecs, "clicks"), "1");
+        assert!(
+            click_and_tick(&mut ecs, "bump"),
+            "the double-click raised no frame"
+        );
+        assert_eq!(text_of(&mut ecs, "doubles"), "1");
+
+        // Enter on the button the clicks focused.
+        std::thread::sleep(DOUBLE_CLICK_GAP);
+        ecs.world.resource_mut::<FrameDirty>().dirty = false;
+        ecs.world.write_message(KeyPressed {
+            key: Key::Named(NamedKey::Enter),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        });
+        ecs.tick();
+        assert_eq!(
+            text_of(&mut ecs, "clicks"),
+            "2",
+            "Enter's click wrote a tick late"
+        );
+        assert!(
+            ecs.world.resource::<FrameDirty>().dirty,
+            "Enter's click raised no frame"
+        );
+
+        // A press held past the long-press threshold, then released.
+        let at = center_of(&mut ecs, "bump");
+        ecs.world.resource_mut::<PointerState>().primary_down = true;
+        ecs.world.write_message(PointerPressed {
+            position: at,
+            button: PointerButton::Primary,
+            local: None,
+        });
+        ecs.tick();
+        std::thread::sleep(LONG_PRESS_HOLD);
+        ecs.world.resource_mut::<FrameDirty>().dirty = false;
+        ecs.tick();
+        assert_eq!(
+            text_of(&mut ecs, "longs"),
+            "1",
+            "the long press wrote a tick late"
+        );
+        assert!(
+            ecs.world.resource::<FrameDirty>().dirty,
+            "the long press raised no frame"
+        );
     }
 
     #[test]

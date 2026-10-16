@@ -1162,23 +1162,26 @@ fn build_run_options(app: LumenApp) -> RunOptions {
     // Runs alongside (not instead of) any script-side `on_click(id)`.
     if !click_handlers.is_empty() {
         opts = opts.with_app_hook(move |app| {
-            use lumen_core::prelude::{ClickEvent, LumenId, MessageReader, Query, TickStage};
+            use bevy_ecs::schedule::IntoScheduleConfigs;
+            use lumen_core::prelude::{
+                ClickEvent, ClickSet, LumenId, MessageReader, Query, TickStage,
+            };
             let handlers = click_handlers;
-            app.add_systems(
-                TickStage::Systems,
-                move |mut clicks: MessageReader<ClickEvent>, ids: Query<&LumenId>| {
-                    for click in clicks.read() {
-                        let Ok(id) = ids.get(click.entity) else {
-                            continue;
-                        };
-                        if let Some(&(cb, ud)) = handlers.get(id.0.as_str())
-                            && let Ok(cid) = CString::new(id.0.as_str())
-                        {
-                            unsafe { cb(cid.as_ptr(), ud.as_ptr()) };
-                        }
+            // After every click producer, so a click is handled on the tick
+            // it lands rather than the next one.
+            let route = move |mut clicks: MessageReader<ClickEvent>, ids: Query<&LumenId>| {
+                for click in clicks.read() {
+                    let Ok(id) = ids.get(click.entity) else {
+                        continue;
+                    };
+                    if let Some(&(cb, ud)) = handlers.get(id.0.as_str())
+                        && let Ok(cid) = CString::new(id.0.as_str())
+                    {
+                        unsafe { cb(cid.as_ptr(), ud.as_ptr()) };
                     }
-                },
-            );
+                }
+            };
+            app.add_systems(TickStage::Systems, route.after(ClickSet::Producers));
         });
     }
 

@@ -539,22 +539,24 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         // Event dispatchers: forward Click / LongPress / DoubleClick to
         // the script's `on_click(id)` / `on_long_press(id)` /
         // `on_double_click(id)` functions with the entity's LumenId. Run
-        // after lumen-input's dispatch_clicks so the Click message is
-        // populated for this tick. Click + double-click are dispatched
-        // together so a double-click's `on_double_click` follows the
-        // `on_click` of the click that completed it.
+        // after every click producer (pointer, Enter / Space, the dialog
+        // default button, the double-click and long-press detectors) so
+        // the messages are populated for this tick. Click + double-click
+        // are dispatched together so a double-click's `on_double_click`
+        // follows the `on_click` of the click that completed it.
         app.add_systems(
             TickStage::Systems,
-            dispatch_clicks_and_doubles::<H>
+            (
+                dispatch_clicks_and_doubles::<H>,
+                dispatch_long_press_to_script::<H>,
+            )
                 .in_set(ScriptSet::Dispatch)
                 .after(ScriptSet::SyncSignals)
-                .after(lumen_input::dispatch_clicks)
-                .after(lumen_primitives::press::detect_double_click),
+                .after(ClickSet::Producers),
         );
         app.add_systems(
             TickStage::Systems,
             (
-                dispatch_long_press_to_script::<H>,
                 dispatch_text_input_to_script::<H>,
                 dispatch_file_drops_to_script::<H>,
                 dnd::dispatch_drops_to_script::<H>,
