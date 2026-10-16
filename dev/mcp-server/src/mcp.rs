@@ -270,11 +270,11 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_simulate",
-                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_down, pointer_up, pointer_move, pointer_cancel, key, type, scroll. pointer_down leaves the button held, so pairing it with pointer_move and pointer_up drives a drag gesture. `pointer` makes the pointer kinds a pen or a touch with its own id, pressure and tilt.",
+                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_down, pointer_up, pointer_move, pointer_cancel, key, key_down, key_up, type, scroll. pointer_down leaves the button held, so pairing it with pointer_move and pointer_up drives a drag gesture; key_down likewise holds a key until key_up. `pointer` makes the pointer kinds a pen or a touch with its own id, pressure and tilt.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "kind": { "type": "string", "enum": ["click", "pointer_down", "pointer_up", "pointer_move", "pointer_cancel", "key", "type", "scroll"] },
+                        "kind": { "type": "string", "enum": ["click", "pointer_down", "pointer_up", "pointer_move", "pointer_cancel", "key", "key_down", "key_up", "type", "scroll"] },
                         "x": { "type": "number" },
                         "y": { "type": "number" },
                         "dx": { "type": "number" },
@@ -593,7 +593,7 @@ mod tests {
     fn simulate_schema_lists_every_kind() {
         // The schema sets additionalProperties:false, so a kind missing
         // from the enum is rejected before it reaches the app - which
-        // accepts all seven.
+        // accepts every kind.
         let kinds = tool("lumen_simulate")["inputSchema"]["properties"]["kind"]["enum"].clone();
         let kinds: Vec<&str> = kinds
             .as_array()
@@ -608,6 +608,8 @@ mod tests {
             "pointer_move",
             "pointer_cancel",
             "key",
+            "key_down",
+            "key_up",
             "type",
             "scroll",
         ] {

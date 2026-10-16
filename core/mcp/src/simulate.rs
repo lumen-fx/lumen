@@ -220,6 +220,27 @@ pub enum SimulateKind {
         #[serde(default)]
         modifiers: SimulateModifiers,
     },
+    /// Press-only half of [`SimulateKind::Key`]: press `key` and leave it
+    /// held until a [`SimulateKind::KeyUp`] for it, so a driver can test
+    /// anything that reads a held key (space-drag panning, WASD). The
+    /// modifiers also become the live modifier state, as a real keyboard's
+    /// would while the key is down.
+    KeyDown {
+        /// Key name, as for [`SimulateKind::Key`].
+        key: String,
+        /// Modifier state. Defaults to all-false.
+        #[serde(default)]
+        modifiers: SimulateModifiers,
+    },
+    /// Release-only half of [`SimulateKind::Key`]: release `key`. The
+    /// modifiers become the live modifier state after the release.
+    KeyUp {
+        /// Key name, as for [`SimulateKind::Key`].
+        key: String,
+        /// Modifier state. Defaults to all-false.
+        #[serde(default)]
+        modifiers: SimulateModifiers,
+    },
     /// Type a string. Each character becomes one `KeyPressed` +
     /// `KeyReleased` pair on the same tick. Modifiers always false.
     Type {
