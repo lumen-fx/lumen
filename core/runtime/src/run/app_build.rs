@@ -291,7 +291,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         )?,
     };
     let LoadResult {
-        ir,
+        mut ir,
         html_mtime,
         css_mtime,
         script_paths,
@@ -410,8 +410,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     app.world.insert_resource(reloaders);
     app.world
         .insert_resource(ScriptLanguageTable(table.clone()));
+    // On a platform with no native menu bar, `<menubar>` is drawn in the
+    // window, at the top of the root.
+    let menubar = super::menubar::mount_in_window_menubar(&mut ir, super::menubar::NATIVE_MENUBAR);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
+    super::menubar::finish_in_window_menubar(&mut app.world, root, menubar);
     crate::run::restyle::install_root_class_list(&mut app.world, root);
     // The `<if>` / `<for>` bodies `on_start`'s writes open, mounted before the
     // first tick so `on_ready` finds them.

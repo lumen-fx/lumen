@@ -308,10 +308,9 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
  *     .menu-item      (tag=button, one per <menuitem>)
  *     .menu-separator (tag=spacer, one per <separator>)
  *
- * `<menu>` nested inside `<menubar>` is native OS chrome - extracted by
- * `extract_menubar` before the layout tree is built, so it never
- * reaches this (or any) stylesheet. There is intentionally no
- * `menubar` selector here.
+ * `<menu>` nested inside `<menubar>` is native OS chrome on macOS and
+ * Windows. Elsewhere the runtime draws the bar in the window; its parts
+ * are styled under "Menu bar" below.
  */
 .menu-panel {
   transition: opacity 120ms ease;
@@ -329,6 +328,19 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .menu-item:disabled { text-color: var(--lumen-text-muted); }
 
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+
+/* === Menu bar ===
+ * Where the platform has no native menu bar (Linux), `<menubar>` is drawn
+ * in the window as the root's first child:
+ *   .menubar           (tag=row)
+ *     .menubar-menu      (tag=column, one per <menu>)
+ *       .menubar-button    (tag=button, the menu's label)
+ *       .menu-panel        (the menu, styled as above)
+ */
+.menubar { bg: var(--lumen-panel); border-bottom: 1px solid var(--lumen-border); padding: 2 4; gap: 2; }
+.menubar-button { bg: var(--lumen-panel); text-color: var(--lumen-text); radius: var(--lumen-radius-sm); padding: 0 10; }
+.menubar-button:hover { bg: var(--lumen-panel-hover); }
+.menubar-button:focus { outline: 2 var(--lumen-accent); }
 
 /* === Dialog ===
  * `<dialog>` itself IS the full-screen absolute overlay (the parser

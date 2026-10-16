@@ -283,7 +283,7 @@ pub(crate) fn hot_reload(world: &mut World) {
         engine: cfg.script.engine(),
     };
     let LoadResult {
-        ir,
+        mut ir,
         html_mtime,
         css_mtime,
         script_paths,
@@ -359,8 +359,10 @@ pub(crate) fn hot_reload(world: &mut World) {
     // Same for the fragment set: an instantiation after the reload builds
     // from the edited declaration.
     crate::fragments::install(world, fragments);
+    let menubar = super::menubar::mount_in_window_menubar(&mut ir, super::menubar::NATIVE_MENUBAR);
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
+    super::menubar::finish_in_window_menubar(world, new_root, menubar);
     crate::run::restyle::install_root_class_list(world, new_root);
     // As at startup: the `<if>` / `<for>` bodies the live signals open are
     // mounted now, so the re-armed `on_ready` finds them.
