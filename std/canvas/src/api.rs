@@ -30,16 +30,25 @@
 //! # let mut app = App::new();
 //! app.add_systems(TickStage::Systems, paint.before(CanvasSet::Encode));
 //! ```
+//!
+//! Reading a canvas back takes the app's text shaper and the renderer, so it
+//! is a system parameter, [`CanvasReader`], rather than a context call; it
+//! answers on the spot with everything drawn so far. A script, which has
+//! neither, reads through [`Context2d::get_image_data`], which fills a buffer
+//! when the canvas next encodes.
 
 use std::fmt;
 use std::path::Path;
 
 use bevy_ecs::schedule::SystemSet;
+use bevy_ecs::system::{NonSendMut, SystemParam};
 use lumen_module::lumen_paint::PixelImage;
+use lumen_module::lumen_text::{ShaperService, TextShaper};
 
 use crate::buffer::PixBuf;
 use crate::color::{self, Rgba};
-use crate::ops::{FontSpec, LineCap, LineJoin, Op};
+use crate::encode;
+use crate::ops::{CompositeOperation, FillRule, FontSpec, LineCap, LineJoin, Op};
 use crate::plugin::Canvas;
 use crate::store;
 
@@ -71,15 +80,32 @@ pub enum CanvasError {
     NotALineJoin(String),
     /// A font string with no size in it.
     NotAFont(String),
+    /// A name that is not one of the HTML canvas's composite operations.
+    NotACompositeOperation(String),
     /// An image file that could not be read, decoded, or written.
     Image(String),
+    /// A read of a canvas before the renderer has drawn a frame, or in a run
+    /// with no renderer at all: there is nothing to rasterize with yet.
+    NoRenderer,
+    /// The renderer could not rasterize the canvas.
+    Read(String),
 }
 
 impl fmt::Display for CanvasError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CanvasError::UnknownBuffer(id) => write!(f, "no buffer {}", id.0),
-            CanvasError::OverCap(message) | CanvasError::Image(message) => f.write_str(message),
+            CanvasError::OverCap(message)
+            | CanvasError::Image(message)
+            | CanvasError::Read(message) => f.write_str(message),
+            CanvasError::NotACompositeOperation(text) => write!(
+                f,
+                "'{text}' is not a composite operation; use one of the HTML canvas's, \
+                 such as source-over, destination-out, or multiply"
+            ),
+            CanvasError::NoRenderer => {
+                f.write_str("the canvas cannot be read before the renderer has drawn a frame")
+            }
             CanvasError::NotAColor(text) => write!(
                 f,
                 "'{text}' is not a color this module understands; use a hex, rgb(), or rgba() value"
@@ -220,9 +246,28 @@ impl Context2d {
         self.record(Op::ClosePath);
     }
 
-    /// Fill the current path.
+    /// Fill the current path, under the nonzero rule.
     pub fn fill(&self) {
-        self.record(Op::Fill);
+        self.record(Op::Fill(FillRule::NonZero));
+    }
+
+    /// Fill the current path under the even-odd rule: a region inside it an
+    /// even number of times is a hole. The HTML canvas's `fill("evenodd")`.
+    pub fn fill_evenodd(&self) {
+        self.record(Op::Fill(FillRule::EvenOdd));
+    }
+
+    /// Intersect the clip with the current path, under the nonzero rule.
+    /// Every later draw shows only inside it; `save` / `restore` carry it,
+    /// and only a `restore` (or a `clear` or `resize`) widens it again.
+    pub fn clip(&self) {
+        self.record(Op::Clip(FillRule::NonZero));
+    }
+
+    /// Intersect the clip with the current path, under the even-odd rule.
+    /// The HTML canvas's `clip("evenodd")`.
+    pub fn clip_evenodd(&self) {
+        self.record(Op::Clip(FillRule::EvenOdd));
     }
 
     /// Stroke the current path.
@@ -238,6 +283,13 @@ impl Context2d {
     /// Stroke one rectangle, leaving the path alone.
     pub fn stroke_rect(&self, x: f64, y: f64, width: f64, height: f64) {
         self.record(Op::StrokeRect(x, y, width, height));
+    }
+
+    /// Make a rectangle transparent, through the transform and the clip.
+    /// The global alpha and the composite operation do not apply, and the
+    /// path and the state are left alone, as on the web.
+    pub fn clear_rect(&self, x: f64, y: f64, width: f64, height: f64) {
+        self.record(Op::ClearRect(x, y, width, height));
     }
 
     // -- state --------------------------------------------------------------
@@ -292,6 +344,12 @@ impl Context2d {
     /// `imageSmoothingEnabled`.
     pub fn set_image_smoothing(&self, enabled: bool) {
         self.record(Op::SetImageSmoothing(enabled));
+    }
+
+    /// How later draws combine with what the canvas holds. The HTML canvas's
+    /// `globalCompositeOperation`; `source-over` by default.
+    pub fn set_global_composite_operation(&self, operation: CompositeOperation) {
+        self.record(Op::SetComposite(operation));
     }
 
     /// Push the drawing state.
@@ -373,6 +431,32 @@ impl Context2d {
             width,
             height,
         });
+    }
+
+    /// Read a `width` x `height` region of the canvas, its top-left at
+    /// `(x, y)` in canvas units, into a new buffer: the HTML canvas's
+    /// `getImageData`. One canvas unit is one pixel, whatever size the
+    /// element is shown at.
+    ///
+    /// The read sees every call made before it and none after, but it is
+    /// answered when the canvas next encodes, after the handler that asked
+    /// returns; until then the buffer is transparent. A read made before the
+    /// renderer's first frame waits for it. [`CanvasReader`] answers on the
+    /// spot, from a system.
+    pub fn get_image_data(
+        &self,
+        x: i64,
+        y: i64,
+        width: u32,
+        height: u32,
+    ) -> Result<PixelBuffer, CanvasError> {
+        let buffer = PixelBuffer::new(width, height)?;
+        self.record(Op::GetImageData {
+            x,
+            y,
+            buffer: buffer.id().raw(),
+        });
+        Ok(buffer)
     }
 
     /// Record a draw of `buffer`'s pixels as they are now. The snapshot is
@@ -627,6 +711,115 @@ impl std::ops::Deref for PixelBuffer {
 impl Drop for PixelBuffer {
     fn drop(&mut self) {
         self.id.free();
+    }
+}
+
+/// Reads canvases back as pixels, on the spot.
+///
+/// A system parameter, because a read rasterizes everything drawn so far,
+/// and drawing text takes the app's shaper. Calls recorded since the canvas
+/// last encoded are encoded first, exactly as the next tick would have, so
+/// the read sees every call made before it.
+///
+/// The pixels are the renderer's: the CPU renderer rasterizes the canvas with
+/// vello_cpu, and the GPU renderer renders it on the device and copies it
+/// back, which waits for the GPU. Either way a read costs one rasterize of
+/// the region, so a read every frame is a second render every frame.
+///
+/// ```
+/// # use bevy_ecs::prelude::*;
+/// use lumen_canvas::{CanvasReader, Context2d};
+///
+/// fn pick_color(mut reader: CanvasReader) {
+///     let mut pixel = [0u8; 4];
+///     if reader.read_rgba8(&Context2d::new("art"), 10, 10, 1, 1, &mut pixel).is_ok() {
+///         // `pixel` is the straight RGBA under canvas unit (10, 10).
+///     }
+/// }
+/// # let _ = IntoSystem::into_system(pick_color);
+/// ```
+#[derive(SystemParam)]
+pub struct CanvasReader<'w> {
+    shaper: Option<NonSendMut<'w, ShaperService>>,
+}
+
+impl CanvasReader<'_> {
+    /// Read a `width` x `height` region, its top-left at `(x, y)` in canvas
+    /// units, into `out` as straight RGBA8 rows. What lies outside the
+    /// canvas reads transparent; a short `out` takes what fits.
+    pub fn read_rgba8(
+        &mut self,
+        canvas: &Context2d,
+        x: i64,
+        y: i64,
+        width: u32,
+        height: u32,
+        out: &mut [u8],
+    ) -> Result<(), CanvasError> {
+        let pixels = self.read(canvas, x, y, width, height)?;
+        let n = out.len().min(pixels.len());
+        out[..n].copy_from_slice(&pixels[..n]);
+        Ok(())
+    }
+
+    /// Read a region into `out` as `0xRRGGBBAA` values, row-major.
+    pub fn read_packed(
+        &mut self,
+        canvas: &Context2d,
+        x: i64,
+        y: i64,
+        width: u32,
+        height: u32,
+        out: &mut [u32],
+    ) -> Result<(), CanvasError> {
+        let pixels = self.read(canvas, x, y, width, height)?;
+        for (slot, px) in out.iter_mut().zip(pixels.chunks_exact(4)) {
+            *slot = u32::from_be_bytes([px[0], px[1], px[2], px[3]]);
+        }
+        Ok(())
+    }
+
+    fn read(
+        &mut self,
+        canvas: &Context2d,
+        x: i64,
+        y: i64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, CanvasError> {
+        let mut store = store::store();
+        let store = &mut *store;
+        let rasterizer = store.rasterizer.clone().ok_or(CanvasError::NoRenderer)?;
+        let surface = store.surfaces.entry(canvas.id.clone()).or_default();
+        let ops = std::mem::take(&mut surface.pending);
+        let drew = encode::encode(
+            surface,
+            ops,
+            &mut store.blobs,
+            self.shaper
+                .as_deref_mut()
+                .map(|s| &mut **s as &mut dyn TextShaper),
+            &mut store.reads,
+        );
+        if drew {
+            surface.revision += 1;
+        }
+        let drawing = surface.drawing.clone();
+        // What was flushed reaches the screen through the next encode, which
+        // sees the drawing moved; wake the loop so there is one.
+        store.wake();
+        store.serve_reads();
+        store::read_pixels(&rasterizer, &drawing, x, y, width, height).map_err(CanvasError::Read)
+    }
+}
+
+impl std::str::FromStr for CompositeOperation {
+    type Err = CanvasError;
+
+    /// The HTML canvas spelling, as in `destination-out`.
+    fn from_str(name: &str) -> Result<CompositeOperation, CanvasError> {
+        CompositeOperation::parse(name)
+            .ok_or_else(|| CanvasError::NotACompositeOperation(name.to_string()))
     }
 }
 

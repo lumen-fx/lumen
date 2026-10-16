@@ -23,7 +23,8 @@ use bevy_ecs::world::World;
 use lumen_core::prelude::*;
 use lumen_core::render_backend::install_offscreen;
 use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
-use lumen_paint::{LayerCache, LayerStats, PaintTarget};
+use lumen_paint::kurbo::Affine;
+use lumen_paint::{LayerCache, LayerStats, PaintTarget, Rasterize, Rasterizer, Recording};
 use surface::Presenter;
 use vello_cpu::Pixmap;
 
@@ -171,6 +172,11 @@ impl Renderer for CpuRenderer {
         let Some(target) = self.target.as_mut() else {
             return Err(RenderError::Detached);
         };
+        // What a drawing read back as pixels is rasterized with: this
+        // renderer's own rasterizer, published once it draws.
+        if !render_world.contains_resource::<Rasterizer>() {
+            render_world.insert_resource(Rasterizer::new(CpuRasterizer));
+        }
         let (w, h) = (self.pixmap.width(), self.pixmap.height());
         cpu_painter(&mut self.painter).begin_frame(w, h, lumen_paint::clear_color(render_world));
         lumen_paint::paint_frame(
@@ -194,6 +200,42 @@ impl Renderer for CpuRenderer {
 
     fn detach(&mut self) {
         self.target = None;
+    }
+}
+
+/// Rasterizes a drawing on demand the way a frame is: a [`CpuPainter`] the
+/// size of the request, replayed into, and rasterized with vello_cpu. What
+/// [`CpuRenderer`] publishes as the render world's [`Rasterizer`].
+///
+/// Each call is a fresh painter and a fresh pixmap, so it shares nothing
+/// with the frame and costs one rasterize of the drawing at that size.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CpuRasterizer;
+
+impl Rasterize for CpuRasterizer {
+    fn rasterize(
+        &self,
+        drawing: &Recording,
+        transform: Affine,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String> {
+        if width == 0 || height == 0 {
+            return Ok(Vec::new());
+        }
+        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+            return Err(format!(
+                "a {width}x{height} image is larger than the {MAX_DIMENSION} pixels a side \
+                 the CPU rasterizer takes"
+            ));
+        }
+        let (w, h) = (width as u16, height as u16);
+        let mut painter = CpuPainter::new(w, h);
+        painter.begin_frame(w, h, lumen_paint::peniko::Color::TRANSPARENT);
+        drawing.replay(&mut painter, transform);
+        let mut pixmap = Pixmap::new(w, h);
+        painter.render_into(&mut pixmap);
+        Ok(straight_rgba8(&pixmap))
     }
 }
 

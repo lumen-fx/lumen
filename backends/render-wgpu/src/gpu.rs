@@ -662,67 +662,25 @@ impl GpuCore {
     }
 
     /// Copy the frame texture to the CPU as tightly packed RGBA8: exactly
-    /// the bytes vello wrote, with no colour conversion. Rows are padded to
-    /// wgpu's copy alignment on the GPU side and unpadded here.
+    /// the bytes vello wrote, with no colour conversion.
     pub(crate) fn read_rgba8(&self) -> Result<Vec<u8>, String> {
         let (width, height) = self.size();
-        let unpadded = width as usize * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
-        let padded = unpadded.div_ceil(align) * align;
+        read_texture(
+            &self.device,
+            &self.queue,
+            &self.frame.texture,
+            width,
+            height,
+        )
+    }
 
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("lumen frame readback"),
-            size: (padded * height as usize) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("lumen frame readback encoder"),
-            });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.frame.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded as u32),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit(Some(encoder.finish()));
-
-        let slice = buffer.slice(..);
-        let (tx, rx) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        rx.recv()
-            .map_err(|_| "map channel dropped".to_string())?
-            .map_err(|e| format!("{e:?}"))?;
-
-        let raw = slice.get_mapped_range();
-        let mut out = Vec::with_capacity(unpadded * height as usize);
-        for row in 0..height as usize {
-            let start = row * padded;
-            out.extend_from_slice(&raw[start..start + unpadded]);
-        }
-        drop(raw);
-        buffer.unmap();
-        Ok(out)
+    /// A rasterizer on this core's device, for the render world to publish.
+    pub(crate) fn rasterizer(&self) -> crate::rasterize::GpuRasterizer {
+        crate::rasterize::GpuRasterizer::new(
+            self.device.clone(),
+            self.queue.clone(),
+            self.adapter_info.clone(),
+        )
     }
 
     /// Wait for every submission to finish. wgpu-core's `Queue::drop` waits
@@ -733,6 +691,74 @@ impl GpuCore {
     pub(crate) fn drain(&self) {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
+}
+
+/// Copy a `width` x `height` `Rgba8Unorm` texture to the CPU as tightly
+/// packed RGBA8: exactly the bytes vello wrote, with no colour conversion.
+/// Rows are padded to wgpu's copy alignment on the GPU side and unpadded
+/// here. Blocks until the copy lands.
+pub(crate) fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    let unpadded = width as usize * 4;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumen readback"),
+        size: (padded * height as usize) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("lumen readback encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    let slice = buffer.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv()
+        .map_err(|_| "map channel dropped".to_string())?
+        .map_err(|e| format!("{e:?}"))?;
+
+    let raw = slice.get_mapped_range();
+    let mut out = Vec::with_capacity(unpadded * height as usize);
+    for row in 0..height as usize {
+        let start = row * padded;
+        out.extend_from_slice(&raw[start..start + unpadded]);
+    }
+    drop(raw);
+    buffer.unmap();
+    Ok(out)
 }
 
 /// One texture's worth of offscreen layers: its size, and where each layer

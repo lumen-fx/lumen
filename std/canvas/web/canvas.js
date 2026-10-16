@@ -338,6 +338,19 @@ function replay(s, [name, ...args]) {
     case "image_smoothing":
       ctx.imageSmoothingEnabled = args[0];
       break;
+    case "composite":
+      ctx.globalCompositeOperation = args[0];
+      break;
+    case "clear_rect":
+      // The bitmap is at the screen's density, and clearRect goes through
+      // the transform that scales onto it, so this clears canvas units.
+      ctx.clearRect(...args);
+      break;
+    case "get_image_data": {
+      const [x, y, handle] = args;
+      readInto(s, x, y, handle);
+      break;
+    }
     case "font":
       ctx.font = args[0];
       break;
@@ -438,6 +451,18 @@ export function fill(id) {
   record(id, ["fill"]);
 }
 
+export function fill_evenodd(id) {
+  record(id, ["fill", "evenodd"]);
+}
+
+export function clip(id) {
+  record(id, ["clip"]);
+}
+
+export function clip_evenodd(id) {
+  record(id, ["clip", "evenodd"]);
+}
+
 export function stroke(id) {
   record(id, ["stroke"]);
 }
@@ -448,6 +473,10 @@ export function fill_rect(id, x, y, w, h) {
 
 export function stroke_rect(id, x, y, w, h) {
   record(id, ["strokeRect", f(x), f(y), f(w), f(h)]);
+}
+
+export function clear_rect(id, x, y, w, h) {
+  record(id, ["clear_rect", f(x), f(y), f(w), f(h)]);
 }
 
 export function set_fill_rgba(id, r, g, b, a) {
@@ -506,6 +535,48 @@ export function set_global_alpha(id, alpha) {
 
 export function set_image_smoothing(id, enabled) {
   record(id, ["image_smoothing", Boolean(enabled)]);
+}
+
+// The HTML canvas's own names, which the module accepts too.
+const COMPOSITE_OPERATIONS = [
+  "source-over",
+  "source-in",
+  "source-out",
+  "source-atop",
+  "destination-over",
+  "destination-in",
+  "destination-out",
+  "destination-atop",
+  "lighter",
+  "copy",
+  "xor",
+  "multiply",
+  "screen",
+  "overlay",
+  "darken",
+  "lighten",
+  "color-dodge",
+  "color-burn",
+  "hard-light",
+  "soft-light",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+];
+
+export function set_global_composite_operation(id, operation) {
+  const name = String(operation).trim().toLowerCase();
+  if (!COMPOSITE_OPERATIONS.includes(name)) {
+    warn(
+      `'${operation}' is not a composite operation; use one of the HTML canvas's, such as source-over, destination-out, or multiply`,
+    );
+    return false;
+  }
+  record(id, ["composite", name]);
+  return true;
 }
 
 export function save(id) {
@@ -713,6 +784,42 @@ export function buffer_load_png(path) {
 export function buffer_save_png(handle, path) {
   warn(`buffer_save_png(${handle}, '${path}'): a page has no files to write`);
   return false;
+}
+
+// Read a region of the canvas, as drawn up to the read, into a buffer. The
+// bitmap is at the screen's density, so the region is scaled back to one
+// pixel per canvas unit; at a density of 1 that is the bitmap's own pixels.
+function readInto(s, x, y, handle) {
+  const buffer = buffers.get(handle);
+  if (!buffer) return;
+  const r = s.ratio || 1;
+  const staging = document.createElement("canvas");
+  staging.width = buffer.width;
+  staging.height = buffer.height;
+  const sctx = staging.getContext("2d");
+  sctx.drawImage(
+    s.element,
+    x * r,
+    y * r,
+    buffer.width * r,
+    buffer.height * r,
+    0,
+    0,
+    buffer.width,
+    buffer.height,
+  );
+  buffer.data.set(sctx.getImageData(0, 0, buffer.width, buffer.height).data);
+}
+
+export function get_image_data(id, x, y, w, h) {
+  const [bw, bh] = [dim(w), dim(h)];
+  const handle = buffer_new(bw, bh);
+  if (handle === 0) return 0;
+  record(id, ["get_image_data", Math.trunc(f(x)), Math.trunc(f(y)), handle]);
+  // A page answers at once: the read lands in the batch the calls before it
+  // drew in, so the buffer holds them when this returns.
+  if (element(id)) flush();
+  return handle;
 }
 
 export function draw_buffer(id, handle, x, y) {

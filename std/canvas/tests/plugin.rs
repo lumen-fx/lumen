@@ -427,7 +427,10 @@ fn a_canvas_drawn_at_forever_is_bounded() {
     {
         let mut store = lumen_canvas::store::store();
         for _ in 0..(lumen_canvas::store::UNANSWERED_JOURNAL_CAP + 500) {
-            store.record("typo", lumen_canvas::ops::Op::Fill);
+            store.record(
+                "typo",
+                lumen_canvas::ops::Op::Fill(lumen_canvas::FillRule::NonZero),
+            );
         }
     }
     app.tick();

@@ -616,13 +616,15 @@ with `add_plugin`, which registers the tag before the markup is parsed.
 `Context2d::new(id)` is the drawing context of the canvas whose element has
 that `id`, the counterpart of the HTML canvas's `CanvasRenderingContext2D`:
 paths (`begin_path`, `move_to`, `line_to`, `quad_to`, `bezier_to`, `arc`,
-`rect`, `close_path`, `fill`, `stroke`), rectangles, colours, line style,
-`set_global_alpha`, `save` / `restore`, the transform, `set_font` and
-`fill_text`, `clear` and `resize`. `Context2d::of(&canvas)` takes the `Canvas`
-component of an adopted element. The calls that parse text
-(`set_fill_style`, `set_stroke_style`, `set_font`) return a `CanvasError`
-where the script functions answer `false`; `LineCap` and `LineJoin` parse
-from their HTML spellings with `str::parse`.
+`rect`, `close_path`, `fill`, `fill_evenodd`, `stroke`), rectangles,
+`clear_rect`, `clip` and `clip_evenodd`, colours, line style,
+`set_global_alpha`, `set_global_composite_operation`, `save` / `restore`, the
+transform, `set_font` and `fill_text`, `clear` and `resize`.
+`Context2d::of(&canvas)` takes the `Canvas` component of an adopted element.
+The calls that parse text (`set_fill_style`, `set_stroke_style`, `set_font`)
+return a `CanvasError` where the script functions answer `false`;
+`CompositeOperation`, `LineCap` and `LineJoin` parse from their HTML
+spellings with `str::parse`.
 
 `PixelBuffer::new(width, height)` is a straight RGBA8 buffer the app owns; it
 is freed when dropped. Every pixel call lives on its `BufferId` handle, which
@@ -651,6 +653,31 @@ is cheap whatever the buffer's size: drawing an unchanged buffer uploads
 nothing, and drawing one after a write uploads only the area the write touched.
 Drawing calls land in the frame of the tick that encodes them; a system ordered
 `.before(CanvasSet::Encode)` draws into the same frame.
+
+`CanvasReader` reads a canvas back, the counterpart of `getImageData`. It is a
+system parameter, because a read rasterizes everything drawn so far and text
+needs the app's shaper; calls not yet encoded are encoded first, so a read sees
+every call made before it. `reader.read_rgba8(&ctx, x, y, w, h, &mut out)` fills
+a slice with straight RGBA8 rows, one pixel per canvas unit, and
+`read_packed` fills `0xRRGGBBAA` values. It answers `CanvasError::NoRenderer`
+until the renderer has drawn its first frame. The read is a full rasterize of
+the region on the app's renderer: vello_cpu on the CPU renderer, and on the
+GPU renderer a render into a texture of the region's size followed by a copy
+back that waits for the GPU, whose first read also builds a second set of
+vello's pipelines. `ctx.get_image_data(x, y, w, h)` is the script form: it
+returns a `PixelBuffer` that is filled when the canvas next encodes.
+
+```rust
+use lumenui::prelude::*;
+use lumenui_canvas::{CanvasReader, Context2d};
+
+fn eyedropper(mut reader: CanvasReader) {
+    let mut pixel = [0u8; 4];
+    if reader.read_rgba8(&Context2d::new("art"), 10, 10, 1, 1, &mut pixel).is_ok() {
+        // `pixel` is what the canvas shows at canvas unit (10, 10).
+    }
+}
+```
 
 ```rust
 use lumenui::prelude::*;

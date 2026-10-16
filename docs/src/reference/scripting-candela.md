@@ -1019,9 +1019,13 @@ gives it one the declaration did not ask for.
 | `canvas::rect(id: string, x: float, y: float, width: float, height: float)` | | Add a closed rectangle to the path. |
 | `canvas::close_path(id: string)` | | Close the current subpath back to its start. |
 | `canvas::fill(id: string)` | | Fill the current path. |
+| `canvas::fill_evenodd(id: string)` | | Fill the current path under the even-odd rule, so a region inside it twice is a hole: `fill("evenodd")` on the web. |
+| `canvas::clip(id: string)` | | Intersect the clip with the current path. Every later draw shows only inside it, until a `restore` (or `clear`, or `resize`) widens it again. |
+| `canvas::clip_evenodd(id: string)` | | The same under the even-odd rule. |
 | `canvas::stroke(id: string)` | | Stroke the current path. |
 | `canvas::fill_rect(id: string, x: float, y: float, width: float, height: float)` | | Fill one rectangle, leaving the path alone. |
 | `canvas::stroke_rect(id: string, x: float, y: float, width: float, height: float)` | | Stroke one rectangle, leaving the path alone. |
+| `canvas::clear_rect(id: string, x: float, y: float, width: float, height: float)` | | Make a rectangle transparent, through the transform and the clip. The alpha and the composite operation do not apply, and the path and state are kept. |
 | `canvas::set_fill_rgba(id: string, r: float, g: float, b: float, a: float)` | | Set the fill colour from four components. |
 | `canvas::set_fill_style(id: string, color: string)` | `bool` | Set the fill colour from CSS text (`#rgb`, `#rrggbbaa`, `rgb()`, `rgba()`, the CSS level 1 names, `transparent`). `false` when the text is none of those, and the colour is left alone. |
 | `canvas::set_stroke_rgba(id: string, r: float, g: float, b: float, a: float)` | | Set the stroke colour from four components. |
@@ -1031,7 +1035,8 @@ gives it one the declaration did not ask for.
 | `canvas::set_line_join(id: string, join: string)` | `bool` | `miter`, `round`, or `bevel`. |
 | `canvas::set_global_alpha(id: string, alpha: float)` | | Multiply every later draw by this alpha. |
 | `canvas::set_image_smoothing(id: string, enabled: bool)` | | Whether a buffer drawn at another size is smoothed. On by default, as on the web; off samples the nearest pixel, which keeps zoomed pixel art sharp. |
-| `canvas::save(id: string)` | | Push the drawing state: colours, line style, alpha, image smoothing, transform. |
+| `canvas::set_global_composite_operation(id: string, operation: string)` | `bool` | How later draws combine with what the canvas holds, by the HTML canvas's `globalCompositeOperation` names: `source-over` (the default), `source-in`, `source-out`, `source-atop`, `destination-over`, `destination-in`, `destination-out`, `destination-atop`, `lighter`, `copy`, `xor`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`. `false` for any other name. |
+| `canvas::save(id: string)` | | Push the drawing state: colours, line style, alpha, image smoothing, composite operation, clip, transform. |
 | `canvas::restore(id: string)` | | Pop it. Popping past the bottom leaves the state alone. |
 | `canvas::translate(id: string, x: float, y: float)` | | Move the origin. |
 | `canvas::rotate(id: string, radians: float)` | | Rotate the transform. |
@@ -1046,12 +1051,19 @@ is filled or stroked, so changing the transform between building a path and
 filling it moves the result. The HTML canvas bakes the transform into each
 segment as it is added; this is the one place the two differ.
 
+A composite operation works on the canvas's own pixels, never on the page
+behind the element: `destination-out` makes the canvas transparent where it
+draws, and the page shows through. The operators that also clear what the
+draw does not cover (`copy`, `source-in`, `source-out`, `destination-in`,
+`destination-atop`) clear the whole canvas, or the whole clip when one is
+set. On the GPU renderer, under a clip, they also clear a band up to 16
+pixels wide just outside the clip's edge; the CPU renderer and a page clear
+the clip exactly.
+
 ### Pixel buffers
 
-A canvas is write-only: what it holds is a list of drawing calls bound for the
-renderer, not an image, so there is nothing to read a pixel back from. Buffers are
-the read-write half - plain CPU pixels a script creates, edits, loads from a
-PNG, saves to one, and draws onto a canvas. A pixel is one packed
+Buffers are plain CPU pixels a script creates, edits, loads from a PNG, saves
+to one, draws onto a canvas, and reads a canvas into. A pixel is one packed
 `0xRRGGBBAA` integer with straight (not premultiplied) alpha, so what a script
 writes is what it reads back.
 
@@ -1069,6 +1081,7 @@ writes is what it reads back.
 | `canvas::buffer_fill_rect(buffer: int, x: int, y: int, width: int, height: int, rgba: int)` | | Fill a rectangle with one colour. |
 | `canvas::buffer_load_png(path: string)` | `int` | Decode a PNG into a new buffer; `0` when it could not be read. The path resolves against the app directory. |
 | `canvas::buffer_save_png(buffer: int, path: string)` | `bool` | Write a buffer out as a PNG. |
+| `canvas::get_image_data(id: string, x: int, y: int, width: int, height: int)` | `int` | Read a region of the canvas, as composed, into a new buffer: `getImageData` on the web. One canvas unit is one pixel. `0` when the buffer was refused. See below for when it is filled. |
 | `canvas::draw_buffer(id: string, buffer: int, x: float, y: float)` | | Draw a buffer onto a canvas at its own size. |
 | `canvas::draw_buffer_scaled(id: string, buffer: int, x: float, y: float, width: float, height: float)` | | Draw a buffer stretched into a box. |
 
@@ -1077,6 +1090,14 @@ write after it, even in the same handler, changes the buffer and not what was
 drawn. To show a write, draw the buffer again. Drawing a buffer that has not
 changed costs no upload, and drawing one after a write uploads only the area
 the write touched, so redrawing a large buffer every frame stays cheap.
+
+A read sees every call made on the canvas before it and none after. On the
+desktop it is answered when the canvas next encodes, after the handler that
+asked returns, so the buffer is transparent until the next handler; a read in
+`on_ready`, before the first frame, waits for that frame. A page answers it
+at once. A read rasterizes the canvas again on the app's renderer, which on a
+GPU means a render and a copy back, so reading every frame costs a second
+render every frame.
 
 Three settings bound what one call may ask for, from the module's `config`
 table: `region_cap` (pixels in one region call), `buffer_pixel_cap` (pixels in
