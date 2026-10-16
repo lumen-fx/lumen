@@ -2137,6 +2137,31 @@ pub struct Validation {
     pub is_valid: bool,
 }
 
+/// On an element a widget built out of parts for itself, such as a color
+/// picker's hex field: its text edits and commits are the widget's own
+/// business, so they raise no DOM `input`, `change` or `submit` event. The
+/// widget raises its own.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct WidgetInternal;
+
+/// Read a color in HTML's "valid simple color" form: `#` and six hex digits,
+/// either case. `None` for anything else, which a color field reads as
+/// black.
+pub fn parse_simple_color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.trim().strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
+/// Write a color the way a color field's `value` holds it: `#rrggbb`, in
+/// lowercase.
+pub fn format_simple_color(rgb: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
 /// What a number field's content must be, beyond `min` and `max`: a number,
 /// and with a step, one a whole number of steps from the grid's start (the
 /// web's `badInput` and `stepMismatch`).

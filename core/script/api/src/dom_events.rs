@@ -33,6 +33,12 @@
 //! - `change` and `submit` fire on commit, from the input router's
 //!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
 //!   single-line input.
+//! - A control that is not a text field (a color field) raises
+//!   [`ControlInput`]: `input` for every new value, and `change` when the
+//!   user commits the one they settled on.
+//! - A widget's own internal parts ([`WidgetInternal`], a color panel's hex
+//!   field) raise no `input`, `change` or `submit`; the widget raises its
+//!   own.
 //! - `scroll` comes from a changed scroll offset and does not bubble.
 //! - `contextmenu` comes from the input layer's [`ContextMenuEvent`]: a
 //!   secondary-button press (a release on Windows), the ContextMenu key or
@@ -50,6 +56,8 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{Message, MessageReader, MessageRegistry, Messages};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
+use lumen_core::components::WidgetInternal;
+use lumen_core::input::ControlInput;
 use lumen_core::prelude::*;
 
 use crate::ScriptHost;
@@ -440,6 +448,7 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<FocusedKey>(world);
     register::<lumen_core::text_events::TextEditApplied>(world);
     register::<TextInputCommitted>(world);
+    register::<ControlInput>(world);
 }
 
 /// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so
@@ -650,6 +659,8 @@ pub fn queue_state_events(
     mut pending: ResMut<PendingDomEvents>,
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
+    mut controls: MessageReader<ControlInput>,
+    internal: Query<(), With<WidgetInternal>>,
     gained_focus: Query<Entity, Added<Focused>>,
     mut lost_focus: RemovedComponents<Focused>,
     gained_hover: Query<Entity, Added<Hovered>>,
@@ -686,6 +697,7 @@ pub fn queue_state_events(
     for ev in edits.read() {
         if matches!(ev.kind, lumen_core::text_events::AppliedKind::CursorMove)
             || fired.contains(&ev.entity)
+            || internal.contains(ev.entity)
         {
             continue;
         }
@@ -700,11 +712,22 @@ pub fn queue_state_events(
     // change / submit from the commit signal (Enter on a single-line
     // input, or focus leaving a committed field).
     for c in commits.read() {
+        if internal.contains(c.entity) {
+            continue;
+        }
         for etype in ["change", "submit"] {
             let mut data = base(c.entity, etype);
             data.value = c.text.clone();
             queue.push((data, c.entity));
         }
+    }
+    // input for each new value, and change for the commit, from a control
+    // that is not a text field.
+    for c in controls.read() {
+        let etype = if c.committed { "change" } else { "input" };
+        let mut data = base(c.entity, etype);
+        data.value = c.value.clone();
+        queue.push((data, c.entity));
     }
     // scroll (does not bubble).
     for e in scrolled.iter() {
@@ -794,6 +817,7 @@ pub(crate) mod text_event_tests {
     /// messages.
     fn drive(world: &mut World) {
         world.init_resource::<PendingDomEvents>();
+        world.init_resource::<Messages<ControlInput>>();
         world
             .run_system_once(queue_state_events)
             .expect("system ran");
@@ -1372,6 +1396,66 @@ pub(crate) mod text_event_tests {
         );
         event::clear_all_bindings();
         publish_dom_index(DomIndex::default());
+    }
+
+    /// A control that is not a text field raises `input` for each new
+    /// value and `change` for the commit, and a widget's internal text field
+    /// raises nothing of its own.
+    #[test]
+    fn control_input_fires_input_and_change() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        let field = world.spawn_empty().id();
+        let hex = world
+            .spawn((TextBuffer::single_line("#000000"), WidgetInternal))
+            .id();
+        let seen = watch(
+            lumen_core::node::NodeHandle::new(field).pack(),
+            &["input", "change"],
+        );
+        let inner = watch(
+            lumen_core::node::NodeHandle::new(hex).pack(),
+            &["input", "change", "submit"],
+        );
+
+        world.write_message(ControlInput {
+            entity: field,
+            value: "#112233".to_string(),
+            committed: false,
+        });
+        world.write_message(ControlInput {
+            entity: field,
+            value: "#445566".to_string(),
+            committed: true,
+        });
+        world.write_message(TextEditApplied {
+            entity: hex,
+            version: 1,
+            kind: AppliedKind::Insert,
+            before_byte: 0,
+            after_byte: 1,
+        });
+        world.write_message(TextInputCommitted {
+            entity: hex,
+            text: "#000000".to_string(),
+        });
+        drive(&mut world);
+        world.resource_mut::<Messages<ControlInput>>().clear();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ("input".to_string(), "#112233".to_string()),
+                ("change".to_string(), "#445566".to_string()),
+            ],
+        );
+        assert!(
+            inner.lock().unwrap().is_empty(),
+            "internal parts raise nothing"
+        );
+        event::clear_all_bindings();
     }
 
     #[test]

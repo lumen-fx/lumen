@@ -128,6 +128,7 @@ pub const ATTRS: &[&str] = &[
     "max",
     "step",
     "multiline",
+    "type",
     "pattern",
     "required",
     "password-character",
@@ -183,7 +184,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<image>`** - Bitmap or SVG. Attributes: `src`, `fit`, `width`, `height`, `opacity`."
         }
         "input" => {
-            "**`<input>`** - Single-line text input. `placeholder`, `bind-text`, `on_text_input`. Validation attributes: `pattern`, `required`, `min`, `max`. `password-character` masks the rendered value."
+            "**`<input>`** - Single-line text input. `value` is the initial text. `placeholder`, `bind-text`, `on_text_input`. Validation attributes: `pattern`, `required`, `min`, `max`. `password-character` masks the rendered value. `type=\"number\"` holds a number stepped within `min` / `max` / `step`; `type=\"color\"` holds a `#rrggbb` color picked from a panel."
         }
         "textarea" => {
             "**`<textarea>`** - Multi-line text input: an `<input>` with `multiline` defaulting to true. Same attributes and events."
@@ -327,7 +328,10 @@ it. The text falls back to the authored `text`, then to the key itself. \
             "**`max`** - number. Upper bound for `<slider>` / `<progress>`, and a validation bound on text that parses as a number."
         }
         "step" => {
-            "**`step`** - number. `<slider>` keyboard / wheel increment. Defaults to `(max - min) / 100`."
+            "**`step`** - number. `<slider>` keyboard / wheel increment. Defaults to `(max - min) / 100`. On `<input type=\"number\">` the step the value moves by and must sit on, defaulting to `1`; `any` accepts any number."
+        }
+        "type" => {
+            "**`type`** - on `<input>`: `text` (the default), `number` or `color`, as in HTML. Any other value is a text field."
         }
         "multiline" => {
             "**`multiline`** - boolean. Accept newlines in a text field. Defaults to false on `<input>`, true on `<textarea>`."

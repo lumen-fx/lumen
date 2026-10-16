@@ -125,7 +125,11 @@ pub fn accumulate_wheel(
     parents: Query<&ChildOf>,
     children_q: Query<(&ChildOf, &Transform)>,
     transforms: Query<&Transform>,
-    wheel_takers: Query<(Has<SliderValue>, Has<crate::number::NumberInput>, Has<Focused>)>,
+    wheel_takers: Query<(
+        Has<SliderValue>,
+        Has<crate::number::NumberInput>,
+        Has<Focused>,
+    )>,
     mut scrolls: Query<(Entity, &mut Scroll, &mut ScrollOffset)>,
 ) {
     let pending: Vec<MouseWheel> = wheels.read().copied().collect();

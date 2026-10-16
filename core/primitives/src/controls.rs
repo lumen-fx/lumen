@@ -172,6 +172,21 @@ impl Plugin for ControlsPlugin {
             )
                 .in_set(lumen_core::text_events::TextEditSet::Producers),
         );
+        // `<input type="color">`'s panel: open and close it, pick from its
+        // area and hue strip, take a typed hex, and show the color on its
+        // parts. A page leaves all of it to the browser's own color input.
+        app.add_systems(
+            TickStage::Systems,
+            (
+                crate::color::toggle_color_panels,
+                crate::color::drag_color_panels,
+                crate::color::commit_color_hex,
+                crate::color::sync_color_parts,
+            )
+                .chain()
+                .after(lumen_input::dispatch_clicks)
+                .before(crate::color::sync_color_bindings),
+        );
         // The user-input mutators are ordered before lumen-core's
         // signal push-back systems (`push_toggle_to_signal` /
         // `push_slider_to_signal`, registered by the host when signal

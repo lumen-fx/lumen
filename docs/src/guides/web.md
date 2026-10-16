@@ -143,7 +143,11 @@ lands on, and what a screen reader reads the caption as the name of; the same
 
 An `<input type="number">` is the browser's own number field, with its `min`,
 `max` and `step`. The browser draws its own step control, so the
-`.number-steps` buttons the desktop draws are not in the page.
+`.number-steps` buttons the desktop draws are not in the page. An
+`<input type="color">` is the browser's own color input, which opens the
+browser's or the system's picker rather than the desktop's `.color-panel`;
+its `input` and `change` reach the app's handlers and its `bind-value` as on
+the desktop.
 
 ## How the styling reaches the page
 

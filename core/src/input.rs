@@ -1403,6 +1403,25 @@ pub struct FocusedKey {
     pub repeat: bool,
 }
 
+/// A control that is not a text field changed its value: a color picker
+/// moved to a new color, or a color field the browser drew picked one. The
+/// script event driver raises it as the DOM `input` event, or as `change`
+/// when `committed`: the user settled on the value the `input`s led to.
+///
+/// A text field's edits are [`crate::text_events::TextEditApplied`] and its
+/// commits [`TextInputCommitted`] instead.
+#[derive(Message, Clone, Debug)]
+pub struct ControlInput {
+    /// The control.
+    pub entity: Entity,
+    /// Its value as the DOM's `value` reads it, `#rrggbb` for a color.
+    pub value: String,
+    /// Whether this is the commit of a value earlier `input`s already
+    /// reported, which is what `change` is: a color panel closing on a new
+    /// color.
+    pub committed: bool,
+}
+
 /// The user asked for a context menu on `entity`; the script event driver
 /// raises it as the DOM `contextmenu` event.
 ///

@@ -665,10 +665,20 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .collect(),
         });
     }
-    if let Some(text) = &text {
+    // A color field is a face, not a text field: its `#rrggbb` is the
+    // color it holds, which `ColorInput` keeps, and nothing to type into.
+    let color_field =
+        el.tag == "input" && el.attrs.input_type == Some(lumen_ir::layout_ir::InputType::Color);
+    if color_field {
+        let rgb = text
+            .as_deref()
+            .and_then(lumen_core::components::parse_simple_color)
+            .unwrap_or([0, 0, 0]);
+        entity.insert(lumen_primitives::ColorInput::new(rgb));
+    } else if let Some(text) = &text {
         entity.insert(TextContent(text.clone()));
     }
-    if matches!(el.tag.as_str(), "input" | "textarea") {
+    if matches!(el.tag.as_str(), "input" | "textarea") && !color_field {
         let default_multiline = el.tag == "textarea";
         entity.insert(TextInput {
             placeholder: strings.placeholder.clone().unwrap_or_default(),
@@ -738,6 +748,40 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             }
             lumen_ir::layout_ir::WidgetPart::StepDown => {
                 entity.insert(lumen_primitives::NumberStepButton { up: false });
+            }
+            // The swatch and the area are painted the field's color, so
+            // they carry paint whether or not a skin gives them a fill.
+            lumen_ir::layout_ir::WidgetPart::ColorSwatch => {
+                entity.insert(lumen_primitives::ColorPart::Swatch);
+                entity.insert_if_new(Visuals::default());
+            }
+            // The panel floats over everything after it in the document, as
+            // a dropdown's does.
+            lumen_ir::layout_ir::WidgetPart::ColorPanel => {
+                entity.insert((
+                    lumen_primitives::ColorPart::Panel,
+                    lumen_core::render_world::OverlayLayer,
+                ));
+            }
+            lumen_ir::layout_ir::WidgetPart::ColorArea => {
+                entity.insert(lumen_primitives::ColorPart::Area);
+                entity.insert_if_new(Visuals::default());
+            }
+            lumen_ir::layout_ir::WidgetPart::ColorAreaThumb => {
+                entity.insert(lumen_primitives::ColorPart::AreaThumb);
+            }
+            lumen_ir::layout_ir::WidgetPart::ColorHue => {
+                entity.insert(lumen_primitives::ColorPart::Hue);
+            }
+            lumen_ir::layout_ir::WidgetPart::ColorHueThumb => {
+                entity.insert(lumen_primitives::ColorPart::HueThumb);
+            }
+            // The hex field's own edits are the color field's business.
+            lumen_ir::layout_ir::WidgetPart::ColorHex => {
+                entity.insert((
+                    lumen_primitives::ColorPart::Hex,
+                    lumen_core::components::WidgetInternal,
+                ));
             }
         }
     }
