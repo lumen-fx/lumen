@@ -183,8 +183,9 @@ impl CanvasStore {
         Ok(self.insert(buffer))
     }
 
-    /// Whether one more buffer of this size is allowed.
-    fn admit(&self, width: u32, height: u32) -> Result<(), String> {
+    /// Whether a buffer of this size is allowed: not empty, and inside the
+    /// pixel cap.
+    pub fn check_size(&self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 {
             return Err(format!("a {width}x{height} buffer holds no pixels"));
         }
@@ -196,6 +197,12 @@ impl CanvasStore {
                 self.caps.buffer_pixels
             ));
         }
+        Ok(())
+    }
+
+    /// Whether one more buffer of this size is allowed.
+    fn admit(&self, width: u32, height: u32) -> Result<(), String> {
+        self.check_size(width, height)?;
         if self.buffers.len() as u64 >= self.caps.buffer_count {
             return Err(format!(
                 "{} buffers already exist, which is the cap; free one first",

@@ -18,17 +18,16 @@
 use std::path::Path;
 
 use image::ImageEncoder;
+use lumen_module::lumen_paint::PixelImage;
 
 /// One CPU pixel buffer.
+///
+/// The pixels are a [`PixelImage`]: tiled, so a write copies only the tiles
+/// it touches and the renderer re-uploads only those, and cheap to snapshot,
+/// so a canvas that drew the buffer keeps the pixels it drew.
 #[derive(Clone, Debug)]
 pub struct PixBuf {
-    width: u32,
-    height: u32,
-    /// Straight RGBA8, row-major, `width * height * 4` bytes.
-    pixels: Vec<u8>,
-    /// Bumped by every write. The renderer's upload cache is keyed by it, so
-    /// a buffer drawn every frame and never edited uploads once.
-    generation: u64,
+    image: PixelImage,
 }
 
 impl PixBuf {
@@ -36,66 +35,38 @@ impl PixBuf {
     #[must_use]
     pub fn new(width: u32, height: u32) -> PixBuf {
         PixBuf {
-            width,
-            height,
-            pixels: vec![0; width as usize * height as usize * 4],
-            generation: 0,
+            image: PixelImage::new(width, height),
         }
     }
 
     /// Width in pixels.
     #[must_use]
     pub fn width(&self) -> u32 {
-        self.width
+        self.image.width()
     }
 
     /// Height in pixels.
     #[must_use]
     pub fn height(&self) -> u32 {
-        self.height
+        self.image.height()
     }
 
-    /// How many times this buffer has been written to.
+    /// The pixels as the renderer draws them. Cloning it is a snapshot.
     #[must_use]
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// The straight RGBA8 bytes.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.pixels
-    }
-
-    /// The byte offset of a pixel, or `None` when it is outside.
-    fn offset(&self, x: i64, y: i64) -> Option<usize> {
-        if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {
-            return None;
-        }
-        Some((y as usize * self.width as usize + x as usize) * 4)
+    pub fn image(&self) -> &PixelImage {
+        &self.image
     }
 
     /// One pixel as `0xRRGGBBAA`; a pixel outside the buffer reads 0, which
     /// is the transparent black a sampler outside an image would give.
     #[must_use]
     pub fn get_pixel(&self, x: i64, y: i64) -> u32 {
-        match self.offset(x, y) {
-            Some(i) => u32::from_be_bytes([
-                self.pixels[i],
-                self.pixels[i + 1],
-                self.pixels[i + 2],
-                self.pixels[i + 3],
-            ]),
-            None => 0,
-        }
+        u32::from_be_bytes(self.image.pixel(x, y))
     }
 
     /// Write one pixel; a pixel outside the buffer is dropped.
     pub fn set_pixel(&mut self, x: i64, y: i64, rgba: u32) {
-        if let Some(i) = self.offset(x, y) {
-            self.pixels[i..i + 4].copy_from_slice(&rgba.to_be_bytes());
-            self.generation += 1;
-        }
+        self.image.write_rgba8(x, y, 1, 1, &rgba.to_be_bytes());
     }
 
     /// A rectangle of pixels, row-major, one `0xRRGGBBAA` per pixel. Pixels
@@ -103,27 +74,43 @@ impl PixBuf {
     /// back the size it asked for.
     #[must_use]
     pub fn get_region(&self, x: i64, y: i64, width: u32, height: u32) -> Vec<u32> {
-        let mut out = Vec::with_capacity(width as usize * height as usize);
-        for row in 0..i64::from(height) {
-            for col in 0..i64::from(width) {
-                out.push(self.get_pixel(x.saturating_add(col), y.saturating_add(row)));
-            }
-        }
+        let mut out = vec![0u32; width as usize * height as usize];
+        self.read_packed(x, y, width, height, &mut out);
         out
+    }
+
+    /// Read a rectangle into `out` as `0xRRGGBBAA` values, row-major. A short
+    /// `out` takes what fits.
+    pub fn read_packed(&self, x: i64, y: i64, width: u32, height: u32, out: &mut [u32]) {
+        let mut bytes = vec![0u8; out.len().min(width as usize * height as usize) * 4];
+        self.image.read_rgba8(x, y, width, height, &mut bytes);
+        for (value, px) in out.iter_mut().zip(bytes.chunks_exact(4)) {
+            *value = u32::from_be_bytes([px[0], px[1], px[2], px[3]]);
+        }
+    }
+
+    /// Read a rectangle into `out` as straight RGBA8 bytes, row-major. A short
+    /// `out` takes what fits.
+    pub fn read_rgba8(&self, x: i64, y: i64, width: u32, height: u32, out: &mut [u8]) {
+        self.image.read_rgba8(x, y, width, height, out);
     }
 
     /// Write a rectangle of pixels back. Extra values are ignored and
     /// missing ones leave their pixels alone, so a short array is a partial
     /// write rather than a refusal.
     pub fn put_region(&mut self, x: i64, y: i64, width: u32, height: u32, pixels: &[u32]) {
-        for row in 0..i64::from(height) {
-            for col in 0..i64::from(width) {
-                let Some(value) = pixels.get(row as usize * width as usize + col as usize) else {
-                    return;
-                };
-                self.set_pixel(x.saturating_add(col), y.saturating_add(row), *value);
-            }
-        }
+        let count = pixels.len().min(width as usize * height as usize);
+        let bytes: Vec<u8> = pixels[..count]
+            .iter()
+            .flat_map(|p| p.to_be_bytes())
+            .collect();
+        self.image.write_rgba8(x, y, width, height, &bytes);
+    }
+
+    /// Write a rectangle of straight RGBA8 bytes. Extra bytes are ignored and
+    /// missing ones leave their pixels alone.
+    pub fn write_rgba8(&mut self, x: i64, y: i64, width: u32, height: u32, pixels: &[u8]) {
+        self.image.write_rgba8(x, y, width, height, pixels);
     }
 
     /// Fill a rectangle with one color.
@@ -133,32 +120,14 @@ impl PixBuf {
     /// passed: filling a whole buffer costs its pixels, and filling a
     /// rectangle a thousand times larger costs the same.
     pub fn fill_rect(&mut self, x: i64, y: i64, width: u32, height: u32, rgba: u32) {
-        let Some((left, top, right, bottom)) = self.clip_rect(x, y, width, height) else {
-            return;
-        };
-        for row in top..bottom {
-            for col in left..right {
-                self.set_pixel(col, row, rgba);
-            }
-        }
+        self.image
+            .fill_rgba8(x, y, width, height, rgba.to_be_bytes());
     }
 
-    /// The part of a requested rectangle that is inside the buffer, as
-    /// `(left, top, right, bottom)`, or `None` when none of it is.
-    ///
-    /// Saturating throughout: `x` and the width come from a script, so
-    /// `i64::MAX` with a width is an ordinary argument rather than an
-    /// impossible one.
-    fn clip_rect(&self, x: i64, y: i64, width: u32, height: u32) -> Option<(i64, i64, i64, i64)> {
-        let left = x.max(0);
-        let top = y.max(0);
-        let right = x
-            .saturating_add(i64::from(width))
-            .min(i64::from(self.width));
-        let bottom = y
-            .saturating_add(i64::from(height))
-            .min(i64::from(self.height));
-        (left < right && top < bottom).then_some((left, top, right, bottom))
+    /// Change the size, keeping the pixels both sizes share at the top left;
+    /// new area is transparent.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.image.resize(width, height);
     }
 
     /// Decode a PNG into a fresh buffer, or say why not.
@@ -185,10 +154,7 @@ impl PixBuf {
             .map_err(|e| format!("cannot decode {}: {e}", path.display()))?
             .to_rgba8();
         Ok(PixBuf {
-            width,
-            height,
-            pixels: decoded.into_raw(),
-            generation: 0,
+            image: PixelImage::from_rgba8(width, height, decoded.as_raw()),
         })
     }
 
@@ -198,9 +164,9 @@ impl PixBuf {
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         image::codecs::png::PngEncoder::new(std::io::BufWriter::new(file))
             .write_image(
-                &self.pixels,
-                self.width,
-                self.height,
+                &self.image.to_rgba8(),
+                self.width(),
+                self.height(),
                 image::ExtendedColorType::Rgba8,
             )
             .map_err(|e| format!("cannot encode {}: {e}", path.display()))
@@ -228,7 +194,7 @@ mod tests {
         buf.set_pixel(0, 9, 0xffffffff);
         assert_eq!(buf.get_pixel(-1, 0), 0);
         assert_eq!(buf.get_pixel(0, 9), 0);
-        assert_eq!(buf.generation(), 0, "a dropped write is not a write");
+        assert_eq!(buf.image().version(), 0, "a dropped write is not a write");
     }
 
     #[test]
@@ -246,7 +212,6 @@ mod tests {
         buf.put_region(0, 0, 4, 4, &[1, 2, 3]);
         assert_eq!(buf.get_region(0, 0, 4, 1), [1, 2, 3, 0]);
         assert_eq!(buf.get_pixel(0, 1), 0, "the rest is untouched");
-        assert_eq!(buf.generation(), 3);
     }
 
     #[test]
@@ -275,7 +240,7 @@ mod tests {
         buf.put_region(i64::MIN, i64::MIN, 2, 2, &[1, 2, 3, 4]);
         assert_eq!(buf.get_region(i64::MAX, 0, 2, 1), [0, 0]);
         assert_eq!(buf.get_pixel(0, 0), 0, "nothing landed in the buffer");
-        assert_eq!(buf.generation(), 0);
+        assert_eq!(buf.image().version(), 0);
     }
 
     #[test]
@@ -286,17 +251,35 @@ mod tests {
         buf.fill_rect(-1000, -1000, u32::MAX, u32::MAX, 0x00ff00ff);
         assert_eq!(buf.get_pixel(0, 0), 0x00ff00ff);
         assert_eq!(buf.get_pixel(1, 1), 0x00ff00ff);
-        assert_eq!(buf.generation(), 4, "four pixels written, not four billion");
     }
 
     #[test]
-    fn filling_and_the_generation_track_the_writes() {
+    fn filling_lands_inside_the_rectangle_only() {
         let mut buf = PixBuf::new(3, 3);
         buf.fill_rect(0, 0, 2, 2, 0x00ff00ff);
         assert_eq!(buf.get_pixel(0, 0), 0x00ff00ff);
         assert_eq!(buf.get_pixel(1, 1), 0x00ff00ff);
         assert_eq!(buf.get_pixel(2, 2), 0);
-        assert_eq!(buf.generation(), 4);
+    }
+
+    #[test]
+    fn packed_and_byte_regions_are_the_same_pixels() {
+        let mut buf = PixBuf::new(4, 4);
+        buf.write_rgba8(1, 1, 2, 1, &[0xff, 0, 0, 0x80, 0, 0, 0xff, 0xff]);
+        assert_eq!(buf.get_region(1, 1, 2, 1), [0xff000080, 0x0000ffff]);
+        let mut bytes = [0u8; 8];
+        buf.read_rgba8(1, 1, 2, 1, &mut bytes);
+        assert_eq!(bytes, [0xff, 0, 0, 0x80, 0, 0, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn a_resize_keeps_the_corner_both_sizes_share() {
+        let mut buf = PixBuf::new(4, 4);
+        buf.fill_rect(0, 0, 4, 4, 0x112233ff);
+        buf.resize(2, 6);
+        assert_eq!((buf.width(), buf.height()), (2, 6));
+        assert_eq!(buf.get_pixel(1, 3), 0x112233ff);
+        assert_eq!(buf.get_pixel(1, 5), 0, "new area is transparent");
     }
 
     #[test]
@@ -312,7 +295,7 @@ mod tests {
 
         let back = PixBuf::load_png(&path, 1_000_000).expect("load");
         assert_eq!((back.width(), back.height()), (3, 2));
-        assert_eq!(back.bytes(), buf.bytes());
+        assert_eq!(back.image().to_rgba8(), buf.image().to_rgba8());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -20,20 +20,18 @@
 
 use lumen_module::ModuleConfig;
 use lumen_module::lumen_core::app::{App, EventLoopWaker, Plugin};
-use lumen_module::lumen_core::app_paths;
 use lumen_module::lumen_core::components::{ImageComponent, Length, LumenId, LumenTag, Style};
 use lumen_module::lumen_core::prelude::*;
 use lumen_module::lumen_core::render_world::FrameDirty;
 use lumen_module::lumen_script::{
-    ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
+    ScriptFn, ScriptFnAppExt, ScriptFnCx, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
 };
 use lumen_module::lumen_text::ShaperService;
 use std::collections::HashMap;
 
-use crate::buffer::PixBuf;
-use crate::color::{self, Rgba};
+use crate::api::{BufferId, CanvasError, CanvasSet, Context2d};
+use crate::color::Rgba;
 use crate::encode::{self, BlobCache};
-use crate::ops::{FontSpec, LineCap, LineJoin, Op};
 use crate::paint::{CanvasPainter, EXTENSION_ID, extract_canvases};
 use crate::store::{self, Caps, UA_SIZE};
 
@@ -149,6 +147,7 @@ impl Plugin for CanvasPlugin {
         app.add_systems(
             TickStage::Systems,
             adopt_canvases
+                .in_set(CanvasSet::Adopt)
                 .before(ScriptSet::Dispatch)
                 .before(ScriptSet::Ready)
                 .before(ScriptSet::Frame),
@@ -159,6 +158,7 @@ impl Plugin for CanvasPlugin {
         app.add_systems(
             TickStage::Systems,
             encode_canvases
+                .in_set(CanvasSet::Encode)
                 .after(adopt_canvases)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::Frame)
@@ -273,7 +273,6 @@ fn encode_canvases(
             store.retire(&id);
         }
     }
-    encoder.blobs.retain(&store.buffers);
     let mut shaper = shaper;
     let mut any_drew = false;
     for (entity, mut canvas, image) in &mut canvases {
@@ -286,7 +285,6 @@ fn encode_canvases(
         let drew = encode::encode(
             surface,
             ops,
-            &store.buffers,
             &mut encoder.blobs,
             shaper
                 .as_deref_mut()
@@ -367,26 +365,36 @@ fn declared_size(style: Option<&Style>) -> (f32, f32) {
 // ---------------------------------------------------------------------
 // The script surface
 // ---------------------------------------------------------------------
+//
+// Every function here is a thin caller of the Rust API in `crate::api`: it
+// reads its arguments, makes the call, and turns a refusal into the warning
+// line and the fallback result a script sees.
 
-/// Record one op against the surface an id names.
-fn record(id: String, op: Op) {
-    store::store().record(&id, op);
+/// The context a script call's first argument names.
+fn ctx(cx: &ScriptFnCx<'_>) -> Context2d {
+    Context2d::new(cx.str_arg(0))
+}
+
+/// The buffer a script integer names; anything outside the handle range
+/// names none.
+fn buffer_arg(value: i64) -> BufferId {
+    BufferId::from_raw(u32::try_from(value).unwrap_or(0))
 }
 
 /// Report a refusal and answer with what the script sees instead.
-fn degrade<T>(outcome: Result<T, String>, fallback: T) -> T {
+fn degrade<T>(outcome: Result<T, CanvasError>, fallback: T) -> T {
     match outcome {
         Ok(value) => value,
-        Err(message) => {
-            lumen_module::lumen_core::warn_line!("lumen-canvas: {message}");
+        Err(error) => {
+            lumen_module::lumen_core::warn_line!("lumen-canvas: {error}");
             fallback
         }
     }
 }
 
-/// A path an app author wrote, against the app.
-fn resolve(path: String) -> std::path::PathBuf {
-    app_paths::resolve(path)
+/// A refusal a script sees as `false`, with the reason on stderr.
+fn accepted(outcome: Result<(), CanvasError>) -> ScriptValue {
+    ScriptValue::Bool(degrade(outcome.map(|()| true), false))
 }
 
 /// One array element as an integer, with the coercions every host argument
@@ -404,6 +412,11 @@ fn int_of(value: &ScriptValue) -> i64 {
 /// A script integer as a pixel value, saturating rather than wrapping.
 fn pixel_of(value: i64) -> u32 {
     u32::try_from(value & 0xffff_ffff).unwrap_or(0)
+}
+
+/// A script integer as a size, 0 for anything negative or too large.
+fn size_of(value: i64) -> u32 {
+    u32::try_from(value).unwrap_or(0)
 }
 
 /// The `canvas` surface, described once for every host. Names, parameters,
@@ -438,11 +451,11 @@ fn surface_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         f("width", "The canvas's drawing width, in canvas units.")
             .param("id", T::Str)
             .ret(T::Int)
-            .build(|cx| Ok(ScriptValue::I64(pending_size(&cx.str_arg(0)).0 as i64))),
+            .build(|cx| Ok(ScriptValue::I64(ctx(cx).size().0 as i64))),
         f("height", "The canvas's drawing height, in canvas units.")
             .param("id", T::Str)
             .ret(T::Int)
-            .build(|cx| Ok(ScriptValue::I64(pending_size(&cx.str_arg(0)).1 as i64))),
+            .build(|cx| Ok(ScriptValue::I64(ctx(cx).size().1 as i64))),
         f(
             "resize",
             "Set the drawing space, in canvas units. This empties the canvas.",
@@ -451,58 +464,31 @@ fn surface_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("width", T::Float)
         .param("height", T::Float)
         .build(|cx| {
-            record(
-                cx.str_arg(0),
-                Op::Resize(
-                    cx.float_arg(1).max(0.0) as f32,
-                    cx.float_arg(2).max(0.0) as f32,
-                ),
-            );
+            ctx(cx).resize(cx.float_arg(1) as f32, cx.float_arg(2) as f32);
             Ok(ScriptValue::Unit)
         }),
         f("clear", "Erase everything the canvas holds.")
             .param("id", T::Str)
             .build(|cx| {
-                record(cx.str_arg(0), Op::Clear);
+                ctx(cx).clear();
                 Ok(ScriptValue::Unit)
             }),
     ]
 }
 
-/// The drawing space a script would see: the last size a pending `resize`
-/// asked for, or the one the canvas already has.
-///
-/// A resize is journalled like every other call, so it has not been applied
-/// yet when the next line of the same handler asks how wide the canvas is.
-/// Answering with the old size there would make the common
-/// `resize(..); for x in 0..width(..)` shape draw the wrong picture.
-fn pending_size(id: &str) -> (f32, f32) {
-    let mut store = store::store();
-    let surface = store.surface(id);
-    surface
-        .pending
-        .iter()
-        .rev()
-        .find_map(|op| match op {
-            Op::Resize(w, h) => Some((*w, *h)),
-            _ => None,
-        })
-        .unwrap_or(surface.logical)
-}
-
 /// Building a path, and filling or stroking it.
 fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
-    let xy = |name: &str, doc: &str, op: fn(f64, f64) -> Op| {
+    let xy = |name: &str, doc: &str, call: fn(&Context2d, f64, f64)| {
         f(name, doc)
             .param("id", T::Str)
             .param("x", T::Float)
             .param("y", T::Float)
             .build(move |cx| {
-                record(cx.str_arg(0), op(cx.float_arg(1), cx.float_arg(2)));
+                call(&ctx(cx), cx.float_arg(1), cx.float_arg(2));
                 Ok(ScriptValue::Unit)
             })
     };
-    let rect = |name: &str, doc: &str, op: fn(f64, f64, f64, f64) -> Op| {
+    let rect = |name: &str, doc: &str, call: fn(&Context2d, f64, f64, f64, f64)| {
         f(name, doc)
             .param("id", T::Str)
             .param("x", T::Float)
@@ -510,28 +496,30 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("width", T::Float)
             .param("height", T::Float)
             .build(move |cx| {
-                record(
-                    cx.str_arg(0),
-                    op(
-                        cx.float_arg(1),
-                        cx.float_arg(2),
-                        cx.float_arg(3),
-                        cx.float_arg(4),
-                    ),
+                call(
+                    &ctx(cx),
+                    cx.float_arg(1),
+                    cx.float_arg(2),
+                    cx.float_arg(3),
+                    cx.float_arg(4),
                 );
                 Ok(ScriptValue::Unit)
             })
     };
-    let bare = |name: &str, doc: &str, op: Op| {
+    let bare = |name: &str, doc: &str, call: fn(&Context2d)| {
         f(name, doc).param("id", T::Str).build(move |cx| {
-            record(cx.str_arg(0), op.clone());
+            call(&ctx(cx));
             Ok(ScriptValue::Unit)
         })
     };
     vec![
-        bare("begin_path", "Start a new path.", Op::BeginPath),
-        xy("move_to", "Start a subpath at a point.", Op::MoveTo),
-        xy("line_to", "Straight segment to a point.", Op::LineTo),
+        bare("begin_path", "Start a new path.", Context2d::begin_path),
+        xy("move_to", "Start a subpath at a point.", Context2d::move_to),
+        xy(
+            "line_to",
+            "Straight segment to a point.",
+            Context2d::line_to,
+        ),
         f("quad_to", "Quadratic segment through a control point.")
             .param("id", T::Str)
             .param("cx", T::Float)
@@ -539,14 +527,11 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("x", T::Float)
             .param("y", T::Float)
             .build(|cx| {
-                record(
-                    cx.str_arg(0),
-                    Op::QuadTo(
-                        cx.float_arg(1),
-                        cx.float_arg(2),
-                        cx.float_arg(3),
-                        cx.float_arg(4),
-                    ),
+                ctx(cx).quad_to(
+                    cx.float_arg(1),
+                    cx.float_arg(2),
+                    cx.float_arg(3),
+                    cx.float_arg(4),
                 );
                 Ok(ScriptValue::Unit)
             }),
@@ -559,16 +544,13 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("x", T::Float)
             .param("y", T::Float)
             .build(|cx| {
-                record(
-                    cx.str_arg(0),
-                    Op::BezierTo(
-                        cx.float_arg(1),
-                        cx.float_arg(2),
-                        cx.float_arg(3),
-                        cx.float_arg(4),
-                        cx.float_arg(5),
-                        cx.float_arg(6),
-                    ),
+                ctx(cx).bezier_to(
+                    cx.float_arg(1),
+                    cx.float_arg(2),
+                    cx.float_arg(3),
+                    cx.float_arg(4),
+                    cx.float_arg(5),
+                    cx.float_arg(6),
                 );
                 Ok(ScriptValue::Unit)
             }),
@@ -580,42 +562,47 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("start", T::Float)
             .param("end", T::Float)
             .build(|cx| {
-                record(
-                    cx.str_arg(0),
-                    Op::Arc {
-                        x: cx.float_arg(1),
-                        y: cx.float_arg(2),
-                        radius: cx.float_arg(3),
-                        start: cx.float_arg(4),
-                        end: cx.float_arg(5),
-                    },
+                ctx(cx).arc(
+                    cx.float_arg(1),
+                    cx.float_arg(2),
+                    cx.float_arg(3),
+                    cx.float_arg(4),
+                    cx.float_arg(5),
                 );
                 Ok(ScriptValue::Unit)
             }),
-        rect("rect", "Add a closed rectangle to the path.", Op::Rect),
+        rect(
+            "rect",
+            "Add a closed rectangle to the path.",
+            Context2d::rect,
+        ),
         bare(
             "close_path",
             "Close the current subpath back to its start.",
-            Op::ClosePath,
+            Context2d::close_path,
         ),
-        bare("fill", "Fill the current path.", Op::Fill),
-        bare("stroke", "Stroke the current path.", Op::Stroke),
+        bare("fill", "Fill the current path.", Context2d::fill),
+        bare("stroke", "Stroke the current path.", Context2d::stroke),
         rect(
             "fill_rect",
             "Fill one rectangle, leaving the path alone.",
-            Op::FillRect,
+            Context2d::fill_rect,
         ),
         rect(
             "stroke_rect",
             "Stroke one rectangle, leaving the path alone.",
-            Op::StrokeRect,
+            Context2d::stroke_rect,
         ),
     ]
 }
 
-/// Colors, line style, alpha, and the state stack.
+/// A state call taking one name, which a script sees `false` from when the
+/// name is not understood.
+type Named = fn(&Context2d, &str) -> Result<(), CanvasError>;
+
+/// Colors, line style, alpha, smoothing, and the state stack.
 fn state_fns(f: Describe<'_>) -> Vec<ScriptFn> {
-    let rgba = |name: &str, doc: &str, op: fn(Rgba) -> Op| {
+    let rgba = |name: &str, doc: &str, call: fn(&Context2d, Rgba)| {
         f(name, doc)
             .param("id", T::Str)
             .param("r", T::Float)
@@ -623,43 +610,28 @@ fn state_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("b", T::Float)
             .param("a", T::Float)
             .build(move |cx| {
-                record(
-                    cx.str_arg(0),
-                    op(Rgba::new(
+                call(
+                    &ctx(cx),
+                    Rgba::new(
                         cx.float_arg(1),
                         cx.float_arg(2),
                         cx.float_arg(3),
                         cx.float_arg(4),
-                    )),
+                    ),
                 );
                 Ok(ScriptValue::Unit)
             })
     };
-    let style = |name: &str, doc: &str, op: fn(Rgba) -> Op| {
+    let named = |name: &str, doc: &str, param: &str, call: Named| {
         f(name, doc)
             .param("id", T::Str)
-            .param("color", T::Str)
+            .param(param, T::Str)
             .ret(T::Bool)
-            .build(move |cx| {
-                let text = cx.str_arg(1);
-                match color::parse_css(&text) {
-                    Some(c) => {
-                        record(cx.str_arg(0), op(c));
-                        Ok(ScriptValue::Bool(true))
-                    }
-                    None => {
-                        lumen_module::lumen_core::warn_line!(
-                            "lumen-canvas: '{text}' is not a color this module understands; \
-                             use a hex, rgb(), or rgba() value"
-                        );
-                        Ok(ScriptValue::Bool(false))
-                    }
-                }
-            })
+            .build(move |cx| Ok(accepted(call(&ctx(cx), &cx.str_arg(1)))))
     };
-    let bare = |name: &str, doc: &str, op: Op| {
+    let bare = |name: &str, doc: &str, call: fn(&Context2d)| {
         f(name, doc).param("id", T::Str).build(move |cx| {
-            record(cx.str_arg(0), op.clone());
+            call(&ctx(cx));
             Ok(ScriptValue::Unit)
         })
     };
@@ -667,74 +639,44 @@ fn state_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         rgba(
             "set_fill_rgba",
             "Set the fill color from four components, each 0..1.",
-            Op::SetFill,
+            Context2d::set_fill_color,
         ),
-        style(
+        named(
             "set_fill_style",
             "Set the fill color from CSS text; false when it is not understood.",
-            Op::SetFill,
+            "color",
+            Context2d::set_fill_style,
         ),
         rgba(
             "set_stroke_rgba",
             "Set the stroke color from four components, each 0..1.",
-            Op::SetStroke,
+            Context2d::set_stroke_color,
         ),
-        style(
+        named(
             "set_stroke_style",
             "Set the stroke color from CSS text; false when it is not understood.",
-            Op::SetStroke,
+            "color",
+            Context2d::set_stroke_style,
         ),
         f("set_line_width", "Set the stroke width, in canvas units.")
             .param("id", T::Str)
             .param("width", T::Float)
             .build(|cx| {
-                record(cx.str_arg(0), Op::SetLineWidth(cx.float_arg(1)));
+                ctx(cx).set_line_width(cx.float_arg(1));
                 Ok(ScriptValue::Unit)
             }),
-        f(
+        named(
             "set_line_cap",
             "Set the stroke's ends: butt, round, square.",
-        )
-        .param("id", T::Str)
-        .param("cap", T::Str)
-        .ret(T::Bool)
-        .build(|cx| {
-            let text = cx.str_arg(1);
-            match LineCap::parse(&text) {
-                Some(cap) => {
-                    record(cx.str_arg(0), Op::SetLineCap(cap));
-                    Ok(ScriptValue::Bool(true))
-                }
-                None => {
-                    lumen_module::lumen_core::warn_line!(
-                        "lumen-canvas: '{text}' is not a line cap; use butt, round, or square"
-                    );
-                    Ok(ScriptValue::Bool(false))
-                }
-            }
-        }),
-        f(
+            "cap",
+            |ctx, name| name.parse().map(|cap| ctx.set_line_cap(cap)),
+        ),
+        named(
             "set_line_join",
             "Set the stroke's corners: miter, round, bevel.",
-        )
-        .param("id", T::Str)
-        .param("join", T::Str)
-        .ret(T::Bool)
-        .build(|cx| {
-            let text = cx.str_arg(1);
-            match LineJoin::parse(&text) {
-                Some(join) => {
-                    record(cx.str_arg(0), Op::SetLineJoin(join));
-                    Ok(ScriptValue::Bool(true))
-                }
-                None => {
-                    lumen_module::lumen_core::warn_line!(
-                        "lumen-canvas: '{text}' is not a line join; use miter, round, or bevel"
-                    );
-                    Ok(ScriptValue::Bool(false))
-                }
-            }
-        }),
+            "join",
+            |ctx, name| name.parse().map(|join| ctx.set_line_join(join)),
+        ),
         f(
             "set_global_alpha",
             "Multiply every later draw by this alpha, 0..1.",
@@ -742,11 +684,21 @@ fn state_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("id", T::Str)
         .param("alpha", T::Float)
         .build(|cx| {
-            record(cx.str_arg(0), Op::SetGlobalAlpha(cx.float_arg(1)));
+            ctx(cx).set_global_alpha(cx.float_arg(1));
             Ok(ScriptValue::Unit)
         }),
-        bare("save", "Push the drawing state.", Op::Save),
-        bare("restore", "Pop the drawing state.", Op::Restore),
+        f(
+            "set_image_smoothing",
+            "Smooth a buffer drawn at another size (the default), or keep its pixels sharp.",
+        )
+        .param("id", T::Str)
+        .param("enabled", T::Bool)
+        .build(|cx| {
+            ctx(cx).set_image_smoothing(cx.bool_arg(1));
+            Ok(ScriptValue::Unit)
+        }),
+        bare("save", "Push the drawing state.", Context2d::save),
+        bare("restore", "Pop the drawing state.", Context2d::restore),
     ]
 }
 
@@ -758,17 +710,14 @@ fn transform_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("x", T::Float)
             .param("y", T::Float)
             .build(|cx| {
-                record(
-                    cx.str_arg(0),
-                    Op::Translate(cx.float_arg(1), cx.float_arg(2)),
-                );
+                ctx(cx).translate(cx.float_arg(1), cx.float_arg(2));
                 Ok(ScriptValue::Unit)
             }),
         f("rotate", "Rotate the transform, in radians.")
             .param("id", T::Str)
             .param("radians", T::Float)
             .build(|cx| {
-                record(cx.str_arg(0), Op::Rotate(cx.float_arg(1)));
+                ctx(cx).rotate(cx.float_arg(1));
                 Ok(ScriptValue::Unit)
             }),
         f("scale", "Scale the transform.")
@@ -776,13 +725,13 @@ fn transform_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("x", T::Float)
             .param("y", T::Float)
             .build(|cx| {
-                record(cx.str_arg(0), Op::Scale(cx.float_arg(1), cx.float_arg(2)));
+                ctx(cx).scale(cx.float_arg(1), cx.float_arg(2));
                 Ok(ScriptValue::Unit)
             }),
         f("reset_transform", "Drop back to the identity transform.")
             .param("id", T::Str)
             .build(|cx| {
-                record(cx.str_arg(0), Op::ResetTransform);
+                ctx(cx).reset_transform();
                 Ok(ScriptValue::Unit)
             }),
         f("set_transform", "Replace the transform with a b c d e f.")
@@ -794,17 +743,14 @@ fn transform_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("e", T::Float)
             .param("f", T::Float)
             .build(|cx| {
-                record(
-                    cx.str_arg(0),
-                    Op::SetTransform([
-                        cx.float_arg(1),
-                        cx.float_arg(2),
-                        cx.float_arg(3),
-                        cx.float_arg(4),
-                        cx.float_arg(5),
-                        cx.float_arg(6),
-                    ]),
-                );
+                ctx(cx).set_transform([
+                    cx.float_arg(1),
+                    cx.float_arg(2),
+                    cx.float_arg(3),
+                    cx.float_arg(4),
+                    cx.float_arg(5),
+                    cx.float_arg(6),
+                ]);
                 Ok(ScriptValue::Unit)
             }),
     ]
@@ -820,21 +766,7 @@ fn text_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("id", T::Str)
         .param("font", T::Str)
         .ret(T::Bool)
-        .build(|cx| {
-            let text = cx.str_arg(1);
-            match FontSpec::parse(&text) {
-                Some(spec) => {
-                    record(cx.str_arg(0), Op::SetFont(spec));
-                    Ok(ScriptValue::Bool(true))
-                }
-                None => {
-                    lumen_module::lumen_core::warn_line!(
-                        "lumen-canvas: '{text}' is not a font; it needs a size, as in '16px'"
-                    );
-                    Ok(ScriptValue::Bool(false))
-                }
-            }
-        }),
+        .build(|cx| Ok(accepted(ctx(cx).set_font(&cx.str_arg(1))))),
         f(
             "fill_text",
             "Draw text in the fill color, with (x, y) on the baseline.",
@@ -844,14 +776,7 @@ fn text_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("x", T::Float)
         .param("y", T::Float)
         .build(|cx| {
-            record(
-                cx.str_arg(0),
-                Op::FillText {
-                    text: cx.str_arg(1),
-                    x: cx.float_arg(2),
-                    y: cx.float_arg(3),
-                },
-            );
+            ctx(cx).fill_text(&cx.str_arg(1), cx.float_arg(2), cx.float_arg(3));
             Ok(ScriptValue::Unit)
         }),
     ]
@@ -868,9 +793,8 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("height", T::Int)
         .ret(T::Int)
         .build(|cx| {
-            let width = u32::try_from(cx.int_arg(0)).unwrap_or(0);
-            let height = u32::try_from(cx.int_arg(1)).unwrap_or(0);
-            let handle = degrade(store::store().new_buffer(width, height), 0);
+            let created = BufferId::create(size_of(cx.int_arg(0)), size_of(cx.int_arg(1)));
+            let handle = degrade(created.map(BufferId::raw), 0);
             Ok(ScriptValue::I64(i64::from(handle)))
         }),
         f(
@@ -879,28 +803,36 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         )
         .param("buffer", T::Int)
         .ret(T::Bool)
-        .build(|cx| {
-            let handle = u32::try_from(cx.int_arg(0)).unwrap_or(0);
-            Ok(ScriptValue::Bool(
-                store::store().buffers.remove(&handle).is_some(),
-            ))
-        }),
+        .build(|cx| Ok(ScriptValue::Bool(buffer_arg(cx.int_arg(0)).free()))),
         f("buffer_width", "A buffer's width; 0 when it is unknown.")
             .param("buffer", T::Int)
             .ret(T::Int)
             .build(|cx| {
-                Ok(ScriptValue::I64(with_buffer(cx.int_arg(0), 0, |b| {
-                    i64::from(b.width())
-                })))
+                Ok(ScriptValue::I64(i64::from(
+                    buffer_arg(cx.int_arg(0)).width(),
+                )))
             }),
         f("buffer_height", "A buffer's height; 0 when it is unknown.")
             .param("buffer", T::Int)
             .ret(T::Int)
             .build(|cx| {
-                Ok(ScriptValue::I64(with_buffer(cx.int_arg(0), 0, |b| {
-                    i64::from(b.height())
-                })))
+                Ok(ScriptValue::I64(i64::from(
+                    buffer_arg(cx.int_arg(0)).height(),
+                )))
             }),
+        f(
+            "buffer_resize",
+            "Change a buffer's size, keeping the pixels both sizes share; false when refused.",
+        )
+        .param("buffer", T::Int)
+        .param("width", T::Int)
+        .param("height", T::Int)
+        .ret(T::Bool)
+        .build(|cx| {
+            Ok(accepted(
+                buffer_arg(cx.int_arg(0)).resize(size_of(cx.int_arg(1)), size_of(cx.int_arg(2))),
+            ))
+        }),
         f(
             "buffer_get_pixel",
             "One pixel as 0xRRGGBBAA; 0 outside the buffer.",
@@ -910,10 +842,8 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("y", T::Int)
         .ret(T::Int)
         .build(|cx| {
-            let (x, y) = (cx.int_arg(1), cx.int_arg(2));
-            Ok(ScriptValue::I64(with_buffer(cx.int_arg(0), 0, |b| {
-                i64::from(b.get_pixel(x, y))
-            })))
+            let pixel = buffer_arg(cx.int_arg(0)).pixel(cx.int_arg(1), cx.int_arg(2));
+            Ok(ScriptValue::I64(i64::from(pixel)))
         }),
         f("buffer_set_pixel", "Write one pixel as 0xRRGGBBAA.")
             .param("buffer", T::Int)
@@ -921,8 +851,13 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("y", T::Int)
             .param("rgba", T::Int)
             .build(|cx| {
-                let (x, y, rgba) = (cx.int_arg(1), cx.int_arg(2), pixel_of(cx.int_arg(3)));
-                with_buffer_mut(cx.int_arg(0), |b| b.set_pixel(x, y, rgba));
+                // An unknown buffer is a silent no-op here, as it always was;
+                // a per-pixel call in a loop is the last place for a warning.
+                let _ = buffer_arg(cx.int_arg(0)).set_pixel(
+                    cx.int_arg(1),
+                    cx.int_arg(2),
+                    pixel_of(cx.int_arg(3)),
+                );
                 Ok(ScriptValue::Unit)
             }),
         f(
@@ -936,15 +871,21 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("height", T::Int)
         .ret(T::Array(Box::new(T::Int)))
         .build(|cx| {
-            let (x, y) = (cx.int_arg(1), cx.int_arg(2));
-            let width = u32::try_from(cx.int_arg(3)).unwrap_or(0);
-            let height = u32::try_from(cx.int_arg(4)).unwrap_or(0);
+            let (width, height) = (size_of(cx.int_arg(3)), size_of(cx.int_arg(4)));
             let Some(()) = check_region(width, height) else {
                 return Ok(ScriptValue::Array(Vec::new()));
             };
-            let pixels = with_buffer(cx.int_arg(0), Vec::new(), |b| {
-                b.get_region(x, y, width, height)
-            });
+            let mut pixels = vec![0u32; width as usize * height as usize];
+            let read = buffer_arg(cx.int_arg(0)).read_packed(
+                cx.int_arg(1),
+                cx.int_arg(2),
+                width,
+                height,
+                &mut pixels,
+            );
+            if read.is_err() {
+                return Ok(ScriptValue::Array(Vec::new()));
+            }
             Ok(ScriptValue::Array(
                 pixels
                     .into_iter()
@@ -960,9 +901,7 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("height", T::Int)
             .param("pixels", T::Array(Box::new(T::Int)))
             .build(|cx| {
-                let (x, y) = (cx.int_arg(1), cx.int_arg(2));
-                let width = u32::try_from(cx.int_arg(3)).unwrap_or(0);
-                let height = u32::try_from(cx.int_arg(4)).unwrap_or(0);
+                let (width, height) = (size_of(cx.int_arg(3)), size_of(cx.int_arg(4)));
                 let Some(()) = check_region(width, height) else {
                     return Ok(ScriptValue::Unit);
                 };
@@ -972,16 +911,20 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
                     }
                     _ => Vec::new(),
                 };
-                with_buffer_mut(cx.int_arg(0), |b| {
-                    b.put_region(x, y, width, height, &pixels)
-                });
+                let _ = buffer_arg(cx.int_arg(0)).write_packed(
+                    cx.int_arg(1),
+                    cx.int_arg(2),
+                    width,
+                    height,
+                    &pixels,
+                );
                 Ok(ScriptValue::Unit)
             }),
         // No region cap here. The cap bounds how many values cross the
         // script boundary, and a fill sends one colour however large the
         // rectangle is; the buffer's own size is the bound that applies, and
-        // `PixBuf::fill_rect` clips to it. Capping this instead refused a
-        // legal buffer its own area.
+        // the fill clips to it. Capping this instead refused a legal buffer
+        // its own area.
         f(
             "buffer_fill_rect",
             "Fill a rectangle of a buffer with one color.",
@@ -993,11 +936,13 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("height", T::Int)
         .param("rgba", T::Int)
         .build(|cx| {
-            let (x, y) = (cx.int_arg(1), cx.int_arg(2));
-            let width = u32::try_from(cx.int_arg(3)).unwrap_or(0);
-            let height = u32::try_from(cx.int_arg(4)).unwrap_or(0);
-            let rgba = pixel_of(cx.int_arg(5));
-            with_buffer_mut(cx.int_arg(0), |b| b.fill_rect(x, y, width, height, rgba));
+            let _ = buffer_arg(cx.int_arg(0)).fill_rect(
+                cx.int_arg(1),
+                cx.int_arg(2),
+                size_of(cx.int_arg(3)),
+                size_of(cx.int_arg(4)),
+                pixel_of(cx.int_arg(5)),
+            );
             Ok(ScriptValue::Unit)
         }),
         f(
@@ -1007,62 +952,29 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("path", T::Str)
         .ret(T::Int)
         .build(|cx| {
-            let path = resolve(cx.str_arg(0));
-            // The cap is read under the lock and the decode happens without
-            // it: reading a file is slow, and every other canvas call in the
-            // process would queue behind it.
-            let cap = store::store().caps.buffer_pixels;
-            let loaded = match PixBuf::load_png(&path, cap) {
-                Ok(buf) => buf,
-                Err(message) => {
-                    lumen_module::lumen_core::warn_line!("lumen-canvas: {message}");
-                    return Ok(ScriptValue::I64(0));
-                }
-            };
-            let handle = degrade(store::store().adopt_buffer(loaded), 0);
-            Ok(ScriptValue::I64(i64::from(handle)))
+            let loaded = BufferId::load_png(cx.str_arg(0)).map(BufferId::raw);
+            Ok(ScriptValue::I64(i64::from(degrade(loaded, 0))))
         }),
         f("buffer_save_png", "Write a buffer out as a PNG.")
             .param("buffer", T::Int)
             .param("path", T::Str)
             .ret(T::Bool)
-            .build(|cx| {
-                let path = resolve(cx.str_arg(1));
-                let store = store::store();
-                let handle = u32::try_from(cx.int_arg(0)).unwrap_or(0);
-                let Some(buffer) = store.buffers.get(&handle) else {
-                    lumen_module::lumen_core::warn_line!(
-                        "lumen-canvas: no buffer {handle} to save"
-                    );
-                    return Ok(ScriptValue::Bool(false));
-                };
-                Ok(ScriptValue::Bool(degrade(
-                    buffer.save_png(&path).map(|()| true),
-                    false,
-                )))
-            }),
+            .build(|cx| Ok(accepted(buffer_arg(cx.int_arg(0)).save_png(cx.str_arg(1))))),
         f(
             "draw_buffer",
-            "Draw a buffer onto the canvas at its own size.",
+            "Draw a buffer onto the canvas at its own size, with the pixels it holds at this call.",
         )
         .param("id", T::Str)
         .param("buffer", T::Int)
         .param("x", T::Float)
         .param("y", T::Float)
         .build(|cx| {
-            record(
-                cx.str_arg(0),
-                Op::DrawBuffer {
-                    buffer: u32::try_from(cx.int_arg(1)).unwrap_or(0),
-                    x: cx.float_arg(2),
-                    y: cx.float_arg(3),
-                },
-            );
+            ctx(cx).draw_buffer(&buffer_arg(cx.int_arg(1)), cx.float_arg(2), cx.float_arg(3));
             Ok(ScriptValue::Unit)
         }),
         f(
             "draw_buffer_scaled",
-            "Draw a buffer onto the canvas stretched into a box.",
+            "Draw a buffer onto the canvas stretched into a box, with the pixels it holds at this call.",
         )
         .param("id", T::Str)
         .param("buffer", T::Int)
@@ -1071,42 +983,23 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .param("width", T::Float)
         .param("height", T::Float)
         .build(|cx| {
-            record(
-                cx.str_arg(0),
-                Op::DrawBufferScaled {
-                    buffer: u32::try_from(cx.int_arg(1)).unwrap_or(0),
-                    x: cx.float_arg(2),
-                    y: cx.float_arg(3),
-                    width: cx.float_arg(4),
-                    height: cx.float_arg(5),
-                },
+            ctx(cx).draw_buffer_scaled(
+                &buffer_arg(cx.int_arg(1)),
+                cx.float_arg(2),
+                cx.float_arg(3),
+                cx.float_arg(4),
+                cx.float_arg(5),
             );
             Ok(ScriptValue::Unit)
         }),
     ]
 }
 
-/// Read something off a buffer, or answer the fallback when the handle names
-/// nothing. A freed handle and an invented one read the same, on purpose.
-fn with_buffer<T>(handle: i64, fallback: T, read: impl FnOnce(&PixBuf) -> T) -> T {
-    let handle = u32::try_from(handle).unwrap_or(0);
-    let store = store::store();
-    match store.buffers.get(&handle) {
-        Some(buffer) => read(buffer),
-        None => fallback,
-    }
-}
-
-/// Write to a buffer, or do nothing when the handle names none.
-fn with_buffer_mut(handle: i64, write: impl FnOnce(&mut PixBuf)) {
-    let handle = u32::try_from(handle).unwrap_or(0);
-    let mut store = store::store();
-    if let Some(buffer) = store.buffers.get_mut(&handle) {
-        write(buffer);
-    }
-}
-
 /// Whether a region is inside the cap, reporting it when it is not.
+///
+/// Scripts only: the cap bounds how many values one call moves across the
+/// script boundary, one per pixel. A Rust caller hands a slice and has no
+/// such cost.
 fn check_region(width: u32, height: u32) -> Option<()> {
     let cap = store::store().caps.region;
     let pixels = u64::from(width) * u64::from(height);

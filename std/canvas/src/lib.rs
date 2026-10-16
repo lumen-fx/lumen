@@ -55,6 +55,24 @@
 //! a `canvas::resize`, which empties it the same way). Drawing nothing on a
 //! tick costs nothing.
 //!
+//! # From Rust
+//!
+//! [`Context2d`] is the same surface for a Rust app, and [`PixelBuffer`] the
+//! same buffers: the script functions are thin callers of them. A Rust SDK
+//! app takes this crate through `lumenui-canvas`.
+//!
+//! ```
+//! # use lumen_canvas::{Context2d, PixelBuffer};
+//! # fn main() -> Result<(), lumen_canvas::CanvasError> {
+//! let art = PixelBuffer::new(64, 64)?;
+//! art.write_rgba8(8, 8, 2, 2, &[255, 0, 0, 255].repeat(4))?;
+//! let ctx = Context2d::new("chart");
+//! ctx.set_image_smoothing(false);
+//! ctx.draw_buffer_scaled(&art, 0.0, 0.0, 512.0, 512.0);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Pixels
 //!
 //! The canvas itself is write-only, because what it holds is a list of
@@ -80,14 +98,15 @@
 //!
 //! `clear_rect`, clipping, blend and composite modes, gradients, patterns,
 //! shadows, `measure_text`, `stroke_text`, text alignment and baselines,
-//! `ellipse` and `arc_to`, dashed strokes, image smoothing, drawing an image
-//! file or another canvas directly, reading a composed canvas back, and a
+//! `ellipse` and `arc_to`, dashed strokes, drawing an image file or another
+//! canvas directly, reading a composed canvas back, and a
 //! per-canvas device pixel ratio. Canvas does not exist on the web target,
 //! which refuses `[dependencies]` outright.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod api;
 pub mod buffer;
 pub mod color;
 pub mod ops;
@@ -100,7 +119,10 @@ mod plugin;
 /// The geometry types this module's public state is spelled in: the
 /// transform on a [`ops::GfxState`] and the path on a [`ops::Gfx`] are
 /// kurbo's, taken through the engine's own lumen-paint so there is one of each.
+pub use api::{BufferId, CanvasError, CanvasSet, Context2d, PixelBuffer};
+pub use color::Rgba;
 pub use lumen_module::lumen_paint::kurbo;
+pub use ops::{LineCap, LineJoin};
 pub use paint::{CanvasLeaf, CanvasPainter, EXTENSION_ID, extract_canvases};
 pub use plugin::{Canvas, CanvasPlugin, TAG};
 pub use store::{

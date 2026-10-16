@@ -335,13 +335,14 @@ function replay(s, [name, ...args]) {
     case "global_alpha":
       ctx.globalAlpha = clamp01(args[0]);
       break;
+    case "image_smoothing":
+      ctx.imageSmoothingEnabled = args[0];
+      break;
     case "font":
       ctx.font = args[0];
       break;
     case "draw_buffer": {
-      const [handle, x, y, width, height] = args;
-      const image = bitmapOf(handle);
-      if (!image) break;
+      const [image, x, y, width, height] = args;
       if (width === undefined) {
         ctx.drawImage(image, x, y);
       } else {
@@ -356,7 +357,9 @@ function replay(s, [name, ...args]) {
 }
 
 // A buffer's pixels on a canvas of their own, which is what drawImage takes
-// through the transform and the alpha. Null for a handle naming nothing.
+// through the transform and the alpha. Null for a handle naming nothing. A
+// draw call takes it when it is made, so a later write to the buffer, even in
+// the same turn, leaves what was drawn alone, as drawImage does.
 function bitmapOf(handle) {
   const buffer = buffers.get(handle);
   if (!buffer) return null;
@@ -501,6 +504,10 @@ export function set_global_alpha(id, alpha) {
   record(id, ["global_alpha", f(alpha)]);
 }
 
+export function set_image_smoothing(id, enabled) {
+  record(id, ["image_smoothing", Boolean(enabled)]);
+}
+
 export function save(id) {
   record(id, ["save"]);
 }
@@ -620,6 +627,31 @@ export function buffer_height(handle) {
   return buffers.get(handle)?.height ?? 0;
 }
 
+export function buffer_resize(handle, w, h) {
+  const [bw, bh] = [dim(w), dim(h)];
+  if (bw === 0 || bh === 0 || bw * bh > caps.buffer_pixel_cap) {
+    warn(
+      bw === 0 || bh === 0
+        ? `a ${bw}x${bh} buffer holds no pixels`
+        : `a ${bw}x${bh} buffer is ${bw * bh} pixels, over the ${caps.buffer_pixel_cap} the app allows`,
+    );
+    return false;
+  }
+  const buffer = buffers.get(handle);
+  if (!buffer) {
+    warn(`no buffer ${handle}`);
+    return false;
+  }
+  const data = new Uint8ClampedArray(bw * bh * 4);
+  const keep = Math.min(buffer.width, bw) * 4;
+  for (let row = 0; row < Math.min(buffer.height, bh); row += 1) {
+    const from = row * buffer.width * 4;
+    data.set(buffer.data.subarray(from, from + keep), row * bw * 4);
+  }
+  buffers.set(handle, { width: bw, height: bh, data });
+  return true;
+}
+
 export function buffer_get_pixel(handle, x, y) {
   const buffer = buffers.get(handle);
   return buffer ? readPixel(buffer, x, y) : 0;
@@ -684,11 +716,13 @@ export function buffer_save_png(handle, path) {
 }
 
 export function draw_buffer(id, handle, x, y) {
-  record(id, ["draw_buffer", handle, f(x), f(y)]);
+  const image = bitmapOf(handle);
+  if (image) record(id, ["draw_buffer", image, f(x), f(y)]);
 }
 
 export function draw_buffer_scaled(id, handle, x, y, w, h) {
-  record(id, ["draw_buffer", handle, f(x), f(y), f(w), f(h)]);
+  const image = bitmapOf(handle);
+  if (image) record(id, ["draw_buffer", image, f(x), f(y), f(w), f(h)]);
 }
 
 export const elements = {

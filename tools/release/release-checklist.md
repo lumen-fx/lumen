@@ -53,15 +53,18 @@ kit it is published on every platform, `install.sh` never fetches it, and
 
 `lumenui-engine-<target>.tar.zst` carries the prebuilt engine the published
 `lumenui` crate links: the compiled crates of `lumenui-engine` (sdk/rust) for
-that target, the proc-macro libraries they use, and any native library they
-link without carrying, collected by `tools/release/lumenui-engine.py`.
+that target, the runtime modules the `lumenui-<name>` crates re-export
+(`lumen-canvas`), the proc-macro libraries they use, and any native library
+they link without carrying, collected by `tools/release/lumenui-engine.py`.
 `lumenui-engine-<target>.json` is its manifest (the rustc that built it, the
 target, the Lumen version, every file with its checksum), published on its own
 so an app's build checks the compiler before downloading the archive.
 `lumenui`'s build script fetches both from the release tagged with its own
 version; `install.sh` never does. Each set is proven before it uploads: an app
 depending on `lumenui` alone is built from it, with a check that no engine
-crate compiled, and run headless.
+crate compiled, and run headless, and so is each module's smoke app, on
+`lumenui` and that module's generated crate (the canvas one renders a pixel
+buffer and checks the frame).
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches
@@ -503,6 +506,7 @@ started by hand from the Actions tab, where it defaults to a dry run.
 | --------- | --------- | ---------------------------- |
 | `lumenui` | PyPI      | the Python SDK               |
 | `lumenui` | crates.io | the Rust SDK                 |
+| `lumenui-canvas` | crates.io | the Rust SDK's canvas module |
 | `lumenc`  | crates.io | the CLI, for `cargo install` |
 
 The Python distribution is pure Python and ships no binary, so one wheel
@@ -524,6 +528,11 @@ refuses to start and lists exactly which crates are in the way, and
 release's `lumenui-engine-<target>` assets instead, so it sits outside the
 workspace and outside that script's order; nothing publishes it yet, and a
 publish of it must come after the release carrying its version's assets.
+`lumenui-canvas`, and every other `lumenui-<name>` module crate, is not in the
+tree: `tools/release/lumenui-engine.py wrappers --out DIR` generates it at the
+tree's version, and a publish uploads it from there
+(`cargo publish --manifest-path DIR/lumenui-canvas/Cargo.toml`). It depends on
+`lumenui` alone, so it publishes after `lumenui`, at the same version.
 
 The crates.io job fails when the plan refuses, with the list on the run
 summary. A release whose crates.io leg is red uploaded nothing to crates.io;

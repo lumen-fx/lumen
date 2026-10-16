@@ -7,55 +7,38 @@
 //!
 //! Two things a script cannot do itself happen here. Text is shaped with the
 //! app's own shaper, so canvas text uses the fonts the rest of the app does.
-//! And a pixel buffer becomes an image the renderer can upload, cached by the
-//! buffer's write count so a buffer drawn every frame and never edited
-//! uploads once.
+//! And a pixel buffer arrives as the snapshot of its tiles the draw call took:
+//! the drawing keeps the pixels the buffer held at the call, and the renderer,
+//! which keeps one resident copy per buffer, re-uploads only the tiles written
+//! since it last drew.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use lumen_module::lumen_paint::kurbo::{Affine, Cap, Join, Rect, Stroke as KurboStroke};
 use lumen_module::lumen_paint::peniko;
-use lumen_module::lumen_paint::peniko::{Blob, Fill};
-use lumen_module::lumen_paint::{GlyphRun, Painter, Recording, Shape};
+use lumen_module::lumen_paint::peniko::{Blob, Fill, ImageQuality, ImageSampler};
+use lumen_module::lumen_paint::{GlyphRun, Painter, PixelImage, Recording, Shape};
 use lumen_module::lumen_text::{ShapeOptions, TextShaper};
 
-use crate::buffer::PixBuf;
 use crate::color::Rgba;
 use crate::ops::{LineCap, LineJoin, Op};
 use crate::store::Surface;
 
-/// The peniko blobs an encode hands the renderer, kept across ticks.
+/// The font blobs an encode hands the renderer, kept across ticks.
 ///
 /// A renderer keys its upload caches off blob identity, so a freshly built
-/// blob means a fresh upload. Both halves of this exist to stop that: a
-/// buffer's pixels re-upload only when the buffer has been written since, and
-/// a font's bytes are uploaded once for the life of the process rather than
-/// once per `fill_text`.
+/// blob means a fresh upload. This keeps one blob per face, so a font's bytes
+/// are uploaded once for the life of the process rather than once per
+/// `fill_text`.
 #[derive(Default)]
 pub struct BlobCache {
-    /// Buffer pixels, keyed by handle and stamped with the write count that
-    /// produced them.
-    buffers: HashMap<u32, (u64, Blob<u8>)>,
     /// Font bytes, keyed by the shaper's own font id and the face index
     /// within the file.
     fonts: HashMap<(u64, u32), Blob<u8>>,
 }
 
 impl BlobCache {
-    /// The blob for a buffer, rebuilt only when it has been written since.
-    fn buffer(&mut self, handle: u32, buffer: &PixBuf) -> Blob<u8> {
-        let generation = buffer.generation();
-        match self.buffers.get(&handle) {
-            Some((cached, blob)) if *cached == generation => blob.clone(),
-            _ => {
-                let blob = Blob::new(Arc::new(buffer.bytes().to_vec()));
-                self.buffers.insert(handle, (generation, blob.clone()));
-                blob
-            }
-        }
-    }
-
     /// The blob for a shaped run's font. The shaper hands out the same
     /// `font_id` for the same face every time, which is what makes one entry
     /// serve every `fill_text` drawn in that font.
@@ -64,17 +47,6 @@ impl BlobCache {
             .entry((font_id, index))
             .or_insert_with(|| Blob::new(data.clone()))
             .clone()
-    }
-
-    /// Drop the blobs of buffers that no longer exist, so a script that
-    /// creates and frees buffers in a loop does not grow this forever.
-    ///
-    /// Unconditional: a tick that frees one buffer and creates another leaves
-    /// the map the same length while its contents have moved on, so a length
-    /// comparison would keep the freed buffer's pixels alive for good.
-    pub fn retain(&mut self, buffers: &std::collections::BTreeMap<u32, PixBuf>) {
-        self.buffers
-            .retain(|handle, _| buffers.contains_key(handle));
     }
 }
 
@@ -91,7 +63,6 @@ fn peniko_color(c: Rgba) -> peniko::Color {
 pub fn encode(
     surface: &mut Surface,
     ops: Vec<Op>,
-    buffers: &std::collections::BTreeMap<u32, PixBuf>,
     blobs: &mut BlobCache,
     mut shaper: Option<&mut dyn TextShaper>,
 ) -> bool {
@@ -176,32 +147,18 @@ pub fn encode(
                     drew = true;
                 }
             }
-            Op::DrawBuffer { buffer, x, y } => {
-                if let Some(buf) = buffers.get(buffer) {
-                    let size = (f64::from(buf.width()), f64::from(buf.height()));
-                    draw_buffer(drawing, gfx, blobs, *buffer, buf, (*x, *y), size);
-                    drew = true;
-                }
+            Op::DrawBuffer { image, x, y } => {
+                let size = (f64::from(image.width()), f64::from(image.height()));
+                drew |= draw_buffer(drawing, gfx, image, (*x, *y), size);
             }
             Op::DrawBufferScaled {
-                buffer,
+                image,
                 x,
                 y,
                 width,
                 height,
             } => {
-                if let Some(buf) = buffers.get(buffer) {
-                    draw_buffer(
-                        drawing,
-                        gfx,
-                        blobs,
-                        *buffer,
-                        buf,
-                        (*x, *y),
-                        (*width, *height),
-                    );
-                    drew = true;
-                }
+                drew |= draw_buffer(drawing, gfx, image, (*x, *y), (*width, *height));
             }
             // Unreachable: `Gfx::apply` answered for every state op above and
             // the two that empty the canvas were taken before it. A no-op
@@ -282,30 +239,31 @@ fn draw_text(
     drew
 }
 
-/// Draw a buffer into a box at `origin` of `size`.
+/// How a buffer drawn at another size is sampled: bilinear while image
+/// smoothing is on, nearest neighbour when it is off.
+fn sampler(gfx: &crate::ops::Gfx) -> ImageSampler {
+    let quality = if gfx.state.image_smoothing {
+        ImageQuality::Medium
+    } else {
+        ImageQuality::Low
+    };
+    ImageSampler::default().with_quality(quality)
+}
+
+/// Draw a buffer's pixels into a box at `origin` of `size`. Returns whether
+/// anything drew: a buffer with no pixels does not.
 fn draw_buffer(
     drawing: &mut dyn Painter,
     gfx: &crate::ops::Gfx,
-    blobs: &mut BlobCache,
-    handle: u32,
-    buffer: &PixBuf,
+    image: &PixelImage,
     origin: (f64, f64),
     size: (f64, f64),
-) {
-    if buffer.width() == 0 || buffer.height() == 0 {
-        return;
+) -> bool {
+    if image.width() == 0 || image.height() == 0 {
+        return false;
     }
-    let image = peniko::ImageData {
-        data: blobs.buffer(handle, buffer),
-        format: peniko::ImageFormat::Rgba8,
-        // Straight, because that is how a buffer stores its pixels; the
-        // renderer multiplies, so nothing rounds on the way in.
-        alpha_type: peniko::ImageAlphaType::Alpha,
-        width: buffer.width(),
-        height: buffer.height(),
-    };
-    let sx = size.0 / f64::from(buffer.width());
-    let sy = size.1 / f64::from(buffer.height());
+    let sx = size.0 / f64::from(image.width());
+    let sy = size.1 / f64::from(image.height());
     let transform =
         gfx.state.transform * Affine::translate(origin) * Affine::scale_non_uniform(sx, sy);
     let alpha = gfx.state.global_alpha.clamp(0.0, 1.0);
@@ -323,10 +281,13 @@ fn draw_buffer(
             )),
         );
     }
-    drawing.draw_image(&peniko::ImageBrush::new(image), transform);
+    // Straight pixels, as the buffer stores them; the renderer multiplies,
+    // so nothing rounds on the way in.
+    drawing.draw_pixels(image, sampler(gfx), transform);
     if alpha < 1.0 {
         drawing.pop_layer();
     }
+    true
 }
 
 #[cfg(test)]
@@ -344,9 +305,8 @@ mod tests {
     /// with no renderer at all.
     fn encode_ops(ops: Vec<Op>) -> (Surface, bool) {
         let mut surface = Surface::default();
-        let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
-        let drew = encode(&mut surface, ops, &buffers, &mut blobs, None);
+        let drew = encode(&mut surface, ops, &mut blobs, None);
         (surface, drew)
     }
 
@@ -441,13 +401,11 @@ mod tests {
     #[test]
     fn clearing_hands_over_a_fresh_drawing_rather_than_copying_one() {
         let mut surface = Surface::default();
-        let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
 
         encode(
             &mut surface,
             vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)],
-            &buffers,
             &mut blobs,
             None,
         );
@@ -456,7 +414,7 @@ mod tests {
 
         // What the render world holding the previous frame looks like.
         let _published = surface.drawing.clone();
-        let drew = encode(&mut surface, vec![Op::Clear], &buffers, &mut blobs, None);
+        let drew = encode(&mut surface, vec![Op::Clear], &mut blobs, None);
 
         assert!(drew, "emptying the canvas is a change the renderer sees");
         assert!(surface.drawing.is_empty());
@@ -503,12 +461,14 @@ mod tests {
         );
     }
 
+    /// A 2x2 image of one colour, the pixels a draw call snapshots.
+    fn image(rgba: [u8; 4]) -> PixelImage {
+        PixelImage::from_rgba8(2, 2, &rgba.repeat(4))
+    }
+
     #[test]
     fn a_buffer_is_drawn_at_its_own_size_and_stretched() {
-        let mut buffers = std::collections::BTreeMap::new();
-        let mut pixels = PixBuf::new(2, 2);
-        pixels.fill_rect(0, 0, 2, 2, 0xff0000ff);
-        buffers.insert(1, pixels);
+        let red = image([0xff, 0, 0, 0xff]);
         let mut blobs = BlobCache::default();
 
         let mut surface = Surface::default();
@@ -516,25 +476,24 @@ mod tests {
             &mut surface,
             vec![
                 Op::DrawBuffer {
-                    buffer: 1,
+                    image: red.clone(),
                     x: 0.0,
                     y: 0.0,
                 },
                 Op::DrawBufferScaled {
-                    buffer: 1,
+                    image: red,
                     x: 4.0,
                     y: 4.0,
                     width: 32.0,
                     height: 32.0,
                 },
             ],
-            &buffers,
             &mut blobs,
             None,
         );
         assert!(drew);
         assert_eq!(
-            count(&surface, |c| matches!(c, Command::Image { .. })),
+            count(&surface, |c| matches!(c, Command::Pixels { .. })),
             2,
             "both draws reached the drawing"
         );
@@ -542,8 +501,6 @@ mod tests {
 
     #[test]
     fn a_buffer_drawn_under_a_global_alpha_goes_through_a_layer() {
-        let mut buffers = std::collections::BTreeMap::new();
-        buffers.insert(1, PixBuf::new(2, 2));
         let mut blobs = BlobCache::default();
 
         let mut surface = Surface::default();
@@ -552,12 +509,11 @@ mod tests {
             vec![
                 Op::SetGlobalAlpha(0.5),
                 Op::DrawBuffer {
-                    buffer: 1,
+                    image: PixelImage::new(2, 2),
                     x: 0.0,
                     y: 0.0,
                 },
             ],
-            &buffers,
             &mut blobs,
             None,
         );
@@ -569,57 +525,25 @@ mod tests {
     }
 
     #[test]
-    fn a_buffer_that_is_not_there_draws_nothing() {
-        let buffers = std::collections::BTreeMap::new();
+    fn a_buffer_with_no_pixels_draws_nothing() {
         let mut blobs = BlobCache::default();
         let mut surface = Surface::default();
         let drew = encode(
             &mut surface,
-            vec![
-                Op::DrawBuffer {
-                    buffer: 9,
-                    x: 0.0,
-                    y: 0.0,
-                },
-                Op::DrawBufferScaled {
-                    buffer: 9,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 4.0,
-                    height: 4.0,
-                },
-            ],
-            &buffers,
-            &mut blobs,
-            None,
-        );
-        assert!(!drew, "a stale handle is not a reason to repaint");
-        assert!(surface.drawing.is_empty());
-    }
-
-    #[test]
-    fn a_buffer_with_no_pixels_draws_nothing() {
-        let mut buffers = std::collections::BTreeMap::new();
-        buffers.insert(1, PixBuf::new(0, 0));
-        let mut blobs = BlobCache::default();
-        let mut surface = Surface::default();
-        encode(
-            &mut surface,
             vec![Op::DrawBuffer {
-                buffer: 1,
+                image: PixelImage::new(0, 0),
                 x: 0.0,
                 y: 0.0,
             }],
-            &buffers,
             &mut blobs,
             None,
         );
+        assert!(!drew, "an empty buffer is not a reason to repaint");
         assert!(surface.drawing.is_empty());
     }
 
     #[test]
     fn text_needs_a_shaper_and_uses_the_apps_own_fonts() {
-        let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
         let ops = || {
             vec![
@@ -635,7 +559,7 @@ mod tests {
         // Without one - a headless app with no text stack - the drawing is
         // skipped and the rest of the canvas still encodes.
         let mut bare = Surface::default();
-        let drew = encode(&mut bare, ops(), &buffers, &mut blobs, None);
+        let drew = encode(&mut bare, ops(), &mut blobs, None);
         assert!(!drew);
         assert!(bare.drawing.is_empty());
 
@@ -645,7 +569,6 @@ mod tests {
         let drew = encode(
             &mut surface,
             ops(),
-            &buffers,
             &mut blobs,
             Some(&mut shaper as &mut dyn TextShaper),
         );
@@ -659,7 +582,6 @@ mod tests {
     #[test]
     fn text_that_shapes_to_nothing_visible_adds_no_geometry() {
         // A zero-width space is text the shaper accepts and has no ink for.
-        let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
         let mut shaper = CosmicShaper::new();
         let mut surface = Surface::default();
@@ -673,7 +595,6 @@ mod tests {
                     y: 12.0,
                 },
             ],
-            &buffers,
             &mut blobs,
             Some(&mut shaper as &mut dyn TextShaper),
         );
@@ -690,7 +611,6 @@ mod tests {
 
     #[test]
     fn text_with_nothing_in_it_draws_nothing() {
-        let buffers = std::collections::BTreeMap::new();
         let mut blobs = BlobCache::default();
         let mut shaper = CosmicShaper::new();
         let mut surface = Surface::default();
@@ -701,51 +621,54 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
             }],
-            &buffers,
             &mut blobs,
             Some(&mut shaper as &mut dyn TextShaper),
         );
         assert!(!drew);
     }
 
+    /// Image smoothing picks the sampler: bilinear by default, nearest once
+    /// it is off, and `save` / `restore` carry it like the rest of the state.
     #[test]
-    fn a_buffers_pixels_upload_once_until_they_change() {
+    fn image_smoothing_picks_how_a_buffer_is_sampled() {
         let mut blobs = BlobCache::default();
-        let mut buffer = PixBuf::new(2, 2);
-
-        let first = blobs.buffer(1, &buffer);
-        let again = blobs.buffer(1, &buffer);
+        let mut surface = Surface::default();
+        let draw = || Op::DrawBufferScaled {
+            image: PixelImage::new(2, 2),
+            x: 0.0,
+            y: 0.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        encode(
+            &mut surface,
+            vec![
+                draw(),
+                Op::Save,
+                Op::SetImageSmoothing(false),
+                draw(),
+                Op::Restore,
+                draw(),
+            ],
+            &mut blobs,
+            None,
+        );
+        let qualities: Vec<ImageQuality> = surface
+            .drawing
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                Command::Pixels { sampler, .. } => Some(sampler.quality),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            first.id(),
-            again.id(),
-            "an untouched buffer keeps the blob the renderer already uploaded"
+            qualities,
+            [
+                ImageQuality::Medium,
+                ImageQuality::Low,
+                ImageQuality::Medium
+            ]
         );
-
-        buffer.set_pixel(0, 0, 0xffffffff);
-        let after = blobs.buffer(1, &buffer);
-        assert_ne!(
-            first.id(),
-            after.id(),
-            "a written buffer has to upload again"
-        );
-    }
-
-    #[test]
-    fn a_freed_buffer_takes_its_pixels_with_it() {
-        // The tick that frees one buffer and creates another leaves the cache
-        // the same length while its contents have moved on, which is why the
-        // sweep cannot be gated on a length comparison.
-        let mut blobs = BlobCache::default();
-        blobs.buffer(1, &PixBuf::new(64, 64));
-        blobs.buffer(2, &PixBuf::new(64, 64));
-        assert_eq!(blobs.buffers.len(), 2);
-
-        let mut live = std::collections::BTreeMap::new();
-        live.insert(2, PixBuf::new(64, 64));
-        live.insert(3, PixBuf::new(64, 64));
-        blobs.retain(&live);
-
-        assert_eq!(blobs.buffers.len(), 1, "buffer 1 was freed");
-        assert!(blobs.buffers.contains_key(&2));
     }
 }

@@ -627,7 +627,8 @@ gives it one the declaration did not ask for.
 | `canvas.set_line_cap(id, cap)` | `bool` | `butt`, `round`, or `square`. |
 | `canvas.set_line_join(id, join)` | `bool` | `miter`, `round`, or `bevel`. |
 | `canvas.set_global_alpha(id, alpha)` | | Multiply every later draw by this alpha. |
-| `canvas.save(id)` | | Push the drawing state: colours, line style, alpha, transform. |
+| `canvas.set_image_smoothing(id, enabled)` | | Whether a buffer drawn at another size is smoothed. On by default, as on the web; off samples the nearest pixel, which keeps zoomed pixel art sharp. |
+| `canvas.save(id)` | | Push the drawing state: colours, line style, alpha, image smoothing, transform. |
 | `canvas.restore(id)` | | Pop it. Popping past the bottom leaves the state alone. |
 | `canvas.translate(id, x, y)` | | Move the origin. |
 | `canvas.rotate(id, radians)` | | Rotate the transform. |
@@ -657,6 +658,7 @@ writes is what it reads back.
 | `canvas.buffer_free(buffer)` | `bool` | Release a buffer. `false` when the handle names none. |
 | `canvas.buffer_width(buffer)` | `int` | Its width, or `0`. |
 | `canvas.buffer_height(buffer)` | `int` | Its height, or `0`. |
+| `canvas.buffer_resize(buffer, width, height)` | `bool` | Change its size, keeping the pixels both sizes share at the top left; new area is transparent. `false` when the handle names none or the size is over the cap. |
 | `canvas.buffer_get_pixel(buffer, x, y)` | `int` | One pixel as `0xRRGGBBAA`. A pixel outside the buffer reads `0`. |
 | `canvas.buffer_set_pixel(buffer, x, y, rgba)` | | Write one pixel. Outside the buffer, nothing happens. |
 | `canvas.buffer_get_region(buffer, x, y, width, height)` | `int[]` | A rectangle of pixels, row-major. Pixels off the edge read `0`, so the result is always the size that was asked for. |
@@ -666,6 +668,12 @@ writes is what it reads back.
 | `canvas.buffer_save_png(buffer, path)` | `bool` | Write a buffer out as a PNG. |
 | `canvas.draw_buffer(id, buffer, x, y)` | | Draw a buffer onto a canvas at its own size. |
 | `canvas.draw_buffer_scaled(id, buffer, x, y, width, height)` | | Draw a buffer stretched into a box. |
+
+A draw takes the buffer's pixels at the call, as `drawImage` does on the web: a
+write after it, even in the same handler, changes the buffer and not what was
+drawn. To show a write, draw the buffer again. Drawing a buffer that has not
+changed costs no upload, and drawing one after a write uploads only the area
+the write touched, so redrawing a large buffer every frame stays cheap.
 
 Three settings bound what one call may ask for, from the module's `config`
 table: `region_cap` (pixels in one region call), `buffer_pixel_cap` (pixels in

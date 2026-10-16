@@ -370,10 +370,11 @@ image after the first one on the page. See
 
 ### `<canvas>`
 
-A surface a script draws on: paths, rectangles, arcs, text, and pixel
-buffers. The drawing functions come from the `canvas` namespace; see
+A surface a script or a Rust app draws on: paths, rectangles, arcs, text,
+and pixel buffers. The drawing functions come from the `canvas` namespace; see
 [Rhai](scripting-rhai.md), [Lua](scripting-lua.md), or
-[candela](scripting-candela.md) for the catalog.
+[candela](scripting-candela.md) for the catalog. A Rust SDK app draws through
+the `lumenui-canvas` crate instead; see [Canvas](ffi.md#canvas).
 
 The tag comes from the `lumen-canvas` module, so an app declares it before
 it can write one:
@@ -417,8 +418,8 @@ HTML canvas does. Drawing outside the element's box is clipped.
 
 Not here yet: `clear_rect`, clipping, blend and composite modes, gradients,
 patterns, shadows, `measure_text`, `stroke_text`, text alignment and
-baselines, `ellipse` and `arc_to`, dashed strokes, image smoothing, drawing
-an image file or another canvas directly, reading a composed canvas back, and
+baselines, `ellipse` and `arc_to`, dashed strokes, drawing an image file or
+another canvas directly, reading a composed canvas back, and
 a per-canvas device pixel ratio. Canvas does not exist on the web target,
 which refuses a native library among the dependencies of its build.
 
