@@ -34,6 +34,7 @@ use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 use lumen_core::components::Visuals;
+use lumen_core::input::CursorImage;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{BackgroundClip, opacity_model, parent_scroll_offsets};
 use lumen_core::time::Instant;
@@ -1031,6 +1032,10 @@ impl Plugin for AssetsPlugin {
         // reconcilers and the hot reload left behind rather than the one
         // `spawn_pending_decodes` saw at the top of `Systems`.
         app.add_systems(TickStage::A11ySync, keep_frame_loop_awake_for_assets);
+        // After every system that can change the wanted cursor this tick,
+        // so the image it names is looked up the tick it is asked for.
+        app.world.init_resource::<CursorImages>();
+        app.add_systems(TickStage::A11ySync, resolve_cursor_image);
         app.add_extract_fn(extract_loaded_images);
         app.add_extract_fn(extract_loaded_svgs);
     }
@@ -1447,6 +1452,75 @@ pub fn drain_completed_decodes(
                 mark_frame_dirty(&mut frame_dirty);
             }
         }
+    }
+}
+
+/// Marks the entity that loads one `url(...)` cursor image. It has no place
+/// in the tree and is never drawn; it is how a cursor image goes through the
+/// same sources, loaders and cache as every other image.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CursorImageHolder;
+
+/// The holder entity loading each cursor image path, so a path asked for
+/// again reuses its load.
+#[derive(Resource, Default, Debug)]
+pub struct CursorImages(HashMap<PathBuf, Entity>);
+
+/// Fill [`CursorRequest::image`] with the first of the wanted cursor's
+/// `url(...)` images that decoded.
+///
+/// The images are tried in the order they were written, as on the web: one
+/// that failed, or decoded to a vector image, is skipped, and one still
+/// loading holds the keyword in place until it settles. The window backend
+/// shows the keyword while `image` is empty.
+#[allow(clippy::type_complexity)]
+pub fn resolve_cursor_image(
+    request: Option<ResMut<CursorRequest>>,
+    mut holders: ResMut<CursorImages>,
+    loads: Query<
+        (Option<&LoadedImage>, Has<ImageLoadFailed>, Has<LoadedSvg>),
+        With<CursorImageHolder>,
+    >,
+    mut commands: Commands,
+) {
+    let Some(mut request) = request else {
+        return;
+    };
+    if request.image.is_some() || request.cursor.images.is_empty() {
+        return;
+    }
+    let mut found = None;
+    for wanted in request.cursor.images.iter() {
+        let holder = *holders.0.entry(wanted.path.clone()).or_insert_with(|| {
+            commands
+                .spawn((CursorImageHolder, ImageSource(wanted.path.clone())))
+                .id()
+        });
+        match loads.get(holder) {
+            Ok((Some(image), _, _)) => {
+                found = Some(cursor_image(image, wanted.hotspot));
+                break;
+            }
+            Ok((None, failed, svg)) if failed || svg => continue,
+            // Still loading, or spawned this tick.
+            _ => break,
+        }
+    }
+    if let Some(image) = found {
+        request.image = Some(image);
+    }
+}
+
+/// A decoded image as a cursor, its hotspot kept inside it.
+fn cursor_image(image: &LoadedImage, hotspot: Option<(f32, f32)>) -> CursorImage {
+    let (x, y) = hotspot.unwrap_or((0.0, 0.0));
+    let clamp = |v: f32, size: u32| (v.round().max(0.0) as u32).min(size.saturating_sub(1));
+    CursorImage {
+        id: image.0.id() as u64,
+        width: image.width,
+        height: image.height,
+        rgba: image.rgba.clone(),
+        hotspot: (clamp(x, image.width), clamp(y, image.height)),
     }
 }
 

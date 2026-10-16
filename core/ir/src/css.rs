@@ -17,7 +17,7 @@
 //! declaration above its origin's normal block.
 
 use crate::layout_ir::{
-    Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
+    Attributes, BgSpec, CursorSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
     ImageRenderingSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError,
     PositionSpec, Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec,
     TextWrapSpec, TrackSizeSpec, TransitionIr, TransitionPropertyIr,
@@ -1799,6 +1799,9 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.image_rendering.is_some() {
         target.image_rendering = inline.image_rendering;
     }
+    if inline.cursor.is_some() {
+        target.cursor = inline.cursor.clone();
+    }
     if inline.radius.is_some() {
         target.radius = inline.radius;
     }
@@ -2577,6 +2580,7 @@ pub fn computed_property(attrs: &Attributes, name: &str) -> Option<String> {
         "opacity" => attrs.opacity.map(|v| v.to_string()),
         "radius" => attrs.radius.map(|v| format!("{v}px")),
         "image-rendering" => attrs.image_rendering.map(|r| r.keyword().to_string()),
+        "cursor" => attrs.cursor.as_ref().map(CursorSpec::to_css),
         _ => None,
     }
 }
@@ -2600,6 +2604,7 @@ pub const COMPUTED_STYLE_PROPERTIES: &[&str] = &[
     "opacity",
     "radius",
     "image-rendering",
+    "cursor",
 ];
 
 /// Every resolved property in [`COMPUTED_STYLE_PROPERTIES`] that the
@@ -3260,6 +3265,7 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "fit",
     "bg-fit",
     "image-rendering",
+    "cursor",
     "transition",
     "transition-property",
     "transition-delay",
@@ -3981,6 +3987,7 @@ fn apply_declaration(
         "image-rendering" => {
             attrs.image_rendering = Some(crate::values::parse_image_rendering(ctx, name, value)?)
         }
+        "cursor" => attrs.cursor = Some(crate::values::parse_cursor(ctx, name, value)?),
         "transition" => {
             attrs.transitions = parse_transition(ctx, name, value)?;
         }

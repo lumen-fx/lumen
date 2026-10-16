@@ -15,9 +15,9 @@ use lumen_core::components::{
     CaretWidth, Color, Fill, ImageFit, ImageRendering, Length, Opacity, PasswordCharacter,
     ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
 };
-use lumen_core::input::ScrollbarStyle;
+use lumen_core::input::{Cursor, CursorImageRef, CursorKeyword, ScrollbarStyle};
 use lumen_core::style_overrides::{StyleOverrides, StyleValues};
-use lumen_ir::layout_ir::{Attributes, WidgetPart};
+use lumen_ir::layout_ir::{Attributes, CursorSpec, WidgetPart};
 use lumen_primitives::{
     BackgroundTransition, BorderColorTransition, Interaction, OpacityTransition, StatePatch,
     StateVisuals, TextColorTransition, TransitionProperty, TransitionSpec, TransitionSpecs,
@@ -25,6 +25,22 @@ use lumen_primitives::{
 };
 
 use crate::spawn::{DISABLED_OPACITY_DEFAULT, apply_ua_style_defaults, track_style_over};
+
+/// The computed `cursor` for a resolved value: each image's path resolved
+/// the way a `bg: url(...)` is.
+fn cursor_of(spec: &CursorSpec) -> Cursor {
+    Cursor {
+        images: spec
+            .images
+            .iter()
+            .map(|image| CursorImageRef {
+                path: lumen_assets::resolve_source_path(&image.url),
+                hotspot: image.hotspot,
+            })
+            .collect(),
+        keyword: CursorKeyword::from_css(&spec.keyword).unwrap_or_default(),
+    }
+}
 
 /// What an element is, beyond its styles, that decides how its styles
 /// become components. Spawning reads it off the element's attributes; a
@@ -105,6 +121,8 @@ pub struct ComputedStyle {
     pub image_fit: Option<ImageFit>,
     /// `image-rendering`, carried only where it is not `auto`.
     pub image_rendering: Option<ImageRendering>,
+    /// `cursor`, carried where the element declares one.
+    pub cursor: Option<Cursor>,
     /// Caret and selected-glyph paint of a text field.
     pub input_paint: Option<TextInputPaint>,
     /// Caret width of a text field.
@@ -284,6 +302,7 @@ impl ComputedStyle {
                 .image_rendering
                 .map(ImageRendering::from)
                 .filter(|r| *r != ImageRendering::Auto),
+            cursor: attrs.cursor.as_ref().map(cursor_of),
             // Caret / selected-glyph paint rides its own component so
             // non-input text never carries the extra row; absent, the
             // renderer falls back (caret = text fill, selected glyphs keep
@@ -416,6 +435,7 @@ impl ComputedStyle {
         insert_some(ent, self.scrollbar);
         insert_some(ent, self.image_fit);
         insert_some(ent, self.image_rendering);
+        insert_some(ent, self.cursor);
         insert_some(ent, self.input_paint);
         insert_some(ent, self.caret_width);
         insert_some(ent, self.password_character);
@@ -622,6 +642,7 @@ impl ComputedStyle {
         put(ent, self.scrollbar);
         put(ent, self.image_fit);
         put(ent, self.image_rendering);
+        put(ent, self.cursor);
         put(ent, self.input_paint);
         put(ent, self.caret_width);
         put(ent, self.password_character);
