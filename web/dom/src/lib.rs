@@ -30,6 +30,7 @@ mod navigation;
 mod nodes;
 mod pointer;
 mod project;
+mod split;
 
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, Plugin, TickStage};
@@ -167,6 +168,16 @@ impl Plugin for WebDomPlugin {
                 .after(bevy_ecs::message::message_update_system)
                 .before(lumen_scene::spawn::close_dialogs_on_escape),
         );
+        // A `<split>`'s panes, read off the browser's boxes once this tick's
+        // presses and keys are in, so a gutter that starts to move starts
+        // from the page as it is.
+        app.add_systems(
+            TickStage::Input,
+            split::measure_splits_from_dom
+                .after(events::drain_dom_events)
+                .after(pointer::drain_pointer_events)
+                .run_if(any_with_component::<lumen_primitives::Split>),
+        );
         // Projecting it comes last, after every system that could have
         // changed what the page should show.
         app.add_systems(
@@ -178,6 +189,7 @@ impl Plugin for WebDomPlugin {
                 project::project_classes,
                 project::project_attributes,
                 project::project_inline_style,
+                split::project_split_basis,
                 project::project_visibility,
                 project::project_control_state,
                 project::project_focus,

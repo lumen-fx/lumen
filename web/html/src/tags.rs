@@ -102,6 +102,7 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
         WidgetPart::ColorAlpha,
         WidgetPart::ColorAlphaFill,
         WidgetPart::ColorAlphaThumb,
+        WidgetPart::SplitGutter,
     ]
     .into_iter()
     .find(|part| part.class() == class)
@@ -172,6 +173,7 @@ pub const MAPPED_TAGS: &[&str] = &[
     "radio",
     "slider",
     "dropdown",
+    "split",
 ];
 
 /// Prefix of the class an element carries for its tag.
@@ -277,6 +279,9 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
         // a rule written against it reaches the same element on both
         // targets.
         "dropdown" => HtmlTag::plain("div"),
+        // A split is a flex box like a row; its gutters are elements of
+        // their own between its panes, and the page's app drags them.
+        "split" => HtmlTag::plain("div"),
         _ => return None,
     };
     Some(tag)

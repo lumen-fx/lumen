@@ -329,6 +329,18 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
+/* === Split ===
+ * `<split>` keeps its children as the panes and puts a gutter between
+ * every two:
+ *   split
+ *     (pane)
+ *     .split-gutter       (tag=div, the separator a drag or a key moves)
+ *     (pane)
+ */
+.split-gutter { bg: var(--lumen-border-subtle); }
+.split-gutter:hover { bg: var(--lumen-border); }
+.split-gutter:focus { bg: var(--lumen-accent); }
+
 /* === Number field ===
  * `<input type="number">` keeps the field and floats two step buttons
  * along its right end:

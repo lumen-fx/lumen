@@ -141,6 +141,11 @@ control is what reports whether it is on, what a press anywhere on the row
 lands on, and what a screen reader reads the caption as the name of; the same
 `.checkbox-box` and `.radio-dot` rules style it on both targets.
 
+A `<split>` is the same elements on the page as on the desktop: the split,
+its panes and the `.split-gutter` between each two. The browser has no
+splitter of its own, so the page's app drags and steps the gutters, writing
+each resize onto the panes as their `flex-basis`.
+
 An `<input type="number">` is the browser's own number field, with its `min`,
 `max` and `step`. The browser draws its own step control, so the
 `.number-steps` buttons the desktop draws are not in the page. An

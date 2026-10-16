@@ -60,6 +60,8 @@ bitflags::bitflags! {
         const TEXT_COLOR = 1 << 10;
         /// `Style::padding`, all four sides.
         const PADDING = 1 << 11;
+        /// `Style::basis`, CSS `flex-basis`.
+        const BASIS = 1 << 12;
         /// Every field that lives on [`Style`].
         const LAYOUT = Self::DISPLAY.bits()
             | Self::POSITION.bits()
@@ -67,7 +69,8 @@ bitflags::bitflags! {
             | Self::WIDTH.bits()
             | Self::HEIGHT.bits()
             | Self::MIN_HEIGHT.bits()
-            | Self::PADDING.bits();
+            | Self::PADDING.bits()
+            | Self::BASIS.bits();
         /// Every field that lives on [`Visuals`].
         const VISUALS = Self::FILL.bits() | Self::SHADOWS.bits() | Self::BORDER.bits();
     }
@@ -90,6 +93,8 @@ pub struct StyleValues {
     pub min_height: Option<Length>,
     /// `Style::padding`.
     pub padding: Option<Edges>,
+    /// `Style::basis`.
+    pub basis: Option<Length>,
     /// `Visuals::fill`.
     pub fill: Option<Option<Fill>>,
     /// `Visuals::shadows`.
@@ -127,6 +132,7 @@ impl StyleValues {
         f.set(StyleFields::HEIGHT, self.height.is_some());
         f.set(StyleFields::MIN_HEIGHT, self.min_height.is_some());
         f.set(StyleFields::PADDING, self.padding.is_some());
+        f.set(StyleFields::BASIS, self.basis.is_some());
         f.set(StyleFields::FILL, self.fill.is_some());
         f.set(StyleFields::SHADOWS, self.shadows.is_some());
         f.set(StyleFields::BORDER, self.border.is_some());
@@ -149,6 +155,7 @@ impl StyleValues {
                 .contains(StyleFields::MIN_HEIGHT)
                 .then_some(s.min_height);
             v.padding = fields.contains(StyleFields::PADDING).then_some(s.padding);
+            v.basis = fields.contains(StyleFields::BASIS).then_some(s.basis);
         }
         if let Some(vis) = live.visuals {
             v.fill = fields.contains(StyleFields::FILL).then(|| vis.fill.clone());
@@ -188,6 +195,9 @@ impl StyleValues {
         }
         if top.padding.is_some() {
             self.padding = top.padding;
+        }
+        if top.basis.is_some() {
+            self.basis = top.basis;
         }
         if top.fill.is_some() {
             self.fill.clone_from(&top.fill);
@@ -229,6 +239,9 @@ impl StyleValues {
         }
         if !keep(StyleFields::PADDING) {
             self.padding = None;
+        }
+        if !keep(StyleFields::BASIS) {
+            self.basis = None;
         }
         if !keep(StyleFields::FILL) {
             self.fill = None;
@@ -285,6 +298,11 @@ impl StyleValues {
             && !edges_eq(&style.padding, &p)
         {
             style.padding = p;
+        }
+        if let Some(b) = self.basis
+            && style.basis != b
+        {
+            style.basis = b;
         }
     }
 

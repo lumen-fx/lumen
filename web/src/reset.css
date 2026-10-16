@@ -54,8 +54,15 @@
   position: relative;
 }
 
-:where(.lm-row, .lm-title-bar, .lm-checkbox, .lm-radio, .lm-progress) {
+:where(.lm-row, .lm-title-bar, .lm-checkbox, .lm-radio, .lm-progress, .lm-split) {
   flex-direction: row;
+}
+
+/* A split's gutter is dragged by the app, so a press on it selects no text
+   and a touch on it does not scroll the page. */
+:where(.split-gutter) {
+  user-select: none;
+  touch-action: none;
 }
 
 /* An overlay floats out of the flow and covers the nearest positioned
