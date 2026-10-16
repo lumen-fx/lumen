@@ -38,8 +38,8 @@ use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
 use lumen_core::components::{DropHovered, DropTarget, SliderValue, TextContent, Toggleable};
 use lumen_core::input::{
-    ClickEvent, FocusTracker, Focused, Key, KeyPressed, KeyReleased, Modifiers, ModifiersState,
-    NamedKey, PointerButton,
+    ClickEvent, ContextMenuEvent, FocusTracker, Focused, Key, KeyPressed, KeyReleased, Modifiers,
+    ModifiersState, NamedKey, PointerButton,
 };
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
@@ -66,6 +66,16 @@ enum PendingEvent {
         /// Client coordinates of the pointer.
         position: (f64, f64),
         /// `MouseEvent.button`.
+        button: i16,
+    },
+    /// The browser is about to open its context menu over the node at this
+    /// path: a secondary click, the ContextMenu key, or a long touch.
+    ContextMenu {
+        /// The element the event landed on, and where its box was.
+        hit: Hit,
+        /// Client coordinates of the pointer.
+        position: (f64, f64),
+        /// `MouseEvent.button`: `2` for a pointer, `0` for the keyboard.
         button: i16,
     },
     /// A text entry's value changed as the user typed.
@@ -152,6 +162,10 @@ thread_local! {
     /// packed handle its handlers saw as the event's target.
     static LAST_CLICK: Cell<Option<u64>> = const { Cell::new(None) };
 
+    /// The node the last context-menu request delivered to the world landed
+    /// on, as the packed handle its handlers saw as the event's target.
+    static LAST_CONTEXT_MENU: Cell<Option<u64>> = const { Cell::new(None) };
+
     /// Whether the document already carries the key and pointer listeners.
     ///
     /// Everything else listens on an app's own root, so a second app in the
@@ -204,14 +218,25 @@ fn run_now() -> bool {
 /// some script has a `click` handler bound at all; every other click waits
 /// for the next frame like any event.
 fn script_cancels_click() -> bool {
-    if !lumen_script::event::has_bindings_for("click") {
+    script_cancels("click", &LAST_CLICK)
+}
+
+/// Whether a script handler cancelled the `kind` event just queued, running
+/// the app now to find out. `last` is where the drain records the target that
+/// event was delivered to.
+///
+/// The browser takes `preventDefault` only before the listener returns, so
+/// the handlers have to have run by then. Without a handler bound for `kind`
+/// nothing can cancel it, and the event waits for the next frame.
+fn script_cancels(kind: &str, last: &'static std::thread::LocalKey<Cell<Option<u64>>>) -> bool {
+    if !lumen_script::event::has_bindings_for(kind) {
         return false;
     }
-    LAST_CLICK.set(None);
+    last.set(None);
     run_now()
-        && LAST_CLICK
+        && last
             .take()
-            .is_some_and(lumen_script::event::is_click_default_prevented)
+            .is_some_and(|target| lumen_script::event::is_default_prevented(kind, target))
 }
 
 /// The node path of the element an event landed on, or of the nearest
@@ -971,6 +996,29 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
+    // The browser's own context menu is the default action. A handler that
+    // opens the app's menu instead cancels it, and has to have run before
+    // this listener returns for the cancel to count.
+    on(
+        root,
+        "contextmenu",
+        Closure::wrap(Box::new(move |event: Event| {
+            let Some(hit) = hit_of(&event) else {
+                return;
+            };
+            let mouse = event.dyn_ref::<MouseEvent>();
+            queue(PendingEvent::ContextMenu {
+                hit,
+                position: mouse.map_or((0.0, 0.0), |m| {
+                    (f64::from(m.client_x()), f64::from(m.client_y()))
+                }),
+                button: mouse.map_or(0, MouseEvent::button),
+            });
+            if script_cancels("contextmenu", &LAST_CONTEXT_MENU) {
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(Event)>),
+    )?;
     // `dragover` fires continuously while a drag hovers, and the browser
     // refuses `drop` on any element whose `dragover` did not prevent the
     // default action - accepting a drop is opt-in the same way it is for a
@@ -1152,6 +1200,7 @@ pub fn drain_dom_events(
     table: NonSend<crate::nodes::NodeTable>,
     mut commands: Commands,
     mut clicks: MessageWriter<ClickEvent>,
+    mut menus: MessageWriter<ContextMenuEvent>,
     mut presses: MessageWriter<KeyPressed>,
     mut releases: MessageWriter<KeyReleased>,
     mut modifiers_state: ResMut<ModifiersState>,
@@ -1189,6 +1238,27 @@ pub fn drain_dom_events(
                         2 => PointerButton::Secondary,
                         0 => PointerButton::Primary,
                         other => PointerButton::Other(other.unsigned_abs()),
+                    },
+                    local: Some(position - hit.origin),
+                });
+            }
+            PendingEvent::ContextMenu {
+                hit,
+                position,
+                button,
+            } => {
+                let Some(entity) = table.entity_at(&hit.path) else {
+                    continue;
+                };
+                let position = glam::Vec2::new(position.0 as f32, position.1 as f32);
+                LAST_CONTEXT_MENU.set(Some(lumen_core::node::NodeHandle::new(entity).pack()));
+                menus.write(ContextMenuEvent {
+                    entity,
+                    position,
+                    button: if button == 2 {
+                        PointerButton::Secondary
+                    } else {
+                        PointerButton::Primary
                     },
                     local: Some(position - hit.origin),
                 });

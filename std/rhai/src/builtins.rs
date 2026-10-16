@@ -484,7 +484,26 @@ pub const BUILTINS: &[BuiltinFn] = &[
             ty: "string",
         }],
         ret: "()",
-        doc: "Open the menu `id` (sets the `__menu_open:id` signal to true).",
+        doc: "Open the menu `id` where its styles place it (sets the `__menu_open:id` signal to true).",
+    },
+    BuiltinFn {
+        name: "open_menu_at",
+        params: &[
+            BuiltinParam {
+                name: "id",
+                ty: "string",
+            },
+            BuiltinParam {
+                name: "x",
+                ty: "float",
+            },
+            BuiltinParam {
+                name: "y",
+                ty: "float",
+            },
+        ],
+        ret: "()",
+        doc: "Open the menu `id` with its top-left corner at (x, y) in window coordinates, moved inward where it would leave the window.",
     },
     BuiltinFn {
         name: "close_menu",

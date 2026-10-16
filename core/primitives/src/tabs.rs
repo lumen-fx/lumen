@@ -106,6 +106,9 @@ impl Plugin for TabsPlugin {
         // Viewport edge-flip: anchor open dropdown panels below their
         // trigger, flipping above near the viewport bottom.
         app.add_systems(TickStage::Systems, crate::popup::flip_open_dropdown_panels);
+        // A menu opened at a point (`open_menu_at`, a context menu) sits on
+        // that point, moved inward at the window edges.
+        app.add_systems(TickStage::Systems, crate::popup::place_menus_at_points);
         // Roving-tabindex keyboard nav for the focused tab button:
         // ArrowRight / ArrowLeft cycle siblings, Home / End jump to
         // ends, Enter / Space activate (same effect as click). Reads

@@ -142,14 +142,16 @@ receives an event it can inspect and control, with `target`, `current_target`,
 `key`, `value`, `button`, coordinates, wheel deltas, modifier flags,
 `prevent_default`, `stop_propagation`, and `stop_immediate_propagation`.
 
-The bindable types are `click`, `dblclick`, `pointerdown`, `pointerup`,
-`pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
+The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
+`pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
 `gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
 `input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
-field to commit. `click` is the one type with a default action to prevent: it
-suppresses the navigation an `<a href>` would otherwise perform. Key events go
-to the focused element; with nothing focused they go to the document, so bind
+field to commit. `click` and `contextmenu` have a default action to prevent:
+`click` suppresses the navigation an `<a href>` would otherwise perform, and
+`contextmenu` keeps a browser from opening its own menu in a web build. Key
+events go to the focused element; with nothing focused they go to the
+document, so bind
 app-wide shortcuts on `document_node()`.
 
 Pointer events come from the mouse, a pen, or a finger, and carry what the

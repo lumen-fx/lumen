@@ -47,7 +47,7 @@ pub use hover::{
 pub use lumen_core::prelude::{Scroll, ScrollAxis, ScrollOffset};
 pub use popup::{
     PopupGap, PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
-    flip_open_dropdown_panels,
+    flip_open_dropdown_panels, place_menus_at_points,
 };
 pub use popup_nav::{
     ActivePopupNav, PopupNavConfig, PopupNavSession, TypeAheadBuffer, closed_dropdown_keys,

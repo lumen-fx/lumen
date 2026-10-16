@@ -378,6 +378,7 @@ pub fn is_id_argument(call: &str, arg_index: usize) -> bool {
             | ("set_class", 0)
             | ("is_valid", 0)
             | ("open_menu", 0)
+            | ("open_menu_at", 0)
             | ("close_menu", 0)
             | ("unregister_tray", 0)
     )
