@@ -410,9 +410,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     app.world.insert_resource(reloaders);
     app.world
         .insert_resource(ScriptLanguageTable(table.clone()));
-    // On a platform with no native menu bar, `<menubar>` is drawn in the
-    // window, at the top of the root.
-    let menubar = super::menubar::mount_in_window_menubar(&mut ir, super::menubar::NATIVE_MENUBAR);
+    // Where the OS shows no menu bar, or the app asks for the bar in the
+    // window, `<menubar>` is drawn at the top of the root.
+    let placement = super::menubar::MenuBarPlacement::of(cfg.window.menubar);
+    app.world.insert_resource(placement);
+    let menubar = super::menubar::mount_in_window_menubar(&mut ir, placement.native);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
     super::menubar::finish_in_window_menubar(&mut app.world, root, menubar);
@@ -606,31 +608,36 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             );
         }));
     }
-    let menubar = ir.menubar.as_ref().map(|spec| MenuModel {
-        menus: spec
-            .menus
-            .iter()
-            .map(|m| Menu {
-                label: m.label.clone(),
-                items: m
-                    .items
-                    .iter()
-                    .map(|entry| match entry {
-                        MenuEntrySpec::Item {
-                            id,
-                            label,
-                            accelerator,
-                        } => MenuEntry::Item {
-                            id: id.clone(),
-                            label: label.clone(),
-                            accelerator: accelerator.clone(),
-                        },
-                        MenuEntrySpec::Separator => MenuEntry::Separator,
-                    })
-                    .collect(),
-            })
-            .collect(),
-    });
+    // The OS bar is handed the menus only when the window does not draw them.
+    let menubar = ir
+        .menubar
+        .as_ref()
+        .filter(|_| placement.native)
+        .map(|spec| MenuModel {
+            menus: spec
+                .menus
+                .iter()
+                .map(|m| Menu {
+                    label: m.label.clone(),
+                    items: m
+                        .items
+                        .iter()
+                        .map(|entry| match entry {
+                            MenuEntrySpec::Item {
+                                id,
+                                label,
+                                accelerator,
+                            } => MenuEntry::Item {
+                                id: id.clone(),
+                                label: label.clone(),
+                                accelerator: accelerator.clone(),
+                            },
+                            MenuEntrySpec::Separator => MenuEntry::Separator,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        });
     // `--lumen-window-bg` resolved from the fully-combined (UA + skin +
     // app) stylesheet paints the GPU clear behind the very first frame -
     // what a user sees before the root element itself paints, and behind

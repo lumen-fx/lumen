@@ -360,8 +360,9 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .color-area-thumb, .color-hue-thumb { shadow: 0 1px 3px #00000066; }
 
 /* === Menu bar ===
- * Where the platform has no native menu bar (Linux), `<menubar>` is drawn
- * in the window as the root's first child:
+ * Where the platform has no native menu bar (Linux), or the app sets
+ * `[window] menubar = "window"`, `<menubar>` is drawn in the window as the
+ * root's first child:
  *   .menubar           (tag=row)
  *     .menubar-menu      (tag=column, one per <menu>)
  *       .menubar-button    (tag=button, the menu's label)

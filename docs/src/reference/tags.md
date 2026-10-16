@@ -786,7 +786,9 @@ of `<root>`. Its children must be `<menu label="...">`.
 
 On macOS and Windows it is the OS's own menu bar, and it takes no place in
 the layout tree. On Linux, where desktops have no menu bar for an app to
-join, the same markup is drawn in the window: a bar at the top of the root,
+join, and on every platform when `lumen.toml` sets
+[`[window] menubar = "window"`](lumen-toml.md#window), the same markup is
+drawn in the window: a bar at the top of the root,
 one button per menu, each opening its menu as a popup. The bar floats over
 the root's top edge and the root keeps its height clear above the content,
 so the root's `justify` and `align` place the content as they would without
@@ -806,7 +808,7 @@ are `<menuitem>` and `<separator>`.
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
 | `<menuitem>` | `id` | Required. Identifies the item to scripts. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
-| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`. Menubar menus only. On Linux the in-window bar runs it while the window has focus. |
+| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`. Menubar menus only. The in-window bar runs it while the window has focus. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by

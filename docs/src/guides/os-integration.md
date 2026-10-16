@@ -59,6 +59,16 @@ the window: a bar along the top with one button per menu. Its items reach
 focus. The skin styles it, and an app can restyle the `.menubar`,
 `.menubar-button` and `.menu-panel` classes like any other element.
 
+To draw the bar in the window on macOS and Windows too, so an app with its
+own theme looks the same everywhere, set the `menubar` key in `lumen.toml`:
+
+```toml
+[window]
+menubar = "window"
+```
+
+The OS bar then shows no menus of the app's.
+
 ### In-window menus
 
 A `menu` outside a `menubar` is a popup panel you open yourself, and it works
