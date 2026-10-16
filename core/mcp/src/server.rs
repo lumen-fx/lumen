@@ -900,7 +900,7 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
         Err(e) => {
             return json!({
                 "error": format!("invalid simulate params: {e}"),
-                "hint": "kind is one of click | pointer_move | pointer_down | pointer_up | pointer_cancel | key | type | scroll",
+                "hint": "kind is one of click | pointer_move | pointer_down | pointer_up | pointer_cancel | key | key_down | key_up | type | scroll",
             });
         }
     };
@@ -984,6 +984,8 @@ fn describe_simulate(
         SimulateKind::PointerUp { x, y, .. } => format!("pointer_up ({x}, {y})"),
         SimulateKind::Click { x, y, .. } => format!("click ({x}, {y})"),
         SimulateKind::Key { key, .. } => format!("key {key}"),
+        SimulateKind::KeyDown { key, .. } => format!("key_down {key}"),
+        SimulateKind::KeyUp { key, .. } => format!("key_up {key}"),
         SimulateKind::Type { text } => format!("type '{text}'"),
         SimulateKind::Scroll { x, y, dx, dy } => format!("scroll ({x},{y}) by ({dx},{dy})"),
     };

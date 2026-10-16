@@ -312,16 +312,26 @@ HTTP request line comes back as a `-32700` parse error.
 | `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. Requires `[mcp] issues = true`. |
 
 Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`,
-`pointer_cancel`, `click`, `key`, `type`, and `scroll`. Point kinds take `x`
-and `y` in logical pixels, button kinds also take `button` (`primary`,
-`secondary`, `middle`, `back`, `forward`, or `eraser`), `key` takes `key` plus
-optional `shift`, `ctrl`, `alt`, and `super` modifiers, `type` takes `text`,
-and `scroll` takes `dx` and `dy`. The pointer kinds and `click` also take
-`pointer`, an object with the web `PointerEvent` fields `pointer_type`
-(`mouse`, `pen`, or `touch`), `pointer_id`, `is_primary`, `pressure`,
-`tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, and `height`, each
-optional; without it the event is the mouse's. One request is drained per
-tick, in order.
+`pointer_cancel`, `click`, `key`, `key_down`, `key_up`, `type`, and `scroll`.
+Point kinds take `x` and `y` in logical pixels, button kinds also take
+`button` (`primary`, `secondary`, `middle`, `back`, `forward`, or `eraser`),
+the key kinds take `key` plus optional `shift`, `ctrl`, `alt`, and `super`
+modifiers, `type` takes `text`, and `scroll` takes `dx` and `dy`. The pointer
+kinds and `click` also take `pointer`, an object with the web `PointerEvent`
+fields `pointer_type` (`mouse`, `pen`, or `touch`), `pointer_id`,
+`is_primary`, `pressure`, `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`,
+`width`, and `height`, each optional; without it the event is the mouse's.
+One request is drained per tick, in order.
+
+`click` and `key` press and release on the same tick. To hold a button or a
+key across ticks, send the halves separately: `pointer_down` leaves the button
+held until `pointer_up`, which with `pointer_move` in between drives a drag,
+and `key_down` leaves the key held until `key_up`, which drives held-key
+input such as WASD movement or space-drag panning. The modifiers on
+`key_down` and `key_up` also become the app's live modifier state, so a
+`key_down` of `Shift` with `shift` set holds Shift for the pointer input that
+follows (a press in a text field extends its selection) until the matching
+`key_up`.
 
 `wait_for` names a message ring the call blocks on until the app records a
 matching event, which is how a driver knows an injected event landed rather
