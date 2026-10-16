@@ -12,8 +12,8 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::world::EntityWorldMut;
 use lumen_core::components::{
-    CaretWidth, Color, Fill, ImageFit, Length, Opacity, PasswordCharacter, ShadowSpec, Style,
-    TextInputPaint, TextStyle, Visuals, ZIndex,
+    CaretWidth, Color, Fill, ImageFit, ImageRendering, Length, Opacity, PasswordCharacter,
+    ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
 };
 use lumen_core::input::ScrollbarStyle;
 use lumen_core::style_overrides::{StyleOverrides, StyleValues};
@@ -103,6 +103,8 @@ pub struct ComputedStyle {
     pub scrollbar: Option<ScrollbarStyle>,
     /// `fit` for an image.
     pub image_fit: Option<ImageFit>,
+    /// `image-rendering`, carried only where it is not `auto`.
+    pub image_rendering: Option<ImageRendering>,
     /// Caret and selected-glyph paint of a text field.
     pub input_paint: Option<TextInputPaint>,
     /// Caret width of a text field.
@@ -278,6 +280,10 @@ impl ComputedStyle {
                 .collect(),
             scrollbar: scrollbar_style(attrs),
             image_fit: attrs.image_fit.map(ImageFit::from),
+            image_rendering: attrs
+                .image_rendering
+                .map(ImageRendering::from)
+                .filter(|r| *r != ImageRendering::Auto),
             // Caret / selected-glyph paint rides its own component so
             // non-input text never carries the extra row; absent, the
             // renderer falls back (caret = text fill, selected glyphs keep
@@ -409,6 +415,7 @@ impl ComputedStyle {
         }
         insert_some(ent, self.scrollbar);
         insert_some(ent, self.image_fit);
+        insert_some(ent, self.image_rendering);
         insert_some(ent, self.input_paint);
         insert_some(ent, self.caret_width);
         insert_some(ent, self.password_character);
@@ -614,6 +621,7 @@ impl ComputedStyle {
         put(ent, self.state_visuals);
         put(ent, self.scrollbar);
         put(ent, self.image_fit);
+        put(ent, self.image_rendering);
         put(ent, self.input_paint);
         put(ent, self.caret_width);
         put(ent, self.password_character);

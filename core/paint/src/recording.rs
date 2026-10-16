@@ -9,7 +9,7 @@
 use crate::{GlyphRun, MaskKind, Painter, Shape};
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
-use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush};
+use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush, ImageQuality};
 use std::any::Any;
 
 /// [`Shape`] with its path owned.
@@ -141,6 +141,27 @@ impl Recording {
     /// the recording are closed at the end, so a replay leaves `painter` at
     /// the depth it started at.
     pub fn replay(&self, painter: &mut dyn Painter, transform: Affine) {
+        self.replay_images_at(painter, transform, None);
+    }
+
+    /// [`Self::replay`], with every recorded image sampled at `quality`
+    /// whatever it was recorded with: what CSS `image-rendering` on the
+    /// element showing the recording asks for.
+    pub fn replay_sampled(
+        &self,
+        painter: &mut dyn Painter,
+        transform: Affine,
+        quality: ImageQuality,
+    ) {
+        self.replay_images_at(painter, transform, Some(quality));
+    }
+
+    fn replay_images_at(
+        &self,
+        painter: &mut dyn Painter,
+        transform: Affine,
+        quality: Option<ImageQuality>,
+    ) {
         let mut opened = 0usize;
         for command in &self.commands {
             match command {
@@ -202,8 +223,8 @@ impl Recording {
                     *kind,
                     transform * *t,
                     &region.as_shape(),
-                    &mut |p| mask.replay(p, transform),
-                    &mut |p| content.replay(p, transform),
+                    &mut |p| mask.replay_images_at(p, transform, quality),
+                    &mut |p| content.replay_images_at(p, transform, quality),
                 ),
                 Command::BlurredRoundedRect {
                     transform: t,
@@ -221,7 +242,14 @@ impl Recording {
                 Command::Image {
                     image,
                     transform: t,
-                } => painter.draw_image(image, transform * *t),
+                } => match quality {
+                    Some(quality) if image.sampler.quality != quality => {
+                        let mut image = image.clone();
+                        image.sampler.quality = quality;
+                        painter.draw_image(&image, transform * *t);
+                    }
+                    _ => painter.draw_image(image, transform * *t),
+                },
                 Command::Glyphs {
                     font,
                     font_size,

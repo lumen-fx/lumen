@@ -158,6 +158,7 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("shadow", "box-shadow", Value::Length),
     ("box-shadow", "box-shadow", Value::Length),
     ("fit", "object-fit", Value::AsIs),
+    ("image-rendering", "image-rendering", Value::AsIs),
     ("radius", "border-radius", Value::Length),
     (
         "border-top-left-radius",
@@ -707,6 +708,7 @@ mod tests {
             "box-shadow: inset 0px 1px 0px #fff",
         ),
         ("fit", "cover", "object-fit: cover"),
+        ("image-rendering", "pixelated", "image-rendering: pixelated"),
         ("radius", "8", "border-radius: 8px"),
         ("border-top-left-radius", "6", "border-top-left-radius: 6px"),
         (

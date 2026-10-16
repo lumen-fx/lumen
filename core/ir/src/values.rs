@@ -149,6 +149,32 @@ pub fn parse_image_fit(
     })
 }
 
+/// CSS `image-rendering`: `auto`, `smooth`, `pixelated`, or `crisp-edges`.
+pub fn parse_image_rendering(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::ImageRenderingSpec, ParseError> {
+    use crate::layout_ir::ImageRenderingSpec;
+    Ok(match value.trim() {
+        "auto" => ImageRenderingSpec::Auto,
+        "smooth" => ImageRenderingSpec::Smooth,
+        "pixelated" => ImageRenderingSpec::Pixelated,
+        "crisp-edges" => ImageRenderingSpec::CrispEdges,
+        other => {
+            return Err(bad(
+                ctx,
+                name,
+                value,
+                format!(
+                    "unknown image-rendering '{other}' (supported: auto, smooth, pixelated, \
+                     crisp-edges)"
+                ),
+            ));
+        }
+    })
+}
+
 /// Parses `radial-gradient(<color1>, <color2 [stop%]>, ...)`. Every term is a colour stop; the radius is always 1.0.
 /// The centre is fixed at 50% / 50%; explicit position and ellipse shapes are not supported.
 fn parse_radial_gradient(
