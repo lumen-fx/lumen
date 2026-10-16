@@ -909,6 +909,7 @@ fn leaf_visually_eq(a: &Node, b: &Node) -> bool {
                 && ai.height == bi.height
                 && std::sync::Arc::ptr_eq(&ai.rgba, &bi.rgba)
                 && ai.fit == bi.fit
+                && ai.rendering == bi.rendering
                 && ai.alpha == bi.alpha
                 && ai.background == bi.background
         }
@@ -1562,6 +1563,7 @@ mod tests {
                 height: 2,
                 rgba: rgba.clone(),
                 fit: lumen_core::components::ImageFit::Fill,
+                rendering: Default::default(),
                 order: 0,
                 alpha: 1.0,
                 background: None,

@@ -9,7 +9,9 @@
 use crate::{GlyphRun, MaskKind, Painter, PixelImage, Shape};
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
-use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush, ImageSampler};
+use peniko::{
+    BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush, ImageQuality, ImageSampler,
+};
 use std::any::Any;
 
 /// [`Shape`] with its path owned.
@@ -148,6 +150,27 @@ impl Recording {
     /// the recording are closed at the end, so a replay leaves `painter` at
     /// the depth it started at.
     pub fn replay(&self, painter: &mut dyn Painter, transform: Affine) {
+        self.replay_images_at(painter, transform, None);
+    }
+
+    /// [`Self::replay`], with every recorded image and pixel buffer sampled at
+    /// `quality` whatever it was recorded with: what CSS `image-rendering` on
+    /// the element showing the recording asks for.
+    pub fn replay_sampled(
+        &self,
+        painter: &mut dyn Painter,
+        transform: Affine,
+        quality: ImageQuality,
+    ) {
+        self.replay_images_at(painter, transform, Some(quality));
+    }
+
+    fn replay_images_at(
+        &self,
+        painter: &mut dyn Painter,
+        transform: Affine,
+        quality: Option<ImageQuality>,
+    ) {
         let mut opened = 0usize;
         for command in &self.commands {
             match command {
@@ -209,8 +232,8 @@ impl Recording {
                     *kind,
                     transform * *t,
                     &region.as_shape(),
-                    &mut |p| mask.replay(p, transform),
-                    &mut |p| content.replay(p, transform),
+                    &mut |p| mask.replay_images_at(p, transform, quality),
+                    &mut |p| content.replay_images_at(p, transform, quality),
                 ),
                 Command::BlurredRoundedRect {
                     transform: t,
@@ -228,12 +251,22 @@ impl Recording {
                 Command::Image {
                     image,
                     transform: t,
-                } => painter.draw_image(image, transform * *t),
+                } => match quality {
+                    Some(quality) if image.sampler.quality != quality => {
+                        let mut image = image.clone();
+                        image.sampler.quality = quality;
+                        painter.draw_image(&image, transform * *t);
+                    }
+                    _ => painter.draw_image(image, transform * *t),
+                },
                 Command::Pixels {
                     image,
                     sampler,
                     transform: t,
-                } => painter.draw_pixels(image, *sampler, transform * *t),
+                } => {
+                    let sampler = quality.map_or(*sampler, |q| sampler.with_quality(q));
+                    painter.draw_pixels(image, sampler, transform * *t);
+                }
                 Command::Glyphs {
                     font,
                     font_size,
@@ -699,6 +732,24 @@ mod tests {
                 assert_eq!(drawn.id(), image.id());
                 assert_eq!(sampler.quality, peniko::ImageQuality::Low);
                 assert_eq!(transform.translation(), (3.0, 0.0).into());
+            }
+            other => panic!("expected the pixels, got {other:?}"),
+        }
+    }
+
+    /// `image-rendering` on the element showing a recording reaches the pixel
+    /// buffers drawn on it as well as its images.
+    #[test]
+    fn a_sampled_replay_overrides_how_a_pixel_image_is_sampled() {
+        let image = PixelImage::new(2, 2);
+        let mut drawing = Recording::default();
+        drawing.draw_pixels(&image, ImageSampler::default(), Affine::IDENTITY);
+
+        let mut copy = Recording::default();
+        drawing.replay_sampled(&mut copy, Affine::IDENTITY, peniko::ImageQuality::Low);
+        match &copy.commands()[0] {
+            Command::Pixels { sampler, .. } => {
+                assert_eq!(sampler.quality, peniko::ImageQuality::Low);
             }
             other => panic!("expected the pixels, got {other:?}"),
         }

@@ -603,7 +603,11 @@ pub fn draw_image(
             &Shape::Rect(clip),
         );
     }
-    painter.draw_image(&peniko::ImageBrush::new(image_data), transform);
+    let mut brush = peniko::ImageBrush::new(image_data);
+    if cmd.rendering.is_nearest() {
+        brush.sampler.quality = peniko::ImageQuality::Low;
+    }
+    painter.draw_image(&brush, transform);
     if needs_layer {
         painter.pop_layer();
     }
@@ -1501,6 +1505,7 @@ mod tests {
             height: 2,
             rgba: Arc::from(vec![255u8; 16]),
             fit,
+            rendering: Default::default(),
             order: 0,
             alpha,
             background: None,

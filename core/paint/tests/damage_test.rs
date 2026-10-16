@@ -199,6 +199,7 @@ fn an_image_over_the_same_pixels_is_unchanged() {
                 height: 2,
                 rgba: rgba.clone(),
                 fit: Default::default(),
+                rendering: Default::default(),
                 order: 0,
                 alpha: 1.0,
                 background: None,

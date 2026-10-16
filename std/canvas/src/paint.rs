@@ -11,13 +11,13 @@
 //! an extension id and a painter registered for that id, which is the whole
 //! contract.
 
-use lumen_module::lumen_core::components::Transform;
+use lumen_module::lumen_core::components::{ImageRendering, Transform};
 use lumen_module::lumen_core::native::{
     ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, upsert_native_leaves,
 };
 use lumen_module::lumen_core::prelude::*;
 use lumen_module::lumen_paint::kurbo::{Affine, Rect as KurboRect};
-use lumen_module::lumen_paint::peniko::{BlendMode, Fill};
+use lumen_module::lumen_paint::peniko::{BlendMode, Fill, ImageQuality};
 use lumen_module::lumen_paint::{PaintTarget, Recording, Shape};
 
 use crate::plugin::Canvas;
@@ -37,6 +37,9 @@ pub struct CanvasLeaf {
     pub logical: (f32, f32),
     /// The element's opacity, ancestors folded in.
     pub opacity: f32,
+    /// The element's CSS `image-rendering` asks for nearest-neighbour
+    /// scaling, so the images drawn on it sample the nearest pixel.
+    pub nearest: bool,
 }
 
 /// Publish one leaf per canvas element.
@@ -46,11 +49,12 @@ pub struct CanvasLeaf {
 /// lock in the middle of a frame.
 pub fn extract_canvases(main: &mut World, render: &mut World) {
     let mut place = NativeExtract::new(main);
-    let mut query = main.query::<(Entity, &Transform, &Canvas)>();
+    let mut query = main.query::<(Entity, &Transform, &Canvas, Option<&ImageRendering>)>();
     let leaves: Vec<(Entity, ExtractedNative)> = query
         .iter(main)
-        .filter_map(|(entity, transform, canvas)| {
+        .filter_map(|(entity, transform, canvas, rendering)| {
             let placed = place.place(entity, transform)?;
+            let nearest = rendering.is_some_and(|r| r.is_nearest());
             Some((
                 entity,
                 ExtractedNative {
@@ -59,10 +63,11 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
                         drawing: canvas.drawing.clone(),
                         logical: canvas.logical,
                         opacity: placed.opacity,
+                        nearest,
                     }),
                     bounds: placed.bounds,
                     order: placed.order,
-                    revision: leaf_revision(canvas.revision, placed.opacity),
+                    revision: leaf_revision(canvas.revision, placed.opacity, nearest),
                     // A canvas draws in its own coordinate space and has no
                     // idea how big its box is, so anything it drew past the
                     // edge is clipped rather than spilling onto a sibling.
@@ -86,12 +91,13 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
 /// the payload, and an ancestor fading in changes nothing else about the
 /// leaf. Left out, a fade over a canvas that is not being drawn on compares
 /// equal, contributes no damage, and keeps the alpha it had when it last
-/// drew. The two are packed rather than hashed so different pixels can never
-/// land on the same stamp; a canvas would have to be drawn on 2^48 times for
-/// the counter to reach the opacity's bits.
-fn leaf_revision(revision: u64, opacity: f32) -> u64 {
+/// drew. The same goes for the sampling `image-rendering` picks. They are
+/// packed rather than hashed so different pixels can never land on the same
+/// stamp; a canvas would have to be drawn on 2^47 times for the counter to
+/// reach the other bits.
+fn leaf_revision(revision: u64, opacity: f32, nearest: bool) -> u64 {
     let quantized = u64::from((opacity.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16);
-    (revision << 16) | quantized
+    (revision << 17) | (u64::from(nearest) << 16) | quantized
 }
 
 /// Replays a canvas's drawing into the frame.
@@ -145,7 +151,11 @@ impl NativePainter for CanvasPainter {
                 )),
             );
         }
-        drawing.replay(&mut **target, transform);
+        if leaf.nearest {
+            drawing.replay_sampled(&mut **target, transform, ImageQuality::Low);
+        } else {
+            drawing.replay(&mut **target, transform);
+        }
         if opacity < 1.0 {
             target.pop_layer();
         }
@@ -172,6 +182,9 @@ mod tests {
     use lumen_module::lumen_core::node_ir::Affine2;
     use lumen_module::lumen_core::render_world::Rect;
     use lumen_module::lumen_paint::Painter;
+    use lumen_module::lumen_paint::peniko::{
+        Blob, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
+    };
     use lumen_module::lumen_paint::recording::Command;
 
     /// The painter replays into whatever paint target it is handed. These
@@ -194,6 +207,7 @@ mod tests {
             drawing: one_filled_square(),
             logical,
             opacity,
+            nearest: false,
         }
     }
 
@@ -229,21 +243,89 @@ mod tests {
 
     #[test]
     fn the_stamp_moves_with_the_drawing_and_with_the_opacity() {
-        assert_eq!(leaf_revision(3, 1.0), leaf_revision(3, 1.0));
+        assert_eq!(leaf_revision(3, 1.0, false), leaf_revision(3, 1.0, false));
         assert_ne!(
-            leaf_revision(3, 1.0),
-            leaf_revision(4, 1.0),
+            leaf_revision(3, 1.0, false),
+            leaf_revision(4, 1.0, false),
             "a canvas that drew has to repaint"
         );
         assert_ne!(
-            leaf_revision(3, 1.0),
-            leaf_revision(3, 0.5),
+            leaf_revision(3, 1.0, false),
+            leaf_revision(3, 0.5, false),
             "and so does one that only faded"
         );
         // Out-of-range opacity is clamped rather than wrapping into the
         // counter's bits.
-        assert_eq!(leaf_revision(3, 1.5), leaf_revision(3, 1.0));
-        assert_eq!(leaf_revision(3, -1.0), leaf_revision(3, 0.0));
+        assert_eq!(leaf_revision(3, 1.5, false), leaf_revision(3, 1.0, false));
+        assert_eq!(leaf_revision(3, -1.0, false), leaf_revision(3, 0.0, false));
+        assert_ne!(
+            leaf_revision(3, 1.0, false),
+            leaf_revision(3, 1.0, true),
+            "a canvas whose image-rendering changed repaints"
+        );
+    }
+
+    /// `image-rendering: pixelated` on the element makes every image drawn
+    /// on the canvas sample the nearest pixel when the box scales it, which
+    /// is what the property does to a canvas on the web.
+    #[test]
+    fn a_pixelated_canvas_samples_its_images_at_the_nearest_pixel() {
+        let mut drawing = Recording::default();
+        drawing.draw_image(
+            &ImageBrush::new(ImageData {
+                data: Blob::new(std::sync::Arc::new(vec![255u8; 16])),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: 2,
+                height: 2,
+            }),
+            Affine::IDENTITY,
+        );
+        let drawing = std::sync::Arc::new(drawing);
+        let quality = |nearest: bool| {
+            let painted = paint_into(&CanvasLeaf {
+                drawing: drawing.clone(),
+                logical: (2.0, 2.0),
+                opacity: 1.0,
+                nearest,
+            });
+            match painted.commands() {
+                [Command::Image { image, .. }] => image.sampler.quality,
+                other => panic!("expected one image, got {other:?}"),
+            }
+        };
+        assert_eq!(quality(true), ImageQuality::Low);
+        assert_ne!(quality(false), ImageQuality::Low, "smooth by default");
+    }
+
+    #[test]
+    fn the_leaf_carries_the_element_image_rendering() {
+        let mut app = lumen_module::lumen_core::app::App::new();
+        app.add_extract_fn(extract_canvases);
+        app.world.spawn((
+            Canvas {
+                id: "art".to_string(),
+                logical: (8.0, 8.0),
+                drawing: one_filled_square(),
+                revision: 1,
+            },
+            Transform {
+                absolute: glam::Vec2::ZERO,
+                size: glam::Vec2::new(64.0, 64.0),
+                baseline_y: None,
+            },
+            Visible(true),
+            ImageRendering::Pixelated,
+        ));
+        app.tick();
+        let mut leaves = app.render_world.query::<&ExtractedNative>();
+        let extracted: Vec<&ExtractedNative> = leaves.iter(&app.render_world).collect();
+        let payload = extracted[0]
+            .payload
+            .downcast_ref::<CanvasLeaf>()
+            .expect("leaf");
+        assert!(payload.nearest);
+        assert_eq!(extracted[0].revision, leaf_revision(1, 1.0, true));
     }
 
     #[test]
@@ -359,7 +441,7 @@ mod tests {
         assert_eq!(extracted.len(), 1);
         assert_eq!(&*extracted[0].extension_id, EXTENSION_ID);
         assert_eq!(extracted[0].bounds.size.x, 40.0);
-        assert_eq!(extracted[0].revision, leaf_revision(4, 1.0));
+        assert_eq!(extracted[0].revision, leaf_revision(4, 1.0, false));
         assert!(extracted[0].clip_to_bounds, "a canvas cannot spill");
         let payload = extracted[0]
             .payload
@@ -430,6 +512,6 @@ mod tests {
             .downcast_ref::<CanvasLeaf>()
             .expect("leaf");
         assert!((payload.opacity - 0.25).abs() < 1e-6);
-        assert_eq!(extracted[0].revision, leaf_revision(2, 0.25));
+        assert_eq!(extracted[0].revision, leaf_revision(2, 0.25, false));
     }
 }

@@ -17,10 +17,10 @@
 //! declaration above its origin's normal block.
 
 use crate::layout_ir::{
-    Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify, LayoutIR,
-    LengthSpec, LineHeightSpec, OverflowSpec, ParseError, PositionSpec, Rgba, ScrollAxisSpec,
-    ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec, TrackSizeSpec, TransitionIr,
-    TransitionPropertyIr,
+    Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
+    ImageRenderingSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError,
+    PositionSpec, Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec,
+    TextWrapSpec, TrackSizeSpec, TransitionIr, TransitionPropertyIr,
 };
 use crate::values::{
     bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges,
@@ -853,7 +853,7 @@ fn apply_to_element(
 #[derive(Debug, Clone, Default)]
 struct Scope {
     vars: std::collections::HashMap<String, String>,
-    text: InheritedText,
+    text: Inherited,
 }
 
 /// Resolve one element's attributes against the stylesheet, in place, and
@@ -1039,17 +1039,17 @@ fn cascade_one(
 
     // Compute the inherited text scope for children from this element's
     // now-resolved values (which already fold in the inherited base).
-    let text = InheritedText::from_computed(attrs, inherited_text);
+    let text = Inherited::from_computed(attrs, inherited_text);
     Scope { vars, text }
 }
 
-/// CSS-inherited text properties carried down the element tree. Per the
-/// CSS cascade, `color`/`font-size`/`text-align`/`text-wrap`/`max-lines`/
-/// `line-height` inherit from parent to child; custom properties inherit
-/// separately via the var map. Only slots that [`Attributes`] actually
-/// supports are modelled.
+/// CSS-inherited properties carried down the element tree. Per the CSS
+/// cascade, `color`/`font-size`/`text-align`/`text-wrap`/`max-lines`/
+/// `line-height`/`image-rendering` inherit from parent to child; custom
+/// properties inherit separately via the var map. Only slots that
+/// [`Attributes`] actually supports are modelled.
 #[derive(Debug, Clone, Default)]
-struct InheritedText {
+struct Inherited {
     text_color: Option<Rgba>,
     selection_color: Option<Rgba>,
     caret_color: Option<Rgba>,
@@ -1061,9 +1061,10 @@ struct InheritedText {
     text_wrap: Option<TextWrapSpec>,
     max_lines: Option<u32>,
     line_height: Option<LineHeightSpec>,
+    image_rendering: Option<ImageRenderingSpec>,
 }
 
-impl InheritedText {
+impl Inherited {
     /// Write inherited values as a specificity-0 base - only into fields
     /// the element hasn't already set inline. Matching rules (applied
     /// afterwards) and the inline-origin restore both override this.
@@ -1101,12 +1102,15 @@ impl InheritedText {
         if attrs.line_height.is_none() {
             attrs.line_height = self.line_height;
         }
+        if attrs.image_rendering.is_none() {
+            attrs.image_rendering = self.image_rendering;
+        }
     }
 
     /// The inherited scope handed to children: the element's computed
     /// value for each prop, falling back to what this element itself
     /// inherited when it set nothing.
-    fn from_computed(attrs: &Attributes, parent: &InheritedText) -> Self {
+    fn from_computed(attrs: &Attributes, parent: &Inherited) -> Self {
         Self {
             text_color: attrs.text_color.or(parent.text_color),
             selection_color: attrs.selection_color.or(parent.selection_color),
@@ -1122,6 +1126,7 @@ impl InheritedText {
             text_wrap: attrs.text_wrap.or(parent.text_wrap),
             max_lines: attrs.max_lines.or(parent.max_lines),
             line_height: attrs.line_height.or(parent.line_height),
+            image_rendering: attrs.image_rendering.or(parent.image_rendering),
         }
     }
 }
@@ -1790,6 +1795,9 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     }
     if inline.bg.is_some() {
         target.bg = inline.bg.clone();
+    }
+    if inline.image_rendering.is_some() {
+        target.image_rendering = inline.image_rendering;
     }
     if inline.radius.is_some() {
         target.radius = inline.radius;
@@ -2568,6 +2576,7 @@ pub fn computed_property(attrs: &Attributes, name: &str) -> Option<String> {
         }),
         "opacity" => attrs.opacity.map(|v| v.to_string()),
         "radius" => attrs.radius.map(|v| format!("{v}px")),
+        "image-rendering" => attrs.image_rendering.map(|r| r.keyword().to_string()),
         _ => None,
     }
 }
@@ -2590,6 +2599,7 @@ pub const COMPUTED_STYLE_PROPERTIES: &[&str] = &[
     "text-align",
     "opacity",
     "radius",
+    "image-rendering",
 ];
 
 /// Every resolved property in [`COMPUTED_STYLE_PROPERTIES`] that the
@@ -3249,6 +3259,7 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "box-shadow",
     "fit",
     "bg-fit",
+    "image-rendering",
     "transition",
     "transition-property",
     "transition-delay",
@@ -3967,6 +3978,9 @@ fn apply_declaration(
         }
         "fit" => attrs.image_fit = Some(crate::values::parse_image_fit(ctx, name, value)?),
         "bg-fit" => attrs.bg_fit = Some(crate::values::parse_image_fit(ctx, name, value)?),
+        "image-rendering" => {
+            attrs.image_rendering = Some(crate::values::parse_image_rendering(ctx, name, value)?)
+        }
         "transition" => {
             attrs.transitions = parse_transition(ctx, name, value)?;
         }
@@ -5328,7 +5342,7 @@ mod skin_token_property_tests {
     fn line_height_inherits_to_children() {
         // `line-height` set on a container must cascade down to a
         // non-matching child, mirroring the existing `font-size` /
-        // `text-color` inheritance behavior modeled by `InheritedText`.
+        // `text-color` inheritance behavior modeled by `Inherited`.
         let mut ir = LayoutIR {
             root: Element {
                 tag: "column".to_string(),

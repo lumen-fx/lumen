@@ -173,9 +173,9 @@ you name that state yourself.
 
 These properties inherit from parent to child: `text-color` (`color`),
 `selection-color`, `selection-text-color`, `caret-color`, `font-size`,
-`font-family`, `font-weight`, `line-height`, `text-align`, `wrap`, and
-`max-lines`. Custom properties inherit through their own scope. Every
-other property applies only where it matches.
+`font-family`, `font-weight`, `line-height`, `text-align`, `wrap`,
+`max-lines`, and `image-rendering`. Custom properties inherit through their
+own scope. Every other property applies only where it matches.
 
 An inherited value acts as a zero-specificity base, so any matching rule
 or markup attribute on the child overrides it.
@@ -471,6 +471,7 @@ integer are clamped with a warning.
 | `opacity` | number, clamped to 0..1 | `1` |
 | `shadow`, `box-shadow` | shadow list | none |
 | `fit`, `object-fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | `fill`; `<image>` only |
+| `image-rendering` | `auto`, `smooth`, `pixelated`, `crisp-edges` | `auto` |
 | `disabled-opacity` | number, clamped to 0..1 | `0.5` |
 | `knob-color` | color | built-in knob fill |
 | `knob-inset` | number | `4` |
@@ -486,6 +487,15 @@ border or text overlaps its background, the background shows through faintly.
 The renderer keeps the picture of a faded element with children from one frame
 to the next while nothing inside it changes, so animating its `opacity` does
 not repaint its contents.
+
+`image-rendering` picks how a raster image drawn at another size than its
+own is sampled: an `<image>`, a `bg: url(...)` image, and the images and
+pixel buffers drawn on a `<canvas>`. `auto` and `smooth` blend neighbouring pixels; `pixelated` and
+`crisp-edges` take the nearest pixel, so scaled-up pixel art keeps hard
+edges. It inherits, so setting it on a container reaches every image inside.
+A canvas's paths and text are drawn at the element's size rather than scaled
+from a bitmap, so the property changes only the images and pixel buffers
+drawn on it.
 
 `disabled-opacity` sets how much a disabled element dims when neither
 `:disabled { bg }` nor `:disabled { opacity }` was authored.
