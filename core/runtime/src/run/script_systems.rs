@@ -214,6 +214,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     app.add_systems(
         TickStage::Systems,
         crate::spawn::activate_dialog_default_on_enter
+            .in_set(ClickSet::Producers)
             .after(lumen_input::dispatch_focused_keys)
             .before(ScriptSet::Dispatch),
     );

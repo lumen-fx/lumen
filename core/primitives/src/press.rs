@@ -63,11 +63,15 @@ impl Plugin for PressPlugin {
         );
         app.add_systems(
             TickStage::Systems,
-            detect_long_press.after(attach_press_timer),
+            detect_long_press
+                .in_set(ClickSet::Producers)
+                .after(attach_press_timer),
         );
         app.add_systems(
             TickStage::Systems,
-            detect_double_click.after(attach_press_timer),
+            detect_double_click
+                .in_set(ClickSet::Producers)
+                .after(attach_press_timer),
         );
     }
 }

@@ -4,7 +4,8 @@
 //! scheduled into [`TickStage::Systems`]. `bump_counter` folds this tick's
 //! clicks into the typed `count` signal; `update_label` reads it back and
 //! writes the label's [`TextContent`] directly through a query - a real ECS
-//! mutation, no binding indirection.
+//! mutation, no binding indirection. Both run after [`ClickSet::Producers`],
+//! the systems that write the clicks, so a click shows on the frame it lands.
 //!
 //! Run with:
 //!
@@ -33,7 +34,12 @@ fn main() -> lumenui::Result<()> {
                 .with_size(960, 720),
         )
         .insert_signal("count", 0i64)
-        .add_systems(TickStage::Systems, (bump_counter, update_label).chain())
+        .add_systems(
+            TickStage::Systems,
+            (bump_counter, update_label)
+                .chain()
+                .after(ClickSet::Producers),
+        )
         .run()
 }
 

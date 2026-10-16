@@ -30,6 +30,7 @@ use lumen_core::components::{
     DirtyLayout, Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag,
     StyleDirty, StyleVersion, TextContent, TextInput,
 };
+use lumen_core::input::ClickSet;
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
@@ -127,7 +128,7 @@ fn install_dom_events(app: &mut App) {
             .chain()
             .in_set(ScriptSet::DomInput)
             .after(build_dom_index)
-            .after(lumen_input::dispatch_clicks)
+            .after(ClickSet::Producers)
             .after(lumen_input::dispatch_focused_keys)
             .before(crate::routing::navigate_on_anchor_click),
     );
