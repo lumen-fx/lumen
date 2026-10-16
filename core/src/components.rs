@@ -1961,7 +1961,7 @@ impl Visuals {
 pub enum Fill {
     /// Single uniform color.
     Solid(Color),
-    /// Linear gradient. `angle_deg` uses the CSS convention (`0` = left->right, `90` = bottom->top, `180` = top->bottom). `stops` is sorted by ascending offset at parse time.
+    /// Linear gradient. `angle_deg` uses the CSS convention (`0` = bottom->top, `90` = left->right, `180` = top->bottom). `stops` is sorted by ascending offset at parse time.
     Linear {
         /// Direction in degrees.
         angle_deg: f32,
@@ -2144,22 +2144,93 @@ pub struct Validation {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct WidgetInternal;
 
-/// Read a color in HTML's "valid simple color" form: `#` and six hex digits,
-/// either case. `None` for anything else, which a color field reads as
-/// black.
-pub fn parse_simple_color(text: &str) -> Option<[u8; 3]> {
-    let hex = text.trim().strip_prefix('#')?;
-    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+/// Read the color a color field's value names, as HTML's color well parses
+/// it: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` in either case, or
+/// `color(srgb r g b)` and `color(srgb r g b / a)` with each component a
+/// number from 0 to 1 or a percentage, which is how a field with `alpha`
+/// writes its value. `None` for anything else, which a color field reads as
+/// opaque black.
+pub fn parse_color_value(text: &str) -> Option<[u8; 4]> {
+    let text = text.trim();
+    if text.starts_with('#') {
+        return Color::from_hex(text).map(Color::to_rgba8);
+    }
+    let lower = text.to_ascii_lowercase();
+    let body = lower.strip_prefix("color(")?.strip_suffix(')')?;
+    let (channels, alpha) = match body.split_once('/') {
+        Some((c, a)) => (c, Some(a)),
+        None => (body, None),
+    };
+    let mut words = channels.split_ascii_whitespace();
+    if words.next()? != "srgb" {
         return None;
     }
-    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
-    Some([byte(0)?, byte(2)?, byte(4)?])
+    let mut rgba = [0u8, 0, 0, 255];
+    for slot in rgba.iter_mut().take(3) {
+        *slot = color_component(words.next()?)?;
+    }
+    if words.next().is_some() {
+        return None;
+    }
+    if let Some(a) = alpha {
+        let mut a = a.split_ascii_whitespace();
+        rgba[3] = color_component(a.next()?)?;
+        if a.next().is_some() {
+            return None;
+        }
+    }
+    Some(rgba)
 }
 
-/// Write a color the way a color field's `value` holds it: `#rrggbb`, in
-/// lowercase.
-pub fn format_simple_color(rgb: [u8; 3]) -> String {
-    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+/// One `color()` component, a number from 0 to 1 or a percentage, as a byte.
+/// Out of range is clamped, as CSS does when it fits a color into sRGB;
+/// halves round up, the way HTML rounds a color well's components.
+fn color_component(word: &str) -> Option<u8> {
+    let unit = match word.strip_suffix('%') {
+        Some(pct) => pct.parse::<f64>().ok()? / 100.0,
+        None => word.parse::<f64>().ok()?,
+    };
+    if !unit.is_finite() {
+        return None;
+    }
+    Some((unit.clamp(0.0, 1.0) * 255.0 + 0.5).floor() as u8)
+}
+
+/// Write a color the way a color field's value holds it, as HTML serializes
+/// a color well: `#rrggbb` in lowercase for a field without `alpha`, and
+/// `color(srgb r g b / a)` for one with it, the `/ a` left out when the
+/// color is opaque.
+pub fn format_color_value(rgba: [u8; 4], alpha: bool) -> String {
+    let [r, g, b, a] = rgba;
+    if !alpha {
+        return format!("#{r:02x}{g:02x}{b:02x}");
+    }
+    let unit = |c: u8| {
+        let text = format!("{:.6}", f64::from(c) / 255.0);
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    if a == 255 {
+        format!("color(srgb {} {} {})", unit(r), unit(g), unit(b))
+    } else {
+        format!(
+            "color(srgb {} {} {} / {})",
+            unit(r),
+            unit(g),
+            unit(b),
+            unit(a)
+        )
+    }
+}
+
+/// A color as the hex field of a color panel shows it: `#rrggbb`, and
+/// `#rrggbbaa` when the field takes `alpha`.
+pub fn format_hex_color(rgba: [u8; 4], alpha: bool) -> String {
+    let [r, g, b, a] = rgba;
+    if alpha {
+        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+    } else {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
 }
 
 /// What a number field's content must be, beyond `min` and `max`: a number,
@@ -3094,5 +3165,60 @@ mod slider_snap_tests {
         assert_eq!(slider(0.0, 1.0, 0.25).snap(0.3).to_string(), "0.25");
         assert_eq!(slider(0.05, 1.0, 0.1).snap(0.14).to_string(), "0.15");
         assert_eq!(slider(0.0, 100.0, 30.0).snap(99.0).to_string(), "90");
+    }
+}
+
+#[cfg(test)]
+mod color_value_tests {
+    use super::{format_color_value, format_hex_color, parse_color_value};
+
+    /// A field without `alpha` writes `#rrggbb`; one with it writes the
+    /// `color(srgb ...)` form HTML serializes, opaque colors without a `/ a`.
+    #[test]
+    fn a_color_serializes_as_html_writes_a_color_well() {
+        assert_eq!(format_color_value([51, 102, 255, 128], false), "#3366ff");
+        assert_eq!(
+            format_color_value([0, 255, 0, 128], true),
+            "color(srgb 0 1 0 / 0.501961)"
+        );
+        assert_eq!(
+            format_color_value([51, 102, 255, 255], true),
+            "color(srgb 0.2 0.4 1)"
+        );
+        assert_eq!(format_hex_color([51, 102, 255, 128], true), "#3366ff80");
+        assert_eq!(format_hex_color([51, 102, 255, 128], false), "#3366ff");
+    }
+
+    /// Hex in every CSS length and the `color(srgb)` form both read, and the
+    /// field's own serialization reads back to the color it wrote.
+    #[test]
+    fn hex_and_color_srgb_values_read() {
+        assert_eq!(parse_color_value("#3366FF"), Some([51, 102, 255, 255]));
+        assert_eq!(parse_color_value("#3366ff80"), Some([51, 102, 255, 128]));
+        assert_eq!(parse_color_value("#36f"), Some([51, 102, 255, 255]));
+        assert_eq!(parse_color_value("#36f8"), Some([51, 102, 255, 136]));
+        assert_eq!(
+            parse_color_value("color(srgb 0 1 0 / 0.5)"),
+            Some([0, 255, 0, 128])
+        );
+        assert_eq!(
+            parse_color_value(" COLOR(srgb 20% 40% 100%) "),
+            Some([51, 102, 255, 255])
+        );
+        for rgba in [[1, 2, 3, 4], [255, 0, 127, 255], [0, 0, 0, 0]] {
+            assert_eq!(
+                parse_color_value(&format_color_value(rgba, true)),
+                Some(rgba)
+            );
+        }
+        for bad in [
+            "",
+            "red",
+            "#12345",
+            "color(display-p3 1 0 0)",
+            "color(srgb 1 0)",
+        ] {
+            assert_eq!(parse_color_value(bad), None, "{bad:?}");
+        }
     }
 }

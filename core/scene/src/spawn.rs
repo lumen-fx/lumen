@@ -670,11 +670,11 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     let color_field =
         el.tag == "input" && el.attrs.input_type == Some(lumen_ir::layout_ir::InputType::Color);
     if color_field {
-        let rgb = text
+        let rgba = text
             .as_deref()
-            .and_then(lumen_core::components::parse_simple_color)
-            .unwrap_or([0, 0, 0]);
-        entity.insert(lumen_primitives::ColorInput::new(rgb));
+            .and_then(lumen_core::components::parse_color_value)
+            .unwrap_or([0, 0, 0, 255]);
+        entity.insert(lumen_primitives::ColorInput::new(rgba, el.attrs.alpha));
     } else if let Some(text) = &text {
         entity.insert(TextContent(text.clone()));
     }
@@ -777,6 +777,18 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 entity.insert(lumen_primitives::ColorPart::HueThumb);
             }
             // The hex field's own edits are the color field's business.
+            lumen_ir::layout_ir::WidgetPart::ColorAlpha => {
+                entity.insert(lumen_primitives::ColorPart::Alpha);
+            }
+            // Shaded from the clear color to the opaque one, so it carries
+            // paint whether or not a skin gives it a fill.
+            lumen_ir::layout_ir::WidgetPart::ColorAlphaFill => {
+                entity.insert(lumen_primitives::ColorPart::AlphaFill);
+                entity.insert_if_new(Visuals::default());
+            }
+            lumen_ir::layout_ir::WidgetPart::ColorAlphaThumb => {
+                entity.insert(lumen_primitives::ColorPart::AlphaThumb);
+            }
             lumen_ir::layout_ir::WidgetPart::ColorHex => {
                 entity.insert((
                     lumen_primitives::ColorPart::Hex,

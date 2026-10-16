@@ -147,7 +147,9 @@ An `<input type="number">` is the browser's own number field, with its `min`,
 `<input type="color">` is the browser's own color input, which opens the
 browser's or the system's picker rather than the desktop's `.color-panel`;
 its `input` and `change` reach the app's handlers and its `bind-value` as on
-the desktop.
+the desktop. A field's `alpha` reaches the page's input, where a browser that
+does not implement it yet (Chrome today) shows an opaque picker and reports
+`#rrggbb`.
 
 ## How the styling reaches the page
 

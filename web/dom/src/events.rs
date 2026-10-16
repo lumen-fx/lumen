@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
-use lumen_core::components::parse_simple_color;
+use lumen_core::components::parse_color_value;
 use lumen_core::components::{DropHovered, DropTarget, SliderValue, TextContent, Toggleable};
 use lumen_core::input::{
     ClickEvent, ContextMenuEvent, ControlInput, FocusTracker, Focused, Key, KeyPressed,
@@ -1297,9 +1297,9 @@ pub fn drain_dom_events(
                     continue;
                 };
                 if let Ok(mut color) = colors.get_mut(entity)
-                    && let Some(rgb) = parse_simple_color(&value)
+                    && let Some(rgba) = parse_color_value(&value)
                 {
-                    color.set_rgb(rgb);
+                    color.set_color(rgba);
                     controls.write(ControlInput {
                         entity,
                         value: color.value(),
@@ -1323,10 +1323,10 @@ pub fn drain_dom_events(
                 // world keeps as the field's color; the event is the control's
                 // own `input`, not a text edit.
                 if let Ok(mut color) = colors.get_mut(entity) {
-                    if let Some(rgb) = parse_simple_color(&value)
-                        && rgb != color.rgb
+                    if let Some(rgba) = parse_color_value(&value)
+                        && color.sanitized(rgba) != color.rgba
                     {
-                        color.set_rgb(rgb);
+                        color.set_color(rgba);
                         controls.write(ControlInput {
                             entity,
                             value: color.value(),

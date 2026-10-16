@@ -99,6 +99,9 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
         WidgetPart::ColorHue,
         WidgetPart::ColorHueThumb,
         WidgetPart::ColorHex,
+        WidgetPart::ColorAlpha,
+        WidgetPart::ColorAlphaFill,
+        WidgetPart::ColorAlphaThumb,
     ]
     .into_iter()
     .find(|part| part.class() == class)
@@ -125,6 +128,9 @@ pub const fn drawn_by_control(part: WidgetPart) -> bool {
             | WidgetPart::ColorHue
             | WidgetPart::ColorHueThumb
             | WidgetPart::ColorHex
+            | WidgetPart::ColorAlpha
+            | WidgetPart::ColorAlphaFill
+            | WidgetPart::ColorAlphaThumb
     )
 }
 
