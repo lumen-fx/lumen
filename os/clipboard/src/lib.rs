@@ -6,12 +6,12 @@
 //!
 //! - [`ClipboardHost`] - `read` / `write` / `clear` for the standard
 //!   system clipboard. Owns an `arboard::Clipboard` behind a `Mutex`.
-//! - [`set_rgba8_image`] / [`get_rgba8_image`] preserved for
-//!   backwards-compatible image round-trips used by lumenc's
-//!   `copy_image` / `save_clipboard_image` Rhai builtins.
+//! - [`ClipboardHost::set_rgba8_image`] / [`ClipboardHost::get_rgba8_image`] -
+//!   images as RGBA8 pixels in memory, behind the `copy_image` /
+//!   `save_clipboard_image` script builtins and the Rust SDK `Clipboard`.
 //!
 //! `arboard::Clipboard` is `!Send` on Linux/Wayland - store as a
-//! `NonSend` ECS resource (see [`InstallExt::install_clipboard_host`]).
+//! `NonSend` ECS resource, which is how `lumen-input` installs it.
 //!
 //! On `wasm32` the clipboard is the page's `navigator.clipboard`, text only.
 //! [`ClipboardHost::try_new`] finds it wherever the page has one (a secure
