@@ -802,11 +802,11 @@ fn golden_decor_tiles() {
     );
 }
 
-/// Gradient fills: linear, radial, conic.
+/// Gradient fills: linear, radial, conic. `linear-gradient(90deg, ...)`
+/// runs left to right, as CSS has it.
 ///
 /// NOTE: at baseline time the conic tile renders as a solid first-stop
-/// fill and `linear-gradient(90deg, ...)` paints top->bottom rather than
-/// left->right; the golden captures current behavior.
+/// fill; the golden captures current behavior.
 #[test]
 fn golden_gradient_tiles() {
     run_case(

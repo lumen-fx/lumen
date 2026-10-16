@@ -101,15 +101,16 @@ fn emit_rect_at(painter: &mut dyn Painter, cmd: &ExtractedRect, ox: f64, oy: f64
     let brush: peniko::Brush = match &cmd.brush {
         LumenBrush::Solid(c) => peniko::Brush::Solid(peniko_color(*c)),
         LumenBrush::Linear { angle_deg, stops } => {
-            // Convert CSS angle (0deg = left->right, increasing CCW) into
-            // start/end points on the bounding box. CSS defines 0deg as
-            // bottom-to-top - but we use the more common "0 = right" so
-            // authors can think in compass terms. Each stop is mapped
-            // straight through to peniko::ColorStop.
+            // A CSS angle: `0deg` runs bottom to top, and the line turns
+            // clockwise from there, so `90deg` runs left to right and
+            // `180deg` top to bottom, as a browser paints the same rule.
+            // In y-down device space that is the direction at
+            // `angle - 90deg`. Each stop maps straight through to
+            // `peniko::ColorStop`.
             let cx = (x0 + x1) / 2.0;
             let cy = (y0 + y1) / 2.0;
             let diag = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt() / 2.0;
-            let theta = (*angle_deg as f64).to_radians();
+            let theta = (f64::from(*angle_deg) - 90.0).to_radians();
             let dx = theta.cos() * diag;
             let dy = theta.sin() * diag;
             let start = Point::new(cx - dx, cy - dy);
@@ -1140,7 +1141,7 @@ mod tests {
 
         let mut target = Recording::default();
         let mut linear = rect(LumenBrush::Linear {
-            angle_deg: 0.0,
+            angle_deg: 90.0,
             stops: stops.clone(),
         });
         linear.radius = 4.0;
@@ -1152,8 +1153,11 @@ mod tests {
         let peniko::GradientKind::Linear(pos) = g.kind else {
             panic!("expected a linear gradient, got {:?}", g.kind);
         };
-        assert_eq!(pos.start.y, 30.0, "a 0deg gradient runs through the middle");
-        assert!(pos.start.x < pos.end.x, "0deg runs left to right");
+        assert!(
+            (pos.start.y - 30.0).abs() < 1e-9,
+            "a 90deg gradient runs through the middle"
+        );
+        assert!(pos.start.x < pos.end.x, "90deg runs left to right");
         assert_eq!(g.stops.len(), 2);
         assert!(matches!(shape, OwnedShape::RoundedRect(r) if r.radii().top_left == 4.0));
 
@@ -1801,5 +1805,38 @@ mod tests {
         };
         assert_eq!(caret.x0, 10.0, "the line start is the field origin");
         assert!(caret.y1 > 20.0 + 20.0, "one line height below the first");
+    }
+
+    /// A linear gradient's angle is a CSS angle: `0deg` runs bottom to top
+    /// and the line turns clockwise, so a desktop window paints a rule the
+    /// way a browser does.
+    #[test]
+    fn a_linear_gradient_angle_is_a_css_angle() {
+        let stops: Arc<[(f32, LumenColor)]> =
+            Arc::from([(0.0, red()), (1.0, LumenColor::rgb(0.0, 0.0, 1.0))].as_slice());
+        let direction = |angle_deg: f32| {
+            let mut target = Recording::default();
+            emit_rect(
+                &mut target,
+                &rect(LumenBrush::Linear {
+                    angle_deg,
+                    stops: stops.clone(),
+                }),
+            );
+            let (brush, _) = only_fill(&target);
+            let peniko::Brush::Gradient(g) = brush else {
+                panic!("expected a gradient, got {brush:?}");
+            };
+            let peniko::GradientKind::Linear(pos) = g.kind else {
+                panic!("expected a linear gradient, got {:?}", g.kind);
+            };
+            let d = pos.end - pos.start;
+            let axis = |v: f64| if v.abs() < 1e-6 { 0.0 } else { v.signum() };
+            (axis(d.x), axis(d.y))
+        };
+        assert_eq!(direction(0.0), (0.0, -1.0), "0deg: bottom to top");
+        assert_eq!(direction(90.0), (1.0, 0.0), "90deg: left to right");
+        assert_eq!(direction(180.0), (0.0, 1.0), "180deg: top to bottom");
+        assert_eq!(direction(270.0), (-1.0, 0.0), "270deg: right to left");
     }
 }
