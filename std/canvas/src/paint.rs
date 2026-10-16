@@ -66,6 +66,10 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
                     // A canvas draws in its own coordinate space and has no
                     // idea how big its box is, so anything it drew past the
                     // edge is clipped rather than spilling onto a sibling.
+                    // The clip is a layer of its own, which is also what
+                    // keeps a composite operation to the canvas's pixels:
+                    // `destination-out` erases the canvas, not the page under
+                    // it.
                     clip_to_bounds: true,
                 },
             ))

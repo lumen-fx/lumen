@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 use crate::api::{BufferId, CanvasError, CanvasSet, Context2d};
 use crate::color::Rgba;
-use crate::encode::{self, BlobCache};
+use crate::encode;
 use crate::paint::{CanvasPainter, EXTENSION_ID, extract_canvases};
 use crate::store::{self, Caps, UA_SIZE};
 
@@ -141,6 +141,13 @@ impl Plugin for CanvasPlugin {
         app.add_script_fns(script_fns());
         app.add_extract_fn(extract_canvases);
         app.register_native_painter(EXTENSION_ID, CanvasPainter);
+        // A read of a canvas rasterizes on the renderer that draws the
+        // frames, which publishes its rasterizer into the render world once
+        // it draws.
+        app.add_render_systems(
+            lumen_module::lumen_core::render_world::RenderStage::Prepare,
+            take_rasterizer,
+        );
         // Adoption runs before any handler does, so the first `on_ready` to
         // ask how big a canvas is gets the size its markup declared rather
         // than the default it would have had a moment earlier.
@@ -171,10 +178,15 @@ impl Plugin for CanvasPlugin {
 // The per-tick system
 // ---------------------------------------------------------------------
 
-/// Where the encoder's per-buffer upload cache lives between ticks.
-#[derive(Default)]
-struct Encoder {
-    blobs: BlobCache,
+/// Hand the renderer's rasterizer to the store, where a read reaches it. Runs
+/// on the render world, and takes the store's lock only when the renderer
+/// published a new one.
+fn take_rasterizer(rasterizer: Option<Res<lumen_module::lumen_paint::Rasterizer>>) {
+    if let Some(rasterizer) = rasterizer
+        && rasterizer.is_changed()
+    {
+        store::store().rasterizer = Some(rasterizer.clone());
+    }
 }
 
 /// Elements that appeared this tick, with what a canvas needs off them.
@@ -246,7 +258,6 @@ fn encode_canvases(
     mut gone: RemovedComponents<Canvas>,
     mut frame_dirty: Option<ResMut<FrameDirty>>,
     shaper: Option<NonSendMut<ShaperService>>,
-    mut encoder: Local<Encoder>,
     mut named: Local<HashMap<Entity, String>>,
 ) {
     let mut store = store::store();
@@ -285,10 +296,11 @@ fn encode_canvases(
         let drew = encode::encode(
             surface,
             ops,
-            &mut encoder.blobs,
+            &mut store.blobs,
             shaper
                 .as_deref_mut()
                 .map(|s| &mut **s as &mut dyn lumen_module::lumen_text::TextShaper),
+            &mut store.reads,
         );
         if drew {
             surface.revision += 1;
@@ -309,6 +321,12 @@ fn encode_canvases(
     }
     if any_drew && let Some(frame_dirty) = frame_dirty.as_deref_mut() {
         frame_dirty.dirty = true;
+    }
+    // Every handler that could read has run, and so has every draw it read
+    // after. A read still waiting for the renderer's first frame asks for the
+    // tick after that frame.
+    if store.serve_reads() {
+        store.wake();
     }
 
     // A canvas that was drawn on but has no element is usually a typo in the
@@ -582,6 +600,21 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             Context2d::close_path,
         ),
         bare("fill", "Fill the current path.", Context2d::fill),
+        bare(
+            "fill_evenodd",
+            "Fill the current path under the even-odd rule.",
+            Context2d::fill_evenodd,
+        ),
+        bare(
+            "clip",
+            "Intersect the clip with the current path.",
+            Context2d::clip,
+        ),
+        bare(
+            "clip_evenodd",
+            "Intersect the clip with the current path, under the even-odd rule.",
+            Context2d::clip_evenodd,
+        ),
         bare("stroke", "Stroke the current path.", Context2d::stroke),
         rect(
             "fill_rect",
@@ -592,6 +625,11 @@ fn path_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             "stroke_rect",
             "Stroke one rectangle, leaving the path alone.",
             Context2d::stroke_rect,
+        ),
+        rect(
+            "clear_rect",
+            "Make a rectangle transparent, through the transform and the clip.",
+            Context2d::clear_rect,
         ),
     ]
 }
@@ -697,6 +735,15 @@ fn state_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             ctx(cx).set_image_smoothing(cx.bool_arg(1));
             Ok(ScriptValue::Unit)
         }),
+        named(
+            "set_global_composite_operation",
+            "Set how later draws combine with the canvas, by its HTML canvas name; false when it is not one.",
+            "operation",
+            |ctx, name| {
+                name.parse()
+                    .map(|op| ctx.set_global_composite_operation(op))
+            },
+        ),
         bare("save", "Push the drawing state.", Context2d::save),
         bare("restore", "Pop the drawing state.", Context2d::restore),
     ]
@@ -960,6 +1007,27 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             .param("path", T::Str)
             .ret(T::Bool)
             .build(|cx| Ok(accepted(buffer_arg(cx.int_arg(0)).save_png(cx.str_arg(1))))),
+        f(
+            "get_image_data",
+            "Read a region of the canvas into a new buffer, filled once the canvas next encodes; 0 when refused.",
+        )
+        .param("id", T::Str)
+        .param("x", T::Int)
+        .param("y", T::Int)
+        .param("width", T::Int)
+        .param("height", T::Int)
+        .ret(T::Int)
+        .build(|cx| {
+            let read = ctx(cx)
+                .get_image_data(
+                    cx.int_arg(1),
+                    cx.int_arg(2),
+                    size_of(cx.int_arg(3)),
+                    size_of(cx.int_arg(4)),
+                )
+                .map(|buffer| buffer.into_id().raw());
+            Ok(ScriptValue::I64(i64::from(degrade(read, 0))))
+        }),
         f(
             "draw_buffer",
             "Draw a buffer onto the canvas at its own size, with the pixels it holds at this call.",

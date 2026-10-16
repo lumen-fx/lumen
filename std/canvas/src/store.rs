@@ -13,12 +13,14 @@
 //! up when it appears.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use lumen_module::lumen_core::app::EventLoopWaker;
-use lumen_module::lumen_paint::Recording;
+use lumen_module::lumen_paint::kurbo::Affine;
+use lumen_module::lumen_paint::{Rasterizer, Recording};
 
 use crate::buffer::PixBuf;
+use crate::encode::BlobCache;
 use crate::ops::{Gfx, Op};
 
 /// How large a `buffer_get_region` / `buffer_put_region` may be, in pixels.
@@ -98,6 +100,28 @@ impl Default for Surface {
     }
 }
 
+/// A read of a canvas a call asked for, waiting for the renderer: the drawing
+/// as it was at the call, and where its pixels go.
+#[derive(Clone)]
+pub struct PendingRead {
+    /// The drawing at the call. Sharing it costs a reference count; the
+    /// canvas copies its recording the next time it draws instead.
+    pub drawing: Arc<Recording>,
+    /// Left edge of the read, in canvas units.
+    pub x: i64,
+    /// Top edge of the read, in canvas units.
+    pub y: i64,
+    /// The handle of the buffer the pixels land in. Its size is the read's.
+    pub buffer: u32,
+    /// Ticks this read has waited for a renderer.
+    pub waited: u32,
+}
+
+/// How many ticks a read waits for a renderer to publish its rasterizer
+/// before it is given up. A renderer publishes one with its first frame, so
+/// a read only waits this long in a run that renders nothing at all.
+pub const READ_WAIT_TICKS: u32 = 120;
+
 /// Every canvas and buffer in the process.
 #[derive(Default)]
 pub struct CanvasStore {
@@ -122,6 +146,13 @@ pub struct CanvasStore {
     /// Ids an element has been adopted for. Read to tell a canvas waiting
     /// for its element from one whose id nothing will ever match.
     pub answered: BTreeSet<String>,
+    /// The renderer's rasterizer, once it has drawn a frame: what a read of
+    /// a canvas turns its drawing into pixels with.
+    pub rasterizer: Option<Rasterizer>,
+    /// Reads recorded by scripts and not answered yet.
+    pub reads: Vec<PendingRead>,
+    /// The font blobs every encode hands the renderer.
+    pub(crate) blobs: BlobCache,
 }
 
 /// How many recorded calls a canvas nothing answers for keeps.
@@ -233,6 +264,47 @@ impl CanvasStore {
         self.reported.remove(id);
     }
 
+    /// Answer every read that can be answered: rasterize the drawing each
+    /// one took and write it into its buffer. Without a rasterizer the reads
+    /// wait, up to [`READ_WAIT_TICKS`] calls of this each. Returns whether
+    /// any are still waiting.
+    pub fn serve_reads(&mut self) -> bool {
+        if self.reads.is_empty() {
+            return false;
+        }
+        let Some(rasterizer) = self.rasterizer.clone() else {
+            for read in &mut self.reads {
+                read.waited += 1;
+            }
+            let before = self.reads.len();
+            self.reads.retain(|read| read.waited <= READ_WAIT_TICKS);
+            if self.reads.len() < before {
+                lumen_module::lumen_core::warn_line!(
+                    "lumen-canvas: no renderer is drawing, so a canvas read was given up"
+                );
+            }
+            return !self.reads.is_empty();
+        };
+        for read in std::mem::take(&mut self.reads) {
+            let Some((width, height)) = self
+                .buffers
+                .get(&read.buffer)
+                .map(|b| (b.width(), b.height()))
+            else {
+                continue;
+            };
+            match read_pixels(&rasterizer, &read.drawing, read.x, read.y, width, height) {
+                Ok(pixels) => {
+                    if let Some(buffer) = self.buffers.get_mut(&read.buffer) {
+                        buffer.write_rgba8(0, 0, width, height, &pixels);
+                    }
+                }
+                Err(why) => lumen_module::lumen_core::warn_line!("lumen-canvas: {why}"),
+            }
+        }
+        false
+    }
+
     /// Report an id nothing answers for, once per id. Returns whether this
     /// call was the one that reported it.
     ///
@@ -245,6 +317,25 @@ impl CanvasStore {
         }
         first
     }
+}
+
+/// A `width` x `height` region of a drawing, its top-left at `(x, y)` in
+/// canvas units, as straight RGBA8 rows. The one read every entry point
+/// makes.
+pub(crate) fn read_pixels(
+    rasterizer: &Rasterizer,
+    drawing: &Recording,
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    rasterizer.rasterize(
+        drawing,
+        Affine::translate((-(x as f64), -(y as f64))),
+        width,
+        height,
+    )
 }
 
 /// The one store. `OnceLock` rather than a resource because the script
@@ -332,7 +423,7 @@ mod tests {
         })));
 
         for _ in 0..1000 {
-            store.record("chart", Op::Fill);
+            store.record("chart", Op::Fill(crate::ops::FillRule::NonZero));
         }
         assert_eq!(
             woken.load(std::sync::atomic::Ordering::SeqCst),
@@ -342,7 +433,7 @@ mod tests {
 
         // The encode is that tick; after it, the next call asks again.
         store.rearm_wake();
-        store.record("chart", Op::Fill);
+        store.record("chart", Op::Fill(crate::ops::FillRule::NonZero));
         assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 2);
         store.waker = None;
     }

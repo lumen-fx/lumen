@@ -18,9 +18,11 @@
 
 pub mod capability;
 mod gpu;
+mod rasterize;
 pub mod sink;
 mod surface;
 pub use gpu::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV};
+pub use rasterize::GpuRasterizer;
 pub use sink::{BACKEND_ID, VelloPainter};
 /// The vello version this backend draws with. A painter that needs vello
 /// itself downcasts [`lumen_paint::Painter::native`] to [`VelloPainter`] and
@@ -241,6 +243,11 @@ impl Renderer for WgpuRenderer {
 
     fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
         let bound = self.bound.as_mut().ok_or(RenderError::Detached)?;
+        // What a drawing read back as pixels is rasterized with: this
+        // device, published once it draws.
+        if !render_world.contains_resource::<lumen_paint::Rasterizer>() {
+            render_world.insert_resource(lumen_paint::Rasterizer::new(bound.gpu.rasterizer()));
+        }
         bound
             .gpu
             .render(render_world)

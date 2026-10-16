@@ -73,15 +73,24 @@
 //! # }
 //! ```
 //!
+//! # Compositing
+//!
+//! Draws combine with the canvas as `set_global_composite_operation` says,
+//! by the HTML canvas's names ([`CompositeOperation`]); `clip` and
+//! `clip_evenodd` narrow every later draw to the current path, and
+//! `clear_rect` erases a rectangle. An operation other than `source-over`,
+//! and a clip, become layers around the one draw they apply to.
+//!
 //! # Pixels
 //!
-//! The canvas itself is write-only, because what it holds is a list of
-//! drawing calls bound for the renderer rather than an image. Reading and writing
-//! pixels is what the buffer functions are for: `buffer_new`,
+//! What a canvas holds is a list of drawing calls bound for the renderer
+//! rather than an image, so pixels live in buffers: `buffer_new`,
 //! `buffer_set_pixel`, `buffer_get_region`, `buffer_load_png`, and
-//! `draw_buffer` to put one on a canvas. Pixels are packed `0xRRGGBBAA`
-//! integers with straight (not premultiplied) alpha, so what a script writes
-//! is what it reads back.
+//! `draw_buffer` to put one on a canvas. `get_image_data` reads a canvas
+//! back into a buffer by rasterizing its drawing on the app's renderer
+//! ([`CanvasReader`] does the same from a Rust system, on the spot). Pixels
+//! are packed `0xRRGGBBAA` integers with straight (not premultiplied) alpha,
+//! so what a script writes is what it reads back.
 //!
 //! Three settings bound what one call can ask for:
 //!
@@ -96,12 +105,10 @@
 //!
 //! # Not here yet
 //!
-//! `clear_rect`, clipping, blend and composite modes, gradients, patterns,
-//! shadows, `measure_text`, `stroke_text`, text alignment and baselines,
-//! `ellipse` and `arc_to`, dashed strokes, drawing an image file or another
-//! canvas directly, reading a composed canvas back, and a
-//! per-canvas device pixel ratio. Canvas does not exist on the web target,
-//! which refuses `[dependencies]` outright.
+//! Gradients, patterns, shadows, `measure_text`, `stroke_text`, text
+//! alignment and baselines, `ellipse` and `arc_to`, dashed strokes, drawing
+//! an image file or another canvas directly, and a per-canvas device pixel
+//! ratio.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -119,10 +126,10 @@ mod plugin;
 /// The geometry types this module's public state is spelled in: the
 /// transform on a [`ops::GfxState`] and the path on a [`ops::Gfx`] are
 /// kurbo's, taken through the engine's own lumen-paint so there is one of each.
-pub use api::{BufferId, CanvasError, CanvasSet, Context2d, PixelBuffer};
+pub use api::{BufferId, CanvasError, CanvasReader, CanvasSet, Context2d, PixelBuffer};
 pub use color::Rgba;
 pub use lumen_module::lumen_paint::kurbo;
-pub use ops::{LineCap, LineJoin};
+pub use ops::{CompositeOperation, FillRule, LineCap, LineJoin};
 pub use paint::{CanvasLeaf, CanvasPainter, EXTENSION_ID, extract_canvases};
 pub use plugin::{Canvas, CanvasPlugin, TAG};
 pub use store::{
