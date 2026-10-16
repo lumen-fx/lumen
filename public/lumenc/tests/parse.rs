@@ -3637,3 +3637,45 @@ fn bg_image_errors_are_reported() {
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert_eq!(ir.root.children[0].attrs.hover_bg, None);
 }
+
+/// `<input type="number">` keeps the field as the element, holding its
+/// `value` as text, and floats a steps box with a down and an up button
+/// along its right end. `step="any"` is recorded as a step of 0.
+#[test]
+fn a_number_input_gains_its_step_buttons() {
+    use lumen_ir::layout_ir::{InputType, WidgetPart};
+    let ir = parse_html(r#"<root><input type="number" value="4" min="0" step="any"/></root>"#)
+        .expect("parse");
+    let field = &ir.root.children[0];
+    assert_eq!(field.tag, "input");
+    assert_eq!(field.attrs.input_type, Some(InputType::Number));
+    assert_eq!(field.attrs.text.as_deref(), Some("4"));
+    assert_eq!(field.attrs.step, Some(0.0));
+    assert!(field.attrs.classes.iter().any(|c| c == "number-input"));
+    let steps = &field.children[0];
+    assert_eq!(steps.attrs.part, Some(WidgetPart::NumberSteps));
+    let parts: Vec<_> = steps
+        .children
+        .iter()
+        .map(|b| (b.attrs.part, b.attrs.text.as_deref()))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            (Some(WidgetPart::StepDown), Some("-")),
+            (Some(WidgetPart::StepUp), Some("+")),
+        ]
+    );
+
+    // A type Lumen does not implement is a text field, and says so.
+    let ir = parse_html(r#"<root><input type="week"/></root>"#).expect("parse");
+    assert_eq!(ir.root.children[0].attrs.input_type, None);
+    assert!(ir.root.children[0].children.is_empty());
+    assert!(
+        ir.lint_findings
+            .iter()
+            .any(|f| f.message.contains("type=\"week\"")),
+        "{:?}",
+        ir.lint_findings
+    );
+}

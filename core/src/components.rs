@@ -2130,8 +2130,22 @@ pub struct Validation {
     pub min: Option<f32>,
     /// Upper numeric bound when the content parses as a number.
     pub max: Option<f32>,
+    /// Set on an `<input type="number">`: non-empty content must be a
+    /// number, on the step grid when there is one.
+    pub number: Option<NumberRule>,
     /// Most recent validity result, recomputed by the validator system.
     pub is_valid: bool,
+}
+
+/// What a number field's content must be, beyond `min` and `max`: a number,
+/// and with a step, one a whole number of steps from the grid's start (the
+/// web's `badInput` and `stepMismatch`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumberRule {
+    /// Where the step grid starts: `min`, else 0.
+    pub base: f32,
+    /// The step, or `None` for `step="any"`.
+    pub step: Option<f32>,
 }
 
 /// Class list assigned in markup via `class="a b c"`. Apps test membership with `LumenClasses::has("tile")`.

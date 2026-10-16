@@ -728,7 +728,27 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             lumen_ir::layout_ir::WidgetPart::ProgressFill => {
                 entity.insert(lumen_primitives::ProgressFill);
             }
+            // The steps box floats along the field's right end; the field
+            // keeps its width clear of the text.
+            lumen_ir::layout_ir::WidgetPart::NumberSteps => {
+                entity.insert(lumen_primitives::ReservedEdge::Right);
+            }
+            lumen_ir::layout_ir::WidgetPart::StepUp => {
+                entity.insert(lumen_primitives::NumberStepButton { up: true });
+            }
+            lumen_ir::layout_ir::WidgetPart::StepDown => {
+                entity.insert(lumen_primitives::NumberStepButton { up: false });
+            }
         }
+    }
+    let number_field =
+        el.tag == "input" && el.attrs.input_type == Some(lumen_ir::layout_ir::InputType::Number);
+    if number_field {
+        entity.insert(lumen_primitives::NumberInput::from_attributes(
+            el.attrs.min,
+            el.attrs.max,
+            el.attrs.step,
+        ));
     }
     // Attach Validation only when validation-specific attrs are set.
     // `<slider min max>` already enforces bounds in SliderValue itself -
@@ -738,12 +758,24 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // same exemption as `<slider>`.
     let validate_min_max = !matches!(el.tag.as_str(), "slider" | "progress")
         && (el.attrs.min.is_some() || el.attrs.max.is_some());
-    if el.attrs.required || el.attrs.pattern.is_some() || validate_min_max {
+    if el.attrs.required || el.attrs.pattern.is_some() || validate_min_max || number_field {
+        let number = number_field.then(|| {
+            let rules = lumen_primitives::NumberInput::from_attributes(
+                el.attrs.min,
+                el.attrs.max,
+                el.attrs.step,
+            );
+            lumen_core::components::NumberRule {
+                base: rules.min.unwrap_or(0.0),
+                step: rules.step,
+            }
+        });
         entity.insert(lumen_core::components::Validation {
             required: el.attrs.required,
             pattern: el.attrs.pattern.clone(),
             min: if validate_min_max { el.attrs.min } else { None },
             max: if validate_min_max { el.attrs.max } else { None },
+            number,
             is_valid: true,
         });
     }

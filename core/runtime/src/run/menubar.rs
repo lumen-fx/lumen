@@ -17,7 +17,7 @@ use bevy_ecs::prelude::{Entity, World};
 use lumen_core::style_overrides::StyleOverrides;
 use lumen_ir::css::{MediaContext, apply_css_with_media};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, MenuEntrySpec};
-use lumen_primitives::{InWindowMenuBar, MenuAccelerators};
+use lumen_primitives::{MenuAccelerators, ReservedEdge};
 
 /// Whether this platform shows an app's menu bar itself.
 pub(crate) const NATIVE_MENUBAR: bool = cfg!(any(target_os = "macos", target_os = "windows"));
@@ -87,7 +87,7 @@ pub(crate) fn finish_in_window_menubar(
         .get::<Children>(root)
         .and_then(|c| c.iter().next().copied());
     if let Some(bar) = bar {
-        world.entity_mut(bar).insert(InWindowMenuBar);
+        world.entity_mut(bar).insert(ReservedEdge::Top);
     }
     if world.get::<StyleOverrides>(root).is_none() {
         world.entity_mut(root).insert(StyleOverrides::default());

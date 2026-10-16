@@ -123,7 +123,6 @@ impl Plugin for TabsPlugin {
             TickStage::Systems,
             crate::menubar::dispatch_menu_accelerators,
         );
-        app.add_systems(TickStage::Systems, crate::menubar::reserve_menubar_space);
         // Roving-tabindex keyboard nav for the focused tab button:
         // ArrowRight / ArrowLeft cycle siblings, Home / End jump to
         // ends, Enter / Space activate (same effect as click). Reads

@@ -1118,6 +1118,9 @@ pub struct Attributes {
     pub pattern: Option<String>,
     /// `multiline="true"` - text input accepts newlines. `<textarea>` defaults to true; `<input>` defaults to false.
     pub multiline: Option<bool>,
+    /// `type="..."` on an `<input>` that is not a plain text field. `None`
+    /// is `type="text"`. On a number field a `step` of `0` is `step="any"`.
+    pub input_type: Option<InputType>,
     /// Synthesised by the `<dropdown>` parser pass on the header
     /// button. The runtime attaches a [`lumen_primitives::DropdownButton`]
     /// whose click flips the open signal and whose option metadata
@@ -1655,6 +1658,40 @@ pub enum WidgetPart {
     RadioDot,
     /// The `.progress-fill` tile inside `<progress>`.
     ProgressFill,
+    /// The `.number-steps` box inside `<input type="number">`, holding the
+    /// two step buttons along the field's right end.
+    NumberSteps,
+    /// The `.number-step-up` button inside `<input type="number">`.
+    StepUp,
+    /// The `.number-step-down` button inside `<input type="number">`.
+    StepDown,
+}
+
+/// What an `<input>` holds when it is not text, from its `type` attribute.
+/// The names and the value each one holds follow HTML's input types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum InputType {
+    /// `type="number"`: a number, typed or stepped with the arrow keys, the
+    /// wheel, or the step buttons, within `min`, `max` and `step`.
+    Number,
+}
+
+impl InputType {
+    /// The `type` attribute value that names this type.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+        }
+    }
+
+    /// The type an `<input type>` value names, or `None` for `text` and for
+    /// a value Lumen does not implement, which a browser also treats as text.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "number" => Some(Self::Number),
+            _ => None,
+        }
+    }
 }
 
 impl WidgetPart {
@@ -1668,6 +1705,9 @@ impl WidgetPart {
             Self::CheckboxBox => "checkbox-box",
             Self::RadioDot => "radio-dot",
             Self::ProgressFill => "progress-fill",
+            Self::NumberSteps => "number-steps",
+            Self::StepUp => "number-step-up",
+            Self::StepDown => "number-step-down",
         }
     }
 }
