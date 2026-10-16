@@ -170,8 +170,10 @@ the file's hash, and writes the block into `styles.css` pointing at the copy.
 A file the app does not have fails the build, naming it. A `src` naming
 another site, a `data:` URL or a `local()` font is left as written, so a font
 served from somewhere else keeps working and nothing is fetched at build
-time. A desktop run of the same app ignores the rule and draws with the fonts
-the system has.
+time. A desktop run of the same app loads the same rule from the app
+directory; browsers read `woff2`, the desktop reads TrueType and OpenType, so
+list a `ttf` or `otf` after the `woff2` for both to find one. See
+[Styling](styling.md#fonts).
 
 Nothing is written `!important`, which leaves that free for you. An important
 declaration cannot be overridden by `:hover`, a media query or a keyframe, so

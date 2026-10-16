@@ -1,92 +1,86 @@
-//! Embedded-font registration for [`cosmic_text::FontSystem`].
+//! Fonts an app ships, added to a [`fontdb::Database`] next to the system's.
 //!
-//! Mirrors `QFontDatabase::addApplicationFont` (Qt) and
-//! `pango_font_map_add_font_file` / `gdk_display_load_font` (GTK +
-//! Pango). The system shaper already discovers system fonts at
-//! construction; this module lets the app push extra fonts at runtime,
-//! typically the bytes of a `.ttf` / `.otf` / `.woff2` shipped
-//! inside a `.lpak` bundle.
-//!
-//! The split lives in its own module so the asset loader can call into
-//! it without growing the `lib.rs` shape registration surface.
+//! The counterpart of `QFontDatabase::addApplicationFont` (Qt) and a
+//! browser's `@font-face`: the faces in a font file become available under
+//! the family the app names them by, whatever the file calls itself, so a
+//! stylesheet's `font-family` finds them.
 
-use cosmic_text::FontSystem;
+use cosmic_text::fontdb;
+use lumen_text::{FontFace, FontStyle};
 
-/// Register a single font from raw bytes against an existing
-/// `FontSystem`. Mirrors `QFontDatabase::addApplicationFont` -
-/// returns `true` when at least one face was loaded.
-///
-/// The bytes can come from any source (`include_bytes!`, a `.lpak`
-/// bundle read, a manual disk fetch). cosmic-text's `fontdb` clones
-/// the data internally, so the caller's buffer can be dropped
-/// immediately after the call returns.
-pub fn register_bytes(font_system: &mut FontSystem, _name: &str, bytes: Vec<u8>) -> bool {
-    // `_name` is forwarded to match the spec - fontdb keys faces by
-    // their parsed family / style metadata, not by an arbitrary
-    // caller-supplied name, so we don't actually store it. Keeping the
-    // parameter in the signature future-proofs against an alternative
-    // backend that needs an explicit handle.
-    let db = font_system.db_mut();
-    let before = db.faces().count();
-    db.load_font_data(bytes);
-    let after = db.faces().count();
-    after > before
-}
-
-/// Convenience: register every `.ttf` / `.otf` / `.woff2` entry in a
-/// generic iterator. Returns the number of faces successfully loaded.
-///
-/// Used by the asset-server integration to drain a `LumenBundle`'s
-/// font entries into the system shaper without leaking the bundle
-/// type into this crate.
-pub fn register_iter<'a, I>(font_system: &mut FontSystem, fonts: I) -> usize
-where
-    I: IntoIterator<Item = (&'a str, Vec<u8>)>,
-{
-    let mut loaded = 0;
-    for (name, bytes) in fonts {
-        if !is_font_extension(name) {
+/// Add every face in `face.data` to `db` under `face.family`, with the
+/// weight and style the rule declares where it declares them. Returns how
+/// many faces were added; `0` when the bytes hold none this database can
+/// read (TrueType, OpenType, and their collections).
+pub fn register_face(db: &mut fontdb::Database, face: &FontFace) -> usize {
+    let source = fontdb::Source::Binary(face.data.clone());
+    let ids = db.load_font_source(source);
+    let mut added = 0;
+    for id in ids {
+        let Some(mut info) = db.face(id).cloned() else {
             continue;
+        };
+        db.remove_face(id);
+        info.families = vec![(face.family.clone(), fontdb::Language::English_UnitedStates)];
+        if let Some(weight) = face.weight {
+            info.weight = fontdb::Weight(weight);
         }
-        if register_bytes(font_system, name, bytes) {
-            loaded += 1;
+        if let Some(style) = face.style {
+            info.style = match style {
+                FontStyle::Normal => fontdb::Style::Normal,
+                FontStyle::Italic => fontdb::Style::Italic,
+                FontStyle::Oblique => fontdb::Style::Oblique,
+            };
         }
+        db.push_face_info(info);
+        added += 1;
     }
-    loaded
-}
-
-/// Whether `name` ends in a recognised font extension. Case-insensitive.
-pub fn is_font_extension(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".ttf")
-        || lower.ends_with(".otf")
-        || lower.ends_with(".woff")
-        || lower.ends_with(".woff2")
+    added
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    #[test]
-    fn is_font_extension_matches_common_suffixes() {
-        assert!(is_font_extension("Inter.ttf"));
-        assert!(is_font_extension("Inter.TTF"));
-        assert!(is_font_extension("path/to/Roboto.otf"));
-        assert!(is_font_extension("a.woff"));
-        assert!(is_font_extension("a.woff2"));
-        assert!(!is_font_extension("icon.png"));
-        assert!(!is_font_extension("main.rhai"));
+    fn noto() -> Vec<u8> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../public/lumenc/tests/goldens/fonts/NotoSans-Regular.ttf"
+        );
+        std::fs::read(path).expect("read the test font")
+    }
+
+    fn face(data: Vec<u8>) -> FontFace {
+        FontFace {
+            family: "Pixel Demo".into(),
+            data: Arc::new(data),
+            weight: Some(700),
+            style: Some(FontStyle::Italic),
+        }
     }
 
     #[test]
-    fn register_bytes_with_empty_buffer_is_noop() {
-        // An empty buffer cannot parse to a face; we expect `false`
-        // (no new faces registered) and no panic.
-        let mut fs = FontSystem::new();
-        let before = fs.db_mut().faces().count();
-        let added = register_bytes(&mut fs, "empty", Vec::new());
-        assert!(!added);
-        assert_eq!(fs.db_mut().faces().count(), before);
+    fn a_face_is_known_by_the_family_and_descriptors_the_rule_gives() {
+        let mut db = fontdb::Database::new();
+        assert_eq!(register_face(&mut db, &face(noto())), 1);
+        let info = db.faces().next().expect("one face");
+        assert_eq!(info.families[0].0, "Pixel Demo");
+        assert_eq!(info.weight, fontdb::Weight(700));
+        assert_eq!(info.style, fontdb::Style::Italic);
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name("Pixel Demo")],
+            weight: fontdb::Weight(700),
+            style: fontdb::Style::Italic,
+            ..fontdb::Query::default()
+        };
+        assert!(db.query(&query).is_some());
+    }
+
+    #[test]
+    fn bytes_that_hold_no_font_add_nothing() {
+        let mut db = fontdb::Database::new();
+        assert_eq!(register_face(&mut db, &face(b"not a font".to_vec())), 0);
+        assert_eq!(db.len(), 0);
     }
 }
