@@ -37,6 +37,7 @@ pub mod emit;
 pub mod frame;
 pub mod glyphs;
 pub mod layers;
+pub mod pixels;
 pub mod recording;
 pub mod svg;
 pub mod walker;
@@ -52,6 +53,7 @@ pub use glyphs::{GLYPH_TOLERANCE, GlyphOutlines};
 pub use layers::{LayerCache, LayerStats};
 pub use peniko;
 pub use peniko::kurbo;
+pub use pixels::PixelImage;
 pub use recording::Recording;
 pub use walker::{
     ClipStack, WalkContext, diff_retained_scenes, scene_has_damage, walk_node, walk_retained_scene,
@@ -59,7 +61,7 @@ pub use walker::{
 
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
-use peniko::{BlendMode, BrushRef, Color, Fill, FontData, ImageBrush};
+use peniko::{BlendMode, BrushRef, Color, Fill, FontData, ImageBrush, ImageSampler};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -254,6 +256,28 @@ pub trait Painter: Send + 'static {
     /// Draw `image` with its top-left corner at the origin of `transform`,
     /// one image pixel per unit.
     fn draw_image(&mut self, image: &ImageBrush, transform: Affine);
+
+    /// Draw `image` with its top-left corner at the origin of `transform`,
+    /// one image pixel per unit, sampled as `sampler` says.
+    ///
+    /// A sink that keeps a resident copy per [`PixelImage::id`] brings that
+    /// copy up to date by re-uploading only the tiles written since it last
+    /// drew the image. The default keeps none: it flattens the image into a
+    /// fresh [`peniko::ImageData`] on every call and draws that through
+    /// [`Self::draw_image`], which is correct and costs a full copy and a
+    /// full upload per call.
+    fn draw_pixels(&mut self, image: &PixelImage, sampler: ImageSampler, transform: Affine) {
+        if image.width() == 0 || image.height() == 0 {
+            return;
+        }
+        self.draw_image(
+            &ImageBrush {
+                image: image.to_image_data(),
+                sampler,
+            },
+            transform,
+        );
+    }
 
     /// Fill one run of glyphs.
     ///

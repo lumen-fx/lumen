@@ -6,10 +6,10 @@
 //! geometry, brushes, images, and glyphs, so it can cross into the render
 //! world and outlive the call that made it.
 
-use crate::{GlyphRun, MaskKind, Painter, Shape};
+use crate::{GlyphRun, MaskKind, Painter, PixelImage, Shape};
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
-use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush};
+use peniko::{BlendMode, Brush, BrushRef, Color, Fill, FontData, ImageBrush, ImageSampler};
 use std::any::Any;
 
 /// [`Shape`] with its path owned.
@@ -94,6 +94,13 @@ pub enum Command {
     /// [`Painter::draw_image`].
     Image {
         image: ImageBrush,
+        transform: Affine,
+    },
+    /// [`Painter::draw_pixels`]. The image is a clone, so the recording keeps
+    /// the pixels it was drawn with.
+    Pixels {
+        image: PixelImage,
+        sampler: ImageSampler,
         transform: Affine,
     },
     /// [`Painter::draw_glyphs`].
@@ -222,6 +229,11 @@ impl Recording {
                     image,
                     transform: t,
                 } => painter.draw_image(image, transform * *t),
+                Command::Pixels {
+                    image,
+                    sampler,
+                    transform: t,
+                } => painter.draw_pixels(image, *sampler, transform * *t),
                 Command::Glyphs {
                     font,
                     font_size,
@@ -359,6 +371,14 @@ impl Painter for Recording {
     fn draw_image(&mut self, image: &ImageBrush, transform: Affine) {
         self.commands.push(Command::Image {
             image: image.clone(),
+            transform,
+        });
+    }
+
+    fn draw_pixels(&mut self, image: &PixelImage, sampler: ImageSampler, transform: Affine) {
+        self.commands.push(Command::Pixels {
+            image: image.clone(),
+            sampler,
             transform,
         });
     }
@@ -654,6 +674,95 @@ mod tests {
         drawing.clear();
         assert!(drawing.is_empty());
         assert_eq!(drawing.layer_depth(), 0);
+    }
+
+    /// A recorded pixel image replays with the pixels it was drawn with,
+    /// whatever was written to the image afterwards.
+    #[test]
+    fn a_recorded_pixel_image_keeps_the_pixels_it_was_drawn_with() {
+        let mut image = PixelImage::new(4, 4);
+        image.fill_rgba8(0, 0, 4, 4, [255, 0, 0, 255]);
+        let mut drawing = Recording::default();
+        let nearest = ImageSampler::default().with_quality(peniko::ImageQuality::Low);
+        drawing.draw_pixels(&image, nearest, Affine::IDENTITY);
+        image.fill_rgba8(0, 0, 4, 4, [0, 0, 255, 255]);
+
+        let mut copy = Recording::default();
+        drawing.replay(&mut copy, Affine::translate((3.0, 0.0)));
+        match &copy.commands()[0] {
+            Command::Pixels {
+                image: drawn,
+                sampler,
+                transform,
+            } => {
+                assert_eq!(drawn.pixel(1, 1), [255, 0, 0, 255]);
+                assert_eq!(drawn.id(), image.id());
+                assert_eq!(sampler.quality, peniko::ImageQuality::Low);
+                assert_eq!(transform.translation(), (3.0, 0.0).into());
+            }
+            other => panic!("expected the pixels, got {other:?}"),
+        }
+    }
+
+    /// A sink that keeps no resident copies draws a pixel image as a flat
+    /// image, sampled the same way.
+    #[test]
+    fn the_default_draws_pixels_as_a_flat_image() {
+        struct Flat(Vec<ImageBrush>);
+        impl Painter for Flat {
+            fn fill(
+                &mut self,
+                _: Fill,
+                _: Affine,
+                _: BrushRef<'_>,
+                _: Option<Affine>,
+                _: &Shape<'_>,
+            ) {
+            }
+            fn stroke(
+                &mut self,
+                _: &Stroke,
+                _: Affine,
+                _: BrushRef<'_>,
+                _: Option<Affine>,
+                _: &Shape<'_>,
+            ) {
+            }
+            fn push_layer(&mut self, _: Fill, _: BlendMode, _: f32, _: Affine, _: &Shape<'_>) {}
+            fn pop_layer(&mut self) {}
+            fn draw_masked(
+                &mut self,
+                _: MaskKind,
+                _: Affine,
+                _: &Shape<'_>,
+                _: &mut dyn FnMut(&mut dyn Painter),
+                _: &mut dyn FnMut(&mut dyn Painter),
+            ) {
+            }
+            fn layer_depth(&self) -> usize {
+                0
+            }
+            fn draw_blurred_rounded_rect(&mut self, _: Affine, _: Rect, _: Color, _: f64, _: f64) {}
+            fn draw_image(&mut self, image: &ImageBrush, _: Affine) {
+                self.0.push(image.clone());
+            }
+            fn draw_glyphs(&mut self, _: &GlyphRun<'_>) {}
+            fn backend_id(&self) -> &'static str {
+                "test.flat"
+            }
+            fn native(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+        let mut image = PixelImage::new(3, 2);
+        image.fill_rgba8(2, 1, 1, 1, [1, 2, 3, 4]);
+        let mut sink = Flat(Vec::new());
+        let nearest = ImageSampler::default().with_quality(peniko::ImageQuality::Low);
+        sink.draw_pixels(&image, nearest, Affine::IDENTITY);
+        sink.draw_pixels(&PixelImage::new(0, 5), nearest, Affine::IDENTITY);
+        assert_eq!(sink.0.len(), 1, "an empty image draws nothing");
+        assert_eq!(sink.0[0].sampler.quality, peniko::ImageQuality::Low);
+        assert_eq!(&sink.0[0].image.data.data()[20..24], &[1, 2, 3, 4]);
     }
 
     /// An owned shape hands back the same geometry it was made from.

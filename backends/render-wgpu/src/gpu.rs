@@ -11,7 +11,9 @@ use crate::sink::{FinishedLayer, GpuLayer};
 use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
 use lumen_core::traits::RenderTarget;
-use lumen_paint::{FragmentCache, LayerCache, PaintTarget};
+use lumen_paint::pixels::TileView;
+use lumen_paint::{FragmentCache, LayerCache, PaintTarget, PixelImage};
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -245,6 +247,66 @@ impl FrameTexture {
     }
 }
 
+/// Upload the tiles of `image` whose stamps moved since `kept` last took
+/// them. Returns whether anything was written.
+///
+/// Most of an image changing is one write of the whole image rather than one
+/// per tile: the per-call cost of a write is what dominates once the tile
+/// count is large.
+fn upload_tiles(queue: &wgpu::Queue, kept: &mut PixelTexture, image: &PixelImage) -> bool {
+    let changed = image
+        .tiles()
+        .filter(|tile| kept.stamps[tile.index] != tile.stamp)
+        .count();
+    if changed == 0 {
+        return false;
+    }
+    let (width, height) = (image.width(), image.height());
+    let write = |origin: (u32, u32), size: (u32, u32), bytes: &[u8], stride: u32| {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &kept.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: origin.0,
+                    y: origin.1,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+    };
+    if changed * 2 > image.tile_count() {
+        write((0, 0), (width, height), &image.to_rgba8(), width * 4);
+    } else {
+        for tile in image.tiles() {
+            if kept.stamps[tile.index] != tile.stamp {
+                write(
+                    (tile.x, tile.y),
+                    (tile.width, tile.height),
+                    tile.pixels,
+                    TileView::STRIDE as u32,
+                );
+            }
+        }
+    }
+    for tile in image.tiles() {
+        kept.stamps[tile.index] = tile.stamp;
+    }
+    true
+}
+
 /// Everything a frame needs on the GPU, whatever its target: the device,
 /// the vello renderer, the sink frames are painted into, the fragment
 /// cache, and the texture the frame lands in.
@@ -265,7 +327,18 @@ pub(crate) struct GpuCore {
     /// The textures standing in for kept layers' images, each with the layer
     /// it belongs to; a texture goes once its layer is dropped.
     textures: Vec<(Weak<GpuLayer>, vello::peniko::ImageData)>,
+    /// The textures standing in for the pixel images frames draw, by image
+    /// id, kept while frames keep drawing them.
+    pixels: HashMap<u64, PixelTexture>,
     frame: FrameTexture,
+}
+
+/// One pixel image's pixels on the GPU, the image vello draws it through,
+/// and the stamp each tile carried when it was last uploaded.
+struct PixelTexture {
+    texture: wgpu::Texture,
+    stand_in: vello::peniko::ImageData,
+    stamps: Vec<u64>,
 }
 
 impl GpuCore {
@@ -318,6 +391,7 @@ impl GpuCore {
                 cache: FragmentCache::default(),
                 layers: LayerCache::default(),
                 textures: Vec::new(),
+                pixels: HashMap::new(),
                 frame,
             },
             surface,
@@ -368,6 +442,7 @@ impl GpuCore {
             Some(&mut self.cache),
             Some(&mut self.layers),
         );
+        self.upload_pixels();
         self.render_offscreen()?;
         let params = RenderParams {
             base_color: lumen_paint::clear_color(render_world),
@@ -495,6 +570,81 @@ impl GpuCore {
                 .push((layer.layer.clone(), layer.image.clone()));
         }
         Ok(())
+    }
+
+    /// Bring the texture of every pixel image the frame drew up to the state
+    /// it drew, uploading only the tiles written since the last upload, and
+    /// stand each texture in for the image vello draws it through.
+    ///
+    /// The upload is the part that crosses to the GPU, and it is only the
+    /// written tiles. Vello then copies the whole texture into its image atlas
+    /// on the GPU (it has no partial copy), which is a device-local copy and
+    /// no transfer.
+    fn upload_pixels(&mut self) {
+        let (drawn, gone) = self
+            .painter
+            .native()
+            .downcast_mut::<VelloPainter>()
+            .expect("the GPU renderer paints through a VelloPainter")
+            .take_pixels();
+        for stand_in in gone {
+            self.vello.override_image(&stand_in, None);
+            self.pixels
+                .retain(|_, kept| kept.stand_in.data.id() != stand_in.data.id());
+        }
+        for (image, stand_in) in drawn {
+            let (width, height) = (image.width(), image.height());
+            let fresh = !self
+                .pixels
+                .get(&image.id())
+                .is_some_and(|kept| kept.stand_in.data.id() == stand_in.data.id());
+            if fresh {
+                if let Some(old) = self.pixels.remove(&image.id()) {
+                    self.vello.override_image(&old.stand_in, None);
+                }
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("lumen pixel image"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    // Written from the CPU, copied into vello's atlas.
+                    usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                // wgpu clears a new texture, which is what a tile that was
+                // never written holds: stamp 0 needs no upload.
+                self.vello.override_image(
+                    &stand_in,
+                    Some(wgpu::TexelCopyTextureInfoBase {
+                        texture: texture.clone(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    }),
+                );
+                self.pixels.insert(
+                    image.id(),
+                    PixelTexture {
+                        texture,
+                        stand_in: stand_in.clone(),
+                        stamps: vec![0; image.tile_count()],
+                    },
+                );
+            }
+            let kept = self
+                .pixels
+                .get_mut(&image.id())
+                .expect("inserted above when missing");
+            if upload_tiles(&self.queue, kept, &image) {
+                self.vello.mark_override_image_dirty(&kept.stand_in);
+            }
+        }
     }
 
     /// Drop the texture of every offscreen layer nothing holds any more: the

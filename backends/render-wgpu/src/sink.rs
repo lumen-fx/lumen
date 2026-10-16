@@ -17,8 +17,11 @@
 //! frame of text costs a copy per glyph rather than a re-encode.
 
 use lumen_paint::glyphs::{Contours, GlyphShape, brush_transform};
-use lumen_paint::{Fragment, GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
+use lumen_paint::{
+    Fragment, GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, PixelImage, Shape,
+};
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use vello::Scene;
 use vello::kurbo::{Affine, Rect, Stroke};
@@ -57,6 +60,14 @@ pub struct VelloPainter {
     /// The frame's target bounds, when the renderer has said; glyphs
     /// outside them are not encoded.
     visible: Option<Rect>,
+    /// The pixel images this frame drew, by id, in the state it drew them.
+    /// The renderer brings each one's texture up to that state before it
+    /// renders (see [`VelloPainter::take_pixels`]).
+    pixels: HashMap<u64, PixelImage>,
+    /// The image each pixel image is drawn through, by id, kept across
+    /// frames: one blob id per pixel image is what lets vello keep one atlas
+    /// slot for it, and the renderer stands a texture in for the blob.
+    stand_ins: HashMap<u64, ImageData>,
 }
 
 impl Default for VelloPainter {
@@ -69,6 +80,8 @@ impl Default for VelloPainter {
             max_layer_side: MAX_LAYER_SIDE,
             outlines: GlyphOutlines::new(),
             visible: None,
+            pixels: HashMap::new(),
+            stand_ins: HashMap::new(),
         }
     }
 }
@@ -107,6 +120,18 @@ impl GlyphShape for EncodedGlyph {
             segments,
             bounds,
         }
+    }
+}
+
+/// An image with a blob of its own and no bytes: a unique image id the
+/// renderer stands a texture in for.
+fn stand_in(width: u32, height: u32) -> ImageData {
+    ImageData {
+        data: Blob::new(Arc::new([0u8; 0])),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width,
+        height,
     }
 }
 
@@ -212,6 +237,30 @@ impl VelloPainter {
         self.offscreen.clear();
         self.finished.clear();
         self.outlines.end_frame();
+        self.pixels.clear();
+    }
+
+    /// The pixel images the frame drew, each with the image vello draws it
+    /// through. The renderer has to stand an up-to-date texture in for every
+    /// one of them before the frame (or an offscreen layer) renders.
+    ///
+    /// A stand-in the frame did not draw is forgotten here, and handed back
+    /// in the second list so the renderer can release its texture.
+    pub(crate) fn take_pixels(&mut self) -> (Vec<(PixelImage, ImageData)>, Vec<ImageData>) {
+        let drawn: Vec<(PixelImage, ImageData)> = self
+            .pixels
+            .drain()
+            .filter_map(|(id, image)| Some((image, self.stand_ins.get(&id)?.clone())))
+            .collect();
+        let mut gone = Vec::new();
+        self.stand_ins.retain(|id, stand_in| {
+            let live = drawn.iter().any(|(image, _)| image.id() == *id);
+            if !live {
+                gone.push(stand_in.clone());
+            }
+            live
+        });
+        (drawn, gone)
     }
 
     /// The offscreen layers closed since the last call. Each must be rendered
@@ -367,6 +416,56 @@ impl Painter for VelloPainter {
         self.target().draw_image(image, transform);
     }
 
+    /// Drawn through a stand-in image whose pixels a texture the renderer
+    /// keeps per image supplies, so a write re-uploads only its tiles.
+    ///
+    /// Two cases draw the image flat instead, the way a sink with no
+    /// resident copies does: inside a fragment, which may replay on a later
+    /// frame after the texture is gone, and a second state of an image this
+    /// frame already drew, since one texture holds one state.
+    fn draw_pixels(&mut self, image: &PixelImage, sampler: ImageSampler, transform: Affine) {
+        let (width, height) = (image.width(), image.height());
+        if width == 0 || height == 0 {
+            return;
+        }
+        if width > self.max_layer_side || height > self.max_layer_side {
+            // Larger than any texture, or vello's atlas, holds.
+            return;
+        }
+        let flat = !self.recording.is_empty()
+            || self
+                .pixels
+                .get(&image.id())
+                .is_some_and(|drawn| drawn.version() != image.version());
+        if flat {
+            let brush = ImageBrush {
+                image: image.to_image_data(),
+                sampler,
+            };
+            self.target().draw_image(&brush, transform);
+            return;
+        }
+        let stand_in = self
+            .stand_ins
+            .entry(image.id())
+            .and_modify(|data| {
+                // A resized image is a new atlas slot and a new texture.
+                if (data.width, data.height) != (width, height) {
+                    *data = stand_in(width, height);
+                }
+            })
+            .or_insert_with(|| stand_in(width, height))
+            .clone();
+        self.pixels.insert(image.id(), image.clone());
+        self.target().draw_image(
+            &ImageBrush {
+                image: stand_in,
+                sampler,
+            },
+            transform,
+        );
+    }
+
     /// Outline glyphs are filled as the polygons [`GlyphOutlines`] flattens
     /// them to, so they match every other backend; vello's own glyph
     /// encoding draws only the colour-glyph runs it declines.
@@ -440,13 +539,10 @@ impl Painter for VelloPainter {
         }
         // A blob of its own gives the layer an image id no other image has;
         // the renderer stands a texture in for its pixels.
-        let image = ImageData {
-            data: Blob::new(Arc::new([0u8; 0])),
-            format: ImageFormat::Rgba8,
-            alpha_type: ImageAlphaType::Alpha,
-            width: bounds.width().round() as u32,
-            height: bounds.height().round() as u32,
-        };
+        let image = stand_in(
+            bounds.width().round() as u32,
+            bounds.height().round() as u32,
+        );
         let layer = Arc::new(GpuLayer {
             image: image.clone(),
             bounds,
@@ -618,6 +714,61 @@ mod tests {
             encoding.resources.glyph_runs.is_empty(),
             "vello's glyph path unused"
         );
+    }
+
+    /// A pixel image keeps one stand-in across frames, so vello keeps one
+    /// atlas slot for it; a frame that stops drawing it hands the stand-in
+    /// back to be released.
+    #[test]
+    fn a_pixel_image_keeps_one_stand_in_while_it_is_drawn() {
+        let mut image = PixelImage::new(8, 8);
+        let mut painter = VelloPainter::new();
+        let sampler = ImageSampler::default();
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        let (drawn, gone) = painter.take_pixels();
+        assert_eq!(drawn.len(), 1);
+        assert!(gone.is_empty());
+        let first = drawn[0].1.data.id();
+
+        painter.reset();
+        image.fill_rgba8(0, 0, 1, 1, [255; 4]);
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        let (drawn, _) = painter.take_pixels();
+        assert_eq!(drawn[0].1.data.id(), first, "a write keeps the slot");
+        assert_eq!(drawn[0].0.version(), image.version(), "in the drawn state");
+
+        painter.reset();
+        image.resize(16, 8);
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        let (drawn, _) = painter.take_pixels();
+        assert_ne!(drawn[0].1.data.id(), first, "a resize takes a new one");
+
+        painter.reset();
+        let (drawn, gone) = painter.take_pixels();
+        assert!(drawn.is_empty());
+        assert_eq!(gone.len(), 1, "not drawn, released");
+    }
+
+    /// Inside a fragment, or as a second state of an image the frame already
+    /// drew, a pixel image is drawn flat and needs no texture.
+    #[test]
+    fn a_pixel_image_the_texture_cannot_serve_is_drawn_flat() {
+        let mut image = PixelImage::new(4, 4);
+        let sampler = ImageSampler::default();
+        let mut painter = VelloPainter::new();
+        assert!(painter.begin_fragment());
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        let fragment = painter.end_fragment().expect("open");
+        assert!(painter.take_pixels().0.is_empty());
+        let scene = fragment.downcast::<Scene>().expect("a vello fragment");
+        assert!(!scene.encoding().is_empty());
+
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        image.fill_rgba8(0, 0, 4, 4, [9; 4]);
+        painter.draw_pixels(&image, sampler, Affine::IDENTITY);
+        let (drawn, _) = painter.take_pixels();
+        assert_eq!(drawn.len(), 1, "the second state went flat");
+        assert_eq!(drawn[0].0.version(), 0, "the texture holds the first");
     }
 
     /// The escape hatch hands out the sink itself, and through it the scene
