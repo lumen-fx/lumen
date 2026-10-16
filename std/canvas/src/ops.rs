@@ -12,6 +12,7 @@
 //! ticks, so a script that sets a fill in one handler and draws in the next
 //! gets the fill it set.
 
+use lumen_module::lumen_paint::PixelImage;
 use lumen_module::lumen_paint::kurbo::{Affine, BezPath, Point};
 
 use crate::color::Rgba;
@@ -117,6 +118,10 @@ pub enum Op {
     SetLineJoin(LineJoin),
     /// Set the alpha every later draw is multiplied by.
     SetGlobalAlpha(f64),
+    /// Set whether a buffer drawn at another size is smoothed (bilinear) or
+    /// kept sharp (nearest neighbour). The HTML canvas's
+    /// `imageSmoothingEnabled`.
+    SetImageSmoothing(bool),
     /// Push the drawing state.
     Save,
     /// Pop the drawing state.
@@ -144,8 +149,10 @@ pub enum Op {
     },
     /// Draw a pixel buffer at its own size.
     DrawBuffer {
-        /// Buffer handle.
-        buffer: u32,
+        /// The buffer's pixels as they were at the call. A clone of a
+        /// `PixelImage` shares its tiles, so this copies no pixels; a write
+        /// after the call copies the tiles it touches instead.
+        image: PixelImage,
         /// Top-left x.
         x: f64,
         /// Top-left y.
@@ -158,8 +165,8 @@ pub enum Op {
     Resize(f32, f32),
     /// Draw a pixel buffer stretched into a box.
     DrawBufferScaled {
-        /// Buffer handle.
-        buffer: u32,
+        /// The buffer's pixels as they were at the call.
+        image: PixelImage,
         /// Top-left x.
         x: f64,
         /// Top-left y.
@@ -256,6 +263,9 @@ pub struct GfxState {
     pub line_join: LineJoin,
     /// The alpha every draw is multiplied by.
     pub global_alpha: f32,
+    /// Whether a buffer drawn at another size is smoothed. On by default,
+    /// as on the web; off is nearest-neighbour, which keeps pixel art sharp.
+    pub image_smoothing: bool,
     /// The font `fill_text` shapes with.
     pub font: FontSpec,
 }
@@ -270,6 +280,7 @@ impl Default for GfxState {
             line_cap: LineCap::default(),
             line_join: LineJoin::default(),
             global_alpha: 1.0,
+            image_smoothing: true,
             font: FontSpec::default(),
         }
     }
@@ -360,6 +371,7 @@ impl Gfx {
             Op::SetLineCap(cap) => self.state.line_cap = *cap,
             Op::SetLineJoin(join) => self.state.line_join = *join,
             Op::SetGlobalAlpha(a) => self.state.global_alpha = a.clamp(0.0, 1.0) as f32,
+            Op::SetImageSmoothing(on) => self.state.image_smoothing = *on,
             Op::Save => self.stack.push(self.state.clone()),
             Op::Restore => {
                 // An unmatched `restore` leaves the state alone, which is

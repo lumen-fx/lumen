@@ -7,7 +7,7 @@
 //! machine with no usable adapter, the same contract every other GPU pixel
 //! suite in the tree has.
 
-use lumen_canvas::{Canvas, CanvasPlugin};
+use lumen_canvas::{Canvas, CanvasPlugin, Context2d, PixelBuffer};
 use lumen_core::app::App;
 use lumen_core::components::{
     Color, Length, LumenId, LumenTag, Opacity, Style, Transform, Visible,
@@ -279,6 +279,136 @@ fn a_fade_over_a_canvas_that_is_not_drawing_still_reaches_the_pixels() {
         assert!(
             faded < opaque - 40,
             "the fade reached the pixels: {faded} against {opaque}"
+        );
+    }
+}
+
+/// Redraw a buffer the way an editor does after a stroke: empty the canvas
+/// and draw the buffer again, zoomed `zoom` times with smoothing as asked.
+fn redraw(ctx: &Context2d, buffer: &PixelBuffer, zoom: f64, smoothing: bool) {
+    ctx.clear();
+    ctx.set_image_smoothing(smoothing);
+    let (w, h) = buffer.size().expect("the buffer exists");
+    ctx.draw_buffer_scaled(buffer, 0.0, 0.0, f64::from(w) * zoom, f64::from(h) * zoom);
+}
+
+#[test]
+fn a_rust_app_writes_a_buffer_region_and_sees_each_write_on_screen() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "art", (0.0, 0.0), (64.0, 64.0), (64.0, 64.0));
+        // Two tiles across and down, so a write lands in one tile of four.
+        let buffer = PixelBuffer::new(128, 128).expect("a buffer");
+        buffer.fill_rect(0, 0, 128, 128, 0x0000ffff).expect("fill");
+        let ctx = Context2d::new("art");
+        redraw(&ctx, &buffer, 2.0, false);
+        let first = draw(&mut app);
+        assert_eq!(pixel(&first, 21, 21), (0, 0, 255), "{backend:?}: the fill");
+
+        // One call writes a red and a green pixel side by side.
+        buffer
+            .write_rgba8(10, 10, 2, 1, &[255, 0, 0, 255, 0, 255, 0, 255])
+            .expect("write");
+        redraw(&ctx, &buffer, 2.0, false);
+        app.tick();
+        let second = read_back(&app);
+        // Zoomed twice without smoothing, buffer pixel 10 covers screen
+        // pixels 20 and 21 exactly, and 11 covers 22 and 23.
+        assert_eq!(
+            pixel(&second, 21, 21),
+            (255, 0, 0),
+            "{backend:?}: the red pixel"
+        );
+        assert_eq!(
+            pixel(&second, 22, 21),
+            (0, 255, 0),
+            "{backend:?}: the green pixel"
+        );
+        assert_eq!(
+            pixel(&second, 19, 21),
+            (0, 0, 255),
+            "{backend:?}: around it"
+        );
+
+        // A write in another tile after the first upload: the earlier write
+        // stays, the new one shows.
+        // At its own size, shifted 8 left, buffer columns 8..72 are on
+        // screen: the first tile's write and the second tile's both.
+        buffer.set_pixel(70, 4, 0xffffffff).expect("write");
+        ctx.clear();
+        ctx.draw_buffer(&buffer, -8.0, 0.0);
+        app.tick();
+        let third = read_back(&app);
+        assert_eq!(
+            pixel(&third, 62, 4),
+            (255, 255, 255),
+            "{backend:?}: the new write"
+        );
+        assert_eq!(
+            pixel(&third, 2, 10),
+            (255, 0, 0),
+            "{backend:?}: the old write kept"
+        );
+    }
+}
+
+/// A draw shows the buffer as it was at the call, as `drawImage` does on the
+/// web, even when the buffer is written again before the tick encodes: the
+/// screen shows the write only once the buffer is drawn again.
+#[test]
+fn a_write_after_a_draw_in_the_same_tick_waits_for_the_next_draw() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for backend in backends() {
+        let mut app = app(backend);
+        spawn_canvas(&mut app, "art", (0.0, 0.0), (64.0, 64.0), (64.0, 64.0));
+        let buffer = PixelBuffer::new(8, 8).expect("a buffer");
+        buffer.fill_rect(0, 0, 8, 8, 0x0000ffff).expect("fill");
+        let ctx = Context2d::new("art");
+        redraw(&ctx, &buffer, 8.0, false);
+        // Written after the draw call and before the tick that encodes it.
+        buffer.fill_rect(0, 0, 8, 8, 0xff0000ff).expect("fill");
+        let first = draw(&mut app);
+        assert_eq!(
+            pixel(&first, 20, 20),
+            (0, 0, 255),
+            "{backend:?}: the pixels of the call, not of the encode"
+        );
+
+        redraw(&ctx, &buffer, 8.0, false);
+        app.tick();
+        let second = read_back(&app);
+        assert_eq!(
+            pixel(&second, 20, 20),
+            (255, 0, 0),
+            "{backend:?}: drawn again, the write shows"
+        );
+    }
+}
+
+#[test]
+fn image_smoothing_off_keeps_zoomed_pixels_sharp() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for backend in backends() {
+        let zoomed = |smoothing: bool| {
+            let mut app = app(backend);
+            spawn_canvas(&mut app, "art", (0.0, 0.0), (64.0, 64.0), (64.0, 64.0));
+            let buffer = PixelBuffer::new(4, 4).expect("a buffer");
+            buffer.fill_rect(0, 0, 2, 4, 0xff0000ff).expect("fill");
+            buffer.fill_rect(2, 0, 2, 4, 0x0000ffff).expect("fill");
+            redraw(&Context2d::new("art"), &buffer, 16.0, smoothing);
+            draw(&mut app)
+        };
+        // The red half ends at 32: its last screen pixel is still red when
+        // the zoom keeps pixels sharp, and mixes towards blue when smoothed.
+        let sharp = zoomed(false);
+        assert_eq!(pixel(&sharp, 31, 8), (255, 0, 0), "{backend:?}: sharp");
+        assert_eq!(pixel(&sharp, 32, 8), (0, 0, 255), "{backend:?}: sharp");
+        let smooth = zoomed(true);
+        let (r, _, b) = pixel(&smooth, 31, 8);
+        assert!(
+            r < 250 && b > 5,
+            "{backend:?}: smoothing mixes the edge: {r},{b}"
         );
     }
 }

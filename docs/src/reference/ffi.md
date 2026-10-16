@@ -595,3 +595,92 @@ runtime modules, and `script_fn` and `native_fn` above replace them, reaching
 every language the app runs.
 
 Runnable examples live in `sdk/rust/examples`.
+
+### Canvas
+
+The `lumenui-canvas` crate gives a Rust app the [`<canvas>`](tags.md#canvas)
+element and draws on it from Rust: the same canvas module scripts use, so a
+script and the app can draw on one canvas and share one buffer. Add it beside
+`lumenui`, at the same version:
+
+```toml
+[dependencies]
+lumenui = "X.Y.Z"
+lumenui-canvas = "X.Y.Z"
+```
+
+It builds nothing of its own: the module is compiled into the same engine set
+`lumenui` downloads, under the same pinned compiler. Install `CanvasPlugin`
+with `add_plugin`, which registers the tag before the markup is parsed.
+
+`Context2d::new(id)` is the drawing context of the canvas whose element has
+that `id`, the counterpart of the HTML canvas's `CanvasRenderingContext2D`:
+paths (`begin_path`, `move_to`, `line_to`, `quad_to`, `bezier_to`, `arc`,
+`rect`, `close_path`, `fill`, `stroke`), rectangles, colours, line style,
+`set_global_alpha`, `save` / `restore`, the transform, `set_font` and
+`fill_text`, `clear` and `resize`. `Context2d::of(&canvas)` takes the `Canvas`
+component of an adopted element. The calls that parse text
+(`set_fill_style`, `set_stroke_style`, `set_font`) return a `CanvasError`
+where the script functions answer `false`; `LineCap` and `LineJoin` parse
+from their HTML spellings with `str::parse`.
+
+`PixelBuffer::new(width, height)` is a straight RGBA8 buffer the app owns; it
+is freed when dropped. Every pixel call lives on its `BufferId` handle, which
+`raw()` hands to a script and `BufferId::from_raw` takes back:
+
+| Call | Effect |
+| --- | --- |
+| `write_rgba8(x, y, w, h, &[u8])` | Write a rectangle from straight RGBA8 rows in one call. |
+| `write_packed(x, y, w, h, &[u32])` | The same from `0xRRGGBBAA` values. |
+| `read_rgba8(x, y, w, h, &mut [u8])` | Read a rectangle back; outside the buffer reads transparent. |
+| `read_packed(x, y, w, h, &mut [u32])` | The same as `0xRRGGBBAA` values. |
+| `fill_rect`, `pixel`, `set_pixel` | One colour over a rectangle, one pixel at a time. |
+| `resize(w, h)` | Change the size, keeping the pixels both sizes share at the top left. |
+| `load_png(path)`, `save_png(path)` | PNG in and out; a relative path resolves against the app. |
+
+`ctx.draw_buffer(&buffer, x, y)` and `draw_buffer_scaled(&buffer, x, y, w,
+h)` put a buffer on the canvas. `ctx.set_image_smoothing(false)` samples the
+nearest pixel when a buffer is drawn at another size, so zoomed pixel art
+stays sharp; smoothing is on by default, as `imageSmoothingEnabled` is on the
+web, and `save` / `restore` carry it.
+
+A draw takes the buffer's pixels at the call, as `drawImage` does on the web: a
+write after it, even before the tick encodes, changes the buffer and not what
+was drawn. So redraw after a write: `clear`, then draw the buffer again. That
+is cheap whatever the buffer's size: drawing an unchanged buffer uploads
+nothing, and drawing one after a write uploads only the area the write touched.
+Drawing calls land in the frame of the tick that encodes them; a system ordered
+`.before(CanvasSet::Encode)` draws into the same frame.
+
+```rust
+use lumenui::prelude::*;
+use lumenui_canvas::{CanvasPlugin, CanvasSet, Context2d, PixelBuffer};
+
+#[derive(Resource)]
+struct Art(PixelBuffer);
+
+fn paint(art: Res<Art>) {
+    art.0.write_rgba8(16, 16, 2, 2, &[255, 0, 0, 255].repeat(4)).unwrap();
+    let ctx = Context2d::new("art");
+    ctx.clear();
+    ctx.set_image_smoothing(false);
+    ctx.draw_buffer_scaled(&art.0, 0.0, 0.0, 512.0, 512.0);
+}
+
+fn main() -> lumenui::Result<()> {
+    lumenui::App::new()
+        .add_plugins(LumenDefaultPlugins.with_markup(
+            r#"<root><canvas id="art" width="512" height="512"/></root>"#,
+        ))
+        .add_plugin(CanvasPlugin::default())
+        .insert_resource(Art(PixelBuffer::new(64, 64).unwrap()))
+        .add_systems(TickStage::Systems, paint.before(CanvasSet::Encode))
+        .run()
+}
+```
+
+A small pixel painter lives in `std/canvas/sdk/examples/paint.rs`. The
+buffer caps from the module's `config` table (see [candela's
+Canvas section](scripting-candela.md#pixel-buffers)) apply to a Rust app too,
+set with `CanvasPlugin::with_caps`; the region cap does not, since a slice
+crosses no script boundary.

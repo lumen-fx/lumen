@@ -133,6 +133,11 @@ params = ["id: string", "alpha: float"]
 doc = "Multiply every later draw by this alpha, 0..1."
 
 [[function]]
+name = "set_image_smoothing"
+params = ["id: string", "enabled: bool"]
+doc = "Smooth a buffer drawn at another size (the default), or keep its pixels sharp."
+
+[[function]]
 name = "save"
 params = ["id: string"]
 doc = "Push the drawing state."
@@ -203,6 +208,12 @@ returns = "int"
 doc = "A buffer's height; 0 when it is unknown."
 
 [[function]]
+name = "buffer_resize"
+params = ["buffer: int", "width: int", "height: int"]
+returns = "bool"
+doc = "Change a buffer's size, keeping the pixels both sizes share; false when refused."
+
+[[function]]
 name = "buffer_get_pixel"
 params = ["buffer: int", "x: int", "y: int"]
 returns = "int"
@@ -244,12 +255,12 @@ doc = "Write a buffer out as a PNG."
 [[function]]
 name = "draw_buffer"
 params = ["id: string", "buffer: int", "x: float", "y: float"]
-doc = "Draw a buffer onto the canvas at its own size."
+doc = "Draw a buffer onto the canvas at its own size, with the pixels it holds at this call."
 
 [[function]]
 name = "draw_buffer_scaled"
 params = ["id: string", "buffer: int", "x: float", "y: float", "width: float", "height: float"]
-doc = "Draw a buffer onto the canvas stretched into a box."
+doc = "Draw a buffer onto the canvas stretched into a box, with the pixels it holds at this call."
 
 [[element]]
 tag = "canvas"

@@ -3,8 +3,12 @@
 
 An app depends on `lumenui` (sdk/lumenui), whose build script downloads, for
 its target, the compiled crates of `lumenui-engine` (sdk/rust) and points
-rustc at them, so the app compiles none of the engine. This script makes that
-set and checks that an app really builds from it.
+rustc at them, so the app compiles none of the engine. The same set carries
+the runtime modules listed in MODULES, compiled in the same build so they
+share the engine's crates, and each reaches an app through a wrapper crate
+this script generates (`lumenui-canvas` re-exports `lumen-canvas`). This
+script makes that set, writes the wrapper crates, and checks that an app
+really builds from them.
 
   build    Compile the engine for this machine's target, the way a release
            does, and record what cargo produced.
@@ -15,14 +19,25 @@ set and checks that an app really builds from it.
            and `lumenui-engine-<target>.json` (the manifest, also inside the
            archive, published on its own so a build can check the compiler
            before downloading the archive).
+  wrappers Write the published crate of every module in MODULES,
+           `lumenui-<name>` for `lumen-<name>`, under OUT_DIR: a manifest, a
+           build script, and a `src/lib.rs` that re-exports the module, all
+           generated from the module's own manifest and `sdk/lumenui`'s. A
+           module directory's `sdk/examples/` becomes the crate's examples,
+           and its `sdk/smoke/` (an app's `src/` and `lumen.toml`) becomes a
+           smoke app in `<crate>/smoke` depending on `lumenui` and the crate
+           alone. Nothing of a wrapper is committed: CI lints, builds and runs
+           what this writes, and a publish uploads it.
   check    Read the `cargo build -v` log of an app built against the set, and
-           fail if cargo compiled any crate other than the app, `lumenui`, and
-           the crates `lumenui`'s build script needs.
+           fail if cargo compiled any crate other than the app, `lumenui`, its
+           `lumenui-<module>` wrappers, and the crates their build scripts
+           need.
 
 Usage:
 
     tools/release/lumenui-engine.py build --target-dir DIR --messages build.jsonl
     tools/release/lumenui-engine.py collect --messages build.jsonl --out dist/
+    tools/release/lumenui-engine.py wrappers --out OUT_DIR
     tools/release/lumenui-engine.py check --app APP_DIR --log build.log
 
 Why the rules in `collect` are the ones they are:
@@ -65,11 +80,27 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import textwrap
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE = "lumenui-engine"
 LIB = "lumenui_engine"
+
+# The runtime modules the Rust SDK carries, each published as the
+# `lumenui-<name>` crate `wrappers` generates for `lumen-<name>`. Adding a
+# module here is the whole of putting it in the SDK. Built in the one
+# invocation with the engine: a separate build resolves features on its own
+# and produces crates whose hashes are not the engine's, which an app cannot
+# use together.
+MODULES = ("lumen-canvas",)
+
+# The rlib of each crate the build asks for by name, which cargo reports by
+# the copy it uplifts out of deps/. A module's library is named after its
+# package.
+REQUESTED_RLIBS = {f"lib{LIB}.rlib"} | {
+    f"lib{module.replace('-', '_')}.rlib" for module in MODULES
+}
 
 # The release's name for each target, the one every asset name carries. The
 # same table is in sdk/lumenui/build.rs.
@@ -137,6 +168,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         "--locked",
         "-p",
         PACKAGE,
+        *(arg for module in MODULES for arg in ("-p", module)),
         "--target",
         triple,
         "--config",
@@ -207,10 +239,10 @@ def collect_files(msgs: list[dict], triple: str) -> tuple[list[Path], list[Path]
                 if marker not in str(p) or p.suffix != ".rlib":
                     continue
                 # Outside deps/ is a copy cargo uplifted for a requested
-                # package; the engine crate's is the only one this build asks
-                # for. A crate that also builds a shared library has no hash
-                # in its file names at all, inside deps/ too.
-                if p.parent.name != "deps" and p.name != f"lib{LIB}.rlib":
+                # package: the engine crate and the modules are the ones this
+                # build asks for. A crate that also builds a shared library has
+                # no hash in its file names at all, inside deps/ too.
+                if p.parent.name != "deps" and p.name not in REQUESTED_RLIBS:
                     continue
                 deps[p.name] = p
         elif reason == "build-script-executed":
@@ -323,12 +355,205 @@ def write_archive(stage: Path, archive: Path, level: int) -> None:
             fail("zstd failed")
 
 
+# ----------------------------------------------------------------- wrappers
+
+
+def package_metadata(*args: str) -> list[dict]:
+    """`cargo metadata --no-deps` packages, of the workspace or one manifest."""
+    out = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps", *args],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return json.loads(out)["packages"]
+
+
+def toml_str(value: str) -> str:
+    """A TOML basic string. JSON's string escapes are a subset of TOML's."""
+    return json.dumps(value)
+
+
+def toml_list(values: list[str]) -> str:
+    return "[" + ", ".join(toml_str(v) for v in values) + "]"
+
+
+def doc_lines(text: str) -> list[str]:
+    """Prose as `//!` lines, with HTML-looking text escaped for rustdoc."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return [f"//! {line}" for line in textwrap.wrap(text, 76, break_on_hyphens=False)]
+
+
+def wrapper_manifest(module: dict, sdk: dict, name: str, short: str) -> str:
+    lumenui = (REPO / "sdk" / "lumenui").as_posix()
+    description = (
+        f"{module['description'].rstrip('.')}. "
+        "For Rust SDK (lumenui) apps, linked from the release's prebuilt engine."
+    )
+    version = toml_str(sdk["version"])
+    return f"""\
+# Generated by tools/release/lumenui-engine.py `wrappers` from the
+# `{module['name']}` module and sdk/lumenui. Not committed; edit the generator.
+[workspace]
+
+[package]
+name = {toml_str(name)}
+version = {version}
+edition = {toml_str(sdk['edition'])}
+license = {toml_str(sdk['license'])}
+authors = {toml_list(sdk['authors'])}
+repository = {toml_str(sdk['repository'])}
+homepage = {toml_str(sdk['homepage'])}
+documentation = {toml_str(f"https://docs.lumenfx.dev/reference/ffi/#{short}")}
+rust-version = {toml_str(sdk['rust_version'])}
+description = {toml_str(description)}
+keywords = {toml_list(module['keywords'][:5])}
+categories = {toml_list(module['categories'])}
+build = "build.rs"
+include = ["build.rs", "src/**", "Cargo.toml"]
+
+[lib]
+name = {toml_str(name.replace('-', '_'))}
+
+[dependencies]
+# The SDK, whose build script points the compiler at the prebuilt set this
+# crate's module comes from. Always the same version: the set is one build.
+lumenui = {{ version = {version}, path = {toml_str(lumenui)} }}
+
+[package.metadata.docs.rs]
+# docs.rs builds without network access, so the crate documents itself
+# without the module, as `lumenui` does.
+targets = ["x86_64-unknown-linux-gnu"]
+"""
+
+
+WRAPPER_BUILD_RS = """\
+//! Tells the crate whether the module is there to re-export.
+//!
+//! The module comes from the prebuilt engine set `lumenui`'s build script
+//! puts on the compiler's search path, which reaches this crate because it
+//! depends on `lumenui`. docs.rs builds with no network, so `lumenui`
+//! fetches nothing there; this crate then documents itself without the
+//! module (`cfg(lumenui_docs_only)`), the same way `lumenui` does.
+
+fn main() {
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rustc-check-cfg=cfg(lumenui_docs_only)");
+    if std::env::var_os("DOCS_RS").is_some() {
+        println!("cargo:rustc-cfg=lumenui_docs_only");
+    }
+}
+"""
+
+
+def wrapper_lib(module: dict, name: str, short: str, lib: str) -> str:
+    about = doc_lines(
+        f"The `{module['name']}` runtime module for a lumenui app, re-exported "
+        "from the release's prebuilt engine set that `lumenui` downloads. The "
+        "crate builds nothing of its own and needs the same pinned compiler "
+        "`lumenui` does."
+    )
+    lines = [
+        f"//! # {name}",
+        "//!",
+        *doc_lines(module["description"]),
+        "//!",
+        *about,
+        "//!",
+        "//! See the [Rust SDK reference]"
+        f"(https://docs.lumenfx.dev/reference/ffi/#{short}).",
+        "",
+        "#![forbid(unsafe_code)]",
+        "",
+        "#[cfg(not(lumenui_docs_only))]",
+        f"extern crate {lib};",
+        "",
+        "#[cfg(not(lumenui_docs_only))]",
+        f"pub use {lib}::*;",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def smoke_manifest(name: str) -> str:
+    lumenui = (REPO / "sdk" / "lumenui").as_posix()
+    return f"""\
+# Generated by tools/release/lumenui-engine.py `wrappers`: an app shaped the
+# way a user's is, on `lumenui` and `{name}` and nothing of the engine.
+[workspace]
+
+[package]
+name = {toml_str(f"{name}-smoke")}
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lumenui = {{ path = {toml_str(lumenui)} }}
+{name} = {{ path = ".." }}
+"""
+
+
+def toolchain_file() -> str:
+    """The pinned compiler, the only one that reads the set's crates."""
+    text = (REPO / "rust-toolchain.toml").read_text()
+    m = re.search(r'^channel\s*=\s*"([^"]+)"', text, re.M)
+    if not m:
+        fail("no channel in rust-toolchain.toml")
+    return f'[toolchain]\nchannel = "{m.group(1)}"\ncomponents = ["rustfmt", "clippy"]\n'
+
+
+def cmd_wrappers(args: argparse.Namespace) -> None:
+    out = Path(args.out).resolve()
+    if under(out, REPO):
+        # Inside the checkout, the workspace above would claim the crates.
+        fail(f"{out} is inside the checkout; write the crates outside it")
+    (sdk,) = package_metadata("--manifest-path", str(REPO / "sdk" / "lumenui" / "Cargo.toml"))
+    packages = {p["name"]: p for p in package_metadata()}
+    out.mkdir(parents=True, exist_ok=True)
+    # rustup looks upward from a crate for the pin, so one file covers every
+    # crate and smoke app written here.
+    (out / "rust-toolchain.toml").write_text(toolchain_file())
+    for module_name in MODULES:
+        module = packages.get(module_name)
+        if module is None:
+            fail(f"no workspace crate named {module_name}")
+        if not module_name.startswith("lumen-"):
+            fail(f"{module_name} is not named lumen-<name>")
+        for key in ("description", "keywords", "categories"):
+            if not module.get(key):
+                fail(f"{module_name} needs `{key}` in its manifest; its wrapper publishes it")
+        lib = next((t["name"] for t in module["targets"] if "lib" in t["kind"]), None)
+        if lib is None:
+            fail(f"{module_name} has no lib target")
+        short = module_name.removeprefix("lumen-")
+        name = f"lumenui-{short}"
+
+        crate = out / name
+        if crate.exists():
+            shutil.rmtree(crate)
+        (crate / "src").mkdir(parents=True)
+        (crate / "Cargo.toml").write_text(wrapper_manifest(module, sdk, name, short))
+        (crate / "build.rs").write_text(WRAPPER_BUILD_RS)
+        (crate / "src" / "lib.rs").write_text(wrapper_lib(module, name, short, lib))
+
+        extras = Path(module["manifest_path"]).parent / "sdk"
+        if (extras / "examples").is_dir():
+            shutil.copytree(extras / "examples", crate / "examples")
+        if (extras / "smoke").is_dir():
+            shutil.copytree(extras / "smoke", crate / "smoke")
+            (crate / "smoke" / "Cargo.toml").write_text(smoke_manifest(name))
+        print(crate)
+
+
 # -------------------------------------------------------------------- check
 
 
 def cmd_check(args: argparse.Namespace) -> None:
-    """Every crate cargo compiled must be the app, `lumenui`, or a crate
-    `lumenui`'s build script needs; anything else is the engine compiling."""
+    """Every crate cargo compiled must be the app, a published SDK crate
+    (`lumenui` and its `lumenui-<module>` wrappers), or a crate one of their
+    build scripts needs; anything else is the engine compiling."""
     app = Path(args.app).resolve()
     meta = json.loads(
         subprocess.run(
@@ -344,13 +569,19 @@ def cmd_check(args: argparse.Namespace) -> None:
     lumenui = next((i for i, p in by_id.items() if p["name"] == "lumenui"), None)
     if lumenui is None:
         fail(f"{app} does not depend on lumenui")
+    sdk = {
+        i
+        for i, p in by_id.items()
+        if p["name"] == "lumenui" or p["name"].startswith("lumenui-")
+    }
 
-    # The closure of lumenui's build-dependencies, through every edge kind
-    # (a build dependency's own build dependencies compile too).
-    allowed = set(meta["workspace_members"]) | {lumenui}
+    # The closure of the SDK crates' build-dependencies, through every edge
+    # kind (a build dependency's own build dependencies compile too).
+    allowed = set(meta["workspace_members"]) | sdk
     stack = [
         d["pkg"]
-        for d in nodes[lumenui]["deps"]
+        for crate in sdk
+        for d in nodes[crate]["deps"]
         if any(k["kind"] == "build" for k in d["dep_kinds"])
     ]
     while stack:
@@ -374,8 +605,8 @@ def cmd_check(args: argparse.Namespace) -> None:
             + ", ".join(engine)
         )
     print(
-        f"ok: {len(compiled)} crates compiled, all of them the app, lumenui, "
-        "or lumenui's build script's dependencies"
+        f"ok: {len(compiled)} crates compiled, all of them the app, the SDK "
+        "crates, or their build scripts' dependencies"
     )
 
 
@@ -389,11 +620,18 @@ def main() -> None:
     c.add_argument("--messages", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--level", type=int, default=19)
+    w = sub.add_parser("wrappers")
+    w.add_argument("--out", required=True)
     k = sub.add_parser("check")
     k.add_argument("--app", required=True)
     k.add_argument("--log", required=True)
     args = parser.parse_args()
-    {"build": cmd_build, "collect": cmd_collect, "check": cmd_check}[args.cmd](args)
+    {
+        "build": cmd_build,
+        "collect": cmd_collect,
+        "wrappers": cmd_wrappers,
+        "check": cmd_check,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":

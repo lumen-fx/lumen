@@ -107,6 +107,7 @@ fn every_drawing_call_is_bound_and_records() {
         ),
         ("set_line_width", vec![id(), f(2.0)]),
         ("set_global_alpha", vec![id(), f(0.5)]),
+        ("set_image_smoothing", vec![id(), ScriptValue::Bool(false)]),
         ("save", vec![id()]),
         ("restore", vec![id()]),
         ("translate", vec![id(), f(1.0), f(1.0)]),
@@ -130,6 +131,48 @@ fn every_drawing_call_is_bound_and_records() {
         store.surface("chart").pending.len(),
         expected,
         "every call recorded exactly one operation"
+    );
+}
+
+/// `buffer_resize` keeps the shared corner, answers to the pixel cap, and
+/// refuses a handle nothing answers for.
+#[test]
+fn a_buffer_resizes_through_the_script_surface() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    store::reset();
+    let fns = surface();
+    let buffer = as_int(call(&fns, "buffer_new", &[i(4), i(4)]));
+    call(
+        &fns,
+        "buffer_set_pixel",
+        &[i(buffer), i(1), i(1), i(0x112233ff)],
+    );
+    assert!(as_bool(call(
+        &fns,
+        "buffer_resize",
+        &[i(buffer), i(8), i(2)]
+    )));
+    assert_eq!(as_int(call(&fns, "buffer_width", &[i(buffer)])), 8);
+    assert_eq!(as_int(call(&fns, "buffer_height", &[i(buffer)])), 2);
+    assert_eq!(
+        as_int(call(&fns, "buffer_get_pixel", &[i(buffer), i(1), i(1)])),
+        0x112233ff
+    );
+    assert!(!as_bool(call(
+        &fns,
+        "buffer_resize",
+        &[i(buffer), i(0), i(2)]
+    )));
+    assert!(!as_bool(call(
+        &fns,
+        "buffer_resize",
+        &[i(buffer), i(1 << 20), i(1 << 20)]
+    )));
+    assert!(!as_bool(call(&fns, "buffer_resize", &[i(999), i(2), i(2)])));
+    assert_eq!(
+        as_int(call(&fns, "buffer_width", &[i(buffer)])),
+        8,
+        "a refused resize leaves the buffer alone"
     );
 }
 
@@ -280,6 +323,55 @@ fn the_buffer_surface_round_trips_and_refuses_safely() {
     assert_eq!(empty, ScriptValue::Array(Vec::new()));
     // A negative handle is not a handle at all.
     assert_eq!(as_int(call(&fns, "buffer_width", &[i(-1)])), 0);
+}
+
+/// A script's draw takes the buffer's pixels at the call, as `drawImage` does
+/// on the web: a write after it, in the same handler, changes the buffer and
+/// not what was drawn. A handle naming no buffer records nothing.
+#[test]
+fn a_drawn_buffer_is_the_buffer_as_it_was_at_the_call() {
+    use lumen_canvas::ops::Op;
+
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    store::reset();
+    let fns = surface();
+
+    let handle = as_int(call(&fns, "buffer_new", &[i(2), i(2)]));
+    call(
+        &fns,
+        "buffer_fill_rect",
+        &[i(handle), i(0), i(0), i(2), i(2), i(0xff00_00ff)],
+    );
+    call(&fns, "draw_buffer", &[s("art"), i(handle), f(0.0), f(0.0)]);
+    call(
+        &fns,
+        "buffer_fill_rect",
+        &[i(handle), i(0), i(0), i(2), i(2), i(0x0000_ffff)],
+    );
+    call(
+        &fns,
+        "draw_buffer_scaled",
+        &[s("art"), i(handle), f(0.0), f(0.0), f(8.0), f(8.0)],
+    );
+    call(&fns, "draw_buffer", &[s("art"), i(9999), f(0.0), f(0.0)]);
+
+    let mut store = store::store();
+    let drawn: Vec<[u8; 4]> = store
+        .surface("art")
+        .pending
+        .iter()
+        .filter_map(|op| match op {
+            Op::DrawBuffer { image, .. } | Op::DrawBufferScaled { image, .. } => {
+                Some(image.pixel(0, 0))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        [[0xff, 0, 0, 0xff], [0, 0, 0xff, 0xff]],
+        "each draw holds the pixels of its own call, and the stale handle drew nothing"
+    );
 }
 
 /// A region takes whatever numbers the host handed it.

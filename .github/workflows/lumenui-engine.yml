@@ -12,7 +12,11 @@ name: lumenui-engine
 # it: an app outside the checkout (sdk/lumenui/smoke), depending on `lumenui`
 # alone, is built against the set through LUMEN_ENGINE_ARTIFACTS, its
 # `cargo build -v` log is checked for any engine crate compiling
-# (lumenui-engine.py `check`), and it runs headless.
+# (lumenui-engine.py `check`), and it runs headless. The module wrapper
+# crates (`lumenui-canvas` and the rest of MODULES in lumenui-engine.py) are
+# not in the checkout: lumenui-engine.py `wrappers` generates them here, and
+# each one's smoke app, on `lumenui` and that crate alone, gets the same
+# proof.
 #
 # Every leg builds natively for its own target. The set carries proc-macro
 # libraries, which run inside the compiler, so a set is only usable on a
@@ -41,6 +45,8 @@ on:
     paths:
       - sdk/rust/**
       - sdk/lumenui/**
+      # The modules in lumenui-engine.py's MODULES, which the set compiles.
+      - std/canvas/**
       - core/widget-macros/**
       - tools/release/lumenui-engine.py
       - rust-toolchain.toml
@@ -143,17 +149,36 @@ jobs:
           --messages "$RUNNER_TEMP/lumenui-engine.jsonl"
           --out "$RUNNER_TEMP/lumenui-engine"
 
-      # The published crate is its own workspace, so the workspace's fmt and
-      # clippy gates never see it; this is where they run, on one leg, since
-      # neither depends on the platform.
-      - name: Lint the published crate
+      # The module wrapper crates, outside the checkout, as a publish would
+      # write them. Each `lumenui-<name>` directory is a crate, and its
+      # `smoke` directory, where the module has one, an app on it.
+      - name: Generate the module crates
+        run: python tools/release/lumenui-engine.py wrappers --out "$RUNNER_TEMP/lumenui-sdk"
+
+      # The published crates are workspaces of their own, so the workspace's
+      # fmt and clippy gates never see them; this is where they run, on one
+      # leg, since neither depends on the platform. A generated crate is
+      # checked like a written one, which is what catches the generator
+      # producing code rustfmt or clippy would not accept.
+      - name: Lint the published crates
         if: matrix.target == 'linux-x86_64'
         env:
           LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
         run: |
+          set -euo pipefail
           cargo fmt --manifest-path sdk/lumenui/Cargo.toml -- --check
           cargo fmt --manifest-path sdk/lumenui/smoke/Cargo.toml -- --check
           cargo clippy --manifest-path sdk/lumenui/Cargo.toml --all-targets -- -D warnings
+          # Globbed relative to the directory: a Windows runner's temp path has
+          # backslashes, which a glob reads as escapes.
+          cd "$RUNNER_TEMP/lumenui-sdk"
+          for crate in lumenui-*/; do
+            cargo fmt --manifest-path "${crate}Cargo.toml" -- --check
+            if [ -d "${crate}smoke" ]; then
+              cargo fmt --manifest-path "${crate}smoke/Cargo.toml" -- --check
+            fi
+            cargo clippy --manifest-path "${crate}Cargo.toml" --all-targets -- -D warnings
+          done
 
       # The app a user writes, outside the checkout so nothing of the
       # workspace (its config, its lockfile, its target directory) reaches it.
@@ -197,6 +222,45 @@ jobs:
           exe=target/debug/lumenui-smoke
           if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
           "./$exe"
+
+      # The same proof for each module wrapper: an app on `lumenui` and the
+      # wrapper alone builds from the set and compiles no engine or module
+      # crate, and its run checks what the module does (the canvas one renders
+      # a pixel buffer headless on the CPU renderer and reads the frame back).
+      # Each loop globs relative to the generated directory: a Windows
+      # runner's temp path has backslashes, which a glob reads as escapes.
+      - name: Build each module's app against the set
+        working-directory: ${{ runner.temp }}/lumenui-sdk
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          for crate in lumenui-*/; do
+            [ -d "${crate}smoke" ] || continue
+            (cd "${crate}smoke" && cargo build -v) 2>&1 \
+              | tee "$RUNNER_TEMP/${crate%/}-smoke-build.log"
+          done
+
+      - name: Check that no engine crate compiled for a module's app
+        working-directory: ${{ runner.temp }}/lumenui-sdk
+        run: |
+          set -euo pipefail
+          for crate in lumenui-*/; do
+            [ -d "${crate}smoke" ] || continue
+            python "$GITHUB_WORKSPACE/tools/release/lumenui-engine.py" check \
+              --app "${crate}smoke" --log "$RUNNER_TEMP/${crate%/}-smoke-build.log"
+          done
+
+      - name: Run each module's app headless
+        working-directory: ${{ runner.temp }}/lumenui-sdk
+        run: |
+          set -euo pipefail
+          for crate in lumenui-*/; do
+            [ -d "${crate}smoke" ] || continue
+            exe="target/debug/${crate%/}-smoke"
+            if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
+            (cd "${crate}smoke" && "./$exe")
+          done
 
       - uses: actions/upload-artifact@v4
         with:

@@ -85,9 +85,13 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   `Painter` trait, the walker that turns the retained node tree into painter
   calls, the leaf emitters (rects, gradients, borders, shadows, images, SVGs,
   text, the caret and selection), the fragment cache, the layer cache faded
-  groups are kept in, the glyph flattening every backend fills text with, and
-  `Recording`, a painter that keeps its calls to replay later. Every render
-  backend paints through it, so the backends agree on a frame by construction.
+  groups are kept in, the glyph flattening every backend fills text with,
+  `Recording`, a painter that keeps its calls to replay later, and
+  `PixelImage`, a tiled RGBA8 image that keeps one identity across writes and
+  stamps each tile it writes, so a backend keeps one resident copy per image
+  (a texture on the GPU, a premultiplied pixmap on the CPU) and re-uploads only
+  the tiles whose stamps moved. Every render backend paints through it, so the
+  backends agree on a frame by construction.
 
 ### Backends
 
@@ -139,10 +143,14 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   drawing, because a script-function body has no world; one system per tick
   replays the journal into a retained `lumen_paint::Recording`, which the
   extract hands the render world and the module's painter replays into the
-  frame on either render backend. One crate builds both link shapes: the cdylib is the bundled
-  `lumen-canvas` runtime module an app declares in `lumen.toml`, and a static
-  build compiles the same plugin in. Its web half in `std/canvas/web` draws
-  the same calls with Canvas 2D; a unit test in this crate holds the web
+  frame on either render backend. The script functions are thin callers of the
+  crate's Rust API (`Context2d`, `PixelBuffer`), which is what `lumenui-canvas`
+  re-exports; buffers are `lumen_paint::PixelImage`s, so a draw call records a
+  snapshot of the buffer's tiles, the pixels at the call as on the web, and
+  copies none of them. One crate builds both link shapes: the cdylib is the
+  bundled `lumen-canvas` runtime module an app declares in `lumen.toml`, and a
+  static build compiles the same plugin in. Its web half in `std/canvas/web`
+  draws the same calls with Canvas 2D; a unit test in this crate holds the web
   half's functions equal to the ones it registers.
 - **lumen-download** (`std/download`): file downloads, as a self-contained
   module the engine knows nothing about. It registers the `download` script
@@ -400,6 +408,18 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   set with `-L`, so an app compiles none of the engine. Outside the workspace,
   with its own `[workspace]` table, because its manifest names no engine crate;
   `LUMEN_ENGINE_ARTIFACTS` points it at a set built from a checkout.
+- **lumenui-canvas** and the other `lumenui-<name>` module crates: a runtime
+  module for a Rust SDK app, published the same way, and generated rather than
+  kept in the tree. `MODULES` in `tools/release/lumenui-engine.py` lists the
+  modules; the engine set compiles each in the same build as the engine, and
+  the script's `wrappers` command writes each one's crate (a manifest from the
+  module's and `sdk/lumenui`'s, and `pub use lumen_<name>::*`) outside the
+  checkout, for CI to lint and build and a publish to upload. The search path
+  `lumenui`'s build script sets reaches the crate because it depends on
+  `lumenui`. A module directory's `sdk/examples/` and `sdk/smoke/` (the canvas
+  module's are in `std/canvas/sdk`) become the crate's examples and the smoke
+  app CI builds against the set and runs. The engine crate names no module: a
+  module reaches the SDK through its own crate.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
   and CSS.
 - **lumen-mcp**: in-app introspection. Per-tick snapshots, message rings,
