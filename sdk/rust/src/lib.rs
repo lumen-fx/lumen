@@ -19,7 +19,12 @@
 //!             LumenDefaultPlugins
 //!                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
 //!         )
-//!         .add_systems(TickStage::Systems, (bump_counter, update_label).chain())
+//!         // After the systems that write clicks, so a click is counted
+//!         // on the tick it lands.
+//!         .add_systems(
+//!             TickStage::Systems,
+//!             (bump_counter, update_label).chain().after(ClickSet::Producers),
+//!         )
 //!         .run()
 //! }
 //!
@@ -61,7 +66,8 @@
 //!    [`signals!`] macro mints typed [`Property`] handle structs.
 //! 4. **Event ergonomics** - two levels. For a full system, run conditions
 //!    [`on_click`] / [`on_toggle`] / [`on_change`] gate it bevy-style:
-//!    `bump.run_if(on_click("bump"))`. For the common "click an id -> write a
+//!    `bump.run_if(on_click("bump")).after(ClickSet::Producers)`. For the
+//!    common "click an id -> write a
 //!    signal" case, register a closure directly:
 //!    [`App::on_click`](App::on_click) hands it an [`EventCtx`] with typed
 //!    `get` / `set`, no `MessageReader` boilerplate. Derived signals come from
@@ -271,8 +277,8 @@ pub mod prelude {
 
     // Input messages.
     pub use lumen_core::input::{
-        ClickEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent, Focused,
-        Hovered, KeyPressed, KeyReleased, LongPressEvent, Pressed,
+        ClickEvent, ClickSet, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
+        Focused, Hovered, KeyPressed, KeyReleased, LongPressEvent, Pressed,
     };
 
     // Typed signal surface.

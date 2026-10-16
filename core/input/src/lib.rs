@@ -923,7 +923,9 @@ impl Plugin for KeyDispatchPlugin {
         // don't have to handle the key directly.
         app.add_systems(
             TickStage::Systems,
-            activate_focused_on_enter.after(dispatch_focused_keys),
+            activate_focused_on_enter
+                .in_set(ClickSet::Producers)
+                .after(dispatch_focused_keys),
         );
     }
 }
@@ -958,7 +960,10 @@ impl Plugin for InputPlugin {
         }
         app.add_plugin(KeyDispatchPlugin);
         app.add_systems(TickStage::Systems, hit_test);
-        app.add_systems(TickStage::Systems, dispatch_clicks.after(hit_test));
+        app.add_systems(
+            TickStage::Systems,
+            dispatch_clicks.in_set(ClickSet::Producers).after(hit_test),
+        );
         // Frameless-window drag: pressing a `<title-bar drag>` region
         // requests a native window drag via the backend. Requires the
         // `WindowDragRequest` resource - install it here so apps that

@@ -598,6 +598,26 @@ pub fn horizontal_scrollbar(
     })
 }
 
+/// Cross-crate [`SystemSet`] label for the systems that write [`ClickEvent`],
+/// [`DoubleClickEvent`] and [`LongPressEvent`].
+///
+/// `lumen-input` tags its pointer click (`dispatch_clicks`) and its Enter /
+/// Space activation (`activate_focused_on_enter`) with [`Self::Producers`];
+/// `lumen-primitives::press` tags its double-click and long-press detectors,
+/// and the scene tags the dialog's Enter-activates-the-default-button system.
+/// A system that reacts to these messages schedules itself
+/// `.after(ClickSet::Producers)` in [`crate::tick::TickStage::Systems`] and
+/// sees the event on the tick it fires, whichever producer wrote it. A reader
+/// with no such edge may run first and see the event a tick late, and the tick
+/// that fired it paints nothing new. The edge is inert when no producer is
+/// installed (an empty set).
+#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum ClickSet {
+    /// Systems that write [`ClickEvent`], [`DoubleClickEvent`] or
+    /// [`LongPressEvent`].
+    Producers,
+}
+
 /// Emitted by `lumen-input` when a press and release land on the same entity without leaving it.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct ClickEvent {

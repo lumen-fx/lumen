@@ -143,6 +143,16 @@ engine is swappable, so a system that reads this tick's boxes orders itself
 `.after(lumen_core::layout_backend::LayoutSolve)` in `LayoutSync` rather than
 after a function of the engine's.
 
+Clicks are the other exception, because several crates write them: the
+pointer dispatch, Enter and Space on a focused element, a dialog's default
+button, and the double-click and long-press detectors. A system that reads
+`ClickEvent`, `DoubleClickEvent` or `LongPressEvent` orders itself
+`.after(lumen_core::input::ClickSet::Producers)`, which holds all of them, and
+a system that writes those messages joins the set with
+`.in_set(ClickSet::Producers)`. A reader with no edge sees a click a tick late,
+on a tick that paints nothing new, so an idle app shows the old state until
+something else wakes it.
+
 ## Resources
 
 Insert plain resources with `insert_resource`, or `init_resource` when

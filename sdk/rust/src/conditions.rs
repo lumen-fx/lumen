@@ -12,11 +12,18 @@
 //! }
 //!
 //! # let mut app = lumenui::App::new();
-//! app.add_systems(TickStage::Systems, reset.run_if(on_click("reset")));
+//! app.add_systems(
+//!     TickStage::Systems,
+//!     reset.run_if(on_click("reset")).after(ClickSet::Producers),
+//! );
 //! ```
 //!
 //! Conditions run inside the same [`TickStage`](lumen_core::tick::TickStage) as
-//! their gated system. [`on_change`] observes the [`PropertyStore`] dirty queue,
+//! their gated system. [`on_click`] and [`on_toggle`] read the clicks of the
+//! tick, so order the gated system after
+//! [`ClickSet::Producers`](lumen_core::input::ClickSet::Producers), as above;
+//! without the edge it may run before the click is written and react a tick
+//! late. [`on_change`] observes the [`PropertyStore`] dirty queue,
 //! which is populated by writes committed *earlier* in the tick (input drain,
 //! external bus) and cleared at end of tick - a signal a peer system writes
 //! later in the same stage is observed on the following tick.

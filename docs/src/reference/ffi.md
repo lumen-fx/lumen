@@ -512,6 +512,14 @@ click-to-signal case, and `App::add_computed` for derived signals. `lumen_source
 picks hot reload from disk in a debug build and embedded markup in a release
 build from one line.
 
+A system that reads `ClickEvent`, `DoubleClickEvent` or `LongPressEvent`, or is
+gated on `on_click` / `on_toggle`, runs `.after(ClickSet::Producers)`: that set
+holds every system that writes those messages (the pointer, Enter and Space on
+a focused element, the double-click and long-press detectors), so the system
+sees a click on the tick it lands and what it changes paints on that frame.
+Without the edge it may run first and see the click a tick late. Closures
+registered with `App::on_click` and its siblings are already ordered this way.
+
 ```rust
 use lumenui::prelude::*;
 
@@ -522,7 +530,10 @@ fn main() -> lumenui::Result<()> {
                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
         )
         .insert_signal("count", 0i64)
-        .add_systems(TickStage::Systems, (bump_counter, update_label).chain())
+        .add_systems(
+            TickStage::Systems,
+            (bump_counter, update_label).chain().after(ClickSet::Producers),
+        )
         .run()
 }
 
