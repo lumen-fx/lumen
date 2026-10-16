@@ -92,6 +92,9 @@ pub fn install_dom(app: &mut App) {
             .after(ScriptSet::Tick)
             .after(ScriptSet::Dispatch)
             .after(ScriptSet::Ready)
+            // A component the build left a marker for builds its subtree
+            // when it is filled, and that subtree lands on the same tick.
+            .after(ScriptSet::Fill)
             .after(ScriptSet::DomInput)
             .after(ScriptSet::DomState),
     );
