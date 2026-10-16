@@ -27,12 +27,17 @@
 //! it: `aria-valuenow` is the share of its two panes the one before it
 //! takes, in percent, between `aria-valuemin` and `aria-valuemax`, the
 //! shares the panes' limits allow, and `aria-orientation` is `vertical` for
-//! a gutter between panes side by side.
+//! a gutter between panes side by side. Beside `split-gutter`, a gutter
+//! carries `split-gutter-row` in a split laid out as a row and
+//! `split-gutter-column` in one laid out as a column, which is what the
+//! user-agent sheet keys its `col-resize` and `row-resize` cursors on.
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
-use lumen_core::components::{A11yValue, BoxSizing, FlexDirection, Length, LumenAttributes, Style};
+use lumen_core::components::{
+    A11yValue, BoxSizing, FlexDirection, Length, LumenAttributes, LumenClasses, Style, StyleDirty,
+};
 use lumen_core::input::FocusedKey;
 use lumen_core::prelude::*;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
@@ -73,6 +78,16 @@ impl SplitAxis {
         match self {
             Self::Row => "vertical",
             Self::Column => "horizontal",
+        }
+    }
+
+    /// The class a gutter of a split laid out this way carries beside
+    /// `split-gutter`, so a stylesheet can tell the two apart: the
+    /// user-agent sheet keys the gutter's resize cursor on it.
+    pub fn gutter_class(self) -> &'static str {
+        match self {
+            Self::Row => "split-gutter-row",
+            Self::Column => "split-gutter-column",
         }
     }
 }
@@ -440,6 +455,39 @@ pub fn sync_split_gutters(splits: Query<&Split, Changed<Split>>, mut gutters: Gu
     }
 }
 
+/// Give each gutter the class of its split's axis, and only that one:
+/// [`SplitAxis::gutter_class`]. It follows the split's measured axis, so a
+/// style that turns a row into a column moves the class, and it comes back
+/// after a script rewrites the gutter's class list. A changed list restyles
+/// the gutter.
+pub fn mark_split_gutter_axes(
+    splits: Query<Ref<Split>>,
+    mut gutters: Query<(Entity, &ChildOf, &mut LumenClasses), With<SplitGutter>>,
+    mut commands: Commands,
+) {
+    let axis_class =
+        |c: &str| c == SplitAxis::Row.gutter_class() || c == SplitAxis::Column.gutter_class();
+    for (gutter, child_of, mut classes) in &mut gutters {
+        let Ok(split) = splits.get(child_of.parent()) else {
+            continue;
+        };
+        if split.panes.is_empty() || (!split.is_changed() && !classes.is_changed()) {
+            continue;
+        }
+        let want = split.axis.gutter_class();
+        let stale = |c: &str| c != want && axis_class(c);
+        let has_want = classes.has(want);
+        if has_want && !classes.0.iter().any(|c| stale(c)) {
+            continue;
+        }
+        classes.0.retain(|c| !stale(c));
+        if !has_want {
+            classes.0.push(want.into());
+        }
+        commands.entity(gutter).insert(StyleDirty);
+    }
+}
+
 /// A length as pixels along an axis `of` long, `None` for `auto`.
 fn resolve(len: Length, of: f32) -> Option<f32> {
     match len {
@@ -512,6 +560,7 @@ impl Plugin for SplitPlugin {
                 drag_split_gutters.after(lumen_input::hit_test),
                 step_split_on_keys.after(lumen_input::dispatch_focused_keys),
                 sync_split_gutters,
+                mark_split_gutter_axes,
             )
                 .chain()
                 .run_if(any_with_component::<Split>),
@@ -609,6 +658,50 @@ mod tests {
             gutters: vec![gutter],
         });
         (world, split, [a, b], gutter)
+    }
+
+    /// A gutter carries the class of its split's axis and only that one,
+    /// follows the axis when it changes, and gets it back after its class
+    /// list is rewritten; each change restyles it.
+    #[test]
+    fn a_gutter_carries_its_split_axis_as_a_class() {
+        let (mut world, split, _, gutter) = split_world();
+        world
+            .entity_mut(gutter)
+            .insert(LumenClasses(vec!["split-gutter".into()]));
+        let classes = |world: &World| -> Vec<String> {
+            world
+                .get::<LumenClasses>(gutter)
+                .unwrap()
+                .0
+                .iter()
+                .map(|c| c.to_string())
+                .collect()
+        };
+        world.run_system_once(mark_split_gutter_axes).unwrap();
+        assert_eq!(classes(&world), ["split-gutter", "split-gutter-row"]);
+        assert!(world.get::<StyleDirty>(gutter).is_some());
+        world.entity_mut(gutter).remove::<StyleDirty>();
+
+        world.run_system_once(mark_split_gutter_axes).unwrap();
+        assert!(
+            world.get::<StyleDirty>(gutter).is_none(),
+            "nothing changed, nothing restyles"
+        );
+
+        world.get_mut::<Split>(split).unwrap().axis = SplitAxis::Column;
+        world.run_system_once(mark_split_gutter_axes).unwrap();
+        assert_eq!(classes(&world), ["split-gutter", "split-gutter-column"]);
+        assert!(world.get::<StyleDirty>(gutter).is_some());
+
+        world
+            .entity_mut(gutter)
+            .insert(LumenClasses(vec!["split-gutter".into(), "mine".into()]));
+        world.run_system_once(mark_split_gutter_axes).unwrap();
+        assert_eq!(
+            classes(&world),
+            ["split-gutter", "mine", "split-gutter-column"]
+        );
     }
 
     fn basis(world: &World, e: Entity) -> Length {
