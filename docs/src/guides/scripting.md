@@ -143,13 +143,43 @@ receives an event it can inspect and control, with `target`, `current_target`,
 `prevent_default`, `stop_propagation`, and `stop_immediate_propagation`.
 
 The bindable types are `click`, `dblclick`, `pointerdown`, `pointerup`,
-`pointermove`, `pointerenter`, `pointerleave`, `wheel`, `keydown`, `keyup`,
+`pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
+`gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
 `input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit. `click` is the one type with a default action to prevent: it
 suppresses the navigation an `<a href>` would otherwise perform. Key events go
 to the focused element; with nothing focused they go to the document, so bind
 app-wide shortcuts on `document_node()`.
+
+Pointer events come from the mouse, a pen, or a finger, and carry what the
+device reports under the web's names: `pointer_id`, `pointer_type` (`"mouse"`,
+`"pen"`, or `"touch"`), `is_primary`, `buttons`, `pressure`,
+`tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, and `height`. A
+pen's eraser end presses button `5`. Lumen's own widgets follow the primary
+pointer; a second finger reaches only your handlers.
+
+A drawing tool keeps a stroke by capturing the pointer in its `pointerdown`
+handler:
+
+```rust
+fn on_down(ev: int) {
+    let e = event(ev);
+    e.current_target().set_pointer_capture(e.pointer_id());
+}
+```
+
+From the pointer's next event until its last button comes up, its events go to
+that element wherever the pointer moves, outside the window included, with
+`gotpointercapture` before them and `lostpointercapture` after. A finger is
+captured by the element it touched without asking.
+
+What a pen or a touch screen reports depends on the desktop. On Windows a pen
+reports pressure, tilt, twist, its barrel button and its eraser, and a touch
+screen reports pressure. On macOS and Linux a pen moves the mouse pointer and
+reports neither pressure nor tilt; a Linux touch screen reports touches
+without pressure, and macOS reports no touches. In a web build every reading
+comes from the browser.
 
 A handler that raises an uncaught error stops at that line and the error is
 reported; the app keeps running. What the handler did before the error stays

@@ -181,6 +181,7 @@ impl Plugin for WebDomPlugin {
                 project::project_visibility,
                 project::project_control_state,
                 project::project_focus,
+                pointer::project_pointer_capture,
             )
                 .chain(),
         );

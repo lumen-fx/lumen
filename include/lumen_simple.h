@@ -114,8 +114,18 @@
  by-value callback type along with `lumen_app_expose_v2` are removed.
  Existing callbacks change signature, so embedders rebuild against the
  new header rather than relinking.
+
+ 0.15 added pointer data and pointer capture: [`LumenEvent`] gains the web
+ `PointerEvent` fields at its end (`pointer_id`, `pressure`,
+ `tangential_pressure`, `tilt_x` / `tilt_y`, `twist`, `width` / `height`,
+ `buttons`, `pointer_type`, `is_primary`), and
+ [`lumen_node_set_pointer_capture`] / [`lumen_node_release_pointer_capture`]
+ / [`lumen_node_has_pointer_capture`] join the node surface. The struct is
+ only ever read through the pointer the runtime hands a callback, and the
+ fields before the new ones keep their offsets, so a callback built against
+ 0.14 reads its fields unchanged; additive, so a minor bump.
  */
-#define LUMEN_ABI_MINOR 14
+#define LUMEN_ABI_MINOR 15
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
@@ -878,6 +888,27 @@ extern "C" {
  handle to `*out`. Thread-safe.
  */
  LumenStatus lumen_document_spawn(const char *tag, LumenNode *out) ;
+
+/*
+ Send pointer `pointer_id`'s events to `node` until its last button comes
+ up, wherever the pointer goes (the web's `setPointerCapture`). Takes
+ effect at the pointer's next event, which `gotpointercapture` precedes;
+ does nothing while the pointer has no button held. Thread-safe.
+ */
+ LumenStatus lumen_node_set_pointer_capture(LumenNode node, uint64_t pointer_id) ;
+
+/*
+ Give pointer `pointer_id` back to hit testing, when `node` holds it (the
+ web's `releasePointerCapture`). Thread-safe.
+ */
+ LumenStatus lumen_node_release_pointer_capture(LumenNode node, uint64_t pointer_id) ;
+
+/*
+ Whether `node` holds pointer `pointer_id` (`1`) or not (`0`), written to
+ `*out` (the web's `hasPointerCapture`). Counts a capture set during the
+ running handler. Thread-safe.
+ */
+ LumenStatus lumen_node_has_pointer_capture(LumenNode node, uint64_t pointer_id, int *out) ;
 
 /*
  Unbind a callback previously registered with [`lumen_on`]. No-op for an

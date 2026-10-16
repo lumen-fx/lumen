@@ -22,6 +22,6 @@ fn the_generated_declarations_are_current() {
     assert_eq!(
         current, generated,
         "prelude/declarations.cdl is stale; refresh it with\n    \
-         UPDATE_PRELUDE=1 cargo test -p lumen-candela --test prelude_generated"
+         UPDATE_PRELUDE=1 cargo test -p lumen-candela-host --test prelude_generated"
     );
 }

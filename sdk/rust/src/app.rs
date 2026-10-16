@@ -605,16 +605,19 @@ mod tests {
         ecs.world.write_message(PointerMoved {
             position: at,
             local: None,
+            pointer: Default::default(),
         });
         ecs.world.write_message(PointerPressed {
             position: at,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
         ecs.world.write_message(PointerReleased {
             position: at,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
         ecs.tick();
         ecs.world.resource::<FrameDirty>().dirty
@@ -725,6 +728,7 @@ mod tests {
             position: at,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
         ecs.tick();
         std::thread::sleep(LONG_PRESS_HOLD);

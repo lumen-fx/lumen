@@ -33,6 +33,7 @@ fn write_pointer_moved(world: &mut World, p: glam::Vec2) {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
 }
 
@@ -44,6 +45,7 @@ fn write_pointer_pressed(world: &mut World, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
 }
 
@@ -55,6 +57,7 @@ fn write_pointer_released(world: &mut World, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
 }
 
@@ -564,6 +567,7 @@ fn same_tick_press_release_emits_exactly_one_click() {
             position: glam::Vec2::new(25.0, 25.0),
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
     app.world.resource_mut::<PointerState>().primary_down = false;
     app.world
@@ -572,6 +576,7 @@ fn same_tick_press_release_emits_exactly_one_click() {
             position: glam::Vec2::new(25.0, 25.0),
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
 
@@ -620,6 +625,7 @@ fn four_same_tick_clicks_deliver_four_times() {
                 position: glam::Vec2::new(25.0, 25.0),
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         app.world.resource_mut::<PointerState>().primary_down = false;
         app.world
@@ -628,6 +634,7 @@ fn four_same_tick_clicks_deliver_four_times() {
                 position: glam::Vec2::new(25.0, 25.0),
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         app.tick();
         // Idle follow-up frames between clicks.
@@ -718,4 +725,64 @@ fn nested_bg_less_focusable_wins_over_its_painted_parent() {
         "the deeper unpainted focusable takes the hit"
     );
     assert!(app.world.get::<Hovered>(panel).is_none());
+}
+
+/// A second finger hovers and presses nothing: the button under the first
+/// finger keeps the hover and the press, the one under the second finger is
+/// recorded as that pointer's target for the script driver, and its lift
+/// clicks nothing.
+#[test]
+fn a_second_finger_is_aimed_but_presses_nothing() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let first = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(0.0, 0.0),
+        glam::Vec2::splat(40.0),
+    );
+    let second = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(100.0, 0.0),
+        glam::Vec2::splat(40.0),
+    );
+    let finger = PointerData {
+        id: 5,
+        kind: PointerKind::Touch,
+        is_primary: false,
+        buttons: 1,
+        ..PointerData::default()
+    };
+    write_pointer_moved(&mut app.world, glam::Vec2::new(10.0, 10.0));
+    app.world
+        .resource_mut::<Messages<PointerPressed>>()
+        .write(PointerPressed {
+            position: glam::Vec2::new(110.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: finger,
+        });
+    app.tick();
+    assert!(app.world.get::<Hovered>(first).is_some());
+    assert!(app.world.get::<Hovered>(second).is_none());
+    assert!(app.world.get::<Pressed>(second).is_none());
+    assert_eq!(app.world.resource::<PointerTargets>().get(5), Some(second));
+
+    app.world
+        .resource_mut::<Messages<PointerReleased>>()
+        .write(PointerReleased {
+            position: glam::Vec2::new(110.0, 10.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: PointerData {
+                buttons: 0,
+                ..finger
+            },
+        });
+    app.tick();
+    assert_eq!(click_count(&app.world), 0, "a second finger clicks nothing");
+    app.tick();
+    assert!(
+        app.world.resource::<PointerTargets>().get(5).is_none(),
+        "a finger with no event this tick has no target"
+    );
 }

@@ -249,6 +249,17 @@ impl Node {
     fn on_capture(self, event_type, handler) {
         return lumen::event_on_capture(self.handle, event_type, handler);
     }
+
+    // -- pointer capture --
+    fn set_pointer_capture(self, pointer_id) {
+        return lumen::node_set_pointer_capture(self.handle, pointer_id);
+    }
+    fn release_pointer_capture(self, pointer_id) {
+        return lumen::node_release_pointer_capture(self.handle, pointer_id);
+    }
+    fn has_pointer_capture(self, pointer_id) {
+        return lumen::node_has_pointer_capture(self.handle, pointer_id);
+    }
 }
 
 impl Event {
@@ -264,6 +275,17 @@ impl Event {
     fn client_y(self) { return lumen::event_client_y(self.handle); }
     fn delta_x(self) { return lumen::event_delta_x(self.handle); }
     fn delta_y(self) { return lumen::event_delta_y(self.handle); }
+    fn pointer_id(self) { return lumen::event_pointer_id(self.handle); }
+    fn pointer_type(self) { return lumen::event_pointer_type(self.handle); }
+    fn is_primary(self) { return lumen::event_is_primary(self.handle); }
+    fn buttons(self) { return lumen::event_buttons(self.handle); }
+    fn pressure(self) { return lumen::event_pressure(self.handle); }
+    fn tangential_pressure(self) { return lumen::event_tangential_pressure(self.handle); }
+    fn tilt_x(self) { return lumen::event_tilt_x(self.handle); }
+    fn tilt_y(self) { return lumen::event_tilt_y(self.handle); }
+    fn twist(self) { return lumen::event_twist(self.handle); }
+    fn width(self) { return lumen::event_width(self.handle); }
+    fn height(self) { return lumen::event_height(self.handle); }
     fn shift(self) { return lumen::event_shift(self.handle); }
     fn ctrl(self) { return lumen::event_ctrl(self.handle); }
     fn alt(self) { return lumen::event_alt(self.handle); }

@@ -749,9 +749,14 @@ none of them means anything without an absolute address.
   target written `accept="text/plain"` stays dark for one. The browser still
   shows its own drop cursor over a target that stays dark.
 - Pointer handlers (`pointerdown`, `pointerup`, `pointermove`,
-  `pointerenter`, `pointerleave`, `wheel`) run on the browser's Pointer
-  Events, so a tap raises the same `pointerdown` and `pointerup` a click
-  does. Moves between two frames arrive as one, at the last position.
+  `pointercancel`, `pointerenter`, `pointerleave`, `wheel`) run on the
+  browser's Pointer Events, so a tap raises the same `pointerdown` and
+  `pointerup` a click does, and pressure, tilt, twist, contact size and the
+  pointer's id and type are the browser's own readings. Moves of one pointer
+  between two frames arrive as one, at the last position.
+- `set_pointer_capture` calls the browser's `setPointerCapture` on the
+  element, so the page keeps receiving the pointer's events after it leaves
+  the element or the window.
 - A `wheel` handler cannot stop the page scrolling. The browser scrolls as it
   would without the handler, the same as a desktop app, where a wheel has no
   default action to prevent.

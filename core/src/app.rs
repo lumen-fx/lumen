@@ -24,8 +24,8 @@ use crate::input::{
     ClickEvent, CloseRequest, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
     FileDropped, FileHoverCancelled, FileHovered, FocusTracker, FocusedKey, ImeEvent, ImeRequest,
     KeyPressed, KeyReleased, LongPressEvent, MenuClicked, ModifiersState, MouseWheel,
-    PendingFileDrops, PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState,
-    ShowContextMenu, TextInputCommitted,
+    PendingFileDrops, PointerCancelled, PointerLeft, PointerMoved, PointerPressed, PointerReleased,
+    PointerState, PointerTargets, ShowContextMenu, TextInputCommitted,
 };
 use crate::node_ir::{PreviousScene, RetainedScene};
 use crate::property_store::PropertyStore;
@@ -321,6 +321,7 @@ impl App {
         // [`crate::render_world::ExtractContextCache`].
         world.insert_resource(crate::render_world::ExtractContextCache::default());
         world.insert_resource(PointerState::default());
+        world.insert_resource(PointerTargets::default());
         world.insert_resource(crate::input::ScrollbarInteraction::default());
         world.insert_resource(ModifiersState::default());
         world.insert_resource(FocusTracker::default());
@@ -332,6 +333,7 @@ impl App {
         MessageRegistry::register_message::<PointerPressed>(&mut world);
         MessageRegistry::register_message::<PointerReleased>(&mut world);
         MessageRegistry::register_message::<PointerLeft>(&mut world);
+        MessageRegistry::register_message::<PointerCancelled>(&mut world);
         MessageRegistry::register_message::<ClickEvent>(&mut world);
         MessageRegistry::register_message::<KeyPressed>(&mut world);
         MessageRegistry::register_message::<KeyReleased>(&mut world);

@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 14
+ABI_MINOR = 15
 ABI_PATCH = 0
 
 
@@ -297,6 +297,17 @@ class LumenEvent(ctypes.Structure):
         ("ctrl", ctypes.c_uint8),
         ("alt", ctypes.c_uint8),
         ("super_", ctypes.c_uint8),
+        ("pointer_id", ctypes.c_uint64),
+        ("pressure", ctypes.c_double),
+        ("tangential_pressure", ctypes.c_double),
+        ("tilt_x", ctypes.c_double),
+        ("tilt_y", ctypes.c_double),
+        ("twist", ctypes.c_double),
+        ("width", ctypes.c_double),
+        ("height", ctypes.c_double),
+        ("buttons", ctypes.c_uint32),
+        ("pointer_type", ctypes.c_uint8),
+        ("is_primary", ctypes.c_uint8),
     ]
 
 
@@ -871,6 +882,12 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
     lib.lumen_node_closest.restype = c.c_uint32
     lib.lumen_node_valid.argtypes = [Node, P(c.c_int)]
     lib.lumen_node_valid.restype = c.c_uint32
+    lib.lumen_node_set_pointer_capture.argtypes = [Node, c.c_uint64]
+    lib.lumen_node_set_pointer_capture.restype = c.c_uint32
+    lib.lumen_node_release_pointer_capture.argtypes = [Node, c.c_uint64]
+    lib.lumen_node_release_pointer_capture.restype = c.c_uint32
+    lib.lumen_node_has_pointer_capture.argtypes = [Node, c.c_uint64, P(c.c_int)]
+    lib.lumen_node_has_pointer_capture.restype = c.c_uint32
     lib.lumen_nodelist_get.argtypes = [LumenNodeList, c.c_size_t, PNode]
     lib.lumen_nodelist_get.restype = c.c_uint32
     lib.lumen_nodelist_free.argtypes = [LumenNodeList]

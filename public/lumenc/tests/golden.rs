@@ -319,6 +319,7 @@ fn pointer_move(app: &mut App, pos: Vec2) {
     app.world.write_message(PointerMoved {
         position: pos,
         local: None,
+        pointer: Default::default(),
     });
     tick(app);
 }
@@ -330,11 +331,13 @@ fn pointer_press(app: &mut App, pos: Vec2) {
     app.world.write_message(PointerMoved {
         position: pos,
         local: None,
+        pointer: Default::default(),
     });
     app.world.write_message(PointerPressed {
         position: pos,
         button: PointerButton::Primary,
         local: None,
+        pointer: Default::default(),
     });
     tick(app);
 }

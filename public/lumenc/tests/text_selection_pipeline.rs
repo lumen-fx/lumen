@@ -65,6 +65,7 @@ fn press_at(app: &mut App, p: glam::Vec2) {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
     app.world.resource_mut::<PointerState>().primary_down = true;
     app.world
@@ -73,6 +74,7 @@ fn press_at(app: &mut App, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
 }
@@ -84,6 +86,7 @@ fn drag_to(app: &mut App, p: glam::Vec2) {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
 }
@@ -96,6 +99,7 @@ fn release_at(app: &mut App, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
     app.tick();
 }

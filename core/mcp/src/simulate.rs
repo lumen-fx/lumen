@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy_ecs::prelude::*;
+use lumen_core::input::{PointerData, PointerKind};
 use serde::Deserialize;
 
 use lumen_core::app::EventLoopWaker;
@@ -148,6 +149,9 @@ pub enum SimulateKind {
         x: f32,
         /// Y in window coordinates.
         y: f32,
+        /// The device that moved; the mouse when absent.
+        #[serde(default)]
+        pointer: Option<SimulatePointer>,
     },
     /// Issue a press / release pair at `(x, y)` with `button` (default
     /// `primary`). A `PointerMoved` is also emitted to keep hit-test in sync.
@@ -159,6 +163,9 @@ pub enum SimulateKind {
         /// Optional button override; defaults to `primary`.
         #[serde(default)]
         button: Option<String>,
+        /// The device that clicked; the mouse when absent.
+        #[serde(default)]
+        pointer: Option<SimulatePointer>,
     },
     /// Press-only half of [`SimulateKind::Click`]: press `button` at
     /// `(x, y)` and leave it held (`PointerState.primary_down` stays
@@ -174,6 +181,9 @@ pub enum SimulateKind {
         /// Optional button override; defaults to `primary`.
         #[serde(default)]
         button: Option<String>,
+        /// The device that pressed; the mouse when absent.
+        #[serde(default)]
+        pointer: Option<SimulatePointer>,
     },
     /// Release-only half of [`SimulateKind::Click`]: release `button` at
     /// `(x, y)`.
@@ -185,6 +195,20 @@ pub enum SimulateKind {
         /// Optional button override; defaults to `primary`.
         #[serde(default)]
         button: Option<String>,
+        /// The device that released; the mouse when absent.
+        #[serde(default)]
+        pointer: Option<SimulatePointer>,
+    },
+    /// The system takes a pointer away mid-gesture (`pointercancel`); no
+    /// release follows.
+    PointerCancel {
+        /// X in window coordinates.
+        x: f32,
+        /// Y in window coordinates.
+        y: f32,
+        /// The device that was cancelled; the mouse when absent.
+        #[serde(default)]
+        pointer: Option<SimulatePointer>,
     },
     /// Press a key (with optional modifiers). For text input, prefer
     /// [`SimulateKind::Type`].
@@ -231,6 +255,70 @@ pub struct SimulateModifiers {
     /// Super / Cmd / Windows-key.
     #[serde(rename = "super")]
     pub super_: bool,
+}
+
+/// The device behind a simulated pointer event, with the web
+/// `PointerEvent` field names. Every field is optional: an absent
+/// `pointer_type` is the mouse, an absent `pointer_id` is `1` for the mouse
+/// and `2` otherwise, and an absent reading takes the web default (pressure
+/// `0.5` while a button is held, no tilt, a 1 px contact).
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SimulatePointer {
+    /// `"mouse"`, `"pen"` or `"touch"`.
+    #[serde(deserialize_with = "kind_name")]
+    pub pointer_type: PointerKind,
+    /// The pointer id.
+    pub pointer_id: Option<u64>,
+    /// Whether this is the primary pointer of its kind (default `true`).
+    pub is_primary: Option<bool>,
+    /// Normalized pressure, `0` to `1`.
+    pub pressure: Option<f32>,
+    /// Normalized barrel pressure, `-1` to `1`.
+    pub tangential_pressure: Option<f32>,
+    /// Tilt toward the right, degrees.
+    pub tilt_x: Option<f32>,
+    /// Tilt toward the user, degrees.
+    pub tilt_y: Option<f32>,
+    /// Rotation about the pen's axis, degrees.
+    pub twist: Option<f32>,
+    /// Contact width, logical pixels.
+    pub width: Option<f32>,
+    /// Contact height, logical pixels.
+    pub height: Option<f32>,
+}
+
+fn kind_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PointerKind, D::Error> {
+    let name = String::deserialize(d)?;
+    Ok(PointerKind::from(name.as_str()))
+}
+
+impl SimulatePointer {
+    /// The pointer data a message carries, with `buttons` held after the
+    /// event.
+    pub fn data(spec: Option<&SimulatePointer>, buttons: u32) -> PointerData {
+        let spec = spec.copied().unwrap_or_default();
+        let id = spec.pointer_id.unwrap_or(match spec.pointer_type {
+            PointerKind::Mouse => PointerData::MOUSE_ID,
+            _ => PointerData::MOUSE_ID + 1,
+        });
+        PointerData {
+            id,
+            kind: spec.pointer_type,
+            is_primary: spec.is_primary.unwrap_or(true),
+            buttons,
+            pressure: spec
+                .pressure
+                .unwrap_or_else(|| PointerData::default_pressure(buttons)),
+            tangential_pressure: spec.tangential_pressure.unwrap_or(0.0),
+            tilt_x: spec.tilt_x.unwrap_or(0.0),
+            tilt_y: spec.tilt_y.unwrap_or(0.0),
+            twist: spec.twist.unwrap_or(0.0),
+            width: spec.width.unwrap_or(1.0),
+            height: spec.height.unwrap_or(1.0),
+            order: 0,
+        }
+    }
 }
 
 /// One pending request bundle. Includes the kind and an optional `wait_for`
@@ -283,7 +371,11 @@ mod waker_tests {
 
     fn sample_request() -> SimulateRequest {
         SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 1.0, y: 2.0 },
+            kind: SimulateKind::PointerMove {
+                x: 1.0,
+                y: 2.0,
+                pointer: None,
+            },
             wait_for: None,
         }
     }

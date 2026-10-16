@@ -183,7 +183,17 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// by-value callback type along with `lumen_app_expose_v2` are removed.
 /// Existing callbacks change signature, so embedders rebuild against the
 /// new header rather than relinking.
-pub const LUMEN_ABI_MINOR: u32 = 14;
+///
+/// 0.15 added pointer data and pointer capture: [`LumenEvent`] gains the web
+/// `PointerEvent` fields at its end (`pointer_id`, `pressure`,
+/// `tangential_pressure`, `tilt_x` / `tilt_y`, `twist`, `width` / `height`,
+/// `buttons`, `pointer_type`, `is_primary`), and
+/// [`lumen_node_set_pointer_capture`] / [`lumen_node_release_pointer_capture`]
+/// / [`lumen_node_has_pointer_capture`] join the node surface. The struct is
+/// only ever read through the pointer the runtime hands a callback, and the
+/// fields before the new ones keep their offsets, so a callback built against
+/// 0.14 reads its fields unchanged; additive, so a minor bump.
+pub const LUMEN_ABI_MINOR: u32 = 15;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -3502,6 +3512,29 @@ pub struct LumenEvent {
     pub alt: u8,
     /// Super / Cmd held (`0` / `1`).
     pub super_: u8,
+    /// The pointer's id; the mouse is `1` (ABI 0.15).
+    pub pointer_id: u64,
+    /// Normalized pressure, `0` to `1`.
+    pub pressure: f64,
+    /// Normalized barrel pressure, `-1` to `1`.
+    pub tangential_pressure: f64,
+    /// Pen tilt toward the right, degrees.
+    pub tilt_x: f64,
+    /// Pen tilt toward the user, degrees.
+    pub tilt_y: f64,
+    /// Pen rotation about its axis, degrees.
+    pub twist: f64,
+    /// Contact width, logical pixels.
+    pub width: f64,
+    /// Contact height, logical pixels.
+    pub height: f64,
+    /// Buttons held, as a web `buttons` mask (`1` primary, `2` secondary,
+    /// `4` middle, `8` back, `16` forward, `32` eraser).
+    pub buttons: u32,
+    /// The device: `0` mouse, `1` pen, `2` touch.
+    pub pointer_type: u8,
+    /// The primary pointer of its kind (`0` / `1`).
+    pub is_primary: u8,
 }
 
 /// C callback invoked when a bound event fires. `event` is borrowed for the
@@ -3530,6 +3563,7 @@ fn current_lumen_event() -> LumenEvent {
     let (cx, cy) = event::event_position_client();
     let (dx, dy) = event::event_delta();
     let (shift, ctrl, alt, super_) = event::event_modifiers();
+    let pointer = event::event_pointer();
     LumenEvent {
         target: event::event_target(),
         current_target: event::event_current_target(),
@@ -3544,7 +3578,68 @@ fn current_lumen_event() -> LumenEvent {
         ctrl: ctrl as u8,
         alt: alt as u8,
         super_: super_ as u8,
+        pointer_id: pointer.id,
+        pressure: f64::from(pointer.pressure),
+        tangential_pressure: f64::from(pointer.tangential_pressure),
+        tilt_x: f64::from(pointer.tilt_x),
+        tilt_y: f64::from(pointer.tilt_y),
+        twist: f64::from(pointer.twist),
+        width: f64::from(pointer.width),
+        height: f64::from(pointer.height),
+        buttons: pointer.buttons,
+        pointer_type: match pointer.kind {
+            lumen_core::input::PointerKind::Mouse => 0,
+            lumen_core::input::PointerKind::Pen => 1,
+            lumen_core::input::PointerKind::Touch => 2,
+        },
+        is_primary: pointer.is_primary as u8,
     }
+}
+
+/// Send pointer `pointer_id`'s events to `node` until its last button comes
+/// up, wherever the pointer goes (the web's `setPointerCapture`). Takes
+/// effect at the pointer's next event, which `gotpointercapture` precedes;
+/// does nothing while the pointer has no button held. Thread-safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_node_set_pointer_capture(node: LumenNode, pointer_id: u64) -> LumenStatus {
+    catch(|| {
+        lumen_script::event::set_pointer_capture(node, pointer_id);
+        LumenStatus::Ok
+    })
+}
+
+/// Give pointer `pointer_id` back to hit testing, when `node` holds it (the
+/// web's `releasePointerCapture`). Thread-safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_node_release_pointer_capture(
+    node: LumenNode,
+    pointer_id: u64,
+) -> LumenStatus {
+    catch(|| {
+        lumen_script::event::release_pointer_capture(node, pointer_id);
+        LumenStatus::Ok
+    })
+}
+
+/// Whether `node` holds pointer `pointer_id` (`1`) or not (`0`), written to
+/// `*out` (the web's `hasPointerCapture`). Counts a capture set during the
+/// running handler. Thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_node_has_pointer_capture(
+    node: LumenNode,
+    pointer_id: u64,
+    out: *mut c_int,
+) -> LumenStatus {
+    catch(|| {
+        if out.is_null() {
+            set_last_error("lumen_node_has_pointer_capture: null out");
+            return LumenStatus::ErrBadArg;
+        }
+        let held = lumen_script::event::has_pointer_capture(node, pointer_id);
+        // SAFETY: checked non-null above; the caller owns the pointee.
+        unsafe { *out = held as c_int };
+        LumenStatus::Ok
+    })
 }
 
 /// Bind `callback` to `node` for `event_type`. `capture` (non-zero) makes it

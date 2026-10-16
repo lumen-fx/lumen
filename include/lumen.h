@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 14u
+#define LUMEN_API_VERSION_MINOR 15u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -399,12 +399,31 @@ typedef struct LumenEvent {
     double client_y;
     double delta_x;           /* wheel delta */
     double delta_y;
-    int64_t button;           /* 0 primary, 1 middle, 2 secondary, -1 none */
+    int64_t button;           /* web button code: 0 primary, 1 middle, 2 secondary,
+                                 3 back, 4 forward, 5 pen eraser, -1 none */
     uint8_t shift;            /* modifier flags, 0 / 1 */
     uint8_t ctrl;
     uint8_t alt;
     uint8_t super_;
+    /* ABI 0.15: the web PointerEvent fields. */
+    uint64_t pointer_id;      /* the mouse is 1 */
+    double pressure;          /* 0 .. 1 */
+    double tangential_pressure; /* -1 .. 1 */
+    double tilt_x;            /* degrees toward the right */
+    double tilt_y;            /* degrees toward the user */
+    double twist;             /* degrees about the pen's axis */
+    double width;             /* contact size, logical pixels */
+    double height;
+    uint32_t buttons;         /* mask: 1 primary, 2 secondary, 4 middle,
+                                 8 back, 16 forward, 32 eraser */
+    uint8_t pointer_type;     /* LUMEN_POINTER_MOUSE / _PEN / _TOUCH */
+    uint8_t is_primary;       /* 0 / 1 */
 } LumenEvent;
+
+/* LumenEvent.pointer_type values (ABI 0.15). */
+#define LUMEN_POINTER_MOUSE 0u
+#define LUMEN_POINTER_PEN 1u
+#define LUMEN_POINTER_TOUCH 2u
 
 /*
  * Dynamic DOM event callback (ABI 0.10). Fires when a bound event reaches

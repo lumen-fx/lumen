@@ -270,16 +270,33 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_simulate",
-                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_down, pointer_up, pointer_move, key, type, scroll. pointer_down leaves the button held, so pairing it with pointer_move and pointer_up drives a drag gesture.",
+                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_down, pointer_up, pointer_move, pointer_cancel, key, type, scroll. pointer_down leaves the button held, so pairing it with pointer_move and pointer_up drives a drag gesture. `pointer` makes the pointer kinds a pen or a touch with its own id, pressure and tilt.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "kind": { "type": "string", "enum": ["click", "pointer_down", "pointer_up", "pointer_move", "key", "type", "scroll"] },
+                        "kind": { "type": "string", "enum": ["click", "pointer_down", "pointer_up", "pointer_move", "pointer_cancel", "key", "type", "scroll"] },
                         "x": { "type": "number" },
                         "y": { "type": "number" },
                         "dx": { "type": "number" },
                         "dy": { "type": "number", "description": "Wheel delta in logical pixels; positive scrolls down (DOM deltaY)." },
-                        "button": { "type": "string", "description": "primary | secondary | middle (default primary)" },
+                        "button": { "type": "string", "description": "primary | secondary | middle | back | forward | eraser (default primary)" },
+                        "pointer": {
+                            "type": "object",
+                            "description": "The device, with web PointerEvent field names; every field optional, the mouse when absent.",
+                            "properties": {
+                                "pointer_type": { "type": "string", "enum": ["mouse", "pen", "touch"] },
+                                "pointer_id": { "type": "integer" },
+                                "is_primary": { "type": "boolean" },
+                                "pressure": { "type": "number" },
+                                "tangential_pressure": { "type": "number" },
+                                "tilt_x": { "type": "number" },
+                                "tilt_y": { "type": "number" },
+                                "twist": { "type": "number" },
+                                "width": { "type": "number" },
+                                "height": { "type": "number" }
+                            },
+                            "additionalProperties": false
+                        },
                         "key": { "type": "string", "description": "Key name like Enter, Tab, Escape, or a literal char like 'a'." },
                         "modifiers": {
                             "type": "object",
@@ -589,6 +606,7 @@ mod tests {
             "pointer_down",
             "pointer_up",
             "pointer_move",
+            "pointer_cancel",
             "key",
             "type",
             "scroll",

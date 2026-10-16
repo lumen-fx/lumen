@@ -1155,6 +1155,24 @@ public:
         return lumen_node_valid(handle_, &out) == LUMEN_OK && out != 0;
     }
 
+    // -- pointer capture --------------------------------------------------
+
+    /// Send pointer `pointer_id`'s events to this node until its last button
+    /// comes up, wherever the pointer goes (`setPointerCapture`).
+    void set_pointer_capture(std::uint64_t pointer_id) const noexcept {
+        lumen_node_set_pointer_capture(handle_, pointer_id);
+    }
+    /// Give pointer `pointer_id` back to hit testing, when this node holds
+    /// it (`releasePointerCapture`).
+    void release_pointer_capture(std::uint64_t pointer_id) const noexcept {
+        lumen_node_release_pointer_capture(handle_, pointer_id);
+    }
+    /// Whether this node holds pointer `pointer_id` (`hasPointerCapture`).
+    bool has_pointer_capture(std::uint64_t pointer_id) const noexcept {
+        int out = 0;
+        return lumen_node_has_pointer_capture(handle_, pointer_id, &out) == LUMEN_OK && out != 0;
+    }
+
     // -- traversal (design 4.1, 4.2) ------------------------------------
 
     /// The parent element.
@@ -1444,9 +1462,40 @@ public:
     std::pair<double, double> delta() const {
         return ev_ ? std::make_pair(ev_->delta_x, ev_->delta_y) : std::make_pair(0.0, 0.0);
     }
-    /// The button for pointer events (0 primary, 1 middle, 2 secondary, -1
-    /// none).
+    /// The button for pointer events, the web `button` code (0 primary, 1
+    /// middle, 2 secondary, 3 back, 4 forward, 5 pen eraser, -1 none).
     std::int64_t button() const noexcept { return ev_ ? ev_->button : -1; }
+
+    /// The pointer's id; the mouse is 1.
+    std::uint64_t pointer_id() const noexcept { return ev_ ? ev_->pointer_id : 1; }
+    /// The pointer's device: `"mouse"`, `"pen"` or `"touch"`.
+    std::string_view pointer_type() const noexcept {
+        if (!ev_) return "mouse";
+        switch (ev_->pointer_type) {
+            case LUMEN_POINTER_PEN: return "pen";
+            case LUMEN_POINTER_TOUCH: return "touch";
+            default: return "mouse";
+        }
+    }
+    /// Whether the pointer is the primary one of its kind.
+    bool is_primary() const noexcept { return ev_ ? ev_->is_primary != 0 : true; }
+    /// The buttons held, as a web `buttons` mask (1 primary, 2 secondary, 4
+    /// middle, 8 back, 16 forward, 32 eraser).
+    std::uint32_t buttons() const noexcept { return ev_ ? ev_->buttons : 0; }
+    /// Normalized pressure, 0 to 1.
+    double pressure() const noexcept { return ev_ ? ev_->pressure : 0.0; }
+    /// Normalized barrel pressure, -1 to 1.
+    double tangential_pressure() const noexcept { return ev_ ? ev_->tangential_pressure : 0.0; }
+    /// Pen tilt `(tilt_x, tilt_y)` in degrees.
+    std::pair<double, double> tilt() const noexcept {
+        return ev_ ? std::make_pair(ev_->tilt_x, ev_->tilt_y) : std::make_pair(0.0, 0.0);
+    }
+    /// Pen rotation about its axis, in degrees.
+    double twist() const noexcept { return ev_ ? ev_->twist : 0.0; }
+    /// Contact `(width, height)` in logical pixels.
+    std::pair<double, double> contact_size() const noexcept {
+        return ev_ ? std::make_pair(ev_->width, ev_->height) : std::make_pair(1.0, 1.0);
+    }
 
     /// Modifier state `(shift, ctrl, alt, super)`.
     std::array<bool, 4> modifiers() const noexcept {

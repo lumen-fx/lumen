@@ -413,6 +413,23 @@ impl UserData for LuaEvent {
         methods.add_method("client_y", |_, _this, ()| Ok(ev::event_position_client().1));
         methods.add_method("delta_x", |_, _this, ()| Ok(ev::event_delta().0));
         methods.add_method("delta_y", |_, _this, ()| Ok(ev::event_delta().1));
+        methods.add_method("pointer_id", |_, _this, ()| Ok(ev::event_pointer().id));
+        methods.add_method("pointer_type", |_, _this, ()| {
+            Ok(ev::event_pointer().kind.as_str())
+        });
+        methods.add_method("is_primary", |_, _this, ()| {
+            Ok(ev::event_pointer().is_primary)
+        });
+        methods.add_method("buttons", |_, _this, ()| Ok(ev::event_pointer().buttons));
+        methods.add_method("pressure", |_, _this, ()| Ok(ev::event_pointer().pressure));
+        methods.add_method("tangential_pressure", |_, _this, ()| {
+            Ok(ev::event_pointer().tangential_pressure)
+        });
+        methods.add_method("tilt_x", |_, _this, ()| Ok(ev::event_pointer().tilt_x));
+        methods.add_method("tilt_y", |_, _this, ()| Ok(ev::event_pointer().tilt_y));
+        methods.add_method("twist", |_, _this, ()| Ok(ev::event_pointer().twist));
+        methods.add_method("width", |_, _this, ()| Ok(ev::event_pointer().width));
+        methods.add_method("height", |_, _this, ()| Ok(ev::event_pointer().height));
         methods.add_method("position", |lua, _this, ()| {
             let (x, y) = ev::event_position_local();
             let (cx, cy) = ev::event_position_client();
@@ -646,6 +663,20 @@ impl UserData for Node {
         methods.add_method("text", |_, this, ()| Ok(node_query::node_text(this.handle)));
         methods.add_method("has_class", |_, this, class: String| {
             Ok(node_query::node_class_contains(this.handle, &class))
+        });
+        methods.add_method("set_pointer_capture", |_, this, pointer_id: u64| {
+            lumen_script::event::set_pointer_capture(this.handle, pointer_id);
+            Ok(())
+        });
+        methods.add_method("release_pointer_capture", |_, this, pointer_id: u64| {
+            lumen_script::event::release_pointer_capture(this.handle, pointer_id);
+            Ok(())
+        });
+        methods.add_method("has_pointer_capture", |_, this, pointer_id: u64| {
+            Ok(lumen_script::event::has_pointer_capture(
+                this.handle,
+                pointer_id,
+            ))
         });
         methods.add_method("style_get", |_, this, name: String| {
             Ok(node_query::node_style_get(this.handle, &name))

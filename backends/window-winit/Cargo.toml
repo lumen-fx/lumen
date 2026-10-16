@@ -42,6 +42,13 @@ signal-hook = { version = "0.4", default-features = false, features = ["iterator
 # Ctrl+C / Ctrl+Break / console-close -> graceful close request, mirroring
 # the Unix SIGINT/SIGTERM watcher (SetConsoleCtrlHandler under the hood).
 ctrlc = { workspace = true }
+# A pen arrives from winit as a touch; the pointer API tells it apart and
+# reads its tilt, rotation, barrel button and eraser.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reads the desktop's color-scheme preference via
