@@ -10,11 +10,13 @@
 //! layer's own; closing it rasterizes the layer into a pixmap the frame then
 //! draws as an image, faded by a tint rather than a compositing layer.
 
-use lumen_paint::{GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, Shape};
+use lumen_paint::pixels::TileView;
+use lumen_paint::{GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, PixelImage, Shape};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 use vello_common::paint::{Tint, TintMode};
+use vello_common::peniko::color::PremulRgba8;
 use vello_cpu::kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use vello_cpu::peniko::{
     BlendMode, Brush, BrushRef, Color, Fill, ImageBrush, ImageQuality, ImageSampler,
@@ -35,9 +37,9 @@ pub struct CpuPainter {
     ctx: RenderContext,
     resources: Resources,
     depth: usize,
-    /// Decoded image pixels, premultiplied once and kept by blob id. An entry
-    /// a frame does not draw is dropped when the next frame starts.
-    images: HashMap<u64, (ImageSource, bool)>,
+    /// Every image this painter keeps between frames. Shared like the other
+    /// caches: an open offscreen layer or mask holds it.
+    images: Images,
     /// Outline glyphs, flattened the way every backend draws them. Shared
     /// like the other caches: an open offscreen layer or mask holds it.
     outlines: GlyphOutlines,
@@ -47,6 +49,107 @@ pub struct CpuPainter {
     /// The offscreen layer open inside this painter, if any. Every call goes
     /// to it, and through it to any layer open inside that one.
     offscreen: Option<Box<Offscreen>>,
+}
+
+/// The images a painter keeps between frames.
+#[derive(Default)]
+struct Images {
+    /// Decoded image pixels, premultiplied once and kept by blob id. An entry
+    /// a frame does not draw is dropped when the next frame starts.
+    decoded: HashMap<u64, (ImageSource, bool)>,
+    /// Pixel images, premultiplied and kept by image id. A frame that draws
+    /// one again premultiplies only the tiles written since; an entry a frame
+    /// does not draw is dropped when the next frame starts.
+    resident: HashMap<u64, Resident>,
+}
+
+impl Images {
+    /// Drop what the frame that just ended did not draw.
+    fn end_frame(&mut self) {
+        self.decoded.retain(|_, (_, used)| std::mem::take(used));
+        self.resident.retain(|_, r| std::mem::take(&mut r.used));
+    }
+}
+
+/// One pixel image's premultiplied copy, and the stamp each of its tiles
+/// carried when it was last copied.
+struct Resident {
+    pixmap: Arc<Pixmap>,
+    size: (u32, u32),
+    stamps: Vec<u64>,
+    /// Which tiles hold a pixel that is not fully opaque, and how many do.
+    /// An image with none paints through vello_cpu's opaque path, which is
+    /// what a decoded image gets too.
+    translucent: Vec<bool>,
+    translucent_tiles: usize,
+    used: bool,
+}
+
+impl Resident {
+    fn new(width: u16, height: u16, tiles: usize) -> Self {
+        Resident {
+            pixmap: Arc::new(Pixmap::new(width, height)),
+            size: (u32::from(width), u32::from(height)),
+            // A fresh pixmap is transparent black, which is what a tile that
+            // was never written holds: stamp 0 needs no copy.
+            stamps: vec![0; tiles],
+            translucent: vec![true; tiles],
+            translucent_tiles: tiles,
+            used: true,
+        }
+    }
+
+    /// Bring the copy up to `image`: premultiply each tile whose stamp moved.
+    ///
+    /// A pixmap the frame already drew is shared with the context until the
+    /// frame renders, so writing it then copies it first. That is what keeps
+    /// two states of one image drawn in one frame apart.
+    fn update(&mut self, image: &PixelImage) {
+        if image
+            .tiles()
+            .all(|tile| self.stamps[tile.index] == tile.stamp)
+        {
+            return;
+        }
+        let width = self.size.0 as usize;
+        let pixmap = Arc::make_mut(&mut self.pixmap);
+        let data = pixmap.data_mut();
+        for tile in image.tiles() {
+            if self.stamps[tile.index] == tile.stamp {
+                continue;
+            }
+            let mut opaque = true;
+            for row in 0..tile.height as usize {
+                let src = &tile.pixels[row * TileView::STRIDE..][..tile.width as usize * 4];
+                let start = (tile.y as usize + row) * width + tile.x as usize;
+                for (dst, px) in data[start..start + tile.width as usize]
+                    .iter_mut()
+                    .zip(src.chunks_exact(4))
+                {
+                    // The multiply vello_cpu applies to a straight image, so a
+                    // pixel image paints exactly as the same pixels drawn
+                    // through `draw_image` would.
+                    opaque &= px[3] == 255;
+                    let alpha = u16::from(px[3]);
+                    let multiply = |c: u8| ((alpha * u16::from(c)) / 255) as u8;
+                    *dst = PremulRgba8 {
+                        r: multiply(px[0]),
+                        g: multiply(px[1]),
+                        b: multiply(px[2]),
+                        a: px[3],
+                    };
+                }
+            }
+            self.stamps[tile.index] = tile.stamp;
+            let was = std::mem::replace(&mut self.translucent[tile.index], !opaque);
+            match (was, !opaque) {
+                (true, false) => self.translucent_tiles -= 1,
+                (false, true) => self.translucent_tiles += 1,
+                _ => {}
+            }
+        }
+        pixmap.set_may_have_transparency(self.translucent_tiles > 0);
+    }
 }
 
 /// An offscreen layer being painted: its own painter, and where it sits in
@@ -79,7 +182,7 @@ impl CpuPainter {
             ctx: RenderContext::new(width, height),
             resources: Resources::new(),
             depth: 0,
-            images: HashMap::new(),
+            images: Images::default(),
             outlines: GlyphOutlines::new(),
             base: Affine::IDENTITY,
             offscreen: None,
@@ -121,7 +224,7 @@ impl CpuPainter {
             self.ctx.reset_and_resize(width, height);
         }
         self.depth = 0;
-        self.images.retain(|_, (_, used)| std::mem::take(used));
+        self.images.end_frame();
         self.outlines.end_frame();
         self.ctx.set_paint(clear);
         self.ctx
@@ -163,10 +266,32 @@ impl CpuPainter {
     fn image_source(&mut self, data: &vello_cpu::peniko::ImageData) -> ImageSource {
         let entry = self
             .images
+            .decoded
             .entry(data.data.id())
             .or_insert_with(|| (ImageSource::from_peniko_image_data(data), true));
         entry.1 = true;
         entry.0.clone()
+    }
+
+    /// The premultiplied pixels for a pixel image, brought up to date by
+    /// copying only the tiles written since this painter last drew it.
+    /// `None` for an image larger than vello_cpu draws.
+    fn pixel_source(&mut self, image: &PixelImage) -> Option<ImageSource> {
+        let width = u16::try_from(image.width()).ok()?;
+        let height = u16::try_from(image.height()).ok()?;
+        let resident = self
+            .images
+            .resident
+            .entry(image.id())
+            .or_insert_with(|| Resident::new(width, height, image.tile_count()));
+        if resident.size != (image.width(), image.height())
+            || resident.stamps.len() != image.tile_count()
+        {
+            *resident = Resident::new(width, height, image.tile_count());
+        }
+        resident.used = true;
+        resident.update(image);
+        Some(ImageSource::Pixmap(Arc::clone(&resident.pixmap)))
     }
 
     /// Set the state every draw call starts from.
@@ -343,6 +468,26 @@ impl Painter for CpuPainter {
         });
         this.ctx.set_transform(this.base * transform);
         this.ctx.set_paint(paint);
+        this.ctx.reset_paint_transform();
+        this.ctx.set_fill_rule(Fill::NonZero);
+        this.ctx
+            .fill_rect(&Rect::new(0.0, 0.0, f64::from(w), f64::from(h)));
+    }
+
+    fn draw_pixels(&mut self, image: &PixelImage, sampler: ImageSampler, transform: Affine) {
+        let (w, h) = (image.width(), image.height());
+        if w == 0 || h == 0 {
+            return;
+        }
+        let this = self.active();
+        let Some(source) = this.pixel_source(image) else {
+            return;
+        };
+        this.ctx.set_transform(this.base * transform);
+        this.ctx.set_paint(PaintType::Image(Image {
+            image: source,
+            sampler,
+        }));
         this.ctx.reset_paint_transform();
         this.ctx.set_fill_rule(Fill::NonZero);
         this.ctx
@@ -568,14 +713,17 @@ mod tests {
         painter.begin_frame(4, 4, Color::new([0.0, 0.0, 0.0, 1.0]));
         painter.draw_image(&brush, Affine::IDENTITY);
         painter.draw_image(&brush, Affine::translate((2.0, 2.0)));
-        assert_eq!(painter.images.len(), 1);
+        assert_eq!(painter.images.decoded.len(), 1);
         let target = frame(&mut painter, 4, 4);
         assert_eq!(target.sample(0, 0).r, 255);
 
         painter.begin_frame(4, 4, Color::new([0.0, 0.0, 0.0, 1.0]));
-        assert_eq!(painter.images.len(), 1, "drawn last frame, kept");
+        assert_eq!(painter.images.decoded.len(), 1, "drawn last frame, kept");
         painter.begin_frame(4, 4, Color::new([0.0, 0.0, 0.0, 1.0]));
-        assert!(painter.images.is_empty(), "not drawn last frame, dropped");
+        assert!(
+            painter.images.decoded.is_empty(),
+            "not drawn last frame, dropped"
+        );
     }
 
     fn black() -> Color {
@@ -585,6 +733,87 @@ mod tests {
     /// Every shape kind fills and strokes where it is, whatever the brush:
     /// rounded rects and paths go through the path rasterizer, gradients and
     /// images through their paints.
+    fn nearest() -> ImageSampler {
+        ImageSampler::default().with_quality(ImageQuality::Low)
+    }
+
+    /// A pixel image drawn again after a write shows the write, and its
+    /// resident copy took only the tile that was written.
+    #[test]
+    fn a_pixel_image_updates_only_the_tiles_written() {
+        let mut image = PixelImage::new(128, 64);
+        image.fill_rgba8(0, 0, 128, 64, [0, 0, 255, 255]);
+        let mut painter = CpuPainter::new(128, 64);
+        painter.begin_frame(128, 64, black());
+        painter.draw_pixels(&image, nearest(), Affine::IDENTITY);
+        let first = frame(&mut painter, 128, 64);
+        let p = first.sample(100, 10);
+        assert_eq!((p.r, p.g, p.b), (0, 0, 255));
+        assert!(
+            !painter.images.resident[&image.id()]
+                .pixmap
+                .may_have_transparency(),
+            "an opaque image takes the opaque path"
+        );
+
+        image.fill_rgba8(100, 10, 1, 1, [255, 0, 0, 255]);
+        let before: Vec<u64> = painter.images.resident[&image.id()].stamps.clone();
+        painter.begin_frame(128, 64, black());
+        painter.draw_pixels(&image, nearest(), Affine::IDENTITY);
+        let second = frame(&mut painter, 128, 64);
+        let p = second.sample(100, 10);
+        assert_eq!((p.r, p.g, p.b), (255, 0, 0));
+        let after = &painter.images.resident[&image.id()].stamps;
+        let moved = before.iter().zip(after).filter(|(a, b)| a != b).count();
+        assert_eq!(moved, 1, "one tile copied, not the whole image");
+
+        // Not drawn for a frame, dropped.
+        painter.begin_frame(128, 64, black());
+        painter.begin_frame(128, 64, black());
+        assert!(painter.images.resident.is_empty());
+    }
+
+    /// Two states of one image drawn in one frame each paint their own
+    /// pixels.
+    #[test]
+    fn two_states_of_one_pixel_image_in_one_frame_stay_apart() {
+        let mut image = PixelImage::new(4, 4);
+        image.fill_rgba8(0, 0, 4, 4, [255, 0, 0, 255]);
+        let red = image.clone();
+        image.fill_rgba8(0, 0, 4, 4, [0, 255, 0, 255]);
+        let mut painter = CpuPainter::new(8, 4);
+        painter.begin_frame(8, 4, black());
+        painter.draw_pixels(&red, nearest(), Affine::IDENTITY);
+        painter.draw_pixels(&image, nearest(), Affine::translate((4.0, 0.0)));
+        let target = frame(&mut painter, 8, 4);
+        let (a, b) = (target.sample(1, 1), target.sample(6, 1));
+        assert_eq!((a.r, a.g), (255, 0));
+        assert_eq!((b.r, b.g), (0, 255));
+    }
+
+    /// Low quality is nearest-neighbour: a scaled pixel image keeps hard
+    /// edges, where the default smooths across them.
+    #[test]
+    fn a_pixel_image_scales_with_the_sampler_it_is_given() {
+        let mut image = PixelImage::new(2, 1);
+        image.fill_rgba8(0, 0, 1, 1, [255, 0, 0, 255]);
+        image.fill_rgba8(1, 0, 1, 1, [0, 0, 255, 255]);
+        let draw = |sampler: ImageSampler| {
+            let mut painter = CpuPainter::new(16, 8);
+            painter.begin_frame(16, 8, black());
+            painter.draw_pixels(&image, sampler, Affine::scale(8.0));
+            frame(&mut painter, 16, 8)
+        };
+        let sharp = draw(nearest());
+        let p = sharp.sample(7, 4);
+        assert_eq!((p.r, p.b), (255, 0), "the last red pixel stays red");
+        let p = sharp.sample(8, 4);
+        assert_eq!((p.r, p.b), (0, 255), "the first blue pixel is blue");
+        let smooth = draw(ImageSampler::default());
+        let p = smooth.sample(7, 4);
+        assert!(p.b > 0, "smoothing mixes across the edge: {p:?}");
+    }
+
     #[test]
     fn every_shape_and_brush_kind_paints() {
         use vello_cpu::kurbo::{Point, RoundedRect};
@@ -739,7 +968,7 @@ mod tests {
             },
         );
         assert_eq!(painter.layer_depth(), 0);
-        assert_eq!(painter.images.len(), 1, "the mask's image is kept");
+        assert_eq!(painter.images.decoded.len(), 1, "the mask's image is kept");
         let target = frame(&mut painter, 16, 16);
         let top = target.sample(8, 4);
         let bottom = target.sample(8, 12);
