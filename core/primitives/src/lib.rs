@@ -14,12 +14,14 @@ pub mod drag;
 mod held;
 pub mod hover;
 pub mod menubar;
+pub mod number;
 pub mod physics;
 pub mod popup;
 pub mod popup_nav;
 pub mod press;
 pub mod progress;
 pub mod radio;
+pub mod reserve;
 pub mod scroll;
 pub mod scrollbar;
 pub mod state_style;
@@ -46,9 +48,10 @@ pub use hover::{
     apply_state_borders,
 };
 pub use lumen_core::prelude::{Scroll, ScrollAxis, ScrollOffset};
-pub use menubar::{
-    InWindowMenuBar, MenuAccelerators, dispatch_menu_accelerators, reserve_menubar_space,
-    switch_menubar_menus_on_hover,
+pub use menubar::{MenuAccelerators, dispatch_menu_accelerators, switch_menubar_menus_on_hover};
+pub use number::{
+    NumberInput, NumberStepButton, step_number_on_buttons, step_number_on_keys,
+    step_number_on_wheel,
 };
 pub use popup::{
     PopupGap, PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
@@ -67,6 +70,7 @@ pub use radio::{
     RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks, radio_group_keys,
     sync_radio_selected, sync_radio_tab_index, sync_radio_visuals,
 };
+pub use reserve::{ReservedEdge, reserve_parent_edges};
 pub use scroll::{ScrollPlugin, accumulate_wheel};
 pub use scrollbar::update_scrollbars;
 pub use state_style::{

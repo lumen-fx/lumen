@@ -141,6 +141,10 @@ control is what reports whether it is on, what a press anywhere on the row
 lands on, and what a screen reader reads the caption as the name of; the same
 `.checkbox-box` and `.radio-dot` rules style it on both targets.
 
+An `<input type="number">` is the browser's own number field, with its `min`,
+`max` and `step`. The browser draws its own step control, so the
+`.number-steps` buttons the desktop draws are not in the page.
+
 ## How the styling reaches the page
 
 The stylesheet holds the whole cascade, in three parts. The reset and the app's

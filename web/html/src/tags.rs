@@ -89,6 +89,9 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
         WidgetPart::CheckboxBox,
         WidgetPart::RadioDot,
         WidgetPart::ProgressFill,
+        WidgetPart::NumberSteps,
+        WidgetPart::StepUp,
+        WidgetPart::StepDown,
     ]
     .into_iter()
     .find(|part| part.class() == class)
@@ -101,7 +104,14 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
 /// fill is written inside it as an element of its own.
 #[must_use]
 pub const fn drawn_by_control(part: WidgetPart) -> bool {
-    matches!(part, WidgetPart::CheckboxBox | WidgetPart::RadioDot)
+    matches!(
+        part,
+        WidgetPart::CheckboxBox
+            | WidgetPart::RadioDot
+            | WidgetPart::NumberSteps
+            | WidgetPart::StepUp
+            | WidgetPart::StepDown
+    )
 }
 
 /// HTML elements that take no children and no end tag.

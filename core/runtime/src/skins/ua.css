@@ -106,6 +106,12 @@ progress { width: 100%; height: 6; }
 :where(.menubar) { height: 32; align: center; }
 :where(.menubar-button) { height: 28; padding: 0 10; }
 .menubar-button { min-height: 0; }
+/* `<input type="number">`'s step buttons float along the field's right end
+   in a fixed-width box, which the field keeps clear of its text. They are
+   compact, not push buttons. */
+:where(.number-steps) { width: 48; height: 100%; }
+:where(.number-step-up, .number-step-down) { width: 24; height: 100%; }
+.number-step-up, .number-step-down { min-height: 0; padding: 0; justify: center; }
 :where(.date-picker, .time-picker) { width: 180; }
 /* A separator is a rule line, not a gap: it keeps its pixel rather than
    taking the grow `spacer` gives the tag it is spelled with. */

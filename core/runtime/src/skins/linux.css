@@ -299,6 +299,17 @@ tile:disabled { opacity: 0.5; }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
+/* === Number field ===
+ * `<input type="number">` keeps the field and floats two step buttons
+ * along its right end:
+ *   input.number-input
+ *     .number-steps        (tag=row)
+ *       .number-step-down  (tag=button, "-")
+ *       .number-step-up    (tag=button, "+")
+ */
+.number-step-up, .number-step-down { bg: var(--lumen-input-bg); text-color: var(--lumen-text-muted); radius: var(--lumen-radius); }
+.number-step-up:hover, .number-step-down:hover { bg: var(--lumen-panel-hover); text-color: var(--lumen-text); }
+
 /* === Menu bar ===
  * Where the platform has no native menu bar (Linux), `<menubar>` is drawn
  * in the window as the root's first child:

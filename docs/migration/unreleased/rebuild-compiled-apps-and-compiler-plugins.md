@@ -2,8 +2,9 @@
 
 The compiled-app format moved on: a tag's defaults now travel as rules in the
 artifact's stylesheet rather than as values in its tree, an element with a
-custom widget tag keeps the attributes it was written with, and an element
-carries its CSS `image-rendering` and `cursor`. The runtime refuses
+custom widget tag keeps the attributes it was written with, an element
+carries its CSS `image-rendering` and `cursor`, and an `<input>` keeps the
+`type` it was written with. The runtime refuses
 an artifact written by an earlier toolchain, which would lose those defaults
 the first time an element restyled and hand its widgets no attributes.
 
@@ -13,7 +14,7 @@ or an SDK), or if your app declares compiler plugins under `[[plugins]]`.
 Loading an old artifact fails with an error that says:
 
 ```
-unsupported artifact version 16 (this build reads 19)
+unsupported artifact version 16 (this build reads 20)
 ```
 
 Rebuild the artifact with the new `lumenc`:

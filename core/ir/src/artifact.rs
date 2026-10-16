@@ -147,11 +147,14 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `cursor`, so CSS `image-rendering` picks how an element's images are
 /// sampled and CSS `cursor` picks the pointer over it.
 ///
+/// `20`: [`crate::layout_ir::Attributes`] gains `input_type`, the `type` an
+/// `<input>` that holds something other than text was written with.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 19;
+pub const FORMAT_VERSION: u16 = 20;
 
 /// The navigable page set of a compiled multi-page app.
 ///

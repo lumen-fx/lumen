@@ -91,6 +91,12 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(id) = &attrs.id {
         out.push(("id", id.clone()));
     }
+    // An `<input>` that holds something other than text is the browser's
+    // own control of that type.
+    let typed_input = attrs.input_type.filter(|_| name == "input");
+    if let Some(kind) = typed_input {
+        out.push(("type", kind.name().to_string()));
+    }
     if name == "a"
         && let Some(href) = &attrs.href
     {
@@ -149,15 +155,17 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     {
         out.push(("value", number(value)));
     }
-    if input_type == "range" {
+    if input_type == "range" || typed_input.is_some() {
         if let Some(min) = attrs.min {
             out.push(("min", number(min)));
         }
         if let Some(max) = attrs.max {
             out.push(("max", number(max)));
         }
+        // A number field records `step="any"` as a step of 0.
         if let Some(step) = attrs.step {
-            out.push(("step", number(step)));
+            let any = typed_input.is_some() && step == 0.0;
+            out.push(("step", if any { "any".to_string() } else { number(step) }));
         }
     } else if name == "progress"
         && let Some(max) = attrs.max
@@ -590,6 +598,32 @@ mod tests {
         assert_eq!(find(&pairs, "min"), Some("0"));
         assert_eq!(find(&pairs, "max"), Some("1"));
         assert_eq!(find(&pairs, "step"), Some("0.25"));
+    }
+
+    #[test]
+    fn a_number_field_is_the_browsers_number_input() {
+        let mut a = attrs();
+        a.input_type = Some(lumen_ir::layout_ir::InputType::Number);
+        a.value = Some(3.0);
+        a.text = Some("3".into());
+        a.min = Some(0.0);
+        a.max = Some(10.0);
+        a.step = Some(0.5);
+        let pairs = html_attrs("input", &a);
+        assert_eq!(find(&pairs, "type"), Some("number"));
+        assert_eq!(find(&pairs, "value"), Some("3"));
+        assert_eq!(pairs.iter().filter(|(k, _)| *k == "value").count(), 1);
+        assert_eq!(find(&pairs, "min"), Some("0"));
+        assert_eq!(find(&pairs, "max"), Some("10"));
+        assert_eq!(find(&pairs, "step"), Some("0.5"));
+        a.step = Some(0.0);
+        assert_eq!(find(&html_attrs("input", &a), "step"), Some("any"));
+        // A plain text field carries no type, and no range.
+        let mut text = attrs();
+        text.min = Some(0.0);
+        let pairs = html_attrs("input", &text);
+        assert_eq!(find(&pairs, "type"), None);
+        assert_eq!(find(&pairs, "min"), None);
     }
 
     #[test]

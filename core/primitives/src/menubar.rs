@@ -11,82 +11,17 @@
 //! - [`dispatch_menu_accelerators`]: an item's `accel` works as a shortcut
 //!   while the window has focus, the way the OS runs it for a native bar,
 //!   and raises the same [`MenuClicked`] a click on the item does.
-//! - [`reserve_menubar_space`]: the bar floats at the top of the root, out
-//!   of the root's own layout, so `justify` and `align` on the root still
-//!   place the app's content the way they would without a bar; the root
-//!   keeps the bar's height clear above that content.
+//!
+//! The bar floats at the top of the root, out of the root's own layout, and
+//! [`crate::ReservedEdge::Top`] on it keeps its height clear above the app's
+//! content.
 
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Length, Style};
 use lumen_core::input::{KeyPressed, MenuClicked};
 use lumen_core::prelude::*;
-use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
 
 use crate::tabs::DropdownButton;
-
-/// Marker the runtime puts on the in-window menu bar it mounts as the first
-/// child of the root.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct InWindowMenuBar;
-
-impl StyleOwner for InWindowMenuBar {
-    const RANK: u8 = 10;
-}
-
-/// Keep the in-window menu bar's height clear at the top of the root.
-///
-/// The bar is absolutely positioned at the root's top edge, so it takes no
-/// part in how the root lays out its content. The root's top padding is
-/// held at what its styles say plus the bar's height, which is what moves
-/// that content below the bar. The height is the bar's own `height` when it
-/// has a fixed one (the user-agent sheet gives it one, so the first frame
-/// already has room), else the height layout measured, in which case a tick
-/// that changes the reservation asks for another to lay out against it.
-pub fn reserve_menubar_space(
-    anim: Option<Res<lumen_core::render_world::AnimationsActive>>,
-    bars: Query<(&ChildOf, &Style, Option<&Transform>), With<InWindowMenuBar>>,
-    mut roots: Query<(&mut Style, &mut StyleOverrides), Without<InWindowMenuBar>>,
-) {
-    for (child_of, bar_style, bar_box) in &bars {
-        let height = match bar_style.height {
-            Length::Px(h) => h,
-            _ => bar_box.map(|t| t.size.y).unwrap_or(0.0),
-        };
-        let Ok((mut style, mut overrides)) = roots.get_mut(child_of.parent()) else {
-            continue;
-        };
-        let live = Live {
-            style: Some(&style),
-            ..Live::default()
-        };
-        let resting = overrides
-            .below::<InWindowMenuBar>(StyleFields::PADDING, &live)
-            .padding
-            .unwrap_or(style.padding);
-        let mut want = resting;
-        want.top += height;
-        let held = overrides
-            .held_by::<InWindowMenuBar>()
-            .and_then(|v| v.padding);
-        if held.is_some_and(|p| (p.top - want.top).abs() < 0.5) {
-            continue;
-        }
-        let out = overrides.hold::<InWindowMenuBar>(
-            StyleValues {
-                padding: Some(want),
-                ..StyleValues::default()
-            },
-            &live,
-        );
-        out.write_style(&mut style);
-        if !matches!(bar_style.height, Length::Px(_))
-            && let Some(anim) = &anim
-        {
-            anim.request();
-        }
-    }
-}
 
 /// Prefix of the reserved signal a menu's open state lives in.
 const MENU_OPEN_PREFIX: &str = "__menu_open:";
@@ -357,41 +292,5 @@ mod tests {
         assert!(!is_open(&world, "__menu_open:menubar-0"));
         assert!(is_open(&world, "__menu_open:menubar-1"));
         let _ = file;
-    }
-
-    /// The root keeps the bar's height clear above its content, on top of
-    /// the padding its styles give it, and keeps doing so when a restyle
-    /// changes that padding.
-    #[test]
-    fn the_root_keeps_the_bar_height_clear() {
-        let mut world = World::new();
-        let root = world
-            .spawn((
-                Style {
-                    padding: lumen_core::components::Edges {
-                        top: 10.0,
-                        left: 4.0,
-                        ..Default::default()
-                    },
-                    ..Style::default()
-                },
-                StyleOverrides::default(),
-            ))
-            .id();
-        world.spawn((
-            InWindowMenuBar,
-            Style {
-                height: Length::Px(32.0),
-                ..Style::default()
-            },
-            ChildOf(root),
-        ));
-        world.run_system_once(reserve_menubar_space).unwrap();
-        let padding = world.get::<Style>(root).unwrap().padding;
-        assert_eq!((padding.top, padding.left), (42.0, 4.0));
-
-        // Running again holds the same value rather than stacking it.
-        world.run_system_once(reserve_menubar_space).unwrap();
-        assert_eq!(world.get::<Style>(root).unwrap().padding.top, 42.0);
     }
 }

@@ -1677,6 +1677,59 @@ fn synthesize_widget_parts(
         *children = synthesized;
     }
 
+    // `<input type="number">`: the field stays the element, holding the
+    // number as text, and gains the steps box it floats along its right end
+    // with a `.number-step-down` and a `.number-step-up` button. The runtime
+    // keeps the box's width clear of the text. On the web the browser draws
+    // its own number field, so none of the parts become elements there.
+    if tag == "input" && attrs.input_type == Some(crate::layout_ir::InputType::Number) {
+        // HTML's `value` names the initial number; the field holds it as
+        // text.
+        if attrs.text.as_deref().is_none_or(str::is_empty)
+            && let Some(value) = attrs.value
+        {
+            attrs.text = Some(value.to_string());
+        }
+        if !attrs.classes.iter().any(|c| c == "number-input") {
+            attrs.classes.insert(0, "number-input".to_string());
+        }
+        let button = |part: crate::layout_ir::WidgetPart, label: &str| {
+            let mut b = Element {
+                tag: "button".to_string(),
+                attrs: Attributes {
+                    part: Some(part),
+                    ..Attributes::default()
+                },
+                ..Default::default()
+            };
+            b.attrs.text = Some(label.to_string());
+            b.attrs.classes = vec![part.class().to_string()];
+            b
+        };
+        let mut steps = Element {
+            tag: "row".to_string(),
+            attrs: Attributes {
+                part: Some(crate::layout_ir::WidgetPart::NumberSteps),
+                ..Attributes::default()
+            },
+            children: vec![
+                button(crate::layout_ir::WidgetPart::StepDown, "-"),
+                button(crate::layout_ir::WidgetPart::StepUp, "+"),
+            ],
+            ..Default::default()
+        };
+        set_built_styles(
+            &mut steps.attrs,
+            &[("position", "absolute"), ("inset", "0 0 0 auto")],
+        );
+        steps.attrs.classes = vec![
+            crate::layout_ir::WidgetPart::NumberSteps
+                .class()
+                .to_string(),
+        ];
+        children.insert(0, steps);
+    }
+
     // `<progress>` desugar (W5): the track stays the root; a single
     // absolute-positioned `.progress-fill` tile child is synthesized.
     // The runtime (`lumen_primitives::sync_progress_fill`) drives its
@@ -2863,7 +2916,32 @@ fn apply_attribute(
         }
         "min" => attrs.min = Some(parse_f32(tag, name, value)?),
         "max" => attrs.max = Some(parse_f32(tag, name, value)?),
+        // `step="any"` on a number field accepts any number and steps by
+        // one, as HTML's does; it is recorded as a step of 0.
+        "step" if tag == "input" && value.trim().eq_ignore_ascii_case("any") => {
+            attrs.step = Some(0.0);
+        }
         "step" => attrs.step = Some(parse_f32(tag, name, value)?),
+        // HTML's input types. `text` and every type Lumen does not implement
+        // are a text field, which is also what a browser falls back to; the
+        // ones it does not implement say so.
+        "type" if tag == "input" => {
+            attrs.input_type = crate::layout_ir::InputType::from_name(value);
+            if attrs.input_type.is_none() && !value.trim().eq_ignore_ascii_case("text") {
+                let (line, col) = line_col_of(ctx.src, ctx.value_offset);
+                ctx.lint_findings.push(LintFinding {
+                    kind: LintKind::UnknownAttribute,
+                    severity: LintSeverity::Warn,
+                    message: format!(
+                        "`<input type=\"{value}\">` is not an input type Lumen implements; \
+                         the field is a text field. The types are `text` and `number`."
+                    ),
+                    line,
+                    col,
+                    suggest: None,
+                });
+            }
+        }
         "required" => {
             attrs.required = ctx.bool_value(tag, name, value);
         }
