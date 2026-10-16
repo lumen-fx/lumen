@@ -97,6 +97,11 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(kind) = typed_input {
         out.push(("type", kind.name().to_string()));
     }
+    // HTML's own `alpha`; a browser that does not implement it (Chrome
+    // today) shows an opaque picker and reports `#rrggbb`.
+    if typed_input == Some(lumen_ir::layout_ir::InputType::Color) && attrs.alpha {
+        out.push(("alpha", String::new()));
+    }
     if name == "a"
         && let Some(href) = &attrs.href
     {
@@ -625,6 +630,12 @@ mod tests {
         let pairs = html_attrs("input", &color);
         assert_eq!(find(&pairs, "type"), Some("color"));
         assert_eq!(find(&pairs, "value"), Some("#3366ff"));
+        assert_eq!(find(&pairs, "alpha"), None);
+        color.alpha = true;
+        color.text = Some("color(srgb 0.2 0.4 1 / 0.5)".into());
+        let pairs = html_attrs("input", &color);
+        assert_eq!(find(&pairs, "alpha"), Some(""));
+        assert_eq!(find(&pairs, "value"), Some("color(srgb 0.2 0.4 1 / 0.5)"));
         // A plain text field carries no type, and no range.
         let mut text = attrs();
         text.min = Some(0.0);

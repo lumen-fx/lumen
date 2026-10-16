@@ -1732,13 +1732,20 @@ fn synthesize_widget_parts(
     // the parts become elements there.
     if tag == "input" && attrs.input_type == Some(crate::layout_ir::InputType::Color) {
         use crate::layout_ir::WidgetPart as P;
-        // HTML's value sanitization: anything but `#rrggbb` is black.
-        let rgb = attrs
+        // HTML's value sanitization: a value that names no color is opaque
+        // black, and without `alpha` every color is made opaque.
+        let mut rgba = attrs
             .text
             .as_deref()
-            .and_then(lumen_core::components::parse_simple_color)
-            .unwrap_or([0, 0, 0]);
-        attrs.text = Some(lumen_core::components::format_simple_color(rgb));
+            .and_then(lumen_core::components::parse_color_value)
+            .unwrap_or([0, 0, 0, 255]);
+        if !attrs.alpha {
+            rgba[3] = 255;
+        }
+        attrs.text = Some(lumen_core::components::format_color_value(
+            rgba,
+            attrs.alpha,
+        ));
         if !attrs.classes.iter().any(|c| c == "color-input") {
             attrs.classes.insert(0, "color-input".to_string());
         }
@@ -1793,13 +1800,38 @@ fn synthesize_widget_parts(
             ))],
         );
         let mut hex = part("input", Some(P::ColorHex), P::ColorHex.class(), Vec::new());
-        hex.attrs.text = attrs.text.clone();
+        hex.attrs.text = Some(lumen_core::components::format_hex_color(rgba, attrs.alpha));
         hex.attrs.tab_index = Some(0);
+        let mut controls = vec![area, hue];
+        // With `alpha` the panel gains the alpha strip: the clear-to-opaque
+        // shading over whatever backdrop the skin gives the strip.
+        if attrs.alpha {
+            controls.push(part(
+                "tile",
+                Some(P::ColorAlpha),
+                P::ColorAlpha.class(),
+                vec![
+                    covering(part(
+                        "tile",
+                        Some(P::ColorAlphaFill),
+                        P::ColorAlphaFill.class(),
+                        Vec::new(),
+                    )),
+                    floating(part(
+                        "tile",
+                        Some(P::ColorAlphaThumb),
+                        P::ColorAlphaThumb.class(),
+                        Vec::new(),
+                    )),
+                ],
+            ));
+        }
+        controls.push(hex);
         let mut panel = floating(part(
             "column",
             Some(P::ColorPanel),
             P::ColorPanel.class(),
-            vec![area, hue, hex],
+            controls,
         ));
         set_built_style(&mut panel.attrs, "display", "none");
         let swatch = part(
@@ -3029,6 +3061,10 @@ fn apply_attribute(
         }
         "required" => {
             attrs.required = ctx.bool_value(tag, name, value);
+        }
+        // HTML's `alpha` on a color input: the alpha can be picked too.
+        "alpha" if tag == "input" => {
+            attrs.alpha = ctx.bool_value(tag, name, value);
         }
         // Dialog contract (W5): `autofocus` marks the initial-focus
         // target when the containing <dialog> opens; `default` marks

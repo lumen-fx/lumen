@@ -54,6 +54,13 @@ fn tree() -> LayoutIR {
         step: Some(2.0),
         ..Attributes::default()
     };
+    let veil = Attributes {
+        id: Some("veil".to_string()),
+        input_type: Some(InputType::Color),
+        alpha: true,
+        text: Some("color(srgb 0.2 0.4 1 / 0.5)".to_string()),
+        ..Attributes::default()
+    };
     let pad = Attributes {
         id: Some("pad".to_string()),
         ..Attributes::default()
@@ -66,7 +73,12 @@ fn tree() -> LayoutIR {
     LayoutIR {
         root: Element {
             tag: "root".to_string(),
-            children: vec![el("input", color), el("input", number), el("column", pad)],
+            children: vec![
+                el("input", color),
+                el("input", number),
+                el("input", veil),
+                el("column", pad),
+            ],
             ..Element::default()
         },
         ..LayoutIR::default()
@@ -200,6 +212,34 @@ fn the_color_input_reports_input_change_and_its_binding() {
         .get_global_str("tint")
         .map(|s| s.to_string());
     assert_eq!(bound.as_deref(), Some("#ff8800"));
+}
+
+/// A color field with `alpha` carries the attribute into the page. Whatever
+/// the browser reports, the field keeps it in the value form its `alpha`
+/// asks for.
+#[wasm_bindgen_test]
+fn the_color_input_carries_alpha() {
+    let (app, root) = boot();
+    let veil = find(&root, "veil");
+    assert_eq!(veil.get_attribute("alpha").as_deref(), Some(""));
+    let input: HtmlInputElement = veil.clone().dyn_into().unwrap();
+    // Chrome reads the `color()` form and, having no alpha, writes it back
+    // as `#rrggbb`; a browser with `alpha` keeps the form it was given.
+    let shown = input.value();
+    assert!(
+        shown == "#3366ff" || shown.starts_with("color(srgb 0.2 0.4 1"),
+        "{shown}"
+    );
+    let seen = watch(node(&app, "veil"), &["input"], false);
+    input.set_value("#ff8800");
+    raise(&veil, "input");
+    tick(&app);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(
+        seen[0].starts_with("input color(srgb 1 0.533333 0"),
+        "{seen:?}"
+    );
 }
 
 /// The number field is the browser's number input, with its range.

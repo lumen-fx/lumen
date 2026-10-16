@@ -4,7 +4,7 @@ The compiled-app format moved on: a tag's defaults now travel as rules in the
 artifact's stylesheet rather than as values in its tree, an element with a
 custom widget tag keeps the attributes it was written with, an element
 carries its CSS `image-rendering` and `cursor`, and an `<input>` keeps the
-`type` it was written with. The runtime refuses
+`type` and `alpha` it was written with. The runtime refuses
 an artifact written by an earlier toolchain, which would lose those defaults
 the first time an element restyled and hand its widgets no attributes.
 

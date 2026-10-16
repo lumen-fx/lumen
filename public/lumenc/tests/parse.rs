@@ -3723,6 +3723,50 @@ fn a_color_input_gains_its_swatch_and_panel() {
     }
 }
 
+/// With `alpha` the value keeps its alpha in HTML's `color(srgb ...)` form,
+/// the hex field shows eight digits and the panel gains the alpha strip;
+/// without it an alpha in the value is dropped.
+#[test]
+fn a_color_input_with_alpha_keeps_the_alpha() {
+    use lumen_ir::layout_ir::WidgetPart;
+    let ir = parse_html(r##"<root><input type="color" alpha="true" value="#3366ff80"/></root>"##)
+        .expect("parse");
+    let field = &ir.root.children[0];
+    assert!(field.attrs.alpha);
+    assert_eq!(
+        field.attrs.text.as_deref(),
+        Some("color(srgb 0.2 0.4 1 / 0.501961)")
+    );
+    let panel = &field.children[1].children;
+    let parts: Vec<_> = panel.iter().map(|c| c.attrs.part).collect();
+    assert_eq!(
+        parts,
+        vec![
+            Some(WidgetPart::ColorArea),
+            Some(WidgetPart::ColorHue),
+            Some(WidgetPart::ColorAlpha),
+            Some(WidgetPart::ColorHex)
+        ]
+    );
+    let strip: Vec<_> = panel[2].children.iter().map(|c| c.attrs.part).collect();
+    assert_eq!(
+        strip,
+        vec![
+            Some(WidgetPart::ColorAlphaFill),
+            Some(WidgetPart::ColorAlphaThumb)
+        ]
+    );
+    assert_eq!(panel[3].attrs.text.as_deref(), Some("#3366ff80"));
+
+    let ir =
+        parse_html(r##"<root><input type="color" value="color(srgb 0.2 0.4 1 / 0.5)"/></root>"##)
+            .expect("parse");
+    let field = &ir.root.children[0];
+    assert!(!field.attrs.alpha);
+    assert_eq!(field.attrs.text.as_deref(), Some("#3366ff"));
+    assert_eq!(field.children[1].children.len(), 3, "no alpha strip");
+}
+
 /// `value` on a text field is the text it starts with, as in HTML.
 #[test]
 fn an_input_value_is_its_initial_text() {
