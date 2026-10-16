@@ -1817,6 +1817,30 @@ pub enum ImageFit {
     ScaleDown,
 }
 
+/// How raster images are sampled when drawn at another size than their own;
+/// mirrors CSS `image-rendering`. Inherited, so the cascade puts the
+/// computed value on every element under the one that declared it; an
+/// element without the component renders [`Self::Auto`].
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageRendering {
+    /// The initial value: smooth scaling.
+    #[default]
+    Auto,
+    /// Smooth (bilinear) scaling.
+    Smooth,
+    /// Nearest-neighbour scaling: each source pixel is a hard-edged block.
+    Pixelated,
+    /// Nearest-neighbour scaling, so edges stay sharp.
+    CrispEdges,
+}
+
+impl ImageRendering {
+    /// Whether images sample the nearest source pixel instead of blending.
+    pub fn is_nearest(self) -> bool {
+        matches!(self, Self::Pixelated | Self::CrispEdges)
+    }
+}
+
 /// An image with a backing GPU texture (uploaded asynchronously).
 #[derive(Component, Clone, Debug, Default)]
 pub struct ImageComponent {

@@ -1075,6 +1075,9 @@ pub struct Attributes {
     /// `bg-fit` - how a `bg: url(...)` image fills the element's box. Takes
     /// the [`Self::image_fit`] values; `None` means cover.
     pub bg_fit: Option<ImageFitSpec>,
+    /// CSS `image-rendering`, inherited: how an `<image>`, a `bg: url(...)`
+    /// image and the images drawn on a `<canvas>` are sampled when scaled.
+    pub image_rendering: Option<ImageRenderingSpec>,
     /// CSS `scrollbar-color: <thumb> [<track>]` (Scrollbars Styling
     /// Level 1) - overlay-bar thumb + optional track fills for `<scroll>`
     /// containers. `None` = the runtime's `ScrollbarStyle` default.
@@ -1523,6 +1526,32 @@ pub enum ImageFitSpec {
     None,
     /// Smaller of None / Contain.
     ScaleDown,
+}
+
+/// CSS `image-rendering`: how a raster image is sampled when it is drawn at
+/// another size than its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ImageRenderingSpec {
+    /// The initial value: smooth.
+    Auto,
+    /// Smooth (bilinear) scaling.
+    Smooth,
+    /// Nearest-neighbour scaling, each source pixel a hard-edged block.
+    Pixelated,
+    /// Nearest-neighbour scaling, so edges stay sharp.
+    CrispEdges,
+}
+
+impl ImageRenderingSpec {
+    /// The CSS keyword for this value.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Smooth => "smooth",
+            Self::Pixelated => "pixelated",
+            Self::CrispEdges => "crisp-edges",
+        }
+    }
 }
 
 /// CSS-style position mode.
@@ -2032,6 +2061,18 @@ impl From<ImageFitSpec> for lumen_core::components::ImageFit {
             ImageFitSpec::Contain => lumen_core::components::ImageFit::Contain,
             ImageFitSpec::None => lumen_core::components::ImageFit::None,
             ImageFitSpec::ScaleDown => lumen_core::components::ImageFit::ScaleDown,
+        }
+    }
+}
+
+impl From<ImageRenderingSpec> for lumen_core::components::ImageRendering {
+    fn from(r: ImageRenderingSpec) -> Self {
+        use lumen_core::components::ImageRendering;
+        match r {
+            ImageRenderingSpec::Auto => ImageRendering::Auto,
+            ImageRenderingSpec::Smooth => ImageRendering::Smooth,
+            ImageRenderingSpec::Pixelated => ImageRendering::Pixelated,
+            ImageRenderingSpec::CrispEdges => ImageRendering::CrispEdges,
         }
     }
 }

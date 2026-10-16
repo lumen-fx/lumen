@@ -1231,7 +1231,7 @@ pub struct ExtractedImageBlob(pub peniko::Blob<u8>);
 /// The sidecar [`ExtractedImageBlob`] is the Node-IR-ready blob payload - see its doc-comment for the splice
 /// path to `Node::Image { blob: Some(...) }`.
 pub fn extract_loaded_images(main: &mut World, render: &mut World) {
-    use lumen_core::components::{ImageBlob, ImageFit};
+    use lumen_core::components::{ImageBlob, ImageFit, ImageRendering};
     use lumen_core::render_world::{build_parent_map, hidden_entities, paint_order_of};
     let (parents, mut depth_cache) = build_parent_map(main);
     // A `Visible(false)` on this entity or any ancestor suppresses paint for
@@ -1247,11 +1247,12 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
         Option<&ImageFit>,
         Option<&BackgroundImage>,
         Option<&Visuals>,
+        Option<&ImageRendering>,
     )>();
     let rows: Vec<(Entity, ExtractedImage, ExtractedImageBlob, ImageBlob)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .map(|(e, t, img, fit, bg, visuals)| {
+        .map(|(e, t, img, fit, bg, visuals, rendering)| {
             let (origin, alpha, fit, background) = match bg {
                 Some(bg) => {
                     let (origin, alpha, clip) = placement.place_background(e, t, visuals);
@@ -1269,6 +1270,7 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
                 height: img.height,
                 rgba: img.rgba.clone(),
                 fit,
+                rendering: rendering.copied().unwrap_or_default(),
                 order: paint_order_of(e, &parents, &mut depth_cache),
                 alpha,
                 background,

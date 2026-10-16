@@ -719,6 +719,9 @@ pub struct ExtractedImage {
     pub rgba: std::sync::Arc<[u8]>,
     /// How the source image fits into the drawn rectangle.
     pub fit: crate::components::ImageFit,
+    /// How the image is sampled when drawn at another size (CSS
+    /// `image-rendering`).
+    pub rendering: crate::components::ImageRendering,
     /// Global paint order (see [`PaintOrder`]).
     pub order: PaintOrder,
     /// Alpha multiplier from [`crate::components::Opacity`] (1.0 when absent). Applied via `push_layer` at draw time so the whole image fades together.

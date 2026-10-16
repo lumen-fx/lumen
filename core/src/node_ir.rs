@@ -955,6 +955,7 @@ mod tests {
             height: 1,
             rgba: Arc::from(vec![255u8; 4]),
             fit: crate::components::ImageFit::Cover,
+            rendering: Default::default(),
             order,
             alpha: 1.0,
             background,
