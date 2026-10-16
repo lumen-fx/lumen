@@ -350,6 +350,7 @@ impl App {
         MessageRegistry::register_message::<MenuClicked>(&mut world);
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
         MessageRegistry::register_message::<ContextMenuEvent>(&mut world);
+        MessageRegistry::register_message::<crate::input::ControlInput>(&mut world);
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's
         // `on_close` dispatcher, the C-ABI `lumen_app_on_close` router,

@@ -36,10 +36,11 @@ use std::collections::HashMap;
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
+use lumen_core::components::parse_simple_color;
 use lumen_core::components::{DropHovered, DropTarget, SliderValue, TextContent, Toggleable};
 use lumen_core::input::{
-    ClickEvent, ContextMenuEvent, FocusTracker, Focused, Key, KeyPressed, KeyReleased, Modifiers,
-    ModifiersState, NamedKey, PointerButton,
+    ClickEvent, ContextMenuEvent, ControlInput, FocusTracker, Focused, Key, KeyPressed,
+    KeyReleased, Modifiers, ModifiersState, NamedKey, PointerButton,
 };
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
@@ -47,6 +48,7 @@ use lumen_core::text_events::{AppliedKind, TextEditApplied};
 use lumen_html::contract::{DATA_LM, DATA_LM_PART, DRAWN_BY_CONTROL};
 use lumen_os_dnd::DropAccept;
 use lumen_os_dnd::mime::MimeKind;
+use lumen_primitives::ColorInput;
 use lumen_scene::spawn::IfMarker;
 
 use crate::navigation::Routes;
@@ -77,6 +79,14 @@ enum PendingEvent {
         position: (f64, f64),
         /// `MouseEvent.button`: `2` for a pointer, `0` for the keyboard.
         button: i16,
+    },
+    /// A control the browser draws whole (a color input) committed its
+    /// value: the browser's `change`.
+    Committed {
+        /// Node path of the control.
+        path: String,
+        /// The value it committed.
+        value: String,
     },
     /// A text entry's value changed as the user typed.
     Input {
@@ -1099,6 +1109,19 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
+    // A color input's picker reports its commit as `change`. A text field's
+    // commit is its Enter, which reaches the world as a key.
+    on(
+        root,
+        "change",
+        Closure::wrap(Box::new(move |event: Event| {
+            if let (Some(path), Some(value)) = (path_of(&event), value_of(&event))
+                && checked_of(&event).is_none()
+            {
+                queue(PendingEvent::Committed { path, value });
+            }
+        }) as Box<dyn FnMut(Event)>),
+    )?;
     // Escape on a showing dialog is the browser's to handle, and `cancel` is
     // how it says so. Letting it run closes the element; what the world still
     // has to learn is that the signal behind it is now false.
@@ -1200,7 +1223,13 @@ pub fn drain_dom_events(
     table: NonSend<crate::nodes::NodeTable>,
     mut commands: Commands,
     mut clicks: MessageWriter<ClickEvent>,
-    mut menus: MessageWriter<ContextMenuEvent>,
+    // Grouped so the system stays inside the parameter limit: what a
+    // context-menu request and a whole-control input write.
+    (mut menus, mut controls, mut colors): (
+        MessageWriter<ContextMenuEvent>,
+        MessageWriter<ControlInput>,
+        Query<&mut ColorInput>,
+    ),
     mut presses: MessageWriter<KeyPressed>,
     mut releases: MessageWriter<KeyReleased>,
     mut modifiers_state: ResMut<ModifiersState>,
@@ -1263,6 +1292,21 @@ pub fn drain_dom_events(
                     local: Some(position - hit.origin),
                 });
             }
+            PendingEvent::Committed { path, value } => {
+                let Some(entity) = table.entity_at(&path) else {
+                    continue;
+                };
+                if let Ok(mut color) = colors.get_mut(entity)
+                    && let Some(rgb) = parse_simple_color(&value)
+                {
+                    color.set_rgb(rgb);
+                    controls.write(ControlInput {
+                        entity,
+                        value: color.value(),
+                        committed: true,
+                    });
+                }
+            }
             PendingEvent::Input { path, value } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
@@ -1274,6 +1318,22 @@ pub fn drain_dom_events(
                 commands.entity(entity).insert(Focused);
                 if let Some(tracker) = focus.as_mut() {
                     tracker.0 = Some(entity);
+                }
+                // A color input reports its color as `#rrggbb`, which the
+                // world keeps as the field's color; the event is the control's
+                // own `input`, not a text edit.
+                if let Ok(mut color) = colors.get_mut(entity) {
+                    if let Some(rgb) = parse_simple_color(&value)
+                        && rgb != color.rgb
+                    {
+                        color.set_rgb(rgb);
+                        controls.write(ControlInput {
+                            entity,
+                            value: color.value(),
+                            committed: false,
+                        });
+                    }
+                    continue;
                 }
                 // A range input reports its position as text and the world
                 // keeps it as a number, which is what the binding behind it

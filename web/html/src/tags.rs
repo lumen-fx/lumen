@@ -92,6 +92,13 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
         WidgetPart::NumberSteps,
         WidgetPart::StepUp,
         WidgetPart::StepDown,
+        WidgetPart::ColorSwatch,
+        WidgetPart::ColorPanel,
+        WidgetPart::ColorArea,
+        WidgetPart::ColorAreaThumb,
+        WidgetPart::ColorHue,
+        WidgetPart::ColorHueThumb,
+        WidgetPart::ColorHex,
     ]
     .into_iter()
     .find(|part| part.class() == class)
@@ -111,6 +118,13 @@ pub const fn drawn_by_control(part: WidgetPart) -> bool {
             | WidgetPart::NumberSteps
             | WidgetPart::StepUp
             | WidgetPart::StepDown
+            | WidgetPart::ColorSwatch
+            | WidgetPart::ColorPanel
+            | WidgetPart::ColorArea
+            | WidgetPart::ColorAreaThumb
+            | WidgetPart::ColorHue
+            | WidgetPart::ColorHueThumb
+            | WidgetPart::ColorHex
     )
 }
 

@@ -123,6 +123,9 @@ impl Plugin for TabsPlugin {
             TickStage::Systems,
             crate::menubar::dispatch_menu_accelerators,
         );
+        // A color field's `bind-value`, on every target: a page's browser
+        // picks the color, and the signal still has to follow it.
+        app.add_systems(TickStage::Systems, crate::color::sync_color_bindings);
         // Roving-tabindex keyboard nav for the focused tab button:
         // ArrowRight / ArrowLeft cycle siblings, Home / End jump to
         // ends, Enter / Space activate (same effect as click). Reads
