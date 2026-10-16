@@ -359,7 +359,10 @@ pub(crate) fn hot_reload(world: &mut World) {
     // Same for the fragment set: an instantiation after the reload builds
     // from the edited declaration.
     crate::fragments::install(world, fragments);
-    let menubar = super::menubar::mount_in_window_menubar(&mut ir, super::menubar::NATIVE_MENUBAR);
+    let native = world
+        .get_resource::<super::menubar::MenuBarPlacement>()
+        .is_some_and(|p| p.native);
+    let menubar = super::menubar::mount_in_window_menubar(&mut ir, native);
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
     super::menubar::finish_in_window_menubar(world, new_root, menubar);

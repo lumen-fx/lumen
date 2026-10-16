@@ -249,7 +249,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<tooltip text=\"...\" delay=\"500\">`** - Hover-delay popup. Wraps exactly one trigger element; the wrapper collapses at parse time, so CSS selectors apply to the trigger. `offset` sets the gap from the trigger, and `translatable` names the catalogue key the popup body reads from."
         }
         "menu" => {
-            "**`<menu>`** - Inside `<menubar>`, a top-level menu titled by `label` (the OS menu bar on macOS and Windows, a bar drawn in the window on Linux), holding `<menuitem>` and `<separator>` children. Outside it, `<menu id=\"m\">` is an in-window popup panel toggled by the `__menu_open:m` signal, dismissed on an outside click."
+            "**`<menu>`** - Inside `<menubar>`, a top-level menu titled by `label` (the OS menu bar on macOS and Windows, a bar drawn in the window on Linux or with `[window] menubar = \"window\"`), holding `<menuitem>` and `<separator>` children. Outside it, `<menu id=\"m\">` is an in-window popup panel toggled by the `__menu_open:m` signal, dismissed on an outside click."
         }
         "menuitem" => {
             "**`<menuitem id=\"open\" label=\"Open\">`** - One menu entry. `id` is required and is passed to `on_menu(id)`; `label` defaults to `id`. `accel` sets a keyboard accelerator (menubar menus only) and `disabled` greys it out (popup menus only)."
