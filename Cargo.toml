@@ -59,6 +59,11 @@ lumenc = { workspace = true, default-features = true, optional = true }
 # re-export module in src/lib.rs).
 lumen-widget = { workspace = true }
 lumen-widget-macros = { workspace = true }
+# The file dialogs and the clipboard, which the Rust SDK gives a typed API.
+# Already in the engine through the runtime; named here so the SDK reaches
+# this copy (see the `sdk` re-export module in src/lib.rs).
+lumen-os-clipboard = { workspace = true }
+lumen-os-filedialog = { workspace = true }
 # The candela script host every compiled app runs, for a build with no shared
 # engine to open it beside (Windows, a static bundle). Named only by the anchor
 # in src/lib.rs, which is off for the `dynamic-engine` shape, where the loader

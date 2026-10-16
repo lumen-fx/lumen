@@ -122,7 +122,9 @@
 extern crate self as lumenui_engine;
 
 pub mod app;
+pub mod clipboard;
 pub mod conditions;
+pub mod dialog;
 pub mod dom;
 mod error;
 mod events;
@@ -174,11 +176,13 @@ pub mod simple {
 // these are the same crates and the same types.
 #[cfg(windows)]
 pub use lumen::sdk::{
-    bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_runtime, lumen_script,
+    lumen_widget, lumen_widget_macros, lumenc,
 };
 #[cfg(not(windows))]
 pub use lumen_engine::sdk::{
-    bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_runtime, lumen_script,
+    lumen_widget, lumen_widget_macros,
 };
 // The parser/compiler front-end sits outside the shared engine (the `lumenc`
 // binary links that library itself); its heavy dependencies still resolve
@@ -256,6 +260,10 @@ pub mod prelude {
     // Dynamic DOM: node handles, query results, events, and the
     // window / document / history namespaces.
     pub use crate::dom::{self, Event, Listener, Node, NodeQuery};
+
+    // OS: native file dialogs and the clipboard.
+    pub use crate::clipboard::{Clipboard, RgbaImage};
+    pub use crate::dialog::FileDialog;
 
     // ECS app + schedule labels.
     pub use lumen_core::app::{App as EcsApp, Plugin};

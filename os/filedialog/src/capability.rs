@@ -73,6 +73,7 @@ fn apply_dialog_commands(
                 .map(|(label, exts)| (label.clone(), exts.clone()).into())
                 .collect(),
             default_name: default_name.clone(),
+            directory: None,
         };
         // The result lands as a `FileDialogResultCommand`, then a script
         // event, through the typed-command drain the install above registered.

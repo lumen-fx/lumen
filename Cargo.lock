@@ -3477,6 +3477,8 @@ dependencies = [
  "lumen-core",
  "lumen-dylib",
  "lumen-lua",
+ "lumen-os-clipboard",
+ "lumen-os-filedialog",
  "lumen-rhai",
  "lumen-runtime",
  "lumen-script",
@@ -3747,6 +3749,8 @@ version = "0.0.10"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
+ "lumen-os-clipboard",
+ "lumen-os-filedialog",
  "lumen-runtime",
  "lumen-script",
  "lumen-widget",
