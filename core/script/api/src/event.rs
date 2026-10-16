@@ -389,43 +389,50 @@ pub fn has_bindings_for(event_type: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Default-action coordination.
 //
-// `click`'s default action is link navigation (a `<a href>` click navigates
-// the active page). The nav executor lives in the runtime's
-// `navigate_on_anchor_click`; the phase-4 dispatcher records here which click
-// targets had their default cancelled so that executor can skip them. The set
-// is cleared at the start of every dispatch pass.
+// Two events have a default action a handler can cancel. `click`'s is link
+// navigation (a `<a href>` click navigates the active page), run by the
+// runtime's `navigate_on_anchor_click`; `contextmenu`'s is the menu the
+// browser would open on a page. The dispatcher records here which targets had
+// their default cancelled, per event type, so whoever runs the default can
+// skip them. The set is cleared at the start of every dispatch pass.
 // ---------------------------------------------------------------------------
 
-static PREVENTED_CLICKS: OnceLock<RwLock<HashSet<u64>>> = OnceLock::new();
+static PREVENTED_DEFAULTS: OnceLock<RwLock<HashSet<(String, u64)>>> = OnceLock::new();
 
-fn prevented_clicks() -> &'static RwLock<HashSet<u64>> {
-    PREVENTED_CLICKS.get_or_init(|| RwLock::new(HashSet::new()))
+fn prevented_defaults() -> &'static RwLock<HashSet<(String, u64)>> {
+    PREVENTED_DEFAULTS.get_or_init(|| RwLock::new(HashSet::new()))
 }
 
-/// Reset the per-tick prevented-click set. The dispatcher calls this before
+/// Reset the per-tick prevented-default set. The dispatcher calls this before
 /// processing a tick's events.
-pub fn clear_prevented_clicks() {
-    if let Ok(mut s) = prevented_clicks().write() {
+pub fn clear_prevented_defaults() {
+    if let Ok(mut s) = prevented_defaults().write() {
         s.clear();
     }
 }
 
-/// Record that a click on `target` (packed handle) had its default action
-/// cancelled via `prevent_default`.
-pub fn mark_prevented_click(target: u64) {
-    if let Ok(mut s) = prevented_clicks().write() {
-        s.insert(target);
+/// Record that an `event_type` event on `target` (packed handle) had its
+/// default action cancelled via `prevent_default`.
+pub fn mark_default_prevented(event_type: &str, target: u64) {
+    if let Ok(mut s) = prevented_defaults().write() {
+        s.insert((event_type.to_string(), target));
     }
 }
 
-/// Whether a click on `target` (packed handle) was default-prevented this
-/// tick. The anchor-navigation executor consults this to honor
-/// `prevent_default`.
-pub fn is_click_default_prevented(target: u64) -> bool {
-    prevented_clicks()
+/// Whether an `event_type` event on `target` (packed handle) was
+/// default-prevented this tick. The anchor-navigation executor asks this for
+/// `click`, and a page asks it for `contextmenu` before the browser opens its
+/// own menu.
+pub fn is_default_prevented(event_type: &str, target: u64) -> bool {
+    prevented_defaults()
         .read()
-        .map(|s| s.contains(&target))
+        .map(|s| s.contains(&(event_type.to_string(), target)))
         .unwrap_or(false)
+}
+
+/// Whether `event_type` has a default action a handler can cancel.
+pub fn has_default_action(event_type: &str) -> bool {
+    matches!(event_type, "click" | "contextmenu")
 }
 
 // ---------------------------------------------------------------------------

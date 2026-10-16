@@ -82,15 +82,38 @@ fn page_current_reads_the_page_the_app_is_on() {
 /// markup binding in every language.
 #[test]
 fn opening_a_menu_writes_the_reserved_signal() {
+    // Opening without a point clears the one an earlier `open_menu_at` left,
+    // so the menu opens where its styles place it.
     let queued = commands(&builtin("open_menu"), &[text("file")]);
     assert!(
-        matches!(&queued[..], [ScriptCommand::SetSignal { name, value }]
-            if name == "__menu_open:file" && value == "true"),
+        matches!(&queued[..], [
+            ScriptCommand::SetSignal { name: at, value: point },
+            ScriptCommand::SetSignal { name, value },
+        ] if at == "__menu_at:file" && point.is_empty()
+            && name == "__menu_open:file" && value == "true"),
         "unexpected commands: {queued:?}"
     );
     let queued = commands(&builtin("close_menu"), &[text("file")]);
     assert!(
         matches!(&queued[..], [ScriptCommand::SetSignal { value, .. }] if value == "false"),
+        "unexpected commands: {queued:?}"
+    );
+}
+
+/// Opening a menu at a point records the point beside the open state, in the
+/// window coordinates a `contextmenu` event's client position carries.
+#[test]
+fn opening_a_menu_at_a_point_records_the_point() {
+    let queued = commands(
+        &builtin("open_menu_at"),
+        &[text("edit"), ScriptValue::F64(120.5), ScriptValue::I64(48)],
+    );
+    assert!(
+        matches!(&queued[..], [
+            ScriptCommand::SetSignal { name: at, value: point },
+            ScriptCommand::SetSignal { name, value },
+        ] if at == "__menu_at:edit" && point == "120.5 48"
+            && name == "__menu_open:edit" && value == "true"),
         "unexpected commands: {queued:?}"
     );
 }

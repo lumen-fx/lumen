@@ -18,7 +18,7 @@ use glam::Vec2;
 use lumen_core::components::{
     EchoMode, TextBlockOrigin, resolve_line_height, text_baseline_in_line, text_block_top,
 };
-use lumen_core::input::{FocusTracker, FocusedKey, KeyPressed, PendingFileDrops};
+use lumen_core::input::{ContextMenuEvent, FocusTracker, FocusedKey, KeyPressed, PendingFileDrops};
 use lumen_core::prelude::*;
 use lumen_core::text_events::TextEditRequest;
 use lumen_core::text_model::{TextBuffer, TextCursor, TextEditable, TextPos};
@@ -959,6 +959,7 @@ impl Plugin for InputPlugin {
         app.add_plugin(KeyDispatchPlugin);
         app.add_systems(TickStage::Systems, hit_test);
         app.add_systems(TickStage::Systems, dispatch_clicks.after(hit_test));
+        app.add_systems(TickStage::Systems, dispatch_context_menus.after(hit_test));
         // Frameless-window drag: pressing a `<title-bar drag>` region
         // requests a native window drag via the backend. Requires the
         // `WindowDragRequest` resource - install it here so apps that
@@ -1662,6 +1663,81 @@ pub fn dispatch_clicks(
             }
         }
         let _ = pointer.position;
+    }
+}
+
+/// Whether the platform opens a context menu when the secondary button comes
+/// up rather than when it goes down. Windows does; macOS and the Linux
+/// desktops open on the press. A browser on each follows its platform, and
+/// so does this.
+const CONTEXT_MENU_ON_RELEASE: bool = cfg!(target_os = "windows");
+
+/// Raise a [`ContextMenuEvent`] wherever the platform asks for a context
+/// menu: the secondary button on the hovered element (on its press, or its
+/// release on Windows), and the ContextMenu key or Shift+F10 on the focused
+/// element. With nothing under the pointer or nothing focused, the request
+/// goes to the document root, as a browser sends it to the body.
+///
+/// A pointer request carries the pointer position. A keyboard request has
+/// no pointer to go by, so a menu opened for it belongs below the element's
+/// leading edge.
+pub fn dispatch_context_menus(
+    hovered: Query<Entity, With<Hovered>>,
+    tracker: Res<FocusTracker>,
+    transforms: Query<&Transform>,
+    mut presses: MessageReader<PointerPressed>,
+    mut releases: MessageReader<PointerReleased>,
+    mut keys: MessageReader<KeyPressed>,
+    mut out: MessageWriter<ContextMenuEvent>,
+) {
+    let document = || lumen_core::node::dom_index_snapshot().document();
+    let pointer: Vec<Vec2> = if CONTEXT_MENU_ON_RELEASE {
+        presses.read().for_each(drop);
+        releases
+            .read()
+            .filter(|r| r.button == PointerButton::Secondary)
+            .map(|r| r.position)
+            .collect()
+    } else {
+        releases.read().for_each(drop);
+        presses
+            .read()
+            .filter(|p| p.button == PointerButton::Secondary)
+            .map(|p| p.position)
+            .collect()
+    };
+    for position in pointer {
+        let Some(entity) = hovered.iter().next().or_else(document) else {
+            continue;
+        };
+        out.write(ContextMenuEvent {
+            entity,
+            position,
+            button: PointerButton::Secondary,
+            local: None,
+        });
+    }
+    for key in keys.read() {
+        let asks = match &key.key {
+            Key::Character(name) => name == "ContextMenu" || (name == "F10" && key.modifiers.shift),
+            Key::Named(_) => false,
+        };
+        if !asks || key.repeat {
+            continue;
+        }
+        let Some(entity) = tracker.0.or_else(document) else {
+            continue;
+        };
+        let position = transforms
+            .get(entity)
+            .map(|t| Vec2::new(t.absolute.x, t.absolute.y + t.size.y))
+            .unwrap_or(Vec2::ZERO);
+        out.write(ContextMenuEvent {
+            entity,
+            position,
+            button: PointerButton::Primary,
+            local: None,
+        });
     }
 }
 

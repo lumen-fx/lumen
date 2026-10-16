@@ -719,3 +719,85 @@ fn nested_bg_less_focusable_wins_over_its_painted_parent() {
     );
     assert!(app.world.get::<Hovered>(panel).is_none());
 }
+
+fn context_menus(world: &World) -> Vec<ContextMenuEvent> {
+    world
+        .resource::<Messages<ContextMenuEvent>>()
+        .iter_current_update_messages()
+        .copied()
+        .collect()
+}
+
+fn write_secondary(world: &mut World, p: glam::Vec2) {
+    world
+        .resource_mut::<Messages<PointerPressed>>()
+        .write(PointerPressed {
+            position: p,
+            button: PointerButton::Secondary,
+            local: None,
+        });
+    world
+        .resource_mut::<Messages<PointerReleased>>()
+        .write(PointerReleased {
+            position: p,
+            button: PointerButton::Secondary,
+            local: None,
+        });
+}
+
+/// A right click asks for a context menu on the element under the pointer,
+/// at the pointer, and reports the secondary button the way the DOM event's
+/// `button` does. It is not a click.
+#[test]
+fn secondary_button_asks_for_a_context_menu_at_the_pointer() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let button = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(10.0, 10.0),
+        glam::Vec2::splat(40.0),
+    );
+    write_pointer_moved(&mut app.world, glam::Vec2::new(20.0, 25.0));
+    app.tick();
+
+    write_secondary(&mut app.world, glam::Vec2::new(20.0, 25.0));
+    app.tick();
+    let menus = context_menus(&app.world);
+    assert_eq!(menus.len(), 1, "one request per right click: {menus:?}");
+    assert_eq!(menus[0].entity, button);
+    assert_eq!(menus[0].position, glam::Vec2::new(20.0, 25.0));
+    assert_eq!(menus[0].button, PointerButton::Secondary);
+    assert_eq!(click_count(&app.world), 0, "a right click is not a click");
+}
+
+/// The ContextMenu key and Shift+F10 ask for a menu on the focused element,
+/// below its leading edge, since there is no pointer to put it at. F10 alone
+/// does not.
+#[test]
+fn menu_key_and_shift_f10_ask_for_a_context_menu_on_the_focused_element() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let button = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(10.0, 10.0),
+        glam::Vec2::new(60.0, 30.0),
+    );
+    app.world.resource_mut::<FocusTracker>().0 = Some(button);
+
+    write_key(&mut app.world, Key::from("F10"), false, false);
+    app.tick();
+    assert!(
+        context_menus(&app.world).is_empty(),
+        "F10 alone is not a request"
+    );
+
+    for (key, shift) in [("F10", true), ("ContextMenu", false)] {
+        write_key(&mut app.world, Key::from(key), false, shift);
+        app.tick();
+        let menus = context_menus(&app.world);
+        assert_eq!(menus.len(), 1, "{key}: {menus:?}");
+        assert_eq!(menus[0].entity, button);
+        assert_eq!(menus[0].position, glam::Vec2::new(10.0, 40.0));
+        assert_eq!(menus[0].button, PointerButton::Primary);
+    }
+}

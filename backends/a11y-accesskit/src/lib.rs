@@ -1023,23 +1023,34 @@ pub fn entity_click_point(world: &World, entity: Entity) -> glam::Vec2 {
 }
 
 /// Drain [`lumen_core::components::A11yContextMenuRequests`] each tick and
-/// emit a typed [`ShowContextMenu`] message, so apps and scripts can
-/// subscribe with `MessageReader<ShowContextMenu>` instead of reading the
-/// raw resource.
+/// emit a typed [`ContextMenuEvent`] for each, so an assistive technology's
+/// request reaches the same `contextmenu` handlers a right click does. A
+/// menu opened for it belongs below the element's leading edge, where a
+/// keyboard request puts it too.
 ///
 /// Registered by [`A11yPlugin`] in [`TickStage::Systems`] so the message
 /// arrives before any later tick stage reads it.
 ///
-/// [`ShowContextMenu`]: lumen_core::input::ShowContextMenu
+/// [`ContextMenuEvent`]: lumen_core::input::ContextMenuEvent
 pub fn forward_a11y_context_menu_requests(
     mut requests: ResMut<lumen_core::components::A11yContextMenuRequests>,
-    mut msgs: bevy_ecs::message::MessageWriter<lumen_core::input::ShowContextMenu>,
+    transforms: Query<&lumen_core::components::Transform>,
+    mut msgs: bevy_ecs::message::MessageWriter<lumen_core::input::ContextMenuEvent>,
 ) {
     if requests.targets.is_empty() {
         return;
     }
     for entity in requests.targets.drain(..) {
-        msgs.write(lumen_core::input::ShowContextMenu { entity });
+        let position = transforms
+            .get(entity)
+            .map(|t| glam::Vec2::new(t.absolute.x, t.absolute.y + t.size.y))
+            .unwrap_or_default();
+        msgs.write(lumen_core::input::ContextMenuEvent {
+            entity,
+            position,
+            button: lumen_core::input::PointerButton::Primary,
+            local: None,
+        });
     }
 }
 
@@ -1137,10 +1148,10 @@ mod tests {
     #[test]
     fn context_menu_requests_reach_the_message_bus() {
         use bevy_ecs::message::Messages;
-        use lumen_core::input::ShowContextMenu;
+        use lumen_core::input::ContextMenuEvent;
 
         let (mut app, _root) = app_with_root();
-        app.add_message::<ShowContextMenu>();
+        app.add_message::<ContextMenuEvent>();
         let target = app.world.spawn_empty().id();
         app.world
             .resource_mut::<A11yContextMenuRequests>()
@@ -1151,7 +1162,7 @@ mod tests {
 
         let seen: Vec<Entity> = app
             .world
-            .resource::<Messages<ShowContextMenu>>()
+            .resource::<Messages<ContextMenuEvent>>()
             .iter_current_update_messages()
             .map(|m| m.entity)
             .collect();

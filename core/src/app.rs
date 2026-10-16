@@ -21,11 +21,11 @@
 
 use crate::command::{Command, CommandQueue, CommandReceiver, CommandRegistry};
 use crate::input::{
-    ClickEvent, CloseRequest, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-    FileDropped, FileHoverCancelled, FileHovered, FocusTracker, FocusedKey, ImeEvent, ImeRequest,
-    KeyPressed, KeyReleased, LongPressEvent, MenuClicked, ModifiersState, MouseWheel,
-    PendingFileDrops, PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState,
-    ShowContextMenu, TextInputCommitted,
+    ClickEvent, CloseRequest, ContextMenuEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent,
+    DragStartEvent, FileDropped, FileHoverCancelled, FileHovered, FocusTracker, FocusedKey,
+    ImeEvent, ImeRequest, KeyPressed, KeyReleased, LongPressEvent, MenuClicked, ModifiersState,
+    MouseWheel, PendingFileDrops, PointerLeft, PointerMoved, PointerPressed, PointerReleased,
+    PointerState, TextInputCommitted,
 };
 use crate::node_ir::{PreviousScene, RetainedScene};
 use crate::property_store::PropertyStore;
@@ -349,7 +349,7 @@ impl App {
         MessageRegistry::register_message::<FileDropped>(&mut world);
         MessageRegistry::register_message::<MenuClicked>(&mut world);
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
-        MessageRegistry::register_message::<ShowContextMenu>(&mut world);
+        MessageRegistry::register_message::<ContextMenuEvent>(&mut world);
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's
         // `on_close` dispatcher, the C-ABI `lumen_app_on_close` router,

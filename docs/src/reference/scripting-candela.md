@@ -643,9 +643,9 @@ through the accessors below:
 
 ### Event types
 
-`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointerenter`,
-`pointerleave`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`,
-`submit`, `scroll`.
+`click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
+`pointerenter`, `pointerleave`, `wheel`, `keydown`, `keyup`, `input`, `change`,
+`focus`, `blur`, `submit`, `scroll`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
@@ -655,8 +655,18 @@ the document root when nothing is focused.
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.
 `change` and `submit` come from the commit signal instead, so they fire when the
-field is committed with Enter. Only `click` has a default action (link
-navigation); `prevent_default` on a click skips it.
+field is committed with Enter.
+
+`contextmenu` fires when the user asks for a context menu: a right click on the
+element under the pointer (on the press, or the release on Windows), the
+ContextMenu key or Shift+F10 on the focused element, or an assistive
+technology's request. Its position is the pointer for a right click and just
+below the element's left edge otherwise, and `button` is `2` for a right click
+and `0` otherwise. A desktop window opens no menu of its own, so open one from
+the handler with `open_menu_at`.
+
+Two types have a default action: `click` (link navigation) and `contextmenu`
+(the browser's own menu, in a web build). `prevent_default` skips it.
 
 In a web build the pointer events come from the browser's Pointer Events, so a
 touch or a pen raises the same `pointerdown` and `pointerup` a mouse does.
@@ -804,7 +814,8 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::clear_recent_files()` | Remove every entry from the recent-files list. |
 | `lumen::set_autostart(on: bool)` | Enable or disable launching this app at login. |
 | `lumen::query_autostart(tag: string)` | Request the autostart state; fires `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`. |
-| `lumen::open_menu(id: string)` | Open menu `id` by setting the `__menu_open:id` signal to true. |
+| `lumen::open_menu(id: string)` | Open menu `id` where its styles place it, by setting the `__menu_open:id` signal to true. |
+| `lumen::open_menu_at(id: string, x: float, y: float)` | Open menu `id` with its top-left corner at `(x, y)` in window coordinates. Near the right or bottom edge it opens to the left of or above the point instead. Pass a `contextmenu` event's client position to open a context menu at the pointer. |
 | `lumen::close_menu(id: string)` | Close menu `id`. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.

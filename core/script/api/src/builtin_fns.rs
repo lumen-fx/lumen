@@ -134,16 +134,49 @@ fn state_fns() -> Vec<ScriptFn> {
             },
         ),
         // Menus are modeled as a reserved `__menu_open:<id>` signal the markup
-        // binds its open state to.
-        emit(
-            "open_menu",
-            "Open the menu with that id.",
-            &[("id", T::Str)],
-            |cx| ScriptCommand::SetSignal {
-                name: menu_signal(&cx.str_arg(0)),
-                value: "true".to_string(),
-            },
-        ),
+        // binds its open state to, and an optional `__menu_at:<id>` point the
+        // popup layer places the panel at. Opening without a point clears
+        // the one a previous `open_menu_at` left, so the panel opens where
+        // its styles put it.
+        ScriptFn::new("open_menu")
+            .ns(ScriptNs::Builtin)
+            .ret(T::Unit)
+            .doc("Open the menu with that id where its styles place it.")
+            .param("id", T::Str)
+            .build(|cx| {
+                let id = cx.str_arg(0);
+                cx.emit(ScriptCommand::SetSignal {
+                    name: menu_at_signal(&id),
+                    value: String::new(),
+                });
+                cx.emit(ScriptCommand::SetSignal {
+                    name: menu_signal(&id),
+                    value: "true".to_string(),
+                });
+                Ok(ScriptValue::Unit)
+            }),
+        ScriptFn::new("open_menu_at")
+            .ns(ScriptNs::Builtin)
+            .ret(T::Unit)
+            .doc(
+                "Open the menu with that id with its top-left corner at (x, y) in \
+                 window coordinates, moved inward where it would leave the window.",
+            )
+            .param("id", T::Str)
+            .param("x", T::Float)
+            .param("y", T::Float)
+            .build(|cx| {
+                let id = cx.str_arg(0);
+                cx.emit(ScriptCommand::SetSignal {
+                    name: menu_at_signal(&id),
+                    value: format!("{} {}", cx.float_arg(1), cx.float_arg(2)),
+                });
+                cx.emit(ScriptCommand::SetSignal {
+                    name: menu_signal(&id),
+                    value: "true".to_string(),
+                });
+                Ok(ScriptValue::Unit)
+            }),
         emit(
             "close_menu",
             "Close the menu with that id.",
@@ -159,6 +192,12 @@ fn state_fns() -> Vec<ScriptFn> {
 /// The reserved signal name carrying a menu's open state.
 fn menu_signal(id: &str) -> String {
     format!("__menu_open:{id}")
+}
+
+/// The reserved signal name carrying the window point a menu opens at, as
+/// `"x y"`; empty when it opens where its styles place it.
+fn menu_at_signal(id: &str) -> String {
+    format!("__menu_at:{id}")
 }
 
 /// Timers and the frame hook. The two timers fire `on_timer(name)` and the

@@ -8,9 +8,10 @@
 //! that bound it or natively; commands it queues are forwarded onto the
 //! [`ScriptCommandEvent`] bus so the normal appliers pick them up.
 //!
-//! The full event set: `click`, `dblclick`, `pointerdown` / `pointerup` /
-//! `pointermove` / `pointerenter` / `pointerleave`, `wheel`, `keydown` /
-//! `keyup`, `input`, `change`, `focus`, `blur`, `submit`, `scroll`.
+//! The full event set: `click`, `dblclick`, `contextmenu`, `pointerdown` /
+//! `pointerup` / `pointermove` / `pointerenter` / `pointerleave`, `wheel`,
+//! `keydown` / `keyup`, `input`, `change`, `focus`, `blur`, `submit`,
+//! `scroll`.
 //!
 //! Sources and current limitations:
 //! - Pointer events target the entity currently under the cursor (`Hovered`);
@@ -28,11 +29,17 @@
 //!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
 //!   single-line input.
 //! - `scroll` comes from a changed scroll offset and does not bubble.
+//! - `contextmenu` comes from the input layer's [`ContextMenuEvent`]: a
+//!   secondary-button press (a release on Windows), the ContextMenu key or
+//!   Shift+F10, or an assistive technology's request.
 //!
-//! Default actions: only `click` (link navigation via `<a href>`) and
-//! `submit` (form submission) have one. `prevent_default` on a `click`
-//! records the target so the runtime's anchor-navigation executor skips it;
-//! `submit`'s default is reserved (there is no form-submission model yet).
+//! Default actions: `click` (link navigation via `<a href>`), `contextmenu`
+//! (the browser's own menu, on a page) and `submit` (form submission) have
+//! one. `prevent_default` on a `click` or a `contextmenu` records the target
+//! so whoever runs the default skips it; `submit`'s default is reserved
+//! (there is no form-submission model yet). A desktop window opens no menu
+//! of its own, so there a `contextmenu` does nothing unless a handler opens
+//! one.
 
 use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{Message, MessageReader, MessageRegistry, Messages};
@@ -153,8 +160,9 @@ fn drain_into<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World)
 
 /// Deliver the pointer, click, wheel and key events read this tick.
 pub fn deliver_input_events(world: &mut World) {
-    // Fresh per-tick prevented-click set for the anchor-nav executor.
-    event::clear_prevented_clicks();
+    // Fresh per-tick prevented-default set for whoever runs a default
+    // action (the anchor-nav executor, a page's context menu).
+    event::clear_prevented_defaults();
     deliver_pending(world, |pending| &mut pending.input);
 }
 
@@ -205,8 +213,8 @@ fn deliver(world: &mut World, hosts: &EventHosts, data: EventData, target_entity
     for host in &hosts.0 {
         (host.drain)(world);
     }
-    if etype == "click" && result.default_prevented {
-        event::mark_prevented_click(target_handle);
+    if result.default_prevented && event::has_default_action(&etype) {
+        event::mark_default_prevented(&etype, target_handle);
     }
 }
 
@@ -284,6 +292,7 @@ pub fn register_dom_event_messages(world: &mut World) {
     }
     register::<ClickEvent>(world);
     register::<DoubleClickEvent>(world);
+    register::<ContextMenuEvent>(world);
     register::<PointerPressed>(world);
     register::<PointerReleased>(world);
     register::<PointerMoved>(world);
@@ -304,6 +313,7 @@ pub fn queue_pointer_and_key_events(
     mut pending: ResMut<PendingDomEvents>,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
+    mut menus: MessageReader<ContextMenuEvent>,
     mut presses: MessageReader<PointerPressed>,
     mut releases: MessageReader<PointerReleased>,
     mut moves: MessageReader<PointerMoved>,
@@ -342,6 +352,19 @@ pub fn queue_pointer_and_key_events(
             None,
         );
         queue.push((data, d.entity));
+    }
+    // contextmenu targets the element the request was for: the one under
+    // the pointer, or the focused one for a keyboard request.
+    for m in menus.read() {
+        let mut data = with_position(
+            base(m.entity, "contextmenu"),
+            &transforms,
+            m.entity,
+            m.position,
+            m.local,
+        );
+        data.button = button_code(m.button);
+        queue.push((data, m.entity));
     }
     // pointerdown / up / move / wheel target the hovered entity.
     for p in presses.read() {
@@ -751,6 +774,92 @@ pub(crate) mod text_event_tests {
                 format!("keyup {:?}", Some(button)),
             ],
             "a focused key bubbles up from the element"
+        );
+        event::clear_all_bindings();
+        publish_dom_index(DomIndex::default());
+    }
+
+    /// A context-menu request reaches a `contextmenu` handler bubbling up
+    /// from the element it was for, with the pointer position and the DOM
+    /// `button`, and a handler's `prevent_default` is recorded so a page can
+    /// keep the browser's own menu shut.
+    #[test]
+    fn context_menu_requests_fire_contextmenu() {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::node::{DomIndex, DomRecord, publish_dom_index};
+
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        world.init_resource::<PendingDomEvents>();
+        let root = world.spawn_empty().id();
+        let canvas = world
+            .spawn(Transform {
+                absolute: Vec2::new(100.0, 50.0),
+                size: Vec2::new(200.0, 200.0),
+                baseline_y: None,
+            })
+            .id();
+        let record = |entity: Entity, parent: Option<Entity>, children: Vec<Entity>| DomRecord {
+            entity,
+            generation: entity.generation().to_bits(),
+            tag: String::new(),
+            id: None,
+            classes: Vec::new(),
+            parent,
+            children,
+            child_index: 0,
+            sibling_count: 0,
+            doc_order: 0,
+        };
+        publish_dom_index(DomIndex::build(vec![
+            record(root, None, vec![canvas]),
+            record(canvas, Some(root), Vec::new()),
+        ]));
+        let doc = lumen_core::node::NodeHandle::new(root).pack();
+        let target = lumen_core::node::NodeHandle::new(canvas).pack();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&seen);
+        event::register_native_binding(
+            doc,
+            "contextmenu".to_string(),
+            false,
+            Arc::new(move || {
+                let (cx, cy) = event::event_position_client();
+                let (lx, ly) = event::event_position_local();
+                sink.lock().unwrap().push(format!(
+                    "{} button={} client=({cx},{cy}) local=({lx},{ly})",
+                    event::event_type(),
+                    event::event_button(),
+                ));
+                event::event_prevent_default();
+            }),
+        );
+
+        world.write_message(ContextMenuEvent {
+            entity: canvas,
+            position: Vec2::new(130.0, 70.0),
+            button: PointerButton::Secondary,
+            local: None,
+        });
+        world
+            .run_system_once(queue_pointer_and_key_events)
+            .expect("system ran");
+        deliver_input_events(&mut world);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["contextmenu button=2 client=(130,70) local=(30,20)".to_string()],
+        );
+        assert!(
+            event::is_default_prevented("contextmenu", target),
+            "the handler cancelled the default menu",
+        );
+        assert!(
+            !event::is_default_prevented("click", target),
+            "a cancel is recorded for its own event type only",
         );
         event::clear_all_bindings();
         publish_dom_index(DomIndex::default());

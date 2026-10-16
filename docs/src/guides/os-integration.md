@@ -89,6 +89,49 @@ elements, so they route by id with `on("menu", ...)`.
 same `on_menu` handler as the native bar. Style the panel and its rows with the
 `.menu-panel`, `.menu-item`, and `.menu-separator` classes.
 
+### Context menus
+
+A right click raises the `contextmenu` event on the element under the
+pointer, as it does in a browser. The ContextMenu key and Shift+F10 raise it on
+the focused element, and so does a screen reader asking for the element's
+menu. Answer it by opening a `menu` at the event's position:
+
+```html
+<column id="canvas" grow="1"/>
+
+<menu id="canvas-menu">
+  <menuitem id="cut" label="Cut"/>
+  <menuitem id="copy" label="Copy"/>
+  <menuitem id="paste" label="Paste"/>
+</menu>
+```
+
+```rust
+import "lumen.cdl";
+
+fn show_canvas_menu(ev: int) {
+    let e = event(ev);
+    e.prevent_default();
+    lumen::open_menu_at("canvas-menu", e.client_x(), e.client_y());
+}
+
+fn on_ready() {
+    get_by_id("canvas").on("contextmenu", "show_canvas_menu");
+}
+
+fn main() {}
+```
+
+The menu opens with its top-left corner at the point, and to the left of or
+above it where it would cross the window edge. For a keyboard request the
+position is just below the element's left edge. `prevent_default` matters in a
+web build, where it keeps the browser's own menu from opening; a desktop window
+has no menu of its own to suppress. Declare the menu near the root, outside any
+scrolled container, so the point it opens at is the point you passed.
+
+A Rust app reads the same requests as `ContextMenuEvent` messages and opens the
+menu with `Signals::open_menu_at`.
+
 ## System tray
 
 ```rhai

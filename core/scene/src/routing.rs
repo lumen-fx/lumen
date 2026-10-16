@@ -208,7 +208,7 @@ pub fn navigate_on_anchor_click(
             // link navigation is the click default action, so a prevented
             // click does not navigate.
             let handle = lumen_core::node::NodeHandle::new(click.entity).pack();
-            if lumen_script::event::is_click_default_prevented(handle) {
+            if lumen_script::event::is_default_prevented("click", handle) {
                 continue;
             }
             nav::navigate(anchor.0.clone());

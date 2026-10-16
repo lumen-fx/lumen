@@ -129,6 +129,53 @@ impl Signals<'_> {
         &mut self.store
     }
 
+    // -- Menus -------------------------------------------------------------
+    //
+    // A `<menu id>` popup's open state is the reserved `__menu_open:<id>`
+    // signal and the point it opens at is `__menu_at:<id>`: the same pair the
+    // script `open_menu` / `open_menu_at` / `close_menu` builtins write.
+
+    /// Open the `<menu id>` popup where its styles place it. Equivalent to
+    /// the script `open_menu(id)`.
+    pub fn open_menu(&mut self, id: &str) {
+        self.store.set_global_str(&format!("__menu_at:{id}"), "");
+        self.store
+            .set_global_bool(&format!("__menu_open:{id}"), true);
+    }
+
+    /// Open the `<menu id>` popup with its top-left corner at `(x, y)` in
+    /// window coordinates, moved inward where it would leave the window.
+    /// Pass a [`ContextMenuEvent`]'s `position` to open a context menu at the
+    /// pointer:
+    ///
+    /// ```
+    /// # extern crate lumenui_engine as lumenui;
+    /// use lumenui::prelude::*;
+    /// use lumenui::bevy_ecs::message::MessageReader;
+    /// use lumenui::input::ContextMenuEvent;
+    ///
+    /// fn canvas_menu(mut requests: MessageReader<ContextMenuEvent>, mut signals: Signals) {
+    ///     for request in requests.read() {
+    ///         signals.open_menu_at("canvas-menu", request.position.x, request.position.y);
+    ///     }
+    /// }
+    /// # lumenui::bevy_ecs::system::assert_is_system(canvas_menu);
+    /// ```
+    ///
+    /// [`ContextMenuEvent`]: lumen_core::input::ContextMenuEvent
+    pub fn open_menu_at(&mut self, id: &str, x: f32, y: f32) {
+        self.store
+            .set_global_str(&format!("__menu_at:{id}"), format!("{x} {y}"));
+        self.store
+            .set_global_bool(&format!("__menu_open:{id}"), true);
+    }
+
+    /// Close the `<menu id>` popup. Equivalent to the script `close_menu(id)`.
+    pub fn close_menu(&mut self, id: &str) {
+        self.store
+            .set_global_bool(&format!("__menu_open:{id}"), false);
+    }
+
     // -- File-based-pages navigation ------------------------------------------
     //
     // Navigation rides the shared `lumen_core::nav` bus - the SAME command
