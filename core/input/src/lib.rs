@@ -1040,8 +1040,10 @@ impl Plugin for InputPlugin {
 ///
 /// Candidate set: anything with a [`Transform`] **and** at least one of
 /// [`Visuals`] (visual button-like surfaces), [`Scroll`] (transparent
-/// scroll containers - still need to receive wheel events), or
-/// [`TabIndex`] (anything focusable).
+/// scroll containers - still need to receive wheel events),
+/// [`TabIndex`] (anything focusable), or a declared CSS `cursor`
+/// ([`lumen_core::input::Cursor`], so the pointer over a transparent box
+/// shows the cursor it asks for).
 ///
 /// Paint never decides participation. An element takes part in hit
 /// testing on its layout rect and its interactivity, the same rule Qt
@@ -1092,6 +1094,7 @@ pub fn hit_test(
             With<lumen_core::components::Visuals>,
             With<Scroll>,
             With<TabIndex>,
+            With<lumen_core::input::Cursor>,
         )>,
     >,
     parents: Query<&ChildOf>,

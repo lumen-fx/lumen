@@ -159,6 +159,7 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("box-shadow", "box-shadow", Value::Length),
     ("fit", "object-fit", Value::AsIs),
     ("image-rendering", "image-rendering", Value::AsIs),
+    ("cursor", "cursor", Value::AsIs),
     ("radius", "border-radius", Value::Length),
     (
         "border-top-left-radius",
@@ -709,6 +710,11 @@ mod tests {
         ),
         ("fit", "cover", "object-fit: cover"),
         ("image-rendering", "pixelated", "image-rendering: pixelated"),
+        (
+            "cursor",
+            "url(\"pen.png\") 2 14, crosshair",
+            "cursor: url(\"pen.png\") 2 14, crosshair",
+        ),
         ("radius", "8", "border-radius: 8px"),
         ("border-top-left-radius", "6", "border-top-left-radius: 6px"),
         (

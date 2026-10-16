@@ -149,6 +149,108 @@ pub fn parse_image_fit(
     })
 }
 
+/// Split `value` at the commas that are not inside parentheses or quotes.
+fn split_top_level_commas(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut quote, mut start) = (0usize, None::<char>, 0usize);
+    for (i, c) in value.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => depth = depth.saturating_sub(1),
+            (None, ',') if depth == 0 => {
+                parts.push(&value[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&value[start..]);
+    parts
+}
+
+/// CSS `cursor`: any number of `url(<image>) [<x> <y>]` entries, each
+/// followed by a comma, then the keyword shown when no image loads.
+pub fn parse_cursor(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::CursorSpec, ParseError> {
+    use crate::layout_ir::{CursorImageSpec, CursorSpec};
+    use lumen_core::input::CursorKeyword;
+    let parts = split_top_level_commas(value);
+    let (last, images) = parts.split_last().expect("split yields one part at least");
+    let keyword = CursorKeyword::from_css(last).ok_or_else(|| {
+        let message = if last.trim_start().to_ascii_lowercase().starts_with("url(") {
+            "a cursor image needs a keyword after it to fall back on, as in \
+             `url(pen.png) 2 14, crosshair`"
+                .to_string()
+        } else {
+            format!(
+                "unknown cursor '{}' (supported: {})",
+                last.trim(),
+                CursorKeyword::ALL
+                    .iter()
+                    .map(|k| k.as_css())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        bad(ctx, name, value, message)
+    })?;
+    let images = images
+        .iter()
+        .map(|part| {
+            let part = part.trim();
+            let close = part
+                .find(')')
+                .filter(|_| {
+                    part.get(..4)
+                        .is_some_and(|h| h.eq_ignore_ascii_case("url("))
+                })
+                .ok_or_else(|| {
+                    bad(
+                        ctx,
+                        name,
+                        value,
+                        format!("'{part}' is not a url() image; only the last entry is a keyword"),
+                    )
+                })?;
+            let url = parse_url(ctx, name, &part[..=close])?.expect("the entry starts with url(");
+            let numbers: Vec<&str> = part[close + 1..].split_whitespace().collect();
+            let hotspot = match numbers.as_slice() {
+                [] => None,
+                [x, y] => {
+                    let number = |n: &str| {
+                        n.parse::<f32>()
+                            .ok()
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(|| {
+                                bad(ctx, name, value, format!("'{n}' is not a hotspot number"))
+                            })
+                    };
+                    Some((number(x)?, number(y)?))
+                }
+                _ => {
+                    return Err(bad(
+                        ctx,
+                        name,
+                        value,
+                        "a cursor hotspot is two numbers, x then y".into(),
+                    ));
+                }
+            };
+            Ok(CursorImageSpec { url, hotspot })
+        })
+        .collect::<Result<Vec<_>, ParseError>>()?;
+    Ok(CursorSpec {
+        images,
+        keyword: keyword.as_css().to_string(),
+    })
+}
+
 /// CSS `image-rendering`: `auto`, `smooth`, `pixelated`, or `crisp-edges`.
 pub fn parse_image_rendering(
     ctx: &str,
@@ -707,5 +809,60 @@ pub fn bad(ctx: &str, name: &str, value: &str, reason: String) -> ParseError {
         value: value.to_string(),
         tag: ctx.to_string(),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout_ir::{CursorImageSpec, CursorSpec};
+
+    fn cursor(value: &str) -> Result<CursorSpec, ParseError> {
+        parse_cursor("x", "cursor", value)
+    }
+
+    #[test]
+    fn a_cursor_is_a_keyword_or_images_then_a_keyword() {
+        assert_eq!(
+            cursor("Crosshair").unwrap(),
+            CursorSpec {
+                images: Vec::new(),
+                keyword: "crosshair".into(),
+            }
+        );
+        assert_eq!(
+            cursor(r#"url("pen.png") 2 14, url(alt.png), not-allowed"#).unwrap(),
+            CursorSpec {
+                images: vec![
+                    CursorImageSpec {
+                        url: "pen.png".into(),
+                        hotspot: Some((2.0, 14.0)),
+                    },
+                    CursorImageSpec {
+                        url: "alt.png".into(),
+                        hotspot: None,
+                    },
+                ],
+                keyword: "not-allowed".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_cursor_without_a_fallback_keyword_is_refused() {
+        for bad in [
+            "url(pen.png)",
+            "hand",
+            "url(pen.png) 2, default",
+            "pointer, default",
+        ] {
+            assert!(cursor(bad).is_err(), "`{bad}` should not parse");
+        }
+    }
+
+    #[test]
+    fn a_cursor_value_writes_back_as_css() {
+        let spec = cursor(r#"url("pen.png") 2 14, crosshair"#).unwrap();
+        assert_eq!(spec.to_css(), r#"url("pen.png") 2 14, crosshair"#);
     }
 }

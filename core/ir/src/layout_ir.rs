@@ -1078,6 +1078,10 @@ pub struct Attributes {
     /// CSS `image-rendering`, inherited: how an `<image>`, a `bg: url(...)`
     /// image and the images drawn on a `<canvas>` are sampled when scaled.
     pub image_rendering: Option<ImageRenderingSpec>,
+    /// CSS `cursor` as the element declares it. It inherits, but not through
+    /// the cascade: the pointer resolves it from the hovered element up its
+    /// ancestors, so only the element that names a cursor carries it.
+    pub cursor: Option<CursorSpec>,
     /// CSS `scrollbar-color: <thumb> [<track>]` (Scrollbars Styling
     /// Level 1) - overlay-bar thumb + optional track fills for `<scroll>`
     /// containers. `None` = the runtime's `ScrollbarStyle` default.
@@ -1551,6 +1555,41 @@ impl ImageRenderingSpec {
             Self::Pixelated => "pixelated",
             Self::CrispEdges => "crisp-edges",
         }
+    }
+}
+
+/// One `url(...)` image of a CSS `cursor` value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CursorImageSpec {
+    /// The path inside `url()`, as written.
+    pub url: String,
+    /// The hotspot, `x y` in image pixels, when the value gave one.
+    pub hotspot: Option<(f32, f32)>,
+}
+
+/// A CSS `cursor` value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CursorSpec {
+    /// The `url(...)` images, in order.
+    pub images: Vec<CursorImageSpec>,
+    /// The fallback keyword, as CSS spells it; always one
+    /// [`lumen_core::input::CursorKeyword::from_css`] reads.
+    pub keyword: String,
+}
+
+impl CursorSpec {
+    /// The value as CSS writes it.
+    pub fn to_css(&self) -> String {
+        let mut out = String::new();
+        for image in &self.images {
+            out.push_str(&format!("url(\"{}\")", image.url));
+            if let Some((x, y)) = image.hotspot {
+                out.push_str(&format!(" {x} {y}"));
+            }
+            out.push_str(", ");
+        }
+        out.push_str(&self.keyword);
+        out
     }
 }
 

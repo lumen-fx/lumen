@@ -174,8 +174,8 @@ you name that state yourself.
 These properties inherit from parent to child: `text-color` (`color`),
 `selection-color`, `selection-text-color`, `caret-color`, `font-size`,
 `font-family`, `font-weight`, `line-height`, `text-align`, `wrap`,
-`max-lines`, and `image-rendering`. Custom properties inherit through their
-own scope. Every other property applies only where it matches.
+`max-lines`, `image-rendering`, and `cursor`. Custom properties inherit
+through their own scope. Every other property applies only where it matches.
 
 An inherited value acts as a zero-specificity base, so any matching rule
 or markup attribute on the child overrides it.
@@ -706,6 +706,40 @@ scrollbar.
 | `sensitivity` | number | `1.0` |
 | `inertia` | number | `0.4` |
 | `tab-index` | integer | from the tag |
+
+### Pointer cursor
+
+| Property | Values | Default |
+| --- | --- | --- |
+| `cursor` | a keyword, or `url(<image>) [<x> <y>]` entries each followed by a comma, then a keyword | `auto` |
+
+The keywords are the standard set: `auto`, `default`, `none`,
+`context-menu`, `help`, `pointer`, `progress`, `wait`, `cell`, `crosshair`,
+`text`, `vertical-text`, `alias`, `copy`, `move`, `no-drop`, `not-allowed`,
+`grab`, `grabbing`, `e-resize`, `n-resize`, `ne-resize`, `nw-resize`,
+`s-resize`, `se-resize`, `sw-resize`, `w-resize`, `ew-resize`, `ns-resize`,
+`nesw-resize`, `nwse-resize`, `col-resize`, `row-resize`, `all-scroll`,
+`zoom-in`, and `zoom-out`. `auto` shows the platform arrow and `none` hides
+the pointer.
+
+```css
+.canvas { cursor: url("cursors/pen.png") 2 14, crosshair; }
+```
+
+A `url()` names a raster image relative to the app directory, the way a
+`bg: url(...)` does; the two numbers are its hotspot in image pixels from the
+top-left corner, which is the default. The first image that loads is shown at
+its own pixel size, and the keyword stands in while it loads or when none
+does. The keyword is required, as on the web.
+
+The pointer shows the cursor of the element under it. The value inherits, so a
+container's cursor reaches everything inside it until a descendant declares
+its own; an element that declares one receives hover even with no background.
+The user-agent sheet gives `<input>` and `<textarea>` `cursor: text` and `<a>`
+`cursor: pointer`; every other element, buttons included, shows the arrow
+until a stylesheet says otherwise. The thumb of a scrollbar or a `<slider>`
+shows `grab` under the pointer and `grabbing` while dragged; no selector
+reaches those parts.
 
 ## Web target mapping
 

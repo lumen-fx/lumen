@@ -333,7 +333,8 @@ fn run(
         window: None,
         proxy,
         last_ime: ImeRequest::default(),
-        last_cursor: CursorShape::Default,
+        last_cursor: None,
+        custom_cursors: std::collections::HashMap::new(),
         close_committed: false,
         last_frame_at: None,
     };
@@ -419,10 +420,13 @@ struct WinitHandler {
     /// current [`ImeRequest`] resource each frame to avoid hammering
     /// winit with redundant calls.
     last_ime: ImeRequest,
-    /// Last cursor shape applied via `Window::set_cursor`. Compared
-    /// against the main world's [`lumen_core::input::CursorRequest`]
-    /// each frame so the OS call only happens on change.
-    last_cursor: CursorShape,
+    /// Last cursor applied via `Window::set_cursor`. Compared against the
+    /// main world's [`lumen_core::input::CursorRequest`] each frame so the
+    /// OS call only happens on change. `None` until the first apply.
+    last_cursor: Option<CursorRequest>,
+    /// Platform cursors made from decoded `url(...)` cursor images, so a
+    /// cursor shown again is not handed to the OS a second time.
+    custom_cursors: CustomCursors,
     /// Set by [`WinitHandler::process_close_request`] once a close
     /// request survived the veto tick (no system wrote
     /// `CloseRequest { vetoed: true }`). Read by
@@ -632,7 +636,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
 
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
@@ -862,10 +866,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // resource; absent when the embedder skipped the
                 // plugin). Change-gated so winit isn't hammered.
                 if let Some(req) = self.app.world.get_resource::<CursorRequest>()
-                    && req.0 != self.last_cursor
+                    && self.last_cursor.as_ref() != Some(req)
                 {
-                    self.last_cursor = req.0;
-                    window.set_cursor(map_cursor_shape(req.0));
+                    let req = req.clone();
+                    apply_cursor(&window, event_loop, &req, &mut self.custom_cursors);
+                    self.last_cursor = Some(req);
                 }
                 // Publish the tree the A11ySync stage built, then present
                 // when FrameDirty / a capture requires it, and clear the
@@ -1335,15 +1340,95 @@ fn map_modifiers(m: WinitModifiers) -> Modifiers {
     }
 }
 
-/// Map Lumen's cursor-shape request onto winit's OS cursor icon set.
-fn map_cursor_shape(shape: CursorShape) -> winit::window::CursorIcon {
+/// Platform cursors made from decoded cursor images, keyed by the image's
+/// identity and hotspot. Each entry keeps the pixels it was made from, which
+/// keeps their address, and so the identity, from being reused by another
+/// image.
+type CustomCursors =
+    std::collections::HashMap<(u64, (u32, u32)), (Arc<[u8]>, winit::window::CustomCursor)>;
+
+/// Show `req` over `window`: its decoded image when it has one, its keyword
+/// otherwise. `none` hides the pointer.
+fn apply_cursor(
+    window: &Window,
+    event_loop: &ActiveEventLoop,
+    req: &CursorRequest,
+    cache: &mut CustomCursors,
+) {
+    let custom = req.image.as_ref().and_then(|image| {
+        let key = (image.id, image.hotspot);
+        if let Some((pixels, cursor)) = cache.get(&key)
+            && Arc::ptr_eq(pixels, &image.rgba)
+        {
+            return Some(cursor.clone());
+        }
+        let size = |v: u32| u16::try_from(v).ok();
+        let source = winit::window::CustomCursor::from_rgba(
+            image.rgba.to_vec(),
+            size(image.width)?,
+            size(image.height)?,
+            size(image.hotspot.0)?,
+            size(image.hotspot.1)?,
+        );
+        match source {
+            Ok(source) => {
+                let cursor = event_loop.create_custom_cursor(source);
+                cache.insert(key, (image.rgba.clone(), cursor.clone()));
+                Some(cursor)
+            }
+            Err(e) => {
+                eprintln!("lumen-window-winit: cannot use the cursor image: {e}");
+                None
+            }
+        }
+    });
+    let hidden = custom.is_none() && req.cursor.keyword == CursorKeyword::None;
+    window.set_cursor_visible(!hidden);
+    match custom {
+        Some(cursor) => window.set_cursor(cursor),
+        None => window.set_cursor(map_cursor_keyword(req.cursor.keyword)),
+    }
+}
+
+/// Map a CSS cursor keyword onto winit's OS cursor icon set, which names
+/// the same cursors.
+fn map_cursor_keyword(keyword: CursorKeyword) -> winit::window::CursorIcon {
     use winit::window::CursorIcon;
-    match shape {
-        CursorShape::Default => CursorIcon::Default,
-        CursorShape::Text => CursorIcon::Text,
-        CursorShape::Pointer => CursorIcon::Pointer,
-        CursorShape::Grab => CursorIcon::Grab,
-        CursorShape::Grabbing => CursorIcon::Grabbing,
+    match keyword {
+        CursorKeyword::Auto | CursorKeyword::Default | CursorKeyword::None => CursorIcon::Default,
+        CursorKeyword::ContextMenu => CursorIcon::ContextMenu,
+        CursorKeyword::Help => CursorIcon::Help,
+        CursorKeyword::Pointer => CursorIcon::Pointer,
+        CursorKeyword::Progress => CursorIcon::Progress,
+        CursorKeyword::Wait => CursorIcon::Wait,
+        CursorKeyword::Cell => CursorIcon::Cell,
+        CursorKeyword::Crosshair => CursorIcon::Crosshair,
+        CursorKeyword::Text => CursorIcon::Text,
+        CursorKeyword::VerticalText => CursorIcon::VerticalText,
+        CursorKeyword::Alias => CursorIcon::Alias,
+        CursorKeyword::Copy => CursorIcon::Copy,
+        CursorKeyword::Move => CursorIcon::Move,
+        CursorKeyword::NoDrop => CursorIcon::NoDrop,
+        CursorKeyword::NotAllowed => CursorIcon::NotAllowed,
+        CursorKeyword::Grab => CursorIcon::Grab,
+        CursorKeyword::Grabbing => CursorIcon::Grabbing,
+        CursorKeyword::EResize => CursorIcon::EResize,
+        CursorKeyword::NResize => CursorIcon::NResize,
+        CursorKeyword::NeResize => CursorIcon::NeResize,
+        CursorKeyword::NwResize => CursorIcon::NwResize,
+        CursorKeyword::SResize => CursorIcon::SResize,
+        CursorKeyword::SeResize => CursorIcon::SeResize,
+        CursorKeyword::SwResize => CursorIcon::SwResize,
+        CursorKeyword::WResize => CursorIcon::WResize,
+        CursorKeyword::EwResize => CursorIcon::EwResize,
+        CursorKeyword::NsResize => CursorIcon::NsResize,
+        CursorKeyword::NeswResize => CursorIcon::NeswResize,
+        CursorKeyword::NwseResize => CursorIcon::NwseResize,
+        CursorKeyword::ColResize => CursorIcon::ColResize,
+        CursorKeyword::RowResize => CursorIcon::RowResize,
+        CursorKeyword::AllScroll => CursorIcon::AllScroll,
+        CursorKeyword::ZoomIn => CursorIcon::ZoomIn,
+        CursorKeyword::ZoomOut => CursorIcon::ZoomOut,
     }
 }
 

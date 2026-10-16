@@ -143,8 +143,9 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// attributes an element with a registered custom tag was written with, so
 /// the widget registered for the tag is handed them when the tree spawns.
 ///
-/// `19`: [`crate::layout_ir::Attributes`] gains `image_rendering`, so CSS
-/// `image-rendering` picks how an element's images are sampled.
+/// `19`: [`crate::layout_ir::Attributes`] gains `image_rendering` and
+/// `cursor`, so CSS `image-rendering` picks how an element's images are
+/// sampled and CSS `cursor` picks the pointer over it.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

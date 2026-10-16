@@ -688,22 +688,167 @@ pub struct Pressed;
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct EscapePressCancel(pub bool);
 
-/// Cursor shape the UI wants for the current pointer position.
-/// Deliberately tiny - only the shapes Lumen widgets actually request;
-/// window backends map it onto the OS cursor set (winit `CursorIcon`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CursorShape {
-    /// The platform default arrow.
+/// Declares the CSS cursor keywords once: the enum, its CSS spelling, and
+/// the parse back from it.
+macro_rules! cursor_keywords {
+    ($($(#[$doc:meta])* $variant:ident => $css:literal,)*) => {
+        /// A CSS `cursor` keyword: the standard set, which window backends
+        /// map onto the platform's cursors (winit `CursorIcon`).
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+        pub enum CursorKeyword {
+            $($(#[$doc])* $variant,)*
+        }
+
+        impl CursorKeyword {
+            /// Every keyword, in the order CSS lists them.
+            pub const ALL: &'static [CursorKeyword] = &[$(CursorKeyword::$variant,)*];
+
+            /// The keyword as CSS spells it.
+            pub fn as_css(self) -> &'static str {
+                match self {
+                    $(CursorKeyword::$variant => $css,)*
+                }
+            }
+
+            /// The keyword CSS spells `css`, ASCII case-insensitively.
+            pub fn from_css(css: &str) -> Option<Self> {
+                let css = css.trim();
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|k| k.as_css().eq_ignore_ascii_case(css))
+            }
+        }
+    };
+}
+
+cursor_keywords! {
+    /// The initial value: the platform arrow, unless a widget asks for more.
     #[default]
-    Default,
-    /// I-beam over editable text.
-    Text,
-    /// Pointing hand over clickable widgets.
-    Pointer,
-    /// Open hand over a grabbable handle (scrollbar / slider thumb).
-    Grab,
-    /// Closed hand while a handle drag is in flight.
-    Grabbing,
+    Auto => "auto",
+    /// The platform arrow.
+    Default => "default",
+    /// No cursor: the pointer is hidden over the element.
+    None => "none",
+    /// A context menu is available.
+    ContextMenu => "context-menu",
+    /// Help is available.
+    Help => "help",
+    /// A link: the pointing hand.
+    Pointer => "pointer",
+    /// Busy in the background, still interactive.
+    Progress => "progress",
+    /// Busy; wait.
+    Wait => "wait",
+    /// A cell or set of cells can be selected.
+    Cell => "cell",
+    /// A precise crosshair.
+    Crosshair => "crosshair",
+    /// Text can be selected: the I-beam.
+    Text => "text",
+    /// Vertical text can be selected.
+    VerticalText => "vertical-text",
+    /// An alias or shortcut is to be created.
+    Alias => "alias",
+    /// Something is to be copied.
+    Copy => "copy",
+    /// Something is to be moved.
+    Move => "move",
+    /// The dragged item cannot be dropped here.
+    NoDrop => "no-drop",
+    /// The action is not allowed.
+    NotAllowed => "not-allowed",
+    /// Something can be grabbed: an open hand.
+    Grab => "grab",
+    /// Something is being grabbed: a closed hand.
+    Grabbing => "grabbing",
+    /// An edge is to be moved east.
+    EResize => "e-resize",
+    /// An edge is to be moved north.
+    NResize => "n-resize",
+    /// An edge is to be moved north-east.
+    NeResize => "ne-resize",
+    /// An edge is to be moved north-west.
+    NwResize => "nw-resize",
+    /// An edge is to be moved south.
+    SResize => "s-resize",
+    /// An edge is to be moved south-east.
+    SeResize => "se-resize",
+    /// An edge is to be moved south-west.
+    SwResize => "sw-resize",
+    /// An edge is to be moved west.
+    WResize => "w-resize",
+    /// Resizes east and west.
+    EwResize => "ew-resize",
+    /// Resizes north and south.
+    NsResize => "ns-resize",
+    /// Resizes north-east and south-west.
+    NeswResize => "nesw-resize",
+    /// Resizes north-west and south-east.
+    NwseResize => "nwse-resize",
+    /// A column can be resized.
+    ColResize => "col-resize",
+    /// A row can be resized.
+    RowResize => "row-resize",
+    /// Something can be scrolled in any direction.
+    AllScroll => "all-scroll",
+    /// Something can be zoomed in.
+    ZoomIn => "zoom-in",
+    /// Something can be zoomed out.
+    ZoomOut => "zoom-out",
+}
+
+/// One `url(...)` image in a `cursor` value, with its hotspot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CursorImageRef {
+    /// Where the image loads from, resolved the way an `<image src>` is.
+    pub path: std::path::PathBuf,
+    /// The hotspot in image pixels from the top-left corner. `None` is the
+    /// corner itself.
+    pub hotspot: Option<(f32, f32)>,
+}
+
+/// A computed CSS `cursor` value: the images to try in order, then the
+/// keyword to show when none of them loads.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct Cursor {
+    /// The `url(...)` images, in the order they were written.
+    pub images: std::sync::Arc<[CursorImageRef]>,
+    /// The keyword the value ends with.
+    pub keyword: CursorKeyword,
+}
+
+impl Cursor {
+    /// A cursor that is only a keyword.
+    pub fn keyword(keyword: CursorKeyword) -> Self {
+        Self {
+            images: std::sync::Arc::new([]),
+            keyword,
+        }
+    }
+}
+
+/// A decoded custom cursor image, ready for a window backend to hand the
+/// platform.
+#[derive(Clone, Debug)]
+pub struct CursorImage {
+    /// Stable identity of the decoded pixels, so a backend can keep the
+    /// platform cursor it made from them.
+    pub id: u64,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Straight RGBA8 pixels, row-major.
+    pub rgba: std::sync::Arc<[u8]>,
+    /// The hotspot in pixels, inside the image.
+    pub hotspot: (u32, u32),
+}
+
+impl PartialEq for CursorImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.hotspot == other.hotspot
+    }
 }
 
 /// Requested mouse cursor, written main-side each tick (see
@@ -711,8 +856,18 @@ pub enum CursorShape {
 /// window by the window backend, which tracks the last applied value so
 /// the OS call only happens on change. Headless runners simply never
 /// read it.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CursorRequest(pub CursorShape);
+///
+/// `cursor` is what the pointer should show: the hovered element's
+/// computed CSS `cursor`, or what a widget handle under a drag asks for.
+/// `image` is the first of its images the asset pipeline has decoded; the
+/// backend shows it when present and the keyword otherwise.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct CursorRequest {
+    /// The wanted cursor.
+    pub cursor: Cursor,
+    /// The decoded image to show in place of the keyword, when one loaded.
+    pub image: Option<CursorImage>,
+}
 
 /// Named non-printable keys recognised by Lumen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

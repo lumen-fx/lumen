@@ -68,7 +68,7 @@ pub mod prelude {
         resolve_layout_direction,
     };
     pub use crate::input::{
-        ClickEvent, CursorRequest, CursorShape, DoubleClickEvent, DragEndEvent, DragMoveEvent,
+        ClickEvent, CursorKeyword, CursorRequest, DoubleClickEvent, DragEndEvent, DragMoveEvent,
         DragStartEvent, EscapePressCancel, FileDropped, FileHoverCancelled, FileHovered,
         FocusTracker, Focused, FocusedKey, Hovered, ImeEvent, ImeRequest, Key, KeyPressed,
         KeyReleased, LongPressEvent, Modifiers, ModifiersState, MouseWheel, NamedKey,
