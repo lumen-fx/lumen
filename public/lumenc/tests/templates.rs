@@ -113,15 +113,20 @@ fn scaffolding_writes_every_file_the_template_carries() {
         let written = scaffold::write_template(t.name, &into)
             .unwrap_or_else(|e| panic!("scaffolding `{}`: {e}", t.name));
         let source = scaffold::template_dir(t.name).expect("the template that was just copied");
-        let expected: Vec<String> = files_under(&source).into_iter().collect();
+        let mut expected = files_under(&source);
+        // A Rust SDK template also gets the toolchain pin scaffolding writes.
+        if expected.contains("Cargo.toml") && !expected.contains("rust-toolchain") {
+            expected.insert("rust-toolchain.toml".to_string());
+        }
+        let expected_list: Vec<String> = expected.iter().cloned().collect();
         assert_eq!(
-            written, expected,
+            written, expected_list,
             "`{}` scaffolded a different file set than it carries",
             t.name
         );
         assert_eq!(
             files_under(&into),
-            files_under(&source),
+            expected,
             "the `{}` files on disk after scaffolding are not the ones it carries",
             t.name
         );

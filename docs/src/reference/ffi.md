@@ -474,35 +474,60 @@ then `collect` makes one.
 
 ### Linking the engine
 
-An app on the published `lumenui` links the engine statically, from the
-release's compiled crates, on every platform. `lumenc run` builds and runs such
-an app with cargo. `lumenc package` does not package it yet: it expects the
-shared engine library that only a build against a Lumen checkout produces, and
-exits 1 naming that library.
+A Rust app links the engine into its own executable, on every platform:
+`lumenui` points the compiler at the release's compiled crates, and those are
+static libraries. `lumenc run`, `lumenc build` and `lumenc package` build the
+app with plain cargo, the same build `cargo build` does, so the executable
+needs no Lumen library beside it. `lumenc new <name> rust` scaffolds such an
+app.
 
 In a Lumen checkout the SDK's code is the `lumenui-engine` crate in `sdk/rust`,
 which an app can depend on by path under the name `lumenui`
 (`lumenui = { package = "lumenui-engine", path = "..." }`); that compiles the
-engine from source. There, a Rust app does not open the C library either. It
-links the engine as a Rust library, which is a separate build of the same code:
-`public/lumen-dylib`, whose output is `liblumen_engine.{so,dylib}`. The C
-library exports the `extern "C"` surface and nothing else, and one crate cannot
-produce both forms, so they are two crates.
+engine from source and links it in the same way.
 
-`lumenc build` and `lumenc package` compile a Rust app with `-C
-prefer-dynamic`, which is what makes cargo take the shared form of that library
-rather than the static one beside it. Building the app yourself with plain
-`cargo build` is fine and links the engine in instead; the app behaves the same
-and is simply bigger. The flag also applies to the Rust standard library, so an
-app and the engine share one copy of that too, and a packaged app carries both
-files. Since both come out of the same build as the executable, there is
-nothing to keep in step by hand.
+Because the engine is inside the executable, a Rust app cannot load a
+[runtime module](lumen-toml.md#dependencies), which loads only into the shared
+engine; `lumenc package` refuses one. A portable plugin loads into a Rust app
+like any other.
 
-**Windows links the engine in.** A shared library there has to describe its
-exports in an import library, and that format stops at 65535 entries, which a
-graph this size is well past. So no linkable engine is built for Windows, a
-Rust app carries the runtime inside its own executable, and a packaged one has
-no library beside it. Everything else about writing the app is the same.
+### Running headless
+
+`App::run_headless_rendered` runs the whole pipeline with no window: layout,
+rendering on the app's `[render] backend` into an offscreen target, scripts,
+and the introspection server when `[mcp] simulate` is on. It is the mode
+`lumenc run --headless` runs a markup app in. `HeadlessOptions` sets the
+target's device pixel ratio and an optional tick bound; without one the run
+lasts until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
+is the cheaper mode that ticks the app and paints nothing.
+
+`App::screenshot` runs the same way and returns the frame the closing tick
+painted, as a `Frame` of straight-alpha RGBA8 pixels. `save_png` and
+`open_png` read and write PNG files, and two frames compare equal when every
+pixel does, so an app can screenshot itself or check a view against a golden
+image in its own tests:
+
+```rust
+use lumenui::prelude::*;
+
+#[test]
+fn the_main_view_matches_its_golden() {
+    let frame = app::app()
+        .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })
+        .unwrap();
+    assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
+}
+```
+
+`lumenc run <app> --headless` works on a Rust app too. lumenc runs the app
+with cargo and sets `LUMEN_HEADLESS` (with `LUMEN_HEADLESS_TICKS`,
+`LUMEN_HEADLESS_DPR` and `LUMEN_HEADLESS_SIZE` for `--ticks`, `--dpr` and
+`--size`) on its process, and `App::run` reads them and takes the rendered
+headless path with those options. Setting the variables yourself does the
+same for a `cargo run`. A malformed value stops the app with an error rather
+than opening a window.
+
+### Writing an app
 
 The surface is `App` for assembly, `LumenDefaultPlugins` for the standard stack
 (decomposable, so you can disable parts or compose your own group), `Signals`
@@ -510,7 +535,9 @@ for typed signal access, the `signals!` macro for typed handles, run conditions
 such as `on_click` for gating systems, `App::on_click` for the common
 click-to-signal case, and `App::add_computed` for derived signals. `lumen_source!`
 picks hot reload from disk in a debug build and embedded markup in a release
-build from one line.
+build from one line. Give it paths under the app's `src/`: a markup file in a
+directory named `src` makes the directory above it the app, so `lumen.toml`
+beside `src/` is read, as `lumenc run` reads it.
 
 ```rust
 use lumenui::prelude::*;
@@ -519,7 +546,7 @@ fn main() -> lumenui::Result<()> {
     lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
-                .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
+                .with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
         )
         .insert_signal("count", 0i64)
         .add_systems(TickStage::Systems, (bump_counter, update_label).chain())

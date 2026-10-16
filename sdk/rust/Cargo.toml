@@ -28,14 +28,13 @@ name = "lumenui_engine"
 # copies of, say, `lumen-core` are two different types to the compiler with
 # two different signal stores behind them.
 #
-# Which engine differs by platform, and only by which form of the library it
-# is. `lumen-dylib` is the form an app links instead of compiling in; naming
-# it is what puts the shared library in the app's link graph, and
-# `-C prefer-dynamic`, which `lumenc build` and `lumenc package` pass, is what
-# makes the app take that form rather than the static one. Windows has no such
-# crate - its linker cannot produce the library at all, see
-# public/lumen-dylib/Cargo.toml - so there the engine crate is named directly and a
-# Rust app links the runtime in.
+# Which engine crate differs by platform. `lumen-dylib` is the engine crate
+# that also builds as a shared library; Windows has no such crate - its linker
+# cannot produce the library at all, see public/lumen-dylib/Cargo.toml - so
+# there the engine crate is named directly. An app links either one
+# statically: the prebuilt set the published `lumenui` points the compiler at
+# holds the compiled crates (`.rlib`), not the shared library, and `lumenc
+# run`, `build` and `package` build a Rust app with plain cargo.
 #
 # The parser and compiler front-end (`lumenc`, a library here) sits outside
 # the shared engine - the `lumenc` binary is itself a consumer of the engine
@@ -55,3 +54,7 @@ lumen = { workspace = true }
 # The same crate the engine resolves, not a second copy: one version, one
 # workspace pin.
 glam.workspace = true
+# PNG encode and decode for `Frame`, the screenshot type. The engine already
+# links this crate for its own screenshots and clipboard images, so this is
+# the same copy, not a second one.
+image.workspace = true

@@ -70,8 +70,13 @@ still loads portable plugins.
 
 If the directory is a Rust, C++, or Python SDK app (detected from its
 contents, or declared with `[app] kind`), `run` hands off to `cargo`,
-`cmake`, or the Python interpreter. Combining a handoff with `--headless`,
-`--artifact`, `--assets`, `--size`, `--dpr`, or `--ticks` is a usage error.
+`cmake`, or the Python interpreter. A Rust app takes `--headless`, `--size`,
+`--dpr`, and `--ticks`: lumenc sets `LUMEN_HEADLESS` and the matching
+`LUMEN_HEADLESS_SIZE`, `LUMEN_HEADLESS_DPR`, and `LUMEN_HEADLESS_TICKS` on the
+`cargo run` it starts, and the SDK's `App::run` runs headless with them (see
+[Rust SDK](ffi.md#running-headless)). Combining any handoff with `--artifact`
+or `--assets`, or a C++ or Python one with the headless flags, is a usage
+error.
 
 `--profile` needs a `lumenc` built with the `profiling` cargo feature, and
 `--profile tracy` additionally needs `profiling-tracy`. A default build
@@ -440,21 +445,22 @@ Targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
 and `windows-x86_64`. An unrecognised name exits 2 and lists the ones that
 exist. Any host can package a markup app for any of them, because that is file
 assembly rather than compilation. For an SDK app the target triple goes to that
-app's own toolchain: a Rust app needs the target installed
-(`rustup target add`), a C++ app needs `CMAKE_TOOLCHAIN_FILE` pointing at a
+app's own toolchain: a Rust app on the published `lumenui` builds only for
+the machine it is built on, because its prebuilt engine carries proc-macro
+libraries for that machine, so its build stops with that message and the app
+is packaged on a machine of the target platform instead; a C++ app needs `CMAKE_TOOLCHAIN_FILE` pointing at a
 toolchain file for that platform and exits 1 without one, and a Python app is
 frozen against the interpreter doing the freezing and exits 2 for any target
 but this machine's.
 
-A Rust app links the engine rather than opening it, so what travels beside it
-comes out of its own build: the engine library cargo produced and the shared
-Rust standard library both were compiled against. On Windows no linkable
-engine exists, so the runtime is inside the executable and nothing travels.
-That holds for an app built against a Lumen checkout's SDK crate; an app on
-the published `lumenui` links the release's prebuilt engine statically, and
-packaging it exits 1 naming the engine library its build did not produce.
+A Rust app has the engine linked into its executable on every platform, from
+the release's prebuilt engine, so no runtime library travels beside it. For
+the same reason it cannot carry a runtime module, which loads only into a
+shared engine: a Rust app that declares one exits 2 naming it. A portable
+plugin travels in `modules/` as for any other kind. The build is the
+release's pinned compiler, the one the app's `rust-toolchain.toml` names.
 
-On Linux and macOS every other kind carries the shared runtime too: the
+On Linux and macOS every other kind carries the shared runtime: the
 runtime library there links `liblumen_engine`, so the engine and the Rust
 standard library from the toolchain travel beside it. A toolchain without
 them (an older release, a static build behind `--lib-dir`) still packages -
@@ -481,15 +487,16 @@ engine travels and one line on stderr says why; a `[capabilities]` entry
 turning anything off then exits 1, since that engine leaves nothing out. A
 `[capabilities]` key that names no capability exits 1 either way. A
 capability left out while the sources call into it gets a warning, here and
-on the app's first call to it at run time. A Rust app's engine comes from
-its own build, and `[capabilities]` does not change it.
+on the app's first call to it at run time. A Rust app's engine is the one
+linked into its executable, and `[capabilities]` does not change it.
 
 The candela standard library travels in a `libs/` subfolder of the package,
 whatever the kind and whatever links the engine: scripts read it off disk as
 they compile, so a package without it fails every `import "std/..."` and every
 array method at startup. It comes from wherever that package's engine came
-from. A Rust app takes the copy its own cargo build staged, beside the engine
-library that build produced. Every other kind takes the toolchain's, from the
+from. A Rust app takes the copy its own cargo build staged beside the
+executable when there is one, and the toolchain's otherwise. Every other kind
+takes the toolchain's, from the
 directory beside `lumenc`, from `--lib-dir`, or from the release archive for a
 `--target`. A source holding no `libs/` warns and packages without it, since an
 app importing nothing from the library needs none of it.
@@ -612,14 +619,16 @@ README at the app root and the app's code under `src/`, starting with
 | `dashboard` | Stat tiles, progress bars, activity feed driven by a timer. |
 | `settings` | Checkbox, radio, dropdown, and slider groups with `derive()`. |
 | `hotkeys` | Global hotkeys, tray icon, OS notifications. |
+| `rust` | The counter as a Rust program on the `lumenui` SDK, with a test that renders it. |
 
 The scripted templates use candela, except `dashboard`, which is Lua, and
-`hotkeys`, which is Rhai. `blank` ships no script.
+`hotkeys`, which is Rhai. `blank` and `rust` ship no script.
 
-A template that is a Rust SDK app (one with a `Cargo.toml`) also gets a
-`rust-toolchain.toml` naming the compiler this release's prebuilt engine was
-built with, unless the template brings its own. The gallery above has no such
-template yet. See [Rust SDK](ffi.md#rust-sdk) for why the compiler is pinned.
+A template that is a Rust SDK app (one with a `Cargo.toml`) is made the new
+app's: the package is named after `<name>`, the `lumenui` dependency asks for
+this release's version, and a `rust-toolchain.toml` names the compiler this
+release's prebuilt engine was built with, unless the template brings its own.
+See [Rust SDK](ffi.md#rust-sdk) for why the compiler is pinned.
 
 `--list` (or `-l`) prints the gallery with one-line descriptions and exits 0.
 An existing `<name>` exits 1 without writing anything. An unknown template

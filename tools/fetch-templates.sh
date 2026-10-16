@@ -47,7 +47,7 @@ DEST="${1:-${CARGO_TARGET_DIR:-target}/templates}"
 # The gallery, which is also scaffold::TEMPLATES in gallery order. The two
 # lists are compared by public/lumenc/tests/templates.rs, so a template added
 # to one and not the other turns the suite red rather than going unnoticed.
-set -- blank hello counter form todo dashboard settings hotkeys
+set -- blank hello counter form todo dashboard settings hotkeys rust
 
 # The commit `main` points at in the template's repository. git asks the
 # server directly, with no API call and so no rate limit to run into.
@@ -100,7 +100,7 @@ for name in "$@"; do
   url="https://github.com/$OWNER/$name/archive/$sha.tar.gz"
   printf 'fetching %s at %s\n' "$OWNER/$name" "$sha"
   # A dropped connection on any one of these fails the whole job, and a CI run
-  # downloads all eight on each of three operating systems, so a transient
+  # downloads every template on each of three operating systems, so a transient
   # reset is worth a few more attempts. A commit that does not exist still
   # fails, a couple of seconds later.
   if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \

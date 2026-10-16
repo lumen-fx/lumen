@@ -129,6 +129,23 @@ because these features vary by platform; see the
 [OS integration guide](../guides/os-integration.md) for what each one supports
 where.
 
+## rust
+
+The counter again, as a Rust program on the `lumenui` SDK.
+
+Shows the shape of a Rust app: `src/lib.rs` builds the app from the markup and
+stylesheet in `src/` and two click handlers that write the `clicks` signal,
+and `src/main.rs` runs it. `lumen_source!` reads the markup from disk and hot
+reloads it under `cargo run`, and compiles it in under a release build. A
+test in `tests/` renders the app with no window and checks the frame it
+painted, the starting point for screenshot and golden-image tests.
+
+Scaffolding names the package after your app and pins it to this release:
+the `lumenui` version in `Cargo.toml`, and a `rust-toolchain.toml` naming the
+compiler the release's prebuilt engine was built with. Run it with `lumenc run`
+or `cargo run`; it needs that Rust toolchain installed (rustup fetches it on
+first use).
+
 ## Next
 
 - [What each file in the scaffolded directory is](project-layout.md).

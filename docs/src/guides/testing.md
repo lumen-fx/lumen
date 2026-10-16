@@ -58,6 +58,24 @@ It exits 0 on success and non-zero on a parse error, a missing asset, or a
 script that fails to compile. For a parse check alone, `lumenc check myapp` is
 faster and opens nothing.
 
+### A Rust app
+
+`lumenc run myapp --headless` and its flags work on a Rust SDK app too:
+lumenc builds and starts it with cargo, and the app runs headless with the
+same options. In the app's own tests, `App::screenshot` renders it with no
+window and returns the painted frame, which a test can check pixel by pixel
+or compare with a PNG it keeps:
+
+```rust
+let frame = app::app()
+    .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })
+    .unwrap();
+assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
+```
+
+The `rust` template ships a test like this. The [Rust SDK
+reference](../reference/ffi.md#running-headless) has the details.
+
 ## Drive a running app
 
 A running app can answer questions about its own UI and accept input, over a

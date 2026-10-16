@@ -123,7 +123,7 @@ _lumenc() {
                         {-l,--list}'[Print the template gallery]' \
                         '--help[Show help]' \
                         '1:name:' \
-                        '2:template:(blank hello counter form todo dashboard settings hotkeys)'
+                        '2:template:(blank hello counter form todo dashboard settings hotkeys rust)'
                     ;;
                 fmt)
                     _arguments \

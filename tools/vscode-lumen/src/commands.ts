@@ -109,6 +109,10 @@ const TEMPLATES: TemplateItem[] = [
         label: "hotkeys",
         description: "Native shell showcase: global hotkeys, tray icon, OS notifications.",
     },
+    {
+        label: "rust",
+        description: "The counter as a Rust program on the lumenui SDK, with a rendering test.",
+    },
 ];
 
 async function cmdNewFromTemplate(): Promise<void> {
