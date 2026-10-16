@@ -312,6 +312,7 @@ fn drain_simulate_queue(
     mut wheel: MessageWriter<MouseWheel>,
     mut key_pressed: MessageWriter<KeyPressed>,
     mut key_released: MessageWriter<KeyReleased>,
+    mut modifiers_state: ResMut<ModifiersState>,
 ) {
     // A wheel deferred last tick takes this tick, the way a real wheel
     // arrives on a tick after the move that put the pointer there.
@@ -466,6 +467,23 @@ fn drain_simulate_queue(
                 });
                 key_released.write(KeyReleased {
                     key: k,
+                    modifiers: m,
+                });
+            }
+            SimulateKind::KeyDown { key, modifiers } => {
+                let m: Modifiers = modifiers.into();
+                modifiers_state.0 = m;
+                key_pressed.write(KeyPressed {
+                    key: key.as_str().into(),
+                    modifiers: m,
+                    repeat: false,
+                });
+            }
+            SimulateKind::KeyUp { key, modifiers } => {
+                let m: Modifiers = modifiers.into();
+                modifiers_state.0 = m;
+                key_released.write(KeyReleased {
+                    key: key.as_str().into(),
                     modifiers: m,
                 });
             }
@@ -1770,6 +1788,53 @@ mod simulate_tests {
         app.tick();
 
         assert_eq!(app.world.get::<TextContent>(field).unwrap().0, "X");
+    }
+
+    /// `key_down` holds a key across ticks until `key_up` releases it, so a
+    /// driver can test held-key behavior such as space-drag panning (#520).
+    /// The requests come in through their JSON wire form.
+    #[test]
+    fn key_down_holds_the_key_until_key_up() {
+        let queue = SimulateQueue::default();
+        let mut app = simulate_test_app(&queue);
+        let request = |json: &str| -> SimulateRequest { serde_json::from_str(json).unwrap() };
+        let counts = |app: &App| {
+            (
+                app.world
+                    .resource::<Messages<KeyPressed>>()
+                    .iter_current_update_messages()
+                    .count(),
+                app.world
+                    .resource::<Messages<KeyReleased>>()
+                    .iter_current_update_messages()
+                    .count(),
+            )
+        };
+
+        queue.push(request(
+            r#"{"kind":"key_down","key":" ","modifiers":{"shift":true}}"#,
+        ));
+        app.tick();
+        assert_eq!(counts(&app), (1, 0), "key_down presses without releasing");
+        assert!(app.world.resource::<ModifiersState>().0.shift);
+
+        app.tick();
+        assert_eq!(counts(&app), (0, 0), "the key stays down on later ticks");
+        assert!(app.world.resource::<ModifiersState>().0.shift);
+
+        queue.push(request(r#"{"kind":"key_up","key":" "}"#));
+        app.tick();
+        assert_eq!(counts(&app), (0, 1), "key_up releases it");
+        let released = app
+            .world
+            .resource::<Messages<KeyReleased>>()
+            .iter_current_update_messages()
+            .next()
+            .unwrap()
+            .key
+            .clone();
+        assert_eq!(released, Key::from(" "));
+        assert!(!app.world.resource::<ModifiersState>().0.shift);
     }
 
     /// A simulated `PointerMove` likewise updates `PointerState.position`.
