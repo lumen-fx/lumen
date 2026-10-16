@@ -110,8 +110,10 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
 - **lumen-render-cpu**: the CPU renderer. Paints the same frame through
   `lumen-paint` into vello_cpu and rasterizes it with no GPU, driver, or
   graphics API, either into an offscreen buffer or into a window through
-  softbuffer. It renders on machines no GPU renderer starts on, and an app
-  that picks it links none of wgpu.
+  softbuffer. A large frame rasterizes on vello_cpu's worker threads, one per
+  share of its pixels up to the core count; a small one stays on the calling
+  thread. It renders on machines no GPU renderer starts on, and an app that
+  picks it links none of wgpu.
 - **lumen-window-winit**: the on-screen window. winit event loop, input
   translation, redraw pacing, and the close-request veto. It owns no pixels: a
   renderer and an accessibility bridge are handed to it, and it drives both
@@ -460,7 +462,9 @@ pinned to the thread that calls `App::tick`, which is
 the window backend's event-loop thread. The worker count comes from
 `App::desired_threads` (`min(cpu count, 4)` by default, raised by a plugin
 via `request_threads_at_least` or overridden by `[runtime] threads` /
-`LUMEN_THREADS`) and is read once, at the first tick.
+`LUMEN_THREADS`) and is read once, at the first tick. The CPU renderer's
+rasterizing threads are not part of that budget: vello_cpu runs its own pool,
+sized from the frame (see lumen-render-cpu above).
 
 ## A tick
 

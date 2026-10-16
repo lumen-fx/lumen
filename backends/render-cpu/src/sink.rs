@@ -21,7 +21,9 @@ use vello_cpu::kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use vello_cpu::peniko::{
     BlendMode, Brush, BrushRef, Color, Fill, ImageBrush, ImageQuality, ImageSampler,
 };
-use vello_cpu::{Image, ImageSource, Mask, PaintType, Pixmap, RenderContext, Resources};
+use vello_cpu::{
+    Image, ImageSource, Mask, PaintType, Pixmap, RenderContext, RenderSettings, Resources,
+};
 
 /// Names this backend in [`Painter::backend_id`] and
 /// [`lumen_core::native::NativePaintCtx::backend_id`]. [`Painter::native`]
@@ -32,9 +34,62 @@ pub const BACKEND_ID: &str = "lumen.render-cpu";
 /// pixels. The same tolerance vello encodes shapes with.
 const TOLERANCE: f64 = 0.1;
 
+/// Frame pixels per worker thread. A frame rasterizes on one worker per
+/// this many pixels, so a large frame spreads over every core while a small
+/// one does not pay for threads that would mostly wait.
+const PIXELS_PER_WORKER: u32 = 32 * 1024;
+
+/// Most worker threads one frame rasterizes on.
+const MAX_WORKERS: usize = 64;
+
+/// The cores this process may run on.
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// The worker threads a `width` x `height` frame rasterizes on with `cores`
+/// cores: one per [`PIXELS_PER_WORKER`] pixels, no more than the cores or
+/// [`MAX_WORKERS`], and none when that comes to fewer than two, because a
+/// single worker leaves the calling thread waiting on it.
+///
+/// Below the cap the count steps in powers of two, so a window being resized
+/// rebuilds its pool only when its size crosses a step.
+fn workers_for(width: u16, height: u16, cores: usize) -> u16 {
+    let cap = cores.min(MAX_WORKERS);
+    let wanted = (u32::from(width) * u32::from(height) / PIXELS_PER_WORKER) as usize;
+    let workers = if wanted >= cap {
+        cap
+    } else if wanted < 2 {
+        0
+    } else {
+        1 << wanted.ilog2()
+    };
+    if workers < 2 { 0 } else { workers as u16 }
+}
+
+/// A vello_cpu context rasterizing on `workers` worker threads, or on the
+/// calling thread for 0.
+fn context(width: u16, height: u16, workers: u16) -> RenderContext {
+    RenderContext::new_with(
+        width,
+        height,
+        RenderSettings {
+            num_threads: workers,
+            ..RenderSettings::default()
+        },
+    )
+}
+
 /// A [`Painter`] rasterizing on the CPU with vello_cpu.
 pub struct CpuPainter {
     ctx: RenderContext,
+    /// The cores the frame may rasterize on; 1 for a painter that always
+    /// draws on the calling thread.
+    cores: usize,
+    /// The context the frame used before its size last changed how many
+    /// workers it takes, kept with its thread pool for when a resize goes
+    /// back.
+    spare: Option<RenderContext>,
     resources: Resources,
     depth: usize,
     /// Every image this painter keeps between frames. Shared like the other
@@ -171,15 +226,33 @@ impl std::fmt::Debug for CpuPainter {
             .field("width", &self.ctx.width())
             .field("height", &self.ctx.height())
             .field("depth", &self.depth)
+            .field("workers", &self.worker_threads())
             .finish()
     }
 }
 
 impl CpuPainter {
-    /// A painter for a target of `width` x `height` pixels.
+    /// A painter for a target of `width` x `height` pixels. A large frame
+    /// rasterizes on worker threads, more of them the larger it is; a small
+    /// one on the calling thread. Both paint the same pixels, except that a
+    /// translucent rect ending exactly on the frame's right edge can differ
+    /// by one step of rounding in the last four columns.
     pub fn new(width: u16, height: u16) -> Self {
+        Self::with_cores(width, height, cores())
+    }
+
+    /// A painter that always rasterizes on the calling thread: a mask or an
+    /// offscreen layer, built for one use and not worth a thread pool.
+    fn single_threaded(width: u16, height: u16) -> Self {
+        Self::with_cores(width, height, 1)
+    }
+
+    /// A painter whose frames may rasterize on up to `cores` cores.
+    fn with_cores(width: u16, height: u16, cores: usize) -> Self {
         Self {
-            ctx: RenderContext::new(width, height),
+            ctx: context(width, height, workers_for(width, height, cores)),
+            cores,
+            spare: None,
             resources: Resources::new(),
             depth: 0,
             images: Images::default(),
@@ -187,6 +260,12 @@ impl CpuPainter {
             base: Affine::IDENTITY,
             offscreen: None,
         }
+    }
+
+    /// The worker threads the frame rasterizes on; 0 when it rasterizes on
+    /// the calling thread.
+    pub fn worker_threads(&self) -> u16 {
+        self.ctx.render_settings().num_threads
     }
 
     /// The painter calls go to: the innermost open offscreen layer, else
@@ -218,6 +297,14 @@ impl CpuPainter {
     /// frame's drawing and fill the target with `clear`.
     pub fn begin_frame(&mut self, width: u16, height: u16, clear: Color) {
         self.abandon_offscreen();
+        let workers = workers_for(width, height, self.cores);
+        if workers != self.worker_threads() {
+            let next = match self.spare.take() {
+                Some(spare) if spare.render_settings().num_threads == workers => spare,
+                _ => context(width, height, workers),
+            };
+            self.spare = Some(std::mem::replace(&mut self.ctx, next));
+        }
         if self.size() == (width, height) {
             self.ctx.reset();
         } else {
@@ -408,7 +495,7 @@ impl Painter for CpuPainter {
         }
         let (width, height) = self.size();
         let region = to_path(region);
-        let mut aside = CpuPainter::new(width, height);
+        let mut aside = CpuPainter::single_threaded(width, height);
         aside.base = self.base;
         std::mem::swap(&mut aside.resources, &mut self.resources);
         std::mem::swap(&mut aside.images, &mut self.images);
@@ -541,7 +628,7 @@ impl Painter for CpuPainter {
         if !(1.0..=f64::from(u16::MAX)).contains(&w) || !(1.0..=f64::from(u16::MAX)).contains(&h) {
             return false;
         }
-        let mut painter = CpuPainter::new(w as u16, h as u16);
+        let mut painter = CpuPainter::single_threaded(w as u16, h as u16);
         painter.base = Affine::translate((-bounds.x0, -bounds.y0));
         // The layer paints with this painter's glyph caches and decoded
         // images, and hands them back when it closes.
@@ -1222,5 +1309,280 @@ mod tests {
             Rect::new(0.0, 0.0, 8.0, 8.0),
         );
         assert_eq!(frame(&mut painter, 8, 8).sample(4, 4).r, 255);
+    }
+
+    /// A frame takes one worker per share of its pixels, up to the cores,
+    /// and none at all when that is fewer than two.
+    #[test]
+    fn workers_follow_the_frame_size() {
+        assert_eq!(
+            workers_for(64, 64, 24),
+            0,
+            "a tiny frame stays on the caller"
+        );
+        assert_eq!(
+            workers_for(256, 128, 24),
+            0,
+            "one worker's worth is not shared"
+        );
+        assert_eq!(workers_for(400, 300, 24), 2);
+        assert_eq!(workers_for(800, 600, 24), 8, "steps down to a power of two");
+        assert_eq!(
+            workers_for(1024, 768, 24),
+            24,
+            "every core once the frame fills them"
+        );
+        assert_eq!(workers_for(3840, 2160, 24), 24);
+        assert_eq!(
+            workers_for(3840, 2160, 1),
+            0,
+            "one core has nothing to share"
+        );
+        assert_eq!(workers_for(3840, 2160, 2), 2);
+        assert_eq!(workers_for(u16::MAX, u16::MAX, 512), MAX_WORKERS as u16);
+    }
+
+    /// A large frame rasterizes on workers, a small one on the calling
+    /// thread, and a resize back to the large size takes the kept pool
+    /// rather than building another.
+    #[test]
+    fn a_large_frame_shares_its_rasterizing_out() {
+        let mut painter = CpuPainter::with_cores(1024, 768, 8);
+        assert_eq!(painter.worker_threads(), 8);
+        painter.begin_frame(64, 64, black());
+        assert_eq!(painter.worker_threads(), 0);
+        painter.begin_frame(1024, 768, black());
+        assert_eq!(painter.worker_threads(), 8);
+        assert_eq!(
+            painter
+                .spare
+                .as_ref()
+                .map(|c| c.render_settings().num_threads),
+            Some(0),
+            "the small frame's context is kept for the next swap"
+        );
+        assert_eq!(frame(&mut painter, 1024, 768).sample(512, 384).a, 255);
+
+        if cores() >= 2 {
+            assert!(
+                RenderSettings::default().num_threads > 0,
+                "vello_cpu is built without its worker threads"
+            );
+            assert!(CpuPainter::new(3840, 2160).worker_threads() >= 2);
+        }
+        let mut masked = CpuPainter::with_cores(1024, 768, 8);
+        masked.begin_frame(1024, 768, black());
+        assert!(masked.begin_offscreen(Rect::new(0.0, 0.0, 1024.0, 768.0)));
+        let layer = masked.offscreen.as_ref().expect("the open layer");
+        assert_eq!(
+            layer.painter.worker_threads(),
+            0,
+            "a layer paints on the caller"
+        );
+    }
+
+    /// Everything the walker draws, painted once on the calling thread and
+    /// once on workers: the pixels match exactly, but for the case the next
+    /// test covers.
+    #[test]
+    fn workers_paint_the_same_pixels() {
+        use lumen_text::GlyphPosition;
+        use vello_cpu::kurbo::{Point, RoundedRect};
+        use vello_cpu::peniko::{Blob, FontData, Gradient, ImageAlphaType, ImageData, ImageFormat};
+        let font_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../public/lumenc/tests/goldens/fonts/NotoSans-Regular.ttf"
+        );
+        let font = FontData::new(
+            Blob::new(std::sync::Arc::new(
+                std::fs::read(font_path).expect("the pinned golden font"),
+            )),
+            0,
+        );
+        let checker: Vec<u8> = (0..16 * 16)
+            .flat_map(|i| {
+                let on = (i % 16 + i / 16) % 2 == 0;
+                if on {
+                    [255, 200, 0, 255]
+                } else {
+                    [0, 40, 255, 128]
+                }
+            })
+            .collect();
+        let image = ImageBrush::new(ImageData {
+            data: Blob::new(std::sync::Arc::new(checker)),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: 16,
+            height: 16,
+        });
+        let mut pixels = PixelImage::new(64, 64);
+        pixels.fill_rgba8(0, 0, 64, 64, [20, 160, 90, 255]);
+        pixels.fill_rgba8(8, 8, 20, 30, [250, 10, 10, 100]);
+        let gradient = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(512.0, 384.0))
+            .with_stops(
+                [
+                    Color::new([0.9, 0.1, 0.3, 1.0]),
+                    Color::new([0.1, 0.3, 0.9, 0.6]),
+                ]
+                .as_slice(),
+            );
+        let (w, h) = (512, 384);
+        let scene = |painter: &mut CpuPainter| {
+            painter.begin_frame(w, h, Color::new([0.95, 0.95, 0.9, 1.0]));
+            painter.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                BrushRef::Gradient(&gradient),
+                None,
+                // Short of the right edge: see the next test.
+                &Shape::Rect(Rect::new(0.0, 0.0, 500.0, 120.0)),
+            );
+            for i in 0..40 {
+                let x = f64::from(i) * 12.5;
+                painter.fill(
+                    Fill::NonZero,
+                    Affine::translate((x, 130.0)).then_rotate(0.01 * f64::from(i)),
+                    Color::new([0.1, 0.02 * i as f32, 0.5, 0.7]).into(),
+                    None,
+                    &Shape::RoundedRect(RoundedRect::new(0.0, 0.0, 10.3, 60.7, 3.0)),
+                );
+            }
+            let mut star = BezPath::new();
+            star.move_to((300.0, 200.0));
+            star.curve_to((420.0, 150.0), (500.0, 330.0), (320.0, 370.0));
+            star.quad_to((200.0, 300.0), (300.0, 200.0));
+            star.close_path();
+            painter.fill(
+                Fill::EvenOdd,
+                Affine::IDENTITY,
+                Color::new([0.2, 0.7, 0.2, 0.8]).into(),
+                None,
+                &Shape::Path(&star),
+            );
+            painter.stroke(
+                &Stroke::new(3.5),
+                Affine::IDENTITY,
+                Color::new([0.0, 0.0, 0.0, 1.0]).into(),
+                None,
+                &Shape::Path(&star),
+            );
+            painter.draw_blurred_rounded_rect(
+                Affine::IDENTITY,
+                Rect::new(40.0, 220.0, 180.0, 330.0),
+                Color::new([0.0, 0.0, 0.0, 0.5]),
+                8.0,
+                6.0,
+            );
+            painter.push_layer(
+                Fill::NonZero,
+                BlendMode::default(),
+                0.6,
+                Affine::IDENTITY,
+                &Shape::RoundedRect(RoundedRect::new(30.0, 210.0, 190.0, 340.0, 12.0)),
+            );
+            painter.draw_image(
+                &image.clone().with_quality(ImageQuality::Medium),
+                Affine::translate((30.0, 210.0))
+                    .then_scale(1.0)
+                    .pre_scale(10.0),
+            );
+            painter.pop_layer();
+            painter.draw_pixels(&pixels, nearest(), Affine::translate((420.0, 10.0)));
+            painter.draw_masked(
+                MaskKind::Alpha,
+                Affine::IDENTITY,
+                &Shape::Rect(Rect::new(200.0, 10.0, 400.0, 110.0)),
+                &mut |p| p.draw_image(&image, Affine::translate((200.0, 10.0)).pre_scale(6.0)),
+                &mut |p| {
+                    p.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        Color::new([1.0, 1.0, 1.0, 1.0]).into(),
+                        None,
+                        &Shape::Rect(Rect::new(200.0, 10.0, 400.0, 110.0)),
+                    );
+                },
+            );
+            let glyphs: Vec<GlyphPosition> = (0..24)
+                .map(|i| GlyphPosition {
+                    id: 40 + i,
+                    x: i as f32 * 13.0,
+                    y: 0.0,
+                    advance: 13.0,
+                    byte_start: 0,
+                    byte_end: 1,
+                })
+                .collect();
+            painter.draw_glyphs(&GlyphRun {
+                font: &font,
+                font_size: 18.0,
+                normalized_coords: &[],
+                transform: Affine::translate((10.4, 370.3)),
+                brush: Color::new([0.1, 0.1, 0.1, 1.0]).into(),
+                glyphs: &glyphs,
+            });
+            assert!(painter.begin_offscreen(Rect::new(220.0, 250.0, 300.0, 330.0)));
+            painter.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::new([0.8, 0.2, 0.9, 1.0]).into(),
+                None,
+                &Shape::RoundedRect(RoundedRect::new(225.0, 255.0, 295.0, 325.0, 20.0)),
+            );
+            let layer = painter.end_offscreen().expect("the layer");
+            assert!(painter.draw_offscreen(&layer, 0.5));
+            frame(painter, w, h)
+        };
+
+        let mut alone = CpuPainter::with_cores(w, h, 1);
+        let mut shared = CpuPainter::with_cores(w, h, 8);
+        assert_eq!(alone.worker_threads(), 0);
+        assert!(shared.worker_threads() >= 2);
+        let one = scene(&mut alone);
+        // Twice on workers: the second frame reuses the pool and its buffers.
+        for _ in 0..2 {
+            let many = scene(&mut shared);
+            let differ = one
+                .data()
+                .iter()
+                .zip(many.data())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differ, 0, "pixels that differ on workers");
+        }
+    }
+
+    /// The one place workers paint other pixels: a translucent rect whose
+    /// right side lies exactly on the frame's right edge. vello_cpu fills a
+    /// rect on the calling thread through a rect path and on workers as a
+    /// path, and the path's last column of tiles blends one step of
+    /// rounding apart. Only those four columns move, by at most one.
+    #[test]
+    fn a_translucent_rect_on_the_right_edge_rounds_at_most_one_apart() {
+        let (w, h) = (512, 384);
+        let paint = |cores| {
+            let mut painter = CpuPainter::with_cores(w, h, cores);
+            painter.begin_frame(w, h, Color::new([0.95, 0.95, 0.9, 1.0]));
+            painter.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::new([0.2, 0.5, 0.7, 0.5]).into(),
+                None,
+                &Shape::Rect(Rect::new(0.0, 0.0, f64::from(w), f64::from(h))),
+            );
+            frame(&mut painter, w, h)
+        };
+        let (alone, shared) = (paint(1), paint(8));
+        for (i, (a, b)) in alone.data().iter().zip(shared.data()).enumerate() {
+            if a == b {
+                continue;
+            }
+            let x = i % usize::from(w);
+            assert!(x >= usize::from(w) - 4, "column {x} moved");
+            for (p, q) in [(a.r, b.r), (a.g, b.g), (a.b, b.b), (a.a, b.a)] {
+                assert!(p.abs_diff(q) <= 1, "column {x}: {a:?} against {b:?}");
+            }
+        }
     }
 }

@@ -116,7 +116,8 @@ backend = "cpu"
 ```
 
 `gpu` renders through wgpu on the machine's graphics adapter. `cpu` rasterizes
-on the processor and needs no GPU or driver at all. Both draw the same frame.
+on the processor and needs no GPU or driver at all, spreading a large frame
+across the processor's cores. Both draw the same frame.
 
 `auto` tries the GPU and falls back to the CPU when no GPU renderer starts, in
 a window and in a headless run alike, and prints which one it fell back to.
@@ -188,7 +189,7 @@ Every key is optional; leaving one out keeps the automatic behaviour.
 |-----|------|---------|--------|
 | `mcp` | bool | on for a windowed run, off for a headless one | Runs the introspection server. `[mcp] port = 0` still disables it. |
 | `hot_reload` | bool | on only for a windowed run from source | Watches source files and reloads on change. Off for headless, bounded, and artifact runs. |
-| `threads` | integer | `min(cpu count, 4)` | Worker-thread budget. `LUMEN_THREADS` overrides this. |
+| `threads` | integer | `min(cpu count, 4)` | Worker-thread budget for the app's systems. The CPU renderer rasterizes on threads of its own. `LUMEN_THREADS` overrides this. |
 
 These gate startup, not linkage: the code is still in the binary. To leave a
 subsystem out of a build, use `[capabilities]`.

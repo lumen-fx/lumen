@@ -22,9 +22,10 @@ lumen-paint = { workspace = true }
 lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
-# The rasterizer. Single-threaded, the u8 pipeline only, and glyph rendering;
-# no PNG decoding, because images reach the painter already decoded.
-vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline"] }
+# The rasterizer: worker threads for a large frame, the u8 pipeline only, and
+# glyph rendering; no PNG decoding, because images reach the painter already
+# decoded.
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline", "multithreading"] }
 # The tint type vello_cpu draws an image with; it fades a kept offscreen
 # layer without a compositing layer. The same release vello_cpu builds on.
 vello_common = { version = "0.2", default-features = false, features = ["std"] }
