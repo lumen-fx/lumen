@@ -109,6 +109,21 @@ impl Plugin for TabsPlugin {
         // A menu opened at a point (`open_menu_at`, a context menu) sits on
         // that point, moved inward at the window edges.
         app.add_systems(TickStage::Systems, crate::popup::place_menus_at_points);
+        // The in-window menu bar: hovering another bar button while one of
+        // its menus is open switches to that menu, and an item's `accel`
+        // activates it. The shortcut table stays empty unless the runtime
+        // mounted a bar.
+        app.add_systems(
+            TickStage::Systems,
+            crate::menubar::switch_menubar_menus_on_hover.after(lumen_input::hit_test),
+        );
+        app.world
+            .init_resource::<crate::menubar::MenuAccelerators>();
+        app.add_systems(
+            TickStage::Systems,
+            crate::menubar::dispatch_menu_accelerators,
+        );
+        app.add_systems(TickStage::Systems, crate::menubar::reserve_menubar_space);
         // Roving-tabindex keyboard nav for the focused tab button:
         // ArrowRight / ArrowLeft cycle siblings, Home / End jump to
         // ends, Enter / Space activate (same effect as click). Reads

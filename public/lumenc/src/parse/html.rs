@@ -1463,8 +1463,7 @@ fn build_composed_widget(
                 node.range().start
             ))
         })?;
-        let open_signal = format!("__menu_open:{menu_id}");
-        let mut body: Vec<Element> = Vec::new();
+        let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
         for child in node
             .children()
             .filter(|c| c.is_element() && c.tag_name().name() != "script")
@@ -1485,31 +1484,13 @@ fn build_composed_widget(
                         .attribute("label")
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| item_id.clone());
-                    // Row height and padding are theme metrics on
-                    // `.menu-item` in the user-agent sheet.
-                    let mut btn = Element {
-                        tag: "button".to_string(),
-                        ..Default::default()
-                    };
-                    btn.attrs.text = Some(label);
-                    btn.attrs.classes = vec!["menu-item".to_string()];
-                    btn.attrs.menu_item = Some((open_signal.clone(), item_id));
-                    // `disabled="true"` on a `<menuitem>`: unclickable,
-                    // skipped by arrow nav, `:disabled`-styled.
-                    btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
-                    body.push(btn);
+                    rows.push(lumen_ir::menu::MenuRow::Item {
+                        id: item_id,
+                        label,
+                        disabled: bool_attribute_of(child, "disabled", src, lint_findings),
+                    });
                 }
-                "separator" => {
-                    // A rule line, not a gap: `.menu-separator` in the
-                    // user-agent sheet keeps it one pixel tall rather
-                    // than taking the grow a written `<spacer>` gets.
-                    let mut sep = Element {
-                        tag: "spacer".to_string(),
-                        ..Default::default()
-                    };
-                    sep.attrs.classes = vec!["menu-separator".to_string()];
-                    body.push(sep);
-                }
+                "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),
                 other => {
                     return Err(ParseError::Xml(format!(
                         "<menu> child at byte {} must be <menuitem> or <separator>, got <{}>",
@@ -1519,39 +1500,8 @@ fn build_composed_widget(
                 }
             }
         }
-        // A floating panel that never takes part in its ancestors' layout
-        // (spec section 8). It is an `<overlay>`, so its column direction
-        // comes from the tag and its minimum width from `.menu-panel` in
-        // the user-agent sheet; its placement is its own. `right` /
-        // `bottom` stay `auto` so the panel shrink-wraps its items; the
-        // items' `width: 100%` then equalises them to the widest.
-        let mut panel = Element {
-            tag: "overlay".to_string(),
-            children: body,
-            ..Default::default()
-        };
-        set_built_styles(
-            &mut panel.attrs,
-            &[("position", "absolute"), ("inset", "0 auto auto 0")],
-        );
-        panel.attrs.classes = vec!["menu-panel".to_string()];
-        panel.attrs.id = Some(menu_id);
-        // Same popup wiring as the dropdown panel: outside-click
-        // dismissal keys off the shared open signal.
-        panel.attrs.popup_panel = Some(open_signal.clone());
-
-        let mut if_block = Element {
-            tag: "if".to_string(),
-            attrs: Attributes::default(),
-            children: vec![panel],
-            ..Default::default()
-        };
-        if_block.attrs.if_signal = Some(open_signal.clone());
-        if_block.attrs.if_eq = Some("true".to_string());
-        if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
-        if_block.attrs.signal_seed = Some((open_signal, "false".to_string()));
-        if_block.attrs.widget = Some(WidgetRole::Menu);
-        return Ok(Some(if_block));
+        // The popup an in-window menu bar builds its menus from too.
+        return Ok(Some(lumen_ir::menu::popup_menu(&menu_id, &rows)));
     }
 
     if matches!(tag, "menuitem" | "separator") {

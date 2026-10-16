@@ -1696,6 +1696,9 @@ pub enum WidgetRole {
     /// `<tooltip>` - text shown beside whatever it wraps. The marker lands
     /// on the wrapped element, which is what survives the expansion.
     Tooltip,
+    /// `<menubar>` drawn in the window, on a platform with no native menu
+    /// bar: a row of buttons, each opening one of its menus.
+    MenuBar,
 }
 
 /// CSS `text-overflow` - what to do with text that overflows its box.

@@ -622,6 +622,7 @@ mod hot_reload;
 mod i18n;
 mod introspection;
 mod loading;
+mod menubar;
 mod restyle;
 mod script_commands;
 mod script_systems;

@@ -305,6 +305,19 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
+/* === Menu bar ===
+ * Where the platform has no native menu bar (Linux), `<menubar>` is drawn
+ * in the window as the root's first child:
+ *   .menubar           (tag=row)
+ *     .menubar-menu      (tag=column, one per <menu>)
+ *       .menubar-button    (tag=button, the menu's label)
+ *       .menu-panel        (the menu, styled as above)
+ */
+.menubar { bg: var(--lumen-window-bg); border-bottom: 1px solid var(--lumen-border); padding: 2 4; gap: 2; }
+.menubar-button { bg: var(--lumen-window-bg); text-color: var(--lumen-text); radius: var(--lumen-radius-sm); padding: 0 10; }
+.menubar-button:hover { bg: var(--lumen-panel-hover); }
+.menubar-button:focus { outline: 2 var(--lumen-focus-ring); }
+
 /* === Dialogs ===
  * Light scrim; the surface is a ~10px card with a hairline and a deep
  * shadow (alert anatomy per HIG).

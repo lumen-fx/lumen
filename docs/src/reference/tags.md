@@ -718,9 +718,19 @@ every source on one host. See [Scripting](../guides/scripting.md).
 
 ### `<menubar>`
 
-Declares the OS-native application menu. At most one per document, as a
-direct child of `<root>`. It is removed from the layout tree. Its
-children must be `<menu label="...">`.
+Declares the application menu. At most one per document, as a direct child
+of `<root>`. Its children must be `<menu label="...">`.
+
+On macOS and Windows it is the OS's own menu bar, and it takes no place in
+the layout tree. On Linux, where desktops have no menu bar for an app to
+join, the same markup is drawn in the window: a bar at the top of the root,
+one button per menu, each opening its menu as a popup. The bar floats over
+the root's top edge and the root keeps its height clear above the content,
+so the root's `justify` and `align` place the content as they would without
+it. Its parts carry the classes `menubar` (the bar), `menubar-menu` (one
+per menu), and `menubar-button` (the menu's label), and the menus are the
+`.menu-panel` popups described below. While one of its menus is open,
+moving the pointer to another button opens that menu instead.
 
 ### `<menu>`, `<menuitem>`, and `<separator>`
 
@@ -733,7 +743,7 @@ are `<menuitem>` and `<separator>`.
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
 | `<menuitem>` | `id` | Required. Identifies the item to scripts. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
-| `<menuitem>` | `accel` | Keyboard accelerator. Menubar menus only. |
+| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`. Menubar menus only. On Linux the in-window bar runs it while the window has focus. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by

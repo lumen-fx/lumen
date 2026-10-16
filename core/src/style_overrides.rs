@@ -58,13 +58,16 @@ bitflags::bitflags! {
         const OPACITY = 1 << 9;
         /// `TextStyle::color`.
         const TEXT_COLOR = 1 << 10;
+        /// `Style::padding`, all four sides.
+        const PADDING = 1 << 11;
         /// Every field that lives on [`Style`].
         const LAYOUT = Self::DISPLAY.bits()
             | Self::POSITION.bits()
             | Self::INSET.bits()
             | Self::WIDTH.bits()
             | Self::HEIGHT.bits()
-            | Self::MIN_HEIGHT.bits();
+            | Self::MIN_HEIGHT.bits()
+            | Self::PADDING.bits();
         /// Every field that lives on [`Visuals`].
         const VISUALS = Self::FILL.bits() | Self::SHADOWS.bits() | Self::BORDER.bits();
     }
@@ -85,6 +88,8 @@ pub struct StyleValues {
     pub height: Option<Length>,
     /// `Style::min_height`.
     pub min_height: Option<Length>,
+    /// `Style::padding`.
+    pub padding: Option<Edges>,
     /// `Visuals::fill`.
     pub fill: Option<Option<Fill>>,
     /// `Visuals::shadows`.
@@ -121,6 +126,7 @@ impl StyleValues {
         f.set(StyleFields::WIDTH, self.width.is_some());
         f.set(StyleFields::HEIGHT, self.height.is_some());
         f.set(StyleFields::MIN_HEIGHT, self.min_height.is_some());
+        f.set(StyleFields::PADDING, self.padding.is_some());
         f.set(StyleFields::FILL, self.fill.is_some());
         f.set(StyleFields::SHADOWS, self.shadows.is_some());
         f.set(StyleFields::BORDER, self.border.is_some());
@@ -142,6 +148,7 @@ impl StyleValues {
             v.min_height = fields
                 .contains(StyleFields::MIN_HEIGHT)
                 .then_some(s.min_height);
+            v.padding = fields.contains(StyleFields::PADDING).then_some(s.padding);
         }
         if let Some(vis) = live.visuals {
             v.fill = fields.contains(StyleFields::FILL).then(|| vis.fill.clone());
@@ -178,6 +185,9 @@ impl StyleValues {
         }
         if top.min_height.is_some() {
             self.min_height = top.min_height;
+        }
+        if top.padding.is_some() {
+            self.padding = top.padding;
         }
         if top.fill.is_some() {
             self.fill.clone_from(&top.fill);
@@ -216,6 +226,9 @@ impl StyleValues {
         }
         if !keep(StyleFields::MIN_HEIGHT) {
             self.min_height = None;
+        }
+        if !keep(StyleFields::PADDING) {
+            self.padding = None;
         }
         if !keep(StyleFields::FILL) {
             self.fill = None;
@@ -267,6 +280,11 @@ impl StyleValues {
             && style.min_height != h
         {
             style.min_height = h;
+        }
+        if let Some(p) = self.padding
+            && !edges_eq(&style.padding, &p)
+        {
+            style.padding = p;
         }
     }
 

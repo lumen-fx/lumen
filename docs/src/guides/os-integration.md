@@ -53,7 +53,11 @@ Or route one item to its own function:
 on("menu", "file-open", "handle_open");
 ```
 
-Linux has no native menu bar. Build an in-window one there.
+Linux desktops have no native menu bar, so there the same markup is drawn in
+the window: a bar along the top with one button per menu. Its items reach
+`on_menu` the same way, and their `accel` shortcuts work while the window has
+focus. The skin styles it, and an app can restyle the `.menubar`,
+`.menubar-button` and `.menu-panel` classes like any other element.
 
 ### In-window menus
 

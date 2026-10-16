@@ -19,6 +19,8 @@
 //! - [`translate`] - the `translatable="key"` resolver, shared by the spawner
 //!   and the web emitter so an app run in a locale and a page built for it
 //!   show the same strings.
+//! - [`menu`] - the element trees a `<menu>` popup and an in-window menu
+//!   bar are built from, shared by the parser and the runtime.
 //! - [`values`] - shared attribute/property value parsers.
 //! - [`css_vars`] - the `var(--name [, fallback])` resolver.
 //! - [`artifact`] - the AOT compiled-app container (`lumenc build` output).
@@ -36,6 +38,7 @@ pub mod css_vars;
 pub mod fragment;
 pub mod interpolate;
 pub mod layout_ir;
+pub mod menu;
 pub mod source_map;
 pub mod translate;
 pub mod values;

@@ -13,6 +13,7 @@ pub mod cursor;
 pub mod drag;
 mod held;
 pub mod hover;
+pub mod menubar;
 pub mod physics;
 pub mod popup;
 pub mod popup_nav;
@@ -45,6 +46,10 @@ pub use hover::{
     apply_state_borders,
 };
 pub use lumen_core::prelude::{Scroll, ScrollAxis, ScrollOffset};
+pub use menubar::{
+    InWindowMenuBar, MenuAccelerators, dispatch_menu_accelerators, reserve_menubar_space,
+    switch_menubar_menus_on_hover,
+};
 pub use popup::{
     PopupGap, PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
     flip_open_dropdown_panels, place_menus_at_points,
