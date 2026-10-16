@@ -999,7 +999,7 @@ flags [above](#lumen-server).
 | `LUMEN_MCP_PORT` | Port the automation commands connect to, below `--port` and above `lumen.toml`. |
 | `LUMEN_NO_UPDATE_CHECK` | Any non-empty value turns the update check off. |
 | `CI` | Turns the update check off. |
-| `LUMEN_THREADS` | Worker-thread budget. Overrides `[runtime] threads`. |
+| `LUMEN_THREADS` | Worker-thread budget for the app's systems; the CPU renderer's rasterizing threads are separate. Overrides `[runtime] threads`. |
 | `LUMEN_DEVTOOLS_OPEN` | Any non-empty value other than `0` opens the devtools overlay at startup instead of waiting for F12. |
 | `LUMEN_HOT_RELOAD_POLL` | Forces the hot-reload watcher onto mtime polling instead of filesystem events. |
 | `LUMEN_FONT_CACHE` | `0`, `off`, `false`, or `no` disables the persistent font-metadata cache and rescans system fonts every launch. |
