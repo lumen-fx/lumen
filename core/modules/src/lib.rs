@@ -171,6 +171,7 @@ pub const RESERVED_TAGS: &[&str] = &[
     "slider",
     "slot",
     "spacer",
+    "split",
     "switch",
     "tab",
     "tabs",

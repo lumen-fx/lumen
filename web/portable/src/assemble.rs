@@ -13,8 +13,9 @@
 //! would be a second hand on the same control, and the DOM backend already
 //! writes what the browser did straight into the world. What stays is the
 //! routing a forwarded key needs, radio groups (the browser unchecks the
-//! sibling without saying so), tab strips and their panels, progress
-//! bindings and validation, none of which a page gets for free.
+//! sibling without saying so), tab strips and their panels, the gutters of
+//! a `<split>`, progress bindings and validation, none of which a page gets
+//! for free.
 //!
 //! The ordering edges below are the ones the desktop registers, and they are
 //! not decoration: every dirty-gated binding reader has to run after the
@@ -43,7 +44,7 @@ pub use lumen_i18n::Catalogues;
 use lumen_i18n::{I18nError, SharedI18n, switch_locale};
 #[cfg(target_arch = "wasm32")]
 use lumen_os_clipboard::ClipboardHost;
-use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
+use lumen_primitives::{ProgressPlugin, RadioPlugin, SplitPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
 #[cfg(target_arch = "wasm32")]
@@ -101,6 +102,9 @@ pub fn portable_app() -> App {
     lumen_scene::dom::install_dom(&mut app);
     app.add_plugin(RadioPlugin);
     app.add_plugin(TabsPlugin);
+    // A page has no splitter of its own: the gutters drag here, against the
+    // panes the DOM backend measures off the browser's boxes.
+    app.add_plugin(SplitPlugin);
     app.add_plugin(ProgressPlugin);
     app.add_plugin(ValidationPlugin);
 

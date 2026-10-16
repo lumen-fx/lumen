@@ -174,6 +174,15 @@ pub(crate) fn register_core(app: &mut App) -> Result<(), RunError> {
     app.add_plugin(ProgressPlugin);
     app.add_plugin(TooltipPlugin);
     app.add_plugin(TabsPlugin);
+    // `<split>`: its gutters drag and step on every platform; here layout
+    // is what measures the panes they resize.
+    app.add_plugin(lumen_primitives::SplitPlugin);
+    app.add_systems(
+        TickStage::LayoutSync,
+        lumen_primitives::measure_splits
+            .after(lumen_core::layout_backend::LayoutSolve)
+            .run_if(any_with_component::<lumen_primitives::Split>),
+    );
     app.add_plugin(TransitionPlugin);
     app.add_plugin(ValidationPlugin);
     app.add_plugin(AssetsPlugin);

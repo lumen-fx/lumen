@@ -44,8 +44,9 @@ Tags fall into two groups.
 rather than an attribute, so you pick `<column>` or `<row>` instead of setting
 a flex direction. `<scroll>` is a container that scrolls its overflow,
 `<tile>` is a plain box, `<spacer>` eats leftover space along the parent's
-axis, and `<overlay>` and `<dialog>` float above their siblings instead of
-taking part in the surrounding layout.
+axis, `<split>` lays out panes the user resizes by dragging the gutters
+between them, and `<overlay>` and `<dialog>` float above their siblings
+instead of taking part in the surrounding layout.
 
 **Controls** carry state and respond to input. `<button>`, `<input>`,
 `<textarea>`, `<toggle>`, `<switch>`, `<slider>`, `<checkbox>`, `<radio>`, and

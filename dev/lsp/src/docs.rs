@@ -44,6 +44,7 @@ pub const TAGS: &[&str] = &[
     "menuitem",
     "separator",
     "title-bar",
+    "split",
 ];
 
 /// Recognized attribute names. Subset that `lumenc::parse::html` knows
@@ -224,6 +225,9 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
         }
         "progress" => {
             "**`<progress value max>`** - Progress bar. With `value` / `bind-value`: determinate fill at `value / max`. Without: indeterminate animated sweep (`duration=` ms, token `--lumen-progress-period`). Not focusable, no interaction."
+        }
+        "split" => {
+            "**`<split>`** - Resizable panes. Each child is a pane, with a draggable, focusable `.split-gutter` between every two; the axis is the split's `flex-direction` (a row by default). A gutter keeps each pane within its `min-width` / `max-width` (`min-height` / `max-height` in a column); arrow keys step a focused gutter, Home / End move it to its limits. A resize holds the panes' `flex-basis`."
         }
         "title-bar" => {
             "**`<title-bar drag=\"true\">`** - Custom title-bar region for `<root frameless=\"true\">`. With `drag=\"true\"` pressing the bar requests a native window drag via the platform backend."
