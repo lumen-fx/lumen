@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod checkbox;
+pub mod color;
 pub mod controls;
 pub mod cursor;
 pub mod drag;
@@ -35,6 +36,10 @@ pub mod wake;
 pub use checkbox::{
     CheckboxBox, CheckboxPlugin, CheckboxStyle, Indeterminate, clear_indeterminate_on_user_toggle,
     sync_checkbox_visuals,
+};
+pub use color::{
+    ColorInput, ColorPart, commit_color_hex, drag_color_panels, hsv_to_rgb, rgb_to_hsv,
+    sync_color_bindings, sync_color_parts, toggle_color_panels,
 };
 pub use controls::{
     ControlsPlugin, KnobGeometry, SliderChanged, SliderDragOrigin, SliderThumb, ToggleChanged,

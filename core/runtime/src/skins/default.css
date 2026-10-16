@@ -340,6 +340,25 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .number-step-up, .number-step-down { bg: var(--lumen-surface); text-color: var(--lumen-text-muted); radius: var(--lumen-radius-sm); }
 .number-step-up:hover, .number-step-down:hover { bg: var(--lumen-panel-hover); text-color: var(--lumen-text); }
 
+/* === Color field ===
+ * `<input type="color">` is a face holding a swatch, and a popup panel:
+ *   input.color-input
+ *     .color-swatch           (tag=tile, the chosen color)
+ *     .color-panel            (tag=column, the popup)
+ *       .color-area           (saturation across, value down)
+ *         .color-area-thumb
+ *       .color-hue            (the hue strip)
+ *         .color-hue-thumb
+ *       .color-hex            (tag=input, the color as #rrggbb)
+ */
+.color-input { bg: var(--lumen-surface); border: 1px solid var(--lumen-border); radius: var(--lumen-radius-sm); }
+.color-input:focus { outline: 2 var(--lumen-accent); }
+.color-swatch { radius: var(--lumen-radius-sm); border: 1px solid var(--lumen-border); }
+.color-panel { bg: var(--lumen-panel); border: 1px solid var(--lumen-border); radius: var(--lumen-radius-sm); shadow: var(--lumen-shadow-panel); }
+.color-area, .color-area-white, .color-area-black { radius: var(--lumen-radius-sm); }
+.color-hue { radius: 6; }
+.color-area-thumb, .color-hue-thumb { shadow: 0 1px 3px #00000066; }
+
 /* === Menu bar ===
  * Where the platform has no native menu bar (Linux), `<menubar>` is drawn
  * in the window as the root's first child:

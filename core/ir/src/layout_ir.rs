@@ -1665,6 +1665,22 @@ pub enum WidgetPart {
     StepUp,
     /// The `.number-step-down` button inside `<input type="number">`.
     StepDown,
+    /// The `.color-swatch` tile inside `<input type="color">`, showing the
+    /// chosen color.
+    ColorSwatch,
+    /// The `.color-panel` popup inside `<input type="color">`.
+    ColorPanel,
+    /// The `.color-area` square in a color panel: saturation across,
+    /// value down.
+    ColorArea,
+    /// The `.color-area-thumb` marking the chosen point in the area.
+    ColorAreaThumb,
+    /// The `.color-hue` strip in a color panel.
+    ColorHue,
+    /// The `.color-hue-thumb` marking the chosen hue on the strip.
+    ColorHueThumb,
+    /// The `.color-hex` text field in a color panel.
+    ColorHex,
 }
 
 /// What an `<input>` holds when it is not text, from its `type` attribute.
@@ -1674,6 +1690,9 @@ pub enum InputType {
     /// `type="number"`: a number, typed or stepped with the arrow keys, the
     /// wheel, or the step buttons, within `min`, `max` and `step`.
     Number,
+    /// `type="color"`: an sRGB color, held as `#rrggbb`, picked from a
+    /// popup panel.
+    Color,
 }
 
 impl InputType {
@@ -1681,6 +1700,7 @@ impl InputType {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Number => "number",
+            Self::Color => "color",
         }
     }
 
@@ -1689,6 +1709,7 @@ impl InputType {
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "number" => Some(Self::Number),
+            "color" => Some(Self::Color),
             _ => None,
         }
     }
@@ -1708,6 +1729,13 @@ impl WidgetPart {
             Self::NumberSteps => "number-steps",
             Self::StepUp => "number-step-up",
             Self::StepDown => "number-step-down",
+            Self::ColorSwatch => "color-swatch",
+            Self::ColorPanel => "color-panel",
+            Self::ColorArea => "color-area",
+            Self::ColorAreaThumb => "color-area-thumb",
+            Self::ColorHue => "color-hue",
+            Self::ColorHueThumb => "color-hue-thumb",
+            Self::ColorHex => "color-hex",
         }
     }
 }

@@ -155,7 +155,7 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     {
         out.push(("value", number(value)));
     }
-    if input_type == "range" || typed_input.is_some() {
+    if input_type == "range" || typed_input == Some(lumen_ir::layout_ir::InputType::Number) {
         if let Some(min) = attrs.min {
             out.push(("min", number(min)));
         }
@@ -618,6 +618,13 @@ mod tests {
         assert_eq!(find(&pairs, "step"), Some("0.5"));
         a.step = Some(0.0);
         assert_eq!(find(&html_attrs("input", &a), "step"), Some("any"));
+        // A color field is the browser's color input holding `#rrggbb`.
+        let mut color = attrs();
+        color.input_type = Some(lumen_ir::layout_ir::InputType::Color);
+        color.text = Some("#3366ff".into());
+        let pairs = html_attrs("input", &color);
+        assert_eq!(find(&pairs, "type"), Some("color"));
+        assert_eq!(find(&pairs, "value"), Some("#3366ff"));
         // A plain text field carries no type, and no range.
         let mut text = attrs();
         text.min = Some(0.0);

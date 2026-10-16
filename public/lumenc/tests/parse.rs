@@ -3679,3 +3679,53 @@ fn a_number_input_gains_its_step_buttons() {
         ir.lint_findings
     );
 }
+
+/// `<input type="color">` holds its `value` as HTML sanitizes it (`#rrggbb`
+/// in lowercase, black for anything else) and gains its swatch and panel.
+#[test]
+fn a_color_input_gains_its_swatch_and_panel() {
+    use lumen_ir::layout_ir::{InputType, WidgetPart};
+    let ir = parse_html(r##"<root><input type="color" value="#3366FF"/></root>"##).expect("parse");
+    let field = &ir.root.children[0];
+    assert_eq!(field.attrs.input_type, Some(InputType::Color));
+    assert_eq!(field.attrs.text.as_deref(), Some("#3366ff"));
+    assert!(field.attrs.classes.iter().any(|c| c == "color-input"));
+    let parts: Vec<_> = field.children.iter().map(|c| c.attrs.part).collect();
+    assert_eq!(
+        parts,
+        vec![Some(WidgetPart::ColorSwatch), Some(WidgetPart::ColorPanel)]
+    );
+    let panel: Vec<_> = field.children[1]
+        .children
+        .iter()
+        .map(|c| c.attrs.part)
+        .collect();
+    assert_eq!(
+        panel,
+        vec![
+            Some(WidgetPart::ColorArea),
+            Some(WidgetPart::ColorHue),
+            Some(WidgetPart::ColorHex)
+        ]
+    );
+    let hex = &field.children[1].children[2];
+    assert_eq!(hex.tag, "input");
+    assert_eq!(hex.attrs.text.as_deref(), Some("#3366ff"));
+
+    for bad in ["red", "#12345", "#gg0000", ""] {
+        let markup = format!(r#"<root><input type="color" value="{bad}"/></root>"#);
+        let ir = parse_html(&markup).expect("parse");
+        assert_eq!(
+            ir.root.children[0].attrs.text.as_deref(),
+            Some("#000000"),
+            "{bad:?}"
+        );
+    }
+}
+
+/// `value` on a text field is the text it starts with, as in HTML.
+#[test]
+fn an_input_value_is_its_initial_text() {
+    let ir = parse_html(r#"<root><input value="hello"/></root>"#).expect("parse");
+    assert_eq!(ir.root.children[0].attrs.text.as_deref(), Some("hello"));
+}

@@ -446,7 +446,8 @@ A button holds its label itself rather than in a child element, so
 ### `<input>`
 
 A single-line text field. Focusable by default. Starts with an empty
-buffer, so a text child is ignored; use `text` for an initial value.
+buffer, so a text child is ignored; use `value` (as in HTML) or `text` for
+an initial value.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
@@ -456,7 +457,8 @@ buffer, so a text child is ignored; use `text` for an initial value.
 | `required` | boolean | The value is valid only if it is non-empty. |
 | `autofocus` | boolean | Takes focus when the containing `<dialog>` opens. |
 | `password-character` | one character | Masks the rendered value. |
-| `type` | `text`, `number` | What the field holds. Defaults to `text`. Any other value is a text field, as it is in a browser, and the parser warns. |
+| `value` | text | The initial text, or the initial number or color of a typed field. |
+| `type` | `text`, `number`, `color` | What the field holds. Defaults to `text`. Any other value is a text field, as it is in a browser, and the parser warns. |
 
 `min` and `max` also feed validation on `<input>` and `<textarea>`.
 
@@ -491,6 +493,34 @@ The field carries the class `number-input`. Its step buttons sit in a
 text, and are `.number-step-down` and `.number-step-up`. On the web the field
 is the browser's own `<input type="number">`, with its own step control and
 none of these parts.
+
+#### `type="color"`
+
+A color field, with the value and events of HTML's color input: it holds
+one sRGB color as `#rrggbb` in lowercase. A `value` that is not `#` and six
+hex digits is black, as a browser reads it.
+
+| Attribute | Value | Effect |
+| --- | --- | --- |
+| `value` | `#rrggbb` | The initial color. Defaults to `#000000`. |
+| `bind-value` | signal | Holds the color as `#rrggbb`: the field writes it on every change and follows it when a script writes it. A signal nothing wrote yet starts at the field's color. |
+
+The field is a compact face showing the color. A click, Enter or Space opens
+its panel below it (above it near the bottom of the window), and a click
+outside the field or Escape closes it. In the panel, the square picks
+saturation (across) and brightness (down) at the current hue, the strip
+below it picks the hue, and the text field takes a color typed as
+`#rrggbb` or `rrggbb` on Enter. Every change raises `input` with the new
+value, and closing the panel on a color other than the one it opened with
+raises `change`, as a browser's picker does. There is no alpha.
+
+Every part is styled by class. The face is `.color-input` and its swatch
+`.color-swatch`; the panel is `.color-panel`, holding `.color-area` with its
+`.color-area-thumb`, `.color-hue` with its `.color-hue-thumb`, and the
+`.color-hex` field. The area's shading and the hue strip are gradients in the
+user-agent sheet. On the web the field is the browser's own
+`<input type="color">`, which opens the browser's or the system's picker,
+and none of these parts are in the page.
 
 ### `<textarea>`
 

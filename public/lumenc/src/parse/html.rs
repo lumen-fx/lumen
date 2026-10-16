@@ -1683,13 +1683,6 @@ fn synthesize_widget_parts(
     // keeps the box's width clear of the text. On the web the browser draws
     // its own number field, so none of the parts become elements there.
     if tag == "input" && attrs.input_type == Some(crate::layout_ir::InputType::Number) {
-        // HTML's `value` names the initial number; the field holds it as
-        // text.
-        if attrs.text.as_deref().is_none_or(str::is_empty)
-            && let Some(value) = attrs.value
-        {
-            attrs.text = Some(value.to_string());
-        }
         if !attrs.classes.iter().any(|c| c == "number-input") {
             attrs.classes.insert(0, "number-input".to_string());
         }
@@ -1728,6 +1721,94 @@ fn synthesize_widget_parts(
                 .to_string(),
         ];
         children.insert(0, steps);
+    }
+
+    // `<input type="color">`: the field stays the element, a face holding
+    // the color as `#rrggbb`, and gains its parts: the `.color-swatch` that
+    // shows the color, and the `.color-panel` popup with the saturation-value
+    // area, the hue strip and the hex field. The runtime opens the panel,
+    // places it and its thumbs, and paints the color into them; their looks
+    // are CSS. On the web the browser draws its own color input, so none of
+    // the parts become elements there.
+    if tag == "input" && attrs.input_type == Some(crate::layout_ir::InputType::Color) {
+        use crate::layout_ir::WidgetPart as P;
+        // HTML's value sanitization: anything but `#rrggbb` is black.
+        let rgb = attrs
+            .text
+            .as_deref()
+            .and_then(lumen_core::components::parse_simple_color)
+            .unwrap_or([0, 0, 0]);
+        attrs.text = Some(lumen_core::components::format_simple_color(rgb));
+        if !attrs.classes.iter().any(|c| c == "color-input") {
+            attrs.classes.insert(0, "color-input".to_string());
+        }
+        let part = |tag: &str, part: Option<P>, class: &str, kids: Vec<Element>| {
+            let mut el = Element {
+                tag: tag.to_string(),
+                attrs: Attributes {
+                    part,
+                    ..Attributes::default()
+                },
+                children: kids,
+                ..Default::default()
+            };
+            el.attrs.classes = vec![class.to_string()];
+            el
+        };
+        let floating = |mut el: Element| {
+            set_built_styles(
+                &mut el.attrs,
+                &[("position", "absolute"), ("inset", "0 auto auto 0")],
+            );
+            el
+        };
+        let covering = |mut el: Element| {
+            set_built_styles(&mut el.attrs, &[("position", "absolute"), ("inset", "0")]);
+            el
+        };
+        let area = part(
+            "tile",
+            Some(P::ColorArea),
+            P::ColorArea.class(),
+            vec![
+                covering(part("tile", None, "color-area-white", Vec::new())),
+                covering(part("tile", None, "color-area-black", Vec::new())),
+                floating(part(
+                    "tile",
+                    Some(P::ColorAreaThumb),
+                    P::ColorAreaThumb.class(),
+                    Vec::new(),
+                )),
+            ],
+        );
+        let hue = part(
+            "tile",
+            Some(P::ColorHue),
+            P::ColorHue.class(),
+            vec![floating(part(
+                "tile",
+                Some(P::ColorHueThumb),
+                P::ColorHueThumb.class(),
+                Vec::new(),
+            ))],
+        );
+        let mut hex = part("input", Some(P::ColorHex), P::ColorHex.class(), Vec::new());
+        hex.attrs.text = attrs.text.clone();
+        hex.attrs.tab_index = Some(0);
+        let mut panel = floating(part(
+            "column",
+            Some(P::ColorPanel),
+            P::ColorPanel.class(),
+            vec![area, hue, hex],
+        ));
+        set_built_style(&mut panel.attrs, "display", "none");
+        let swatch = part(
+            "tile",
+            Some(P::ColorSwatch),
+            P::ColorSwatch.class(),
+            Vec::new(),
+        );
+        children.splice(0..0, [swatch, panel]);
     }
 
     // `<progress>` desugar (W5): the track stays the root; a single
@@ -2869,6 +2950,9 @@ fn apply_attribute(
         "value" if tag == "radio" => {
             attrs.radio_value = Some(value.to_string());
         }
+        // An `<input>`'s value is the text it starts with, as in HTML: a
+        // number for a number field, `#rrggbb` for a color field.
+        "value" if tag == "input" => attrs.text = Some(value.to_string()),
         "value" => attrs.value = Some(parse_f32(tag, name, value)?),
         "group" if tag == "radio" => {
             // A signal name like every `bind-*`: `$cat` and `cat` are one signal.
@@ -2934,7 +3018,8 @@ fn apply_attribute(
                     severity: LintSeverity::Warn,
                     message: format!(
                         "`<input type=\"{value}\">` is not an input type Lumen implements; \
-                         the field is a text field. The types are `text` and `number`."
+                         the field is a text field. The types are `text`, `number` and \
+                         `color`."
                     ),
                     line,
                     col,
