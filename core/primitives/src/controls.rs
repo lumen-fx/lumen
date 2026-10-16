@@ -160,7 +160,15 @@ impl Plugin for ControlsPlugin {
         app.add_systems(TickStage::Systems, update_message_buffers);
         // A part floating along an edge (the in-window menu bar, a number
         // field's step buttons) keeps that edge of its parent clear.
-        app.add_systems(TickStage::Systems, crate::reserve::reserve_parent_edges);
+        //
+        // These and the field systems below run only in a document that has
+        // the element they serve, so an app without one pays a condition
+        // check for them and no system run.
+        app.add_systems(
+            TickStage::Systems,
+            crate::reserve::reserve_parent_edges
+                .run_if(any_with_component::<crate::reserve::ReservedEdge>),
+        );
         // `<input type="number">` steps from the arrow keys, the wheel while
         // focused, and its step buttons, as edits the text pipeline applies.
         app.add_systems(
@@ -170,7 +178,8 @@ impl Plugin for ControlsPlugin {
                 crate::number::step_number_on_wheel.after(lumen_input::hit_test),
                 crate::number::step_number_on_buttons.after(lumen_input::dispatch_clicks),
             )
-                .in_set(lumen_core::text_events::TextEditSet::Producers),
+                .in_set(lumen_core::text_events::TextEditSet::Producers)
+                .run_if(any_with_component::<crate::number::NumberInput>),
         );
         // `<input type="color">`'s panel: open and close it, pick from its
         // area and hue strip, take a typed hex, and show the color on its
@@ -185,7 +194,8 @@ impl Plugin for ControlsPlugin {
             )
                 .chain()
                 .after(lumen_input::dispatch_clicks)
-                .before(crate::color::sync_color_bindings),
+                .before(crate::color::sync_color_bindings)
+                .run_if(any_with_component::<crate::color::ColorInput>),
         );
         // The user-input mutators are ordered before lumen-core's
         // signal push-back systems (`push_toggle_to_signal` /
