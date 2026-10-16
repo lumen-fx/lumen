@@ -1,23 +1,28 @@
-//! Mouse-cursor shape selection (spec: I-beam over text inputs, pointer
-//! over clickables, grab/grabbing on scrollbar + slider thumbs).
+//! Mouse-cursor selection.
 //!
-//! [`update_cursor_request`] derives the wanted
-//! [`CursorShape`](lumen_core::input::CursorShape) from the current
-//! [`Hovered`] entity (plus the scrollbar / drag capture FSMs, which can
-//! own the pointer while nothing is hovered) and writes it into the
-//! [`CursorRequest`](lumen_core::input::CursorRequest) resource - only
-//! on change, so the window backend's per-frame poll is a cheap
-//! equality check. `lumen-window-winit` maps the shape onto winit's
-//! `CursorIcon` and applies it to the OS window; headless runners never
-//! read the resource.
+//! [`update_cursor_request`] derives the wanted cursor from the hovered
+//! element's computed CSS `cursor` ([`Cursor`]), unless a widget handle the
+//! stylesheet cannot reach owns the pointer: the overlay scrollbar's thumb
+//! and a slider's thumb show `grab` while hovered and `grabbing` while
+//! dragged. It writes the result into the
+//! [`CursorRequest`](lumen_core::input::CursorRequest) resource - only on
+//! change, so the window backend's per-frame poll is a cheap equality
+//! check. The asset pipeline fills in the decoded image of a `url(...)`
+//! cursor, and `lumen-window-winit` hands the result to the OS window;
+//! headless runners never read the resource.
+//!
+//! The user-agent stylesheet gives text fields `cursor: text` and links
+//! `cursor: pointer`; everything else shows the platform arrow until a
+//! stylesheet says otherwise.
 
 use bevy_ecs::prelude::*;
-use lumen_core::input::{CursorRequest, CursorShape, ScrollbarInteraction, ScrollbarPart};
+use lumen_core::input::{
+    Cursor, CursorKeyword, CursorRequest, ScrollbarInteraction, ScrollbarPart,
+};
 use lumen_core::prelude::*;
 
 use crate::controls::SliderThumb;
 use crate::drag::DragState;
-use crate::hover::Interaction;
 
 /// Plugin: installs [`CursorRequest`] and registers
 /// [`update_cursor_request`] after `hit_test` so it reads this tick's
@@ -34,37 +39,30 @@ impl Plugin for CursorPlugin {
     }
 }
 
-/// Pick the cursor shape for this tick and write it into
-/// [`CursorRequest`] (change-gated):
+/// Pick the cursor for this tick and write it into [`CursorRequest`]
+/// (change-gated):
 ///
-/// 1. **Grabbing** while a handle drag is in flight - a scrollbar thumb
+/// 1. **grabbing** while a handle drag is in flight - a scrollbar thumb
 ///    drag ([`ScrollbarInteraction::drag`]) or an active [`DragState`]
 ///    on a slider or its thumb child.
-/// 2. **Grab** with the pointer resting on a scrollbar thumb
+/// 2. **grab** with the pointer resting on a scrollbar thumb
 ///    ([`ScrollbarInteraction::hover`], thumb part) or a slider thumb.
-/// 3. **Text** (I-beam) over [`TextInput`] entities.
-/// 4. **Pointer** over clickable widgets: the hovered entity or an
-///    ancestor carries [`Interaction`] (hover/press feedback - the
-///    button class), [`Toggleable`], [`SliderValue`], or a
-///    non-negative [`TabIndex`].
-/// 5. **Default** otherwise. Disabled widgets are never [`Hovered`]
-///    (`hit_test` skips them), so they fall here automatically.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+/// 3. Otherwise the hovered element's computed `cursor`: the [`Cursor`]
+///    it or its nearest ancestor declares, which is how the property
+///    inherits; `auto` when none does. Declaring a cursor makes an element
+///    a hit-test candidate, so a transparent box gets its own. Disabled
+///    widgets are never [`Hovered`] (`hit_test` skips them).
+#[allow(clippy::type_complexity)]
 pub fn update_cursor_request(
     mut req: ResMut<CursorRequest>,
     hovered: Query<Entity, With<Hovered>>,
+    cursors: Query<&Cursor>,
     scrollbar_ix: Option<Res<ScrollbarInteraction>>,
     drags: Query<(Entity, &DragState)>,
-    sliders: Query<(), With<SliderValue>>,
-    thumbs: Query<(), With<SliderThumb>>,
-    inputs: Query<(), With<TextInput>>,
-    interactions: Query<(), With<Interaction>>,
-    toggles: Query<(), With<Toggleable>>,
-    tab_indices: Query<&TabIndex>,
+    // A slider or its thumb, and whether it is the thumb.
+    slider_parts: Query<Has<SliderThumb>, Or<(With<SliderValue>, With<SliderThumb>)>>,
     parents: Query<&ChildOf>,
 ) {
-    // Self-or-ancestor membership walk (matches the control-resolution
-    // walk in `crate::controls::resolve_control`).
     let self_or_ancestor = |start: Entity, hit: &dyn Fn(Entity) -> bool| -> bool {
         let mut cur = Some(start);
         while let Some(e) = cur {
@@ -75,7 +73,8 @@ pub fn update_cursor_request(
         }
         false
     };
-    let is_slider_ish = |e: Entity| sliders.contains(e) || thumbs.contains(e);
+    let is_slider_ish = |e: Entity| slider_parts.contains(e);
+    let is_thumb = |e: Entity| slider_parts.get(e).unwrap_or(false);
 
     let ix = scrollbar_ix.as_deref();
     let scrollbar_dragging = ix.is_some_and(|ix| ix.drag.is_some());
@@ -86,39 +85,36 @@ pub fn update_cursor_request(
         ix.hover
             .is_some_and(|(_, _, part)| matches!(part, ScrollbarPart::Thumb))
     });
+    let hovered = hovered.single().ok();
 
-    let shape = if scrollbar_dragging || slider_dragging {
-        // 1. An in-flight handle drag owns the pointer regardless of
-        //    what is hovered (capture may have moved it off the handle).
-        CursorShape::Grabbing
-    } else if let Ok(e) = hovered.single() {
-        if over_scrollbar_thumb || thumbs.contains(e) {
-            // 2. Resting on a grabbable handle.
-            CursorShape::Grab
-        } else if inputs.contains(e) {
-            // 3. Editable text.
-            CursorShape::Text
-        } else if self_or_ancestor(e, &|x| {
-            interactions.contains(x)
-                || toggles.contains(x)
-                || sliders.contains(x)
-                || tab_indices.get(x).is_ok_and(|t| t.0 >= 0)
-        }) {
-            // 4. Clickable.
-            CursorShape::Pointer
-        } else {
-            CursorShape::Default
-        }
-    } else if over_scrollbar_thumb {
-        // Overlay-scrollbar hover resolves the scroll container through
-        // the bar-target path; the thumb itself may hold no `Hovered`.
-        CursorShape::Grab
+    let cursor = if scrollbar_dragging || slider_dragging {
+        // An in-flight handle drag owns the pointer regardless of what is
+        // hovered (capture may have moved it off the handle).
+        Cursor::keyword(CursorKeyword::Grabbing)
+    } else if over_scrollbar_thumb || hovered.is_some_and(is_thumb) {
+        // Resting on a grabbable handle. Overlay-scrollbar hover resolves
+        // the scroll container through the bar-target path, so the thumb
+        // itself may hold no `Hovered`.
+        Cursor::keyword(CursorKeyword::Grab)
     } else {
-        CursorShape::Default
+        // Inheritance: the nearest declaration from the hovered element up.
+        let mut at = hovered;
+        let mut found = None;
+        while let Some(e) = at {
+            if let Ok(cursor) = cursors.get(e) {
+                found = Some(cursor.clone());
+                break;
+            }
+            at = parents.get(e).ok().map(|c| c.parent());
+        }
+        found.unwrap_or_default()
     };
 
-    if req.0 != shape {
-        req.0 = shape;
+    if req.cursor != cursor {
+        req.cursor = cursor;
+        // The decoded image belonged to the cursor being replaced; the
+        // asset pipeline finds the new one's.
+        req.image = None;
     }
 }
 
@@ -132,37 +128,80 @@ mod tests {
     use bevy_ecs::schedule::Schedule;
     use glam::Vec2;
 
-    fn run(world: &mut World) -> CursorShape {
+    fn run(world: &mut World) -> Cursor {
         world.init_resource::<CursorRequest>();
         let mut s = Schedule::default();
         s.add_systems(update_cursor_request);
         s.run(world);
-        world.resource::<CursorRequest>().0
+        world.resource::<CursorRequest>().cursor.clone()
+    }
+
+    fn keyword(k: CursorKeyword) -> Cursor {
+        Cursor::keyword(k)
     }
 
     #[test]
-    fn text_input_wants_ibeam() {
+    fn the_hovered_element_cursor_wins() {
         let mut world = World::new();
-        world.spawn((Hovered, TextInput::default()));
-        assert_eq!(run(&mut world), CursorShape::Text);
+        world.spawn((Hovered, keyword(CursorKeyword::Crosshair)));
+        assert_eq!(run(&mut world), keyword(CursorKeyword::Crosshair));
     }
 
     #[test]
-    fn clickable_wants_pointer_inert_wants_default() {
+    fn a_child_inherits_the_nearest_declared_cursor() {
         let mut world = World::new();
-        let e = world.spawn((Hovered, Interaction::default())).id();
-        assert_eq!(run(&mut world), CursorShape::Pointer);
-        world.entity_mut(e).remove::<(Hovered, Interaction)>();
+        let outer = world.spawn(keyword(CursorKeyword::Move)).id();
+        let inner = world
+            .spawn((keyword(CursorKeyword::Auto), ChildOf(outer)))
+            .id();
+        let leaf = world.spawn((Hovered, ChildOf(inner))).id();
+        assert_eq!(
+            run(&mut world),
+            keyword(CursorKeyword::Auto),
+            "an explicit auto stops the parent's value"
+        );
+        world.entity_mut(leaf).remove::<Hovered>();
+        world.spawn((Hovered, ChildOf(outer)));
+        assert_eq!(run(&mut world), keyword(CursorKeyword::Move));
+    }
+
+    #[test]
+    fn an_element_with_no_cursor_is_auto() {
+        let mut world = World::new();
         world.spawn(Hovered);
-        assert_eq!(run(&mut world), CursorShape::Default);
+        assert_eq!(run(&mut world), keyword(CursorKeyword::Auto));
     }
 
     #[test]
-    fn clickable_ancestor_makes_child_pointer() {
+    fn an_image_cursor_reaches_the_request_with_its_fallback() {
         let mut world = World::new();
-        let button = world.spawn(Interaction::default()).id();
-        world.spawn((Hovered, ChildOf(button)));
-        assert_eq!(run(&mut world), CursorShape::Pointer);
+        let pen = Cursor {
+            images: std::sync::Arc::new([lumen_core::input::CursorImageRef {
+                path: "pen.png".into(),
+                hotspot: Some((2.0, 14.0)),
+            }]),
+            keyword: CursorKeyword::Crosshair,
+        };
+        world.spawn((Hovered, pen.clone()));
+        assert_eq!(run(&mut world), pen);
+    }
+
+    #[test]
+    fn a_new_cursor_drops_the_old_decoded_image() {
+        let mut world = World::new();
+        world.insert_resource(CursorRequest {
+            cursor: keyword(CursorKeyword::Wait),
+            image: Some(lumen_core::input::CursorImage {
+                id: 1,
+                width: 1,
+                height: 1,
+                rgba: std::sync::Arc::new([0, 0, 0, 255]),
+                hotspot: (0, 0),
+            }),
+        });
+        world.spawn((Hovered, keyword(CursorKeyword::Move)));
+        run(&mut world);
+        assert!(world.resource::<CursorRequest>().image.is_none());
     }
 
     #[test]
@@ -177,22 +216,34 @@ mod tests {
             })
             .id();
         let thumb = world.spawn((SliderThumb, ChildOf(slider), Hovered)).id();
-        assert_eq!(run(&mut world), CursorShape::Grab, "resting on the thumb");
+        assert_eq!(
+            run(&mut world),
+            keyword(CursorKeyword::Grab),
+            "resting on the thumb"
+        );
 
         world.entity_mut(thumb).insert(DragState::Active {
             start: Vec2::ZERO,
             last: Vec2::new(10.0, 0.0),
         });
-        assert_eq!(run(&mut world), CursorShape::Grabbing, "thumb drag");
+        assert_eq!(
+            run(&mut world),
+            keyword(CursorKeyword::Grabbing),
+            "thumb drag"
+        );
 
         // Dragged off the thumb (hover confined by pointer capture ->
         // nothing hovered): still grabbing.
         world.entity_mut(thumb).remove::<Hovered>();
-        assert_eq!(run(&mut world), CursorShape::Grabbing, "capture keeps it");
+        assert_eq!(
+            run(&mut world),
+            keyword(CursorKeyword::Grabbing),
+            "capture keeps it"
+        );
     }
 
     #[test]
-    fn generic_draggable_tile_does_not_grab() {
+    fn generic_draggable_tile_keeps_its_own_cursor() {
         let mut world = World::new();
         world.spawn((
             Hovered,
@@ -200,24 +251,18 @@ mod tests {
                 start: Vec2::ZERO,
                 last: Vec2::ZERO,
             },
+            keyword(CursorKeyword::Move),
         ));
         assert_eq!(
             run(&mut world),
-            CursorShape::Default,
+            keyword(CursorKeyword::Move),
             "only slider/scrollbar handles claim the grab cursors"
         );
     }
 
     #[test]
-    fn tab_index_negative_is_not_clickable() {
+    fn nothing_hovered_is_auto() {
         let mut world = World::new();
-        world.spawn((Hovered, TabIndex(-1)));
-        assert_eq!(run(&mut world), CursorShape::Default);
-    }
-
-    #[test]
-    fn nothing_hovered_is_default() {
-        let mut world = World::new();
-        assert_eq!(run(&mut world), CursorShape::Default);
+        assert_eq!(run(&mut world), keyword(CursorKeyword::Auto));
     }
 }

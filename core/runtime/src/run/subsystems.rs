@@ -159,7 +159,7 @@ pub(crate) fn register_core(app: &mut App) -> Result<(), RunError> {
     app.add_plugin(lumen_os_dnd::DndPlugin);
     app.add_plugin(HoverTintPlugin);
     app.add_plugin(lumen_primitives::StateStylePlugin);
-    // Wave 3: cursor-shape selection (I-beam / pointer / grab). The
+    // Mouse-cursor selection from the hovered element's CSS `cursor`. The
     // window backend polls `CursorRequest` each frame; headless runs
     // simply never read it.
     app.add_plugin(lumen_primitives::CursorPlugin);

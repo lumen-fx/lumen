@@ -52,6 +52,12 @@ button { min-height: 36; }
    sizes: typed text and author padding still grow it. */
 input, textarea { min-height: 24; min-width: 160; }
 
+/* The pointer over text that can be typed in, and over a link, as in a
+   browser. Everything else shows the platform arrow until a stylesheet
+   picks a `cursor`. */
+input, textarea { cursor: text; }
+a { cursor: pointer; }
+
 /* No text to measure - the track is a fixed theme metric. */
 toggle { height: 36; min-width: 96; }
 /* Compact pill track (iOS / Material switch proportions), narrower
