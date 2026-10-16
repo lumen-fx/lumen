@@ -47,6 +47,7 @@ js-sys.workspace = true
 # something calls it.
 web-sys = { workspace = true, features = [
     "AddEventListenerOptions",
+    "CssStyleDeclaration",
     "DataTransfer",
     "Document",
     "DomRect",

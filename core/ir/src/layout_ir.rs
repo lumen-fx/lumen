@@ -1625,6 +1625,9 @@ pub enum WidgetPart {
     ColorAlphaFill,
     /// The `.color-alpha-thumb` marking the chosen alpha on the strip.
     ColorAlphaThumb,
+    /// The `.split-gutter` the parser puts between two children of a
+    /// `<split>`: the separator that resizes them.
+    SplitGutter,
 }
 
 /// What an `<input>` holds when it is not text, from its `type` attribute.
@@ -1683,6 +1686,7 @@ impl WidgetPart {
             Self::ColorAlpha => "color-alpha",
             Self::ColorAlphaFill => "color-alpha-fill",
             Self::ColorAlphaThumb => "color-alpha-thumb",
+            Self::SplitGutter => "split-gutter",
         }
     }
 }

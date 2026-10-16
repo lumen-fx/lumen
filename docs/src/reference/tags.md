@@ -264,6 +264,8 @@ CSS, so a bare app still has usable controls. Any rule of yours wins.
 - `checkbox`, `radio`: `min-height: 24`.
 - `progress`: `width: 100%`, `height: 6`.
 - `.checkbox-box`, `.radio-dot`: 18 by 18.
+- `.split-pane`: `min-width: 0`, `min-height: 0`.
+- `.split-gutter`: `flex-basis: 6`, neither growing nor shrinking.
 
 `<input>` and `<textarea>` also default to `overflow: hidden` on both
 axes unless you author `overflow`, `overflow-x`, or `overflow-y`.
@@ -333,6 +335,49 @@ panels.
 An `<overlay>` under a parent that is content-sized and has no in-flow
 children covers nothing, because that parent measures zero. See
 [Positioning](css.md#positioning).
+
+### `<split>`
+
+Panes the user resizes. Each child is a pane, and a gutter goes between
+every two of them; dragging a gutter with the pointer moves the boundary
+between the two panes beside it.
+
+```html
+<split class="workspace">
+  <column class="tools" min-width="120"/>
+  <column class="canvas" grow="1"/>
+  <column class="layers" min-width="160"/>
+</split>
+```
+
+The panes lay out along the split's `flex-direction`: a row unless a style
+sets `flex-direction: column`, which stacks them and makes the gutters
+horizontal. A gutter never takes a pane below its `min-width`
+(`min-height` in a column) or past its `max-width` (`max-height`). The
+built-in floor makes every pane's own minimum zero, so a pane without a
+`min-width` can be dragged down to nothing.
+
+A gutter is focusable and is a `separator`, the web's window splitter.
+While it is focused, ArrowLeft and ArrowRight (ArrowUp and ArrowDown in a
+column) move it by 10 px, Home gives the pane before it its smallest size
+and End its largest. It carries `aria-orientation` (`vertical` between
+panes side by side), and `aria-valuenow`, `aria-valuemin` and
+`aria-valuemax`: the share of its two panes the pane before it takes, in
+percent, and the least and the most the panes' limits let it take.
+
+A resize sets the panes' `flex-basis`, holding it over what the styles
+say. The first resize holds every pane at the size it has, and later ones
+move size from one neighbour to the other, so the panes' total stays the
+same. The panes keep their own `grow` and `shrink`, so when the split
+itself changes size they share the difference as their styles say. The
+sizes are not saved or bound to a signal.
+
+The panes carry the class `split-pane` and the gutters `split-gutter`, and
+every skin styles the gutters by that class, `:hover` and `:focus`
+included. The gutter's thickness is its `flex-basis`, 6 by default. A
+`<for>` or an `<if>` written as a child of the split is one pane. On the web
+the split, its panes and its gutters are the same elements, and the page's
+app does the dragging and the keys.
 
 ## Text and media
 

@@ -3767,6 +3767,47 @@ fn a_color_input_with_alpha_keeps_the_alpha() {
     assert_eq!(field.children[1].children.len(), 3, "no alpha strip");
 }
 
+/// `<split>` keeps its children as panes, marked `split-pane`, with a
+/// focusable `.split-gutter` between every two; a lone child gets none.
+#[test]
+fn a_split_puts_a_gutter_between_its_panes() {
+    use lumen_ir::layout_ir::WidgetPart;
+    let ir = parse_html(
+        r#"<root><split><column id="a"/><column id="b" class="x"/><row id="c"/></split></root>"#,
+    )
+    .expect("parse");
+    let split = &ir.root.children[0];
+    assert_eq!(split.tag, "split");
+    let kids: Vec<_> = split
+        .children
+        .iter()
+        .map(|c| (c.tag.as_str(), c.attrs.part, c.attrs.classes.clone()))
+        .collect();
+    let gutter = (
+        "div",
+        Some(WidgetPart::SplitGutter),
+        vec!["split-gutter".to_string()],
+    );
+    assert_eq!(
+        kids,
+        vec![
+            ("column", None, vec!["split-pane".to_string()]),
+            gutter.clone(),
+            (
+                "column",
+                None,
+                vec!["x".to_string(), "split-pane".to_string()]
+            ),
+            gutter,
+            ("row", None, vec!["split-pane".to_string()]),
+        ]
+    );
+    assert_eq!(split.children[1].attrs.tab_index, Some(0));
+
+    let ir = parse_html(r#"<root><split><column/></split></root>"#).expect("parse");
+    assert_eq!(ir.root.children[0].children.len(), 1);
+}
+
 /// `value` on a text field is the text it starts with, as in HTML.
 #[test]
 fn an_input_value_is_its_initial_text() {

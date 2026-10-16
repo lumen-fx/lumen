@@ -356,6 +356,7 @@ impl ComputedStyle {
             height: Some(self.style.height),
             min_height: Some(self.style.min_height),
             padding: Some(self.style.padding),
+            basis: Some(self.style.basis),
             fill: Some(v.and_then(|v| v.fill.clone())),
             shadows: Some(v.map(|v| v.shadows.clone()).unwrap_or_default()),
             border: Some(v.and_then(|v| v.border)),

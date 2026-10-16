@@ -91,6 +91,13 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(id) = &attrs.id {
         out.push(("id", id.clone()));
     }
+    // A split's gutter is the web's window splitter: a focusable
+    // `separator`. Its orientation and value follow the panes it sits
+    // between, which only the page's layout knows, so the app writes them
+    // once it has measured.
+    if attrs.part == Some(lumen_ir::layout_ir::WidgetPart::SplitGutter) {
+        out.push(("role", "separator".to_string()));
+    }
     // An `<input>` that holds something other than text is the browser's
     // own control of that type.
     let typed_input = attrs.input_type.filter(|_| name == "input");
@@ -603,6 +610,18 @@ mod tests {
         assert_eq!(find(&pairs, "min"), Some("0"));
         assert_eq!(find(&pairs, "max"), Some("1"));
         assert_eq!(find(&pairs, "step"), Some("0.25"));
+    }
+
+    #[test]
+    fn a_split_gutter_is_a_focusable_separator() {
+        let mut a = attrs();
+        a.part = Some(lumen_ir::layout_ir::WidgetPart::SplitGutter);
+        a.classes = vec!["split-gutter".into()];
+        a.tab_index = Some(0);
+        let pairs = html_attrs("div", &a);
+        assert_eq!(find(&pairs, "role"), Some("separator"));
+        assert_eq!(find(&pairs, "tabindex"), Some("0"));
+        assert_eq!(find(&html_attrs("div", &attrs()), "role"), None);
     }
 
     #[test]

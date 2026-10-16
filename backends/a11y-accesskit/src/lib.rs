@@ -187,6 +187,7 @@ fn role_for_classes(classes: &LumenClasses) -> Option<Role> {
             "menu-panel" => Role::Menu,
             "menu-item" => Role::MenuItem,
             "menu-separator" => Role::Splitter,
+            "split-gutter" => Role::Splitter,
             "date-picker" => Role::DateInput,
             "time-picker" => Role::TimeInput,
             _ => continue,

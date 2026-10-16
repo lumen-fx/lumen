@@ -1153,10 +1153,11 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
     // same reason, and what it routes at an entity it routes through
     // `FocusTracker`.
     //
-    // Nothing below calls `prevent_default`. Whether an app has a handler
-    // bound for a key is only knowable a tick later, when the browser will
-    // no longer take the answer, so the page keeps its own behaviour for
-    // every key that is forwarded: Space and PageDown still scroll it.
+    // Nothing below calls `prevent_default` but for the keys a focused
+    // split gutter moves on. Whether an app has a handler bound for a key
+    // is only knowable a tick later, when the browser will no longer take
+    // the answer, so the page keeps its own behaviour for every other key
+    // that is forwarded: Space and PageDown still scroll it.
     if let Some(document) = root.owner_document().filter(|_| !DOCUMENT_BOUND.get()) {
         DOCUMENT_BOUND.set(true);
         // The pointer listens on the document too, and for the same kind of
@@ -1182,6 +1183,13 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                     let modifiers = modifiers_of(event);
                     if browser_handles(&key, modifiers, target_kind(event)) {
                         return;
+                    }
+                    // A focused split gutter moves on these keys, and the
+                    // page must not scroll for them as well. Unlike a key a
+                    // handler may or may not answer, this is known now.
+                    let target = event.target().and_then(|t| t.dyn_into::<Element>().ok());
+                    if crate::split::is_gutter_key(target.as_ref(), &event.key()) {
+                        event.prevent_default();
                     }
                     queue(PendingEvent::Key {
                         down,
