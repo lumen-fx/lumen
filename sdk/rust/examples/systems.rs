@@ -32,7 +32,10 @@ fn main() -> lumenui::Result<()> {
     lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
-                .with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
+                .with_source(lumen_source!(
+                    "examples/src/main.lmn",
+                    "examples/src/main.css"
+                ))
                 .with_title("Lumen systems demo - direct Visuals mutation"),
         )
         .add_systems(

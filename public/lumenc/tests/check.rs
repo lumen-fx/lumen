@@ -163,10 +163,12 @@ fn every_template_checks_clean() {
             "template `{}` should render at least one element",
             template.name
         );
+        // A Rust SDK template's logic is its Rust program, not a script.
+        let rust = dir.join("Cargo.toml").is_file();
         assert_eq!(
             report.has_script,
-            template.name != "blank",
-            "every template but `blank` ships a script"
+            template.name != "blank" && !rust,
+            "every template but `blank` and the Rust ones ships a script"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

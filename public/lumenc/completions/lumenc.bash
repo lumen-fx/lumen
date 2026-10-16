@@ -144,7 +144,7 @@ _lumenc() {
         new)
             # <name> is new, so only the template argument completes.
             if [ "$count" -eq 1 ]; then
-                mapfile -t COMPREPLY < <(compgen -W "blank hello counter form todo dashboard settings hotkeys" -- "$cur")
+                mapfile -t COMPREPLY < <(compgen -W "blank hello counter form todo dashboard settings hotkeys rust" -- "$cur")
             fi
             ;;
         fmt)

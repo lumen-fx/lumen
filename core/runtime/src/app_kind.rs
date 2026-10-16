@@ -252,55 +252,106 @@ pub fn dispatch(kind: AppKind, dir: &Path, mode: Mode) -> Result<Vec<CommandSpec
 }
 
 /// Rust: `cargo run` (Run) / `cargo build --release` (Build), in the app dir.
-/// The Rust bin reaches the Lumen runtime through the `lumen` crate itself.
+///
+/// A plain cargo build with nothing added to its environment: `lumenui`
+/// links the release's prebuilt engine statically, so the executable cargo
+/// writes carries the whole runtime and needs no library beside it.
 fn rust_specs(dir: &Path, mode: Mode) -> Vec<CommandSpec> {
-    let mut spec = match mode {
+    let spec = match mode {
         Mode::Run => CommandSpec::new("cargo", dir).arg("run"),
         Mode::Build => CommandSpec::new("cargo", dir).arg("build").arg("--release"),
     };
-    for (key, value) in rust_dynamic_env(None) {
-        spec = spec.envv(key, value);
-    }
     vec![spec]
 }
 
-/// The environment a Rust app is compiled in so that it links the shared Lumen
-/// engine instead of compiling a copy of it into itself.
+// -- Headless handoff --------------------------------------------------------
+
+/// The variable that asks an SDK app's own process for a rendered headless
+/// run. Set, to any value, it means no window.
+pub const HEADLESS_ENV: &str = "LUMEN_HEADLESS";
+/// The `--ticks N` of a handed-off headless run.
+pub const HEADLESS_TICKS_ENV: &str = "LUMEN_HEADLESS_TICKS";
+/// The `--dpr N` of a handed-off headless run.
+pub const HEADLESS_DPR_ENV: &str = "LUMEN_HEADLESS_DPR";
+/// The `--size WxH` of a handed-off headless run.
+pub const HEADLESS_SIZE_ENV: &str = "LUMEN_HEADLESS_SIZE";
+
+/// `lumenc run --headless` for an app that is its own program.
 ///
-/// Two flags do it. `-C prefer-dynamic` tells the compiler to take the shared
-/// form of a crate wherever one exists, which is what makes the app pick the
-/// engine library over the static one beside it; it also applies to the Rust
-/// standard library, so the app and the engine end up sharing one copy of that
-/// too rather than each carrying its own. The second adds the app's own
-/// directory to the list the loader searches, so the shared libraries sitting
-/// beside a packaged executable are found without a `LD_LIBRARY_PATH` in front
-/// of it.
-///
-/// Windows gets neither, and the returned environment is empty there. No
-/// linkable engine is built for it - a shared library exporting a graph this
-/// large is past what its import-library format can describe - so a Rust app
-/// on Windows carries the runtime inside its own binary, which is what the
-/// absence of these flags produces.
-///
-/// `target` is a Rust target triple to cross-compile for, or `None` for this
-/// machine. Anything already in `RUSTFLAGS` is kept and these are added after
-/// it, because setting the variable at all makes cargo ignore the `rustflags`
-/// an app's own config may have set.
-pub fn rust_dynamic_env(target: Option<&str>) -> Vec<(String, String)> {
-    let (is_macos, is_windows) = match target {
-        Some(triple) => (triple.contains("apple"), triple.contains("windows")),
-        None => (cfg!(target_os = "macos"), cfg!(target_os = "windows")),
-    };
-    if is_windows {
-        return Vec::new();
+/// A markup app runs headless inside lumenc. A Rust SDK app is a separate
+/// executable that cargo builds and starts, so lumenc sets these variables on
+/// that process instead, and the SDK's `App::run` reads them and takes the
+/// rendered headless path with the same options. Both sides go through this
+/// type, so the names and the value formats live in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HeadlessHandoff {
+    /// Run exactly this many ticks, then close.
+    pub ticks: Option<u64>,
+    /// Device pixel ratio of the offscreen target.
+    pub dpr: Option<f32>,
+    /// Logical viewport size.
+    pub size: Option<(u32, u32)>,
+}
+
+impl HeadlessHandoff {
+    /// The variables that hand this run to the child process.
+    pub fn to_env(self) -> Vec<(String, String)> {
+        let mut env = vec![(HEADLESS_ENV.to_string(), "1".to_string())];
+        if let Some(n) = self.ticks {
+            env.push((HEADLESS_TICKS_ENV.to_string(), n.to_string()));
+        }
+        if let Some(dpr) = self.dpr {
+            env.push((HEADLESS_DPR_ENV.to_string(), dpr.to_string()));
+        }
+        if let Some((w, h)) = self.size {
+            env.push((HEADLESS_SIZE_ENV.to_string(), format!("{w}x{h}")));
+        }
+        env
     }
-    let rpath = if is_macos { "@loader_path" } else { "$ORIGIN" };
-    let flags = format!("-C prefer-dynamic -C link-arg=-Wl,-rpath,{rpath}");
-    let combined = match std::env::var("RUSTFLAGS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {flags}"),
-        _ => flags,
-    };
-    vec![("RUSTFLAGS".to_string(), combined)]
+
+    /// The run this process was handed, or `None` when it was started
+    /// without one. A malformed value is an error rather than a default, so
+    /// a typo in a CI script fails instead of opening a window.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// [`Self::from_env`] over any variable lookup.
+    pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, String> {
+        if get(HEADLESS_ENV).is_none() {
+            return Ok(None);
+        }
+        let ticks = match get(HEADLESS_TICKS_ENV) {
+            Some(v) => Some(
+                v.trim()
+                    .parse::<u64>()
+                    .map_err(|_| format!("{HEADLESS_TICKS_ENV}={v} is not a tick count"))?,
+            ),
+            None => None,
+        };
+        let dpr = match get(HEADLESS_DPR_ENV) {
+            Some(v) => match v.trim().parse::<f32>() {
+                Ok(d) if d.is_finite() && d > 0.0 => Some(d),
+                _ => return Err(format!("{HEADLESS_DPR_ENV}={v} is not a positive number")),
+            },
+            None => None,
+        };
+        let size = match get(HEADLESS_SIZE_ENV) {
+            Some(v) => Some(
+                parse_size(v.trim())
+                    .ok_or_else(|| format!("{HEADLESS_SIZE_ENV}={v} is not a WxH size"))?,
+            ),
+            None => None,
+        };
+        Ok(Some(Self { ticks, dpr, size }))
+    }
+}
+
+/// `WxH`, both sides above zero.
+fn parse_size(v: &str) -> Option<(u32, u32)> {
+    let (w, h) = v.split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// C++: drive CMake. Configure then build; the Release toggle switches the
@@ -413,15 +464,20 @@ fn execute(specs: &[CommandSpec]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Reroute `lumenc run <dir>` to the SDK app's native toolchain.
-pub fn run_app_external(kind: AppKind, dir: &Path) -> ExitCode {
-    let specs = match dispatch(kind, dir, Mode::Run) {
+/// Reroute `lumenc run <dir>` to the SDK app's native toolchain, with `env`
+/// added to every command it runs; that is how a [`HeadlessHandoff`] reaches
+/// the app's process.
+pub fn run_app_external(kind: AppKind, dir: &Path, env: &[(String, String)]) -> ExitCode {
+    let mut specs = match dispatch(kind, dir, Mode::Run) {
         Ok(specs) => specs,
         Err(e) => {
             eprintln!("lumenc run: {e}");
             return ExitCode::from(2);
         }
     };
+    for spec in &mut specs {
+        spec.env.extend(env.iter().cloned());
+    }
     let code = execute(&specs);
     if kind == AppKind::Cpp {
         // TODO(cpp-run): CMake produces one binary per project with a
@@ -594,6 +650,60 @@ mod tests {
         assert_eq!(specs[0].program, "cargo");
         assert_eq!(specs[0].args, vec!["build", "--release"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `lumenui` links the prebuilt engine statically. `-C prefer-dynamic`
+    /// would turn the standard library into a shared one the executable then
+    /// needs beside it, which no package carries.
+    #[test]
+    fn a_rust_build_adds_nothing_to_the_environment() {
+        let dir = scratch("rust-env");
+        for mode in [Mode::Run, Mode::Build] {
+            let specs = dispatch(AppKind::Rust, &dir, mode).unwrap();
+            assert!(specs[0].env.is_empty(), "{:?}", specs[0].env);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn lookup(vars: &[(String, String)]) -> impl Fn(&str) -> Option<String> + '_ {
+        move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn a_headless_handoff_reads_back_what_it_wrote() {
+        let handoff = HeadlessHandoff {
+            ticks: Some(120),
+            dpr: Some(2.0),
+            size: Some((800, 600)),
+        };
+        let env = handoff.to_env();
+        assert_eq!(HeadlessHandoff::from_vars(lookup(&env)), Ok(Some(handoff)));
+
+        let bare = HeadlessHandoff::default().to_env();
+        assert_eq!(bare, vec![(HEADLESS_ENV.to_string(), "1".to_string())]);
+        assert_eq!(
+            HeadlessHandoff::from_vars(lookup(&bare)),
+            Ok(Some(HeadlessHandoff::default()))
+        );
+        assert_eq!(HeadlessHandoff::from_vars(|_| None), Ok(None));
+    }
+
+    #[test]
+    fn a_malformed_headless_handoff_is_an_error() {
+        for (name, value) in [
+            (HEADLESS_TICKS_ENV, "many"),
+            (HEADLESS_DPR_ENV, "0"),
+            (HEADLESS_DPR_ENV, "-1"),
+            (HEADLESS_SIZE_ENV, "800"),
+            (HEADLESS_SIZE_ENV, "0x600"),
+        ] {
+            let env = vec![
+                (HEADLESS_ENV.to_string(), "1".to_string()),
+                (name.to_string(), value.to_string()),
+            ];
+            let err = HeadlessHandoff::from_vars(lookup(&env)).unwrap_err();
+            assert!(err.contains(name), "{err}");
+        }
     }
 
     #[test]

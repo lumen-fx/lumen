@@ -81,7 +81,7 @@ complete -c lumenc -n '__fish_seen_subcommand_from update' -l dir -xa '(__fish_c
 # --- new ----------------------------------------------------------------------
 
 complete -c lumenc -n '__fish_seen_subcommand_from new' -l list -s l -d 'Print the template gallery'
-complete -c lumenc -n '__fish_seen_subcommand_from new' -a 'blank hello counter form todo dashboard settings hotkeys' -d 'Template'
+complete -c lumenc -n '__fish_seen_subcommand_from new' -a 'blank hello counter form todo dashboard settings hotkeys rust' -d 'Template'
 
 # --- fmt ----------------------------------------------------------------------
 

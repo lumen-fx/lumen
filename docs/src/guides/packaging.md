@@ -397,16 +397,18 @@ produced, so packaging one is the same command:
 lumenc package myapp
 ```
 
-Every kind produces an executable, and the runtime library goes beside it, the
-same as for a markup app. How the executable is produced is what differs:
+Every kind produces an executable. A C++ or Python app gets the runtime
+library beside it, the same as a markup app; a Rust app has the engine linked
+in. How the executable is produced is what differs:
 
-- **Rust.** `cargo build --release` runs, and the binary it reports is copied
-  in under your app's name. On Linux and macOS a Rust app links the engine
-  rather than compiling a copy into itself, so the executable is small and the
-  engine travels beside it, out of the same build. On Windows the runtime is
-  inside the executable and nothing travels with it. That engine is whatever
-  the app's own cargo build linked, so `[capabilities]` does not trim it, and
-  a package of a Rust app with the table set says so.
+- **Rust.** `cargo build --release` runs with the compiler your
+  `rust-toolchain.toml` pins, and the binary it reports is copied in under
+  your app's name. The engine is linked into that binary from the release's
+  prebuilt engine, so no runtime library travels with it. `[capabilities]`
+  does not trim that engine, and a package of a Rust app with the table set
+  says so. A runtime module cannot load into a Rust app, which has no shared
+  engine, so packaging one that declares a runtime module stops and names it;
+  a portable plugin travels as it does for every kind.
 - **C++.** CMake configures and builds, and the executable from the build tree
   is copied in. If the project builds more than one executable, the most recent
   one is packaged and the others are named on the way past; give the app its
@@ -434,18 +436,18 @@ the rest.
 lumenc package myapp --target linux-aarch64
 ```
 
-For a Rust app the target triple is passed to cargo, so
-`rustup target add aarch64-unknown-linux-gnu` is what makes it work. For a C++
+A Rust app is the exception: `lumenui`'s prebuilt engine carries the
+proc-macro libraries the compiler runs, built for one kind of machine, so a
+Rust app builds only on the platform it targets. Package it on a machine of
+that platform. For a C++
 app, set `CMAKE_TOOLCHAIN_FILE` to a toolchain file for that platform; there is
 nothing Lumen can supply in its place, so packaging says so rather than
 building this machine's binary under another platform's name. A Python app is
 frozen against the interpreter doing the freezing and can only be packaged for
 the platform you are on.
 
-A Rust app needs nothing from the release channel: the engine it links comes
-out of its own cargo build, so `rustup target add` is the whole requirement.
-The other kinds open the C library, and that one is fetched for the platform
-you asked for.
+The C++ and Python kinds open the C library, and that one is fetched for the
+platform you asked for.
 
 Every flag on every command here is in the [CLI
 reference](../reference/cli.md).

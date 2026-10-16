@@ -58,6 +58,10 @@ pub const TEMPLATES: &[Template] = &[
         name: "hotkeys",
         description: "Native shell showcase: global hotkeys, tray icon, OS notifications.",
     },
+    Template {
+        name: "rust",
+        description: "The counter as a Rust program on the lumenui SDK, with a rendering test.",
+    },
 ];
 
 /// Look up a template by CLI name.
@@ -193,6 +197,7 @@ pub fn write_template(name: &str, dest: &Path) -> Result<Vec<String>, Error> {
     let source = template_dir(name)?;
     let mut written = Vec::new();
     copy_dir(&source, dest, "", &mut written)?;
+    adapt_cargo_manifest(dest, env!("CARGO_PKG_VERSION"))?;
     if let Some(file) = pin_rust_toolchain(dest, RUST_CHANNEL)? {
         written.push(file);
     }
@@ -231,6 +236,66 @@ fn pin_rust_toolchain(dest: &Path, channel: Option<&str>) -> Result<Option<Strin
         source,
     })?;
     Ok(Some(RUST_TOOLCHAIN.to_string()))
+}
+
+/// Make a scaffolded Rust SDK app's `Cargo.toml` this app's: the package is
+/// named after the directory it was written to, the way `cargo new` names
+/// one, and the `lumenui` dependency asks for `version`, the Lumen release
+/// this lumenc is. The templates are not versioned with Lumen, and `lumenui`
+/// links the prebuilt engine of exactly its own release, so the version comes
+/// from here rather than from the template. A template with no `Cargo.toml`
+/// is left alone.
+fn adapt_cargo_manifest(dest: &Path, version: &str) -> Result<(), Error> {
+    let path = dest.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let invalid = |message: String| Error::Io {
+        path: path.clone(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, message),
+    };
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| invalid(e.to_string()))?;
+    if let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_like_mut())
+        && package.contains_key("name")
+        && let Some(name) = dest.file_name().map(|n| package_name(&n.to_string_lossy()))
+    {
+        package.insert("name", toml_edit::value(name));
+    }
+    if let Some(dep) = doc
+        .get_mut("dependencies")
+        .and_then(|d| d.as_table_like_mut())
+        .and_then(|d| d.get_mut("lumenui"))
+    {
+        if let Some(table) = dep.as_table_like_mut() {
+            table.insert("version", toml_edit::value(version));
+        } else {
+            *dep = toml_edit::value(version);
+        }
+    }
+    std::fs::write(&path, doc.to_string()).map_err(|source| Error::Io { path, source })
+}
+
+/// `dir` as a cargo package name: letters, digits, `-` and `_`, not
+/// starting with a digit.
+fn package_name(dir: &str) -> String {
+    let name: String = dir
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_matches('-');
+    match name.chars().next() {
+        None => "app".to_string(),
+        Some(c) if c.is_ascii_digit() => format!("app-{name}"),
+        Some(_) => name.to_string(),
+    }
 }
 
 /// Copy everything under `from` into `to`, recording each file as
@@ -379,6 +444,52 @@ mod tests {
         assert_eq!(written.as_deref(), Some("rust-toolchain.toml"));
         let pin = std::fs::read_to_string(root.join("rust-toolchain.toml")).unwrap();
         assert!(pin.contains("[toolchain]\nchannel = \"1.97.0\"\n"), "{pin}");
+    }
+
+    #[test]
+    fn a_rust_sdk_template_is_named_after_its_directory_and_this_release() {
+        let root = scratch_dir("rust-manifest");
+        let dest = root.join("pixel editor");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(
+            dest.join("Cargo.toml"),
+            "[package]\nname = \"app\" # renamed\nedition = \"2024\"\n\n\
+             [lib]\nname = \"app\"\n\n[dependencies]\nlumenui = \"0.0.1\"\n",
+        )
+        .unwrap();
+        adapt_cargo_manifest(&dest, "9.8.7").unwrap();
+        let text = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(doc["package"]["name"].as_str(), Some("pixel-editor"));
+        assert_eq!(doc["lib"]["name"].as_str(), Some("app"));
+        assert_eq!(doc["dependencies"]["lumenui"].as_str(), Some("9.8.7"));
+
+        // A table dependency keeps its other keys.
+        std::fs::write(
+            dest.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n\n[dependencies]\n\
+             lumenui = { version = \"0.0.1\", default-features = false }\n",
+        )
+        .unwrap();
+        adapt_cargo_manifest(&dest, "9.8.7").unwrap();
+        let text = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            doc["dependencies"]["lumenui"]["version"].as_str(),
+            Some("9.8.7")
+        );
+        assert_eq!(
+            doc["dependencies"]["lumenui"]["default-features"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_directory_name_becomes_a_package_name() {
+        assert_eq!(package_name("editor"), "editor");
+        assert_eq!(package_name("my app!"), "my-app");
+        assert_eq!(package_name("2048"), "app-2048");
+        assert_eq!(package_name("..."), "app");
     }
 
     #[test]

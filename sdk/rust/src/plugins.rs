@@ -16,7 +16,7 @@
 //!     .add_plugins(
 //!         // Dev-hot-reload-by-default: reads from disk + watches in `cargo
 //!         // run`, `include_str!`-embeds in `cargo run --release`.
-//!         LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
+//!         LumenDefaultPlugins.with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
 //!     )
 //!     .run()
 //! # }
@@ -386,13 +386,27 @@ impl Source {
     /// [`lumen_source!`](crate::lumen_source) in debug builds; the file itself
     /// is not read here - the runtime loads `main.lmn` / `main.css` from the
     /// derived directory and watches them.
+    ///
+    /// An app keeps its code under `src/` with `lumen.toml` beside that
+    /// directory, so a markup file in a directory named `src` makes the
+    /// directory above it the app dir: `lumen_source!("src/main.lmn")` loads
+    /// the app at the crate root, `lumen.toml` included.
     pub fn disk(markup_file: impl AsRef<Path>) -> Self {
         let path = markup_file.as_ref();
-        let dir = path
+        let parent = path
             .parent()
             .filter(|d| !d.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
+        let dir = if parent.file_name().is_some_and(|n| n == "src") {
+            parent
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."))
+        } else {
+            parent
+        };
         Source::Disk { dir }
     }
 
@@ -421,8 +435,9 @@ impl Source {
 /// The same source line does both - you never branch on the build profile.
 ///
 /// The disk/hot-reload path follows the app-dir convention: name the markup
-/// `main.lmn` and the stylesheet `main.css` and keep them in one directory, so
-/// the runtime's `main.lmn` / `main.css` lookup resolves. In release the exact
+/// `main.lmn` and the stylesheet `main.css` and keep them in a `src/`
+/// directory, with `lumen.toml` beside it, so the runtime's `src/main.lmn` /
+/// `src/main.css` lookup resolves. In release the exact
 /// named files are embedded.
 ///
 /// ```no_run
@@ -434,7 +449,7 @@ impl Source {
 ///     .add_plugins(
 ///         LumenDefaultPlugins
 ///             // hot-reloads in `cargo run`, embedded in `cargo run --release`
-///             .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),
+///             .with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
 ///     )
 ///     .run()
 /// # }
@@ -447,7 +462,7 @@ impl Source {
 /// # use lumenui::prelude::*;
 /// # fn demo() -> lumenui::Result<()> {
 /// # lumenui::App::new().add_plugins(
-/// LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn"))
+/// LumenDefaultPlugins.with_source(lumen_source!("examples/src/main.lmn"))
 /// # ).run() }
 /// ```
 #[macro_export]
@@ -513,7 +528,7 @@ impl LumenDefaultPlugins {
     /// # use lumenui::prelude::*;
     /// # fn demo() -> lumenui::Result<()> {
     /// # lumenui::App::new().add_plugins(
-    /// LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
+    /// LumenDefaultPlugins.with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css"))
     /// # ).run() }
     /// ```
     pub fn with_source(self, source: Source) -> LumenPluginsBuilder {

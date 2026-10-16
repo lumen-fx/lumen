@@ -10,12 +10,12 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumenui-engine --example counter          # hot-reloads examples/main.lmn live
+//! cargo run -p lumenui-engine --example counter          # hot-reloads examples/src/main.lmn live
 //! cargo run -p lumenui-engine --example counter --release # markup/CSS embedded, no watcher
 //! ```
 //!
 //! The UI comes from [`lumen_source!`]: in a debug `cargo run` it is read from
-//! `examples/main.lmn` / `examples/main.css` on disk and hot-reloaded by the
+//! `examples/src/main.lmn` / `examples/src/main.css` on disk and hot-reloaded by the
 //! runtime watcher (edit the markup and the window updates live); a
 //! `--release` build `include_str!`-embeds the same files.
 
@@ -29,7 +29,10 @@ fn main() -> lumenui::Result<()> {
     lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
-                .with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
+                .with_source(lumen_source!(
+                    "examples/src/main.lmn",
+                    "examples/src/main.css"
+                ))
                 .with_title("Lumen counter (ECS SDK)")
                 .with_size(960, 720),
         )

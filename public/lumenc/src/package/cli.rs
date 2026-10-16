@@ -312,14 +312,14 @@ impl Target {
         }
     }
 
-    /// File name of the engine a Rust app links, as its own build produces it.
+    /// File name of the shared engine the C library links on Linux and macOS.
     /// Distinct from [`Self::lib_name`], which is the C library an app opens:
     /// the two are different crate targets and cannot share a file name.
     fn linked_engine_name(self) -> &'static str {
         match self.os {
             Os::Macos => "liblumen_engine.dylib",
-            // Windows never reaches here - see `copy_linked_engine` - but the
-            // name is the one cargo would write.
+            // Windows has the engine inside the C library and never asks,
+            // but the name is the one cargo would write.
             Os::Windows => "lumen_engine.dll",
             Os::Linux => "liblumen_engine.so",
         }
@@ -664,6 +664,24 @@ fn dependency_refusal(
     declared: &Declared<'_>,
 ) -> Option<String> {
     let windows = target.os == Os::Windows;
+    // A Rust app's executable has the engine linked into it on every
+    // platform, so there is no shared engine for a runtime module to load
+    // into; a portable plugin loads into any host.
+    if kind == AppKind::Rust
+        && let Some(dep) = declared
+            .cfg
+            .0
+            .iter()
+            .find(|dep| matches!(declared.shape(&dep.name), Shape::Bundled | Shape::Module))
+    {
+        return Some(format!(
+            "dependency '{}' is a runtime module, and a Rust app cannot carry one: its \
+             executable has the engine linked in, and a runtime module loads only into a \
+             shared engine. A portable plugin (a library exporting lumen_plugin_v1) loads \
+             into a Rust app.",
+            dep.name
+        ));
+    }
     for dep in &declared.cfg.0 {
         match declared.shape(&dep.name) {
             Shape::Script | Shape::Portable | Shape::Missing => {}
@@ -896,22 +914,24 @@ fn package_sdk(
     let exe_path = out.join(target.exe_name(app_name));
     copy_executable(&built, &exe_path)?;
 
-    // A Rust app's engine comes out of its own cargo build, so the standard
-    // library that build staged is the one that belongs beside it; the other
-    // two open the toolchain's engine and take the toolchain's copy, relinked
-    // for the app where an engine kit can be replayed. Their program is C++ or
-    // Python the source scan cannot read, so every capability a use rule
-    // could want stays in unless `[capabilities]` says otherwise.
+    // A Rust app has the engine linked into its executable, so no library
+    // travels beside it; the toolchain files come from its own build, then
+    // from the toolchain beside lumenc. The other two open the toolchain's
+    // engine and take the toolchain's copy, relinked for the app where an
+    // engine kit can be replayed. Their program is C++ or Python the source
+    // scan cannot read, so every capability a use rule could want stays in
+    // unless `[capabilities]` says otherwise.
     let (carried, library_dirs, modules, engine) = if kind == AppKind::Rust {
         if !cfg.capabilities.0.is_empty() {
             eprintln!(
-                "lumenc package: a Rust app links the engine its own cargo build produced, so \
+                "lumenc package: a Rust app has the engine linked into its executable, so \
                  [capabilities] does not trim it; the package carries what that build linked"
             );
         }
-        let carried = copy_linked_engine(&built, out, target)?;
         let modules = stage_modules(src, out, target, lib_dir, declared)?;
-        (carried, build_dirs(&built), modules, None)
+        let mut dirs = build_dirs(&built);
+        dirs.extend(search_dirs(lib_dir, true));
+        (0, dirs, modules, None)
     } else {
         let toolchain = locate_toolchain(target, lib_dir)?;
         let sources = crate::config::app_sources(src);
@@ -1083,48 +1103,6 @@ fn ship_runtime(
         modules,
         engine,
     })
-}
-
-/// Copy the shared engine a Rust app just linked, and the standard library
-/// they share, out of the app's own build. Returns how many files travelled.
-///
-/// Neither comes from an installed toolchain: cargo built the engine as part
-/// of building the app, so the copy that belongs in the package is that one,
-/// produced by the same compiler as the executable beside it. On Windows the
-/// engine is inside the executable and there is nothing to copy.
-fn copy_linked_engine(built: &Path, out: &Path, target: Target) -> Result<usize, String> {
-    if target.os == Os::Windows {
-        return Ok(0);
-    }
-    let engine = target.linked_engine_name();
-    let from = linked_engine_beside(built, engine).ok_or_else(|| {
-        format!(
-            "the build produced no {engine} beside {}. A Rust app links the engine, so \
-             the library has to come out of the same build as the executable.",
-            built.display()
-        )
-    })?;
-    std::fs::copy(&from, out.join(engine))
-        .map_err(|e| format!("copy {} -> {}: {e}", from.display(), out.display()))?;
-
-    let mut carried = 1;
-    if let Some(std_lib) = local_shared_std(target)? {
-        let dest = out.join(std_lib.file_name().unwrap_or_default());
-        std::fs::copy(&std_lib, &dest)
-            .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))?;
-        carried += 1;
-    }
-    Ok(carried)
-}
-
-/// Where cargo left the engine library relative to the executable it built:
-/// beside it for an ordinary binary, one level up for an example, which cargo
-/// writes into a subdirectory of the same profile.
-fn linked_engine_beside(built: &Path, engine: &str) -> Option<PathBuf> {
-    build_dirs(built)
-        .into_iter()
-        .map(|dir| dir.join(engine))
-        .find(|p| p.is_file())
 }
 
 /// The directories a cargo build leaves its companions in, relative to the
@@ -1780,9 +1758,10 @@ fn find_shared_std(dir: &Path, prefix: &str, ext: &str) -> Option<PathBuf> {
 
 /// Build a Rust SDK app and return the executable cargo produced.
 ///
-/// The build command is the one `lumenc build` uses, in the environment that
-/// makes the app link the shared engine library rather than compile the engine
-/// into itself. The extra flag makes cargo report where the executable landed,
+/// The build command is the one `lumenc build` uses: a plain release build,
+/// which links the engine into the executable (the prebuilt engine `lumenui`
+/// points the compiler at is a set of compiled crates, not a shared library).
+/// The extra flag makes cargo report where the executable landed,
 /// which cannot be worked out from the app directory alone because a workspace
 /// puts it under the workspace root rather than the app.
 fn build_rust_app(src: &Path, target: Target) -> Result<PathBuf, String> {
@@ -1793,7 +1772,6 @@ fn build_rust_app(src: &Path, target: Target) -> Result<PathBuf, String> {
         .arg("build")
         .arg("--release")
         .arg("--message-format=json-render-diagnostics")
-        .envs(lumen_runtime::app_kind::rust_dynamic_env(cross))
         .stderr(std::process::Stdio::inherit());
     if let Some(triple) = cross {
         command.arg("--target").arg(triple);
@@ -2598,7 +2576,12 @@ impl CopyRules {
             _ => Self {
                 skip_dirs: &["target"],
                 skip_exts: &["rs"],
-                skip_files: &["Cargo.toml", "Cargo.lock"],
+                skip_files: &[
+                    "Cargo.toml",
+                    "Cargo.lock",
+                    "rust-toolchain.toml",
+                    "rust-toolchain",
+                ],
             },
         }
     }
@@ -4273,92 +4256,47 @@ mod tests {
         }
     }
 
-    /// cargo writes a binary beside the engine it linked, and an example one
-    /// directory further down. Both have to resolve, or a packaged app would
-    /// ship without the library it needs.
+    /// cargo writes a binary into its profile directory and an example one
+    /// directory further down, and what a build staged beside them (the
+    /// script standard library) is looked for in both.
     #[test]
-    fn the_linked_engine_is_found_beside_a_binary_or_an_example() {
-        let tmp = std::env::temp_dir().join(format!("lumen-linked-{}", std::process::id()));
-        let profile = tmp.join("release");
-        let examples = profile.join("examples");
-        std::fs::create_dir_all(&examples).expect("mkdir");
-        let engine = profile.join("liblumen_engine.so");
-        std::fs::write(&engine, b"stand-in engine").expect("write engine");
-
+    fn a_cargo_build_is_searched_beside_a_binary_and_above_an_example() {
+        let profile = PathBuf::from("/t/release");
         assert_eq!(
-            linked_engine_beside(&profile.join("app"), "liblumen_engine.so"),
-            Some(engine.clone()),
-            "beside an ordinary binary"
+            build_dirs(&profile.join("app")),
+            [profile.clone(), PathBuf::from("/t")]
         );
         assert_eq!(
-            linked_engine_beside(&examples.join("counter"), "liblumen_engine.so"),
-            Some(engine),
-            "one level up from an example"
+            build_dirs(&profile.join("examples").join("counter")),
+            [profile.join("examples"), profile]
         );
-        assert_eq!(
-            linked_engine_beside(&profile.join("app"), "liblumen_missing.so"),
-            None,
-            "a library that was never built"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The whole of what a packaged Rust app carries: the engine its own build
-    /// produced, and the standard library that build compiled against. Both
-    /// come out of the same compiler, so the pair is assembled here rather than
-    /// gathered from an installed toolchain.
+    /// A Rust app has the engine linked into its executable on every
+    /// platform, so a runtime module, which loads only into a shared engine,
+    /// is refused before anything builds; on Linux too, where a markup app
+    /// carries one.
     #[test]
-    fn a_rust_app_carries_its_own_engine_and_standard_library() {
-        let host = Target::host();
-        if host.os == Os::Windows {
-            return; // Covered by the test below; nothing is copied there.
-        }
-        let tmp = std::env::temp_dir().join(format!("lumen-rustpkg-{}", std::process::id()));
-        let profile = tmp.join("release");
-        let out = tmp.join("out");
-        std::fs::create_dir_all(&profile).expect("mkdir");
-        std::fs::create_dir_all(&out).expect("mkdir");
-        let engine = host.linked_engine_name();
-        std::fs::write(profile.join(engine), b"stand-in engine").expect("write engine");
-
-        let carried = copy_linked_engine(&profile.join("App"), &out, host).expect("copy");
-        assert!(out.join(engine).is_file(), "the engine travels");
-
-        // The standard library is only absent from a compiler built without a
-        // shared one, which is not what CI or a rustup toolchain has.
-        match local_shared_std(host).expect("ask rustc") {
-            Some(std_lib) => {
-                assert_eq!(carried, 2);
-                let name = std_lib.file_name().expect("a file name");
-                assert!(out.join(name).is_file(), "the standard library travels");
-            }
-            None => assert_eq!(carried, 1),
-        }
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    /// A Windows Rust app carries the runtime inside its executable, so there
-    /// is no library to copy and nothing to look for.
-    #[test]
-    fn a_windows_rust_app_carries_no_library() {
-        let tmp = std::env::temp_dir().join(format!("lumen-winpkg-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).expect("mkdir");
-        let windows = Target::parse("windows-x86_64").expect("known target");
-
-        let carried = copy_linked_engine(&tmp.join("App.exe"), &tmp, windows).expect("no-op");
-        assert_eq!(carried, 0);
-        assert!(
-            std::fs::read_dir(&tmp)
-                .expect("read back")
-                .flatten()
-                .next()
-                .is_none(),
-            "nothing was written"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
+    fn a_rust_app_refuses_a_runtime_module() {
+        use lumen_runtime::modules::DepCfg;
+        let cfg = DependenciesCfg(vec![DepCfg {
+            name: "canvas".to_string(),
+            source: ModuleSource::Bundled,
+            config: toml::Table::new(),
+            tags: Vec::new(),
+        }]);
+        let resolved = crate::package::lpm::Resolved::default();
+        let shapes = BTreeMap::from([("canvas".to_string(), Shape::Bundled)]);
+        let declared = Declared {
+            cfg: &cfg,
+            resolved: &resolved,
+            shapes: &shapes,
+        };
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        let refusal = dependency_refusal(AppKind::Rust, linux, false, &declared)
+            .expect("a Rust app cannot load a runtime module");
+        assert!(refusal.contains("'canvas'"), "{refusal}");
+        assert!(dependency_refusal(AppKind::Markup, linux, false, &declared).is_none());
     }
 
     /// The C library travels under the name the app looks for on the platform
@@ -4444,6 +4382,12 @@ mod tests {
         }
         assert!(CopyRules::sdk(AppKind::Rust).skip_exts.contains(&"rs"));
         assert!(CopyRules::sdk(AppKind::Cpp).skip_exts.contains(&"cpp"));
+        // The toolchain pin is a build input like the manifest.
+        assert!(
+            CopyRules::sdk(AppKind::Rust)
+                .skip_files
+                .contains(&"rust-toolchain.toml")
+        );
     }
 
     #[test]
