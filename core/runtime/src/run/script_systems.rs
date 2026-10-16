@@ -75,6 +75,13 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             // the command stream needs this edge for the same reason: an
             // `on_frame` write binds on the tick the callback ran.
             .after(ScriptSet::Frame)
+            // So does an `on_timer` or `on_http` write. Nothing else orders
+            // those sets against this one, and left to the schedule's tie
+            // break the write waited a tick whenever the order came out the
+            // other way, which an idle app that parks after the reply never
+            // runs.
+            .after(ScriptSet::Timers)
+            .after(ScriptSet::Fetch)
             .before(ScriptSet::Derivations),
     );
     // Signal -> TextContent must land BEFORE the keystroke / IME path so a
