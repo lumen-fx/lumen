@@ -449,8 +449,41 @@ buffer, so a text child is ignored; use `text` for an initial value.
 | `required` | boolean | The value is valid only if it is non-empty. |
 | `autofocus` | boolean | Takes focus when the containing `<dialog>` opens. |
 | `password-character` | one character | Masks the rendered value. |
+| `type` | `text`, `number` | What the field holds. Defaults to `text`. Any other value is a text field, as it is in a browser, and the parser warns. |
 
 `min` and `max` also feed validation on `<input>` and `<textarea>`.
+
+#### `type="number"`
+
+A field for a number, with the attributes and behaviour of HTML's number
+input.
+
+| Attribute | Value | Effect |
+| --- | --- | --- |
+| `value` | number | The initial number. |
+| `min`, `max` | number | The range the steps stay in, and the range a typed value must be in to be valid. |
+| `step` | number, `any` | The step. Defaults to `1`. `any` steps by one and accepts any number. |
+
+ArrowUp and ArrowDown step the focused field, so does the wheel while the
+pointer is over the focused field (the page under it does not scroll then),
+and so do its `-` and `+` buttons. Each step writes the new number into the
+field as an edit, so `input` handlers and a bound signal see it. A step works
+the way a browser's does: a value between steps moves to the next step in
+that direction, a value on a step moves by one step, and the result stays
+within `min` and `max`. Steps start at `min`, or at 0 without one, and an
+empty field steps from 0.
+
+The field holds the number as text. It is valid while it is empty (unless
+`required`) or holds a number within `min` and `max` that is a whole number
+of steps from the start, and invalid otherwise. Validity lands in the
+`valid:<id>` signal. Typing is not filtered: a letter is accepted and leaves
+the field invalid, where a browser refuses it.
+
+The field carries the class `number-input`. Its step buttons sit in a
+`.number-steps` box along its right end, which the field keeps clear of its
+text, and are `.number-step-down` and `.number-step-up`. On the web the field
+is the browser's own `<input type="number">`, with its own step control and
+none of these parts.
 
 ### `<textarea>`
 

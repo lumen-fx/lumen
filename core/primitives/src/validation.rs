@@ -9,6 +9,7 @@
 //! - `pattern`: content must contain the configured literal substring, or match a
 //!   named shape when the pattern starts with `shape:` (see [`matches_pattern`]).
 //! - `min` / `max`: numeric range applied to slider values and to input text when it parses as a number.
+//! - `number` (`<input type="number">`): non-empty text must parse as a number and sit on the step grid.
 
 use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenId, SliderValue, TextContent, Toggleable, Validation};
@@ -99,6 +100,19 @@ pub fn evaluate(
         return false;
     }
     let numeric: Option<f32> = text.and_then(|t| t.trim().parse().ok());
+    if let (Some(rule), Some(t)) = (v.number, text)
+        && !t.trim().is_empty()
+    {
+        let Some(n) = numeric.filter(|n| n.is_finite()) else {
+            return false;
+        };
+        if let Some(step) = rule.step.filter(|s| *s > 0.0) {
+            let offset = (f64::from(n) - f64::from(rule.base)) / f64::from(step);
+            if (offset - offset.round()).abs() > 1e-6 {
+                return false;
+            }
+        }
+    }
     let candidate: Option<f32> = numeric.or_else(|| slider.map(|s| s.value));
     if let Some(n) = candidate {
         if let Some(lo) = v.min
@@ -195,6 +209,7 @@ mod tests {
             pattern: pattern.map(|s| s.to_string()),
             min,
             max,
+            number: None,
             is_valid: true,
         }
     }
@@ -308,5 +323,30 @@ mod tests {
             Some(Toggleable { checked: false })
         ));
         assert!(evaluate(&v, None, None, Some(Toggleable { checked: true })));
+    }
+
+    /// A number field's text must be a number on the step grid; empty is
+    /// valid unless `required`.
+    #[test]
+    fn a_number_field_wants_a_number_on_the_grid() {
+        let mut v = validation(false, None, Some(0.0), Some(10.0));
+        v.number = Some(lumen_core::components::NumberRule {
+            base: 0.0,
+            step: Some(0.5),
+        });
+        let check = |t: &str| evaluate(&v, Some(t), None, None);
+        assert!(check(""));
+        assert!(check("2.5"));
+        assert!(!check("2.4"), "between steps");
+        assert!(!check("abc"), "not a number");
+        assert!(!check("12"), "over max");
+        v.number = Some(lumen_core::components::NumberRule {
+            base: 0.0,
+            step: None,
+        });
+        assert!(
+            evaluate(&v, Some("2.4"), None, None),
+            "step=any takes any number"
+        );
     }
 }

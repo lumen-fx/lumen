@@ -125,7 +125,7 @@ pub fn accumulate_wheel(
     parents: Query<&ChildOf>,
     children_q: Query<(&ChildOf, &Transform)>,
     transforms: Query<&Transform>,
-    sliders: Query<(), With<SliderValue>>,
+    wheel_takers: Query<(Has<SliderValue>, Has<crate::number::NumberInput>, Has<Focused>)>,
     mut scrolls: Query<(Entity, &mut Scroll, &mut ScrollOffset)>,
 ) {
     let pending: Vec<MouseWheel> = wheels.read().copied().collect();
@@ -135,11 +135,14 @@ pub fn accumulate_wheel(
     // A hovered `<slider>` (or its thumb child) consumes the wheel -
     // `lumen_primitives::controls::adjust_slider_on_wheel` turns it into
     // a value step - so it must never ALSO scroll an ancestor scroll
-    // container (Qt: an accepted wheel event does not propagate).
+    // container (Qt: an accepted wheel event does not propagate). A focused
+    // number field under the pointer steps on the wheel the same way.
     {
         let mut cur = hovered.iter().next();
         while let Some(e) = cur {
-            if sliders.contains(e) {
+            if let Ok((slider, number, focused)) = wheel_takers.get(e)
+                && (slider || (number && focused))
+            {
                 return;
             }
             cur = parents.get(e).ok().map(|c| c.parent());
