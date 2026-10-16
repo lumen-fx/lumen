@@ -97,6 +97,7 @@ fn move_pointer(world: &mut World, p: glam::Vec2) {
         .write(PointerMoved {
             position: p,
             local: None,
+            pointer: Default::default(),
         });
 }
 
@@ -108,6 +109,7 @@ fn press(world: &mut World, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
 }
 
@@ -119,6 +121,7 @@ fn release(world: &mut World, p: glam::Vec2) {
             position: p,
             button: PointerButton::Primary,
             local: None,
+            pointer: Default::default(),
         });
 }
 

@@ -350,6 +350,9 @@ pointer that unbinds when called.
 | `Node.on(event_type, handler)` | `fn` | Bind for the bubble phase. |
 | `Node.on(event_type, handler, capture)` | `fn` | Bind for the capture phase when `capture` is `true`. |
 | `Node.on_capture(event_type, handler)` | `fn` | Bind for the capture phase. |
+| `Node.set_pointer_capture(pointer_id)` | | Send that pointer's events to this element until its last button comes up. Does nothing while no button is held. |
+| `Node.release_pointer_capture(pointer_id)` | | Give the pointer back to hit testing, when this element holds it. |
+| `Node.has_pointer_capture(pointer_id)` | `bool` | Whether this element holds the pointer, counting a capture set in the running handler. |
 
 ```rhai
 let off = get_by_id("save").on("click", |e| {
@@ -369,7 +372,16 @@ The handler receives an `Event`:
 | `event_type()` | `string` | Event type name. |
 | `key()` | `string` | Key name for keyboard events. |
 | `value()` | `string` | Text value for `input` / `change` / `submit`. |
-| `button()` | `int` | `0` primary, `1` middle, `2` secondary. |
+| `button()` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
+| `buttons()` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
+| `pointer_id()` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
+| `pointer_type()` | `string` | `"mouse"`, `"pen"`, or `"touch"`. |
+| `is_primary()` | `bool` | Whether the pointer is the primary one of its kind. |
+| `pressure()` | `float` | Normalized pressure, `0` to `1`; `0.5` while pressed on a device without a sensor. |
+| `tangential_pressure()` | `float` | Normalized barrel pressure, `-1` to `1`. |
+| `tilt_x()` / `tilt_y()` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
+| `twist()` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
+| `width()` / `height()` | `float` | Contact size in logical pixels; `1` for a point device. |
 | `x()` / `y()` | `float` | Pointer position relative to the target. |
 | `client_x()` / `client_y()` | `float` | Pointer position in window coordinates. |
 | `delta_x()` / `delta_y()` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
@@ -381,14 +393,23 @@ The handler receives an `Event`:
 
 ### Event types
 
-`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointerenter`,
-`pointerleave`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`,
-`submit`, `scroll`.
+`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointercancel`,
+`pointerenter`, `pointerleave`, `gotpointercapture`, `lostpointercapture`,
+`wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`, `submit`,
+`scroll`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
 `scroll` do not bubble. `keydown` and `keyup` target the focused element, or
 the document root when nothing is focused.
+
+A pointer event targets the element under its pointer. After
+`set_pointer_capture(pointer_id)` on an element, that pointer's events go to
+the element until its last button comes up, wherever the pointer moves;
+`gotpointercapture` fires on the element before the first of them and
+`lostpointercapture` after the release. A touch is captured by the element it
+went down on. `pointercancel` replaces `pointerup` when the system takes a
+touch or pen over mid-gesture.
 
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.

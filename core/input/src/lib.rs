@@ -1105,6 +1105,7 @@ pub fn hit_test(
     scrollbar_ix: Option<Res<lumen_core::input::ScrollbarInteraction>>,
     overlay_roots: Query<Entity, With<lumen_core::render_world::OverlayLayer>>,
     overlay_order: Option<Res<lumen_core::render_world::OverlayOpenOrder>>,
+    mut others: Option<OtherPointers>,
     mut current: Local<Option<Entity>>,
 ) {
     // Top-layer hit ordering (mirrors the paint bands in
@@ -1130,10 +1131,9 @@ pub fn hit_test(
             .map(|d| d.entity)
             .or_else(|| ix.hover.map(|(e, ..)| e))
     });
-    let hit = match (bar_target, pointer.position) {
-        (Some(target), _) => Some(target),
-        (None, None) => None,
-        (None, Some(p)) => {
+    // The topmost hittable entity at `p`.
+    let topmost = |p: Vec2| -> Option<Entity> {
+        {
             // Winner key: `(overlay_band, overlay_stamp, depth, entity)`,
             // higher wins - the painter's order restated for hit-testing.
             let mut best: Option<((u32, u64, u32, u64), Entity)> = None;
@@ -1192,6 +1192,32 @@ pub fn hit_test(
             best.map(|(_, e)| e)
         }
     };
+    // A second finger hovers nothing; what is under it is recorded per
+    // pointer for the script event driver. Only this tick's pointers are
+    // kept, so a lifted finger leaves nothing behind.
+    if let Some(others) = others.as_mut()
+        && let Some(targets) = others.targets.as_mut()
+    {
+        let positions = others
+            .presses
+            .read()
+            .map(|m| (m.pointer, m.position))
+            .chain(others.moves.read().map(|m| (m.pointer, m.position)))
+            .chain(others.releases.read().map(|m| (m.pointer, m.position)))
+            .chain(others.cancels.read().map(|m| (m.pointer, m.position)));
+        let seen: Vec<_> = positions.filter(|(data, _)| !data.is_primary).collect();
+        if !seen.is_empty() || !targets.is_empty() {
+            targets.clear();
+            for (data, p) in seen {
+                targets.set(data.id, topmost(p));
+            }
+        }
+    }
+    let hit = match (bar_target, pointer.position) {
+        (Some(target), _) => Some(target),
+        (None, None) => None,
+        (None, Some(p)) => topmost(p),
+    };
 
     // Pointer-capture gate: mid-press, the hover marker is confined to
     // the pressed entity (over it) or nothing (dragged off). The gate is
@@ -1225,6 +1251,17 @@ pub fn hit_test(
         commands.entity(next).insert(Hovered);
     }
     *current = hit;
+}
+
+/// The pointers other than the primary one that [`hit_test`] resolves a
+/// target for, grouped so the system stays under the parameter limit.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct OtherPointers<'w, 's> {
+    presses: MessageReader<'w, 's, PointerPressed>,
+    moves: MessageReader<'w, 's, PointerMoved>,
+    releases: MessageReader<'w, 's, PointerReleased>,
+    cancels: MessageReader<'w, 's, lumen_core::input::PointerCancelled>,
+    targets: Option<ResMut<'w, lumen_core::input::PointerTargets>>,
 }
 
 /// Disabled-check for the pointer path (spec section 0: disabled widgets take
@@ -1367,7 +1404,7 @@ pub fn focus_on_press(
 ) {
     let is_input = |e: Entity| nodes.get(e).is_ok_and(|(_, input, _)| input);
     for press in presses.read() {
-        if !matches!(press.button, PointerButton::Primary) {
+        if !press.is_primary() {
             continue;
         }
         let mut cur = hovered.single().ok();
@@ -1597,8 +1634,16 @@ pub fn dispatch_clicks(
     disabled: Query<(), With<lumen_core::components::Disabled>>,
     mut presses: MessageReader<PointerPressed>,
     mut releases: MessageReader<PointerReleased>,
+    cancels: Option<MessageReader<lumen_core::input::PointerCancelled>>,
     mut clicks: MessageWriter<ClickEvent>,
 ) {
+    // A cancelled primary pointer (the system took the touch over) ends the
+    // press with no click.
+    if cancels.is_some_and(|mut c| c.read().any(|c| c.pointer.is_primary)) {
+        for e in &pressed {
+            commands.entity(e).remove::<Pressed>();
+        }
+    }
     // Entities that received a primary press during THIS system run.
     //
     // `Commands` are deferred: the `Pressed` inserted below is not visible
@@ -1611,7 +1656,7 @@ pub fn dispatch_clicks(
     // press targets locally lets a same-tick release resolve against them.
     let mut pressed_this_tick: Vec<Entity> = Vec::new();
     for press in presses.read() {
-        if !matches!(press.button, PointerButton::Primary) {
+        if !press.is_primary() {
             continue;
         }
         if let Ok(e) = hovered.single()
@@ -1625,7 +1670,7 @@ pub fn dispatch_clicks(
     }
 
     for release in releases.read() {
-        if !matches!(release.button, PointerButton::Primary) {
+        if !release.is_primary() {
             continue;
         }
         // Click counts if the same entity that was pressed is still hovered.
@@ -1680,7 +1725,7 @@ pub fn request_window_drag_on_titlebar_press(
     mut request: ResMut<lumen_core::components::WindowDragRequest>,
 ) {
     for press in presses.read() {
-        if !matches!(press.button, PointerButton::Primary) {
+        if !press.is_primary() {
             continue;
         }
         let Ok(start) = hovered.single() else {
@@ -1866,7 +1911,7 @@ pub fn text_pointer_to_caret(
 ) {
     let now = Instant::now();
     for press in presses.read() {
-        if !matches!(press.button, PointerButton::Primary) {
+        if !press.is_primary() {
             continue;
         }
         let Ok(entity) = hovered.single() else {
@@ -1994,7 +2039,7 @@ pub fn text_pointer_drag_select(
     // caret / selection from the same pointer position - treating the
     // accompanying PointerMoved as a drag would immediately clobber a
     // double/triple-click selection with a char-level extend.
-    if presses.read().count() > 0 {
+    if presses.read().any(|p| p.pointer.is_primary) {
         moves.read().for_each(drop);
         return;
     }
@@ -2030,7 +2075,12 @@ pub fn text_pointer_drag_select(
         size_px,
         line_height_px,
     );
-    let Some(last_pos) = moves.read().last().map(|m| m.position) else {
+    let Some(last_pos) = moves
+        .read()
+        .filter(|m| m.pointer.is_primary)
+        .last()
+        .map(|m| m.position)
+    else {
         return;
     };
     let head_byte = pointer_to_byte(
@@ -3078,6 +3128,7 @@ mod focus_visible_tests {
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         world.run_system_once(focus_on_press).unwrap();
         world.entity_mut(e).remove::<Hovered>();

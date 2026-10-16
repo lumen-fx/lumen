@@ -142,6 +142,7 @@ impl Harness {
         self.app.world.write_message(PointerMoved {
             position: pos,
             local: None,
+            pointer: Default::default(),
         });
         self.app.tick();
     }

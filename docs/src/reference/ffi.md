@@ -308,9 +308,23 @@ The introspectable components are `LayoutBox`, `Visuals`, `Opacity`, `ZIndex`,
 
 The callback receives a `LumenEvent` with the scalar fields `target`,
 `current_target`, `local_x`, `local_y`, `client_x`, `client_y`, `delta_x`,
-`delta_y`, `button` (`0` primary, `1` middle, `2` secondary, `-1` none), and the
-modifier flags `shift`, `ctrl`, `alt`, `super_`. The struct is borrowed for the
-call; copy anything you keep.
+`delta_y`, `button` (the web code: `0` primary, `1` middle, `2` secondary, `3`
+back, `4` forward, `5` pen eraser, `-1` none), the modifier flags `shift`,
+`ctrl`, `alt`, `super_`, and the pointer's readings: `pointer_id`, `pressure`,
+`tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`,
+`buttons` (a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16`
+forward, `32` eraser), `pointer_type` (`LUMEN_POINTER_MOUSE`,
+`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), and `is_primary`. The struct is
+borrowed for the call; copy anything you keep.
+
+| Function | Behaviour |
+| --- | --- |
+| `LumenStatus lumen_node_set_pointer_capture(LumenNode node, uint64_t pointer_id)` | Send that pointer's events to `node` until its last button comes up. Does nothing while no button is held. |
+| `LumenStatus lumen_node_release_pointer_capture(LumenNode node, uint64_t pointer_id)` | Give the pointer back to hit testing, when `node` holds it. |
+| `LumenStatus lumen_node_has_pointer_capture(LumenNode node, uint64_t pointer_id, int *out)` | Whether `node` holds the pointer. |
+
+The C++, Python, and Rust SDKs expose the same readings on their `Event` and
+the three capture calls on their `Node`.
 
 String fields and propagation controls are separate calls, valid only inside the
 callback:

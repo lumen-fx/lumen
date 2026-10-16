@@ -29,6 +29,14 @@
 //!
 //! A pointer that moves several times between two ticks is one move: only
 //! the last position is queued, so a fast mouse costs one message per frame.
+//!
+//! Every event carries the browser's `PointerEvent` fields (`pointerId`,
+//! `pointerType`, `pressure`, tilt, twist, contact size, `buttons`,
+//! `isPrimary`) as Lumen's pointer data. Only the primary pointer moves the
+//! hover marker; a second finger's target goes in [`PointerTargets`]. A
+//! capture a script sets is handed to the browser's own `setPointerCapture`
+//! (see [`project_pointer_capture`]), so the browser keeps sending the
+//! pointer's events while it is outside the element or the page.
 
 use std::cell::RefCell;
 
@@ -38,12 +46,12 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::components::Disabled;
 use lumen_core::input::{
-    Hovered, MouseWheel, PointerButton, PointerLeft, PointerMoved, PointerPressed, PointerReleased,
-    PointerState,
+    Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind, PointerLeft,
+    PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use web_sys::{AddEventListenerOptions, Document, Event, MouseEvent, WheelEvent};
+use web_sys::{AddEventListenerOptions, Document, Event, MouseEvent, PointerEvent, WheelEvent};
 
 use crate::events::{Hit, hit_of, origin_of};
 use crate::nodes::NodeTable;
@@ -60,6 +68,8 @@ enum PointerInput {
         position: Vec2,
         /// Which button.
         button: PointerButton,
+        /// The device.
+        pointer: PointerData,
     },
     /// A button came up.
     Up {
@@ -70,6 +80,8 @@ enum PointerInput {
         position: Vec2,
         /// Which button.
         button: PointerButton,
+        /// The device.
+        pointer: PointerData,
     },
     /// The pointer moved.
     Move {
@@ -78,6 +90,8 @@ enum PointerInput {
         hit: Option<Hit>,
         /// Client coordinates.
         position: Vec2,
+        /// The device.
+        pointer: PointerData,
     },
     /// The wheel turned, or a touchpad scrolled.
     Wheel {
@@ -89,10 +103,30 @@ enum PointerInput {
         /// Scroll distance in pixels, positive down and right.
         delta: Vec2,
     },
-    /// The pointer left the document, or the browser took the gesture over
-    /// (a touch that became a scroll). Either way nothing is under it and no
-    /// press is in flight.
+    /// The browser took the gesture over (a touch that became a scroll).
+    /// No `pointerup` follows.
+    Cancel {
+        /// Client coordinates.
+        position: Vec2,
+        /// The device.
+        pointer: PointerData,
+    },
+    /// The pointer left the document. Nothing is under it and no press is
+    /// in flight.
     Left,
+}
+
+impl PointerInput {
+    /// The device a pointer input came from; `None` for a wheel or a leave.
+    fn pointer(&self) -> Option<&PointerData> {
+        match self {
+            PointerInput::Down { pointer, .. }
+            | PointerInput::Up { pointer, .. }
+            | PointerInput::Move { pointer, .. }
+            | PointerInput::Cancel { pointer, .. } => Some(pointer),
+            PointerInput::Wheel { .. } | PointerInput::Left => None,
+        }
+    }
 }
 
 thread_local! {
@@ -108,8 +142,10 @@ thread_local! {
 /// that reads it, so a pointer that moves ten times between two frames is
 /// queued once.
 fn push(queue: &mut Vec<PointerInput>, input: PointerInput) {
+    let id = input.pointer().map(|p| p.id);
     if matches!(input, PointerInput::Move { .. })
         && let Some(last @ PointerInput::Move { .. }) = queue.last_mut()
+        && last.pointer().map(|p| p.id) == id
     {
         *last = input;
         return;
@@ -123,7 +159,37 @@ fn button_of(code: i16) -> PointerButton {
         0 => PointerButton::Primary,
         1 => PointerButton::Middle,
         2 => PointerButton::Secondary,
+        3 => PointerButton::Back,
+        4 => PointerButton::Forward,
+        5 => PointerButton::Eraser,
         other => PointerButton::Other(u16::try_from(other).unwrap_or(u16::MAX)),
+    }
+}
+
+/// The device behind a pointer event, field for field. An event that is a
+/// plain `MouseEvent` is the mouse.
+fn pointer_of(event: &Event) -> PointerData {
+    let Some(mouse) = event.dyn_ref::<MouseEvent>() else {
+        return PointerData::default();
+    };
+    let buttons = u32::from(mouse.buttons());
+    let Some(p) = event.dyn_ref::<PointerEvent>() else {
+        return PointerData::mouse(buttons);
+    };
+    PointerData {
+        id: u64::try_from(p.pointer_id()).unwrap_or(PointerData::MOUSE_ID),
+        kind: PointerKind::from(p.pointer_type().as_str()),
+        // The mouse is always primary, whatever a synthetic event says.
+        is_primary: p.is_primary() || p.pointer_type() == "mouse",
+        buttons,
+        pressure: p.pressure(),
+        tangential_pressure: p.tangential_pressure(),
+        tilt_x: p.tilt_x() as f32,
+        tilt_y: p.tilt_y() as f32,
+        twist: p.twist() as f32,
+        width: p.width() as f32,
+        height: p.height() as f32,
+        order: 0,
     }
 }
 
@@ -193,17 +259,20 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
             let hit = hit_of(&event);
             let position = position_of(mouse);
             let button = button_of(mouse.button());
+            let pointer = pointer_of(&event);
             queue(if down {
                 PointerInput::Down {
                     hit,
                     position,
                     button,
+                    pointer,
                 }
             } else {
                 PointerInput::Up {
                     hit,
                     position,
                     button,
+                    pointer,
                 }
             });
         })?;
@@ -213,6 +282,7 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
             queue(PointerInput::Move {
                 hit: hit_of(&event),
                 position: position_of(mouse),
+                pointer: pointer_of(&event),
             });
         }
     })?;
@@ -239,8 +309,15 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
     })?;
     // The browser took the gesture over, most often a touch that turned into
     // a scroll. No `pointerup` follows.
-    on(document, "pointercancel", true, move |_: Event| {
-        queue(PointerInput::Left);
+    on(document, "pointercancel", true, move |event: Event| {
+        let position = event
+            .dyn_ref::<MouseEvent>()
+            .map(position_of)
+            .unwrap_or_default();
+        queue(PointerInput::Cancel {
+            position,
+            pointer: pointer_of(&event),
+        });
     })?;
     Ok(())
 }
@@ -294,11 +371,16 @@ pub fn drain_pointer_events(
     parents: Query<&ChildOf>,
     disabled: Query<(), With<Disabled>>,
     mut tracking: Local<PointerTracking>,
+    mut targets: ResMut<PointerTargets>,
 ) {
     let pending = QUEUE.with_borrow_mut(std::mem::take);
     if pending.is_empty() {
+        if !targets.is_empty() {
+            targets.clear();
+        }
         return;
     }
+    targets.clear();
     // The hover target the messages written so far were aimed at.
     let mut aimed: Option<Option<Entity>> = None;
     let mut hover = hovered.iter().next();
@@ -309,10 +391,58 @@ pub fn drain_pointer_events(
             | PointerInput::Up { hit, .. }
             | PointerInput::Move { hit, .. }
             | PointerInput::Wheel { hit, .. } => hit.clone(),
-            PointerInput::Left => None,
+            PointerInput::Cancel { .. } | PointerInput::Left => None,
         };
         let landed = hit.as_ref().and_then(|hit| table.entity_at(&hit.path));
         let target = landed.and_then(|e| hover_target(e, &parents, &disabled));
+        // A second finger hovers nothing and holds no press: what is under it
+        // is all the script driver needs.
+        if let Some(pointer) = input.pointer().copied().filter(|p| !p.is_primary) {
+            targets.set(pointer.id, target);
+            let local = match (&hit, target) {
+                (Some(hit), Some(t)) if landed == Some(t) => Some(hit.origin),
+                (_, Some(t)) => table.element(t).map(origin_of),
+                (_, None) => None,
+            };
+            let local = |position: Vec2| local.map(|origin| position - origin);
+            match input {
+                PointerInput::Down {
+                    position, button, ..
+                } => {
+                    writers.presses.write(PointerPressed {
+                        position,
+                        button,
+                        local: local(position),
+                        pointer: pointer.stamped(),
+                    });
+                }
+                PointerInput::Up {
+                    position, button, ..
+                } => {
+                    writers.releases.write(PointerReleased {
+                        position,
+                        button,
+                        local: local(position),
+                        pointer: pointer.stamped(),
+                    });
+                }
+                PointerInput::Move { position, .. } => {
+                    writers.moves.write(PointerMoved {
+                        position,
+                        local: local(position),
+                        pointer: pointer.stamped(),
+                    });
+                }
+                PointerInput::Cancel { position, .. } => {
+                    writers.cancels.write(PointerCancelled {
+                        position,
+                        pointer: pointer.stamped(),
+                    });
+                }
+                PointerInput::Wheel { .. } | PointerInput::Left => {}
+            }
+            continue;
+        }
         // Held by a press: the pressed entity or nothing.
         let target = match tracking.captured {
             Some(captured) => target.filter(|t| *t == captured),
@@ -338,7 +468,10 @@ pub fn drain_pointer_events(
         };
         match input {
             PointerInput::Down {
-                position, button, ..
+                position,
+                button,
+                pointer,
+                ..
             } => {
                 aimed = Some(target);
                 state.position = Some(position);
@@ -350,10 +483,14 @@ pub fn drain_pointer_events(
                     position,
                     button,
                     local: local(position),
+                    pointer: pointer.stamped(),
                 });
             }
             PointerInput::Up {
-                position, button, ..
+                position,
+                button,
+                pointer,
+                ..
             } => {
                 aimed = Some(target);
                 state.position = Some(position);
@@ -365,15 +502,31 @@ pub fn drain_pointer_events(
                     position,
                     button,
                     local: local(position),
+                    pointer: pointer.stamped(),
                 });
             }
-            PointerInput::Move { position, .. } => {
+            PointerInput::Move {
+                position, pointer, ..
+            } => {
                 aimed = Some(target);
                 state.position = Some(position);
                 writers.moves.write(PointerMoved {
                     position,
                     local: local(position),
+                    pointer: pointer.stamped(),
                 });
+            }
+            PointerInput::Cancel { position, pointer } => {
+                // The browser has the gesture now: nothing is under the
+                // pointer and no press is in flight, as when it leaves.
+                state.position = None;
+                state.primary_down = false;
+                tracking.captured = None;
+                writers.cancels.write(PointerCancelled {
+                    position,
+                    pointer: pointer.stamped(),
+                });
+                writers.left.write(PointerLeft);
             }
             PointerInput::Wheel {
                 position, delta, ..
@@ -417,11 +570,45 @@ pub struct PointerWriters<'w> {
     moves: MessageWriter<'w, PointerMoved>,
     wheels: MessageWriter<'w, MouseWheel>,
     left: MessageWriter<'w, PointerLeft>,
+    cancels: MessageWriter<'w, PointerCancelled>,
+}
+
+/// Hand each pointer capture a script holds to the browser, and take back
+/// the ones it let go of.
+///
+/// Lumen aims a captured pointer's events at the capturing node itself; the
+/// browser's own capture is what keeps it sending them once the pointer is
+/// outside that element, or outside the page. A release the browser made on
+/// its own (the last button came up) is not an error, so a failing release
+/// is ignored.
+pub fn project_pointer_capture(table: NonSend<NodeTable>, mut held: Local<Vec<(u64, u64)>>) {
+    let now = lumen_script::event::active_pointer_captures();
+    if now.is_empty() && held.is_empty() {
+        return;
+    }
+    let element = |node: u64| {
+        lumen_core::node::NodeHandle::unpack(node).and_then(|h| table.element(h.entity))
+    };
+    for &(id, node) in held.iter() {
+        if !now.contains(&(id, node))
+            && let (Some(el), Ok(id)) = (element(node), i32::try_from(id))
+        {
+            let _ = el.release_pointer_capture(id);
+        }
+    }
+    for &(id, node) in &now {
+        if !held.contains(&(id, node))
+            && let (Some(el), Ok(id)) = (element(node), i32::try_from(id))
+        {
+            let _ = el.set_pointer_capture(id);
+        }
+    }
+    *held = now;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PointerButton, PointerInput, button_of, hover_target, push};
+    use super::{PointerButton, PointerData, PointerInput, button_of, hover_target, push};
     use bevy_ecs::hierarchy::ChildOf;
     use bevy_ecs::prelude::*;
     use bevy_ecs::system::SystemState;
@@ -477,6 +664,7 @@ mod tests {
                 origin: Vec2::ZERO,
             }),
             position: Vec2::new(x, 0.0),
+            pointer: PointerData::default(),
         }
     }
 
@@ -498,6 +686,7 @@ mod tests {
             hit: None,
             position: Vec2::ZERO,
             button: PointerButton::Primary,
+            pointer: PointerData::default(),
         };
         push(&mut queue, moved(1.0));
         push(&mut queue, down.clone());
@@ -511,6 +700,28 @@ mod tests {
         assert_eq!(button_of(0), PointerButton::Primary);
         assert_eq!(button_of(1), PointerButton::Middle);
         assert_eq!(button_of(2), PointerButton::Secondary);
-        assert_eq!(button_of(3), PointerButton::Other(3));
+        assert_eq!(button_of(3), PointerButton::Back);
+        assert_eq!(button_of(5), PointerButton::Eraser);
+        assert_eq!(button_of(7), PointerButton::Other(7));
+    }
+
+    /// Two fingers moving between ticks are two pointers: each keeps its
+    /// own last position.
+    #[test]
+    fn moves_fold_per_pointer() {
+        let finger = |id: u64, x: f32| PointerInput::Move {
+            hit: None,
+            position: Vec2::new(x, 0.0),
+            pointer: PointerData {
+                id,
+                kind: lumen_core::input::PointerKind::Touch,
+                ..PointerData::default()
+            },
+        };
+        let mut queue = Vec::new();
+        push(&mut queue, finger(2, 1.0));
+        push(&mut queue, finger(3, 1.0));
+        push(&mut queue, finger(3, 2.0));
+        assert_eq!(queue, vec![finger(2, 1.0), finger(3, 2.0)]);
     }
 }

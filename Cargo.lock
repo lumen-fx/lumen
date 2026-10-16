@@ -4705,6 +4705,7 @@ dependencies = [
  "signal-hook",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

@@ -128,6 +128,7 @@ mod pipeline_integration_tests {
             .write(PointerMoved {
                 position: p,
                 local: None,
+                pointer: Default::default(),
             });
         app.world.resource_mut::<PointerState>().primary_down = true;
         app.world
@@ -136,6 +137,7 @@ mod pipeline_integration_tests {
                 position: p,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         app.tick();
         assert_eq!(
@@ -813,6 +815,7 @@ mod pipeline_integration_tests {
             .write(PointerMoved {
                 position: p,
                 local: None,
+                pointer: Default::default(),
             });
         app.world.resource_mut::<PointerState>().primary_down = true;
         app.world
@@ -821,6 +824,7 @@ mod pipeline_integration_tests {
                 position: p,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         app.tick();
         app.world.resource_mut::<PointerState>().primary_down = false;
@@ -830,6 +834,7 @@ mod pipeline_integration_tests {
                 position: p,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
         app.tick();
         // One extra settle tick: the flip tick writes the store; readers

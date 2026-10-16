@@ -143,7 +143,11 @@ pub fn update_drag_on_move(
     mut starts: MessageWriter<DragStartEvent>,
     mut deltas: MessageWriter<DragMoveEvent>,
 ) {
-    let pending: Vec<Vec2> = moves.read().map(|m| m.position).collect();
+    let pending: Vec<Vec2> = moves
+        .read()
+        .filter(|m| m.pointer.is_primary)
+        .map(|m| m.position)
+        .collect();
     if pending.is_empty() {
         return;
     }

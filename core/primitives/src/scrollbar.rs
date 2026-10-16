@@ -129,12 +129,8 @@ pub fn update_scrollbars(
         (v, h)
     };
 
-    let pressed = presses
-        .read()
-        .any(|p| matches!(p.button, PointerButton::Primary));
-    let released = releases
-        .read()
-        .any(|r| matches!(r.button, PointerButton::Primary));
+    let pressed = presses.read().any(|p| p.is_primary());
+    let released = releases.read().any(|r| r.is_primary());
     let escape = keys
         .read()
         .any(|k| matches!(k.key, Key::Named(NamedKey::Escape)));
@@ -559,6 +555,7 @@ mod fsm_tests {
                 position: pos,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
     }
 
@@ -570,6 +567,7 @@ mod fsm_tests {
                 position: pos,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
     }
 

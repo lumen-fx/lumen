@@ -118,6 +118,9 @@ host "lumen" {
     {string: float} node_content_rect(int);
     {string: float} node_scroll(int);
     bool node_is_visible(int);
+    node_set_pointer_capture(int, int);
+    node_release_pointer_capture(int, int);
+    bool node_has_pointer_capture(int, int);
     int node_z_index(int);
     {string: string} node_computed_style_all(int);
     {string: string} node_inline_style(int);
@@ -140,6 +143,17 @@ host "lumen" {
     float event_client_y(int);
     float event_delta_x(int);
     float event_delta_y(int);
+    int event_pointer_id(int);
+    string event_pointer_type(int);
+    bool event_is_primary(int);
+    int event_buttons(int);
+    float event_pressure(int);
+    float event_tangential_pressure(int);
+    float event_tilt_x(int);
+    float event_tilt_y(int);
+    float event_twist(int);
+    float event_width(int);
+    float event_height(int);
     bool event_shift(int);
     bool event_ctrl(int);
     bool event_alt(int);

@@ -15,13 +15,14 @@ use lumen_core::components::{
 };
 use lumen_core::input::{
     ClickEvent, FocusTracker, Focused, FocusedKey, Hovered, Key, KeyPressed, KeyReleased,
-    Modifiers, ModifiersState, MouseWheel, NamedKey, PointerButton, PointerMoved, PointerPressed,
-    PointerReleased, PointerState, Pressed, Scroll, ScrollAxis, ScrollOffset,
+    Modifiers, ModifiersState, MouseWheel, NamedKey, PointerButton, PointerCancelled, PointerData,
+    PointerMoved, PointerPressed, PointerReleased, PointerState, Pressed, Scroll, ScrollAxis,
+    ScrollOffset,
 };
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::task::TimerService;
 
-use crate::simulate::{SimulateKind, SimulateQueue};
+use crate::simulate::{SimulateKind, SimulatePointer, SimulateQueue};
 use lumen_core::render_world::{
     ExtractedRect, ExtractedText, RenderStage, SurfaceCapture, Viewport,
 };
@@ -306,6 +307,8 @@ fn drain_simulate_queue(
     mut moved: MessageWriter<PointerMoved>,
     mut pressed: MessageWriter<PointerPressed>,
     mut released: MessageWriter<PointerReleased>,
+    mut cancelled: MessageWriter<PointerCancelled>,
+    mut sim_buttons: Local<SimulatedButtons>,
     mut wheel: MessageWriter<MouseWheel>,
     mut key_pressed: MessageWriter<KeyPressed>,
     mut key_released: MessageWriter<KeyReleased>,
@@ -331,73 +334,127 @@ fn drain_simulate_queue(
     }
     {
         match req.kind {
-            SimulateKind::PointerMove { x, y } => {
+            SimulateKind::PointerMove {
+                x,
+                y,
+                pointer: spec,
+            } => {
+                let at = glam::Vec2::new(x, y);
+                let data = sim_buttons.data(spec.as_ref(), None);
                 // Mirror the winit backend's `CursorMoved` handling: update
                 // `PointerState.position` as well as writing the message, so
                 // `hit_test` (which reads the resource, not the message ring)
                 // sees the synthetic pointer and updates `Hovered`. Without
                 // this, a simulated move/click is invisible to hit-testing and
                 // input routes to wherever the real OS cursor last hovered.
-                pointer.position = Some(glam::Vec2::new(x, y));
+                if data.is_primary {
+                    pointer.position = Some(at);
+                }
                 moved.write(PointerMoved {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     local: None,
+                    pointer: data.stamped(),
                 });
             }
-            SimulateKind::Click { x, y, button } => {
+            SimulateKind::Click {
+                x,
+                y,
+                button,
+                pointer: spec,
+            } => {
                 let b: PointerButton = button.as_deref().unwrap_or("primary").into();
+                let at = glam::Vec2::new(x, y);
+                let before = sim_buttons.data(spec.as_ref(), None);
+                let down = sim_buttons.data(spec.as_ref(), Some((b, true)));
+                let up = sim_buttons.data(spec.as_ref(), Some((b, false)));
                 // Move the synthetic pointer first so this tick's `hit_test`
                 // resolves `Hovered` to the entity under (x, y) before
                 // `dispatch_clicks` turns the press/release into a click.
-                pointer.position = Some(glam::Vec2::new(x, y));
-                if matches!(b, PointerButton::Primary) {
-                    pointer.primary_down = true;
+                if down.is_primary {
+                    pointer.position = Some(at);
                 }
                 moved.write(PointerMoved {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     local: None,
+                    pointer: before.stamped(),
                 });
                 pressed.write(PointerPressed {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     button: b,
                     local: None,
+                    pointer: down.stamped(),
                 });
                 released.write(PointerReleased {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     button: b,
                     local: None,
+                    pointer: up.stamped(),
                 });
-                if matches!(b, PointerButton::Primary) {
-                    pointer.primary_down = false;
-                }
             }
-            SimulateKind::PointerDown { x, y, button } => {
+            SimulateKind::PointerDown {
+                x,
+                y,
+                button,
+                pointer: spec,
+            } => {
                 let b: PointerButton = button.as_deref().unwrap_or("primary").into();
-                pointer.position = Some(glam::Vec2::new(x, y));
-                if matches!(b, PointerButton::Primary) {
-                    pointer.primary_down = true;
+                let at = glam::Vec2::new(x, y);
+                let before = sim_buttons.data(spec.as_ref(), None);
+                let data = sim_buttons.data(spec.as_ref(), Some((b, true)));
+                if data.is_primary {
+                    pointer.position = Some(at);
+                    if matches!(b, PointerButton::Primary) {
+                        pointer.primary_down = true;
+                    }
                 }
                 moved.write(PointerMoved {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     local: None,
+                    pointer: before.stamped(),
                 });
                 pressed.write(PointerPressed {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     button: b,
                     local: None,
+                    pointer: data.stamped(),
                 });
             }
-            SimulateKind::PointerUp { x, y, button } => {
+            SimulateKind::PointerUp {
+                x,
+                y,
+                button,
+                pointer: spec,
+            } => {
                 let b: PointerButton = button.as_deref().unwrap_or("primary").into();
-                pointer.position = Some(glam::Vec2::new(x, y));
+                let at = glam::Vec2::new(x, y);
+                let data = sim_buttons.data(spec.as_ref(), Some((b, false)));
+                if data.is_primary {
+                    pointer.position = Some(at);
+                    if matches!(b, PointerButton::Primary) {
+                        pointer.primary_down = false;
+                    }
+                }
                 released.write(PointerReleased {
-                    position: glam::Vec2::new(x, y),
+                    position: at,
                     button: b,
                     local: None,
+                    pointer: data.stamped(),
                 });
-                if matches!(b, PointerButton::Primary) {
+            }
+            SimulateKind::PointerCancel {
+                x,
+                y,
+                pointer: spec,
+            } => {
+                let at = glam::Vec2::new(x, y);
+                let data = sim_buttons.cancel(spec.as_ref());
+                if data.is_primary {
                     pointer.primary_down = false;
                 }
+                cancelled.write(PointerCancelled {
+                    position: at,
+                    pointer: data.stamped(),
+                });
             }
             SimulateKind::Key { key, modifiers } => {
                 let k: Key = key.as_str().into();
@@ -447,6 +504,7 @@ fn drain_simulate_queue(
                     moved.write(PointerMoved {
                         position: at,
                         local: None,
+                        pointer: Default::default(),
                     });
                     progress.deferred_wheel = Some((seq, event));
                     progress.drained_seq = prior_seq;
@@ -1361,11 +1419,53 @@ impl From<&Style> for StyleView {
     }
 }
 
+/// The buttons each simulated pointer holds, so the `buttons` mask a
+/// simulated event carries matches the presses and releases before it.
+#[derive(Default)]
+struct SimulatedButtons(Vec<(u64, u32)>);
+
+impl SimulatedButtons {
+    /// The pointer data for one event; `change` presses or releases a
+    /// button first.
+    fn data(
+        &mut self,
+        spec: Option<&SimulatePointer>,
+        change: Option<(PointerButton, bool)>,
+    ) -> PointerData {
+        let id = SimulatePointer::data(spec, 0).id;
+        let held = match self.0.iter_mut().find(|(p, _)| *p == id) {
+            Some((_, held)) => held,
+            None => {
+                self.0.push((id, 0));
+                &mut self.0.last_mut().expect("just pushed").1
+            }
+        };
+        match change {
+            Some((b, true)) => *held |= b.bit(),
+            Some((b, false)) => *held &= !b.bit(),
+            None => {}
+        }
+        let buttons = *held;
+        self.0.retain(|(_, held)| *held != 0);
+        SimulatePointer::data(spec, buttons)
+    }
+
+    /// The pointer data for a cancel, which lets go of every button.
+    fn cancel(&mut self, spec: Option<&SimulatePointer>) -> PointerData {
+        let data = SimulatePointer::data(spec, 0);
+        self.0.retain(|(p, _)| *p != data.id);
+        data
+    }
+}
+
 fn button_name(b: PointerButton) -> String {
     match b {
         PointerButton::Primary => "primary".into(),
         PointerButton::Secondary => "secondary".into(),
         PointerButton::Middle => "middle".into(),
+        PointerButton::Back => "back".into(),
+        PointerButton::Forward => "forward".into(),
+        PointerButton::Eraser => "eraser".into(),
         PointerButton::Other(n) => format!("other({n})"),
     }
 }
@@ -1599,6 +1699,7 @@ mod simulate_tests {
                 x: 200.0,
                 y: 48.0,
                 button: None,
+                pointer: None,
             },
             wait_for: None,
         });
@@ -1678,7 +1779,11 @@ mod simulate_tests {
         let mut app = simulate_test_app(&queue);
 
         queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 10.0, y: 20.0 },
+            kind: SimulateKind::PointerMove {
+                x: 10.0,
+                y: 20.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         app.tick();
@@ -1698,11 +1803,19 @@ mod simulate_tests {
         let mut app = simulate_test_app(&queue);
 
         let seq_a = queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 1.0, y: 1.0 },
+            kind: SimulateKind::PointerMove {
+                x: 1.0,
+                y: 1.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         let seq_b = queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 2.0, y: 2.0 },
+            kind: SimulateKind::PointerMove {
+                x: 2.0,
+                y: 2.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         assert_eq!((seq_a, seq_b), (1, 2), "monotonic sequence numbers");
@@ -1735,7 +1848,11 @@ mod simulate_tests {
         let mut app = simulate_test_app(&queue);
 
         let seq = queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 3.0, y: 4.0 },
+            kind: SimulateKind::PointerMove {
+                x: 3.0,
+                y: 4.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         assert_eq!(
@@ -1764,11 +1881,19 @@ mod simulate_tests {
         )));
 
         queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 1.0, y: 1.0 },
+            kind: SimulateKind::PointerMove {
+                x: 1.0,
+                y: 1.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 2.0, y: 2.0 },
+            kind: SimulateKind::PointerMove {
+                x: 2.0,
+                y: 2.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         assert_eq!(count.load(Ordering::SeqCst), 2, "one wake per push");
@@ -1825,7 +1950,11 @@ mod simulate_tests {
 
         // Simulate the MCP server thread pushing a request between ticks.
         queue.push(SimulateRequest {
-            kind: SimulateKind::PointerMove { x: 5.0, y: 6.0 },
+            kind: SimulateKind::PointerMove {
+                x: 5.0,
+                y: 6.0,
+                pointer: None,
+            },
             wait_for: None,
         });
         assert!(

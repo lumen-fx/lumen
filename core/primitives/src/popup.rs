@@ -136,7 +136,7 @@ pub fn dismiss_popups_on_outside_press(
 ) {
     let mut primary_press = false;
     for press in presses.read() {
-        if matches!(press.button, PointerButton::Primary) {
+        if press.is_primary() {
             primary_press = true;
         }
     }
@@ -387,6 +387,7 @@ mod tests {
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
                 local: None,
+                pointer: Default::default(),
             });
     }
 

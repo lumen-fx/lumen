@@ -23,6 +23,7 @@ use crate::{lumen_core, lumen_script};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use lumen_core::input::PointerData;
 use lumen_script::ScriptCommand;
 use lumen_script::event as ev;
 use lumen_script::introspect as ins;
@@ -508,6 +509,26 @@ impl Node {
 
     // -- events (design 4.6) ------------------------------------------------
 
+    /// Send pointer `pointer_id`'s events to this node until its last button
+    /// comes up, wherever the pointer goes (`setPointerCapture`). Takes
+    /// effect at the pointer's next event, which `gotpointercapture`
+    /// precedes. Does nothing while the pointer has no button held.
+    pub fn set_pointer_capture(self, pointer_id: u64) {
+        ev::set_pointer_capture(self.0, pointer_id);
+    }
+
+    /// Give pointer `pointer_id` back to hit testing, when this node holds it
+    /// (`releasePointerCapture`).
+    pub fn release_pointer_capture(self, pointer_id: u64) {
+        ev::release_pointer_capture(self.0, pointer_id);
+    }
+
+    /// Whether this node holds pointer `pointer_id` (`hasPointerCapture`),
+    /// counting a capture set during the current handler.
+    pub fn has_pointer_capture(self, pointer_id: u64) -> bool {
+        ev::has_pointer_capture(self.0, pointer_id)
+    }
+
     /// Bind `handler` to this node for `event_type` (bubble / target phase).
     /// Returns a [`Listener`]; call [`Listener::off`] to unbind.
     pub fn on(
@@ -604,10 +625,18 @@ impl Event {
         ev::event_value()
     }
 
-    /// The button for pointer events (0 primary, 1 middle, 2 secondary, -1
-    /// none).
+    /// The button for pointer events, the web `button` code (0 primary, 1
+    /// middle, 2 secondary, 3 back, 4 forward, 5 pen eraser, -1 none).
     pub fn button(&self) -> i64 {
         ev::event_button()
+    }
+
+    /// The pointer behind a pointer event: its id, device kind
+    /// ([`PointerKind`](lumen_core::input::PointerKind)), held buttons,
+    /// pressure, tilt, twist and contact size, as the web `PointerEvent` has
+    /// them.
+    pub fn pointer(&self) -> PointerData {
+        ev::event_pointer()
     }
 
     /// Wheel delta `(dx, dy)`.

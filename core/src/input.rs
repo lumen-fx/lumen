@@ -6,22 +6,189 @@
 use bevy_ecs::message::Message;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Mouse button identifier carried by pointer-press and pointer-release messages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Button identifier carried by pointer-press and pointer-release messages.
+///
+/// A touch contact and a pen tip touching the surface are the primary
+/// button, as on the web.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PointerButton {
-    /// Primary (typically left mouse).
+    /// Primary (typically left mouse, a touch contact, a pen tip).
+    #[default]
     Primary,
-    /// Secondary (typically right mouse).
+    /// Secondary (typically right mouse, a pen barrel button).
     Secondary,
     /// Middle button / wheel click.
     Middle,
+    /// The back button (X1).
+    Back,
+    /// The forward button (X2).
+    Forward,
+    /// The eraser end of a pen.
+    Eraser,
     /// Any other button, identified by raw OS code.
     Other(u16),
 }
 
+impl PointerButton {
+    /// The web `PointerEvent.button` code: `0` primary, `1` middle, `2`
+    /// secondary, `3` back, `4` forward, `5` eraser. Any other button
+    /// reports its raw code.
+    pub fn code(self) -> i64 {
+        match self {
+            PointerButton::Primary => 0,
+            PointerButton::Middle => 1,
+            PointerButton::Secondary => 2,
+            PointerButton::Back => 3,
+            PointerButton::Forward => 4,
+            PointerButton::Eraser => 5,
+            PointerButton::Other(code) => code as i64,
+        }
+    }
+
+    /// This button's bit in the web `PointerEvent.buttons` mask: `1`
+    /// primary, `2` secondary, `4` middle, `8` back, `16` forward, `32`
+    /// eraser. A button with no web code has no bit.
+    pub fn bit(self) -> u32 {
+        match self {
+            PointerButton::Primary => 1,
+            PointerButton::Secondary => 2,
+            PointerButton::Middle => 4,
+            PointerButton::Back => 8,
+            PointerButton::Forward => 16,
+            PointerButton::Eraser => 32,
+            PointerButton::Other(_) => 0,
+        }
+    }
+}
+
+/// The kind of device behind a pointer, the web `PointerEvent.pointerType`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PointerKind {
+    /// A mouse, or a touchpad driving the cursor.
+    #[default]
+    Mouse,
+    /// A pen or stylus on a tablet or screen.
+    Pen,
+    /// A finger on a touch screen.
+    Touch,
+}
+
+impl PointerKind {
+    /// The web spelling: `"mouse"`, `"pen"` or `"touch"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PointerKind::Mouse => "mouse",
+            PointerKind::Pen => "pen",
+            PointerKind::Touch => "touch",
+        }
+    }
+}
+
+impl From<&str> for PointerKind {
+    /// Parses the web spelling; anything else is a mouse.
+    fn from(name: &str) -> Self {
+        match name {
+            "pen" => PointerKind::Pen,
+            "touch" => PointerKind::Touch,
+            _ => PointerKind::Mouse,
+        }
+    }
+}
+
+/// What a pointer event says about the device that produced it, with the
+/// fields, units and defaults of the web `PointerEvent`.
+///
+/// A device that cannot measure a value reports the web default for it: a
+/// mouse has no tilt, and anything without a pressure sensor reports `0.5`
+/// while a button is held and `0` otherwise.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerData {
+    /// Identifies the pointer for as long as it is in contact or in range:
+    /// the mouse is always [`PointerData::MOUSE_ID`], each touch contact and
+    /// each pen gets its own id.
+    pub id: u64,
+    /// The device kind.
+    pub kind: PointerKind,
+    /// The primary pointer of its kind: the mouse, the pen, or the first
+    /// finger down while no other finger is. Lumen's own widgets (buttons,
+    /// sliders, scrollbars, text selection) follow the primary pointer only.
+    pub is_primary: bool,
+    /// The buttons held after this event, as a web `buttons` mask (see
+    /// [`PointerButton::bit`]).
+    pub buttons: u32,
+    /// Normalized pressure, `0.0` to `1.0`.
+    pub pressure: f32,
+    /// Normalized barrel (tangential) pressure, `-1.0` to `1.0`.
+    pub tangential_pressure: f32,
+    /// Pen tilt from vertical toward the right, `-90` to `90` degrees.
+    pub tilt_x: f32,
+    /// Pen tilt from vertical toward the user, `-90` to `90` degrees.
+    pub tilt_y: f32,
+    /// Pen rotation about its own axis, `0` to `359` degrees.
+    pub twist: f32,
+    /// Contact width in logical pixels; `1` for a point device.
+    pub width: f32,
+    /// Contact height in logical pixels; `1` for a point device.
+    pub height: f32,
+    /// Where this event falls among every pointer event, across the move,
+    /// press, release and cancel messages: a quick stroke can press, move and
+    /// release inside one frame, and a reader that interleaves the message
+    /// types sorts by this to see them in the order they happened. A backend
+    /// sets it with [`PointerData::stamped`]; `0` leaves the reader's own
+    /// order.
+    pub order: u64,
+}
+
+/// The next [`PointerData::order`] stamp.
+static POINTER_ORDER: AtomicU64 = AtomicU64::new(1);
+
+impl PointerData {
+    /// The mouse's pointer id, the one browsers give it.
+    pub const MOUSE_ID: u64 = 1;
+
+    /// The mouse with `buttons` held.
+    pub fn mouse(buttons: u32) -> Self {
+        Self {
+            id: Self::MOUSE_ID,
+            kind: PointerKind::Mouse,
+            is_primary: true,
+            buttons,
+            pressure: Self::default_pressure(buttons),
+            tangential_pressure: 0.0,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            twist: 0.0,
+            width: 1.0,
+            height: 1.0,
+            order: 0,
+        }
+    }
+
+    /// This data stamped as the latest pointer event, for a backend to call
+    /// as it writes each message.
+    pub fn stamped(mut self) -> Self {
+        self.order = POINTER_ORDER.fetch_add(1, Ordering::Relaxed);
+        self
+    }
+
+    /// The pressure a device without a sensor reports: `0.5` while a
+    /// button is held, `0` otherwise.
+    pub fn default_pressure(buttons: u32) -> f32 {
+        if buttons == 0 { 0.0 } else { 0.5 }
+    }
+}
+
+impl Default for PointerData {
+    /// The mouse with no button held.
+    fn default() -> Self {
+        Self::mouse(0)
+    }
+}
+
 /// Pointer moved to a new position in window coordinates.
-#[derive(Message, Clone, Copy, Debug)]
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct PointerMoved {
     /// New position in logical pixels, top-left origin.
     pub position: Vec2,
@@ -30,10 +197,13 @@ pub struct PointerMoved {
     /// `None` leaves it to Lumen's own layout, which is what a native window
     /// backend does.
     pub local: Option<Vec2>,
+    /// The device that moved, pressed or released, and its pen and touch
+    /// readings.
+    pub pointer: PointerData,
 }
 
 /// Pointer button pressed.
-#[derive(Message, Clone, Copy, Debug)]
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct PointerPressed {
     /// Position at time of press.
     pub position: Vec2,
@@ -44,10 +214,13 @@ pub struct PointerPressed {
     /// `None` leaves it to Lumen's own layout, which is what a native window
     /// backend does.
     pub local: Option<Vec2>,
+    /// The device that moved, pressed or released, and its pen and touch
+    /// readings.
+    pub pointer: PointerData,
 }
 
 /// Pointer button released.
-#[derive(Message, Clone, Copy, Debug)]
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct PointerReleased {
     /// Position at time of release.
     pub position: Vec2,
@@ -58,11 +231,76 @@ pub struct PointerReleased {
     /// `None` leaves it to Lumen's own layout, which is what a native window
     /// backend does.
     pub local: Option<Vec2>,
+    /// The device that moved, pressed or released, and its pen and touch
+    /// readings.
+    pub pointer: PointerData,
+}
+
+impl PointerPressed {
+    /// The primary button of the primary pointer: the press Lumen's own
+    /// widgets act on. A second finger's touch is not one.
+    pub fn is_primary(&self) -> bool {
+        self.button == PointerButton::Primary && self.pointer.is_primary
+    }
+}
+
+impl PointerReleased {
+    /// The primary button of the primary pointer: the release Lumen's own
+    /// widgets act on. A second finger's lift is not one.
+    pub fn is_primary(&self) -> bool {
+        self.button == PointerButton::Primary && self.pointer.is_primary
+    }
 }
 
 /// Pointer left the window.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct PointerLeft;
+
+/// The system took a pointer away mid-gesture (a touch that became an OS
+/// gesture, a pen that left range while down): the web `pointercancel`. No
+/// release follows.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct PointerCancelled {
+    /// Last known position in logical pixels.
+    pub position: Vec2,
+    /// The pointer that was cancelled.
+    pub pointer: PointerData,
+}
+
+/// The entity under each non-primary pointer (a second finger) that moved,
+/// pressed or released this tick, keyed by pointer id.
+///
+/// The primary pointer's entity is the one carrying [`Hovered`]; a
+/// non-primary pointer hovers nothing, so whatever hit-tests for the
+/// backend (the input layer on a desktop, the browser on a page) records
+/// where it is here, for the script event driver to aim its events at.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct PointerTargets(Vec<(u64, Entity)>);
+
+impl PointerTargets {
+    /// The entity under pointer `id`, if any.
+    pub fn get(&self, id: u64) -> Option<Entity> {
+        self.0.iter().find(|(p, _)| *p == id).map(|(_, e)| *e)
+    }
+
+    /// Record `target` (or nothing) under pointer `id`.
+    pub fn set(&mut self, id: u64, target: Option<Entity>) {
+        self.0.retain(|(p, _)| *p != id);
+        if let Some(e) = target {
+            self.0.push((id, e));
+        }
+    }
+
+    /// Forget every pointer.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Whether no pointer is recorded.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// Mouse-wheel scroll event. `delta` is in logical pixels and follows the DOM
 /// `WheelEvent` convention: positive y scrolls toward the end of the content
@@ -775,11 +1013,14 @@ impl From<&str> for Key {
 }
 
 impl From<&str> for PointerButton {
-    /// Parses a button name case-insensitively. Recognised values: `"primary"` / `"left"`, `"secondary"` / `"right"`, `"middle"`. Unknown names yield `Primary`.
+    /// Parses a button name case-insensitively. Recognised values: `"primary"` / `"left"`, `"secondary"` / `"right"`, `"middle"`, `"back"`, `"forward"`, `"eraser"`. Unknown names yield `Primary`.
     fn from(name: &str) -> Self {
         match name.to_ascii_lowercase().as_str() {
             "secondary" | "right" => PointerButton::Secondary,
             "middle" => PointerButton::Middle,
+            "back" => PointerButton::Back,
+            "forward" => PointerButton::Forward,
+            "eraser" => PointerButton::Eraser,
             _ => PointerButton::Primary,
         }
     }
