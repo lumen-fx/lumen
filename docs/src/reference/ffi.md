@@ -705,6 +705,10 @@ lumenui-canvas = "X.Y.Z"
 It builds nothing of its own: the module is compiled into the same engine set
 `lumenui` downloads, under the same pinned compiler. Install `CanvasPlugin`
 with `add_plugin`, which registers the tag before the markup is parsed.
+`lumenc check` reads the app's `Cargo.toml` for the same reason: a
+`lumenui-<name>` (or `lumen-<name>`) dependency on a bundled module counts as a
+dependency on that module, so the elements it brings check without a
+`lumen.toml` entry, which a Rust app cannot carry.
 
 `Context2d::new(id)` is the drawing context of the canvas whose element has
 that `id`, the counterpart of the HTML canvas's `CanvasRenderingContext2D`:

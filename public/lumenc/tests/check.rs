@@ -350,3 +350,31 @@ fn pages_demo_wraps_every_page_in_the_shared_layout() {
         "the artifact carries the layout declaration"
     );
 }
+
+/// #519: a Rust app compiles the canvas module in through its `Cargo.toml`
+/// and installs the plugin itself, and cannot declare the module in
+/// `lumen.toml`. `check` takes the modules the manifest links, through the
+/// published wrapper crate, as the app's dependencies, so the `<canvas>` it
+/// uses parses.
+#[test]
+fn a_rust_apps_linked_module_tags_check_clean() {
+    let dir = std::env::temp_dir().join(format!("lumenc-rust-canvas-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("create app dir");
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"canvas-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [dependencies]\nlumenui = \"0\"\nlumenui-canvas = \"0\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
+    std::fs::write(
+        dir.join("src").join("main.lmn"),
+        "<root><canvas id=\"art\" width=\"64\" height=\"64\"/></root>\n",
+    )
+    .expect("write main.lmn");
+    let checked = lumenc::check_app(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    let report = checked.expect("the canvas the app links parses");
+    assert_eq!(report.element_count, 2);
+}

@@ -27,8 +27,9 @@
 use std::path::{Path, PathBuf};
 
 use lumen_modules::addon::{AddonPackage, read_web_half, web_half};
-use lumen_modules::{DependenciesCfg, ModuleSource, ResolvedModules, Target};
+use lumen_modules::{DepCfg, DependenciesCfg, ModuleSource, ResolvedModules, Target};
 use lumen_runtime::CompileDeps;
+use lumen_runtime::app_kind::{self, AppKind};
 
 use crate::package::lpm::Resolved;
 
@@ -68,10 +69,26 @@ pub fn target_deps(
     target: Target,
     lib_dir: Option<&Path>,
 ) -> Result<TargetDeps, String> {
+    target_deps_reading(dir, target, lib_dir, false)
+}
+
+/// [`target_deps`], with the modules a Rust app links through its
+/// `Cargo.toml` taken as dependencies too when `linked_modules` is set (see
+/// [`linked_modules`]).
+fn target_deps_reading(
+    dir: &Path,
+    target: Target,
+    lib_dir: Option<&Path>,
+    linked_modules: bool,
+) -> Result<TargetDeps, String> {
     let cfg =
         lumen_runtime::LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let resolved = crate::registry_packages(dir, target)?;
-    let deps = cfg.dependencies_for(target);
+    let mut deps = cfg.dependencies_for(target);
+    if linked_modules && app_kind::resolve(dir, cfg.app.kind) == AppKind::Rust {
+        let linked = self::linked_modules(dir, &deps, lib_dir);
+        deps.0.extend(linked);
+    }
     let halves = web_halves(dir, &deps, &resolved, lib_dir)?;
     let without_web_half = DependenciesCfg(
         deps.0
@@ -115,7 +132,16 @@ pub fn compile_deps(
     target: Target,
     lib_dir: Option<&Path>,
 ) -> Result<TargetDeps, String> {
-    let mut found = target_deps(dir, target, lib_dir)?;
+    compile_deps_reading(dir, target, lib_dir, false)
+}
+
+fn compile_deps_reading(
+    dir: &Path,
+    target: Target,
+    lib_dir: Option<&Path>,
+    linked_modules: bool,
+) -> Result<TargetDeps, String> {
+    let mut found = target_deps_reading(dir, target, lib_dir, linked_modules)?;
     if target != Target::Web {
         found.compile.modules = lumen_runtime::module_surface(
             dir,
@@ -228,6 +254,62 @@ fn package_name(root: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The bundled modules a Rust app links through its `Cargo.toml`, as the
+/// `[dependencies]` entries a markup app would write for them, leaving out any
+/// `declared` already names.
+///
+/// A Rust app cannot declare a runtime module in `lumen.toml`: it compiles the
+/// module in, by depending on its crate, and installs the plugin itself. The
+/// crate is the module's own (`lumen-<name>`) or the published wrapper that
+/// re-exports it (`lumenui-<name>`). A dependency counts when the toolchain
+/// has a bundled module of that name, so the elements the module answers for
+/// are the ones its descriptor declares, as for any app that depends on it.
+fn linked_modules(dir: &Path, declared: &DependenciesCfg, lib_dir: Option<&Path>) -> Vec<DepCfg> {
+    let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = toml::from_str::<toml::Table>(&text) else {
+        return Vec::new();
+    };
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    tables.extend(manifest.get("dependencies").and_then(toml::Value::as_table));
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        tables.extend(
+            targets
+                .values()
+                .filter_map(|t| t.get("dependencies").and_then(toml::Value::as_table)),
+        );
+    }
+    let mut linked: Vec<DepCfg> = Vec::new();
+    for (key, value) in tables.into_iter().flatten() {
+        // A renamed dependency names its crate in `package`.
+        let package = value
+            .get("package")
+            .and_then(toml::Value::as_str)
+            .unwrap_or(key);
+        let module = match package.strip_prefix("lumenui-") {
+            Some(name) => format!("lumen-{name}"),
+            None if package.starts_with("lumen-") => package.to_string(),
+            None => continue,
+        };
+        let known = declared
+            .0
+            .iter()
+            .chain(&linked)
+            .any(|dep| dep.name == module);
+        if known || bundled_module(&module, lib_dir).is_none() {
+            continue;
+        }
+        linked.push(DepCfg {
+            name: module,
+            source: ModuleSource::Bundled,
+            config: toml::Table::new(),
+            tags: Vec::new(),
+        });
+    }
+    linked
+}
+
 /// The import root a web half's candela sugar is compiled from, when it
 /// carries some: the `web/` directory is a candela package too, entered the
 /// way any is, through its `candela.toml` or `src/main.cdl`.
@@ -245,13 +327,17 @@ fn candela_root(package: &AddonPackage) -> Option<(String, PathBuf)> {
 /// web half, so for such an app the web is left out and the check is the
 /// desktop's alone.
 ///
+/// A Rust app's modules come from its `Cargo.toml` as well as `lumen.toml`
+/// (see [`linked_modules`]), so the elements a module it compiles in answers
+/// for check the way they run.
+///
 /// # Errors
 ///
 /// As [`target_deps`].
 pub fn every_target(dir: &Path) -> Result<Vec<CompileDeps>, String> {
     let mut targets = Vec::new();
     for target in Target::ALL {
-        let found = compile_deps(dir, target, None)?;
+        let found = compile_deps_reading(dir, target, None, true)?;
         if target == Target::Web && !found.without_web_half.0.is_empty() {
             continue;
         }
