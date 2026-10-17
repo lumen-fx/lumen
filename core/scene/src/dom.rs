@@ -155,12 +155,17 @@ fn install_dom_events(app: &mut App) {
     );
 }
 
-/// Rebuild the per-tick [`DomIndex`] snapshot from the live tree and publish
-/// it for cross-thread readers (script hosts, the C-ABI).
+/// Rebuild the [`DomIndex`] snapshot from the live tree and publish it for
+/// cross-thread readers (script hosts, the C-ABI).
 ///
 /// Every spawned element carries a [`LumenTag`], so the query walks all
 /// selector-reachable entities; a parent or child that is not itself tagged,
 /// such as the window root, is dropped from the element tree.
+///
+/// Runs every tick and rebuilds only on one that changed what the index
+/// holds: a tag, an id, the classes, the tree's shape, or an element hidden
+/// from the DOM, coming or going. Rebuilding walks every element, which an
+/// idle tick of a large tree has no reason to pay.
 #[allow(clippy::type_complexity)]
 pub fn build_dom_index(
     query: Query<
@@ -174,8 +179,39 @@ pub fn build_dom_index(
         ),
         Without<lumen_core::components::DomHidden>,
     >,
+    changed: Query<
+        (),
+        Or<(
+            Changed<LumenTag>,
+            Changed<LumenClasses>,
+            Changed<LumenId>,
+            Changed<ChildOf>,
+            Changed<Children>,
+            Changed<lumen_core::components::DomHidden>,
+        )>,
+    >,
+    mut removed: (
+        RemovedComponents<LumenTag>,
+        RemovedComponents<LumenClasses>,
+        RemovedComponents<LumenId>,
+        RemovedComponents<ChildOf>,
+        RemovedComponents<Children>,
+        RemovedComponents<lumen_core::components::DomHidden>,
+    ),
+    mut built: Local<bool>,
 ) {
     use std::collections::HashSet;
+    // Every reader is drained, so a removal is seen on one tick only.
+    let removals = removed.0.read().count()
+        + removed.1.read().count()
+        + removed.2.read().count()
+        + removed.3.read().count()
+        + removed.4.read().count()
+        + removed.5.read().count();
+    if *built && removals == 0 && changed.is_empty() {
+        return;
+    }
+    *built = true;
     let indexed: HashSet<u64> = query.iter().map(|(e, ..)| e.to_bits()).collect();
     let mut records: Vec<DomRecord> = Vec::with_capacity(indexed.len());
     for (entity, tag, classes, id, child_of, children) in query.iter() {

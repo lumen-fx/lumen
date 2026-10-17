@@ -6,6 +6,7 @@
 //! host-neutral introspection surface (`lumen_script::introspect`) that
 //! every script host and the C-ABI share. No window is opened.
 
+use bevy_ecs::change_detection::DetectChangesMut;
 use lumen_ir::css::{Declaration, Origin, Rule, Stylesheet, parse_selector_list};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
@@ -240,6 +241,35 @@ fn introspection_read_side_headless() {
     assert!(ins::node_rect(0).is_none());
     assert!(!ins::node_is_visible(0));
     assert!(ins::node_computed_style_map(0).is_empty());
+
+    // --- #540: rebuilt only on a tick that changed what it holds ---
+    // A write the change ticks cannot see stands for a tick where nothing
+    // changed: the snapshot keeps what it had rather than walking the tree.
+    let entity = lumen_core::node::NodeHandle::unpack(save).unwrap().entity;
+    app.world
+        .get_mut::<lumen_core::components::Transform>(entity)
+        .expect("save is laid out")
+        .bypass_change_detection()
+        .size
+        .x = 55.0;
+    let frame_before = ins::frame_info().frame;
+    for _ in 0..2 {
+        app.tick();
+    }
+    assert_eq!(
+        ins::node_rect(save).expect("still published").width,
+        100.0,
+        "an idle tick does not rebuild the snapshot"
+    );
+    assert!(
+        ins::frame_info().frame > frame_before,
+        "the frame counters move every tick"
+    );
+    app.world
+        .entity_mut(entity)
+        .insert(lumen_core::components::ZIndex(3));
+    app.tick();
+    assert_eq!(ins::node_z_index(save), 3, "a change is published");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

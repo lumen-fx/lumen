@@ -7,8 +7,8 @@ use lumen::*;
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_core::prelude::{Entity, World};
 use lumen_script::introspect::{
-    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, PointerSnapshot, publish_introspection,
-    publish_pointer,
+    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, PointerSnapshot, publish_frame_info,
+    publish_introspection, publish_pointer,
 };
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -86,13 +86,13 @@ fn c_abi_introspection_surface() {
         geometry,
         components,
         vec!["LayoutBox".to_string()],
-        FrameInfo {
-            frame: 9,
-            dt_ms: 16.0,
-            dirty_count: 2,
-        },
         vec![("count".to_string(), "3".to_string())],
     ));
+    publish_frame_info(FrameInfo {
+        frame: 9,
+        dt_ms: 16.0,
+        dirty_count: 2,
+    });
 
     // rect
     unsafe {

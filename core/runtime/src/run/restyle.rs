@@ -451,9 +451,12 @@ pub(crate) fn detect_media_change(world: &mut World) {
             scheme_changed || width_crossed
         }
     };
-    // Always refresh the baseline so breakpoint-crossing detection tracks
-    // the latest width even on ticks that don't bump.
-    world.insert_resource(LastMediaContext(media));
+    // Refresh the baseline so breakpoint-crossing detection tracks the
+    // latest width even on ticks that don't bump. Only a different context
+    // is written: readers of the resource take a write as a change.
+    if prev != Some(media) {
+        world.insert_resource(LastMediaContext(media));
+    }
     if changed {
         StyleVersion::bump(world);
     }
