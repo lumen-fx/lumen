@@ -29,6 +29,14 @@ path = "src/main.rs"
 # library, not the binary.
 required-features = ["runtime-parse"]
 
+# What one frame of a large pixel editor costs, phase by phase, on both
+# renderers: `cargo bench -p lumenc --bench editor_frame -- gpu`. It takes its
+# options on the command line, which libtest's harness would read as filters.
+[[bench]]
+name = "editor_frame"
+harness = false
+required-features = ["dev-run"]
+
 [dependencies]
 lumen-core = { workspace = true }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,

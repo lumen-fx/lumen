@@ -584,6 +584,25 @@ actionable if you know which phase is slow. The run is also reported in
 tenths, so a cost that grows with the number of starts shows as a trend
 instead of disappearing into one number. `--iterations` sets the sample count.
 
+## Measuring a frame of a large editor
+
+`lumenc` carries a benchmark for what one frame costs in an app at the size a
+paint program reaches: a canvas drawing a stack of large pixel buffers with
+blend modes, beside about two thousand elements of panels and lists. It runs
+the real pipeline with no window, on either renderer, and times idle ticks, a
+repaint of an unchanged frame, a pan, a brush stroke, rewriting every buffer,
+and hiding and freeing one:
+
+```sh
+cargo bench -p lumenc --bench editor_frame -- gpu buffers=2,8,32
+cargo bench -p lumenc --bench editor_frame -- cpu buffers=32 side=4096 frames=30
+```
+
+Each frame is split at the instants `FrameTiming` records (update, extract,
+encode, submit), plus the time the GPU took to finish it. Built with
+`--features profiling` and run with `LUMEN_BENCH_TRACE=1`, it also writes every
+system's spans to `lumen-trace.json`.
+
 ## Comparing against other toolkits
 
 [guibench](https://github.com/lumen-fx/guibench) implements the same four apps
