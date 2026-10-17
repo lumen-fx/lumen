@@ -526,7 +526,7 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
             .copied()
             .filter(|&e| world.get_entity(e).is_ok())
             .map(|e| match world.get::<ChildOf>(e) {
-                Some(c) if siblings => c.parent(),
+                Some(c) if siblings && is_sibling_element(world, e) => c.parent(),
                 _ => e,
             })
             .collect();
@@ -616,7 +616,7 @@ fn restyle_subtree(
     let tagged: Vec<Entity> = children
         .iter()
         .copied()
-        .filter(|&k| world.get::<LumenTag>(k).is_some())
+        .filter(|&k| is_sibling_element(world, k))
         .collect();
     let node = cascade_node(world, entity, place, !tagged.is_empty());
     let mut attrs = walk.resolve(&node);
@@ -718,17 +718,24 @@ fn identity(world: &World, e: Entity) -> (String, Vec<String>, Option<String>) {
     )
 }
 
+/// Whether `e` counts among its parent's element children: an element that
+/// is part of the document. A [`DomHidden`](lumen_core::components::DomHidden)
+/// one, such as an open tooltip under the root, is styled but is nobody's
+/// sibling, so opening it does not move the root's `:last-child`.
+fn is_sibling_element(world: &World, e: Entity) -> bool {
+    use lumen_core::components::{DomHidden, LumenTag};
+    world
+        .get_entity(e)
+        .is_ok_and(|r| r.contains::<LumenTag>() && !r.contains::<DomHidden>())
+}
+
 /// The children of `e` that are elements. Only those count as siblings: a
 /// renderer-internal child added beside a row does not shift the row's
 /// `:nth-child`.
 fn tagged_children(world: &World, e: Entity) -> Vec<Entity> {
     world
         .get::<bevy_ecs::hierarchy::Children>(e)
-        .map(|c| {
-            c.iter()
-                .filter(|&k| world.get::<lumen_core::components::LumenTag>(k).is_some())
-                .collect()
-        })
+        .map(|c| c.iter().filter(|&k| is_sibling_element(world, k)).collect())
         .unwrap_or_default()
 }
 

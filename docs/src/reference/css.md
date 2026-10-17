@@ -416,8 +416,8 @@ keeps its content size where it would have sat in the flow; with two
 sides set, such as `inset: 4 8 auto auto` or `inset-block-start` plus
 `inset-inline-end`, it keeps its size against that corner. Set opposite
 sides, as `inset: 0` does, to stretch it between them. An element with
-no parent at all, such as a tooltip, resolves its `inset` against the
-window.
+no parent at all, such as one a Rust plugin spawns as a root of its own,
+resolves its `inset` against the window.
 
 An out-of-flow child contributes nothing to its parent's content size.
 A parent that is content-sized on an axis and has only absolutely

@@ -15,23 +15,24 @@
 //! component without the previous hand-coded
 //! `if tag == "tooltip" { ... }` branch in `lumenc::parse::html`.
 //!
-//! The four per-tick systems remain hand-written (the `#[widget(prop)]`
+//! The per-tick systems remain hand-written (the `#[widget(prop)]`
 //! /`#[widget(state)]` attributes only cover marker-component
 //! authoring; system bodies stay author-supplied for v1). The plugin
 //! struct is also hand-written (via `#[widget(plugin =
-//! "TooltipPlugin")]`) because the four systems need to be installed
-//! in a specific tick stage - the canned no-op plugin emitted by the
+//! "TooltipPlugin")]`) because the systems need to be installed
+//! in specific tick stages - the canned no-op plugin emitted by the
 //! derive can't do that yet.
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::query::Added;
 use glam::Vec2;
 use lumen_core::components::{
-    Color, Fill, LumenClasses, Position, Style, TextContent, TextStyle, Transform, Visuals,
+    DomHidden, Edges, LumenClasses, LumenTag, Position, Style, StyleDirty, TextContent, Transform,
 };
 use lumen_core::input::Hovered;
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
+use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
 use lumen_core::tick::WakeDeadline;
 use lumen_core::time::{Duration, Instant};
 use lumen_widget_macros::Widget;
@@ -89,23 +90,24 @@ pub struct TooltipPopup {
     pub trigger: Entity,
 }
 
-/// Plugin: registers the four tooltip systems and a default `class`
-/// rule via the LSP completion tables. No render path of its own -
-/// the popup is just an `<overlay>`-shaped entity with a `Visuals`
-/// fill + `TextContent`, so all standard styling (CSS `.tooltip`
-/// selector, hover-bg, opacity) works.
+/// The popup holds its placement at the pointer over its styles.
+impl StyleOwner for TooltipPopup {
+    const RANK: u8 = 20;
+}
+
+/// Plugin: registers the tooltip systems. No render path of its own -
+/// the popup is a plain text element classed `tooltip`, so all standard
+/// styling (CSS `.tooltip` selector, opacity, tokens) works.
 pub struct TooltipPlugin;
 
 impl Plugin for TooltipPlugin {
     fn build(self, app: &mut App) {
+        // The popup spawns ahead of `Systems`, where the restyle runs, so it
+        // is styled in the frame it first paints.
+        app.add_systems(TickStage::CommandDrain, spawn_tooltip_popups);
         app.add_systems(
             TickStage::Systems,
-            (
-                record_hover_started,
-                spawn_tooltip_popups,
-                apply_tooltip_defaults,
-                despawn_tooltip_popups,
-            ),
+            (record_hover_started, despawn_tooltip_popups),
         );
     }
 }
@@ -175,10 +177,21 @@ pub fn cursor_tooltip_origin(cursor: Vec2, popup: Vec2, viewport: Vec2, offset: 
 /// [`cursor_tooltip_origin`]. Falls back to the trigger's top-left
 /// when the backend reports no pointer position (keyboard-only /
 /// synthetic hover).
+///
+/// The popup is a `<tooltip class="tooltip">` element under the root of
+/// the trigger's tree, so the stylesheet styles it like any element and
+/// its `var()` tokens resolve against the root. It is [`DomHidden`]:
+/// scripts and structural selectors never see it. Its `position:
+/// absolute` and the inset that puts it at the pointer are held in
+/// [`StyleOverrides`], which a restyle keeps; everything else, its look
+/// included, is the cascade's.
+#[allow(clippy::too_many_arguments)]
 fn spawn_tooltip_popups(
     mut commands: Commands,
     triggers: Query<(Entity, &TooltipSource, &Transform, &HoverStartedAt), With<Hovered>>,
     existing: Query<&TooltipPopup>,
+    parents: Query<&ChildOf>,
+    transforms: Query<&Transform>,
     viewport: Option<Res<Viewport>>,
     pointer: Option<Res<lumen_core::input::PointerState>>,
     wake: Option<Res<WakeDeadline>>,
@@ -205,66 +218,50 @@ fn spawn_tooltip_popups(
         let est = estimated_tooltip_size(&src.text);
         let anchor = cursor.unwrap_or(t.absolute);
         let origin = cursor_tooltip_origin(anchor, est, viewport_size, src.offset);
-        // Default Visuals / TextStyle are not spawned inline: they
-        // would beat any author CSS `.tooltip { background: ... }`
-        // rule (inline-attribute styling has the highest cascade
-        // priority). `apply_tooltip_defaults` fills them in only when
-        // CSS-or-other-systems haven't already attached a Visuals
-        // component - preserving the unstyled-tooltip default look
-        // while letting `.tooltip` author rules win when present.
-        commands.spawn((
+        let root = parents.iter_ancestors(trigger).last();
+        // The inset resolves against the root, the popup's containing
+        // block; a trigger with no tree above it leaves the popup a root of
+        // its own, whose inset resolves against the window.
+        let local = origin
+            - root
+                .and_then(|r| transforms.get(r).ok())
+                .map_or(Vec2::ZERO, |r| r.absolute);
+        let placement = StyleValues {
+            position: Some(Position::Absolute),
+            // Pinned by its top-left corner; `right` / `bottom` stay `auto`
+            // so the popup keeps its content size.
+            inset: Some(Edges {
+                left: local.x,
+                top: local.y,
+                ..Edges::auto()
+            }),
+            ..Default::default()
+        };
+        let mut style = Style::default();
+        let mut overrides = StyleOverrides::default();
+        let live = Live {
+            style: Some(&style),
+            ..Live::default()
+        };
+        let placed = overrides.hold::<TooltipPopup>(placement, &live);
+        placed.write_style(&mut &mut style);
+        let mut popup = commands.spawn((
             TooltipPopup { trigger },
             // Top-layer paint band: the tooltip stacks with other popups
-            // by open order (later-opened on top) instead of the orphan
-            // fallback band.
+            // by open order (later-opened on top) and escapes the clips of
+            // the tree it sits in.
             lumen_core::render_world::OverlayLayer,
+            LumenTag("tooltip".into()),
             LumenClasses(vec!["tooltip".into()]),
-            Style {
-                width: lumen_core::components::Length::Auto,
-                height: lumen_core::components::Length::Auto,
-                position: Position::Absolute,
-                // Pinned by its top-left corner; `right` / `bottom` stay
-                // `auto` so the popup keeps its content size.
-                inset: lumen_core::components::Edges {
-                    left: origin.x,
-                    top: origin.y,
-                    ..lumen_core::components::Edges::auto()
-                },
-                padding: lumen_core::components::Edges::all(8.0),
-                ..Default::default()
-            },
+            DomHidden,
+            style,
+            overrides,
+            StyleDirty,
             TextContent(src.text.clone()),
         ));
-    }
-}
-
-/// Fill in default `Visuals` (dark panel + rounded corners) and
-/// `TextStyle` (near-white body) on any tooltip popup that doesn't
-/// already carry them - covers the no-CSS case while leaving an
-/// author-defined `.tooltip { background: ...; color: ...; }` rule
-/// authoritative when one applies.
-///
-/// Runs after `spawn_tooltip_popups`. Idempotent: once a popup has a
-/// `Visuals` or `TextStyle` component (whether from this system or
-/// elsewhere), this pass leaves it alone.
-fn apply_tooltip_defaults(
-    mut commands: Commands,
-    needs_visuals: Query<Entity, (With<TooltipPopup>, Without<Visuals>)>,
-    needs_text_style: Query<Entity, (With<TooltipPopup>, Without<TextStyle>)>,
-) {
-    for e in &needs_visuals {
-        commands.entity(e).insert(Visuals {
-            fill: Some(Fill::Solid(Color::rgba(0.10, 0.12, 0.16, 0.95))),
-            radius: 6.0,
-            ..Default::default()
-        });
-    }
-    for e in &needs_text_style {
-        commands.entity(e).insert(TextStyle {
-            color: Color::rgb(0.94, 0.95, 0.97),
-            size_px: 13.0,
-            ..Default::default()
-        });
+        if let Some(root) = root {
+            popup.insert(ChildOf(root));
+        }
     }
 }
 
