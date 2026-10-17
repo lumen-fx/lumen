@@ -16,7 +16,8 @@ name: lumenui-engine
 # crates (`lumenui-canvas` and the rest of MODULES in lumenui-engine.py) are
 # not in the checkout: lumenui-engine.py `wrappers` generates them here, and
 # each one's smoke app, on `lumenui` and that crate alone, gets the same
-# proof.
+# proof. The Linux x86_64 leg also packages and verifies every crate
+# publish.yml uploads, against its set, without uploading.
 #
 # Every leg builds natively for its own target. The set carries proc-macro
 # libraries, which run inside the compiler, so a set is only usable on a
@@ -49,6 +50,7 @@ on:
       - std/canvas/**
       - core/widget-macros/**
       - tools/release/lumenui-engine.py
+      - tools/release/publish-crates.py
       - rust-toolchain.toml
       - .github/workflows/lumenui-engine.yml
   workflow_dispatch:
@@ -261,6 +263,18 @@ jobs:
             if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
             (cd "${crate}smoke" && "./$exe")
           done
+
+      # The packages publish.yml uploads, verified the way it verifies them:
+      # `lumenui` and every generated module crate packaged and built from the
+      # packaged files, in publish order, against this leg's set. publish.yml
+      # can only do that once the release carrying the set is up, so this is
+      # where a version that is not released yet gets the check. Nothing is
+      # uploaded. One leg, since the packages are the same for every target.
+      - name: Package the published crates
+        if: matrix.target == 'linux-x86_64'
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: python tools/release/publish-crates.py --sdk --dry-run
 
       - uses: actions/upload-artifact@v4
         with:
