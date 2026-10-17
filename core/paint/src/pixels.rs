@@ -226,12 +226,19 @@ impl PixelImage {
     /// tile's own pixels (copied first if anything else shares them) and the
     /// part of the rectangle inside it, in image pixels. Stamps every tile
     /// written.
+    ///
+    /// With `complete`, `write` writes every pixel of the part it is handed.
+    /// A tile the rectangle covers to its edges (or to the image's) is then
+    /// written whole, so a shared one is replaced by a fresh allocation rather
+    /// than copied first: rewriting a whole image a renderer still holds costs
+    /// one pass over its pixels, not two.
     fn for_tiles_mut(
         &mut self,
         (left, top, right, bottom): (u32, u32, u32, u32),
+        complete: bool,
         mut write: impl FnMut(&mut [u8], (u32, u32), (u32, u32, u32, u32)),
     ) {
-        let cols = self.cols;
+        let (cols, width, height) = (self.cols, self.width, self.height);
         let tiles = Arc::make_mut(&mut self.tiles);
         let stamp = fresh_stamp();
         for row in top / TILE..bottom.div_ceil(TILE) {
@@ -243,7 +250,15 @@ impl PixelImage {
                     right.min(origin.0 + TILE),
                     bottom.min(origin.1 + TILE),
                 );
+                let whole = complete
+                    && part.0 == origin.0
+                    && part.1 == origin.1
+                    && part.2 == (origin.0 + TILE).min(width)
+                    && part.3 == (origin.1 + TILE).min(height);
                 let tile = &mut tiles[(row * cols + col) as usize];
+                if whole && Arc::get_mut(&mut tile.pixels).is_none() {
+                    tile.pixels = Arc::new(vec![0u8; TILE_BYTES]);
+                }
                 write(Arc::make_mut(&mut tile.pixels).as_mut_slice(), origin, part);
                 tile.stamp = stamp;
             }
@@ -266,7 +281,8 @@ impl PixelImage {
         // than reading past its end.
         let full_rows = rgba.len() / stride.max(1);
         let tail = rgba.len() % stride.max(1) / 4;
-        self.for_tiles_mut(clip, |tile, (tx, ty), (l, t, r, b)| {
+        let complete = full_rows >= height as usize;
+        self.for_tiles_mut(clip, complete, |tile, (tx, ty), (l, t, r, b)| {
             for py in t..b {
                 let src_row = (i64::from(py) - y) as usize;
                 let src_col = (i64::from(l) - x) as usize;
@@ -328,7 +344,7 @@ impl PixelImage {
         let Some(clip) = self.clip(x, y, width, height) else {
             return;
         };
-        self.for_tiles_mut(clip, |tile, (tx, ty), (l, t, r, b)| {
+        self.for_tiles_mut(clip, true, |tile, (tx, ty), (l, t, r, b)| {
             for py in t..b {
                 let start = (py - ty) as usize * TILE_STRIDE + (l - tx) as usize * 4;
                 for px in tile[start..start + (r - l) as usize * 4].chunks_exact_mut(4) {
@@ -428,6 +444,39 @@ mod tests {
             &snapshot.tiles[1].pixels,
             &image.tiles[1].pixels
         ));
+    }
+
+    /// #535: rewriting a whole tile a snapshot still shares takes a fresh
+    /// allocation instead of copying the old pixels first, and the snapshot
+    /// keeps what it had; a partial write still copies.
+    #[test]
+    fn a_whole_tile_write_does_not_copy_the_shared_pixels() {
+        let mut image = PixelImage::new(100, 70);
+        image.fill_rgba8(0, 0, 100, 70, [1, 2, 3, 4]);
+        let snapshot = image.clone();
+        // Tile 0 whole, tile 1 (the right edge tile, 36 pixels wide) whole
+        // to the image's edge, tile 2 (bottom left) only in part.
+        image.fill_rgba8(0, 0, 100, 64, [9, 9, 9, 9]);
+        image.fill_rgba8(0, 64, 10, 2, [7, 7, 7, 7]);
+        assert_eq!(image.pixel(63, 63), [9; 4]);
+        assert_eq!(image.pixel(99, 0), [9; 4]);
+        assert_eq!(image.pixel(5, 65), [7; 4]);
+        assert_eq!(
+            image.pixel(50, 66),
+            [1, 2, 3, 4],
+            "a partial write keeps the rest"
+        );
+        assert_eq!(
+            snapshot.pixel(0, 0),
+            [1, 2, 3, 4],
+            "the snapshot keeps its pixels"
+        );
+        // Data too short for the rectangle leaves part of a covered tile
+        // alone, so it copies the tile first.
+        let mut partial = snapshot.clone();
+        partial.write_rgba8(0, 0, 64, 64, &[5; 64 * 4]);
+        assert_eq!(partial.pixel(0, 0), [5; 4]);
+        assert_eq!(partial.pixel(10, 10), [1, 2, 3, 4]);
     }
 
     #[test]
