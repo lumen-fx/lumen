@@ -390,39 +390,51 @@ pub fn apply_dom_commands(world: &mut World) {
                 }
             }
             ScriptCommand::ClassAdd { node, class } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    class_edit(world, entity, &class, ClassOp::Add);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && class_edit(world, entity, &class, ClassOp::Add)
+                {
                     world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::ClassRemove { node, class } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    class_edit(world, entity, &class, ClassOp::Remove);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && class_edit(world, entity, &class, ClassOp::Remove)
+                {
                     world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::ClassToggle { node, class } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    class_edit(world, entity, &class, ClassOp::Toggle);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && class_edit(world, entity, &class, ClassOp::Toggle)
+                {
                     world.entity_mut(entity).insert(StyleDirty);
                 }
             }
             ScriptCommand::SetStyleProp { node, name, value } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     let mut e = world.entity_mut(entity);
-                    let mut style = e.take::<InlineStyle>().unwrap_or_default();
-                    style.set(&name, value);
-                    e.insert((style, StyleDirty));
+                    let same = e
+                        .get::<InlineStyle>()
+                        .is_some_and(|style| style.get(&name) == Some(value.as_str()));
+                    if !same {
+                        let mut style = e.take::<InlineStyle>().unwrap_or_default();
+                        style.set(&name, value);
+                        e.insert((style, StyleDirty));
+                    }
                 }
             }
             ScriptCommand::RemoveStyleProp { node, name } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     let mut e = world.entity_mut(entity);
-                    if let Some(mut style) = e.take::<InlineStyle>() {
-                        style.remove(&name);
-                        e.insert(style);
+                    let present = e
+                        .get::<InlineStyle>()
+                        .is_some_and(|style| style.get(&name).is_some());
+                    if present {
+                        if let Some(mut style) = e.get_mut::<InlineStyle>() {
+                            style.remove(&name);
+                        }
+                        e.insert(StyleDirty);
                     }
-                    e.insert(StyleDirty);
                 }
             }
             ScriptCommand::BindEvent {
@@ -675,9 +687,11 @@ fn set_classes(world: &mut World, target_id: &str, classes: &str) -> Vec<Entity>
         else {
             return Vec::new();
         };
-        world
-            .entity_mut(root)
-            .insert(LumenClasses::from(new_classes));
+        if class_list_differs(world.get::<LumenClasses>(root), &new_classes) {
+            world
+                .entity_mut(root)
+                .insert(LumenClasses::from(new_classes));
+        }
         // The root's own restyle is the watcher's, on the host that has one.
         return Vec::new();
     }
@@ -691,10 +705,10 @@ fn set_classes(world: &mut World, target_id: &str, classes: &str) -> Vec<Entity>
     for (entity, differs) in targets {
         if differs {
             changed.push(entity);
+            world
+                .entity_mut(entity)
+                .insert(LumenClasses::from(new_classes.clone()));
         }
-        world
-            .entity_mut(entity)
-            .insert(LumenClasses::from(new_classes.clone()));
     }
     changed
 }
@@ -717,21 +731,30 @@ enum ClassOp {
     Toggle,
 }
 
-fn class_edit(world: &mut World, entity: Entity, class: &str, op: ClassOp) {
+fn class_edit(world: &mut World, entity: Entity, class: &str, op: ClassOp) -> bool {
     let mut e = world.entity_mut(entity);
-    let mut classes = e.take::<LumenClasses>().unwrap_or_default();
-    let present = classes.0.iter().any(|c| c.as_ref() == class);
+    let present = e
+        .get::<LumenClasses>()
+        .is_some_and(|classes| classes.0.iter().any(|c| c.as_ref() == class));
     let want = match op {
         ClassOp::Add => true,
         ClassOp::Remove => false,
         ClassOp::Toggle => !present,
     };
-    if want && !present {
+    // An edit that leaves the class list as it was writes nothing: a write
+    // is a change to everything watching the classes, and the element and
+    // its subtree would restyle for it.
+    if want == present {
+        return false;
+    }
+    let mut classes = e.take::<LumenClasses>().unwrap_or_default();
+    if want {
         classes.0.push(class.into());
-    } else if !want && present {
+    } else {
         classes.0.retain(|c| c.as_ref() != class);
     }
     e.insert(classes);
+    true
 }
 
 /// Reconstruct a minimal [`Element`] subtree from a live entity: tag,
