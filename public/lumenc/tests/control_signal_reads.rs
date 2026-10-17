@@ -100,6 +100,7 @@ fn key(app: &mut App, ch: char) {
         key: Key::Character(ch.to_string()),
         modifiers: Modifiers::default(),
         repeat: false,
+        time_stamp: lumen_core::time::Instant::now(),
     });
 }
 
@@ -255,6 +256,7 @@ fn enter_lets_a_submit_handler_clear_the_field_it_came_from() {
         key: Key::Named(lumen_core::input::NamedKey::Enter),
         modifiers: Modifiers::default(),
         repeat: false,
+        time_stamp: lumen_core::time::Instant::now(),
     });
     let e = find(&mut app, "name");
     for _ in 0..4 {

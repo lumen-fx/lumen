@@ -837,6 +837,7 @@ mod slider_key_tests {
                 key,
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 
@@ -1005,6 +1006,7 @@ mod slider_key_tests {
                 delta: glam::Vec2::new(0.0, WHEEL_NOTCH_PX * 100.0),
                 position: glam::Vec2::ZERO,
                 local: None,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         world.run_system_once(adjust_slider_on_wheel).unwrap();
         let v = value_of(&world, e);

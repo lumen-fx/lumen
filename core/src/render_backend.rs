@@ -131,8 +131,11 @@ mod tests {
             self.requests.push(request);
             true
         }
-        fn present(&mut self, _: &mut World) -> Result<(), RenderError> {
+        fn present(&mut self, world: &mut World) -> Result<(), RenderError> {
             self.presents += 1;
+            let mut stamps = world.resource_mut::<crate::tick::RenderTimestamps>();
+            stamps.mark_encoded();
+            stamps.mark_submitted();
             Ok(())
         }
         fn detach(&mut self) {
@@ -220,5 +223,50 @@ mod tests {
         let recorder = app.render_world.non_send::<Recorder>();
         assert_eq!(recorder.attached, Some((24, 10)));
         assert!(recorder.requests[1].force_full, "a resize repaints in full");
+    }
+
+    /// #527: a tick records when each of its phases ended, the renderer's
+    /// own instants included, where a system on the next tick reads them;
+    /// a tick that painted nothing says so.
+    #[test]
+    fn a_tick_records_its_phases_for_the_next_one() {
+        let mut app = App::new();
+        install_offscreen(&mut app, Recorder::default());
+        app.tick();
+        let first = *app.world.resource::<crate::tick::FrameTiming>();
+        assert_eq!(first.frame, 1);
+        assert!(first.painted());
+        let (extract, encoded, submitted, end) = (
+            first.extract_end.expect("extracted"),
+            first.encoded.expect("the renderer stamped its encode"),
+            first.submitted.expect("the renderer stamped its submit"),
+            first.render_end.expect("rendered"),
+        );
+        assert!(first.start <= first.update_end && first.update_end <= extract);
+        assert!(extract <= encoded && encoded <= submitted && submitted <= end);
+        assert_eq!(
+            first.presented, None,
+            "an offscreen image is never on screen"
+        );
+        assert_eq!(first.end(), end);
+
+        // What a system sees during the next tick is the tick before.
+        #[derive(bevy_ecs::resource::Resource, Default)]
+        struct Seen(u64);
+        app.world.init_resource::<Seen>();
+        app.add_systems(
+            crate::tick::TickStage::Systems,
+            |timing: bevy_ecs::system::Res<crate::tick::FrameTiming>,
+             mut seen: bevy_ecs::system::ResMut<Seen>| seen.0 = timing.frame,
+        );
+        app.world
+            .resource_mut::<crate::render_world::FrameDirty>()
+            .dirty = false;
+        app.tick();
+        assert_eq!(app.world.resource::<Seen>().0, 1);
+        let idle = *app.world.resource::<crate::tick::FrameTiming>();
+        assert_eq!(idle.frame, 2);
+        assert!(!idle.painted(), "a tick that was not dirty painted nothing");
+        assert_eq!(idle.encoded, None);
     }
 }

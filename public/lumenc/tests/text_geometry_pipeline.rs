@@ -217,6 +217,7 @@ fn typing_after_a_click_inserts_at_the_clicked_point() {
             key: Key::Character("Z".into()),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     let text = app
@@ -252,6 +253,7 @@ fn backspace_after_a_click_deletes_at_the_clicked_point() {
             key: Key::Named(NamedKey::Backspace),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     let text = app

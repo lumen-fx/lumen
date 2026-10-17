@@ -64,6 +64,115 @@ impl Tick {
     }
 }
 
+/// When the last tick ran, phase by phase: what an app reads to measure its
+/// own frame time.
+///
+/// A main-world resource [`crate::app::App::tick`] fills in as the tick goes
+/// and finishes once the tick has painted, so a system reading it during a
+/// tick sees the tick before: [`Self::frame`] is one less than
+/// [`Tick::frame`]. A window backend presents after the tick returns and adds
+/// [`Self::presented`] then, before the next tick starts.
+///
+/// The render-side instants come from the renderer, through the render
+/// world's [`RenderTimestamps`]; a renderer that cannot tell a phase apart
+/// leaves it `None`. A tick that painted nothing (its frame was not dirty)
+/// has every render-side field `None`.
+///
+/// The instants are taken on the CPU. A GPU renderer's
+/// [`Self::submitted`] is when it handed the frame to the device, not when
+/// the device finished drawing it.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct FrameTiming {
+    /// The [`Tick::frame`] this describes; 0 until the first tick finishes.
+    pub frame: u64,
+    /// The tick started: its [`Tick::now`].
+    pub start: Instant,
+    /// The main schedule finished: input, app systems, style, layout and
+    /// accessibility are done.
+    pub update_end: Instant,
+    /// The render world holds this tick's scene.
+    pub extract_end: Option<Instant>,
+    /// The renderer finished building the frame's draw commands.
+    pub encoded: Option<Instant>,
+    /// The renderer handed the frame to the device (GPU), or finished
+    /// rasterizing it (CPU).
+    pub submitted: Option<Instant>,
+    /// The render schedule returned.
+    pub render_end: Option<Instant>,
+    /// The frame went on screen; set by a window backend once it presents.
+    pub presented: Option<Instant>,
+}
+
+impl Default for FrameTiming {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            frame: 0,
+            start: now,
+            update_end: now,
+            extract_end: None,
+            encoded: None,
+            submitted: None,
+            render_end: None,
+            presented: None,
+        }
+    }
+}
+
+impl FrameTiming {
+    /// The latest instant this records: the end of the tick as far as it got.
+    pub fn end(&self) -> Instant {
+        self.presented
+            .or(self.render_end)
+            .or(self.submitted)
+            .or(self.encoded)
+            .or(self.extract_end)
+            .unwrap_or(self.update_end)
+    }
+
+    /// From the tick's start to [`Self::end`].
+    pub fn duration(&self) -> Duration {
+        self.end().saturating_duration_since(self.start)
+    }
+
+    /// Whether the tick painted a frame.
+    pub fn painted(&self) -> bool {
+        self.extract_end.is_some()
+    }
+}
+
+/// The instants a renderer reports for the frame it is drawing, in the render
+/// world. [`crate::app::App::tick`] clears them before the render schedule
+/// runs and copies them into the main world's [`FrameTiming`] after; a
+/// renderer stamps the ones it can tell apart with [`Self::mark_encoded`],
+/// [`Self::mark_submitted`] and [`Self::mark_presented`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderTimestamps {
+    /// See [`FrameTiming::encoded`].
+    pub encoded: Option<Instant>,
+    /// See [`FrameTiming::submitted`].
+    pub submitted: Option<Instant>,
+    /// See [`FrameTiming::presented`].
+    pub presented: Option<Instant>,
+}
+
+impl RenderTimestamps {
+    /// The frame's draw commands are built.
+    pub fn mark_encoded(&mut self) {
+        self.encoded = Some(Instant::now());
+    }
+
+    /// The frame is handed to the device, or rasterized.
+    pub fn mark_submitted(&mut self) {
+        self.submitted = Some(Instant::now());
+    }
+
+    /// The frame is on screen.
+    pub fn mark_presented(&mut self) {
+        self.presented = Some(Instant::now());
+    }
+}
+
 /// Whether the tick that just ran left work behind, so a driver that only
 /// wakes on events has to schedule another frame.
 ///

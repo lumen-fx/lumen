@@ -975,10 +975,12 @@ pub(crate) mod text_event_tests {
                 key: key.clone(),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
             world.write_message(KeyReleased {
                 key,
                 modifiers: Modifiers::default(),
+                time_stamp: lumen_core::time::Instant::now(),
             });
             world
                 .run_system_once(queue_pointer_and_key_events)

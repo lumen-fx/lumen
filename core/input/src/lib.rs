@@ -2831,6 +2831,7 @@ mod keyboard_activation_tests {
                 .write(KeyReleased {
                     key,
                     modifiers: Modifiers::default(),
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
         }
 
@@ -2961,6 +2962,7 @@ mod keyboard_activation_tests {
                 key: Key::Named(NamedKey::Escape),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         use bevy_ecs::system::RunSystemOnce;
         f.world.run_system_once(cancel_press_on_escape).unwrap();
@@ -3235,6 +3237,7 @@ mod focus_visible_tests {
                 key: Key::Named(NamedKey::Tab),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         world.run_system_once(cycle_focus_on_tab).unwrap();
         world.resource_mut::<Messages<KeyPressed>>().clear();

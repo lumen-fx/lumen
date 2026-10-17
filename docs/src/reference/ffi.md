@@ -700,6 +700,53 @@ fn paste(clipboard: Clipboard) {
 
 Runnable examples live in `sdk/rust/examples`.
 
+### Frame timing
+
+`FrameTiming` is a resource holding when the last tick ran, phase by phase. A
+system reads the tick before its own: `frame` is that tick's `Tick::frame`,
+`start` its start, `update_end` the end of input, app systems, style and
+layout, `extract_end` the moment the render world held its scene, `encoded`
+when the renderer had built its draw commands, `submitted` when it handed them
+to the GPU (or finished rasterizing, on the CPU renderer), `render_end` the end
+of the render step, and `presented` when a window put the frame on screen. A
+tick that painted nothing has every field from `extract_end` on `None`, and
+`painted()` says so; `duration()` runs from `start` to the last instant
+recorded. The instants are CPU clock readings: `submitted` on the GPU renderer
+is when the work was queued, not when the GPU finished it, and an offscreen
+(headless) frame is never `presented`.
+
+Every pointer, wheel and key message carries the moment the event happened:
+`PointerData::time_stamp` on `PointerMoved`, `PointerPressed`,
+`PointerReleased` and `PointerCancelled`, and `time_stamp` on `MouseWheel`,
+`KeyPressed` and `KeyReleased`. In a page it is the browser's `timeStamp`; a
+desktop window stamps the event when it receives it. The time from an input to
+the frame that shows it is the `presented` (or `submitted`) instant of that
+frame's `FrameTiming` minus the event's `time_stamp`.
+
+```rust
+use std::time::Instant;
+use lumenui::prelude::*;
+
+/// Frame time, and how long the latest pointer move took to reach the screen.
+fn measure(
+    timing: Res<FrameTiming>,
+    mut moves: MessageReader<PointerMoved>,
+    mut pending: Local<Option<Instant>>,
+) {
+    // `timing` is the tick before this one, which drew what that tick's
+    // moves changed.
+    if timing.painted()
+        && let Some(input) = pending.take()
+    {
+        let shown = timing.presented.unwrap_or(timing.end());
+        println!("frame {:?}, latency {:?}", timing.duration(), shown - input);
+    }
+    if let Some(latest) = moves.read().last() {
+        *pending = Some(latest.pointer.time_stamp);
+    }
+}
+```
+
 ### Canvas
 
 The `lumenui-canvas` crate gives a Rust app the [`<canvas>`](tags.md#canvas)

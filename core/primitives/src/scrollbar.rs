@@ -643,6 +643,7 @@ mod fsm_tests {
                 key: Key::Named(NamedKey::Escape),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         run(&mut world);
         assert_eq!(

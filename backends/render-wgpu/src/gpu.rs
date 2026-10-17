@@ -11,6 +11,7 @@ use crate::atlas::{FRAME_BUDGET, Job, keep_atlas, scene_images};
 use crate::sink::{FinishedLayer, GpuLayer};
 use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
+use lumen_core::tick::RenderTimestamps;
 use lumen_core::traits::RenderTarget;
 use lumen_paint::pixels::TileView;
 use lumen_paint::{FragmentCache, LayerCache, PaintTarget, PixelImage};
@@ -248,6 +249,14 @@ impl FrameTexture {
     }
 }
 
+/// Stamp one of the frame's [`RenderTimestamps`], when the render world keeps
+/// them.
+pub(crate) fn stamp(render_world: &mut World, mark: fn(&mut RenderTimestamps)) {
+    if let Some(mut stamps) = render_world.get_resource_mut::<RenderTimestamps>() {
+        mark(&mut stamps);
+    }
+}
+
 /// Upload the tiles of `image` whose stamps moved since `kept` last took
 /// them. Returns whether anything was written.
 ///
@@ -482,6 +491,7 @@ impl GpuCore {
                 .expect("the GPU renderer paints through a VelloPainter")
                 .finish_split();
         }
+        stamp(render_world, RenderTimestamps::mark_encoded);
         self.upload_pixels();
         self.render_offscreen()?;
         self.release_copies();
@@ -517,6 +527,7 @@ impl GpuCore {
                 &params,
             )
             .map_err(|e| format!("vello render: {e:?}"))?;
+        stamp(render_world, RenderTimestamps::mark_submitted);
         self.resident = scene_images(scene);
         self.release_textures();
         for (image, _texture) in self.passes.drain(..) {

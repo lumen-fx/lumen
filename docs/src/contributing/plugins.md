@@ -208,6 +208,10 @@ offscreen image, `lumen_core::render_backend::install_offscreen` puts an
 attached renderer into `app.render_world`, registers the system in
 `RenderStage::Render` that drives it each frame, and calls
 `install_extract_pipeline` so the extract step that feeds it exists at all.
+Stamping the render world's `RenderTimestamps` with
+`mark_encoded`, `mark_submitted` and `mark_presented` while it presents fills
+in those instants of the app's `FrameTiming`; a renderer that cannot tell a
+phase apart leaves it unstamped.
 The whole of the CPU renderer's offscreen plugin is that one call; the GPU
 backend's adds an optional text shaper alongside. The extract install is a
 no-op when another backend already made it, so a test that builds a bare

@@ -258,8 +258,13 @@ impl Renderer for WgpuRenderer {
         // Read back before the blit: the frame texture holds exactly what
         // the window is about to show.
         lumen_paint::answer_capture(render_world, bound.gpu.size(), || bound.gpu.read_rgba8());
-        if let Some(window) = bound.window.as_mut() {
-            window.present(&bound.gpu)?;
+        if let Some(window) = bound.window.as_mut()
+            && window.present(&bound.gpu)?
+        {
+            gpu::stamp(
+                render_world,
+                lumen_core::tick::RenderTimestamps::mark_presented,
+            );
         }
         Ok(())
     }

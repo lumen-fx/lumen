@@ -464,10 +464,12 @@ fn drain_simulate_queue(
                     key: k.clone(),
                     modifiers: m,
                     repeat: false,
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
                 key_released.write(KeyReleased {
                     key: k,
                     modifiers: m,
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
             }
             SimulateKind::KeyDown { key, modifiers } => {
@@ -477,6 +479,7 @@ fn drain_simulate_queue(
                     key: key.as_str().into(),
                     modifiers: m,
                     repeat: false,
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
             }
             SimulateKind::KeyUp { key, modifiers } => {
@@ -485,6 +488,7 @@ fn drain_simulate_queue(
                 key_released.write(KeyReleased {
                     key: key.as_str().into(),
                     modifiers: m,
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
             }
             SimulateKind::Type { text } => {
@@ -495,10 +499,12 @@ fn drain_simulate_queue(
                         key: k.clone(),
                         modifiers: m,
                         repeat: false,
+                        time_stamp: lumen_core::time::Instant::now(),
                     });
                     key_released.write(KeyReleased {
                         key: k,
                         modifiers: m,
+                        time_stamp: lumen_core::time::Instant::now(),
                     });
                 }
             }
@@ -508,6 +514,7 @@ fn drain_simulate_queue(
                     delta: glam::Vec2::new(dx, dy),
                     position: at,
                     local: None,
+                    time_stamp: lumen_core::time::Instant::now(),
                 };
                 if pointer.position == Some(at) {
                     wheel.write(event);

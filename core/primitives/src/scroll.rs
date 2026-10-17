@@ -862,6 +862,7 @@ mod wheel_routing_tests {
                 delta: Vec2::new(0.0, dy),
                 position: Vec2::new(10.0, 60.0),
                 local: None,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 
@@ -985,6 +986,7 @@ mod scroll_key_tests {
                 key,
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 

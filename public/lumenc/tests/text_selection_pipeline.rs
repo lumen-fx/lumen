@@ -228,6 +228,7 @@ fn shift_arrow_extends_the_selection() {
                     ..Default::default()
                 },
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         app.tick();
     }

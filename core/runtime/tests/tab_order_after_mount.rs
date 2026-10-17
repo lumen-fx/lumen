@@ -108,6 +108,7 @@ impl Harness {
                 key: Key::Named(NamedKey::Tab),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         self.app.tick();
     }

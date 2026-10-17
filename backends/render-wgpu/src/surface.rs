@@ -82,8 +82,9 @@ impl SurfaceFront {
     }
 
     /// Put the frame texture on screen: acquire the next swap-chain
-    /// texture, blit, present.
-    pub(crate) fn present(&mut self, gpu: &GpuCore) -> Result<(), RenderError> {
+    /// texture, blit, present. Returns whether the frame went up; a skipped
+    /// acquire is not an error.
+    pub(crate) fn present(&mut self, gpu: &GpuCore) -> Result<bool, RenderError> {
         // wgpu 29 reports each non-success acquire outcome with what to do:
         //   - Suboptimal: a usable texture, but the swap chain no longer
         //     matches the surface (resize race, Wayland scale change).
@@ -110,18 +111,18 @@ impl SurfaceFront {
                     "surface texture suboptimal, outdated or lost; reconfiguring + skipping frame",
                 );
                 self.surface.configure(&gpu.device, &self.config);
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 tracing::debug!(
                     target: "lumen::render",
                     "surface acquire timed out; skipping frame",
                 );
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Occluded => {
                 tracing::debug!(target: "lumen::render", "window occluded; skipping frame");
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err(RenderError::Present(
@@ -141,6 +142,6 @@ impl SurfaceFront {
             .copy(&gpu.device, &mut encoder, gpu.srgb_view(), &surface_view);
         gpu.queue.submit(Some(encoder.finish()));
         frame.present();
-        Ok(())
+        Ok(true)
     }
 }

@@ -302,6 +302,8 @@ impl App {
         world.insert_resource(PropertyStore::default());
         // Per-tick frame clock; updated by `App::tick` before each main schedule run.
         world.insert_resource(crate::tick::Tick::default());
+        // The last tick's phase instants, filled in by `App::tick`.
+        world.insert_resource(crate::tick::FrameTiming::default());
         // Insert `Viewport` into the main world; the window plugin mirrors writes into the render world on resize.
         world.insert_resource(Viewport::default());
         // Insert `FrameDirty`; defaults to dirty so the first frame paints. The window backend reads and clears it per presented frame.
@@ -384,6 +386,9 @@ impl App {
         // Build the render world.
         let mut render_world = World::new();
         render_world.insert_resource(Viewport::default());
+        // What the renderer reports about the frame it draws; copied into the
+        // main world's `FrameTiming` after the render schedule.
+        render_world.insert_resource(crate::tick::RenderTimestamps::default());
         // Insert the persistent main->render entity registry consulted by upserting extract fns.
         // [`clear_extracted`] skips entities present in this map so their identities survive across frames.
         render_world.insert_resource(crate::render_world::RenderEntityMap::default());
@@ -672,6 +677,7 @@ impl App {
             tick.advance();
         }
         run_schedule_resilient(&mut self.world, Tick);
+        let update_end = crate::time::Instant::now();
 
         // Rotate the main world's removal/despawn event buffers once per tick.
         // Standalone bevy_ecs (no bevy_app) never rotates `RemovedComponentEvents`
@@ -692,6 +698,18 @@ impl App {
             .get_resource::<FrameDirty>()
             .map(|f| f.dirty)
             .unwrap_or(true);
+        let (frame, start) = self
+            .world
+            .get_resource::<crate::tick::Tick>()
+            .map_or((0, update_end), |t| (t.frame, t.now));
+        if let Some(mut timing) = self.world.get_resource_mut::<crate::tick::FrameTiming>() {
+            *timing = crate::tick::FrameTiming {
+                frame,
+                start,
+                update_end,
+                ..crate::tick::FrameTiming::default()
+            };
+        }
         if !dirty {
             return;
         }
@@ -726,8 +744,21 @@ impl App {
         // (e.g. `Changed<ExtractedText>` filters) and queue further render-world work. Foundation ships the schedule
         // empty; wave 2 wires migrations.
         run_schedule_resilient(&mut self.render_world, ExtractSchedule);
+        let extract_end = crate::time::Instant::now();
+        if let Some(mut stamps) = self
+            .render_world
+            .get_resource_mut::<crate::tick::RenderTimestamps>()
+        {
+            *stamps = crate::tick::RenderTimestamps::default();
+        }
 
         run_schedule_resilient(&mut self.render_world, Render);
+        let render_end = crate::time::Instant::now();
+        if let Some(mut timing) = self.world.get_resource_mut::<crate::tick::FrameTiming>() {
+            timing.extract_end = Some(extract_end);
+            timing.render_end = Some(render_end);
+        }
+        self.record_render_reports();
 
         // Rotate the render world's removal buffers. `clear_extracted` despawns
         // the entire transient `Extracted*` set every dirty frame, recording a
@@ -737,6 +768,28 @@ impl App {
         // preserve here. Only reachable on dirty ticks (the render pass runs only
         // when dirty), which is exactly when the despawn churn happens.
         self.render_world.clear_trackers();
+    }
+
+    /// Copy what the renderer reported into the main world: the render
+    /// world's [`crate::tick::RenderTimestamps`] into
+    /// [`crate::tick::FrameTiming`]. [`Self::tick`] calls it after
+    /// the render schedule; a window backend that presents after the tick
+    /// calls it again once it has, so the present lands in the same record.
+    pub fn record_render_reports(&mut self) {
+        let Some(stamps) = self
+            .render_world
+            .get_resource::<crate::tick::RenderTimestamps>()
+            .copied()
+        else {
+            return;
+        };
+        if let Some(mut timing) = self.world.get_resource_mut::<crate::tick::FrameTiming>()
+            && timing.painted()
+        {
+            timing.encoded = stamps.encoded;
+            timing.submitted = stamps.submitted;
+            timing.presented = stamps.presented;
+        }
     }
 
     /// Borrows the [`CommandReceiver`] resource mutably from the main world.

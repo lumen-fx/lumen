@@ -390,6 +390,7 @@ fn f12_toggles_visibility_and_mirrors_the_root() {
             key: Key::Character("F12".into()),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     run!(&mut world, toggle_devtools_on_f12);
     assert!(world.resource::<DevtoolsState>().visible);

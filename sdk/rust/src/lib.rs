@@ -276,7 +276,7 @@ pub mod prelude {
 
     // ECS app + schedule labels.
     pub use lumen_core::app::{App as EcsApp, Plugin};
-    pub use lumen_core::tick::TickStage;
+    pub use lumen_core::tick::{FrameTiming, TickStage};
 
     // Components: visuals, text, layout, structure, markers.
     pub use lumen_core::components::{
@@ -289,7 +289,8 @@ pub mod prelude {
     // Input messages.
     pub use lumen_core::input::{
         ClickEvent, ClickSet, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-        Focused, Hovered, KeyPressed, KeyReleased, LongPressEvent, Pressed,
+        Focused, Hovered, KeyPressed, KeyReleased, LongPressEvent, MouseWheel, PointerMoved,
+        PointerPressed, PointerReleased, Pressed,
     };
 
     // Typed signal surface.

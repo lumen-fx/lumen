@@ -347,10 +347,12 @@ fn key_tap(app: &mut App, key: Key) {
         key: key.clone(),
         modifiers: Modifiers::default(),
         repeat: false,
+        time_stamp: lumen_core::time::Instant::now(),
     });
     app.world.write_message(KeyReleased {
         key,
         modifiers: Modifiers::default(),
+        time_stamp: lumen_core::time::Instant::now(),
     });
     tick(app);
 }
@@ -371,6 +373,7 @@ fn wheel(app: &mut App, pos: Vec2, delta: Vec2) {
         delta,
         position: pos,
         local: None,
+        time_stamp: lumen_core::time::Instant::now(),
     });
     tick(app);
 }

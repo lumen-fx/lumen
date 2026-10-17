@@ -98,6 +98,7 @@ fn focus_and_type(app: &mut App, target: Entity, chars: &str) {
                 key: Key::Character(ch.to_string()),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         app.tick();
     }

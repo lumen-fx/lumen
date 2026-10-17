@@ -79,6 +79,7 @@ fn scroll_under_stationary_cursor_rehovers_same_tick() {
             delta: glam::Vec2::new(0.0, 120.0),
             position: glam::Vec2::new(100.0, 50.0),
             local: None,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick(); // wheel consumed; hit_test runs AFTER the offset mutation
     app.tick(); // flush deferred Hovered commands

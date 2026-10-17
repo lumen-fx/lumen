@@ -180,6 +180,7 @@ mod tests {
             key: Key::from(key),
             modifiers,
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     }
 

@@ -132,6 +132,7 @@ fn press_key(world: &mut World, key: Key) {
             key,
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
 }
 
@@ -343,6 +344,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
             delta: glam::Vec2::new(0.0, -lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
 
@@ -365,6 +367,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
             delta: glam::Vec2::new(0.0, lumen_primitives::WHEEL_NOTCH_PX),
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     assert!(
@@ -588,6 +591,7 @@ fn a_menu_bar_shortcut_reaches_its_item_in_a_window_app() {
             ..Modifiers::default()
         },
         repeat: false,
+        time_stamp: lumen_core::time::Instant::now(),
     });
     app.tick();
 
