@@ -682,7 +682,20 @@ has held still for a frame, a scale or size change drops every kept layer, a
 group holding a native leaf is never kept, and the cache holds at most a fixed
 budget of pixels; a group it does not keep paints directly. The GPU sink
 renders the layers a frame closes packed into shared textures, one vello pass
-per texture rather than one per layer. Text is the one shape the walker does
+per texture rather than one per layer. Every image a vello pass samples is
+copied into one image atlas, 8192 pixels square, so the GPU renderer keeps
+each pass inside it. A frame whose images would not fit together, a paint
+program's stack of large canvas buffers say, is painted a second time in split
+mode: an image drawn at a fraction of its size draws through a copy the size
+of the pixels it covers, kept across frames while the draw repeats, and a
+layer whose content outgrows a pass renders what it holds so far and carries
+on from that, so every image draws and opacity, blend modes and masks compose
+as in one pass. A frame that fits renders as one pass. The GPU renderer also
+keeps the atlas through a pass that samples no image at all, which vello would
+otherwise empty. A pixel image wider or taller than the atlas, or than the
+device's texture limit when that is smaller, is not drawn, and the renderer
+says so once.
+Text is the one shape the walker does
 not leave to each rasterizer's own curve flattening, because two rasterizers
 flattening a glyph's curves their own ways draw visibly different edges at
 text sizes. `GlyphOutlines` in `lumen-paint` reads each glyph's outline,
