@@ -4366,6 +4366,7 @@ name = "lumen-render-cpu"
 version = "0.0.10"
 dependencies = [
  "bevy_ecs",
+ "bevy_tasks",
  "glam 0.33.3",
  "lumen-capability",
  "lumen-core",

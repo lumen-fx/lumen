@@ -21,6 +21,8 @@ lumen-paint = { workspace = true }
 # `render-cpu` capability; see `capability.rs`.
 lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
+# The engine's worker pool: a large pixel image is premultiplied on it.
+bevy_tasks.workspace = true
 glam.workspace = true
 # The rasterizer: worker threads for a large frame, the u8 pipeline only, and
 # glyph rendering; no PNG decoding, because images reach the painter already
