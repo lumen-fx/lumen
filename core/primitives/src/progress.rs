@@ -135,7 +135,7 @@ pub fn apply_progress_bindings(
     )>,
     new_binds: Query<(), Added<BindValue>>,
 ) {
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    if store.observe_dirty().is_empty() && new_binds.is_empty() {
         return;
     }
     for (bind, mut bar, a11y) in &mut q {

@@ -34,12 +34,13 @@ use lumen_core::input::ClickSet;
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
+use lumen_core::render_world::AnimationsActive;
 use lumen_core::window_state::{set_size, set_title};
 use lumen_ir::fragment::FragmentTable;
 use lumen_ir::interpolate::Scope;
 use lumen_ir::layout_ir::Element;
 use lumen_script::event::{register_host_binding, unregister_binding};
-use lumen_script::node_query::drain_external_dom_commands;
+use lumen_script::node_query::{drain_external_dom_commands, external_dom_commands_pending};
 use lumen_script::runtime::{ScriptCommandEvent, register_script_commands};
 use lumen_script::{
     EventHosts, PendingDomEvents, ScriptCommand, ScriptSet, deliver_input_events,
@@ -102,6 +103,10 @@ pub fn install_dom(app: &mut App) {
         TickStage::Systems,
         apply_dom_commands.after(collect_dom_commands),
     );
+    // A mutation pushed after the collector ran waits on the bus for the next
+    // tick's; this asks for that tick, which a loop that parks once a tick
+    // leaves nothing behind would otherwise never run.
+    app.add_systems(TickStage::A11ySync, request_tick_for_queued_dom_commands);
     // The handlers bound with `on(type, handler)`, for an app with a script
     // and for one queried and driven over the C ABI alike.
     install_dom_events(app);
@@ -218,6 +223,18 @@ pub fn collect_dom_commands(
         }
     }
     pending.0.extend(drain_external_dom_commands());
+}
+
+/// Ask for another tick when DOM commands from the C ABI or an SDK are still
+/// queued at the end of this one: pushed by a system the schedule ran after
+/// [`collect_dom_commands`], so they land on the next tick, and the next tick
+/// has to run for them to.
+pub fn request_tick_for_queued_dom_commands(anim: Option<Res<AnimationsActive>>) {
+    if let Some(anim) = anim
+        && external_dom_commands_pending()
+    {
+        anim.request();
+    }
 }
 
 /// Apply the collected DOM / window commands against the live world.

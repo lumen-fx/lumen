@@ -153,6 +153,13 @@ a system that writes those messages joins the set with
 on a tick that paints nothing new, so an idle app shows the old state until
 something else wakes it.
 
+A system that writes a signal or edits the DOM needs no edge to be seen. Ahead
+of the `bind-*` readers its write paints on its own tick; after them, the tick
+keeps the write for the next one and asks for it, so it paints one tick later.
+A system that applies signal writes and skips its work when none landed reads
+the queue with `PropertyStore::observe_dirty` rather than `dirty_peek`, so a
+write after it is kept for its next run.
+
 ## Resources
 
 Insert plain resources with `insert_resource`, or `init_resource` when

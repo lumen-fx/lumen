@@ -556,6 +556,13 @@ pub fn push_external_dom_command(cmd: ScriptCommand) -> bool {
     }
 }
 
+/// Whether external DOM commands are queued that no tick has drained yet:
+/// ones pushed after this tick's drain, by a system the schedule ran after
+/// it.
+pub fn external_dom_commands_pending() -> bool {
+    dom_cmd_queue().lock().is_ok_and(|q| !q.is_empty())
+}
+
 /// Drain all queued external DOM commands (FIFO). Called by the runtime
 /// once per tick.
 pub fn drain_external_dom_commands() -> Vec<ScriptCommand> {

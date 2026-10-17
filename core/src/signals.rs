@@ -411,7 +411,7 @@ pub fn apply_text_bindings(
         > 0;
     // The fifth is Enter committing a field's edit, which ends it the way a
     // blur does while the field keeps focus.
-    if store.dirty_peek().is_empty()
+    if store.observe_dirty().is_empty()
         && new_binds.is_empty()
         && !locale_changed
         && !blur
@@ -514,7 +514,7 @@ pub fn apply_checked_bindings(
 ) {
     // Idle-tick fast path - see `apply_text_bindings` (incl. the
     // `new_binds` escape hatch for reconciler-mounted `<toggle bind-checked>`).
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    if store.observe_dirty().is_empty() && new_binds.is_empty() {
         return;
     }
     for (bind, mut t) in &mut q {
@@ -568,7 +568,7 @@ pub fn apply_disabled_bindings(
 ) {
     // Idle-tick fast path - see `apply_text_bindings` (incl. the
     // `new_binds` escape hatch for reconciler-mounted `bind-disabled`).
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    if store.observe_dirty().is_empty() && new_binds.is_empty() {
         return;
     }
     for (entity, bind, is_disabled) in &q {
@@ -594,7 +594,7 @@ pub fn apply_value_bindings(
 ) {
     // Idle-tick fast path - see `apply_text_bindings` (incl. the
     // `new_binds` escape hatch for reconciler-mounted `<slider bind-value>`).
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    if store.observe_dirty().is_empty() && new_binds.is_empty() {
         return;
     }
     for (bind, mut sv) in &mut q {
@@ -660,7 +660,7 @@ pub fn apply_scroll_bindings(
 ) {
     // Idle-tick fast path - see `apply_text_bindings` (incl. the
     // `new_binds` escape hatch for reconciler-mounted `<scroll bind-scroll>`).
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    if store.observe_dirty().is_empty() && new_binds.is_empty() {
         return;
     }
     for (bind, mut off, scroll) in &mut q {
