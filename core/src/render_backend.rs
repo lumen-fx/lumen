@@ -47,6 +47,74 @@ impl BackendEntry for RenderBackend {
 /// [`crate::backends::register_backend`].
 pub type RenderBackends = Backends<RenderBackend>;
 
+/// What kind of device a renderer draws on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DeviceKind {
+    /// A graphics card of its own.
+    DiscreteGpu,
+    /// A GPU sharing the CPU's package and memory.
+    IntegratedGpu,
+    /// A GPU a hypervisor hands the machine.
+    VirtualGpu,
+    /// The CPU: a software rasterizer, or a GPU API emulated on the CPU.
+    Cpu,
+    /// The renderer cannot tell.
+    #[default]
+    Unknown,
+}
+
+/// Device memory the renderer's own allocations hold, as far as the graphics
+/// API reports it. Not the device's capacity: no portable API tells that.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct DeviceMemory {
+    /// Bytes in live allocations: textures, buffers, pipelines' scratch.
+    pub allocated: u64,
+    /// Bytes in the memory blocks those allocations are carved from, free
+    /// space inside them included.
+    pub reserved: u64,
+}
+
+/// Which renderer draws the app and on what: what an app reads to show its
+/// renderer, or to size what it keeps on the device.
+///
+/// A main-world resource, present once a renderer has drawn a frame. The
+/// renderer reports it through [`crate::traits::Renderer::info`]; a launch
+/// that started a renderer publishes it into the render world after each
+/// frame, and [`crate::app::App::tick`] copies it across. Fields a renderer
+/// cannot tell stay empty.
+#[derive(bevy_ecs::resource::Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RendererInfo {
+    /// The backend's name in [`RenderBackends`], the one `[render] backend`
+    /// selects it by: under `auto`, which of them started.
+    pub backend: &'static str,
+    /// The device, as its driver names it.
+    pub device: String,
+    /// What kind of device it is.
+    pub device_kind: DeviceKind,
+    /// The PCI vendor id, or 0.
+    pub vendor_id: u32,
+    /// The PCI device id, or 0.
+    pub device_id: u32,
+    /// The graphics API the renderer drives it through: `Vulkan`, `Metal`,
+    /// `Dx12`, `Gl`; empty for a CPU rasterizer.
+    pub api: String,
+    /// The driver, and its version where it says.
+    pub driver: String,
+    /// The longest side of a texture the device makes, in pixels, or 0 when
+    /// it has no such limit.
+    pub max_texture_side: u32,
+    /// What the renderer's allocations hold, when the API reports it.
+    pub memory: Option<DeviceMemory>,
+}
+
+/// Put `info` into `world` unless it is already there, so a reader's change
+/// detection sees a change only when the renderer's answer moved.
+pub fn publish_renderer_info(world: &mut World, info: RendererInfo) {
+    if world.get_resource::<RendererInfo>() != Some(&info) {
+        world.insert_resource(info);
+    }
+}
+
 /// Put `renderer`, already attached to a
 /// [`crate::traits::FrameTarget::Offscreen`] image, into `app`.
 ///
@@ -89,10 +157,11 @@ fn present_offscreen<R: Renderer>(world: &mut World) {
         dirty: true,
         force_full: resized,
     };
-    if renderer.wants_present(world, request)
-        && let Err(e) = renderer.present(world)
-    {
-        eprintln!("lumen: offscreen render failed: {e}");
+    if renderer.wants_present(world, request) {
+        if let Err(e) = renderer.present(world) {
+            eprintln!("lumen: offscreen render failed: {e}");
+        }
+        publish_renderer_info(world, renderer.info());
     }
     world.insert_non_send(renderer);
 }
@@ -137,6 +206,13 @@ mod tests {
             stamps.mark_encoded();
             stamps.mark_submitted();
             Ok(())
+        }
+        fn info(&mut self) -> RendererInfo {
+            RendererInfo {
+                backend: "test",
+                device: format!("recorder after {} frames", self.presents),
+                ..RendererInfo::default()
+            }
         }
         fn detach(&mut self) {
             self.attached = None;
@@ -268,5 +344,29 @@ mod tests {
         assert_eq!(idle.frame, 2);
         assert!(!idle.painted(), "a tick that was not dirty painted nothing");
         assert_eq!(idle.encoded, None);
+    }
+
+    /// #528: what the renderer says about itself reaches the main world
+    /// after it draws, and is written again only when it changed.
+    #[test]
+    fn the_renderer_reports_itself_after_it_draws() {
+        use bevy_ecs::change_detection::DetectChanges;
+        let mut app = App::new();
+        install_offscreen(&mut app, Recorder::default());
+        assert!(app.world.get_resource::<RendererInfo>().is_none());
+        app.tick();
+        let info = app.world.resource::<RendererInfo>();
+        assert_eq!(info.backend, "test");
+        assert_eq!(info.device, "recorder after 1 frames");
+        let first = app.world.resource_ref::<RendererInfo>().last_changed();
+        app.world
+            .resource_mut::<crate::render_world::FrameDirty>()
+            .dirty = false;
+        app.tick();
+        assert_eq!(
+            app.world.resource_ref::<RendererInfo>().last_changed(),
+            first,
+            "a tick that drew nothing leaves it alone"
+        );
     }
 }

@@ -772,10 +772,18 @@ impl App {
 
     /// Copy what the renderer reported into the main world: the render
     /// world's [`crate::tick::RenderTimestamps`] into
-    /// [`crate::tick::FrameTiming`]. [`Self::tick`] calls it after
+    /// [`crate::tick::FrameTiming`], and its
+    /// [`crate::render_backend::RendererInfo`]. [`Self::tick`] calls it after
     /// the render schedule; a window backend that presents after the tick
     /// calls it again once it has, so the present lands in the same record.
     pub fn record_render_reports(&mut self) {
+        if let Some(info) = self
+            .render_world
+            .get_resource::<crate::render_backend::RendererInfo>()
+            .cloned()
+        {
+            crate::render_backend::publish_renderer_info(&mut self.world, info);
+        }
         let Some(stamps) = self
             .render_world
             .get_resource::<crate::tick::RenderTimestamps>()

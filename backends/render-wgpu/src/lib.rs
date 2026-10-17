@@ -34,7 +34,7 @@ pub use vello;
 use bevy_ecs::world::World;
 use gpu::GpuCore;
 use lumen_core::prelude::*;
-use lumen_core::render_backend::install_offscreen;
+use lumen_core::render_backend::{DeviceKind, DeviceMemory, RendererInfo, install_offscreen};
 use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
 use lumen_text::{ShaperService, TextShaper};
 use surface::SurfaceFront;
@@ -138,6 +138,24 @@ pub struct WgpuRenderer {
     /// do not count, so a static UI redrawn on a false-positive dirty flag
     /// leaves it flat.
     render_count: u64,
+    /// The last memory report and when it was taken. A report walks every
+    /// allocation, so [`Renderer::info`] takes one at most every
+    /// [`MEMORY_REPORT_INTERVAL`].
+    memory: Option<(std::time::Instant, Option<DeviceMemory>)>,
+}
+
+/// How long a memory report stands before [`Renderer::info`] takes another.
+const MEMORY_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The core's name for a wgpu device type.
+fn device_kind(kind: wgpu::DeviceType) -> DeviceKind {
+    match kind {
+        wgpu::DeviceType::DiscreteGpu => DeviceKind::DiscreteGpu,
+        wgpu::DeviceType::IntegratedGpu => DeviceKind::IntegratedGpu,
+        wgpu::DeviceType::VirtualGpu => DeviceKind::VirtualGpu,
+        wgpu::DeviceType::Cpu => DeviceKind::Cpu,
+        wgpu::DeviceType::Other => DeviceKind::Unknown,
+    }
 }
 
 impl WgpuRenderer {
@@ -198,6 +216,49 @@ impl WgpuRenderer {
 }
 
 impl Renderer for WgpuRenderer {
+    fn info(&mut self) -> RendererInfo {
+        let Some(bound) = self.bound.as_ref() else {
+            return RendererInfo {
+                backend: capability::NAME,
+                ..RendererInfo::default()
+            };
+        };
+        let adapter = &bound.gpu.adapter_info;
+        let now = std::time::Instant::now();
+        let memory = match self.memory {
+            Some((at, memory)) if now.duration_since(at) < MEMORY_REPORT_INTERVAL => memory,
+            _ => {
+                let memory =
+                    bound
+                        .gpu
+                        .device
+                        .generate_allocator_report()
+                        .map(|report| DeviceMemory {
+                            allocated: report.total_allocated_bytes,
+                            reserved: report.total_reserved_bytes,
+                        });
+                self.memory = Some((now, memory));
+                memory
+            }
+        };
+        let driver = match (adapter.driver.is_empty(), adapter.driver_info.is_empty()) {
+            (false, false) => format!("{} {}", adapter.driver, adapter.driver_info),
+            (false, true) => adapter.driver.clone(),
+            _ => adapter.driver_info.clone(),
+        };
+        RendererInfo {
+            backend: capability::NAME,
+            device: adapter.name.clone(),
+            device_kind: device_kind(adapter.device_type),
+            vendor_id: adapter.vendor,
+            device_id: adapter.device,
+            api: format!("{:?}", adapter.backend),
+            driver,
+            max_texture_side: bound.gpu.device.limits().max_texture_dimension_2d,
+            memory,
+        }
+    }
+
     fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
         // Drop any previous binding first so an old surface releases its
         // window before a new one claims it.

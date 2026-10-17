@@ -1738,6 +1738,7 @@ fn present_frame(
             Ok(()) => emit_first_frame_marker(),
             Err(e) => eprintln!("lumen-window-winit: render failed: {e}"),
         }
+        lumen_core::render_backend::publish_renderer_info(&mut app.render_world, renderer.info());
         // The present happened after the tick recorded its timing; add it.
         app.record_render_reports();
     }
