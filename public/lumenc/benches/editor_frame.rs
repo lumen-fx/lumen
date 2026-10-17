@@ -12,7 +12,10 @@
 //! 2,8,32), `side=N` (buffer side, default 4096), `rows=N` (list rows in the
 //! side panel, default 300), `frames=N` (frames per phase, default 30).
 //!
-//! Each phase reports the median and the worst frame, split at the instants
+//! The phases: idle ticks, a repaint of an unchanged frame, a pan, a brush
+//! stroke, rewriting the top buffer, a class edit on the root that changes
+//! nothing, an edit of the tree's shape, rewriting every buffer, and hiding and freeing
+//! one. Each reports the median and the worst frame, split at the instants
 //! the app's `FrameTiming` records: update (input, systems, style, layout),
 //! extract, encode (the renderer building its draw commands) and submit
 //! (handing them to the device, or rasterizing). `gpu` is how long the device
@@ -29,6 +32,8 @@ use lumen_core::prelude::{FrameDirty, FrameTiming, TickStage, Viewport};
 use lumen_core::render_backend::install_offscreen;
 use lumen_render_cpu::CpuRenderer;
 use lumen_render_wgpu::{WgpuRenderer, gpu_unavailable_reason};
+use lumen_script::ScriptCommand;
+use lumen_script::node_query;
 use lumen_text::ShaperService;
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
@@ -48,6 +53,9 @@ enum Action {
     /// Write every pixel of every buffer and redraw: what reopening a
     /// document, or rebuilding a flattened layer stack, does.
     Rewrite,
+    /// Write every pixel of the top buffer and redraw: a transform of one
+    /// whole layer.
+    RewriteOne,
 }
 
 #[derive(Resource)]
@@ -69,6 +77,14 @@ fn draw(mut art: ResMut<Art>) {
             let at = 1000 + art.dab * 8;
             top.fill_rect(at, 1000, 8, 8, 0xff2040ff).expect("dab");
             art.dab += 1;
+        }
+        Action::RewriteOne => {
+            art.dab += 1;
+            let shade = (art.dab as u32 * 40) & 0xff;
+            let top = art.buffers.last().expect("a buffer");
+            let side = top.width();
+            top.fill_rect(0, 0, side, side, 0x30201000 | (shade << 24) | 0xff)
+                .expect("fill");
         }
         Action::Rewrite => {
             art.dab += 1;
@@ -391,6 +407,39 @@ fn run(backend: Backend, buffers: usize, side: u32, rows: usize, frames: usize) 
     phase(&mut app, "repaint, same", Action::Idle, true);
     phase(&mut app, "pan", Action::Pan, false);
     phase(&mut app, "stroke", Action::Stroke, false);
+    phase(&mut app, "rewrite one", Action::RewriteOne, false);
+
+    // Edits through the DOM, one a tick, with nothing else moving.
+    let dom_phase =
+        |app: &mut App, name: &str, target: u64, edit: &dyn Fn(u64) -> ScriptCommand| {
+            app.world.resource_mut::<Art>().action = Action::Idle;
+            let mut samples = Vec::with_capacity(frames);
+            for _ in 0..frames {
+                node_query::push_external_dom_command(edit(target));
+                samples.push(frame(app, readback));
+            }
+            report(name, &samples);
+        };
+    let root = node_query::run_document().expect("the document root");
+    let status = node_query::run_get_by_id("status").expect("#status");
+    dom_phase(&mut app, "class, no-op", root, &|node| {
+        ScriptCommand::ClassRemove {
+            node,
+            class: "absent".into(),
+        }
+    });
+    let flip = std::cell::Cell::new(false);
+    dom_phase(&mut app, "tree edit", status, &|node| {
+        flip.set(!flip.get());
+        ScriptCommand::SetInnerMarkup {
+            node,
+            markup: if flip.get() {
+                "<label text=\"saved\"/>".into()
+            } else {
+                "<label text=\"saved\"/><label text=\"1 layer\"/>".into()
+            },
+        }
+    });
     app.world.resource_mut::<Art>().action = Action::Rewrite;
     let rewrite = frame(&mut app, readback);
     app.world.resource_mut::<Art>().action = Action::Pan;
