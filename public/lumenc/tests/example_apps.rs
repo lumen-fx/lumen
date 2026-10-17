@@ -262,6 +262,13 @@ fn every_fixture_app_runs_clean() {
 /// Those files are downloaded rather than kept in the repository
 /// (`tools/fetch-templates.sh`), so a checkout that has not run the script has
 /// nothing to scaffold and this says so. CI fetches before it tests.
+///
+/// A template that scaffolds a Cargo project (the `rust` one) is not run
+/// here. Its `lumenui` dependency asks for this checkout's version on
+/// crates.io, which a checkout is always ahead of, and the crate links a
+/// prebuilt engine set this suite does not build. The `lumenui-engine`
+/// workflow builds that set and proves the template against it on every
+/// operating system: scaffolded by this lumenc, built, tested and run.
 #[test]
 fn every_template_runs_clean() {
     if let Err(why) = lumenc::cli::scaffold::payload_dir() {
@@ -286,10 +293,13 @@ fn every_template_runs_clean() {
             String::from_utf8_lossy(&out.stderr)
         );
 
-        if let Err(e) = run_clean(
-            &workdir.join(template.name),
-            &format!("template `{}`", template.name),
-        ) {
+        let dir = workdir.join(template.name);
+        // A Cargo project builds and runs through cargo against the prebuilt
+        // engine; see the doc comment for where that is proven.
+        if dir.join("Cargo.toml").is_file() {
+            continue;
+        }
+        if let Err(e) = run_clean(&dir, &format!("template `{}`", template.name)) {
             failures.push(e);
         }
     }
