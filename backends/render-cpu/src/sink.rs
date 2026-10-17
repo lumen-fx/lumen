@@ -10,7 +10,8 @@
 //! layer's own; closing it rasterizes the layer into a pixmap the frame then
 //! draws as an image, faded by a tint rather than a compositing layer.
 
-use lumen_paint::pixels::TileView;
+use bevy_tasks::{ComputeTaskPool, ParallelSliceMut, TaskPool};
+use lumen_paint::pixels::{TILE, TileView};
 use lumen_paint::{GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, PixelImage, Shape};
 use std::any::Any;
 use std::collections::HashMap;
@@ -159,44 +160,53 @@ impl Resident {
     /// A pixmap the frame already drew is shared with the context until the
     /// frame renders, so writing it then copies it first. That is what keeps
     /// two states of one image drawn in one frame apart.
+    ///
+    /// Many changed tiles are premultiplied a band of tile rows per worker:
+    /// a whole large image is tens of millions of pixels, which one thread
+    /// takes most of a second over.
     fn update(&mut self, image: &PixelImage) {
-        if image
+        let changed = image
             .tiles()
-            .all(|tile| self.stamps[tile.index] == tile.stamp)
-        {
+            .filter(|tile| self.stamps[tile.index] != tile.stamp)
+            .count();
+        if changed == 0 {
             return;
         }
         let width = self.size.0 as usize;
+        let tiles: Vec<TileView<'_>> = image.tiles().collect();
+        let cols = width.div_ceil(TILE as usize).max(1);
+        let stamps = &self.stamps;
         let pixmap = Arc::make_mut(&mut self.pixmap);
-        let data = pixmap.data_mut();
-        for tile in image.tiles() {
-            if self.stamps[tile.index] == tile.stamp {
-                continue;
-            }
-            let mut opaque = true;
-            for row in 0..tile.height as usize {
-                let src = &tile.pixels[row * TileView::STRIDE..][..tile.width as usize * 4];
-                let start = (tile.y as usize + row) * width + tile.x as usize;
-                for (dst, px) in data[start..start + tile.width as usize]
-                    .iter_mut()
-                    .zip(src.chunks_exact(4))
-                {
-                    // The multiply vello_cpu applies to a straight image, so a
-                    // pixel image paints exactly as the same pixels drawn
-                    // through `draw_image` would.
-                    opaque &= px[3] == 255;
-                    let alpha = u16::from(px[3]);
-                    let multiply = |c: u8| ((alpha * u16::from(c)) / 255) as u8;
-                    *dst = PremulRgba8 {
-                        r: multiply(px[0]),
-                        g: multiply(px[1]),
-                        b: multiply(px[2]),
-                        a: px[3],
-                    };
-                }
-            }
-            self.stamps[tile.index] = tile.stamp;
-            let was = std::mem::replace(&mut self.translucent[tile.index], !opaque);
+        let mut data = pixmap.data_mut();
+        let band = width * TILE as usize;
+        let premultiply = |row: usize, pixels: &mut [PremulRgba8]| {
+            tiles[row * cols..((row + 1) * cols).min(tiles.len())]
+                .iter()
+                .filter(|tile| stamps[tile.index] != tile.stamp)
+                .map(|tile| {
+                    (
+                        tile.index,
+                        tile.stamp,
+                        premultiply_tile(tile, pixels, width),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let done: Vec<(usize, u64, bool)> = if changed < PARALLEL_TILES || band == 0 {
+            data.chunks_mut(band.max(1))
+                .enumerate()
+                .flat_map(|(row, pixels)| premultiply(row, pixels))
+                .collect()
+        } else {
+            let pool = ComputeTaskPool::get_or_init(TaskPool::default);
+            data.par_chunk_map_mut(pool, band, premultiply)
+                .into_iter()
+                .flatten()
+                .collect()
+        };
+        for (index, stamp, opaque) in done {
+            self.stamps[index] = stamp;
+            let was = std::mem::replace(&mut self.translucent[index], !opaque);
             match (was, !opaque) {
                 (true, false) => self.translucent_tiles -= 1,
                 (false, true) => self.translucent_tiles += 1,
@@ -205,6 +215,39 @@ impl Resident {
         }
         pixmap.set_may_have_transparency(self.translucent_tiles > 0);
     }
+}
+
+/// Changed tiles below this many are premultiplied on the calling thread: a
+/// brush dab touches a few, and handing those to workers costs more than
+/// the work.
+const PARALLEL_TILES: usize = 64;
+
+/// Premultiply one tile into `band`, the pixmap rows of the tile row it sits
+/// in, `width` pixels each. Returns whether every pixel was opaque.
+fn premultiply_tile(tile: &TileView<'_>, band: &mut [PremulRgba8], width: usize) -> bool {
+    let mut opaque = true;
+    for row in 0..tile.height as usize {
+        let src = &tile.pixels[row * TileView::STRIDE..][..tile.width as usize * 4];
+        let start = row * width + tile.x as usize;
+        for (dst, px) in band[start..start + tile.width as usize]
+            .iter_mut()
+            .zip(src.chunks_exact(4))
+        {
+            // The multiply vello_cpu applies to a straight image, so a pixel
+            // image paints exactly as the same pixels drawn through
+            // `draw_image` would.
+            opaque &= px[3] == 255;
+            let alpha = u16::from(px[3]);
+            let multiply = |c: u8| ((alpha * u16::from(c)) / 255) as u8;
+            *dst = PremulRgba8 {
+                r: multiply(px[0]),
+                g: multiply(px[1]),
+                b: multiply(px[2]),
+                a: px[3],
+            };
+        }
+    }
+    opaque
 }
 
 /// An offscreen layer being painted: its own painter, and where it sits in
@@ -858,6 +901,53 @@ mod tests {
         painter.begin_frame(128, 64, black());
         painter.begin_frame(128, 64, black());
         assert!(painter.images.resident.is_empty());
+    }
+
+    /// An image changed in more tiles than one thread takes (premultiplied
+    /// a band per worker) paints every tile, the ragged right and bottom
+    /// edges included, and keeps the translucent tile count it should.
+    #[test]
+    fn a_pixel_image_changed_all_over_paints_every_tile() {
+        let (w, h) = (1000u32, 700u32);
+        let mut image = PixelImage::new(w, h);
+        for ty in 0..h.div_ceil(64) {
+            for tx in 0..w.div_ceil(64) {
+                let alpha = if (tx + ty) % 3 == 0 { 128 } else { 255 };
+                let color = [(tx * 16) as u8, (ty * 16) as u8, 200, alpha];
+                image.fill_rgba8(i64::from(tx * 64), i64::from(ty * 64), 64, 64, color);
+            }
+        }
+        let mut painter = CpuPainter::new(w as u16, h as u16);
+        painter.begin_frame(w as u16, h as u16, black());
+        painter.draw_pixels(&image, nearest(), Affine::IDENTITY);
+        let target = frame(&mut painter, w as u16, h as u16);
+        for (x, y) in [
+            (5, 5),
+            (999, 5),
+            (5, 699),
+            (999, 699),
+            (640, 320),
+            (700, 450),
+        ] {
+            let (tx, ty) = (x / 64, y / 64);
+            let p = target.sample(x as u16, y as u16);
+            let want = if (tx + ty) % 3 == 0 {
+                ((tx * 16) as u8 / 2, 200 / 2)
+            } else {
+                ((tx * 16) as u8, 200)
+            };
+            assert!(
+                p.r.abs_diff(want.0) <= 1 && p.b.abs_diff(want.1) <= 1,
+                "({x}, {y}) reads {p:?}"
+            );
+        }
+        let resident = &painter.images.resident[&image.id()];
+        let translucent = (0..h.div_ceil(64))
+            .flat_map(|ty| (0..w.div_ceil(64)).map(move |tx| (tx + ty) % 3 == 0))
+            .filter(|t| *t)
+            .count();
+        assert_eq!(resident.translucent_tiles, translucent);
+        assert!(resident.stamps.iter().all(|s| *s != 0));
     }
 
     /// Two states of one image drawn in one frame each paint their own
