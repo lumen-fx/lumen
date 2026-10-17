@@ -58,6 +58,37 @@ fn a_bounded_headless_run_completes() {
         .unwrap();
 }
 
+/// #525: a release build embeds the entry markup and stylesheet and reads the
+/// rest of the app from its app directory, not from wherever it was started.
+/// Started from an unrelated directory, the stylesheet's `@import` still
+/// resolves.
+#[test]
+fn embedded_sources_read_imports_from_the_app_not_the_working_dir() {
+    let _guard = isolate();
+    let dir = fixture("embedded-imports", "");
+    std::fs::write(
+        dir.join("src").join("theme.css"),
+        "label { color: #ff0000; }",
+    )
+    .unwrap();
+    let elsewhere = std::env::temp_dir().join(format!(
+        "lumenui-run-paths-{}-elsewhere",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let was = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&elsewhere).unwrap();
+    let run = lumenui::App::new()
+        .add_plugins(LumenDefaultPlugins.with_source(Source::embedded_from(
+            dir.join("src").join("main.lmn"),
+            "<root><label text=\"hi\"/></root>",
+            Some("@import \"theme.css\";"),
+        )))
+        .run_headless(1);
+    std::env::set_current_dir(was).unwrap();
+    run.unwrap();
+}
+
 #[test]
 fn a_bad_plugin_declaration_fails_before_any_window() {
     let _guard = isolate();
