@@ -38,6 +38,7 @@ use lumen_core::components::Visuals;
 use lumen_core::input::CursorImage;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{BackgroundClip, opacity_model, parent_scroll_offsets};
+#[cfg(debug_assertions)]
 use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::Entry as MapEntry;
@@ -663,6 +664,7 @@ impl AssetServer {
 
     /// Recomputes `bytes_used` from scratch by summing every cached entry. O(n). Used only by the debug
     /// reconciliation tick to catch any insert / evict path that forgot to update the counter.
+    #[cfg(any(debug_assertions, test))]
     fn recompute_bytes_used(&self) -> usize {
         let mut total: usize = 0;
         for (_, img) in self.image_cache.iter() {
