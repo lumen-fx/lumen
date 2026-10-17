@@ -7,6 +7,7 @@
 //! it back; a window blits it onto the swap chain (see `surface.rs`). The
 //! texture carries a second, sRGB view of the same bytes for that blit.
 
+use crate::atlas::{FRAME_BUDGET, Job, keep_atlas, scene_images};
 use crate::sink::{FinishedLayer, GpuLayer};
 use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
@@ -330,6 +331,18 @@ pub(crate) struct GpuCore {
     /// The textures standing in for the pixel images frames draw, by image
     /// id, kept while frames keep drawing them.
     pixels: HashMap<u64, PixelTexture>,
+    /// The textures holding the copies of shrunk image draws a split frame
+    /// keeps (see [`crate::atlas`]), by the blob id of the image each stands
+    /// in for.
+    copies: HashMap<u64, wgpu::Texture>,
+    /// The textures this frame's split renders produced, each with the image
+    /// it stands in for, let go once the frame has rendered.
+    passes: Vec<(vello::peniko::ImageData, wgpu::Texture)>,
+    /// The images the last render held in vello's atlas, by blob id, with
+    /// their sizes: what a frame's own images share the atlas with.
+    resident: HashMap<u64, u64>,
+    /// A one-pixel target for the empty renders that age vello's atlas.
+    pixel_target: Option<wgpu::TextureView>,
     frame: FrameTexture,
 }
 
@@ -392,6 +405,10 @@ impl GpuCore {
                 layers: LayerCache::default(),
                 textures: Vec::new(),
                 pixels: HashMap::new(),
+                copies: HashMap::new(),
+                passes: Vec::new(),
+                resident: HashMap::new(),
+                pixel_target: None,
                 frame,
             },
             surface,
@@ -442,8 +459,43 @@ impl GpuCore {
             Some(&mut self.cache),
             Some(&mut self.layers),
         );
+        let split = self.overflows_atlas();
+        let mut jobs = Vec::new();
+        if split {
+            // Painted again, into renders that each fit the atlas.
+            let sink = self
+                .painter
+                .native()
+                .downcast_mut::<VelloPainter>()
+                .expect("the GPU renderer paints through a VelloPainter");
+            sink.begin_split(width, height);
+            lumen_paint::paint_frame(
+                render_world,
+                &mut self.painter,
+                Some(&mut self.cache),
+                Some(&mut self.layers),
+            );
+            jobs = self
+                .painter
+                .native()
+                .downcast_mut::<VelloPainter>()
+                .expect("the GPU renderer paints through a VelloPainter")
+                .finish_split();
+        }
         self.upload_pixels();
         self.render_offscreen()?;
+        self.release_copies();
+        if split {
+            self.render_jobs(jobs)?;
+            self.age_atlas()?;
+        }
+        keep_atlas(
+            self.painter
+                .native()
+                .downcast_mut::<VelloPainter>()
+                .expect("the GPU renderer paints through a VelloPainter")
+                .scene_mut(),
+        );
         let params = RenderParams {
             base_color: lumen_paint::clear_color(render_world),
             width: self.frame.width,
@@ -465,8 +517,146 @@ impl GpuCore {
                 &params,
             )
             .map_err(|e| format!("vello render: {e:?}"))?;
+        self.resident = scene_images(scene);
         self.release_textures();
+        for (image, _texture) in self.passes.drain(..) {
+            self.vello.override_image(&image, None);
+        }
         Ok(())
+    }
+
+    /// Whether the frame just painted holds more images than vello's atlas
+    /// has room for alongside the ones the last render left in it, which
+    /// stay there until two more renders have passed without them.
+    fn overflows_atlas(&mut self) -> bool {
+        let scene = self
+            .painter
+            .native()
+            .downcast_ref::<VelloPainter>()
+            .expect("the GPU renderer paints through a VelloPainter")
+            .scene();
+        let images = scene_images(scene);
+        let own: u64 = images.values().sum();
+        if own == 0 {
+            return false;
+        }
+        let shared: u64 = self
+            .resident
+            .iter()
+            .filter(|(id, _)| !images.contains_key(id))
+            .map(|(_, area)| area)
+            .sum();
+        own + shared > FRAME_BUDGET
+    }
+
+    /// Render a split frame's jobs, in order, each into a texture of its own
+    /// that then stands in for its image. A job may draw what an earlier one
+    /// rendered, never a later one.
+    fn render_jobs(&mut self, jobs: Vec<Job>) -> Result<(), String> {
+        for job in jobs {
+            let (width, height) = (job.image.width, job.image.height);
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("lumen split pass"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // Vello renders into it as storage and copies it into its
+                // image atlas from it.
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.age_atlas()?;
+            let params = RenderParams {
+                base_color: vello::peniko::Color::TRANSPARENT,
+                width,
+                height,
+                antialiasing_method: AaConfig::Area,
+            };
+            self.vello
+                .render_to_texture(&self.device, &self.queue, &job.scene, &view, &params)
+                .map_err(|e| format!("vello split pass: {e:?}"))?;
+            self.vello.override_image(
+                &job.image,
+                Some(wgpu::TexelCopyTextureInfoBase {
+                    texture: texture.clone(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                }),
+            );
+            if job.kept {
+                self.copies.insert(job.image.data.id(), texture);
+            } else {
+                self.passes.push((job.image, texture));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run two empty renders, so every image vello's atlas holds from earlier
+    /// renders is old enough to be evicted when the next render needs room.
+    /// Vello keeps an image placed until two renders have passed without it,
+    /// and a split frame's renders each need the atlas to themselves.
+    fn age_atlas(&mut self) -> Result<(), String> {
+        let view = match &self.pixel_target {
+            Some(view) => view.clone(),
+            None => {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("lumen atlas aging target"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::STORAGE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                self.pixel_target = Some(view.clone());
+                view
+            }
+        };
+        let params = RenderParams {
+            base_color: vello::peniko::Color::TRANSPARENT,
+            width: 1,
+            height: 1,
+            antialiasing_method: AaConfig::Area,
+        };
+        // An empty scene would skip the atlas altogether, neither aging it
+        // nor keeping it.
+        let mut tick = vello::Scene::new();
+        keep_atlas(&mut tick);
+        for _ in 0..2 {
+            self.vello
+                .render_to_texture(&self.device, &self.queue, &tick, &view, &params)
+                .map_err(|e| format!("vello atlas aging render: {e:?}"))?;
+        }
+        Ok(())
+    }
+
+    /// Drop the textures of the kept copies the frame did not draw.
+    fn release_copies(&mut self) {
+        let gone = self
+            .painter
+            .native()
+            .downcast_mut::<VelloPainter>()
+            .expect("the GPU renderer paints through a VelloPainter")
+            .end_copies();
+        for image in gone {
+            self.vello.override_image(&image, None);
+            self.copies.remove(&image.data.id());
+        }
     }
 
     /// Render the offscreen layers the frame closed, and stand a region of a
@@ -546,6 +736,7 @@ impl GpuCore {
             );
             scene.pop_layer();
         }
+        keep_atlas(&mut scene);
         let params = RenderParams {
             base_color: vello::peniko::Color::TRANSPARENT,
             width: batch.width,
