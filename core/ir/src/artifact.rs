@@ -149,7 +149,8 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 ///
 /// `20`: [`crate::layout_ir::Attributes`] gains `input_type`, the `type` an
 /// `<input>` that holds something other than text was written with, and
-/// `alpha`, whether a color field picks alpha too.
+/// `alpha`, whether a color field picks alpha too; and `mask_image`,
+/// `mask_size`, `mask_repeat` and `mask_position`, an element's CSS mask.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

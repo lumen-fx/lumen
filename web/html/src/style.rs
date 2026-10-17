@@ -160,6 +160,10 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("fit", "object-fit", Value::AsIs),
     ("image-rendering", "image-rendering", Value::AsIs),
     ("cursor", "cursor", Value::AsIs),
+    ("mask-image", "mask-image", Value::AsIs),
+    ("mask-size", "mask-size", Value::Length),
+    ("mask-repeat", "mask-repeat", Value::AsIs),
+    ("mask-position", "mask-position", Value::Length),
     ("radius", "border-radius", Value::Length),
     (
         "border-top-left-radius",
@@ -715,6 +719,15 @@ mod tests {
             "url(\"pen.png\") 2 14, crosshair",
             "cursor: url(\"pen.png\") 2 14, crosshair",
         ),
+        (
+            "mask-image",
+            "url(\"icons/pen.svg\")",
+            "mask-image: url(\"icons/pen.svg\")",
+        ),
+        ("mask-size", "16 auto", "mask-size: 16px auto"),
+        ("mask-size", "contain", "mask-size: contain"),
+        ("mask-repeat", "no-repeat", "mask-repeat: no-repeat"),
+        ("mask-position", "center 4", "mask-position: center 4px"),
         ("radius", "8", "border-radius: 8px"),
         ("border-top-left-radius", "6", "border-top-left-radius: 6px"),
         (
