@@ -312,6 +312,10 @@ pub(crate) struct BootConfig {
     pub(crate) markup: Option<String>,
     pub(crate) css: Option<String>,
     pub(crate) dir: Option<PathBuf>,
+    /// The app directory embedded sources came from, for an app whose
+    /// executable does not sit in its app directory (see
+    /// [`Source::Embedded`]).
+    pub(crate) built_dir: Option<PathBuf>,
     pub(crate) title: Option<String>,
     pub(crate) size: Option<(u32, u32)>,
     pub(crate) hot_reload: Option<bool>,
@@ -372,11 +376,23 @@ pub enum Source {
     // `Compiled { lmna: Vec<u8> }` variant (or an `lmna: Option<Vec<u8>>` field)
     // and have the boot path hand it to the parser-free runtime. Embedding the
     // raw source string here is the interim payload and keeps this seam small.
+    ///
+    /// Only the entry markup and stylesheet are embedded. What they name by a
+    /// relative path (an `@import`ed stylesheet, an `@font-face` font, a
+    /// `url()` image) and `lumen.toml` are read from the app directory: the
+    /// executable's own directory when it holds a `lumen.toml`, which is how
+    /// `lumenc package` lays an app out, else `dir`, else the working
+    /// directory.
     Embedded {
         /// Markup baked in via `include_str!`.
         markup: String,
         /// Optional stylesheet baked in via `include_str!`.
         css: Option<String>,
+        /// The app directory the sources were embedded from, when known.
+        /// [`lumen_source!`](crate::lumen_source) records it at compile time,
+        /// so a release build run from anywhere on the machine it was built on
+        /// finds the app's other files.
+        dir: Option<PathBuf>,
     },
 }
 
@@ -392,32 +408,55 @@ impl Source {
     /// directory above it the app dir: `lumen_source!("src/main.lmn")` loads
     /// the app at the crate root, `lumen.toml` included.
     pub fn disk(markup_file: impl AsRef<Path>) -> Self {
-        let path = markup_file.as_ref();
-        let parent = path
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let dir = if parent.file_name().is_some_and(|n| n == "src") {
-            parent
-                .parent()
-                .filter(|d| !d.as_os_str().is_empty())
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."))
-        } else {
-            parent
-        };
-        Source::Disk { dir }
+        Source::Disk {
+            dir: app_dir_of(markup_file.as_ref()),
+        }
     }
 
     /// Build an [`Embedded`](Self::Embedded) source from compile-time markup and
-    /// optional CSS. Used by [`lumen_source!`](crate::lumen_source) in release
-    /// builds, and directly as the explicit always-embed escape hatch.
+    /// optional CSS. Used directly as the explicit always-embed escape hatch;
+    /// the app's other files are read from the executable's directory or the
+    /// working directory.
     pub fn embedded(markup: impl Into<String>, css: Option<impl Into<String>>) -> Self {
         Source::Embedded {
             markup: markup.into(),
             css: css.map(Into::into),
+            dir: None,
         }
+    }
+
+    /// [`Self::embedded`], remembering the app directory of the markup
+    /// file the markup was read from, by the same rule as [`Self::disk`]. Used
+    /// by [`lumen_source!`](crate::lumen_source) in release builds.
+    pub fn embedded_from(
+        markup_file: impl AsRef<Path>,
+        markup: impl Into<String>,
+        css: Option<impl Into<String>>,
+    ) -> Self {
+        Source::Embedded {
+            markup: markup.into(),
+            css: css.map(Into::into),
+            dir: Some(app_dir_of(markup_file.as_ref())),
+        }
+    }
+}
+
+/// The app directory a markup file belongs to: the directory holding it, or
+/// the one above when that directory is `src`.
+fn app_dir_of(path: &Path) -> PathBuf {
+    let parent = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if parent.file_name().is_some_and(|n| n == "src") {
+        parent
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        parent
     }
 }
 
@@ -475,7 +514,8 @@ macro_rules! lumen_source {
             $markup
         ));
         #[cfg(not(debug_assertions))]
-        let __lumen_src = $crate::plugins::Source::embedded(
+        let __lumen_src = $crate::plugins::Source::embedded_from(
+            ::core::concat!(::core::env!("CARGO_MANIFEST_DIR"), "/", $markup),
             ::core::include_str!(::core::concat!(
                 ::core::env!("CARGO_MANIFEST_DIR"),
                 "/",
@@ -493,7 +533,8 @@ macro_rules! lumen_source {
             $markup
         ));
         #[cfg(not(debug_assertions))]
-        let __lumen_src = $crate::plugins::Source::embedded(
+        let __lumen_src = $crate::plugins::Source::embedded_from(
+            ::core::concat!(::core::env!("CARGO_MANIFEST_DIR"), "/", $markup),
             ::core::include_str!(::core::concat!(
                 ::core::env!("CARGO_MANIFEST_DIR"),
                 "/",
@@ -595,11 +636,12 @@ impl LumenPluginsBuilder {
                 self.boot.markup = None;
                 self.boot.css = None;
             }
-            Source::Embedded { markup, css } => {
+            Source::Embedded { markup, css, dir } => {
                 self.boot.markup = Some(markup);
                 if css.is_some() {
                     self.boot.css = css;
                 }
+                self.boot.built_dir = dir;
             }
         }
         self

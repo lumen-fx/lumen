@@ -4,6 +4,7 @@
 // lib.rs says why they come from there rather than from a dependency.
 use crate::{bevy_ecs, lumen_core, lumen_runtime, lumenc};
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::error::{Error, Result};
@@ -285,6 +286,7 @@ impl App {
             markup,
             css,
             dir,
+            built_dir,
             title,
             size,
             hot_reload,
@@ -294,6 +296,9 @@ impl App {
         } = boot;
         if markup.is_some() {
             self.boot.markup = markup;
+        }
+        if built_dir.is_some() {
+            self.boot.built_dir = built_dir;
         }
         if css.is_some() {
             self.boot.css = css;
@@ -482,8 +487,14 @@ impl App {
         let in_memory = self.boot.markup.is_some();
         let dir = match self.boot.dir {
             Some(d) => d,
-            None if in_memory => std::env::current_dir()
-                .map_err(|e| Error::Setup(format!("resolve current dir: {e}")))?,
+            None if in_memory => match embedded_app_dir(
+                std::env::current_exe().ok().as_deref(),
+                self.boot.built_dir.as_deref(),
+            ) {
+                Some(dir) => dir,
+                None => std::env::current_dir()
+                    .map_err(|e| Error::Setup(format!("resolve current dir: {e}")))?,
+            },
             None => {
                 return Err(Error::Setup(
                     "no UI source: add \
@@ -515,6 +526,18 @@ impl App {
         let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         Ok((opts, self.seeds, self.deferred))
     }
+}
+
+/// The app directory of an app whose markup is embedded, where the files the
+/// markup and stylesheet name by relative path and `lumen.toml` are read
+/// from: the directory holding `exe` when it holds a `lumen.toml` too, which
+/// is the layout `lumenc package` writes, else the directory the sources were
+/// embedded from when it is still there. `None` leaves the working directory.
+fn embedded_app_dir(exe: Option<&Path>, built: Option<&Path>) -> Option<PathBuf> {
+    exe.and_then(Path::parent)
+        .filter(|dir| dir.join("lumen.toml").is_file())
+        .or(built.filter(|dir| dir.is_dir()))
+        .map(Path::to_path_buf)
 }
 
 /// Ask for the frame the closing tick paints. The runtime writes the close
@@ -655,6 +678,48 @@ mod tests {
         assert!(matches!(
             Source::disk("src/main.lmn"),
             Source::Disk { dir } if dir == std::path::Path::new(".")
+        ));
+    }
+
+    /// #525: embedded sources read the rest of the app from the executable's
+    /// directory when it is a packaged app's, else from the directory they
+    /// were embedded from, and only then from the working directory.
+    #[test]
+    fn embedded_sources_find_their_app_dir() {
+        let root = std::env::temp_dir().join(format!("lumenui-app-dir-{}", std::process::id()));
+        let packaged = root.join("packaged");
+        let built = root.join("built");
+        std::fs::create_dir_all(&packaged).unwrap();
+        std::fs::create_dir_all(&built).unwrap();
+        std::fs::write(packaged.join("lumen.toml"), "").unwrap();
+        let exe = packaged.join("app");
+        let bare_exe = built.join("target").join("app");
+
+        assert_eq!(
+            embedded_app_dir(Some(&exe), Some(&built)),
+            Some(packaged.clone()),
+            "a packaged app reads beside its executable"
+        );
+        assert_eq!(
+            embedded_app_dir(Some(&bare_exe), Some(&built)),
+            Some(built.clone()),
+            "a build run from its target directory reads where it was built"
+        );
+        assert_eq!(
+            embedded_app_dir(Some(&bare_exe), Some(&root.join("gone"))),
+            None,
+            "a build moved off the machine it was built on falls back"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The release branch of `lumen_source!` records the app dir the markup
+    /// came from.
+    #[test]
+    fn embedded_from_records_the_app_dir() {
+        assert!(matches!(
+            Source::embedded_from("/app/src/main.lmn", "<root/>", None::<&str>),
+            Source::Embedded { dir: Some(dir), .. } if dir == std::path::Path::new("/app")
         ));
     }
 

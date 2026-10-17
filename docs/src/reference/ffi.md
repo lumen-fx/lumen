@@ -553,6 +553,14 @@ build from one line. Give it paths under the app's `src/`: a markup file in a
 directory named `src` makes the directory above it the app, so `lumen.toml`
 beside `src/` is read, as `lumenc run` reads it.
 
+A release build embeds the entry markup and stylesheet only. The files they
+name by relative path (an `@import`, an `@font-face` font, a `url()` image) and
+`lumen.toml` are read from the app directory: the executable's own directory
+when it holds a `lumen.toml`, which is how `lumenc package` lays an app out,
+else the directory `lumen_source!` embedded the sources from, and only when
+neither is there the working directory. A release binary therefore runs from
+any directory, packaged or on the machine that built it.
+
 A system that reads `ClickEvent`, `DoubleClickEvent` or `LongPressEvent`, or is
 gated on `on_click` / `on_toggle`, runs `.after(ClickSet::Producers)`: that set
 holds every system that writes those messages (the pointer, Enter and Space on
