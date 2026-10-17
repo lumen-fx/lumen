@@ -700,7 +700,7 @@ fn paste(clipboard: Clipboard) {
 
 Runnable examples live in `sdk/rust/examples`.
 
-### Frame timing
+### Frame timing and the renderer
 
 `FrameTiming` is a resource holding when the last tick ran, phase by phase. A
 system reads the tick before its own: `frame` is that tick's `Tick::frame`,
@@ -746,6 +746,16 @@ fn measure(
     }
 }
 ```
+
+`RendererInfo` is a resource saying which renderer draws the app, present
+once it has drawn a frame: `backend` is its `[render] backend` name (`gpu` or
+`cpu`, so under `auto` it tells which one started), `device`, `device_kind`,
+`vendor_id`, `device_id`, `api` and `driver` describe what it runs on, and
+`max_texture_side` is the largest texture it makes. On the GPU renderer
+`memory` holds the bytes its allocations use (`allocated`) and the bytes of the
+blocks they come from (`reserved`), refreshed at most twice a second. No
+portable graphics API reports how much memory the device has, so that is not
+here.
 
 ### Canvas
 

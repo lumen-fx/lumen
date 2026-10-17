@@ -208,7 +208,9 @@ offscreen image, `lumen_core::render_backend::install_offscreen` puts an
 attached renderer into `app.render_world`, registers the system in
 `RenderStage::Render` that drives it each frame, and calls
 `install_extract_pipeline` so the extract step that feeds it exists at all.
-Stamping the render world's `RenderTimestamps` with
+Two more pieces let an app see what the renderer did. `info` describes the
+backend and its device as a `RendererInfo`, which the driver publishes after
+each frame it presents. Stamping the render world's `RenderTimestamps` with
 `mark_encoded`, `mark_submitted` and `mark_presented` while it presents fills
 in those instants of the app's `FrameTiming`; a renderer that cannot tell a
 phase apart leaves it unstamped.

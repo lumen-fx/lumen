@@ -123,6 +123,15 @@ pub trait Renderer: Send + 'static {
     /// Paint, submit, and present one frame from the render world.
     fn present(&mut self, render_world: &mut World) -> Result<(), RenderError>;
 
+    /// Which backend this is and what it draws on, for
+    /// [`crate::render_backend::RendererInfo`]. Asked after each frame it
+    /// presents, so a renderer that has to work for part of the answer (a
+    /// memory report) keeps that part and refreshes it now and then. The
+    /// default knows nothing.
+    fn info(&mut self) -> crate::render_backend::RendererInfo {
+        crate::render_backend::RendererInfo::default()
+    }
+
     /// Release the target and everything behind it. A window backend calls
     /// this while the platform connection is still alive, because tearing a
     /// surface down after the display connection closes crashes some
@@ -147,6 +156,10 @@ impl<R: Renderer + ?Sized> Renderer for Box<R> {
 
     fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
         (**self).present(render_world)
+    }
+
+    fn info(&mut self) -> crate::render_backend::RendererInfo {
+        (**self).info()
     }
 
     fn detach(&mut self) {

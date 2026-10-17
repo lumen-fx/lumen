@@ -54,3 +54,26 @@ fn render_one_rect_and_read_back() {
         "corner not black: ({cr}, {cg}, {cb})"
     );
 }
+
+/// #528: after a frame the app can read which renderer drew it and what
+/// device it ran on, with the memory its allocations hold.
+#[test]
+fn the_app_reads_which_renderer_drew_it() {
+    use lumen_core::render_backend::{DeviceKind, RendererInfo};
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+    let mut app = App::new();
+    app.add_plugin(WgpuRendererPlugin::new(16, 16));
+    app.tick();
+    let info = app.world.resource::<RendererInfo>();
+    assert_eq!(info.backend, "gpu");
+    assert!(!info.device.is_empty(), "the adapter names itself");
+    assert!(!info.api.is_empty());
+    assert_ne!(info.device_kind, DeviceKind::Cpu, "a hardware adapter");
+    assert!(info.max_texture_side >= 2048);
+    if let Some(memory) = info.memory {
+        assert!(memory.reserved >= memory.allocated && memory.allocated > 0);
+    }
+}

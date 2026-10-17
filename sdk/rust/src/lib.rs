@@ -278,6 +278,9 @@ pub mod prelude {
     pub use lumen_core::app::{App as EcsApp, Plugin};
     pub use lumen_core::tick::{FrameTiming, TickStage};
 
+    // Which renderer draws the app, and on what.
+    pub use lumen_core::render_backend::RendererInfo;
+
     // Components: visuals, text, layout, structure, markers.
     pub use lumen_core::components::{
         Color, Disabled, DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection,

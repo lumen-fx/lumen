@@ -21,7 +21,7 @@ pub use vello_cpu;
 
 use bevy_ecs::world::World;
 use lumen_core::prelude::*;
-use lumen_core::render_backend::install_offscreen;
+use lumen_core::render_backend::{DeviceKind, RendererInfo, install_offscreen};
 use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
 use lumen_paint::kurbo::Affine;
 use lumen_paint::{LayerCache, LayerStats, PaintTarget, Rasterize, Rasterizer, Recording};
@@ -134,6 +134,19 @@ impl CpuRenderer {
 }
 
 impl Renderer for CpuRenderer {
+    fn info(&mut self) -> RendererInfo {
+        RendererInfo {
+            backend: capability::NAME,
+            device: format!(
+                "vello_cpu, {} worker threads",
+                cpu_painter(&mut self.painter).worker_threads()
+            ),
+            device_kind: DeviceKind::Cpu,
+            max_texture_side: MAX_DIMENSION,
+            ..RendererInfo::default()
+        }
+    }
+
     fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
         self.target = None;
         self.holds_frame = false;
@@ -320,6 +333,21 @@ mod tests {
     use super::*;
     use lumen_core::components::Color as LumenColor;
     use lumen_core::render_world::SurfaceCapture;
+
+    /// #528: after a frame the app can read that the CPU renderer drew it,
+    /// and when it finished rasterizing.
+    #[test]
+    fn the_app_reads_that_the_cpu_drew_it() {
+        let mut app = App::new();
+        app.add_plugin(CpuRendererPlugin::new(16, 16));
+        app.tick();
+        let info = app.world.resource::<RendererInfo>();
+        assert_eq!(info.backend, "cpu");
+        assert_eq!(info.device_kind, DeviceKind::Cpu);
+        assert_eq!(info.memory, None, "nothing on a device to report");
+        let timing = app.world.resource::<FrameTiming>();
+        assert!(timing.encoded.is_some() && timing.submitted.is_some());
+    }
 
     /// A premultiplied pixel reads back straight: opaque pixels unchanged,
     /// transparent ones zero, and partial ones divided back out.
