@@ -18,9 +18,11 @@
 //! `<for>` reconciler uses, so layout, style and paint stay consistent. A
 //! class, id, disabled or inline-style change marks the element
 //! [`StyleDirty`](lumen_core::components::StyleDirty), and a structure edit
-//! bumps [`StyleVersion`](lumen_core::components::StyleVersion); those are
-//! what a host with a cascade of its own listens on. A host whose platform
-//! resolves CSS itself, such as a browser page, has nothing reading them.
+//! marks the element whose children changed, since what it changes is that
+//! element's subtree: the nodes that came, and the siblings whose place
+//! among the children moved. That is what a host with a cascade of its own
+//! listens on. A host whose platform resolves CSS itself, such as a browser
+//! page, has nothing reading it.
 
 use std::collections::HashMap;
 
@@ -28,7 +30,7 @@ use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
     DirtyLayout, Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag,
-    StyleDirty, StyleVersion, TextContent, TextInput,
+    StyleDirty, TextContent, TextInput,
 };
 use lumen_core::input::ClickSet;
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
@@ -288,7 +290,9 @@ pub fn apply_dom_commands(world: &mut World) {
     // Reserved token -> spawned entity, filled as `Spawn` / `CloneNode`
     // materialize; subsequent commands in the same tick resolve through it.
     let mut reserved: HashMap<u64, Entity> = HashMap::new();
-    let mut style_dirty = false;
+    // The elements whose children an edit changed: each restyles with its
+    // subtree once the commands are in.
+    let mut reshaped: Vec<Entity> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -297,10 +301,11 @@ pub fn apply_dom_commands(world: &mut World) {
                     tag,
                     ..Default::default()
                 };
+                // Detached until an `Insert` puts it in the tree, which
+                // restyles it there.
                 let entity =
                     crate::spawn::spawn_subtree(world, &el, None, Placeholders::Unresolved);
                 reserved.insert(tok, entity);
-                style_dirty = true;
             }
             ScriptCommand::CloneNode {
                 source,
@@ -314,7 +319,6 @@ pub fn apply_dom_commands(world: &mut World) {
                     let entity =
                         crate::spawn::spawn_subtree(world, &el, None, Placeholders::Resolved);
                     reserved.insert(tok, entity);
-                    style_dirty = true;
                 }
             }
             ScriptCommand::Insert {
@@ -326,8 +330,11 @@ pub fn apply_dom_commands(world: &mut World) {
                     resolve(world, &reserved, parent),
                     resolve(world, &reserved, node),
                 ) {
+                    // A node moved from elsewhere leaves a parent whose
+                    // children changed too.
+                    reshaped.extend(world.get::<ChildOf>(node).map(|c| c.parent()));
                     attach(world, parent, node, resolve(world, &reserved, before));
-                    style_dirty = true;
+                    reshaped.push(parent);
                 }
             }
             ScriptCommand::ReplaceWith { old, new } => {
@@ -335,8 +342,9 @@ pub fn apply_dom_commands(world: &mut World) {
                     resolve(world, &reserved, old),
                     resolve(world, &reserved, new),
                 ) {
+                    reshaped.extend(world.get::<ChildOf>(new).map(|c| c.parent()));
+                    reshaped.extend(world.get::<ChildOf>(old).map(|c| c.parent()));
                     replace_node(world, old, new);
-                    style_dirty = true;
                 }
             }
             ScriptCommand::SpawnFragment {
@@ -351,18 +359,19 @@ pub fn apply_dom_commands(world: &mut World) {
                     .collect();
                 if let Some(entity) = spawn_fragment(world, &key, &args, &children) {
                     reserved.insert(tok, entity);
-                    style_dirty = true;
                 }
             }
             ScriptCommand::RemoveNode { node } => {
                 if let Some(node) = resolve(world, &reserved, node) {
+                    reshaped.extend(world.get::<ChildOf>(node).map(|c| c.parent()));
                     world.entity_mut(node).despawn();
-                    style_dirty = true;
                 }
             }
             ScriptCommand::SetInnerMarkup { node, markup } => {
-                if let Some(entity) = resolve(world, &reserved, node) {
-                    style_dirty |= apply_inner_markup(world, entity, &markup);
+                if let Some(entity) = resolve(world, &reserved, node)
+                    && apply_inner_markup(world, entity, &markup)
+                {
+                    reshaped.push(entity);
                 }
             }
             ScriptCommand::SetNodeText { node, text } => {
@@ -463,8 +472,10 @@ pub fn apply_dom_commands(world: &mut World) {
         }
     }
 
-    if style_dirty {
-        StyleVersion::bump(world);
+    for entity in reshaped {
+        if let Ok(mut e) = world.get_entity_mut(entity) {
+            e.insert(StyleDirty);
+        }
     }
 }
 

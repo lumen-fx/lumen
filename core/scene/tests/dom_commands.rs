@@ -6,10 +6,11 @@
 //! the element as it was has to write nothing.
 
 use bevy_ecs::change_detection::DetectChanges;
+use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::message::{MessageRegistry, Messages};
 use bevy_ecs::system::RunSystemOnce;
 use bevy_ecs::world::World;
-use lumen_core::components::{InlineStyle, LumenClasses, LumenTag, StyleDirty};
+use lumen_core::components::{InlineStyle, LumenClasses, LumenTag, StyleDirty, StyleVersion};
 use lumen_core::node::NodeHandle;
 use lumen_scene::dom::{PendingDomCommands, apply_dom_commands, collect_dom_commands};
 use lumen_script::ScriptCommand;
@@ -114,4 +115,53 @@ fn an_edit_that_changes_nothing_writes_nothing() {
         .map(|c| c.as_ref())
         .collect();
     assert_eq!(classes, ["hot", "cold"]);
+}
+
+/// #539: an edit of the tree's shape restyles the element whose children
+/// changed, with its subtree, and leaves the rest of the document alone.
+#[test]
+fn a_tree_edit_restyles_the_subtree_it_changed() {
+    let mut world = world();
+    world.insert_resource(StyleVersion::default());
+    let root = world.spawn(LumenTag("root".into())).id();
+    let list = world.spawn((LumenTag("column".into()), ChildOf(root))).id();
+    let row = world.spawn((LumenTag("row".into()), ChildOf(list))).id();
+    let panel = world.spawn((LumenTag("column".into()), ChildOf(root))).id();
+    let added = world.spawn(LumenTag("row".into())).id();
+    let pack = |e| NodeHandle::new(e).pack();
+
+    apply(
+        &mut world,
+        vec![ScriptCommand::Insert {
+            parent: pack(list),
+            node: pack(added),
+            before: 0,
+        }],
+    );
+    assert!(
+        world.get::<StyleDirty>(list).is_some(),
+        "the list's children changed"
+    );
+    assert!(
+        world.get::<StyleDirty>(panel).is_none(),
+        "the panel did not"
+    );
+    assert!(world.get::<StyleDirty>(root).is_none());
+    assert_eq!(
+        *world.resource::<StyleVersion>(),
+        StyleVersion::default(),
+        "no full restyle"
+    );
+
+    world.entity_mut(list).remove::<StyleDirty>();
+    apply(
+        &mut world,
+        vec![ScriptCommand::RemoveNode { node: pack(row) }],
+    );
+    assert!(
+        world.get::<StyleDirty>(list).is_some(),
+        "a removal reshapes the parent"
+    );
+    assert!(world.get::<StyleDirty>(panel).is_none());
+    assert_eq!(*world.resource::<StyleVersion>(), StyleVersion::default());
 }

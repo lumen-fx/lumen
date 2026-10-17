@@ -592,9 +592,12 @@ A runtime built without the source-load path can run only artifacts, and links
 no parser at all.
 
 Styling is re-resolved after spawn, from scratch. A theme flip, a media-query
-change, a root class change or a tree edit bumps a style version, which
-restyles the whole document; a class, id, inline-style or disabled change on
-one element marks it `StyleDirty`, which restyles its subtree. The restyle
+change or a root class change bumps a style version, which restyles the whole
+document; a class, id, inline-style or disabled change on one element marks it
+`StyleDirty`, which restyles its subtree, and a tree edit marks the element
+whose children changed the same way. An edit that leaves the element as it
+was (a class it already has, an inline value it already holds) marks nothing.
+The restyle
 walks top-down with `lumen_ir::css::RestyleWalk`: each element is resolved
 from its tag, classes, id and place in the tree, with its markup declarations
 (the `MarkupStyle` component, recorded by the parser for what an author wrote
