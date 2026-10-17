@@ -22,6 +22,8 @@ lumen-paint = { workspace = true }
 # `render-gpu` capability; see `capability.rs`.
 lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
+# The engine's worker pool: a large pixel image is laid out for upload on it.
+bevy_tasks.workspace = true
 glam.workspace = true
 # vello re-exports wgpu (`vello::wgpu`) so code never drifts the version.
 # `default-features = false, features = ["wgpu"]` (set at workspace level)

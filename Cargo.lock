@@ -4402,6 +4402,7 @@ name = "lumen-render-wgpu"
 version = "0.0.10"
 dependencies = [
  "bevy_ecs",
+ "bevy_tasks",
  "glam 0.33.3",
  "image",
  "lumen-capability",
