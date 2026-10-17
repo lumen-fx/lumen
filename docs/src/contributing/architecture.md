@@ -862,6 +862,15 @@ component and the global namespace of the store. Text bindings skip any entity
 that currently has focus or an active input method session, so a signal write
 cannot race a keystroke.
 
+The binding readers read the dirty queue through `PropertyStore::observe_dirty`,
+which records where in the queue the earliest of them looked. The end of a
+tick forgets the writes the readers saw and keeps the ones that landed after,
+from a system the schedule ran after the readers, so the next tick applies
+them; `work_pending` reports the kept writes, so a loop that parks once a tick
+leaves nothing behind runs that tick. A DOM mutation queued from the C ABI or an
+SDK after the tick's DOM commands were collected asks for the next tick the
+same way. Either reaches the screen one tick later, without waiting for input.
+
 The `Bindable` trait in `lumen-core` describes where this is heading: one
 type-erased pipeline keyed on entity properties, replacing the per-kind marker
 components. It has one reference implementation and no dispatch behind it yet.

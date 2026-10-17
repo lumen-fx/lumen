@@ -3,6 +3,7 @@
 //! - [`PropertyStore`] is a [`Resource`] holding a [`HashMap`] of [`PropertyKey`] -> [`PropertyCell`].
 //! - [`PropertyStore::set`] writes the cell, bumps its generation, and records the key onto the per-tick dirty queue.
 //! - The per-tick dirty queue drives the observer systems: they read it with [`PropertyStore::dirty_peek`] each tick, and the end-of-tick `clear_property_store_dirty` system resets it. [`PropertyStore::drain_dirty`] is the consuming variant for callers that want the entries.
+//! - A system that applies writes and skips its work on a tick with none reads the queue with [`PropertyStore::observe_dirty`]. A write that lands after the first such read of a tick stays queued into the next tick, so every applier sees it, whichever order the schedule ran the writer in.
 //! - [`PropertyStore::freeze_notify`] / [`PropertyStore::thaw_notify`] gate the dirty queue across batched writes (e.g. `<for>` reconciler rewriting 1000 rows).
 //!
 //! The legacy [`crate::signals::Signals`] resource is a thin wrapper over this store keyed on `PropertyKey::Global(name)`.
@@ -15,6 +16,7 @@ use smallvec::SmallVec;
 use std::any::Any;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Identifier for an observer registered against a [`PropertyKey`]. Newtype-wrapped `u64`.
@@ -288,6 +290,10 @@ pub struct PropertyStore {
     next_listener: u64,
     /// Monotonic binding id allocator.
     next_binding: u64,
+    /// How much of `dirty` the earliest [`Self::observe_dirty`] of this tick
+    /// saw, plus one; 0 while nothing has observed it. Interior-mutable so
+    /// the appliers, which hold the store shared, can record it.
+    observed: AtomicUsize,
 }
 
 impl PropertyStore {
@@ -400,6 +406,40 @@ impl PropertyStore {
         &self.dirty
     }
 
+    /// The dirty queue, for a system that applies what was written and skips
+    /// its work when nothing was: a `bind-*` reader, a derivation pass.
+    ///
+    /// Also records that such a system has read the queue this tick. A write
+    /// that lands after the earliest of these reads, from a system the
+    /// schedule happened to run after the reader, is kept queued past the end
+    /// of the tick by [`clear_property_store_dirty`], so the next tick's
+    /// readers apply it rather than finding an empty queue. The tick that ran
+    /// the write therefore leaves work behind ([`crate::tick::work_pending`]),
+    /// and the next one paints it.
+    pub fn observe_dirty(&self) -> &[PropertyKey] {
+        let seen = self.dirty.len() + 1;
+        let _ = self
+            .observed
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |at| {
+                (at == 0 || seen < at).then_some(seen)
+            });
+        &self.dirty
+    }
+
+    /// End the tick's dirty window: forget every write the appliers have
+    /// seen, and keep the ones that landed after the earliest of them read
+    /// the queue (see [`Self::observe_dirty`]). With no reader this tick,
+    /// everything goes.
+    pub fn end_dirty_tick(&mut self) {
+        match self.observed.swap(0, Ordering::Relaxed) {
+            0 => self.dirty.clear(),
+            at => {
+                let seen = (at - 1).min(self.dirty.len());
+                self.dirty.drain(..seen);
+            }
+        }
+    }
+
     /// Clear the per-tick dirty queue without consuming it. Sibling to [`Self::drain_dirty`]
     /// for callers that only want the reset side-effect - used by the end-of-tick
     /// `clear_property_store_dirty` system to drop accumulated entries after every consumer
@@ -487,11 +527,18 @@ impl PropertyStore {
 /// Without this the queue grows monotonically and `dirty_global_names` returns
 /// stale entries on subsequent ticks. The system is the wave-D replacement for
 /// `clear_signal_dirty` - same role, different backing store.
+///
+/// A write that landed after the tick's first [`PropertyStore::observe_dirty`]
+/// stays queued for the next tick; see [`PropertyStore::end_dirty_tick`].
 pub fn clear_property_store_dirty(store: Option<ResMut<PropertyStore>>) {
-    if let Some(mut s) = store
-        && !s.dirty.is_empty()
-    {
-        s.clear_dirty();
+    let Some(mut s) = store else {
+        return;
+    };
+    if s.dirty.is_empty() {
+        // Through the shared borrow: an idle tick leaves the store unchanged.
+        s.observed.store(0, Ordering::Relaxed);
+    } else {
+        s.end_dirty_tick();
     }
 }
 
@@ -880,6 +927,29 @@ mod tests {
         s.thaw_notify();
         s.set(k.clone(), PropertyValue::I64(3));
         assert_eq!(s.drain_dirty().len(), 1);
+    }
+
+    /// #523: the end of a tick forgets what the readers saw and keeps what
+    /// landed after the earliest of them read the queue; the next tick's
+    /// readers see those, and the tick after that forgets them.
+    #[test]
+    fn a_write_after_the_readers_outlives_the_tick() {
+        let mut s = PropertyStore::default();
+        s.set(PropertyKey::global("seen"), PropertyValue::I64(1));
+        assert_eq!(s.observe_dirty().len(), 1);
+        s.set(PropertyKey::global("late"), PropertyValue::I64(1));
+        assert_eq!(s.observe_dirty().len(), 2, "a later reader sees both");
+        s.end_dirty_tick();
+        assert_eq!(s.dirty_peek(), [PropertyKey::global("late")]);
+
+        assert_eq!(s.observe_dirty().len(), 1, "the next tick's reader");
+        s.end_dirty_tick();
+        assert!(s.dirty_peek().is_empty());
+
+        // With no reader on the tick, the queue empties as it always did.
+        s.set(PropertyKey::global("unread"), PropertyValue::I64(1));
+        s.end_dirty_tick();
+        assert!(s.dirty_peek().is_empty());
     }
 
     #[test]
