@@ -298,10 +298,12 @@ jobs:
       # current measurement. Raising it is a decision, not a fix: it went up
       # once, when the module stopped being a script host alone and gained the
       # scene layer, the DOM backend and the input and widget behaviour the
-      # page shares with a desktop app. Trimming what a page does not use is
-      # its own piece of work, and this follows the measurement back down when
+      # page shares with a desktop app. It went up again when pages gained the
+      # split pane, the number and color fields, pen and touch input, the
+      # menu bar, cursors and masks. Trimming what a page does not use is its
+      # own piece of work, and this follows the measurement back down when
       # that lands.
-      WASM_SIZE_BUDGET_BYTES: 3000000
+      WASM_SIZE_BUDGET_BYTES: 3200000
     steps:
       - if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v4
