@@ -624,8 +624,8 @@ mod tests {
     use bevy_ecs::entity::Entity;
     use lumen_core::components::{LumenId, TextContent, Transform};
     use lumen_core::input::{
-        Key, KeyPressed, Modifiers, NamedKey, PointerButton, PointerMoved, PointerPressed,
-        PointerReleased, PointerState,
+        ClickEvent, ClickSet, Key, KeyPressed, Modifiers, NamedKey, PointerButton, PointerMoved,
+        PointerPressed, PointerReleased, PointerState,
     };
     use lumen_core::render_world::FrameDirty;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -735,9 +735,32 @@ mod tests {
         }
     }
 
+    /// A headless app, held alone: the external DOM bus is process-wide, so
+    /// a second app ticking on another test thread would drain the commands
+    /// this one's systems queue.
+    struct Stack {
+        ecs: EcsApp,
+        _alone: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl std::ops::Deref for Stack {
+        type Target = EcsApp;
+        fn deref(&self) -> &EcsApp {
+            &self.ecs
+        }
+    }
+
+    impl std::ops::DerefMut for Stack {
+        fn deref_mut(&mut self) -> &mut EcsApp {
+            &mut self.ecs
+        }
+    }
+
     /// The whole headless stack (input, layout, bindings, paint pipeline)
     /// for `app`, ticked until its first frame is out.
-    fn headless_stack(app: App) -> EcsApp {
+    fn headless_stack(app: App) -> Stack {
+        static ALONE: Mutex<()> = Mutex::new(());
+        let alone = ALONE.lock().unwrap_or_else(PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!(
             "lumenui_handler_frame_{}_{}",
             std::process::id(),
@@ -756,7 +779,7 @@ mod tests {
             ecs.tick();
         }
         let _ = std::fs::remove_dir_all(&dir);
-        ecs
+        Stack { ecs, _alone: alone }
     }
 
     fn entity_by_id(ecs: &mut EcsApp, id: &str) -> Entity {
@@ -928,6 +951,88 @@ mod tests {
             ecs.world.resource::<FrameDirty>().dirty,
             "the long press raised no frame"
         );
+    }
+
+    /// Write `clicks` from a system the schedule runs after the `bind-text`
+    /// reader, the order an unordered user system may land in.
+    fn late_signal_writer(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
+        let hits = clicks.read().count() as i64;
+        if hits > 0 {
+            signals.update::<i64>("clicks", |n| n + hits);
+        }
+    }
+
+    /// Edit `#clicks` from a system that runs after the DOM commands of the
+    /// tick were collected.
+    fn late_dom_editor(mut clicks: MessageReader<ClickEvent>) {
+        if clicks.read().count() > 0
+            && let Some(label) = crate::dom::Node::get_by_id("clicks")
+        {
+            label.set_text("edited");
+        }
+    }
+
+    /// Bring the loop to rest: tick while the last tick left work behind, the
+    /// way a driver that parks on events does. Returns how many ticks ran.
+    fn settle(ecs: &mut EcsApp) -> usize {
+        let mut ran = 0;
+        while lumen_core::tick::work_pending(&ecs.world) && ran < 16 {
+            ecs.world.resource_mut::<FrameDirty>().dirty = false;
+            ecs.tick();
+            ran += 1;
+        }
+        ran
+    }
+
+    /// #523: a signal written after the binding readers ran still reaches
+    /// the screen without another input: the tick that wrote it leaves work
+    /// behind, and the next one applies it and raises a frame.
+    #[test]
+    fn a_signal_written_after_the_readers_paints_without_input() {
+        let mut ecs = headless_stack(
+            App::new()
+                .add_plugins(LumenDefaultPlugins.with_markup(COUNTER))
+                .insert_signal("clicks", 0i64)
+                .add_systems(
+                    TickStage::Systems,
+                    late_signal_writer
+                        .after(ClickSet::Producers)
+                        .after(lumen_core::signals::apply_text_bindings),
+                ),
+        );
+        settle(&mut ecs);
+        click_and_tick(&mut ecs, "bump");
+        assert!(
+            lumen_core::tick::work_pending(&ecs.world),
+            "the tick that wrote the signal left nothing behind"
+        );
+        ecs.world.resource_mut::<FrameDirty>().dirty = false;
+        ecs.tick();
+        assert_eq!(text_of(&mut ecs, "clicks"), "1");
+        assert!(
+            ecs.world.resource::<FrameDirty>().dirty,
+            "the tick that applied the write raised no frame"
+        );
+        assert!(settle(&mut ecs) < 16, "the loop never came to rest");
+    }
+
+    /// #523: a DOM edit queued after the tick's DOM commands were collected
+    /// lands on the next tick, and that tick runs without another input.
+    #[test]
+    fn a_dom_edit_after_the_collector_paints_without_input() {
+        let mut ecs = headless_stack(
+            App::new()
+                .add_plugins(LumenDefaultPlugins.with_markup(COUNTER))
+                .add_systems(TickStage::LayoutSync, late_dom_editor),
+        );
+        settle(&mut ecs);
+        click_and_tick(&mut ecs, "bump");
+        assert!(
+            lumen_core::tick::work_pending(&ecs.world),
+            "the tick that queued the edit left nothing behind"
+        );
+        settle(&mut ecs);
+        assert_eq!(text_of(&mut ecs, "clicks"), "edited");
     }
 
     #[test]

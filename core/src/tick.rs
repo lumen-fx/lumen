@@ -5,7 +5,7 @@
 //! - The render schedule runs after the main schedule and the extract step; see [`crate::render_world`].
 
 use crate::plugin_events::plugin_events_pending;
-use crate::property_store::external_properties_pending;
+use crate::property_store::{PropertyStore, external_properties_pending};
 use crate::render_world::{AnimationsActive, FrameDirty};
 use crate::time::{Duration, Instant};
 use bevy_ecs::prelude::*;
@@ -67,7 +67,7 @@ impl Tick {
 /// Whether the tick that just ran left work behind, so a driver that only
 /// wakes on events has to schedule another frame.
 ///
-/// Five sources, each of which reaches `false` on its own once the system
+/// Six sources, each of which reaches `false` on its own once the system
 /// settles, so a caller that loops on this can never spin forever:
 ///
 /// 1. The external typed-property bus still holds undrained writes, from a
@@ -86,6 +86,10 @@ impl Tick {
 /// 5. A [`WakeDeadline`] requested this tick has already passed. A driver
 ///    that reaches a deadline hands its work out on the tick that follows,
 ///    so the claim settles with it.
+/// 6. The [`PropertyStore`] still holds writes past the end of the tick:
+///    ones that landed after the `bind-*` readers had read the queue, kept
+///    for the next tick's readers (see [`PropertyStore::observe_dirty`]). The
+///    next tick applies them and lets them go.
 ///
 /// This is a frame predicate, not a state predicate: an app with a permanent
 /// animation raises the third source forever. A caller that needs to know
@@ -99,6 +103,9 @@ pub fn work_pending(world: &World) -> bool {
             .is_some_and(|a| a.get())
         || world.get_resource::<FrameDirty>().is_some_and(|f| f.dirty)
         || wake_deadline(world).is_some_and(|at| at <= Instant::now())
+        || world
+            .get_resource::<PropertyStore>()
+            .is_some_and(|store| !store.dirty_peek().is_empty())
 }
 
 /// The earliest instant a driver asked for another tick at, if any.
