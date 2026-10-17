@@ -11,9 +11,10 @@ use crate::atlas::{FRAME_BUDGET, Job, keep_atlas, scene_images};
 use crate::sink::{FinishedLayer, GpuLayer};
 use crate::{NATIVE_BACKENDS, VelloPainter, vello_options};
 use bevy_ecs::world::World;
+use bevy_tasks::{ComputeTaskPool, ParallelSliceMut, TaskPool};
 use lumen_core::tick::RenderTimestamps;
 use lumen_core::traits::RenderTarget;
-use lumen_paint::pixels::TileView;
+use lumen_paint::pixels::{TILE, TileView};
 use lumen_paint::{FragmentCache, LayerCache, PaintTarget, PixelImage};
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -257,13 +258,41 @@ pub(crate) fn stamp(render_world: &mut World, mark: fn(&mut RenderTimestamps)) {
     }
 }
 
+/// `image` as contiguous straight RGBA8 rows, in `out`, which keeps its
+/// allocation from one call to the next. Each band of tile rows is copied on
+/// a worker of its own: a whole large image is tens of megabytes, and copying
+/// it on one thread is a fair part of what uploading it costs.
+fn assemble_rows(image: &PixelImage, out: &mut Vec<u8>) {
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    let stride = width * 4;
+    out.resize(stride * height, 0);
+    let tiles: Vec<TileView<'_>> = image.tiles().collect();
+    let cols = width.div_ceil(TILE as usize);
+    let band = (stride * TILE as usize).max(1);
+    let pool = ComputeTaskPool::get_or_init(TaskPool::default);
+    out.par_chunk_map_mut(pool, band, |row, rows| {
+        for tile in &tiles[row * cols..(row + 1) * cols] {
+            let len = tile.width as usize * 4;
+            for y in 0..tile.height as usize {
+                let src = &tile.pixels[y * TileView::STRIDE..][..len];
+                rows[y * stride + tile.x as usize * 4..][..len].copy_from_slice(src);
+            }
+        }
+    });
+}
+
 /// Upload the tiles of `image` whose stamps moved since `kept` last took
 /// them. Returns whether anything was written.
 ///
 /// Most of an image changing is one write of the whole image rather than one
 /// per tile: the per-call cost of a write is what dominates once the tile
-/// count is large.
-fn upload_tiles(queue: &wgpu::Queue, kept: &mut PixelTexture, image: &PixelImage) -> bool {
+/// count is large. The whole image is laid out in `scratch` first.
+fn upload_tiles(
+    queue: &wgpu::Queue,
+    kept: &mut PixelTexture,
+    image: &PixelImage,
+    scratch: &mut Vec<u8>,
+) -> bool {
     let changed = image
         .tiles()
         .filter(|tile| kept.stamps[tile.index] != tile.stamp)
@@ -298,7 +327,8 @@ fn upload_tiles(queue: &wgpu::Queue, kept: &mut PixelTexture, image: &PixelImage
         );
     };
     if changed * 2 > image.tile_count() {
-        write((0, 0), (width, height), &image.to_rgba8(), width * 4);
+        assemble_rows(image, scratch);
+        write((0, 0), (width, height), scratch, width * 4);
     } else {
         for tile in image.tiles() {
             if kept.stamps[tile.index] != tile.stamp {
@@ -353,6 +383,10 @@ pub(crate) struct GpuCore {
     /// A one-pixel target for the empty renders that age vello's atlas.
     pixel_target: Option<wgpu::TextureView>,
     frame: FrameTexture,
+    /// Where a pixel image changed all over is laid out whole before it is
+    /// uploaded, so a frame that uploads several reuses one allocation.
+    /// Emptied at the end of the frame.
+    scratch: Vec<u8>,
 }
 
 /// One pixel image's pixels on the GPU, the image vello draws it through,
@@ -419,6 +453,7 @@ impl GpuCore {
                 resident: HashMap::new(),
                 pixel_target: None,
                 frame,
+                scratch: Vec::new(),
             },
             surface,
         ))
@@ -843,10 +878,13 @@ impl GpuCore {
                 .pixels
                 .get_mut(&image.id())
                 .expect("inserted above when missing");
-            if upload_tiles(&self.queue, kept, &image) {
+            if upload_tiles(&self.queue, kept, &image, &mut self.scratch) {
                 self.vello.mark_override_image_dirty(&kept.stand_in);
             }
         }
+        // The layout of a whole image is tens of megabytes nothing needs
+        // between the frames that upload one.
+        self.scratch = Vec::new();
     }
 
     /// Drop the texture of every offscreen layer nothing holds any more: the
@@ -1037,6 +1075,21 @@ fn pack_sizes(sizes: &[(u32, u32)], max_side: u32) -> Vec<Batch> {
 mod tests {
     use super::*;
     use vello::wgpu::rwh::{HasWindowHandle, WindowHandle};
+
+    /// An image laid out for upload band by band is the image, edge tiles
+    /// and all, and the buffer is reused at whatever size it last had.
+    #[test]
+    fn an_image_laid_out_for_upload_is_its_rows() {
+        let mut image = PixelImage::new(130, 70);
+        let data: Vec<u8> = (0..130 * 70 * 4).map(|i| (i % 251) as u8).collect();
+        image.write_rgba8(0, 0, 130, 70, &data);
+        let mut out = vec![7u8; 3];
+        assemble_rows(&image, &mut out);
+        assert_eq!(out, image.to_rgba8());
+        let small = PixelImage::from_rgba8(3, 2, &[9; 24]);
+        assemble_rows(&small, &mut out);
+        assert_eq!(out, small.to_rgba8());
+    }
 
     /// Layers pack side by side on shelves, a new shelf when one is full and
     /// a new texture when the shelves reach the size limit; a layer too big

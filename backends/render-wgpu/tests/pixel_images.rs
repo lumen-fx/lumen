@@ -404,3 +404,36 @@ fn a_panned_shrunk_stack_draws_what_a_fresh_render_does() {
         .count();
     assert_eq!(wrong, 0, "{wrong} pixels differ from a fresh render");
 }
+
+/// #535: an image written all over uploads as one copy of its rows, padded
+/// to the device's row alignment; every pixel lands where it belongs, the
+/// ragged edge tiles included.
+#[test]
+fn an_image_written_all_over_uploads_every_pixel() {
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+    let (w, h) = (130u32, 70u32);
+    let data: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            [
+                (i % 251) as u8,
+                (i / 7 % 253) as u8,
+                (i % 13 * 19) as u8,
+                255,
+            ]
+        })
+        .collect();
+    let image = PixelImage::from_rgba8(w, h, &data);
+    let pixels = render(Arc::new(vec![image]), Layout::Grid, w);
+    let wrong = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let got = pixel(&pixels, w, x, y);
+            let i = ((y * w + x) * 4) as usize;
+            (0..3).any(|c| got[c] != data[i + c])
+        })
+        .count();
+    assert_eq!(wrong, 0, "{wrong} pixels differ from the image");
+}
