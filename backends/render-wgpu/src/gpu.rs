@@ -528,11 +528,28 @@ impl GpuCore {
         }
         stamp(render_world, RenderTimestamps::mark_encoded);
         self.upload_pixels();
-        self.render_offscreen()?;
+        let layered = self.render_offscreen()?;
         self.release_copies();
         if split {
+            // Aging makes room for the frame's own images among the ones
+            // earlier renders placed. A frame whose images are all already
+            // placed, because the last render drew exactly them and nothing
+            // has rendered since, has nothing to make room for: a pan over
+            // kept copies skips two renders.
+            let placed = !layered && jobs.is_empty() && {
+                let scene = self
+                    .painter
+                    .native()
+                    .downcast_ref::<VelloPainter>()
+                    .expect("the GPU renderer paints through a VelloPainter")
+                    .scene();
+                let images = scene_images(scene);
+                self.resident.keys().all(|id| images.contains_key(id))
+            };
             self.render_jobs(jobs)?;
-            self.age_atlas()?;
+            if !placed {
+                self.age_atlas()?;
+            }
         }
         keep_atlas(
             self.painter
@@ -711,8 +728,9 @@ impl GpuCore {
     /// Each render costs a full pass of vello's pipeline however little it
     /// draws, so layers share textures: those closed at the same depth pack
     /// into as few textures as fit, and each texture is one render. The
-    /// deepest go first, since a layer may draw a deeper one.
-    fn render_offscreen(&mut self) -> Result<(), String> {
+    /// deepest go first, since a layer may draw a deeper one. Returns
+    /// whether it rendered anything.
+    fn render_offscreen(&mut self) -> Result<bool, String> {
         let mut finished = self
             .painter
             .native()
@@ -720,7 +738,7 @@ impl GpuCore {
             .expect("the GPU renderer paints through a VelloPainter")
             .take_offscreen();
         if finished.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let max_side = self.device.limits().max_texture_dimension_2d;
         finished.sort_by(|a, b| {
@@ -738,7 +756,7 @@ impl GpuCore {
             }
             rest = after;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Render one packed texture of offscreen layers and point each layer's
