@@ -278,10 +278,11 @@ The tag push starts `release.yml` again, this time as the release itself:
 
    Every one of the four keeps a manual trigger in the Actions tab, so a leg that
    failed is re-run on its own rather than by cutting another release, and a
-   leg missing its credential verifies instead of uploading. The crates.io leg
-   is the exception while the workspace blocks the publish: it fails before it
-   reaches the verify, in every mode. Each of those files lists the credentials
-   it wants at the top.
+   leg missing its credential verifies instead of uploading. The `lumenc` job
+   on crates.io is the exception while the workspace blocks its publish: it
+   fails before it reaches the verify, in every mode, and leaves the Rust SDK
+   job beside it alone. Each of those files lists the credentials it wants at
+   the top.
 
    `publish.yml` and `publish-extensions.yml` both ask their registry what it
    already holds and upload only what is missing, so re-running either one is
@@ -514,73 +515,102 @@ covers every platform; it finds `liblumen` from an installed toolchain or a
 checkout at run time (`sdk/python/README.md` documents the search order).
 
 That table is the whole list. Every other crate in the workspace is
-`publish = false`, because the engine does not travel through crates.io:
+`publish = false`, because the engine does not travel through crates.io as
+source: the Rust SDK links the release's prebuilt engine, and
 `public/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
-the launcher beside the installed binary, so a `cargo install lumenc` gets the
-engine without any of its pieces being registry packages.
+the launcher beside the installed binary.
 
-Neither crates.io package goes out yet. `lumenc` names many `lumen-*` crates
-as dependencies, and cargo will not publish a crate whose dependency is not on
-the registry. Until that is unwound, `tools/release/publish-crates.py --plan`
-refuses to start and lists exactly which crates are in the way, and
-`cargo publish -p lumenc --dry-run` names the first of them. `lumenui`
-(sdk/lumenui) names no engine crate, since its build script downloads the
-release's `lumenui-engine-<target>` assets instead, so it sits outside the
-workspace and outside that script's order; nothing publishes it yet, and a
-publish of it must come after the release carrying its version's assets.
-`lumenui-canvas`, and every other `lumenui-<name>` module crate, is not in the
-tree: `tools/release/lumenui-engine.py wrappers --out DIR` generates it at the
-tree's version, and a publish uploads it from there
-(`cargo publish --manifest-path DIR/lumenui-canvas/Cargo.toml`). It depends on
-`lumenui` alone, so it publishes after `lumenui`, at the same version.
+### The Rust SDK
 
-The crates.io job fails when the plan refuses, with the list on the run
-summary. A release whose crates.io leg is red uploaded nothing to crates.io;
-the rest of that release still shipped. Once the block is cleared, re-run the
-workflow from the Actions tab and it picks up from whatever is already on the
-registry.
+`lumenui` (sdk/lumenui) names no engine crate. Its build script downloads, for
+its own version and the build's target, the release's
+`lumenui-engine-<target>` assets, so it sits outside the workspace and depends
+on nothing in it. `lumenui-canvas`, and every other `lumenui-<name>` module
+crate, is not in the tree: `tools/release/lumenui-engine.py wrappers --out DIR`
+generates one per entry in its `MODULES`, at the version of `sdk/lumenui`,
+depending on `lumenui` alone. `tools/release/bump-version.py` moves that
+version with the workspace's, so every SDK crate publishes at the release's
+version, and `lumenc new` writes the same version into a Rust app's `lumenui`
+requirement.
 
-The script computes publish order from `cargo metadata`, reports what state
-each crate is in, and publishes them one at a time:
+The `lumenui on crates.io` job in `publish.yml` publishes them, `lumenui`
+first, then each module crate. It runs after the release upload, because a
+crate whose engine set is not on the release cannot build for anyone. The
+script refuses to start when the release `v<version>` or its `sha256sums.txt`
+is missing, or when the release carries no engine set at all; a release
+missing some targets' sets still publishes, with one warning per missing
+asset on the run. Re-running that target's build leg and the release upload
+fills the gap for the version already on crates.io, since the crates are the
+same for every target.
+
+Verifying a crate builds it, and building `lumenui` downloads the engine set,
+so the job verifies only a released version. A `workflow_dispatch` run on
+`main`, whose version is not released yet, refuses at the plan step. The
+check for an unreleased version is in `lumenui-engine.yml`: its Linux x86_64
+leg runs the same dry run against the set it has just built. On a checkout:
 
 ```sh
-tools/release/publish-crates.py --plan      # order and per-crate state
-tools/release/publish-crates.py --dry-run   # package and verify, upload nothing
-tools/release/publish-crates.py --execute   # publish, needs CARGO_REGISTRY_TOKEN
+LUMEN_ENGINE_ARTIFACTS=<unpacked set> tools/release/publish-crates.py --sdk --dry-run
+```
+
+A module crate's dry run builds against the checkout's `lumenui` while that
+version is not on the registry.
+
+### lumenc
+
+`lumenc` does not go out yet. It names many `lumen-*` crates as dependencies,
+and cargo will not publish a crate whose dependency is not on the registry.
+Until that is unwound, `tools/release/publish-crates.py --plan` refuses to
+start and lists exactly which crates are in the way, and
+`cargo publish -p lumenc --dry-run` names the first of them.
+
+The `lumenc on crates.io` job fails when the plan refuses, with the list on the
+run summary. It runs after the SDK job whatever that job's result, so a red
+`lumenc` job leaves the SDK published. A release whose `lumenc` job is red
+uploaded no workspace crate; the rest of that release still shipped. Once the
+block is cleared, re-run the workflow from the Actions tab and it picks up
+from whatever is already on the registry.
+
+### The publish script
+
+The script computes publish order from the crates' manifests, reports what
+state each crate is in, and publishes them one at a time:
+
+```sh
+tools/release/publish-crates.py --sdk --plan      # the Rust SDK set
+tools/release/publish-crates.py --sdk --dry-run
+tools/release/publish-crates.py --sdk --execute   # needs CARGO_REGISTRY_TOKEN
+tools/release/publish-crates.py --plan            # the lumenc set
+tools/release/publish-crates.py --dry-run
+tools/release/publish-crates.py --execute         # needs CARGO_REGISTRY_TOKEN
 ```
 
 It skips versions already on the registry, so a run interrupted halfway is
 resumed by running it again. crates.io meters publishing (a burst of new
 crates, then a slower drip), and the script waits out those intervals rather
-than failing on them, which is why a first publish of the whole set takes
-hours while a later release takes minutes.
+than failing on them, which is why a first publish of a large set takes hours
+while a later release takes minutes.
 
-Three things it refuses to start on, all worth knowing before a release:
+What it refuses to start on, all worth knowing before a release:
 
-- A crate the published set depends on that is `publish = false`. The
-  workspace is in that state today; the paragraphs above describe it.
+- A crate the published set depends on that is `publish = false`. The `lumenc`
+  set is in that state today; the section above describes it.
+- A crate whose version is not the workspace version.
 - A crate name on crates.io that belongs to another project. The script
   compares the `repository` field of an existing crate against this one.
 - A dependency taken from git with no version. crates.io accepts no such
   dependency, so the crate carrying it, and everything above it, cannot be
-  published. `lumen-candela` and `lumen-candela-dev` are in that state until
-  candela publishes.
+  published.
+- For the SDK set, a release that is not published, or carries no engine set.
 
-Each of those exits 2 and takes the crates.io job red with it. A publish that
-starts and then fails partway exits 1, and the crates before the failure are
-already on the registry.
+Each of those exits 2 and takes its job red with it. A publish that starts and
+then fails partway exits 1, and the crates before the failure are already on
+the registry.
 
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
-`.github/workflows/publish.yml`. Without its credential the PyPI leg builds and
-checks the artifacts and uploads nothing, which is not a failure.
-
-The crates.io leg is red either way today. Its plan step runs before the verify
-and before the publish, in every mode, and it refuses while the crates the
-published set depends on are unpublishable; the steps after it are skipped. So
-running the workflow with `dry_run: true` to check that every crate packages
-tells you nothing yet. Run `tools/release/publish-crates.py --dry-run` on a
-checkout instead. Clearing the block is what lets the workflow verify anything.
+`.github/workflows/publish.yml`. Without its credential a leg verifies and
+uploads nothing, which is not a failure.
 
 The PyPI leg needs one thing settled before `PYPI_PUBLISH_ENABLED` is turned
 on. A trusted publisher is registered against a workflow filename, and PyPI

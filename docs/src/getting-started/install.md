@@ -202,6 +202,9 @@ standard library from it, putting all three beside the installed `lumenc` so
 running and packaging an app work the same as they do from a release. Expect it
 to take a while: it is compiling the engine.
 
+`lumenc` is not on crates.io yet: it depends on engine crates that are not
+published, so this command fails until that changes.
+
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
 [template repository](templates.md) you were going to scaffold from. The same
