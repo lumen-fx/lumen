@@ -422,6 +422,7 @@ mod tests {
                 key: Key::Named(key),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 

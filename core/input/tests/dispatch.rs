@@ -181,6 +181,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
             key: Key::Named(NamedKey::Tab),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     assert!(
@@ -196,6 +197,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
             key: Key::Named(NamedKey::Tab),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     assert!(app.world.get::<Focused>(b).is_some());
@@ -211,6 +213,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
                 ..Modifiers::default()
             },
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     app.tick();
     assert!(app.world.get::<Focused>(a).is_some());
@@ -242,6 +245,7 @@ fn tab_cycle_with_equal_tabindex_follows_document_order_not_entity_order() {
                     ..Modifiers::default()
                 },
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     };
 
@@ -309,6 +313,7 @@ fn write_key(world: &mut World, key: Key, ctrl: bool, shift: bool) {
             key,
             modifiers,
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
 }
 
@@ -498,6 +503,7 @@ fn tab_cycle_skips_disabled_entities() {
                 key: Key::Named(NamedKey::Tab),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
         app.tick();
     };

@@ -176,6 +176,7 @@ impl Harness {
             key: Key::Character(ch.to_string()),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
     }
 }

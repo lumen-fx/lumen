@@ -917,6 +917,7 @@ mod tests {
             key: Key::Named(NamedKey::Enter),
             modifiers: Modifiers::default(),
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
         ecs.tick();
         assert_eq!(

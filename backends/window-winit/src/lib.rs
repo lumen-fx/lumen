@@ -931,6 +931,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                         delta: v,
                         position: pos,
                         local: None,
+                        time_stamp: lumen_core::time::Instant::now(),
                     });
                 }
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
@@ -953,6 +954,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                                     key,
                                     modifiers: mods,
                                     repeat: event.repeat,
+                                    time_stamp: lumen_core::time::Instant::now(),
                                 });
                             }
                         }
@@ -963,6 +965,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                                 msgs.write(KeyReleased {
                                     key,
                                     modifiers: mods,
+                                    time_stamp: lumen_core::time::Instant::now(),
                                 });
                             }
                         }
@@ -1735,6 +1738,8 @@ fn present_frame(
             Ok(()) => emit_first_frame_marker(),
             Err(e) => eprintln!("lumen-window-winit: render failed: {e}"),
         }
+        // The present happened after the tick recorded its timing; add it.
+        app.record_render_reports();
     }
     // `FrameDirty` is consumed whichever branch ran: an empty-damage dirty flag
     // has been fully accounted for (no visible change this tick), and leaving it

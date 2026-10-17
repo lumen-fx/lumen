@@ -49,11 +49,12 @@ use lumen_core::input::{
     Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind, PointerLeft,
     PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
 };
+use lumen_core::time::Instant;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{AddEventListenerOptions, Document, Event, MouseEvent, PointerEvent, WheelEvent};
 
-use crate::events::{Hit, hit_of, origin_of};
+use crate::events::{Hit, event_time, hit_of, origin_of};
 use crate::nodes::NodeTable;
 
 /// One thing the pointer did, waiting for the next tick.
@@ -102,6 +103,8 @@ enum PointerInput {
         position: Vec2,
         /// Scroll distance in pixels, positive down and right.
         delta: Vec2,
+        /// When the browser saw it.
+        time_stamp: Instant,
     },
     /// The browser took the gesture over (a touch that became a scroll).
     /// No `pointerup` follows.
@@ -174,7 +177,10 @@ fn pointer_of(event: &Event) -> PointerData {
     };
     let buttons = u32::from(mouse.buttons());
     let Some(p) = event.dyn_ref::<PointerEvent>() else {
-        return PointerData::mouse(buttons);
+        return PointerData {
+            time_stamp: event_time(event),
+            ..PointerData::mouse(buttons)
+        };
     };
     PointerData {
         id: u64::try_from(p.pointer_id()).unwrap_or(PointerData::MOUSE_ID),
@@ -190,6 +196,7 @@ fn pointer_of(event: &Event) -> PointerData {
         width: p.width() as f32,
         height: p.height() as f32,
         order: 0,
+        time_stamp: event_time(event),
     }
 }
 
@@ -292,6 +299,7 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
                 hit: hit_of(&event),
                 position: position_of(wheel),
                 delta: wheel_delta(wheel),
+                time_stamp: event_time(&event),
             });
         }
     })?;
@@ -529,7 +537,10 @@ pub fn drain_pointer_events(
                 writers.left.write(PointerLeft);
             }
             PointerInput::Wheel {
-                position, delta, ..
+                position,
+                delta,
+                time_stamp,
+                ..
             } => {
                 aimed = Some(target);
                 state.position = Some(position);
@@ -537,6 +548,7 @@ pub fn drain_pointer_events(
                     delta,
                     position,
                     local: local(position),
+                    time_stamp,
                 });
             }
             PointerInput::Left => {
@@ -657,6 +669,13 @@ mod tests {
         );
     }
 
+    /// One pointer reading, the same every call: the queue compares events
+    /// whole, time stamp included.
+    fn mouse() -> PointerData {
+        static MOUSE: std::sync::OnceLock<PointerData> = std::sync::OnceLock::new();
+        *MOUSE.get_or_init(PointerData::default)
+    }
+
     fn moved(x: f32) -> PointerInput {
         PointerInput::Move {
             hit: Some(crate::events::Hit {
@@ -664,7 +683,7 @@ mod tests {
                 origin: Vec2::ZERO,
             }),
             position: Vec2::new(x, 0.0),
-            pointer: PointerData::default(),
+            pointer: mouse(),
         }
     }
 
@@ -686,7 +705,7 @@ mod tests {
             hit: None,
             position: Vec2::ZERO,
             button: PointerButton::Primary,
-            pointer: PointerData::default(),
+            pointer: mouse(),
         };
         push(&mut queue, moved(1.0));
         push(&mut queue, down.clone());
@@ -715,7 +734,7 @@ mod tests {
             pointer: PointerData {
                 id,
                 kind: lumen_core::input::PointerKind::Touch,
-                ..PointerData::default()
+                ..mouse()
             },
         };
         let mut queue = Vec::new();

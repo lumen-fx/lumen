@@ -155,6 +155,7 @@ mod pipeline_integration_tests {
                     key: Key::Character("m".into()),
                     modifiers: Modifiers::default(),
                     repeat: false,
+                    time_stamp: lumen_core::time::Instant::now(),
                 });
         }
         app.tick();
@@ -1064,6 +1065,7 @@ mod virtualization_tests {
                 delta: glam::Vec2::new(0.0, dy),
                 position: glam::Vec2::new(400.0, 300.0),
                 local: None,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 

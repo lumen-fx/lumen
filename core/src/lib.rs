@@ -120,7 +120,7 @@ pub mod prelude {
         Affinity, Bias, ImePreedit, MarkId, TagKind, TextBuffer, TextBufferKind, TextCursor,
         TextEditable, TextMark, TextPos, TextTagRange,
     };
-    pub use crate::tick::{Tick, TickStage, WakeDeadline};
+    pub use crate::tick::{FrameTiming, RenderTimestamps, Tick, TickStage, WakeDeadline};
     pub use crate::traits::{
         A11yBackend, A11yBridgeFactory, Bindable, FrameRequest, FrameTarget, LayoutEngine,
         RenderError, RenderTarget, Renderer, Spawn, Timer, WindowBackend, WindowError,

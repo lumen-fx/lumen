@@ -3256,6 +3256,7 @@ mod escape_tests {
                 key: Key::Named(NamedKey::Escape),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 
@@ -3586,6 +3587,7 @@ mod dialog_contract_tests {
                 key: Key::Named(NamedKey::Enter),
                 modifiers: Modifiers::default(),
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 

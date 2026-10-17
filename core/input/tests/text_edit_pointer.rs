@@ -120,6 +120,7 @@ fn write_key_mods(app: &mut App, key: Key, modifiers: Modifiers) {
             key,
             modifiers,
             repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
         });
 }
 

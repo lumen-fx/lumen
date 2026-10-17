@@ -749,6 +749,7 @@ mod tests {
                 key,
                 modifiers,
                 repeat: false,
+                time_stamp: lumen_core::time::Instant::now(),
             });
     }
 

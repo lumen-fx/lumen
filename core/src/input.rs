@@ -3,6 +3,7 @@
 //! - Window backends translate raw OS events into the typed messages defined here.
 //! - `lumen-input` reads them to drive hit-testing, focus routing, and Click/Hover dispatch.
 
+use crate::time::Instant;
 use bevy_ecs::message::Message;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
@@ -139,6 +140,12 @@ pub struct PointerData {
     /// sets it with [`PointerData::stamped`]; `0` leaves the reader's own
     /// order.
     pub order: u64,
+    /// When the event happened: the web's `timeStamp`. A backend that is
+    /// told when the platform saw it passes that on; one that is not stamps
+    /// the moment it received it. Subtracting it from the
+    /// [`crate::tick::FrameTiming`] of the frame that showed its effect gives
+    /// the input-to-screen latency.
+    pub time_stamp: Instant,
 }
 
 /// The next [`PointerData::order`] stamp.
@@ -163,6 +170,7 @@ impl PointerData {
             width: 1.0,
             height: 1.0,
             order: 0,
+            time_stamp: Instant::now(),
         }
     }
 
@@ -317,6 +325,8 @@ pub struct MouseWheel {
     /// `None` leaves it to Lumen's own layout, which is what a native window
     /// backend does.
     pub local: Option<Vec2>,
+    /// When the event happened (see [`PointerData::time_stamp`]).
+    pub time_stamp: Instant,
 }
 
 /// Axis (or axes) a scroll container responds to. Used by `lumen-input` for scroll-aware hit-testing and by `lumen-primitives` for the accumulator and extract.
@@ -1251,6 +1261,8 @@ pub struct KeyPressed {
     pub modifiers: Modifiers,
     /// Whether this is an OS-generated key repeat (held key).
     pub repeat: bool,
+    /// When the event happened (see [`PointerData::time_stamp`]).
+    pub time_stamp: Instant,
 }
 
 /// Raw global key-release event.
@@ -1260,6 +1272,8 @@ pub struct KeyReleased {
     pub key: Key,
     /// Modifier state at time of release.
     pub modifiers: Modifiers,
+    /// When the event happened (see [`PointerData::time_stamp`]).
+    pub time_stamp: Instant,
 }
 
 /// Marker placed by `lumen-input`'s focus router on the keyboard-focused entity. The router maintains at most one [`Focused`] at a time.

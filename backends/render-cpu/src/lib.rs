@@ -185,7 +185,9 @@ impl Renderer for CpuRenderer {
             None,
             Some(&mut self.layers),
         );
+        stamp(render_world, RenderTimestamps::mark_encoded);
         cpu_painter(&mut self.painter).render_into(&mut self.pixmap);
+        stamp(render_world, RenderTimestamps::mark_submitted);
         self.holds_frame = true;
         self.render_count += 1;
         let pixmap = &self.pixmap;
@@ -193,7 +195,11 @@ impl Renderer for CpuRenderer {
             Ok(straight_rgba8(pixmap))
         });
         match target {
-            Target::Window(presenter) => presenter.present(pixmap),
+            Target::Window(presenter) => {
+                presenter.present(pixmap)?;
+                stamp(render_world, RenderTimestamps::mark_presented);
+                Ok(())
+            }
             Target::Offscreen => Ok(()),
         }
     }
@@ -298,6 +304,14 @@ impl From<CpuRenderer> for CpuRendererPlugin {
 impl Plugin for CpuRendererPlugin {
     fn build(self, app: &mut App) {
         install_offscreen(app, self.renderer);
+    }
+}
+
+/// Stamp one of the frame's [`RenderTimestamps`], when the render world keeps
+/// them.
+fn stamp(render_world: &mut World, mark: fn(&mut RenderTimestamps)) {
+    if let Some(mut stamps) = render_world.get_resource_mut::<RenderTimestamps>() {
+        mark(&mut stamps);
     }
 }
 

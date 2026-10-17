@@ -146,7 +146,23 @@ enum PendingEvent {
         modifiers: Modifiers,
         /// `KeyboardEvent.repeat`: the OS repeating a held key.
         repeat: bool,
+        /// When the browser saw it.
+        time_stamp: lumen_core::time::Instant,
     },
+}
+
+/// When the browser saw `event`, as an instant on the engine's clock: the
+/// event's `timeStamp` and the clock both count from the page's time origin,
+/// so the event's age is how far the one trails the other.
+pub(crate) fn event_time(event: &Event) -> lumen_core::time::Instant {
+    let now = lumen_core::time::Instant::now();
+    let age_ms = web_sys::window()
+        .and_then(|w| w.performance())
+        .map_or(0.0, |p| p.now() - event.time_stamp());
+    now.checked_sub(lumen_core::time::Duration::from_secs_f64(
+        age_ms.max(0.0) / 1000.0,
+    ))
+    .unwrap_or(now)
 }
 
 thread_local! {
@@ -1196,6 +1212,7 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                         key,
                         modifiers,
                         repeat: event.repeat(),
+                        time_stamp: event_time(event),
                     });
                 }) as Box<dyn FnMut(Event)>),
             )?;
@@ -1474,6 +1491,7 @@ pub fn drain_dom_events(
                 key,
                 modifiers,
                 repeat,
+                time_stamp,
             } => {
                 modifiers_state.0 = modifiers;
                 if down {
@@ -1481,9 +1499,14 @@ pub fn drain_dom_events(
                         key,
                         modifiers,
                         repeat,
+                        time_stamp,
                     });
                 } else {
-                    releases.write(KeyReleased { key, modifiers });
+                    releases.write(KeyReleased {
+                        key,
+                        modifiers,
+                        time_stamp,
+                    });
                 }
             }
         }
