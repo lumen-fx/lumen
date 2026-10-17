@@ -103,36 +103,13 @@ impl Plugin for TabsPlugin {
             TickStage::Systems,
             crate::popup::dismiss_popups_on_outside_press.after(lumen_input::dispatch_clicks),
         );
-        // Viewport edge-flip: anchor open dropdown panels below their
-        // trigger, flipping above near the viewport bottom.
-        app.add_systems(TickStage::Systems, crate::popup::flip_open_dropdown_panels);
-        // A menu opened at a point (`open_menu_at`, a context menu) sits on
-        // that point, moved inward at the window edges.
+        // Placing an open panel against the layout and the in-window menu
+        // bar are a window's: `ControlsPlugin` registers them.
         //
-        // These and the systems below run only in a document that has the
-        // element they serve, so an app without one pays a condition check
-        // for them and no system run.
-        app.add_systems(
-            TickStage::Systems,
-            crate::popup::place_menus_at_points
-                .run_if(any_with_component::<crate::popup::PopupPanel>),
-        );
-        // The in-window menu bar: hovering another bar button while one of
-        // its menus is open switches to that menu, and an item's `accel`
-        // activates it. The runtime marks a bar it mounted with
-        // `ReservedEdge::Top`, and fills the shortcut table only then.
-        app.world
-            .init_resource::<crate::menubar::MenuAccelerators>();
-        app.add_systems(
-            TickStage::Systems,
-            (
-                crate::menubar::switch_menubar_menus_on_hover.after(lumen_input::hit_test),
-                crate::menubar::dispatch_menu_accelerators,
-            )
-                .run_if(any_with_component::<crate::reserve::ReservedEdge>),
-        );
         // A color field's `bind-value`, on every target: a page's browser
-        // picks the color, and the signal still has to follow it.
+        // picks the color, and the signal still has to follow it. It runs
+        // only in a document that has one, so an app without one pays a
+        // condition check for it and no system run.
         app.add_systems(
             TickStage::Systems,
             crate::color::sync_color_bindings

@@ -442,6 +442,39 @@ mod tests {
         lumen_core::i18n::clear_translator();
     }
 
+    /// The in-window menu bar is one the desktop runtime mounts, and popup
+    /// placement reads a layout the page does not run; a browser lays out its
+    /// own panels and a page's `<menubar>` never becomes that bar.
+    #[test]
+    fn the_page_leaves_the_window_menu_bar_and_popup_placement_out() {
+        let mut app = portable_app();
+        app.tick();
+        assert!(
+            !app.world
+                .contains_resource::<lumen_primitives::MenuAccelerators>()
+        );
+        let systems: Vec<String> = app
+            .world
+            .resource::<Schedules>()
+            .get(Tick)
+            .expect("the tick schedule")
+            .systems()
+            .expect("an initialized schedule")
+            .map(|(_, system)| system.name().to_string())
+            .collect();
+        for window_only in [
+            "switch_menubar_menus_on_hover",
+            "dispatch_menu_accelerators",
+            "flip_open_dropdown_panels",
+            "place_menus_at_points",
+        ] {
+            assert!(
+                !systems.iter().any(|name| name.ends_with(window_only)),
+                "{window_only} is in the page's tick"
+            );
+        }
+    }
+
     #[test]
     fn a_locale_that_is_no_tag_is_reported() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
