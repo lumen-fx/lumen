@@ -17,7 +17,11 @@ name: lumenui-engine
 # not in the checkout: lumenui-engine.py `wrappers` generates them here, and
 # each one's smoke app, on `lumenui` and that crate alone, gets the same
 # proof. The Linux x86_64 leg also packages and verifies every crate
-# publish.yml uploads, against its set, without uploading.
+# publish.yml uploads, against its set, without uploading. Last, the `rust`
+# template `lumenc new` scaffolds gets the proof too, plus its own `cargo
+# test`: the template is a repository of its own, and its `lumenui`
+# requirement names a version crates.io does not have until the release
+# publishes it, so this is the one place it builds before a user meets it.
 #
 # Every leg builds natively for its own target. The set carries proc-macro
 # libraries, which run inside the compiler, so a set is only usable on a
@@ -51,6 +55,11 @@ on:
       - core/widget-macros/**
       - tools/release/lumenui-engine.py
       - tools/release/publish-crates.py
+      # What scaffolds the rust template: the gallery, the manifest and
+      # toolchain pin it writes, and the download of the template's tree.
+      - public/lumenc/src/cli/scaffold.rs
+      - public/lumenc/build.rs
+      - tools/fetch-templates.sh
       - rust-toolchain.toml
       - .github/workflows/lumenui-engine.yml
   workflow_dispatch:
@@ -275,6 +284,71 @@ jobs:
         env:
           LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
         run: python tools/release/publish-crates.py --sdk --dry-run
+
+      # The `rust` template, the way a user starts a Rust app: downloaded as
+      # a release would package it, scaffolded by this checkout's `lumenc
+      # new` (which names the package, sets the `lumenui` version and writes
+      # rust-toolchain.toml), outside the checkout. The scaffold asks for
+      # `lumenui` at this checkout's version on crates.io, which has none of
+      # it before the release, so `[patch.crates-io]` points that crate, and
+      # any `lumenui-<name>` wrapper the template adds, at this checkout's
+      # copy. Only `lumenc new` is needed, so lumenc is built as the thin
+      # compiler, without the runtime and so without the engine.
+      - name: Scaffold the rust template
+        run: |
+          set -euo pipefail
+          tools/fetch-templates.sh "$RUNNER_TEMP/templates"
+          cargo build -p lumenc --no-default-features --features runtime-parse --bin lumenc
+          lumenc="$GITHUB_WORKSPACE/target/debug/lumenc"
+          if [ "$RUNNER_OS" = Windows ]; then lumenc="$lumenc.exe"; fi
+          rm -rf "$RUNNER_TEMP/rust-app"
+          (cd "$RUNNER_TEMP" && LUMEN_TEMPLATES_DIR="$RUNNER_TEMP/templates" "$lumenc" new rust-app rust)
+          python - "$RUNNER_TEMP/rust-app" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/lumenui-sdk" <<'PY'
+          import pathlib, sys, tomllib
+          app, repo, sdk = (pathlib.Path(a) for a in sys.argv[1:])
+          manifest = app / "Cargo.toml"
+          deps = tomllib.loads(manifest.read_text()).get("dependencies", {})
+          if "lumenui" not in deps:
+              sys.exit(f"{manifest} does not depend on lumenui")
+          patch = {"lumenui": repo / "sdk" / "lumenui"}
+          for name in deps:
+              if name.startswith("lumenui-"):
+                  if not (sdk / name).is_dir():
+                      sys.exit(f"{manifest} depends on {name}, which `wrappers` did not generate")
+                  patch[name] = sdk / name
+          lines = "".join(f'{n} = {{ path = "{p.as_posix()}" }}\n' for n, p in patch.items())
+          manifest.write_text(manifest.read_text() + f"\n[patch.crates-io]\n{lines}")
+          PY
+          cat "$RUNNER_TEMP/rust-app/Cargo.toml" "$RUNNER_TEMP/rust-app/rust-toolchain.toml"
+
+      - name: Build the rust template against the set
+        working-directory: ${{ runner.temp }}/rust-app
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo build -v 2>&1 | tee "$RUNNER_TEMP/rust-app-build.log"
+
+      - name: Check that no engine crate compiled for the rust template
+        run: >-
+          python tools/release/lumenui-engine.py check
+          --app "$RUNNER_TEMP/rust-app"
+          --log "$RUNNER_TEMP/rust-app-build.log"
+
+      # The template's own test renders the app with no window and checks the
+      # frame. The run after it is what `lumenc run . --headless` hands a Rust
+      # app: the same executable, told through the environment to run a fixed
+      # number of ticks with no window.
+      - name: Test and run the rust template headless
+        working-directory: ${{ runner.temp }}/rust-app
+        env:
+          LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo test
+          exe=target/debug/rust-app
+          if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
+          LUMEN_HEADLESS=1 LUMEN_HEADLESS_TICKS=60 "./$exe"
 
       - uses: actions/upload-artifact@v4
         with:

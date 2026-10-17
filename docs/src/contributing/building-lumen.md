@@ -482,6 +482,15 @@ turns it away. These cases run on Linux, since the set of lines a clean run
 prints is what makes the check sharp and that set is per environment; the app
 sources are the same everywhere.
 
+A template that scaffolds a Cargo project, the `rust` one, is scaffolded but
+not run there: its `lumenui` dependency names this checkout's version, which
+crates.io does not have yet, and the crate links a prebuilt engine the suite
+does not build. `.github/workflows/lumenui-engine.yml` builds that engine on
+each operating system and proves the template against it: the checkout's
+`lumenc new` scaffolds it, `[patch.crates-io]` points `lumenui` at
+`sdk/lumenui`, and the app builds without compiling any engine crate, passes
+its own `cargo test`, and runs headless.
+
 Three families of test skip themselves rather than fail when the machine cannot
 support them, printing the reason:
 
