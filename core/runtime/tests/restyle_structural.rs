@@ -199,3 +199,21 @@ fn computed_style_reports_the_same_match() {
     assert_eq!(read("c1").as_deref(), Some("#ffffff"));
     assert_eq!(read("c3").as_deref(), Some("#ff0000"));
 }
+
+/// #539: a tree edit restyles the element whose children changed, which is
+/// what reaches the siblings whose place among them moved.
+#[test]
+fn removing_the_last_child_makes_the_one_before_it_last() {
+    let mut h = Harness::three_cells(vec![
+        rule(".cell", &[("bg", "#ffffff")], 0),
+        rule(".cell:last-child", &[("bg", "#ff0000")], 1),
+    ]);
+    assert!(near(h.fill("c2"), "#ffffff"));
+    let c3 = node_query::run_get_by_id("c3").expect("c3");
+    node_query::push_external_dom_command(lumen_script::ScriptCommand::RemoveNode { node: c3 });
+    for _ in 0..3 {
+        h.app.tick();
+    }
+    assert!(near(h.fill("c2"), "#ff0000"), "c2 is the last child now");
+    assert!(near(h.fill("c1"), "#ffffff"));
+}

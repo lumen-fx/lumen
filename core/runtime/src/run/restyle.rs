@@ -466,10 +466,11 @@ pub(crate) fn detect_media_change(world: &mut World) {
 /// style components from scratch.
 ///
 /// Two triggers. A bump of [`StyleVersion`] (a theme, a breakpoint, a root
-/// class, a tree edit) restyles every element of the document. An element
-/// marked [`StyleDirty`] (its own classes, id, inline style or disabled
-/// state changed) restyles itself and everything under it, which is every
-/// element whose styles such a change can reach. A steady tick costs one
+/// class) restyles every element of the document. An element marked
+/// [`StyleDirty`] (its own classes, id, inline style or disabled state
+/// changed, or a tree edit changed its children) restyles itself and
+/// everything under it, which is every element whose styles such a change
+/// can reach. A steady tick costs one
 /// integer compare and one empty query.
 ///
 /// Each element is resolved the way the first cascade resolved it, through
