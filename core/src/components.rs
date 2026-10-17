@@ -2289,7 +2289,10 @@ pub struct LumenTag(pub std::sync::Arc<str>);
 /// Marker excluding an entity from the scripting DOM index: selectors never
 /// match it, and it can never become the document root scripts resolve.
 /// Attach to tooling subtrees that live in the app's world but are not part
-/// of the app's document - the devtools panel stamps it across its overlay.
+/// of the app's document - the devtools panel stamps it across its overlay -
+/// and to runtime popups placed in the document only to be styled, such as
+/// an open tooltip: the cascade styles those, but they count as nobody's
+/// sibling for structural selectors.
 /// Without it, a tooling root spawned before the app's sorts first among the
 /// index roots and script-built content lands under the wrong tree.
 #[derive(Component, Clone, Copy, Debug, Default)]
