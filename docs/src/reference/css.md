@@ -320,6 +320,48 @@ An image replaces the colour: `bg` holds one value, so set the colour on a
 parent if you want one showing through transparent pixels. An `<image>`
 element ignores a `bg` image; its `src` is its one source.
 
+### Masks
+
+`mask-image` paints an element, its border and everything inside it through
+the alpha of an image: where the image is opaque the element shows, where
+it is transparent nothing of it does. Paired with `bg`, it colors an icon
+with any color, gradient, or theme token, so one icon file serves every
+theme:
+
+```css
+.tool-icon {
+  width: 20px;
+  height: 20px;
+  bg: var(--text);
+  mask-image: url("icons/pencil.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+.tool.active .tool-icon { bg: var(--on-accent); }
+```
+
+The image is a raster image or an SVG, named with `url()` and resolved and
+loaded the way a `bg` image is. It is laid out in the element's border box
+and nothing of the element shows outside that box. Until the image has
+loaded, or when it fails to load, nothing of the element shows, as on the
+web.
+
+- `mask-size`: `contain`, `cover`, or a width and an optional height, each
+  a length, a percentage of the box, or `auto` (one `auto` keeps the image's
+  proportions; the default `auto` is the image's own size).
+- `mask-repeat`: `repeat` (the default), `no-repeat`, `repeat-x`,
+  `repeat-y`, or one of `repeat` / `no-repeat` per axis.
+- `mask-position`: one or two of `left`, `center`, `right`, `top`,
+  `bottom`, a length, or a percentage; the default is the top-left corner.
+
+The masks are a subset of the web's: one image layer, used through its
+alpha. Lumen has no `mask` shorthand, gradients as mask images, several
+layers, `mask-mode`, `mask-origin`, `mask-clip`, `mask-composite`, the
+`space` and `round` repeats, edge offsets such as `right 4px top 2px` in
+`mask-position`, or the `-webkit-mask-*` spellings. A web build writes the
+same four properties, which every current browser reads.
+
 ### Shadows
 
 ```text
@@ -479,6 +521,10 @@ integer are clamped with a warning.
 | `shadow`, `box-shadow` | shadow list | none |
 | `fit`, `object-fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | `fill`; `<image>` only |
 | `image-rendering` | `auto`, `smooth`, `pixelated`, `crisp-edges` | `auto` |
+| `mask-image` | `none` or one `url()` image; see [masks](#masks) | `none` |
+| `mask-size` | `contain`, `cover`, or 1 to 2 lengths, percentages, or `auto` | `auto` |
+| `mask-repeat` | `repeat`, `no-repeat`, `repeat-x`, `repeat-y`, or 2 of `repeat` / `no-repeat` | `repeat` |
+| `mask-position` | 1 to 2 keywords, lengths, or percentages | `0% 0%` |
 | `disabled-opacity` | number, clamped to 0..1 | `0.5` |
 | `knob-color` | color | built-in knob fill |
 | `knob-inset` | number | `4` |

@@ -45,7 +45,7 @@
 use crate::components::{Color, ImageBlob, SvgPayload};
 use crate::native::ExtractedNative;
 use crate::render_world::{
-    BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage,
+    BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedMaskGroup,
     ExtractedOpacityGroup, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
     ExtractedText, PaintOrder, Rect,
 };
@@ -191,6 +191,20 @@ pub enum Node {
         /// such identity, which paints its layer afresh every frame.
         key: Option<u64>,
     },
+    /// CSS mask: the child subtree paints through the alpha of what `mask` paints, inside `region`
+    /// and nowhere outside it. An empty `mask` lets nothing of the child through. Authored from
+    /// [`ExtractedMaskGroup`].
+    ///
+    /// Maps to `gtk_snapshot_push_mask` -> `GskMaskNode` (alpha mode) / a `QQuickItem` layer with
+    /// an `OpacityMask` effect.
+    Mask {
+        /// The masked element's border box in window coordinates; nothing paints outside it.
+        region: Rect,
+        /// What the mask paints: the mask image's tiles.
+        mask: Arc<Node>,
+        /// Child subtree.
+        child: Arc<Node>,
+    },
     /// Clip region pushed onto the back-end's clip stack. Descendants are masked to `shape`. Wraps a single
     /// child subtree.
     ///
@@ -335,6 +349,7 @@ impl std::fmt::Debug for Node {
             }
             Node::Opacity { alpha, .. } => f.debug_struct("Opacity").field("alpha", alpha).finish(),
             Node::Clip { shape, .. } => f.debug_struct("Clip").field("shape", shape).finish(),
+            Node::Mask { region, .. } => f.debug_struct("Mask").field("region", region).finish(),
             Node::Rect { bounds, corner, .. } => f
                 .debug_struct("Rect")
                 .field("bounds", bounds)
@@ -585,12 +600,14 @@ fn scrollbar_key(order: PaintOrder) -> EntryOrder {
 }
 
 /// What a bracketed range of leaves is wrapped in.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Bracket {
     /// A [`Node::Clip`].
     Clip(ClipShape),
     /// A [`Node::Opacity`] group.
     Opacity(f32, u64),
+    /// A [`Node::Mask`]: the region and what the mask paints.
+    Mask(Rect, Arc<Node>),
 }
 
 impl Bracket {
@@ -602,6 +619,11 @@ impl Bracket {
                 alpha,
                 child,
                 key: Some(key),
+            },
+            Bracket::Mask(region, mask) => Node::Mask {
+                region,
+                mask,
+                child,
             },
         })
     }
@@ -629,6 +651,7 @@ pub fn transform_extracted_to_nodes(
     natives: bevy_ecs::system::Query<(bevy_ecs::entity::Entity, &ExtractedNative)>,
     clips: bevy_ecs::system::Query<&ExtractedClipBox>,
     groups: bevy_ecs::system::Query<&ExtractedOpacityGroup>,
+    masks: bevy_ecs::system::Query<&ExtractedMaskGroup>,
     scrollbars: bevy_ecs::system::Query<&ExtractedScrollbar>,
 ) {
     // Park the prior frame's root in PreviousScene so the walker / damage diff can compare ptr-equal subtrees.
@@ -754,6 +777,13 @@ pub fn transform_extracted_to_nodes(
                 Bracket::Opacity(g.alpha, g.key),
             )
         }))
+        .chain(masks.iter().map(|m| {
+            (
+                leaf_key(m.start_order),
+                leaf_key(m.end_order),
+                Bracket::Mask(m.region, m.mask.clone()),
+            )
+        }))
         .collect();
     ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
 
@@ -795,7 +825,7 @@ pub fn transform_extracted_to_nodes(
         flush_open(&mut open, &mut roots, key);
         // Open any new ranges that start at/before this leaf.
         while next_range < ranges.len() && ranges[next_range].0 <= key {
-            let (_, end, bracket) = ranges[next_range];
+            let (_, end, bracket) = ranges[next_range].clone();
             next_range += 1;
             // A range that already ended holds no leaf of its own: an empty
             // container clips or fades nothing. Opening it here would wrap this
