@@ -6,7 +6,8 @@ use lumen_candela_dev::CandelaHost;
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_core::prelude::{Entity, World};
 use lumen_script::introspect::{
-    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, publish_introspection,
+    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, publish_frame_info,
+    publish_introspection,
 };
 use lumen_script::{ScriptHost, ScriptValue};
 use std::collections::HashMap;
@@ -87,13 +88,13 @@ fn candela_procedural_introspection_dispatches() {
         geometry,
         components,
         vec!["LayoutBox".to_string()],
-        FrameInfo {
-            frame: 7,
-            dt_ms: 16.0,
-            dirty_count: 0,
-        },
         vec![],
     ));
+    publish_frame_info(FrameInfo {
+        frame: 7,
+        dt_ms: 16.0,
+        dirty_count: 0,
+    });
 
     let mut host = CandelaHost::new();
     host.load(SRC, "introspect.cdl").expect("script compiles");

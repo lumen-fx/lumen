@@ -11,6 +11,7 @@
 
 use super::*;
 use bevy_ecs::hierarchy::ChildOf;
+use bevy_ecs::system::SystemState;
 use lumen_core::components::{InlineStyle, LumenAttributes, TextContent};
 use lumen_script::node_query::{DomDetails, NodeDetail, publish_dom_details};
 use std::collections::HashMap;
@@ -34,25 +35,151 @@ impl Default for FrameClock {
     }
 }
 
+/// Whether anything the introspection snapshot is built from changed since
+/// the last publish: an element's geometry, style, paint, text, classes or
+/// attributes, the tree's shape, or an element coming or going.
+#[allow(clippy::type_complexity)]
+pub(crate) type IntrospectionChanges = (
+    Query<
+        'static,
+        'static,
+        (),
+        Or<(
+            Changed<lumen_core::components::LumenTag>,
+            Changed<lumen_core::components::Transform>,
+            Changed<ChildOf>,
+            Changed<lumen_core::components::Style>,
+            Changed<lumen_core::components::Visuals>,
+            Changed<lumen_core::components::ZIndex>,
+            Changed<lumen_core::components::Visible>,
+            Changed<lumen_core::input::ScrollOffset>,
+            Changed<lumen_core::components::Opacity>,
+            Changed<TextContent>,
+            Changed<lumen_core::components::LumenClasses>,
+            Changed<LumenAttributes>,
+            Changed<InlineStyle>,
+        )>,
+    >,
+    (
+        RemovedComponents<'static, 'static, lumen_core::components::LumenTag>,
+        RemovedComponents<'static, 'static, lumen_core::components::Transform>,
+        RemovedComponents<'static, 'static, ChildOf>,
+        RemovedComponents<'static, 'static, lumen_core::components::Style>,
+        RemovedComponents<'static, 'static, lumen_core::components::Visuals>,
+        RemovedComponents<'static, 'static, lumen_core::components::ZIndex>,
+        RemovedComponents<'static, 'static, lumen_core::components::Visible>,
+    ),
+    (
+        RemovedComponents<'static, 'static, lumen_core::input::ScrollOffset>,
+        RemovedComponents<'static, 'static, lumen_core::components::Opacity>,
+        RemovedComponents<'static, 'static, TextContent>,
+        RemovedComponents<'static, 'static, lumen_core::components::LumenClasses>,
+        RemovedComponents<'static, 'static, LumenAttributes>,
+        RemovedComponents<'static, 'static, InlineStyle>,
+    ),
+);
+
+/// What the last published snapshot was built from: whether one was, and a
+/// fingerprint of the signal set (every cell bumps its generation on a
+/// write, so the sum moves whenever a signal does).
+#[derive(Default)]
+pub(crate) struct Published {
+    built: bool,
+    signals: (usize, u64),
+}
+
 /// Publish the phase-5 low-level introspection snapshot: post-layout
 /// geometry (rect / content_rect / scroll / visibility / z-index), typed
-/// component field maps, frame state, and the signal set. Runs
+/// component field maps, and the signal set, plus the frame counters. Runs
 /// each tick alongside the [`DomIndex`] publish so a read issued from a
 /// handler sees this tick's tree. Geometry reflects the last committed
 /// layout (this tick's `sync_layout` runs later in `LayoutSync`), matching
 /// `computed_style`'s one-tick lag. An inspection pass, not a render path.
+///
+/// The snapshot is rebuilt only on a tick where something it holds changed:
+/// building it reads every element, which costs an idle tick of a large tree
+/// more than everything else the tick does. The frame counters move every
+/// tick and are published on their own.
 #[allow(clippy::type_complexity)]
-pub(crate) fn publish_introspection(world: &mut World) {
+pub(crate) fn publish_introspection(
+    world: &mut World,
+    changes: &mut SystemState<IntrospectionChanges>,
+    mut published: Local<Published>,
+) {
     use lumen_core::components::{
         DirtyLayout, Display, LumenTag, Style, Transform, Visible, Visuals, ZIndex,
     };
     use lumen_core::input::ScrollOffset;
     use lumen_core::introspect::ComponentIntrospection;
     use lumen_script::introspect::{
-        FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, NodeScroll,
+        FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, NodeScroll, publish_frame_info,
         publish_introspection as publish,
     };
     use std::collections::HashMap;
+
+    // Frame counters.
+    let dirty_count = {
+        let mut q = world.query_filtered::<Entity, With<DirtyLayout>>();
+        q.iter(world).count() as u64
+    };
+    {
+        let now = std::time::Instant::now();
+        let mut clock = world.get_resource_or_insert_with(FrameClock::default);
+        let dt_ms = now.duration_since(clock.last).as_secs_f64() * 1000.0;
+        clock.frame = clock.frame.wrapping_add(1);
+        clock.last = now;
+        publish_frame_info(FrameInfo {
+            frame: clock.frame,
+            dt_ms,
+            dirty_count,
+        });
+    }
+
+    let signals_print = world
+        .get_resource::<lumen_core::property_store::PropertyStore>()
+        .map(|store| {
+            store
+                .iter()
+                .filter(|(key, _)| {
+                    matches!(key, lumen_core::property_store::PropertyKey::Global(_))
+                })
+                .fold((0usize, 0u64), |(n, sum), (key, _)| {
+                    let generation = store.cell(key).map_or(0, |c| c.generation);
+                    (n + 1, sum.wrapping_add(generation))
+                })
+        })
+        .unwrap_or_default();
+    let changed = match changes.get_mut(world) {
+        // The parameters always validate; were one not to, rebuilding is the
+        // answer that cannot go stale.
+        Err(_) => true,
+        Ok((query, removed_a, removed_b)) => {
+            let (mut a0, mut a1, mut a2, mut a3, mut a4, mut a5, mut a6) = removed_a;
+            let (mut b0, mut b1, mut b2, mut b3, mut b4, mut b5) = removed_b;
+            // Every reader is drained, so a removal is seen on one tick only.
+            let removed = [
+                a0.read().count(),
+                a1.read().count(),
+                a2.read().count(),
+                a3.read().count(),
+                a4.read().count(),
+                a5.read().count(),
+                a6.read().count(),
+                b0.read().count(),
+                b1.read().count(),
+                b2.read().count(),
+                b3.read().count(),
+                b4.read().count(),
+                b5.read().count(),
+            ];
+            !query.is_empty() || removed.iter().any(|n| *n > 0)
+        }
+    };
+    if published.built && !changed && published.signals == signals_print {
+        return;
+    }
+    published.built = true;
+    published.signals = signals_print;
 
     let registry = ComponentIntrospection::with_defaults();
     let known = registry.names().iter().map(|s| s.to_string()).collect();
@@ -218,26 +345,8 @@ pub(crate) fn publish_introspection(world: &mut World) {
         })
         .unwrap_or_default();
 
-    // Frame counters.
-    let dirty_count = {
-        let mut q = world.query_filtered::<Entity, With<DirtyLayout>>();
-        q.iter(world).count() as u64
-    };
-    let frame = {
-        let now = std::time::Instant::now();
-        let mut clock = world.get_resource_or_insert_with(FrameClock::default);
-        let dt_ms = now.duration_since(clock.last).as_secs_f64() * 1000.0;
-        clock.frame = clock.frame.wrapping_add(1);
-        clock.last = now;
-        FrameInfo {
-            frame: clock.frame,
-            dt_ms,
-            dirty_count,
-        }
-    };
-
     publish(IntrospectSnapshot::new(
-        geometry, components, known, frame, signals,
+        geometry, components, known, signals,
     ));
 }
 
@@ -268,7 +377,11 @@ fn property_value_string(v: &lumen_core::property_store::PropertyValue) -> Strin
 /// style) plus the cascade inputs `computed_style` needs. Runs each tick
 /// alongside the [`DomIndex`] publish so a read issued from a handler sees
 /// this tick's state.
-#[allow(clippy::type_complexity)]
+///
+/// The detail map and the stylesheet are published again only on a tick
+/// that changed one of them, or the set of entities; focus and hover, which
+/// move with the pointer, every tick.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn publish_node_details(
     nodes: Query<(
         Entity,
@@ -277,16 +390,48 @@ pub(crate) fn publish_node_details(
         Option<&InlineStyle>,
         Option<&lumen_core::components::MarkupStyle>,
     )>,
+    changed: Query<
+        (),
+        Or<(
+            Changed<TextContent>,
+            Changed<LumenAttributes>,
+            Changed<InlineStyle>,
+            Changed<lumen_core::components::MarkupStyle>,
+        )>,
+    >,
+    mut removed: (
+        RemovedComponents<TextContent>,
+        RemovedComponents<LumenAttributes>,
+        RemovedComponents<InlineStyle>,
+        RemovedComponents<lumen_core::components::MarkupStyle>,
+    ),
+    entities: &bevy_ecs::entity::Entities,
     focused: Query<Entity, With<lumen_core::input::Focused>>,
     hovered: Query<Entity, With<lumen_core::input::Hovered>>,
     sheet: Option<Res<RuntimeStylesheet>>,
     media: Option<Res<LastMediaContext>>,
+    mut published: Local<Option<u32>>,
 ) {
     let pack = |e: Entity| lumen_core::node::NodeHandle::new(e).pack();
     lumen_script::node_query::publish_focus(
         focused.iter().next().map(pack),
         hovered.iter().next().map(pack),
     );
+    // Every reader is drained, so a removal is seen on one tick only.
+    let removals = removed.0.read().count()
+        + removed.1.read().count()
+        + removed.2.read().count()
+        + removed.3.read().count();
+    let count = entities.len();
+    let unchanged = *published == Some(count)
+        && removals == 0
+        && changed.is_empty()
+        && !sheet.as_ref().is_some_and(|s| s.is_changed())
+        && !media.as_ref().is_some_and(|m| m.is_changed());
+    if unchanged {
+        return;
+    }
+    *published = Some(count);
     let mut map: HashMap<u64, NodeDetail> = HashMap::new();
     for (entity, text, attrs, inline, markup) in nodes.iter() {
         let detail = NodeDetail {

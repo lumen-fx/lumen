@@ -132,32 +132,45 @@ pub type ComponentFields = Vec<(String, String)>;
 /// order, keyed by packed handle.
 pub type ComponentMaps = HashMap<u64, Vec<(String, ComponentFields)>>;
 
-/// Geometry + component maps published each tick, keyed by packed handle.
+/// Geometry, component maps and the signal set, keyed by packed handle. The
+/// runtime publishes a new one on a tick that changed what it holds; the
+/// frame counters, which move every tick, are published apart from it (see
+/// [`publish_frame_info`]).
 #[derive(Default)]
 pub struct IntrospectSnapshot {
     geometry: HashMap<u64, NodeGeometry>,
     components: ComponentMaps,
     known_components: Vec<String>,
-    frame: FrameInfo,
     signals: Vec<(String, String)>,
 }
 
 impl IntrospectSnapshot {
-    /// Assemble a snapshot from the runtime's per-tick reads.
+    /// Assemble a snapshot from the runtime's reads.
     pub fn new(
         geometry: HashMap<u64, NodeGeometry>,
         components: ComponentMaps,
         known_components: Vec<String>,
-        frame: FrameInfo,
         signals: Vec<(String, String)>,
     ) -> Self {
         Self {
             geometry,
             components,
             known_components,
-            frame,
             signals,
         }
+    }
+}
+
+static FRAME_INFO: RwLock<FrameInfo> = RwLock::new(FrameInfo {
+    frame: 0,
+    dt_ms: 0.0,
+    dirty_count: 0,
+});
+
+/// Publish this tick's frame counters for `frame_info()`.
+pub fn publish_frame_info(frame: FrameInfo) {
+    if let Ok(mut g) = FRAME_INFO.write() {
+        *g = frame;
     }
 }
 
@@ -521,7 +534,7 @@ pub fn publish_pointer_state(
 
 /// `frame_info()`: `{frame, dt_ms, dirty_count}`.
 pub fn frame_info() -> FrameInfo {
-    snapshot().frame
+    FRAME_INFO.read().map(|g| *g).unwrap_or_default()
 }
 
 /// `signals_all()`: the whole PropertyStore signal set as `(name, value)`

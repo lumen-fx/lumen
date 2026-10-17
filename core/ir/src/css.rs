@@ -595,7 +595,7 @@ pub enum ContrastPreference {
 
 /// Runtime view of the OS-level theme + viewport state. Passed to
 /// [`apply_css_with_media`] so `@media` blocks resolve consistently.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MediaContext {
     /// OS color scheme. `None` = unknown.
     pub color_scheme: Option<ColorSchemePreference>,
