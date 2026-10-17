@@ -39,7 +39,7 @@
 use std::collections::{HashMap, HashSet};
 
 use vello::Scene;
-use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, Shape as _};
+use vello::kurbo::{self, Affine, BezPath, Rect, RoundedRect, Shape as _};
 use vello::peniko::{
     BlendMode, Blob, Color, Fill, Gradient, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
     ImageQuality, ImageSampler,
@@ -132,6 +132,53 @@ pub(crate) struct Job {
     /// The texture outlives the frame: it holds a kept copy of an image's
     /// draw (see [`Copies`]).
     pub(crate) kept: bool,
+}
+
+/// A shrunk draw's copy of the whole image, made where the draw lands up to
+/// a whole-pixel shift, so the same copy serves the draw wherever it moves.
+///
+/// Moving a draw by whole pixels samples the same image texels at every
+/// pixel, so a copy made under the draw's scale, rotation and fraction of a
+/// pixel draws one texel per pixel at the shifted spot exactly as the image
+/// itself would. A paint program panning over a stack of large layers then
+/// reuses every layer's copy instead of making each again on every frame.
+struct Placement {
+    /// The draw's transform less its whole-pixel shift.
+    local: Affine,
+    /// The pixels the image covers under `local`.
+    copy: Rect,
+    /// Where the copy's corner lands in the frame.
+    at: kurbo::Point,
+}
+
+impl Placement {
+    /// The largest copy of a whole image worth keeping: one render's share of
+    /// the atlas, in a quarter, so a frame holds several beside each other.
+    const MAX_AREA: u64 = RENDER_BUDGET / 4;
+
+    /// The whole-image copy for a draw under `transform`, or `None` when the
+    /// image would cover too much to keep whole.
+    fn whole(image: &ImageData, transform: Affine) -> Option<Placement> {
+        let full = Rect::new(0.0, 0.0, f64::from(image.width), f64::from(image.height));
+        let [a, b, c, d, e, f] = transform.as_coeffs();
+        let shift = kurbo::Vec2::new(e.floor(), f.floor());
+        let local = Affine::new([a, b, c, d, e - shift.x, f - shift.y]);
+        let copy = whole_pixels(local.transform_rect_bbox(full));
+        let placement = Placement {
+            local,
+            copy,
+            at: copy.origin() + shift,
+        };
+        (!is_empty(copy)
+            && copy.width() <= f64::from(ATLAS_SIDE)
+            && copy.height() <= f64::from(ATLAS_SIDE)
+            && placement.area() <= Self::MAX_AREA)
+            .then_some(placement)
+    }
+
+    fn area(&self) -> u64 {
+        self.copy.width() as u64 * self.copy.height() as u64
+    }
 }
 
 /// Which draw a kept copy is of: the image in the state it was drawn, how,
@@ -509,33 +556,54 @@ impl SplitFrame {
         let fits =
             region.width() <= f64::from(ATLAS_SIDE) && region.height() <= f64::from(ATLAS_SIDE);
         if fits && (covered * 2 <= area(image) || area(image) > RENDER_BUDGET) {
-            let key = CopyKey::new(image, version, &brush.sampler, transform, region);
-            copies.used.insert(key);
-            let copy = match copies.kept.get(&key) {
-                Some(copy) => copy.clone(),
+            let (copy, at, held) = match Placement::whole(image, transform) {
+                Some(whole) => {
+                    let key = CopyKey::new(image, version, &brush.sampler, whole.local, whole.copy);
+                    let copy = self.copy(brush, key, whole.local, whole.copy, copies);
+                    (copy, whole.at, whole.area())
+                }
                 None => {
-                    let copy = stand_in(region.width() as u32, region.height() as u32);
-                    let mut scene = Scene::new();
-                    scene.draw_image(
-                        brush,
-                        Affine::translate((-region.x0, -region.y0)) * transform,
-                    );
-                    self.jobs.push(Job {
-                        scene,
-                        image: copy.clone(),
-                        kept: true,
-                    });
-                    copies.kept.insert(key, copy.clone());
-                    copy
+                    let key = CopyKey::new(image, version, &brush.sampler, transform, region);
+                    let copy = self.copy(brush, key, transform, region, copies);
+                    (copy, region.origin(), covered)
                 }
             };
-            self.admit(&HashMap::from([(copy.data.id(), covered)]));
+            self.admit(&HashMap::from([(copy.data.id(), held)]));
             self.scene()
-                .draw_image(&one_to_one(copy), Affine::translate((region.x0, region.y0)));
+                .draw_image(&one_to_one(copy), Affine::translate(at.to_vec2()));
             return;
         }
         self.admit(&HashMap::from([(image.data.id(), area(image))]));
         self.scene().draw_image(brush, transform);
+    }
+
+    /// The kept copy `key` names, or a new one: `region` of the image drawn
+    /// under `transform`, rendered by a job of its own.
+    fn copy(
+        &mut self,
+        brush: &ImageBrush,
+        key: CopyKey,
+        transform: Affine,
+        region: Rect,
+        copies: &mut Copies,
+    ) -> ImageData {
+        copies.used.insert(key);
+        if let Some(copy) = copies.kept.get(&key) {
+            return copy.clone();
+        }
+        let copy = stand_in(region.width() as u32, region.height() as u32);
+        let mut scene = Scene::new();
+        scene.draw_image(
+            brush,
+            Affine::translate((-region.x0, -region.y0)) * transform,
+        );
+        self.jobs.push(Job {
+            scene,
+            image: copy.clone(),
+            kept: true,
+        });
+        copies.kept.insert(key, copy.clone());
+        copy
     }
 
     /// Append a recorded fragment, counting the images it samples.
@@ -627,6 +695,37 @@ mod tests {
         // A new state of the image is a new copy, and the old one goes.
         let mut frame = SplitFrame::new(512, 512);
         frame.draw_image(&brush(&big), shrink, 2, &mut copies);
+        assert_eq!(frame.finish().1.len(), 1);
+        assert_eq!(copies.end_frame().len(), 1);
+    }
+
+    /// Moving a shrunk draw by whole pixels keeps its copy: a pan over a
+    /// stack of large layers makes no new copies. A move by a fraction of a
+    /// pixel samples other texels, so it makes one.
+    #[test]
+    fn a_shrunk_draw_keeps_its_copy_while_it_pans() {
+        let big = image(4096);
+        let at = |x: f64, y: f64| Affine::translate((x, y)) * Affine::scale(0.0625);
+        let mut copies = Copies::default();
+
+        let mut frame = SplitFrame::new(512, 512);
+        frame.draw_image(&brush(&big), at(10.0, 10.0), 1, &mut copies);
+        assert_eq!(frame.finish().1.len(), 1);
+        assert!(copies.end_frame().is_empty());
+
+        // The same draw seven pixels across and three down, half off the
+        // frame's right edge: the same copy, drawn where the draw now lands.
+        let mut frame = SplitFrame::new(512, 512);
+        frame.draw_image(&brush(&big), at(17.0, 13.0), 1, &mut copies);
+        frame.draw_image(&brush(&big), at(400.0, 13.0), 1, &mut copies);
+        let (scene, jobs) = frame.finish();
+        assert!(jobs.is_empty(), "a whole-pixel pan reuses the copy");
+        assert!(copies.end_frame().is_empty());
+        assert_eq!(scene_images(&scene).len(), 1, "both draws sample one copy");
+
+        // A quarter of a pixel is a new copy, and the old one goes.
+        let mut frame = SplitFrame::new(512, 512);
+        frame.draw_image(&brush(&big), at(17.25, 13.0), 1, &mut copies);
         assert_eq!(frame.finish().1.len(), 1);
         assert_eq!(copies.end_frame().len(), 1);
     }
