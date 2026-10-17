@@ -16,6 +16,7 @@
 
 #![warn(missing_docs)]
 
+pub(crate) mod atlas;
 pub mod capability;
 mod gpu;
 mod rasterize;

@@ -10,6 +10,10 @@
 //! supplies; the renderer renders the recorded sub-scene into that texture
 //! before it renders the frame (see [`VelloPainter::take_offscreen`]).
 //!
+//! A frame whose images would not fit vello's image atlas is painted again
+//! in split mode, through a `SplitFrame`: the renderer then renders it in
+//! several passes (see the crate's `atlas` module).
+//!
 //! Outline glyphs reach the scene as the polygons [`GlyphOutlines`] flattens
 //! them to, the same lines every backend fills. Each flattened glyph is kept
 //! encoded, and a run copies those encodings into the scene under one
@@ -23,11 +27,13 @@ use lumen_paint::{
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+
+use crate::atlas::{Copies, Job, Opened, SplitFrame, stand_in};
 use vello::Scene;
 use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::{
-    BlendMode, Blob, BrushRef, Color, Compose, Fill, ImageAlphaType, ImageBrush, ImageData,
-    ImageFormat, ImageQuality, ImageSampler, Mix,
+    BlendMode, BrushRef, Color, Compose, Fill, ImageBrush, ImageData, ImageQuality, ImageSampler,
+    Mix,
 };
 use vello_encoding::{Encoding, PathTag, Transform};
 
@@ -68,6 +74,11 @@ pub struct VelloPainter {
     /// frames: one blob id per pixel image is what lets vello keep one atlas
     /// slot for it, and the renderer stands a texture in for the blob.
     stand_ins: HashMap<u64, ImageData>,
+    /// Set while a frame paints in split mode: frame-level calls go through
+    /// it rather than straight into `scene`.
+    split: Option<SplitFrame>,
+    /// The copies of shrunk image draws split frames keep across frames.
+    copies: Copies,
 }
 
 impl Default for VelloPainter {
@@ -82,6 +93,8 @@ impl Default for VelloPainter {
             visible: None,
             pixels: HashMap::new(),
             stand_ins: HashMap::new(),
+            split: None,
+            copies: Copies::default(),
         }
     }
 }
@@ -120,18 +133,6 @@ impl GlyphShape for EncodedGlyph {
             segments,
             bounds,
         }
-    }
-}
-
-/// An image with a blob of its own and no bytes: a unique image id the
-/// renderer stands a texture in for.
-fn stand_in(width: u32, height: u32) -> ImageData {
-    ImageData {
-        data: Blob::new(Arc::new([0u8; 0])),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::Alpha,
-        width,
-        height,
     }
 }
 
@@ -238,6 +239,53 @@ impl VelloPainter {
         self.finished.clear();
         self.outlines.end_frame();
         self.pixels.clear();
+        self.split = None;
+    }
+
+    /// Start painting the frame again, in split mode, over a target of
+    /// `width` x `height` pixels: the first paint drew more images than one
+    /// render holds. The offscreen layers the first paint closed are kept,
+    /// since the layer cache may hand them out again rather than repaint them.
+    pub(crate) fn begin_split(&mut self, width: u32, height: u32) {
+        self.scene.reset();
+        self.recording.clear();
+        self.offscreen.clear();
+        self.pixels.clear();
+        self.split = Some(SplitFrame::new(width, height));
+    }
+
+    /// End split mode: the frame's own scene goes back to where
+    /// [`Self::scene`] reads it, and the renders to run before it come back,
+    /// in order.
+    pub(crate) fn finish_split(&mut self) -> Vec<Job> {
+        let Some(split) = self.split.take() else {
+            return Vec::new();
+        };
+        let (scene, jobs) = split.finish();
+        self.scene = scene;
+        jobs
+    }
+
+    /// Forget the kept copies this frame did not draw, handing back the
+    /// images their textures stand in for.
+    pub(crate) fn end_copies(&mut self) -> Vec<ImageData> {
+        self.copies.end_frame()
+    }
+
+    /// Whether the next call paints into the frame itself, rather than into
+    /// a fragment or an offscreen layer.
+    fn at_frame_level(&self) -> bool {
+        self.recording.is_empty() && self.offscreen.is_empty()
+    }
+
+    /// The split frame, when the frame paints in split mode and the next call
+    /// paints into the frame itself.
+    fn split_frame(&mut self) -> Option<&mut SplitFrame> {
+        if self.at_frame_level() {
+            self.split.as_mut()
+        } else {
+            None
+        }
     }
 
     /// The pixel images the frame drew, each with the image vello draws it
@@ -284,10 +332,25 @@ impl VelloPainter {
         if let Some(fragment) = self.recording.last_mut() {
             return fragment;
         }
-        match self.offscreen.last_mut() {
-            Some((layer, _)) => layer,
+        if let Some((layer, _)) = self.offscreen.last_mut() {
+            return layer;
+        }
+        match &mut self.split {
+            Some(split) => split.scene(),
             None => &mut self.scene,
         }
+    }
+}
+
+/// Say once per run that a pixel image too large to draw was left out.
+fn report_too_large(width: u32, height: u32, side: u32) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if !REPORTED.swap(true, Ordering::Relaxed) {
+        lumen_core::warn_line!(
+            "lumen-render-wgpu: a {width}x{height} pixel image is not drawn: the GPU renderer \
+             draws images up to {side} pixels a side"
+        );
     }
 }
 
@@ -332,6 +395,10 @@ impl Painter for VelloPainter {
         transform: Affine,
         clip: &Shape<'_>,
     ) {
+        if let Some(split) = self.split_frame() {
+            split.open(Opened::layer(clip_style, blend, alpha, transform, clip));
+            return;
+        }
         let scene = self.target();
         match clip {
             Shape::Rect(r) => scene.push_layer(clip_style, blend, alpha, transform, r),
@@ -341,6 +408,10 @@ impl Painter for VelloPainter {
     }
 
     fn pop_layer(&mut self) {
+        if let Some(split) = self.split_frame() {
+            split.close();
+            return;
+        }
         self.target().pop_layer();
     }
 
@@ -363,6 +434,16 @@ impl Painter for VelloPainter {
             self.pop_layer();
         }
         match kind {
+            MaskKind::Luminance if self.at_frame_level() && self.split.is_some() => {
+                if let Some(split) = self.split.as_mut() {
+                    split.open(Opened::luminance_mask(
+                        Fill::NonZero,
+                        1.0,
+                        transform,
+                        region,
+                    ));
+                }
+            }
             MaskKind::Luminance => {
                 let scene = self.target();
                 match region {
@@ -392,6 +473,9 @@ impl Painter for VelloPainter {
     }
 
     fn layer_depth(&self) -> usize {
+        if let (true, Some(split)) = (self.at_frame_level(), &self.split) {
+            return split.depth();
+        }
         let scene = match (self.recording.last(), self.offscreen.last()) {
             (Some(fragment), _) => fragment,
             (None, Some((layer, _))) => layer,
@@ -413,6 +497,12 @@ impl Painter for VelloPainter {
     }
 
     fn draw_image(&mut self, image: &ImageBrush, transform: Affine) {
+        if self.at_frame_level()
+            && let Some(split) = self.split.as_mut()
+        {
+            split.draw_image(image, transform, 0, &mut self.copies);
+            return;
+        }
         self.target().draw_image(image, transform);
     }
 
@@ -429,7 +519,7 @@ impl Painter for VelloPainter {
             return;
         }
         if width > self.max_layer_side || height > self.max_layer_side {
-            // Larger than any texture, or vello's atlas, holds.
+            report_too_large(width, height, self.max_layer_side);
             return;
         }
         let flat = !self.recording.is_empty()
@@ -457,13 +547,17 @@ impl Painter for VelloPainter {
             .or_insert_with(|| stand_in(width, height))
             .clone();
         self.pixels.insert(image.id(), image.clone());
-        self.target().draw_image(
-            &ImageBrush {
-                image: stand_in,
-                sampler,
-            },
-            transform,
-        );
+        let brush = ImageBrush {
+            image: stand_in,
+            sampler,
+        };
+        if self.at_frame_level()
+            && let Some(split) = self.split.as_mut()
+        {
+            split.draw_image(&brush, transform, image.version(), &mut self.copies);
+            return;
+        }
+        self.target().draw_image(&brush, transform);
     }
 
     /// Outline glyphs are filled as the polygons [`GlyphOutlines`] flattens
@@ -518,6 +612,10 @@ impl Painter for VelloPainter {
         let Some(scene) = fragment.downcast::<Scene>() else {
             return false;
         };
+        if let Some(split) = self.split_frame() {
+            split.append(scene, transform);
+            return true;
+        }
         self.target().append(scene, Some(transform));
         true
     }
@@ -570,10 +668,14 @@ impl Painter for VelloPainter {
                 ..ImageSampler::default()
             },
         };
-        self.target().draw_image(
-            &brush,
-            Affine::translate((layer.bounds.x0, layer.bounds.y0)),
-        );
+        let at = Affine::translate((layer.bounds.x0, layer.bounds.y0));
+        if self.at_frame_level()
+            && let Some(split) = self.split.as_mut()
+        {
+            split.draw_image(&brush, at, 0, &mut self.copies);
+            return true;
+        }
+        self.target().draw_image(&brush, at);
         true
     }
 
