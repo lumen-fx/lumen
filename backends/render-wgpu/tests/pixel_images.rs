@@ -167,8 +167,9 @@ fn images(count: usize, side: u32) -> Arc<Vec<PixelImage>> {
     )
 }
 
-/// Render `images` once into a `frame` x `frame` target and read it back.
-fn render(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32) -> Vec<u8> {
+/// An app rendering `images` into a `frame` x `frame` target, as one leaf
+/// covering it whose corner sits at `at`.
+fn app_with(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32, at: glam::Vec2) -> App {
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(frame, frame));
     app.add_extract_fn(extract_images);
@@ -180,7 +181,7 @@ fn render(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32) -> Vec<u8> {
     }
     app.world.spawn((
         Transform {
-            absolute: glam::Vec2::ZERO,
+            absolute: at,
             size: glam::Vec2::splat(frame as f32),
             baseline_y: None,
         },
@@ -190,12 +191,22 @@ fn render(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32) -> Vec<u8> {
             revision: 1,
         },
     ));
-    app.tick();
+    app
+}
+
+fn read_back(app: &App) -> Vec<u8> {
     app.render_world
         .get_non_send::<WgpuRenderer>()
         .expect("renderer")
         .read_rgba8()
         .expect("readback")
+}
+
+/// Render `images` once into a `frame` x `frame` target and read it back.
+fn render(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32) -> Vec<u8> {
+    let mut app = app_with(images, layout, frame, glam::Vec2::ZERO);
+    app.tick();
+    read_back(&app)
 }
 
 fn pixel(pixels: &[u8], frame: u32, x: u32, y: u32) -> [u8; 4] {
@@ -343,4 +354,53 @@ fn a_full_size_layer_stack_past_the_atlas_composites_like_one_that_fits() {
     let large = render(images(count, 2048), Layout::Stack, 2048);
     let small = render(images(count, 64), Layout::Stack, 2048);
     assert_same_centre(&large, &small, 2048);
+}
+
+/// `count` images of `side` x `side`, each 64 x 64 tile its own colour, so
+/// a draw that samples the wrong texels shows.
+fn patterned(count: usize, side: u32) -> Arc<Vec<PixelImage>> {
+    Arc::new(
+        (0..count)
+            .map(|i| {
+                let mut image = PixelImage::new(side, side);
+                for ty in 0..side / 64 {
+                    for tx in 0..side / 64 {
+                        let c = color_of(i + (tx * 7 + ty * 13) as usize);
+                        image.fill_rgba8(i64::from(tx * 64), i64::from(ty * 64), 64, 64, c);
+                    }
+                }
+                image
+            })
+            .collect(),
+    )
+}
+
+/// #535: a shrunk stack past the atlas panned by whole pixels draws through
+/// the copies its first frame made, and those draw exactly the pixels a fresh
+/// render of the panned stack does.
+#[test]
+fn a_panned_shrunk_stack_draws_what_a_fresh_render_does() {
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+    let frame = 256;
+    let images = patterned(7, 4096);
+    let mut app = app_with(images.clone(), Layout::Stack, frame, glam::Vec2::ZERO);
+    app.tick();
+    let moved = glam::Vec2::new(37.0, -11.0);
+    for mut transform in app.world.query::<&mut Transform>().iter_mut(&mut app.world) {
+        transform.absolute = moved;
+    }
+    app.tick();
+    let panned = read_back(&app);
+    let mut fresh = app_with(images, Layout::Stack, frame, moved);
+    fresh.tick();
+    let want = read_back(&fresh);
+    let wrong = panned
+        .chunks_exact(4)
+        .zip(want.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
+        .count();
+    assert_eq!(wrong, 0, "{wrong} pixels differ from a fresh render");
 }
