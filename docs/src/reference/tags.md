@@ -911,6 +911,23 @@ to the trigger, not to `<tooltip>`.
 
 Wrapping zero or more than one element is an error.
 
+The popup is a `tooltip` element with the class `tooltip`, placed under
+the root, so a `.tooltip` rule styles it like any element: background,
+text color, padding, radius, border, shadow, and font. It inherits from the
+root, which puts the root's custom properties in scope, and it paints above
+everything else. Its position is the runtime's: it opens beside the pointer
+and moves to the pointer's other side near the window's edges, so `inset`
+and `position` in a `.tooltip` rule have no effect. Scripts do not see it,
+and it does not count as one of the root's children for `:last-child` and
+the other structural selectors.
+
+```css
+.tooltip { bg: var(--accent); text-color: #ffffff; padding: 4 8; radius: 4; }
+```
+
+In a web build the tooltip is the trigger's `title` attribute, which the
+browser shows in its own look.
+
 ### `<title-bar>`
 
 A title-bar region for frameless windows. Lays out as a row, full width,
