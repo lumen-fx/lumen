@@ -150,7 +150,10 @@ pub struct SliderChanged {
 }
 
 /// Plugin: registers the toggle + slider behavior systems and their
-/// outbound message types.
+/// outbound message types, with the rest of the widget behaviour that needs
+/// a window's layout and input: the number and color fields, popup panel
+/// placement, and the in-window menu bar. A page leaves all of it to the
+/// browser.
 pub struct ControlsPlugin;
 
 impl Plugin for ControlsPlugin {
@@ -196,6 +199,33 @@ impl Plugin for ControlsPlugin {
                 .after(lumen_input::dispatch_clicks)
                 .before(crate::color::sync_color_bindings)
                 .run_if(any_with_component::<crate::color::ColorInput>),
+        );
+        // Open popup panels, placed against the layout the window runs: a
+        // dropdown's panel below its trigger, flipped above near the
+        // viewport bottom, and a menu opened at a point (`open_menu_at`, a
+        // context menu) on that point, moved inward at the window edges. A
+        // page lays its panels out in the browser.
+        app.add_systems(
+            TickStage::Systems,
+            (
+                crate::popup::flip_open_dropdown_panels,
+                crate::popup::place_menus_at_points,
+            )
+                .run_if(any_with_component::<crate::popup::PopupPanel>),
+        );
+        // The in-window menu bar: hovering another bar button while one of
+        // its menus is open switches to that menu, and an item's `accel`
+        // activates it. The runtime marks a bar it mounted with
+        // `ReservedEdge::Top`, and fills the shortcut table only then.
+        app.world
+            .init_resource::<crate::menubar::MenuAccelerators>();
+        app.add_systems(
+            TickStage::Systems,
+            (
+                crate::menubar::switch_menubar_menus_on_hover.after(lumen_input::hit_test),
+                crate::menubar::dispatch_menu_accelerators,
+            )
+                .run_if(any_with_component::<crate::reserve::ReservedEdge>),
         );
         // The user-input mutators are ordered before lumen-core's
         // signal push-back systems (`push_toggle_to_signal` /

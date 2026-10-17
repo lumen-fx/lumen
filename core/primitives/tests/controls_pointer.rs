@@ -568,3 +568,34 @@ fn a_click_at_the_far_end_stops_on_the_last_step() {
 
     assert_eq!(slider_value(&app.world, slider), 90.0);
 }
+
+/// The in-window menu bar runs where the window's controls do: a window app
+/// built with `ControlsPlugin` turns an item's `accel` into that item's
+/// `MenuClicked`, as a click on the item would.
+#[test]
+fn a_menu_bar_shortcut_reaches_its_item_in_a_window_app() {
+    use lumen_core::input::{Key, KeyPressed, MenuClicked, Modifiers};
+    use lumen_primitives::{MenuAccelerators, ReservedEdge};
+
+    let mut app = test_app();
+    app.world
+        .insert_resource(MenuAccelerators::from_entries([("open", "Control+O")]));
+    app.world.spawn(ReservedEdge::Top);
+    app.world.write_message(KeyPressed {
+        key: Key::from("o"),
+        modifiers: Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        },
+        repeat: false,
+    });
+    app.tick();
+
+    let clicked: Vec<String> = app
+        .world
+        .resource::<Messages<MenuClicked>>()
+        .iter_current_update_messages()
+        .map(|m| m.id.clone())
+        .collect();
+    assert_eq!(clicked, vec!["open"]);
+}
