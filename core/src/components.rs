@@ -1817,6 +1817,118 @@ pub enum ImageFit {
     ScaleDown,
 }
 
+/// CSS `mask-image` on an element: the element and everything in it paint
+/// through the alpha of the image at `source`, laid out in the element's
+/// border box as [`MaskLayout`] says. Outside the border box nothing shows,
+/// and until the image has loaded, or when it fails to, nothing of the
+/// element shows either, as on the web.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct MaskImage {
+    /// The image, resolved the way an `<image>` source is.
+    pub source: std::path::PathBuf,
+    /// Its size, tiling and position in the border box.
+    pub layout: MaskLayout,
+}
+
+/// CSS `mask-size`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MaskSize {
+    /// The largest size that fits the box, keeping the image's proportions.
+    Contain,
+    /// The smallest size that covers the box, keeping the image's
+    /// proportions.
+    Cover,
+    /// A width and a height; a percentage is of the box, and [`Length::Auto`]
+    /// follows the image's proportions (both `auto`: the image's own size).
+    Size([Length; 2]),
+}
+
+/// How a mask image sits in its element's border box: CSS `mask-size`,
+/// `mask-repeat` and `mask-position`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaskLayout {
+    /// `mask-size`.
+    pub size: MaskSize,
+    /// `mask-repeat`: whether the image tiles along x and along y.
+    pub repeat: [bool; 2],
+    /// `mask-position`: the offset along x and y, a length or a percentage
+    /// of the room the box leaves around the image ([`Length::Auto`] reads
+    /// as `0`).
+    pub position: [Length; 2],
+}
+
+impl MaskLayout {
+    /// The rects, relative to the box's top-left corner, that a mask image
+    /// of `image` size covers in a box of `area` size: one, or a grid of
+    /// them along the repeated axes, covering the box. Empty when the image
+    /// or the box has no area.
+    pub fn tiles(&self, area: Vec2, image: Vec2) -> Vec<(Vec2, Vec2)> {
+        if area.x <= 0.0 || area.y <= 0.0 || image.x <= 0.0 || image.y <= 0.0 {
+            return Vec::new();
+        }
+        let ratio = image.x / image.y;
+        let size = match self.size {
+            MaskSize::Contain => {
+                let s = (area.x / image.x).min(area.y / image.y);
+                image * s
+            }
+            MaskSize::Cover => {
+                let s = (area.x / image.x).max(area.y / image.y);
+                image * s
+            }
+            MaskSize::Size([w, h]) => {
+                let len = |l: Length, of: f32| match l {
+                    Length::Px(v) => Some(v),
+                    Length::Percent(p) => Some(of * p / 100.0),
+                    Length::Auto => None,
+                };
+                match (len(w, area.x), len(h, area.y)) {
+                    (Some(w), Some(h)) => Vec2::new(w, h),
+                    (Some(w), None) => Vec2::new(w, w / ratio),
+                    (None, Some(h)) => Vec2::new(h * ratio, h),
+                    (None, None) => image,
+                }
+            }
+        };
+        if size.x <= 0.0 || size.y <= 0.0 {
+            return Vec::new();
+        }
+        let offset = |l: Length, room: f32| match l {
+            Length::Px(v) => v,
+            Length::Percent(p) => room * p / 100.0,
+            Length::Auto => 0.0,
+        };
+        let at = Vec2::new(
+            offset(self.position[0], area.x - size.x),
+            offset(self.position[1], area.y - size.y),
+        );
+        // Along a repeated axis the tiles run both ways from the positioned
+        // one until they cover the box.
+        let span = |repeat: bool, at: f32, step: f32, room: f32| -> Vec<f32> {
+            if !repeat {
+                return vec![at];
+            }
+            let first = at - (at / step).ceil() * step;
+            let mut out = Vec::new();
+            let mut v = first;
+            while v < room {
+                out.push(v);
+                v += step;
+            }
+            out
+        };
+        let xs = span(self.repeat[0], at.x, size.x, area.x);
+        let ys = span(self.repeat[1], at.y, size.y, area.y);
+        let mut out = Vec::with_capacity(xs.len() * ys.len());
+        for &y in &ys {
+            for &x in &xs {
+                out.push((Vec2::new(x, y), size));
+            }
+        }
+        out
+    }
+}
+
 /// How raster images are sampled when drawn at another size than their own;
 /// mirrors CSS `image-rendering`. Inherited, so the cascade puts the
 /// computed value on every element under the one that declared it; an
@@ -3223,5 +3335,89 @@ mod color_value_tests {
         ] {
             assert_eq!(parse_color_value(bad), None, "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod mask_layout_tests {
+    use super::{Length, MaskLayout, MaskSize};
+    use glam::Vec2;
+
+    fn layout(size: MaskSize, repeat: bool, position: [Length; 2]) -> MaskLayout {
+        MaskLayout {
+            size,
+            repeat: [repeat, repeat],
+            position,
+        }
+    }
+
+    /// `contain` with `no-repeat` and `center` puts one tile of the image's
+    /// proportions in the middle of the box, as the icon-tint idiom wants.
+    #[test]
+    fn contained_and_centered_is_one_tile_in_the_middle() {
+        let l = layout(
+            MaskSize::Contain,
+            false,
+            [Length::Percent(50.0), Length::Percent(50.0)],
+        );
+        let tiles = l.tiles(Vec2::new(40.0, 20.0), Vec2::new(16.0, 16.0));
+        assert_eq!(tiles, vec![(Vec2::new(10.0, 0.0), Vec2::new(20.0, 20.0))]);
+    }
+
+    /// The initial values: the image's own size, from the top-left corner,
+    /// repeated until the box is covered.
+    #[test]
+    fn the_initial_values_tile_the_image_from_the_corner() {
+        let l = layout(
+            MaskSize::Size([Length::Auto, Length::Auto]),
+            true,
+            [Length::Percent(0.0), Length::Percent(0.0)],
+        );
+        let tiles = l.tiles(Vec2::new(20.0, 10.0), Vec2::new(8.0, 8.0));
+        let origins: Vec<Vec2> = tiles.iter().map(|t| t.0).collect();
+        assert_eq!(
+            origins,
+            vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(8.0, 0.0),
+                Vec2::new(16.0, 0.0),
+                Vec2::new(0.0, 8.0),
+                Vec2::new(8.0, 8.0),
+                Vec2::new(16.0, 8.0),
+            ]
+        );
+    }
+
+    /// A repeated tile positioned inside the box also runs back towards the
+    /// box's start, and `cover` fills the box keeping the proportions; one
+    /// `auto` side follows the other.
+    #[test]
+    fn repeats_run_both_ways_and_auto_keeps_the_proportions() {
+        let l = layout(
+            MaskSize::Size([Length::Px(10.0), Length::Px(10.0)]),
+            true,
+            [Length::Px(5.0), Length::Px(0.0)],
+        );
+        let xs: Vec<f32> = l
+            .tiles(Vec2::new(20.0, 10.0), Vec2::new(4.0, 4.0))
+            .iter()
+            .map(|t| t.0.x)
+            .collect();
+        assert_eq!(xs, vec![-5.0, 5.0, 15.0]);
+
+        let cover = layout(MaskSize::Cover, false, [Length::Px(0.0), Length::Px(0.0)]);
+        assert_eq!(
+            cover.tiles(Vec2::new(40.0, 10.0), Vec2::new(10.0, 10.0))[0].1,
+            Vec2::new(40.0, 40.0)
+        );
+        let half = layout(
+            MaskSize::Size([Length::Percent(50.0), Length::Auto]),
+            false,
+            [Length::Px(0.0), Length::Px(0.0)],
+        );
+        assert_eq!(
+            half.tiles(Vec2::new(40.0, 10.0), Vec2::new(10.0, 5.0))[0].1,
+            Vec2::new(20.0, 10.0)
+        );
     }
 }

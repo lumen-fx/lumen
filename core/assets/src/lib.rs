@@ -33,6 +33,7 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
+use lumen_core::components::MaskImage;
 use lumen_core::components::Visuals;
 use lumen_core::input::CursorImage;
 use lumen_core::prelude::*;
@@ -1009,6 +1010,11 @@ impl Plugin for AssetsPlugin {
         app.world.init_resource::<AssetServer>();
         app.add_message::<AssetReloadRequested>();
         app.add_systems(TickStage::Systems, spawn_pending_decodes);
+        app.world.init_resource::<MaskImages>();
+        app.add_systems(
+            TickStage::Systems,
+            request_mask_images.before(spawn_pending_decodes),
+        );
         app.add_systems(
             TickStage::Systems,
             drain_completed_decodes.after(spawn_pending_decodes),
@@ -1035,6 +1041,7 @@ impl Plugin for AssetsPlugin {
         app.add_systems(TickStage::A11ySync, resolve_cursor_image);
         app.add_extract_fn(extract_loaded_images);
         app.add_extract_fn(extract_loaded_svgs);
+        app.add_extract_fn(extract_mask_groups);
     }
 }
 
@@ -1519,6 +1526,155 @@ fn cursor_image(image: &LoadedImage, hotspot: Option<(f32, f32)>) -> CursorImage
         rgba: image.rgba.clone(),
         hotspot: (clamp(x, image.width), clamp(y, image.height)),
     }
+}
+
+/// Marks the entity that loads one CSS `mask-image`. It has no place in the
+/// tree and is never drawn; it is how a mask image goes through the same
+/// sources, loaders and cache as every other image.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MaskImageHolder;
+
+/// The holder entity loading each mask image path, so every element masked
+/// with one image shares one load.
+#[derive(Resource, Default, Debug)]
+pub struct MaskImages(HashMap<PathBuf, Entity>);
+
+/// Start loading the image of every [`MaskImage`] that appeared or changed.
+///
+/// Runs before [`spawn_pending_decodes`], so a mask named this tick starts
+/// decoding this tick. An app without masks queries nothing that matches.
+pub fn request_mask_images(
+    masks: Query<&MaskImage, Changed<MaskImage>>,
+    mut holders: ResMut<MaskImages>,
+    mut commands: Commands,
+) {
+    for mask in &masks {
+        holders.0.entry(mask.source.clone()).or_insert_with(|| {
+            commands
+                .spawn((MaskImageHolder, ImageSource(mask.source.clone())))
+                .id()
+        });
+    }
+}
+
+/// Extracts one [`ExtractedMaskGroup`] per visible element carrying a
+/// [`MaskImage`]: its border box on screen, and the tiles of its mask image
+/// laid out there as [`MaskImage::layout`] says. A mask whose image is still
+/// loading, or failed, has no tiles, which shows nothing of the element.
+///
+/// Returns at once while no element has ever named a mask image, so an app
+/// without masks pays one resource lookup per frame.
+pub fn extract_mask_groups(main: &mut World, render: &mut World) {
+    use lumen_core::components::{ImageBlob, ImageFit, ImageRendering, MaskImage, SvgPayload};
+    use lumen_core::node_ir::Node;
+    use lumen_core::render_world::{
+        ExtractedImage, ExtractedMaskGroup, OverlayLayer, Rect, RenderEntityMap, build_parent_map,
+        hidden_entities, max_desc_order, paint_order_of,
+    };
+    let holders: HashMap<PathBuf, Entity> = match main.get_resource::<MaskImages>() {
+        Some(m) if !m.0.is_empty() => m.0.clone(),
+        _ => return,
+    };
+    let (parents, mut depth_cache) = build_parent_map(main);
+    let hidden = hidden_entities(main, &parents);
+    let placement = Placement::new(main, &parents);
+    let overlay: HashSet<Entity> = {
+        let mut q = main.query_filtered::<Entity, With<OverlayLayer>>();
+        q.iter(main).collect()
+    };
+    let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    for (&e, &p) in &parents {
+        children.entry(p).or_default().push(e);
+    }
+    let masked: Vec<(Entity, Transform, MaskImage, ImageRendering)> = {
+        let mut q = main.query::<(Entity, &Transform, &MaskImage, Option<&ImageRendering>)>();
+        q.iter(main)
+            .filter(|(e, ..)| !hidden.contains(e))
+            .map(|(e, t, m, r)| (e, *t, m.clone(), r.copied().unwrap_or_default()))
+            .collect()
+    };
+    let mut pairs: Vec<(Entity, ExtractedMaskGroup)> = Vec::with_capacity(masked.len());
+    for (e, t, mask, rendering) in masked {
+        let (origin, _) = placement.place(e, &t);
+        let region = Rect::new(origin, t.size);
+        let holder = holders.get(&mask.source).copied();
+        let image = holder.and_then(|h| main.get::<LoadedImage>(h).cloned());
+        let svg = holder.and_then(|h| main.get::<LoadedSvg>(h).cloned());
+        let mut tiles: Vec<Arc<Node>> = Vec::new();
+        if let Some(img) = image {
+            let natural = glam::Vec2::new(img.width as f32, img.height as f32);
+            let blob = ImageBlob(Arc::new(ExtractedImageBlob(img.blob.clone())));
+            for (at, size) in mask.layout.tiles(t.size, natural) {
+                let tile = ExtractedImage {
+                    origin: origin + at,
+                    size,
+                    width: img.width,
+                    height: img.height,
+                    rgba: img.rgba.clone(),
+                    fit: ImageFit::Fill,
+                    rendering,
+                    order: 0,
+                    alpha: 1.0,
+                    background: None,
+                };
+                tiles.push(Arc::new(Node::from((&tile, &blob))));
+            }
+        } else if let Some(svg) = svg {
+            for (at, size) in mask.layout.tiles(t.size, svg.intrinsic) {
+                let tile = ExtractedSvg {
+                    origin: origin + at,
+                    size,
+                    intrinsic: svg.intrinsic,
+                    asset: svg.0.clone(),
+                    fit: ImageFit::Fill,
+                    order: 0,
+                    alpha: 1.0,
+                };
+                let payload = SvgPayload {
+                    payload: Arc::new(tile),
+                    order: 0,
+                    background: None,
+                };
+                tiles.push(Arc::new(Node::from(&payload)));
+            }
+        }
+        let own = paint_order_of(e, &parents, &mut depth_cache);
+        let end = max_desc_order(e, &children, &parents, &overlay, &mut depth_cache);
+        pairs.push((
+            e,
+            ExtractedMaskGroup {
+                start_order: own.saturating_sub(1),
+                end_order: end,
+                region,
+                mask: Arc::new(Node::Container { children: tiles }),
+            },
+        ));
+    }
+    // Keyed upsert against `RenderEntityMap.mask_group`.
+    let prior = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().mask_group);
+    let mut next: HashMap<Entity, Entity> = HashMap::with_capacity(pairs.len());
+    for (main_e, group) in pairs {
+        let reuse = prior
+            .get(&main_e)
+            .copied()
+            .filter(|&re| render.get_entity(re).is_ok());
+        let render_e = match reuse {
+            Some(re) => {
+                render.entity_mut(re).insert(group);
+                re
+            }
+            None => render.spawn(group).id(),
+        };
+        next.insert(main_e, render_e);
+    }
+    for (main_e, render_e) in &prior {
+        if !next.contains_key(main_e)
+            && let Ok(em) = render.get_entity_mut(*render_e)
+        {
+            em.despawn();
+        }
+    }
+    render.resource_mut::<RenderEntityMap>().mask_group = next;
 }
 
 /// Keeps the frame loop scheduled while an element is still waiting on the

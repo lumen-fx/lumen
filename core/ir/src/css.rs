@@ -1979,6 +1979,18 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.bg_fit.is_some() {
         target.bg_fit = inline.bg_fit;
     }
+    if inline.mask_image.is_some() {
+        target.mask_image = inline.mask_image.clone();
+    }
+    if inline.mask_size.is_some() {
+        target.mask_size = inline.mask_size;
+    }
+    if inline.mask_repeat.is_some() {
+        target.mask_repeat = inline.mask_repeat;
+    }
+    if inline.mask_position.is_some() {
+        target.mask_position = inline.mask_position;
+    }
     if inline.style_role.is_some() {
         target.style_role = inline.style_role.clone();
     }
@@ -3266,6 +3278,10 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "bg-fit",
     "image-rendering",
     "cursor",
+    "mask-image",
+    "mask-size",
+    "mask-repeat",
+    "mask-position",
     "transition",
     "transition-property",
     "transition-delay",
@@ -3988,6 +4004,14 @@ fn apply_declaration(
             attrs.image_rendering = Some(crate::values::parse_image_rendering(ctx, name, value)?)
         }
         "cursor" => attrs.cursor = Some(crate::values::parse_cursor(ctx, name, value)?),
+        "mask-image" => attrs.mask_image = Some(crate::values::parse_mask_image(ctx, name, value)?),
+        "mask-size" => attrs.mask_size = Some(crate::values::parse_mask_size(ctx, name, value)?),
+        "mask-repeat" => {
+            attrs.mask_repeat = Some(crate::values::parse_mask_repeat(ctx, name, value)?)
+        }
+        "mask-position" => {
+            attrs.mask_position = Some(crate::values::parse_mask_position(ctx, name, value)?)
+        }
         "transition" => {
             attrs.transitions = parse_transition(ctx, name, value)?;
         }

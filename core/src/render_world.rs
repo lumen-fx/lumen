@@ -851,6 +851,26 @@ pub struct ExtractedOpacityGroup {
     pub key: u64,
 }
 
+/// One element painted through a CSS mask (`mask-image`): its paints and its descendants' paint
+/// through the alpha of what `mask` paints, and nothing of them shows outside `region`.
+///
+/// Brackets the same paints an [`ExtractedOpacityGroup`] would, from the slot its drop shadows take
+/// to its last descendant in the same paint band. Folded into a [`crate::node_ir::Node::Mask`].
+#[derive(Component, Clone, Debug)]
+pub struct ExtractedMaskGroup {
+    /// Paint-order key at which the mask opens: the slot under the element's own [`PaintOrder`] that
+    /// its drop shadows take.
+    pub start_order: PaintOrder,
+    /// Paint-order key at which the mask closes - the maximum [`PaintOrder`] across the element and
+    /// its descendants in the same paint band.
+    pub end_order: PaintOrder,
+    /// The element's border box on screen.
+    pub region: Rect,
+    /// What the mask paints: the image's tiles. Empty while the image is loading or when it failed,
+    /// which shows nothing of the element, as on the web.
+    pub mask: std::sync::Arc<crate::node_ir::Node>,
+}
+
 /// One rounded solid rect of an overlay scrollbar (track or thumb).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollbarDrawRect {
@@ -1233,6 +1253,8 @@ pub struct RenderEntityMap {
     /// `main_entity -> render_entity` for [`ExtractedOpacityGroup`]; one entry per faded element with
     /// children.
     pub opacity_group: std::collections::HashMap<Entity, Entity>,
+    /// `main_entity -> render_entity` for [`ExtractedMaskGroup`]; one entry per masked element.
+    pub mask_group: std::collections::HashMap<Entity, Entity>,
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
@@ -1259,6 +1281,7 @@ pub fn clear_extracted(render: &mut World) {
         set.extend(map.border.values().copied());
         set.extend(map.clip.values().copied());
         set.extend(map.opacity_group.values().copied());
+        set.extend(map.mask_group.values().copied());
         set.extend(map.image.values().copied());
         set.extend(map.svg.values().copied());
         set.extend(map.scrollbar.values().copied());
@@ -1896,7 +1919,7 @@ pub fn build_parent_map(
 /// The maximum [`PaintOrder`] across `root` and its descendants, by DFS over `children`, not descending
 /// into nested [`OverlayLayer`] roots: their ranks sit in the top-layer band and would wrongly stretch a
 /// bracket across all the content between.
-fn max_desc_order(
+pub fn max_desc_order(
     root: Entity,
     children: &HashMap<Entity, Vec<Entity>>,
     parents: &HashMap<Entity, Entity>,

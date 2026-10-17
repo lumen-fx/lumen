@@ -700,6 +700,7 @@ fn commit_resolved(world: &mut World, entity: Entity, attrs: &mut Attributes, an
     let mut ent = world.entity_mut(entity);
     computed.commit(&mut ent, animate);
     lumen_scene::spawn::apply_background_image(&mut ent, &tag, attrs);
+    lumen_scene::spawn::apply_mask_image(&mut ent, attrs);
 }
 
 /// An element's tag, classes and id, as selectors match them.

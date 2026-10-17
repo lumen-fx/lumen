@@ -564,6 +564,31 @@ pub fn apply_background_image(
     }
 }
 
+/// Put the element's CSS mask on it as a [`MaskImage`], or take it off when
+/// its styles no longer name one. Touches the component only when the mask
+/// changed, so an unmasked element is never written.
+///
+/// [`MaskImage`]: lumen_core::components::MaskImage
+pub fn apply_mask_image(ent: &mut bevy_ecs::world::EntityWorldMut<'_>, attrs: &Attributes) {
+    use lumen_core::components::MaskImage;
+    let want = attrs.mask().map(|(path, layout)| MaskImage {
+        source: lumen_assets::resolve_source_path(&path),
+        layout,
+    });
+    match want {
+        Some(mask) => {
+            if ent.get::<MaskImage>() != Some(&mask) {
+                ent.insert(mask);
+            }
+        }
+        None => {
+            if ent.contains::<MaskImage>() {
+                ent.remove::<MaskImage>();
+            }
+        }
+    }
+}
+
 /// The in-app drag source a `drag-payload` attribute publishes. An empty
 /// payload names the element by its `id`.
 fn drag_source(attrs: &Attributes) -> Option<lumen_os_dnd::DragSource> {
@@ -958,6 +983,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src)));
     }
     apply_background_image(&mut entity, &el.tag, &el.attrs);
+    apply_mask_image(&mut entity, &el.attrs);
     if let Some(tab) = el.attrs.tab_index {
         entity.insert(TabIndex(tab));
     }

@@ -281,6 +281,11 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             }
             walk_group(ctx, child, alpha, *key);
         }
+        Node::Mask {
+            region,
+            mask,
+            child,
+        } => walk_mask(ctx, *region, mask, child),
         Node::Clip { shape, child } => {
             // Scale the logical clip rect to physical pixels - leaves below scale themselves by
             // ctx.dpr at emit time, so the clip must live in the same (physical) space.
@@ -495,6 +500,47 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
     }
 }
 
+/// Paints `child` through the alpha of what `mask` paints, inside `region`.
+///
+/// The child paints into a layer of its own clipped to the region, so the mask touches nothing
+/// under it; the mask then paints in a nested destination-in layer, which keeps the child where the
+/// mask has alpha and clears it where it has none, when it closes. An empty mask shows nothing.
+fn walk_mask(ctx: &mut WalkContext<'_>, region: LumenRect, mask: &Arc<Node>, child: &Arc<Node>) {
+    if matches!(mask.as_ref(), Node::Container { children } if children.is_empty()) {
+        return;
+    }
+    let ClipShape::Rect(device) = scale_clip_shape(ClipShape::Rect(region), ctx.dpr) else {
+        return;
+    };
+    let clip = Shape::Rect(lumen_rect_to_kurbo(device));
+    let depth = ctx.painter.layer_depth();
+    ctx.painter.push_layer(
+        Fill::NonZero,
+        peniko::BlendMode::default(),
+        1.0,
+        Affine::IDENTITY,
+        &clip,
+    );
+    walk_node(ctx, child);
+    while ctx.painter.layer_depth() > depth + 1 {
+        ctx.painter.pop_layer();
+    }
+    ctx.painter.push_layer(
+        Fill::NonZero,
+        peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::DestIn),
+        1.0,
+        Affine::IDENTITY,
+        &clip,
+    );
+    // The mask's alpha is its own: an ancestor's fade reaches the child's paints, not the mask's.
+    let opacity = std::mem::replace(&mut ctx.opacity, 1.0);
+    walk_node(ctx, mask);
+    ctx.opacity = opacity;
+    while ctx.painter.layer_depth() > depth {
+        ctx.painter.pop_layer();
+    }
+}
+
 /// Paints the subtree of a group fading at `alpha` (in `(0, 1)`), into one layer that composites at
 /// `alpha`.
 ///
@@ -575,6 +621,10 @@ fn group_bounds(ctx: &mut WalkContext<'_>, node: &Node) -> (LumenRect, bool) {
             (acc.unwrap_or(EMPTY), native)
         }
         Node::Opacity { child, .. } => group_bounds(ctx, child),
+        Node::Mask { region, child, .. } => {
+            let (b, native) = group_bounds(ctx, child);
+            (intersection(b, *region), native)
+        }
         Node::Clip { shape, child } => {
             let (b, native) = group_bounds(ctx, child);
             let clip = match shape {
@@ -719,6 +769,24 @@ fn diff_node(prev: &Arc<Node>, curr: &Arc<Node>, viewport: LumenRect, xform: Aff
                 diff_node(pchild, cchild, viewport, xform)
             } else {
                 either_has_area(pchild, cchild, viewport, xform, xform)
+            }
+        }
+        (
+            Node::Mask {
+                region: pr,
+                mask: pm,
+                child: pchild,
+            },
+            Node::Mask {
+                region: cr,
+                mask: cm,
+                child: cchild,
+            },
+        ) => {
+            if pr == cr && !diff_node(pm, cm, viewport, xform) {
+                diff_node(pchild, cchild, viewport, xform)
+            } else {
+                either_has_area(prev, curr, viewport, xform, xform)
             }
         }
         (
@@ -960,6 +1028,10 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
         Node::Opacity { child, .. } | Node::Clip { child, .. } => {
             node_bounds(child, viewport, xform)
         }
+        Node::Mask { region, child, .. } => intersection(
+            node_bounds(child, viewport, xform),
+            apply_affine_to_rect(*region, xform),
+        ),
         Node::Rect { bounds, .. } => apply_affine_to_rect(*bounds, xform),
         Node::Shadow {
             origin,

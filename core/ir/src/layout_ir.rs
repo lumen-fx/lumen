@@ -1078,6 +1078,18 @@ pub struct Attributes {
     /// CSS `image-rendering`, inherited: how an `<image>`, a `bg: url(...)`
     /// image and the images drawn on a `<canvas>` are sampled when scaled.
     pub image_rendering: Option<ImageRenderingSpec>,
+    /// CSS `mask-image`: an image whose alpha the element and everything in
+    /// it is painted through.
+    pub mask_image: Option<MaskImageSpec>,
+    /// CSS `mask-size`: the size of the mask image in the element's border
+    /// box; `None` is `auto`, the image's own size.
+    pub mask_size: Option<MaskSizeSpec>,
+    /// CSS `mask-repeat`: which axes the mask image tiles along; `None` is
+    /// `repeat`, both.
+    pub mask_repeat: Option<MaskRepeatSpec>,
+    /// CSS `mask-position`: where the mask image sits in the element's border
+    /// box; `None` is `0% 0%`, the top-left corner.
+    pub mask_position: Option<MaskPositionSpec>,
     /// CSS `cursor` as the element declares it. It inherits, but not through
     /// the cascade: the pointer resolves it from the hovered element up its
     /// ancestors, so only the element that names a cursor carries it.
@@ -1537,6 +1549,47 @@ pub enum ImageFitSpec {
     None,
     /// Smaller of None / Contain.
     ScaleDown,
+}
+
+/// CSS `mask-image`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MaskImageSpec {
+    /// `none`: no mask.
+    None,
+    /// `url(...)`: the path of the image whose alpha masks the element.
+    Url(String),
+}
+
+/// CSS `mask-size`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum MaskSizeSpec {
+    /// The largest size that fits the box, keeping the image's proportions.
+    Contain,
+    /// The smallest size that covers the box, keeping the image's
+    /// proportions.
+    Cover,
+    /// A width and a height, each a length, a percentage of the box, or
+    /// `auto` (`auto auto` is the image's own size).
+    Size(LengthSpec, LengthSpec),
+}
+
+/// CSS `mask-repeat`: whether the mask image tiles along each axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MaskRepeatSpec {
+    /// Tiles horizontally.
+    pub x: bool,
+    /// Tiles vertically.
+    pub y: bool,
+}
+
+/// CSS `mask-position`: the offset of the mask image in the box along each
+/// axis, a length or a percentage (`left` is `0%`, `center` `50%`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MaskPositionSpec {
+    /// Horizontal offset.
+    pub x: LengthSpec,
+    /// Vertical offset.
+    pub y: LengthSpec,
 }
 
 /// CSS `image-rendering`: how a raster image is sampled when it is drawn at
@@ -2191,6 +2244,40 @@ impl From<ImageFitSpec> for lumen_core::components::ImageFit {
             ImageFitSpec::None => lumen_core::components::ImageFit::None,
             ImageFitSpec::ScaleDown => lumen_core::components::ImageFit::ScaleDown,
         }
+    }
+}
+
+impl Attributes {
+    /// The element's CSS mask as the runtime paints it: `None` without a
+    /// `mask-image` or with `mask-image: none`. `source` is the image's
+    /// path as the stylesheet wrote it.
+    pub fn mask(&self) -> Option<(String, lumen_core::components::MaskLayout)> {
+        use lumen_core::components::{Length, MaskLayout, MaskSize};
+        let Some(MaskImageSpec::Url(source)) = &self.mask_image else {
+            return None;
+        };
+        let size = match self.mask_size {
+            None => MaskSize::Size([Length::Auto, Length::Auto]),
+            Some(MaskSizeSpec::Contain) => MaskSize::Contain,
+            Some(MaskSizeSpec::Cover) => MaskSize::Cover,
+            Some(MaskSizeSpec::Size(w, h)) => MaskSize::Size([w.into(), h.into()]),
+        };
+        let repeat = self
+            .mask_repeat
+            .unwrap_or(MaskRepeatSpec { x: true, y: true });
+        let position = self
+            .mask_position
+            .map_or([Length::Percent(0.0), Length::Percent(0.0)], |p| {
+                [p.x.into(), p.y.into()]
+            });
+        Some((
+            source.clone(),
+            MaskLayout {
+                size,
+                repeat: [repeat.x, repeat.y],
+                position,
+            },
+        ))
     }
 }
 

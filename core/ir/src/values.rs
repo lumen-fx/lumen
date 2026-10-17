@@ -251,6 +251,160 @@ pub fn parse_cursor(
     })
 }
 
+/// CSS `mask-image`: `none` or one `url(...)`.
+pub fn parse_mask_image(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::MaskImageSpec, ParseError> {
+    use crate::layout_ir::MaskImageSpec;
+    if value.trim() == "none" {
+        return Ok(MaskImageSpec::None);
+    }
+    match parse_url(ctx, name, value)? {
+        Some(path) => Ok(MaskImageSpec::Url(path)),
+        None => Err(bad(
+            ctx,
+            name,
+            value,
+            "expected 'none' or one 'url(...)' (gradients and several layers are not \
+             supported)"
+                .into(),
+        )),
+    }
+}
+
+/// CSS `mask-size`: `contain`, `cover`, or one or two of a length, a
+/// percentage, or `auto` (one value sets the width, and the height is
+/// `auto`).
+pub fn parse_mask_size(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::MaskSizeSpec, ParseError> {
+    use crate::layout_ir::MaskSizeSpec;
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.as_slice() {
+        ["contain"] => Ok(MaskSizeSpec::Contain),
+        ["cover"] => Ok(MaskSizeSpec::Cover),
+        [w] => Ok(MaskSizeSpec::Size(
+            parse_length(ctx, name, w)?,
+            LengthSpec::Auto,
+        )),
+        [w, h] => Ok(MaskSizeSpec::Size(
+            parse_length(ctx, name, w)?,
+            parse_length(ctx, name, h)?,
+        )),
+        _ => Err(bad(
+            ctx,
+            name,
+            value,
+            "expected 'contain', 'cover', or one or two lengths".into(),
+        )),
+    }
+}
+
+/// CSS `mask-repeat`: `repeat`, `no-repeat`, `repeat-x`, `repeat-y`, or two
+/// of `repeat` / `no-repeat`, one per axis.
+pub fn parse_mask_repeat(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::MaskRepeatSpec, ParseError> {
+    use crate::layout_ir::MaskRepeatSpec;
+    let axis = |v: &str| match v {
+        "repeat" => Ok(true),
+        "no-repeat" => Ok(false),
+        other => Err(bad(
+            ctx,
+            name,
+            value,
+            format!(
+                "unknown mask-repeat '{other}' (supported: repeat, no-repeat, repeat-x, repeat-y)"
+            ),
+        )),
+    };
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.as_slice() {
+        ["repeat-x"] => Ok(MaskRepeatSpec { x: true, y: false }),
+        ["repeat-y"] => Ok(MaskRepeatSpec { x: false, y: true }),
+        [both] => {
+            let r = axis(both)?;
+            Ok(MaskRepeatSpec { x: r, y: r })
+        }
+        [x, y] => Ok(MaskRepeatSpec {
+            x: axis(x)?,
+            y: axis(y)?,
+        }),
+        _ => Err(bad(
+            ctx,
+            name,
+            value,
+            "expected one or two of repeat, no-repeat".into(),
+        )),
+    }
+}
+
+/// CSS `mask-position`: one or two of `left`, `center`, `right`, `top`,
+/// `bottom`, a length, or a percentage. One value sets the axis its keyword
+/// names (the horizontal one for a length) and centers the other.
+pub fn parse_mask_position(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::MaskPositionSpec, ParseError> {
+    use crate::layout_ir::MaskPositionSpec;
+    enum Axis {
+        X,
+        Y,
+        Either,
+    }
+    let term = |v: &str| -> Result<(Axis, LengthSpec), ParseError> {
+        Ok(match v {
+            "left" => (Axis::X, LengthSpec::Percent(0.0)),
+            "right" => (Axis::X, LengthSpec::Percent(100.0)),
+            "top" => (Axis::Y, LengthSpec::Percent(0.0)),
+            "bottom" => (Axis::Y, LengthSpec::Percent(100.0)),
+            "center" => (Axis::Either, LengthSpec::Percent(50.0)),
+            other => match parse_length(ctx, name, other)? {
+                LengthSpec::Auto => {
+                    return Err(bad(ctx, name, value, "'auto' is not a position".into()));
+                }
+                len => (Axis::Either, len),
+            },
+        })
+    };
+    let center = LengthSpec::Percent(50.0);
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.as_slice() {
+        [one] => Ok(match term(one)? {
+            (Axis::Y, y) => MaskPositionSpec { x: center, y },
+            (_, x) => MaskPositionSpec { x, y: center },
+        }),
+        [a, b] => match (term(a)?, term(b)?) {
+            ((Axis::Y, y), (Axis::X | Axis::Either, x))
+            | ((Axis::Either, x), (Axis::Y, y))
+            | ((Axis::X, x), (Axis::Y | Axis::Either, y))
+            | ((Axis::Either, x), (Axis::Either, y)) => Ok(MaskPositionSpec { x, y }),
+            ((Axis::Either, y), (Axis::X, x)) => Ok(MaskPositionSpec { x, y }),
+            _ => Err(bad(
+                ctx,
+                name,
+                value,
+                "both values name the same axis".into(),
+            )),
+        },
+        _ => Err(bad(
+            ctx,
+            name,
+            value,
+            "expected one or two positions (edge offsets such as 'right 4px top 2px' are not \
+             supported)"
+                .into(),
+        )),
+    }
+}
+
 /// CSS `image-rendering`: `auto`, `smooth`, `pixelated`, or `crisp-edges`.
 pub fn parse_image_rendering(
     ctx: &str,
@@ -864,5 +1018,65 @@ mod tests {
     fn a_cursor_value_writes_back_as_css() {
         let spec = cursor(r#"url("pen.png") 2 14, crosshair"#).unwrap();
         assert_eq!(spec.to_css(), r#"url("pen.png") 2 14, crosshair"#);
+    }
+
+    /// The mask longhands take the web's spellings, and the ones this
+    /// subset leaves out are refused rather than read as something else.
+    #[test]
+    fn mask_longhands_read_the_web_values() {
+        use crate::layout_ir::{MaskImageSpec, MaskPositionSpec, MaskRepeatSpec, MaskSizeSpec};
+        assert_eq!(
+            parse_mask_image("x", "mask-image", r#"url("icons/pen.svg")"#).unwrap(),
+            MaskImageSpec::Url("icons/pen.svg".into())
+        );
+        assert_eq!(
+            parse_mask_image("x", "mask-image", "none").unwrap(),
+            MaskImageSpec::None
+        );
+        assert!(parse_mask_image("x", "mask-image", "linear-gradient(#000, #fff)").is_err());
+
+        assert_eq!(
+            parse_mask_size("x", "mask-size", "contain").unwrap(),
+            MaskSizeSpec::Contain
+        );
+        assert_eq!(
+            parse_mask_size("x", "mask-size", "16px").unwrap(),
+            MaskSizeSpec::Size(LengthSpec::Px(16.0), LengthSpec::Auto)
+        );
+        assert_eq!(
+            parse_mask_size("x", "mask-size", "50% 8").unwrap(),
+            MaskSizeSpec::Size(LengthSpec::Percent(50.0), LengthSpec::Px(8.0))
+        );
+
+        assert_eq!(
+            parse_mask_repeat("x", "mask-repeat", "repeat-x").unwrap(),
+            MaskRepeatSpec { x: true, y: false }
+        );
+        assert_eq!(
+            parse_mask_repeat("x", "mask-repeat", "no-repeat repeat").unwrap(),
+            MaskRepeatSpec { x: false, y: true }
+        );
+        assert!(parse_mask_repeat("x", "mask-repeat", "space").is_err());
+
+        let pos = |v: &str| parse_mask_position("x", "mask-position", v);
+        let p = |x, y| MaskPositionSpec { x, y };
+        assert_eq!(
+            pos("center").unwrap(),
+            p(LengthSpec::Percent(50.0), LengthSpec::Percent(50.0))
+        );
+        assert_eq!(
+            pos("top").unwrap(),
+            p(LengthSpec::Percent(50.0), LengthSpec::Percent(0.0))
+        );
+        assert_eq!(
+            pos("bottom right").unwrap(),
+            p(LengthSpec::Percent(100.0), LengthSpec::Percent(100.0))
+        );
+        assert_eq!(
+            pos("4px 25%").unwrap(),
+            p(LengthSpec::Px(4.0), LengthSpec::Percent(25.0))
+        );
+        assert!(pos("left right").is_err());
+        assert!(pos("right 4px top 2px").is_err());
     }
 }
