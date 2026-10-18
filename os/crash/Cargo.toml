@@ -1,0 +1,41 @@
+[package]
+name = "lumen-os-crash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Crash handling for Lumen apps - catches panics and native faults and hands them to the lumen-crash helper, which writes a minidump and a readable report. UnityCrashHandler / Breakpad analog."
+keywords = ["ui", "gui", "crash", "minidump", "lumen"]
+categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[dependencies]
+# The optional-subsystem entry this crate registers itself through.
+lumen-capability = { workspace = true }
+# The app's data directory, the renderer report, and the diagnostic lines
+# the report quotes.
+lumen-core = { workspace = true }
+lumen-crash-report = { workspace = true }
+bevy_ecs.workspace = true
+serde.workspace = true
+tracing.workspace = true
+crash-handler.workspace = true
+minidumper.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+] }
+
+[dev-dependencies]
+toml.workspace = true

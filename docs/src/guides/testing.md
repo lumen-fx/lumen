@@ -46,6 +46,12 @@ headless app costs nothing.
 Ctrl+C and `SIGTERM` exit 0 through the same graceful-close path an ordinary
 window close takes, so close handlers still fire.
 
+A headless run installs no [crash handling](packaging.md#when-the-app-crashes):
+a panic prints and exits the way it does in any Rust program, and no
+`lumen-crash` helper starts. When a windowed run in automation crashes, set
+`LUMEN_CRASH_NO_DIALOG=1` so the report is written and no message box waits
+for a click.
+
 ### A smoke test
 
 The shortest useful check is that the app builds its tree and ticks:

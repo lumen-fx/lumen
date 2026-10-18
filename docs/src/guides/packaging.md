@@ -223,6 +223,50 @@ wherever it is copied.
 Pass `--headless --ticks N` to a packaged app to run it window-free for a fixed
 number of ticks, which is how you smoke-test a package in CI.
 
+### When the app crashes
+
+A Lumen app that panics or faults leaves a crash report behind instead of
+just vanishing. On Windows this matters most: a release build runs without a
+console, so a crash with no report looks like a window that opens and closes.
+
+Every windowed launch starts `lumen-crash`, a small helper process, beside the
+app; a headless run starts none. When the app dies of a Rust panic on any
+thread, or of a native fault (an access violation on Windows; `SIGSEGV`,
+`SIGBUS`, `SIGABRT` or `SIGILL` on Linux and macOS), the helper writes two
+files to the `crashes/` folder of the app's data directory, named for the
+moment of the crash in UTC:
+
+- `2026-10-18_14-03-22.txt`, a summary to read: the panic's message, location,
+  thread and backtrace, or the fault, its address, the module it happened in
+  and the addresses on the crashing thread's stack; then the Lumen version,
+  the operating system, the GPU the app drew on (once it drew a frame), and
+  the last log lines.
+- `2026-10-18_14-03-22.dmp`, a minidump of the process for a debugger (Visual
+  Studio, WinDbg, lldb, or `minidump-stackwalk`).
+
+It then shows a message box that names the report and offers to open its
+folder. Nothing is sent anywhere.
+
+The data directory is the one a script's `files::data_dir()` returns:
+`lumen/<app id>` under `$XDG_DATA_HOME` (else `~/.local/share`) on Linux,
+`~/Library/Application Support` on macOS, and `%APPDATA%` on Windows, with
+the id from [`[app] id`](../reference/lumen-toml.md#app).
+
+A panic the app survives is not a crash. Lumen contains a panic in a script
+or a runtime module and keeps the app running; such a panic leaves no report
+once the app ends normally.
+
+The helper is found beside the app's executable, or beside the Lumen runtime
+library a C++ or Python program loads. Without it the app writes the summary
+itself, with no minidump and no message box; a native fault's summary then
+carries only the fault and its address. `lumenc package` does not copy the
+helper into the folder yet.
+
+Turn crash handling off with
+[`[crash] enabled = false`](../reference/lumen-toml.md#crash). Set
+`LUMEN_CRASH_NO_DIALOG=1` in the environment to keep the reports and skip the
+message box.
+
 ## Compile without packaging
 
 `lumenc build` runs the same compile step and writes the result to a file:

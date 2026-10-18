@@ -60,6 +60,9 @@ lumen-os-hotkey-capability = { workspace = true }
 lumen-os-launcher-capability = { workspace = true }
 lumen-os-lifecycle-capability = { workspace = true }
 lumen-os-power-capability = { workspace = true }
+# Crash handling: the panic hook, the fault handler and the lumen-crash
+# helper. Installed by its preflight on every interactive launch.
+lumen-os-crash-capability = { workspace = true }
 # The render backends, each through the crate that registers it as a
 # capability. The run loop picks one from the registry by `[render] backend`
 # and names neither; a static package links only the ones the app selects.

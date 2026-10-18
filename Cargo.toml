@@ -271,6 +271,7 @@ lumen-os-tray-capability = { path = "capabilities/os-tray" }
 lumen-os-launcher-capability = { path = "capabilities/os-launcher" }
 lumen-os-power-capability = { path = "capabilities/os-power" }
 lumen-os-lifecycle-capability = { path = "capabilities/os-lifecycle" }
+lumen-os-crash-capability = { path = "capabilities/os-crash" }
 lumen-mcp-capability = { path = "capabilities/mcp" }
 lumen-http-ureq-capability = { path = "capabilities/http-fetch" }
 lumen-async-tokio-capability = { path = "capabilities/async" }
@@ -283,6 +284,9 @@ lumen-capability-macros = { path = "core/capability-macros" }
 lumen-module-registry = { path = "core/module-registry" }
 lumen-modules = { path = "core/modules" }
 lumen-os-clipboard = { path = "os/clipboard" }
+lumen-os-crash = { path = "os/crash" }
+lumen-crash-report = { path = "os/crash-report" }
+lumen-crash = { path = "os/crash-helper" }
 lumen-os-dnd = { path = "os/dnd" }
 lumen-os-filedialog = { path = "os/filedialog" }
 lumen-os-hotkey = { path = "os/hotkey" }
@@ -469,6 +473,14 @@ rustix = "1"
 # Win32 calls std does not wrap: a `lumen-server --dev` watching the process
 # that started it. The version the rest of the tree already uses.
 windows-sys = "0.61"
+# The crash handler: the in-process hook that catches native faults
+# (signals, structured exceptions) and the IPC that hands a crashed process
+# to the `lumen-crash` helper, which writes the minidump. Both from
+# EmbarkStudios' crash-handling set; `minidump` reads the dump back for the
+# report's summary.
+crash-handler = "0.8"
+minidumper = "0.11"
+minidump = "0.26"
 
 # Serialization (used by lumen-mcp + lumen-mcp-server)
 serde = { version = "1", features = ["derive"] }

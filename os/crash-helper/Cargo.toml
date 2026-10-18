@@ -1,0 +1,45 @@
+[package]
+name = "lumen-crash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The crash helper every Lumen app starts beside itself: writes the minidump and the readable report when the app crashes, then tells the user where they are."
+keywords = ["ui", "gui", "crash", "minidump", "lumen"]
+categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[[bin]]
+name = "lumen-crash"
+path = "src/main.rs"
+
+# Nothing of the engine: the helper runs beside every app for the app's whole
+# life, so it starts in a moment and sits small. The dialog is the
+# platform's own, loaded only when there is something to say.
+[dependencies]
+lumen-crash-report = { workspace = true }
+minidumper.workspace = true
+minidump.workspace = true
+# Opens the reports' folder when the user asks; the same opener the
+# launcher capability wraps.
+opener.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# The tests start apps that install the in-process half against this
+# helper and then crash.
+lumen-os-crash = { workspace = true }
+lumen-capability = { workspace = true }
+toml.workspace = true
