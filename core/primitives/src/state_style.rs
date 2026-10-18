@@ -18,7 +18,7 @@
 //! disabled markup without a binding takes its `:disabled` styles as its
 //! own computed style (`lumen_scene::computed`); the patch here drives
 //! every dynamic case.
-//! [`eject_interaction_on_disable`] strips `Hovered` / `Pressed` /
+//! [`eject_interaction_on_disable`] strips `Hovered` / `HoverWithin` / `Pressed` /
 //! focus the moment an entity becomes disabled (moving keyboard focus
 //! to the next focusable) so no interaction state lingers on a
 //! greyed-out widget.
@@ -157,7 +157,8 @@ pub fn apply_state_visuals(
             Option<&Opacity>,
             &mut StyleOverrides,
             Has<StatePatched>,
-            Option<&Hovered>,
+            Has<HoverWithin>,
+            Has<Hovered>,
             Option<&Focused>,
             Option<&lumen_core::input::FocusVisible>,
             Option<&Pressed>,
@@ -165,7 +166,7 @@ pub fn apply_state_visuals(
             Has<DropHovered>,
         ),
         Or<(
-            With<Hovered>,
+            With<HoverWithin>,
             With<Focused>,
             With<Pressed>,
             With<Disabled>,
@@ -183,7 +184,7 @@ pub fn apply_state_visuals(
         (
             With<StatePatched>,
             With<StateVisuals>,
-            Without<Hovered>,
+            Without<HoverWithin>,
             Without<Focused>,
             Without<Pressed>,
             Without<Disabled>,
@@ -211,6 +212,7 @@ pub fn apply_state_visuals(
         mut overrides,
         patched,
         hovered,
+        over_target,
         focused,
         focus_visible,
         pressed,
@@ -222,12 +224,14 @@ pub fn apply_state_visuals(
         // a pointer press dragged off the captured widget presents
         // un-pressed even though `Pressed` (the capture marker) stays.
         // Keyboard presses (pointer up) present pressed without hover.
-        let active_on = pressed.is_some() && (hovered.is_some() || !primary_down);
+        // "Over the captured widget" is the hit target: capture confines
+        // `Hovered` to the pressed entity.
+        let active_on = pressed.is_some() && (over_target || !primary_down);
         // Field-wise merge: hover < focus < focus-visible < active <
         // disabled (disabled stamps last).
         let mut patch = StatePatch::default();
         for (marker_on, p) in [
-            (hovered.is_some(), &sv.hover),
+            (hovered, &sv.hover),
             (focused.is_some(), &sv.focus),
             (
                 focused.is_some() && focus_visible.is_some(),
@@ -327,7 +331,7 @@ fn write_out(
 /// enable/disable via `bind-disabled`), strip every live interaction
 /// state from it:
 ///
-/// * `Hovered` / `Pressed` are removed (with their transient tween
+/// * `Hovered` / `HoverWithin` / `Pressed` are removed (with their transient tween
 ///   components) - the hover tint / press tint end immediately, and a
 ///   pending release will not click (`dispatch_clicks` requires
 ///   `Pressed`). The tinted fill is let go of at once, so the
@@ -361,6 +365,7 @@ pub fn eject_interaction_on_disable(
         }
         commands.entity(entity).remove::<(
             Hovered,
+            HoverWithin,
             Pressed,
             Focused,
             FocusVisible,
@@ -467,7 +472,7 @@ mod tests {
             .id();
 
         // Hover -> patch applied.
-        world.entity_mut(e).insert(Hovered);
+        world.entity_mut(e).insert((Hovered, HoverWithin));
         run(&mut world);
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, red);
         assert_eq!(world.get::<Opacity>(e).map(|o| o.0), Some(0.8));
@@ -480,7 +485,7 @@ mod tests {
         assert_eq!(world.get::<Opacity>(e).map(|o| o.0), Some(0.8));
 
         // All states end -> baseline restored, capture removed.
-        world.entity_mut(e).remove::<Hovered>();
+        world.entity_mut(e).remove::<(Hovered, HoverWithin)>();
         world.entity_mut(e).remove::<Pressed>();
         run(&mut world);
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, idle);
@@ -611,7 +616,7 @@ mod tests {
                 TextStyle::default(),
             ))
             .id();
-        world.entity_mut(e).insert((Hovered, Disabled));
+        world.entity_mut(e).insert((Hovered, HoverWithin, Disabled));
         run(&mut world);
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, grey);
     }
@@ -637,12 +642,21 @@ mod eject_tests {
         let b = world.spawn((TabIndex(0), DocumentOrder(1))).id();
         let c = world.spawn((TabIndex(0), DocumentOrder(2))).id();
         world.insert_resource(FocusTracker(Some(b)));
-        world
-            .entity_mut(b)
-            .insert((Hovered, Pressed, Focused, FocusVisible, Disabled));
+        world.entity_mut(b).insert((
+            Hovered,
+            HoverWithin,
+            Pressed,
+            Focused,
+            FocusVisible,
+            Disabled,
+        ));
 
         run(&mut world);
         assert!(world.get::<Hovered>(b).is_none(), "hover stripped");
+        assert!(
+            world.get::<HoverWithin>(b).is_none(),
+            "hover chain stripped"
+        );
         assert!(world.get::<Pressed>(b).is_none(), "press stripped");
         assert!(world.get::<Focused>(b).is_none(), "focus stripped");
         assert_eq!(

@@ -2,12 +2,13 @@
 //!
 //! A window backend turns the OS pointer into [`PointerPressed`],
 //! [`PointerReleased`], [`PointerMoved`], [`MouseWheel`] and [`PointerLeft`],
-//! and the hit test marks the entity under it [`Hovered`]. The script event
+//! and the hit test marks the entity under it [`Hovered`] (and it and its
+//! ancestors [`HoverWithin`]). The script event
 //! driver reads the messages and aims each one at the hovered entity, which
 //! is how a handler bound with `on("pointerdown", ...)` fires. A page has no
 //! hit test to run: the browser already knows which element the pointer is
 //! over and says so on every event. This module writes the same messages and
-//! the same marker from that, so the driver runs unchanged. Pointer Events
+//! the same markers from that, so the driver runs unchanged. Pointer Events
 //! cover the mouse, a pen and touch alike, so a tap reaches a script as the
 //! same `pointerdown` and `pointerup` a click does.
 //!
@@ -46,8 +47,9 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::components::Disabled;
 use lumen_core::input::{
-    Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind, PointerLeft,
-    PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
+    HoverWithin, Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind,
+    PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
+    reconcile_hover_chain,
 };
 use lumen_core::time::Instant;
 use wasm_bindgen::JsCast;
@@ -375,7 +377,10 @@ pub fn drain_pointer_events(
     mut commands: Commands,
     mut state: ResMut<PointerState>,
     mut writers: PointerWriters,
-    hovered: Query<Entity, With<Hovered>>,
+    (hovered, chain): (
+        Query<Entity, With<Hovered>>,
+        Query<Entity, With<HoverWithin>>,
+    ),
     parents: Query<&ChildOf>,
     disabled: Query<(), With<Disabled>>,
     mut tracking: Local<PointerTracking>,
@@ -571,6 +576,9 @@ pub fn drain_pointer_events(
     {
         commands.entity(entity).try_insert(Hovered);
     }
+    // The hover chain follows: the target and its ancestors are hovered,
+    // as the browser's own `:hover` has them.
+    reconcile_hover_chain(&mut commands, hover, &parents, &chain);
 }
 
 /// The message writers [`drain_pointer_events`] fills, grouped so the system

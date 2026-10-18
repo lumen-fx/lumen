@@ -525,7 +525,9 @@ pub fn focused_node() -> Option<u64> {
     focus_cell().read().ok().and_then(|g| g.0)
 }
 
-/// `document.hovered()`: the hovered node handle, or `None`.
+/// `document.hovered()`: the innermost node under the pointer (packed
+/// handle), or `None`. Its ancestors count as hovered for `:hover`, but
+/// this names the hit target alone, like `event.target`.
 pub fn hovered_node() -> Option<u64> {
     focus_cell().read().ok().and_then(|g| g.1)
 }

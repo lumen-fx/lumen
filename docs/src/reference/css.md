@@ -93,7 +93,7 @@ the value in when the element enters that state.
 
 | Pseudo-class | Matches |
 | --- | --- |
-| `:hover` | Pointer over the element. |
+| `:hover` | Pointer over the element or one of its descendants. |
 | `:focus` | Element has keyboard focus. |
 | `:focus-visible` | Focus arrived from the keyboard. |
 | `:active` | Element is pressed. |

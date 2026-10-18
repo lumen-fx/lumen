@@ -34,7 +34,7 @@ Switch panels by clicking a tab. There is no keyboard shortcut for switching.
 
 | Tab | Contents |
 |-----|----------|
-| Elements | Live element tree, one row per entity, syntax-colored the way a browser colors markup: tag, `#id.class`, `[WxH]`, and `:hover`/`:focus`/`:press` state each in their own color. Hovering a row overlays that element in the app with a tinted box and a `<tag>#id WxH` chip; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
+| Elements | Live element tree, one row per entity, syntax-colored the way a browser colors markup: tag, `#id.class`, `[WxH]`, and `:hover`/`:focus`/`:press` state each in their own color; `:hover` marks the innermost element under the pointer, not its ancestors. Hovering a row overlays that element in the app with a tinted box and a `<tag>#id WxH` chip; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
 | Signals | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
 | Network | HTTP exchanges captured from script `fetch()` calls, oldest first: status, method, URL, and tag. Holds the last 128. |
 

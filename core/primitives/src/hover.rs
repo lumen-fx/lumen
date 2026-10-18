@@ -2,7 +2,8 @@
 //! folded into a single [`Interaction`] fat component.
 //!
 //! `Interaction.hover_tint` blends the [`Visuals`] solid fill toward a
-//! tint while the entity is [`Hovered`] or [`Focused`]. `press_tint`
+//! tint while the entity is hovered ([`HoverWithin`]: the pointer is over
+//! it or one of its descendants) or [`Focused`]. `press_tint`
 //! overrides that blend when the entity is [`Pressed`] - pressed >
 //! hovered/focused > idle. `focus_outline` paints a stroked ring around
 //! the entity while it has [`Focused`]. Gradient fills are skipped by
@@ -173,17 +174,17 @@ pub fn apply_state_borders(
             &mut Visuals,
             &mut StyleOverrides,
             Has<StateBorderHeld>,
-            Option<&Hovered>,
+            Option<&HoverWithin>,
             Option<&Focused>,
         ),
-        Or<(With<Hovered>, With<Focused>)>,
+        Or<(With<HoverWithin>, With<Focused>)>,
     >,
     mut idle: Query<
         (Entity, &mut Visuals, &mut StyleOverrides),
         (
             With<StateBorderHeld>,
             With<Interaction>,
-            Without<Hovered>,
+            Without<HoverWithin>,
             Without<Focused>,
         ),
     >,
@@ -368,7 +369,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 /// they stand this frame. A class that changes the resting `bg` while the
 /// pointer is over the element is what the tint fades back to.
 ///
-/// Idle entities (no `Hovered`/`Focused`) target 0; active ones target 1.
+/// Idle entities (neither hovered nor focused) target 0; active ones target 1.
 /// Once an idle entity finishes draining (progress = 0), the tween is
 /// removed and the fill let go, to keep archetype churn bounded.
 #[allow(clippy::type_complexity)]
@@ -385,7 +386,7 @@ pub fn apply_hover_tint(
             Option<&mut HoverTween>,
             Option<&crate::transition::TransitionSpecs>,
         ),
-        Or<(With<Hovered>, With<Focused>)>,
+        Or<(With<HoverWithin>, With<Focused>)>,
     >,
     mut idle: Query<
         (
@@ -396,7 +397,7 @@ pub fn apply_hover_tint(
             &mut HoverTween,
             Option<&crate::transition::TransitionSpecs>,
         ),
-        (Without<Hovered>, Without<Focused>),
+        (Without<HoverWithin>, Without<Focused>),
     >,
     mut orphaned: Query<
         (Entity, &mut Visuals, &mut StyleOverrides),
@@ -769,7 +770,7 @@ mod state_border_tests {
         assert_eq!(world.get::<Visuals>(e).unwrap().border, None);
 
         // Hover -> hover border, base captured.
-        world.entity_mut(e).insert(Hovered);
+        world.entity_mut(e).insert(HoverWithin);
         run(&mut world);
         assert_eq!(
             world.get::<Visuals>(e).unwrap().border,
@@ -784,7 +785,7 @@ mod state_border_tests {
         assert_eq!(world.get::<Visuals>(e).unwrap().border, Some(border(2.0)));
 
         // Both end -> base (None) restored, capture removed.
-        world.entity_mut(e).remove::<Hovered>();
+        world.entity_mut(e).remove::<HoverWithin>();
         world.entity_mut(e).remove::<lumen_core::input::Focused>();
         run(&mut world);
         assert_eq!(world.get::<Visuals>(e).unwrap().border, None);

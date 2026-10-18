@@ -33,11 +33,12 @@ fn opens_a_menu(button: &DropdownButton) -> bool {
 }
 
 /// While a menu bar menu is open, open the menu of the bar button the
-/// pointer has just moved onto in its place.
+/// pointer has just moved onto in its place. The button counts as moved
+/// onto when the pointer reaches it or any part of it, its label included.
 pub fn switch_menubar_menus_on_hover(
     mut store: ResMut<PropertyStore>,
     buttons: Query<&DropdownButton>,
-    newly_hovered: Query<Entity, Added<Hovered>>,
+    newly_hovered: Query<Entity, Added<HoverWithin>>,
 ) {
     for entity in &newly_hovered {
         let Ok(target) = buttons.get(entity) else {
@@ -265,7 +266,7 @@ mod tests {
             world.resource::<PropertyStore>().get_global_bool(s) == Some(true)
         };
 
-        world.entity_mut(edit).insert(Hovered);
+        world.entity_mut(edit).insert(HoverWithin);
         world
             .run_system_once(switch_menubar_menus_on_hover)
             .unwrap();
@@ -273,20 +274,20 @@ mod tests {
             !is_open(&world, "__menu_open:menubar-1"),
             "nothing was open"
         );
-        world.entity_mut(edit).remove::<Hovered>();
+        world.entity_mut(edit).remove::<HoverWithin>();
 
         world
             .resource_mut::<PropertyStore>()
             .set_global_bool("__menu_open:menubar-0", true);
-        world.entity_mut(combo).insert(Hovered);
+        world.entity_mut(combo).insert(HoverWithin);
         world
             .run_system_once(switch_menubar_menus_on_hover)
             .unwrap();
         assert!(is_open(&world, "__menu_open:menubar-0"));
         assert!(!is_open(&world, "__dropdown_open:fruit"));
-        world.entity_mut(combo).remove::<Hovered>();
+        world.entity_mut(combo).remove::<HoverWithin>();
 
-        world.entity_mut(edit).insert(Hovered);
+        world.entity_mut(edit).insert(HoverWithin);
         world
             .run_system_once(switch_menubar_menus_on_hover)
             .unwrap();
