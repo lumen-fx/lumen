@@ -20,7 +20,12 @@
 //!   second finger. A pointer captured with `set_pointer_capture` targets
 //!   its capturing node instead, wherever it is, and a touch is captured by
 //!   the node it went down on, as on the web. `pointerenter` /
-//!   `pointerleave` come from the hover marker transitions.
+//!   `pointerleave` come from the hover chain (`HoverWithin`): as on the
+//!   web, an element gets `pointerenter` when the pointer reaches it or one
+//!   of its descendants and `pointerleave` when the pointer is over neither,
+//!   so crossing from a button onto its icon fires `pointerenter` on the
+//!   icon only. Entered elements hear it outermost first, left ones
+//!   innermost first.
 //! - `keydown` targets the focused entity (from the input router's
 //!   `FocusedKey`); `keyup` targets the focused entity. With nothing focused
 //!   both go to the document root, the way a browser sends them to the body,
@@ -663,8 +668,9 @@ pub fn queue_state_events(
     internal: Query<(), With<WidgetInternal>>,
     gained_focus: Query<Entity, Added<Focused>>,
     mut lost_focus: RemovedComponents<Focused>,
-    gained_hover: Query<Entity, Added<Hovered>>,
-    mut lost_hover: RemovedComponents<Hovered>,
+    gained_hover: Query<Entity, Added<HoverWithin>>,
+    mut lost_hover: RemovedComponents<HoverWithin>,
+    parents: Query<&ChildOf>,
     scrolled: Query<Entity, Changed<ScrollOffset>>,
     fields: Query<FieldText>,
 ) {
@@ -681,8 +687,15 @@ pub fn queue_state_events(
     for e in lost_focus.read() {
         queue.push((base(e, "blur"), e));
     }
-    // pointerenter / pointerleave.
-    for e in gained_hover.iter() {
+    // pointerenter / pointerleave. Entered elements outermost first; the
+    // hit test removes the chain innermost first, which is the order the
+    // removals read back in.
+    let mut entered: Vec<(usize, Entity)> = gained_hover
+        .iter()
+        .map(|e| (parents.iter_ancestors(e).count(), e))
+        .collect();
+    entered.sort_unstable();
+    for (_, e) in entered {
         queue.push((base(e, "pointerenter"), e));
     }
     for e in lost_hover.read() {
@@ -884,6 +897,87 @@ pub(crate) mod text_event_tests {
             ],
         );
         event::clear_all_bindings();
+    }
+
+    /// `pointerenter` / `pointerleave` follow the hover chain, as on the
+    /// web: moving from a button onto its icon enters the icon only, the
+    /// button hears nothing, and leaving both fires `pointerleave` on the
+    /// icon first. Entering from outside fires outermost first.
+    #[test]
+    fn pointerenter_and_pointerleave_follow_the_hover_chain() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        let button = world.spawn_empty().id();
+        let icon = world.spawn(ChildOf(button)).id();
+        let seen: Arc<Mutex<Vec<(String, &'static str)>>> = Arc::default();
+        for (e, name) in [(button, "button"), (icon, "icon")] {
+            let node = lumen_core::node::NodeHandle::new(e).pack();
+            for t in ["pointerenter", "pointerleave"] {
+                let sink = Arc::clone(&seen);
+                event::register_native_binding(
+                    node,
+                    t.to_string(),
+                    false,
+                    Arc::new(move || sink.lock().unwrap().push((event::event_type(), name))),
+                );
+            }
+        }
+        let hover = |world: &mut World, hit: Option<Entity>| {
+            world
+                .run_system_once(
+                    move |mut commands: Commands,
+                          parents: Query<&ChildOf>,
+                          chain: Query<Entity, With<HoverWithin>>| {
+                        lumen_core::input::reconcile_hover_chain(
+                            &mut commands,
+                            hit,
+                            &parents,
+                            &chain,
+                        );
+                    },
+                )
+                .unwrap();
+        };
+        // A registered system keeps its change ticks and removal cursor
+        // between runs, as the schedule does; `run_system_once` would see
+        // every marker as newly added.
+        world.init_resource::<PendingDomEvents>();
+        world.init_resource::<Messages<ControlInput>>();
+        let queue = world.register_system(queue_state_events);
+        let drive = |world: &mut World| {
+            world.run_system(queue).expect("system ran");
+            deliver_state_events(world);
+        };
+        let take = |seen: &Arc<Mutex<Vec<(String, &'static str)>>>| {
+            std::mem::take(&mut *seen.lock().unwrap())
+                .into_iter()
+                .map(|(t, n)| format!("{t} {n}"))
+                .collect::<Vec<_>>()
+        };
+
+        hover(&mut world, Some(button));
+        drive(&mut world);
+        assert_eq!(take(&seen), ["pointerenter button"]);
+
+        hover(&mut world, Some(icon));
+        drive(&mut world);
+        assert_eq!(
+            take(&seen),
+            ["pointerenter icon"],
+            "the button stays entered"
+        );
+
+        hover(&mut world, None);
+        drive(&mut world);
+        assert_eq!(take(&seen), ["pointerleave icon", "pointerleave button"]);
+
+        hover(&mut world, Some(icon));
+        drive(&mut world);
+        assert_eq!(take(&seen), ["pointerenter button", "pointerenter icon"]);
     }
 
     #[test]

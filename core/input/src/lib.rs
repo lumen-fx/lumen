@@ -2,7 +2,8 @@
 //!
 //! - Reads pointer messages from the main-world bus and [`PointerState`].
 //! - Computes the entity under the cursor each tick.
-//! - Inserts/removes [`Hovered`] on entities entering and leaving hover.
+//! - Inserts/removes [`Hovered`] on the entity under the pointer, and
+//!   [`HoverWithin`](lumen_core::input::HoverWithin) on it and its ancestors.
 //! - Inserts [`Pressed`] on `PointerPressed` against the hovered entity; removes it and emits [`ClickEvent`] on `PointerReleased` against the same entity.
 //! - Hit-tests via AABB against [`Transform`] for entities carrying [`Transform`] and an
 //!   input-relevant component: [`Visuals`], [`Scroll`], or [`TabIndex`]. Whether the element
@@ -1037,7 +1038,9 @@ impl Plugin for InputPlugin {
     }
 }
 
-/// AABB hit-test based on `PointerState.position`. Inserts/removes [`Hovered`].
+/// AABB hit-test based on `PointerState.position`. Inserts/removes
+/// [`Hovered`] on the hit target and
+/// [`HoverWithin`](lumen_core::input::HoverWithin) on it and its ancestors.
 ///
 /// Scroll-aware: walks the [`ChildOf`] chain for each candidate, accumulating
 /// ancestor [`ScrollOffset`] values, and shifts the candidate's logical AABB
@@ -1105,7 +1108,10 @@ pub fn hit_test(
     >,
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,
-    currently_hovered: Query<Entity, With<Hovered>>,
+    (currently_hovered, chain): (
+        Query<Entity, With<Hovered>>,
+        Query<Entity, With<lumen_core::input::HoverWithin>>,
+    ),
     visibles: Query<&lumen_core::components::Visible>,
     styles: Query<&lumen_core::components::Style>,
     disableds: Query<(), With<lumen_core::components::Disabled>>,
@@ -1259,6 +1265,11 @@ pub fn hit_test(
     {
         commands.entity(next).insert(Hovered);
     }
+    // The hover chain follows the hit target: it and its ancestors count as
+    // hovered (CSS `:hover`). Mid-press it is the captured entity and its
+    // ancestors while over it, and nothing while dragged off, because `hit`
+    // already went through the capture gate above.
+    lumen_core::input::reconcile_hover_chain(&mut commands, hit, &parents, &chain);
     *current = hit;
 }
 
@@ -3100,9 +3111,164 @@ mod press_capture_tests {
 }
 
 #[cfg(test)]
+mod hover_chain_tests {
+    //! The hover chain: the hit target and every ancestor of it carry
+    //! `HoverWithin` (CSS `:hover`), while `Hovered` stays on the hit target
+    //! alone. Mid-press the chain follows the capture rule of the hit target.
+    use super::*;
+    use bevy_ecs::schedule::Schedule;
+    use glam::Vec2;
+    use lumen_core::components::{Transform, Visuals};
+    use lumen_core::input::HoverWithin;
+
+    fn hit_schedule() -> Schedule {
+        let mut s = Schedule::default();
+        s.add_systems(hit_test);
+        s
+    }
+
+    fn set_pointer(world: &mut World, x: f32, y: f32, down: bool) {
+        world.insert_resource(PointerState {
+            position: Some(Vec2::new(x, y)),
+            primary_down: down,
+        });
+    }
+
+    fn boxed(world: &mut World, x: f32, w: f32, parent: Option<Entity>) -> Entity {
+        let mut e = world.spawn((
+            Transform::new(Vec2::new(x, 0.0), Vec2::new(w, 50.0)),
+            Visuals::default(),
+        ));
+        if let Some(p) = parent {
+            e.insert(ChildOf(p));
+        }
+        e.id()
+    }
+
+    fn chain(world: &mut World) -> Vec<Entity> {
+        let mut q = world.query_filtered::<Entity, With<HoverWithin>>();
+        let mut v: Vec<Entity> = q.iter(world).collect();
+        v.sort();
+        v
+    }
+
+    fn sorted(mut v: Vec<Entity>) -> Vec<Entity> {
+        v.sort();
+        v
+    }
+
+    /// root (0..300) > button (0..200) > icon (50..100); sibling (200..300)
+    /// under root.
+    fn tree(world: &mut World) -> (Entity, Entity, Entity, Entity) {
+        let root = boxed(world, 0.0, 300.0, None);
+        let button = boxed(world, 0.0, 200.0, Some(root));
+        let icon = boxed(world, 50.0, 50.0, Some(button));
+        let sibling = boxed(world, 200.0, 100.0, Some(root));
+        (root, button, icon, sibling)
+    }
+
+    #[test]
+    fn the_hit_target_and_its_ancestors_are_hovered() {
+        let mut world = World::new();
+        let mut sched = hit_schedule();
+        let (root, button, icon, sibling) = tree(&mut world);
+
+        set_pointer(&mut world, 75.0, 25.0, false);
+        sched.run(&mut world);
+        assert!(
+            world.get::<Hovered>(icon).is_some(),
+            "the icon is the hit target"
+        );
+        assert!(
+            world.get::<Hovered>(button).is_none(),
+            "Hovered stays single"
+        );
+        assert_eq!(chain(&mut world), sorted(vec![root, button, icon]));
+
+        // Onto the button's padding: the icon leaves the chain, the button
+        // and root stay in it untouched.
+        set_pointer(&mut world, 10.0, 25.0, false);
+        sched.run(&mut world);
+        assert_eq!(chain(&mut world), sorted(vec![root, button]));
+
+        // Onto the sibling: the button leaves, root stays.
+        set_pointer(&mut world, 250.0, 25.0, false);
+        sched.run(&mut world);
+        assert_eq!(chain(&mut world), sorted(vec![root, sibling]));
+
+        // Off the window: nothing is hovered.
+        world.insert_resource(PointerState::default());
+        sched.run(&mut world);
+        assert!(chain(&mut world).is_empty());
+    }
+
+    #[test]
+    fn a_still_pointer_touches_nothing() {
+        let mut world = World::new();
+        let mut sched = hit_schedule();
+        let (_, button, _, _) = tree(&mut world);
+        set_pointer(&mut world, 75.0, 25.0, false);
+        sched.run(&mut world);
+        let before = world
+            .entity(button)
+            .get_change_ticks::<HoverWithin>()
+            .unwrap()
+            .added;
+        world.increment_change_tick();
+        sched.run(&mut world);
+        let after = world
+            .entity(button)
+            .get_change_ticks::<HoverWithin>()
+            .unwrap()
+            .added;
+        assert_eq!(
+            before, after,
+            "the marker is not re-inserted on a still pointer"
+        );
+    }
+
+    #[test]
+    fn a_lost_marker_comes_back() {
+        // Another system stripped the chain (a disable, a keyboard move in a
+        // popup): the next hit test puts it back while the pointer rests.
+        let mut world = World::new();
+        let mut sched = hit_schedule();
+        let (root, button, icon, _) = tree(&mut world);
+        set_pointer(&mut world, 75.0, 25.0, false);
+        sched.run(&mut world);
+        world.entity_mut(button).remove::<HoverWithin>();
+        sched.run(&mut world);
+        assert_eq!(chain(&mut world), sorted(vec![root, button, icon]));
+    }
+
+    #[test]
+    fn mid_press_the_chain_is_the_captured_entity_and_its_ancestors() {
+        let mut world = World::new();
+        let mut sched = hit_schedule();
+        let (root, button, icon, sibling) = tree(&mut world);
+        set_pointer(&mut world, 75.0, 25.0, false);
+        sched.run(&mut world);
+        world.entity_mut(icon).insert(Pressed);
+
+        // Dragged onto the sibling: nothing is hovered, the sibling and its
+        // parent included.
+        set_pointer(&mut world, 250.0, 25.0, true);
+        sched.run(&mut world);
+        assert!(chain(&mut world).is_empty(), "dragged off: no chain");
+        assert!(world.get::<HoverWithin>(sibling).is_none());
+
+        // Back over the captured icon: it and its ancestors again.
+        set_pointer(&mut world, 75.0, 25.0, true);
+        sched.run(&mut world);
+        assert_eq!(chain(&mut world), sorted(vec![root, button, icon]));
+    }
+}
+
+#[cfg(test)]
 mod disabled_hit_tests {
     //! Spec section 0: disabled widgets take no hover - no hover tint and no
-    //! tooltip trigger (`record_hover_started` keys on `Added<Hovered>`).
+    //! tooltip trigger (`record_hover_started` keys on `Added<HoverWithin>`,
+    //! and the chain only ever grows up from the hit target).
     //! A disabled ancestor disables the whole subtree.
     use super::*;
     use bevy_ecs::system::RunSystemOnce;

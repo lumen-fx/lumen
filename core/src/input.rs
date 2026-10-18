@@ -938,9 +938,61 @@ pub struct PointerState {
     pub primary_down: bool,
 }
 
-/// Marker inserted/removed by the hit-test system to mark the entity currently under the pointer; matched by style systems for `:hover` behaviour.
+/// Marker on the one entity under the primary pointer, the hit target:
+/// the innermost element the hit test picked, like a browser's
+/// `event.target`. Pointer events, presses and clicks aim at it, and
+/// pointer capture confines it to the pressed entity mid-press.
+///
+/// For "is this element hovered" in the CSS `:hover` sense, which also
+/// holds for every ancestor of the hit target, read [`HoverWithin`].
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Hovered;
+
+/// Marker on the hit target ([`Hovered`]) and on every ancestor of it:
+/// the hover chain. An element counts as hovered while the pointer is over
+/// it or over any of its descendants, as CSS `:hover` does in a browser, so
+/// a button stays hovered while the pointer is over its icon. `:hover`
+/// styles, the hover tint, `<tooltip>` triggers and `pointerenter` /
+/// `pointerleave` key off this marker.
+///
+/// Whatever places [`Hovered`] keeps the chain in step through
+/// [`reconcile_hover_chain`].
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct HoverWithin;
+
+/// Put [`HoverWithin`] on `hit` and its ancestors and take it off every
+/// other entity carrying it, touching only the entities whose membership
+/// changes. `chain` is the live set of [`HoverWithin`] entities.
+///
+/// Removals go innermost first and insertions outermost first, the order a
+/// browser fires `pointerleave` and `pointerenter` in.
+pub fn reconcile_hover_chain(
+    commands: &mut Commands,
+    hit: Option<Entity>,
+    parents: &Query<&ChildOf>,
+    chain: &Query<Entity, With<HoverWithin>>,
+) {
+    // Innermost first: the hit target, then each ancestor up to the root.
+    let mut want: smallvec::SmallVec<[Entity; 32]> = smallvec::SmallVec::new();
+    if let Some(hit) = hit {
+        want.push(hit);
+        want.extend(parents.iter_ancestors(hit));
+    }
+    let mut stale: smallvec::SmallVec<[(usize, Entity); 8]> = chain
+        .iter()
+        .filter(|e| !want.contains(e))
+        .map(|e| (parents.iter_ancestors(e).count(), e))
+        .collect();
+    stale.sort_unstable_by(|a, b| b.cmp(a));
+    for (_, e) in stale {
+        commands.entity(e).try_remove::<HoverWithin>();
+    }
+    for &e in want.iter().rev() {
+        if !chain.contains(e) {
+            commands.entity(e).try_insert(HoverWithin);
+        }
+    }
+}
 
 /// Marker indicating an active primary-button press on the entity.
 /// Inserted on `PointerPressed`; removed on `PointerReleased` and `PointerLeft`.

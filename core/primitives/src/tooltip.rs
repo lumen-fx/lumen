@@ -1,9 +1,11 @@
 //! Hover-delay tooltip widget driven by markup `<tooltip text="Save" delay="500">...trigger...</tooltip>`.
 //!
-//! - The single child is the trigger; the tooltip remains invisible until the trigger has carried [`Hovered`] for `delay` milliseconds (default 500, `--lumen-tooltip-delay` token).
-//! - The trigger entity carries [`TooltipSource`]; the first tick of [`Hovered`] records [`HoverStartedAt`].
+//! - The single child is the trigger; the tooltip remains invisible until the trigger has been hovered for `delay` milliseconds (default 500, `--lumen-tooltip-delay` token).
+//! - A trigger is hovered while it carries [`HoverWithin`]: the pointer is over it or over any of its descendants, so a button's tooltip holds while the pointer crosses onto the button's icon.
+//! - The trigger entity carries [`TooltipSource`]; the first tick of [`HoverWithin`] records [`HoverStartedAt`].
 //! - Once dwell exceeds the configured delay, a [`TooltipPopup`] entity is spawned below-right of the CURSOR (Qt `QToolTip` placement), flipping above/left near viewport edges - see [`cursor_tooltip_origin`].
-//! - The popup despawns one tick after [`Hovered`] clears.
+//! - With tooltip triggers nested inside each other, only the innermost hovered one shows, as with nested `title` attributes in a browser.
+//! - The popup despawns one tick after its trigger stops being hovered, or stops being the innermost hovered trigger.
 //!
 //! ## Canonical `#[derive(Widget)]` port
 //!
@@ -29,7 +31,7 @@ use glam::Vec2;
 use lumen_core::components::{
     DomHidden, Edges, LumenClasses, LumenTag, Position, Style, StyleDirty, TextContent, Transform,
 };
-use lumen_core::input::Hovered;
+use lumen_core::input::HoverWithin;
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
@@ -75,9 +77,9 @@ impl Default for TooltipSource {
     }
 }
 
-/// Per-entity timestamp of when [`Hovered`] was first inserted.
-/// Recorded on `Added<Hovered>` and used to compute dwell time before
-/// the tooltip popup is allowed to appear.
+/// When a tooltip trigger started being hovered. Recorded on
+/// `Added<HoverWithin>` and used to compute dwell time before the tooltip
+/// popup is allowed to appear.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct HoverStartedAt(pub Instant);
 
@@ -112,23 +114,41 @@ impl Plugin for TooltipPlugin {
     }
 }
 
-/// Stamp `HoverStartedAt` on any entity that just gained `Hovered`.
+/// Stamp `HoverStartedAt` on any tooltip trigger that just started being
+/// hovered, and drop it from one that stopped, so a trigger hovered again
+/// later waits out its delay afresh instead of showing on a stale stamp.
 ///
-/// A tooltip trigger also asks the loop to wake when its delay runs out:
-/// with the pointer resting on the trigger nothing else may tick, and the
-/// popup only spawns on a tick.
+/// The trigger also asks the loop to wake when its delay runs out: with
+/// the pointer resting on the trigger nothing else may tick, and the popup
+/// only spawns on a tick.
 fn record_hover_started(
     mut commands: Commands,
-    new_hovers: Query<(Entity, Option<&TooltipSource>), Added<Hovered>>,
+    new_hovers: Query<(Entity, &TooltipSource), Added<HoverWithin>>,
+    mut left: RemovedComponents<HoverWithin>,
+    stamped: Query<(), (With<HoverStartedAt>, Without<HoverWithin>)>,
     wake: Option<Res<WakeDeadline>>,
 ) {
+    for e in left.read() {
+        if stamped.contains(e) {
+            commands.entity(e).try_remove::<HoverStartedAt>();
+        }
+    }
     let now = Instant::now();
     for (e, src) in &new_hovers {
         commands.entity(e).insert(HoverStartedAt(now));
-        if let (Some(src), Some(wake)) = (src, wake.as_deref()) {
+        if let Some(wake) = wake.as_deref() {
             wake.request(now + Duration::from_millis(u64::from(src.delay_ms)));
         }
     }
+}
+
+/// The innermost hovered tooltip trigger: of the triggers on the hover
+/// chain, the one deepest in the tree. Only it shows a tooltip.
+fn innermost_trigger(
+    hovered: impl Iterator<Item = Entity>,
+    parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    hovered.max_by_key(|&e| (parents.iter_ancestors(e).count(), e))
 }
 
 /// Conservative pre-layout estimate of the tooltip body size used by
@@ -167,8 +187,8 @@ pub fn cursor_tooltip_origin(cursor: Vec2, popup: Vec2, viewport: Vec2, offset: 
     Vec2::new(x, y)
 }
 
-/// Spawn a popup for any hovered `<tooltip>` trigger whose dwell
-/// exceeds the configured delay and whose popup doesn't already
+/// Spawn a popup for the innermost hovered `<tooltip>` trigger once its
+/// dwell exceeds the configured delay and its popup doesn't already
 /// exist.
 ///
 /// Placement is CURSOR-relative (Qt style): below-right of the pointer
@@ -188,7 +208,10 @@ pub fn cursor_tooltip_origin(cursor: Vec2, popup: Vec2, viewport: Vec2, offset: 
 #[allow(clippy::too_many_arguments)]
 fn spawn_tooltip_popups(
     mut commands: Commands,
-    triggers: Query<(Entity, &TooltipSource, &Transform, &HoverStartedAt), With<Hovered>>,
+    triggers: Query<
+        (Entity, &TooltipSource, &Transform, Option<&HoverStartedAt>),
+        With<HoverWithin>,
+    >,
     existing: Query<&TooltipPopup>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
@@ -202,9 +225,12 @@ fn spawn_tooltip_popups(
         .map(|v| v.size)
         .unwrap_or(Vec2::new(f32::INFINITY, f32::INFINITY));
     let cursor = pointer.as_ref().and_then(|p| p.position);
-    for (trigger, src, t, started) in &triggers {
+    let innermost = innermost_trigger(triggers.iter().map(|(e, ..)| e), &parents);
+    // The innermost trigger is picked before its dwell stamp lands, so an
+    // outer trigger never shows for the tick in between.
+    if let Some((trigger, src, t, Some(started))) = innermost.and_then(|e| triggers.get(e).ok()) {
         if already.contains(&trigger) {
-            continue;
+            return;
         }
         let due = started.0 + Duration::from_millis(u64::from(src.delay_ms));
         if now < due {
@@ -213,7 +239,7 @@ fn spawn_tooltip_popups(
             if let Some(wake) = wake.as_deref() {
                 wake.request(due);
             }
-            continue;
+            return;
         }
         let est = estimated_tooltip_size(&src.text);
         let anchor = cursor.unwrap_or(t.absolute);
@@ -266,14 +292,19 @@ fn spawn_tooltip_popups(
 }
 
 /// Drop popups whose trigger is no longer hovered (or no longer
-/// exists).
+/// exists), or is no longer the innermost hovered trigger.
 fn despawn_tooltip_popups(
     mut commands: Commands,
     popups: Query<(Entity, &TooltipPopup)>,
-    hovered: Query<(), With<Hovered>>,
+    hovered: Query<Entity, (With<TooltipSource>, With<HoverWithin>)>,
+    parents: Query<&ChildOf>,
 ) {
+    if popups.is_empty() {
+        return;
+    }
+    let innermost = innermost_trigger(hovered.iter(), &parents);
     for (popup, info) in &popups {
-        if hovered.get(info.trigger).is_err() {
+        if innermost != Some(info.trigger) {
             commands.entity(popup).despawn();
         }
     }
@@ -377,6 +408,30 @@ mod tests {
         assert_eq!(o, Vec2::ZERO);
     }
 
+    /// A trigger the pointer leaves loses its dwell stamp, so hovering it
+    /// again waits out the delay from the new hover.
+    #[test]
+    fn leaving_a_trigger_drops_its_dwell_stamp() {
+        let mut app = App::new();
+        app.add_plugin(TooltipPlugin);
+        let e = app
+            .world
+            .spawn((
+                TooltipSource {
+                    text: "Save".into(),
+                    ..Default::default()
+                },
+                Transform::default(),
+                HoverWithin,
+            ))
+            .id();
+        app.tick();
+        assert!(app.world.get::<HoverStartedAt>(e).is_some());
+        app.world.entity_mut(e).remove::<HoverWithin>();
+        app.tick();
+        assert!(app.world.get::<HoverStartedAt>(e).is_none());
+    }
+
     /// A trigger resting under the pointer books a wake-up for when its delay
     /// ends, on the first hovered tick and on every tick until the popup
     /// spawns, so an idle loop still shows the tooltip.
@@ -392,7 +447,7 @@ mod tests {
                 ..Default::default()
             },
             Transform::default(),
-            Hovered,
+            HoverWithin,
         ));
         for _ in 0..2 {
             app.tick();

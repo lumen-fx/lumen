@@ -402,6 +402,11 @@ Dispatch runs capture (root down to the target), then the target, then bubble
 `scroll` do not bubble. `keydown` and `keyup` target the focused element, or
 the document root when nothing is focused.
 
+`pointerenter` fires on an element when the pointer reaches it or one of its
+descendants, outermost element first, and `pointerleave` when the pointer is
+over neither, innermost first, as on the web: moving from a button onto its
+icon fires `pointerenter` on the icon and nothing on the button.
+
 A pointer event targets the element under its pointer. After
 `set_pointer_capture(pointer_id)` on an element, that pointer's events go to
 the element until its last button comes up, wherever the pointer moves;
@@ -453,7 +458,7 @@ Pre-bound global tables.
 | `document.query(selector)` | `NodeQuery` | Matching elements, document order. |
 | `document.get_by_id(id)` | `Node` or `nil` | Element with that `id`. |
 | `document.focused()` | `Node` or `nil` | The focused element. |
-| `document.hovered()` | `Node` or `nil` | The hovered element. |
+| `document.hovered()` | `Node` or `nil` | The innermost element under the pointer. |
 | `document.create(tag)` | `Node` | Create a detached element. |
 
 ## Page navigation

@@ -19,7 +19,7 @@
 //!   a fresh `QMenu`). The row highlight *is* the [`Focused`] marker,
 //!   so `.dropdown-option:hover`-style CSS (routed through
 //!   [`crate::hover::Interaction::hover_tint`], which treats `Focused`
-//!   like `Hovered`) and `:focus` rules both style it - highlight
+//!   like `HoverWithin`) and `:focus` rules both style it - highlight
 //!   styling stays CSS-reachable with zero new style plumbing.
 //! - `ArrowUp` / `ArrowDown` move the highlight without committing
 //!   (dropdown clamps like `QListView`; menus wrap like `QMenu`),
@@ -467,7 +467,7 @@ pub fn popup_nav_keys(
     hovered_rows: Query<
         Entity,
         (
-            With<Hovered>,
+            With<HoverWithin>,
             Or<(With<DropdownOptionButton>, With<MenuItemButton>)>,
         ),
     >,
@@ -582,7 +582,7 @@ pub fn popup_nav_keys(
         // highlight so exactly one row presents highlighted (Qt).
         for hovered in &hovered_rows {
             if hovered != rows[idx].entity {
-                commands.entity(hovered).remove::<Hovered>();
+                commands.entity(hovered).remove::<HoverWithin>();
             }
         }
         let from = tracker.0;
@@ -610,7 +610,7 @@ pub fn follow_hover_highlight(
             Option<&DropdownOptionButton>,
             Option<&MenuItemButton>,
         ),
-        Added<Hovered>,
+        Added<HoverWithin>,
     >,
 ) {
     let Some(session) = nav.0.as_ref() else {
@@ -1042,12 +1042,12 @@ mod tests {
             .set_global_bool(OPEN, true);
         run_lifecycle(&mut world);
         // Pointer rests on row 0 (hover highlight).
-        world.entity_mut(rows[0]).insert(Hovered);
+        world.entity_mut(rows[0]).insert(HoverWithin);
         press(&mut world, Key::Named(NamedKey::ArrowDown));
         run_keys(&mut world);
         assert_eq!(focused(&world), Some(rows[2]), "keyboard moved highlight");
         assert!(
-            world.get::<Hovered>(rows[0]).is_none(),
+            world.get::<HoverWithin>(rows[0]).is_none(),
             "keyboard move strips the stale hover highlight (last input wins)"
         );
     }
@@ -1061,7 +1061,7 @@ mod tests {
             .set_global_bool(OPEN, true);
         run_lifecycle(&mut world);
         assert_eq!(focused(&world), Some(rows[1]));
-        world.entity_mut(rows[0]).insert(Hovered);
+        world.entity_mut(rows[0]).insert(HoverWithin);
         world.run_system_once(follow_hover_highlight).unwrap();
         assert_eq!(
             focused(&world),

@@ -16,7 +16,9 @@ use glam::Vec2;
 use lumen_core::components::{
     Color, DirtyLayout, Fill, LumenId, TextContent, TextStyle, Transform, Visible, Visuals,
 };
-use lumen_core::input::{ClickEvent, Hovered, Key, KeyPressed, Modifiers, PointerButton};
+use lumen_core::input::{
+    ClickEvent, HoverWithin, Hovered, Key, KeyPressed, Modifiers, PointerButton,
+};
 use lumen_core::render_world::DockInsets;
 use lumen_devtools::{
     DevtoolsRoot, DevtoolsState, HighlightBox, HighlightTip, OverlayPalette, PANEL_ID, RowTarget,
@@ -176,7 +178,7 @@ fn tabs_and_rows_style_by_state() {
             LumenId("dt-tab-network".into()),
             TextStyle::default(),
             Visuals::default(),
-            Hovered,
+            HoverWithin,
         ))
         .id();
     let pick = world
@@ -216,7 +218,7 @@ fn tabs_and_rows_style_by_state() {
 
     let selected_row = world.spawn((RowTarget(7), Visuals::default())).id();
     let hovered_row = world
-        .spawn((RowTarget(8), Visuals::default(), Hovered))
+        .spawn((RowTarget(8), Visuals::default(), HoverWithin))
         .id();
     let plain_row = world.spawn((RowTarget(9), Visuals::default())).id();
     run!(&mut world, style_rows);
@@ -266,7 +268,7 @@ fn highlight_box_and_tag_chip_track_the_hovered_row_target() {
         ))
         .id();
     // The hovered row pointing at it.
-    world.spawn((RowTarget(target.to_bits()), Hovered));
+    world.spawn((RowTarget(target.to_bits()), HoverWithin));
     let mut snap = Snapshot::default();
     let mut inspect = EntityInspect::default();
     inspect.tag = Some("label".into());

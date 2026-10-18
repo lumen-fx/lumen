@@ -52,7 +52,7 @@ use lumen_core::components::{
     Border, Color, DirtyLayout, Disabled, Edges, Fill, FlexDirection, Length, LumenId, Style,
     TextContent, TextStyle, TextWrap, Transform, Visible, Visuals,
 };
-use lumen_core::input::{ClickEvent, Hovered, Key, KeyPressed, ScrollOffset};
+use lumen_core::input::{ClickEvent, HoverWithin, Hovered, Key, KeyPressed, ScrollOffset};
 use lumen_core::render_world::{DockInsets, OverlayLayer};
 use lumen_core::tick::TickStage;
 use lumen_mcp::SnapshotHandle;
@@ -574,7 +574,7 @@ pub fn style_tabs(
         &LumenId,
         Option<&mut Visuals>,
         &mut TextStyle,
-        Option<&Hovered>,
+        Option<&HoverWithin>,
     )>,
 ) {
     for (entity, id, visuals, mut text, hovered) in &mut tabs {
@@ -636,7 +636,7 @@ pub fn style_tabs(
 pub fn style_rows(
     state: Res<DevtoolsState>,
     palette: Res<OverlayPalette>,
-    mut rows: Query<(&RowTarget, &mut Visuals, Option<&Hovered>)>,
+    mut rows: Query<(&RowTarget, &mut Visuals, Option<&HoverWithin>)>,
 ) {
     for (target, mut visuals, hovered) in &mut rows {
         let fill = if state.selected == Some(target.0) {
@@ -679,7 +679,7 @@ pub fn sync_dock_inset(
 pub fn update_highlight(
     state: Res<DevtoolsState>,
     snapshot: Res<SnapshotHandle>,
-    hovered_rows: Query<&RowTarget, With<Hovered>>,
+    hovered_rows: Query<&RowTarget, With<HoverWithin>>,
     hovered_app: Query<Entity, (With<Hovered>, Without<DevtoolsMarker>)>,
     transforms: Query<&Transform, (Without<HighlightBox>, Without<HighlightTip>)>,
     parents: Query<&ChildOf>,

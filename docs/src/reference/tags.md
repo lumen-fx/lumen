@@ -899,8 +899,11 @@ and `<button default="true">` is the default button.
 ### `<tooltip>`
 
 Wraps exactly one trigger element and shows a popup after the pointer
-dwells on it. The wrapper collapses at parse time, so CSS selectors apply
-to the trigger, not to `<tooltip>`.
+dwells on it. The pointer dwells on the trigger while it is over the
+trigger or anything inside it, so a button's tooltip stays up while the
+pointer is over the button's icon. When tooltips are nested, only the
+innermost one under the pointer shows. The wrapper collapses at parse time,
+so CSS selectors apply to the trigger, not to `<tooltip>`.
 
 | Attribute | Value | Default |
 | --- | --- | --- |

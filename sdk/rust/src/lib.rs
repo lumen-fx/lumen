@@ -292,8 +292,8 @@ pub mod prelude {
     // Input messages.
     pub use lumen_core::input::{
         ClickEvent, ClickSet, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-        Focused, Hovered, KeyPressed, KeyReleased, LongPressEvent, MouseWheel, PointerMoved,
-        PointerPressed, PointerReleased, Pressed,
+        Focused, HoverWithin, Hovered, KeyPressed, KeyReleased, LongPressEvent, MouseWheel,
+        PointerMoved, PointerPressed, PointerReleased, Pressed,
     };
 
     // Typed signal surface.

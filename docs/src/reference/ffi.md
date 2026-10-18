@@ -572,6 +572,12 @@ A system that writes a signal or edits the DOM needs no ordering to reach the
 screen: one the schedule runs after the `bind-*` readers or the DOM applier
 paints on the next tick, which runs without waiting for input.
 
+Two markers say where the pointer is. `Hovered` sits on the innermost element
+under the pointer, the one a click and the pointer events name. `HoverWithin`
+sits on that element and on every ancestor of it, which is what CSS `:hover`
+matches, so a system that asks whether a card is hovered, its children
+included, queries `With<HoverWithin>`.
+
 ```rust
 use lumenui::prelude::*;
 

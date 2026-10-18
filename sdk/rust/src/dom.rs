@@ -693,7 +693,7 @@ pub fn focused_node() -> Option<Node> {
     nq::focused_node().map(Node)
 }
 
-/// The current hover target.
+/// The innermost element under the pointer, the hover target.
 pub fn hovered_node() -> Option<Node> {
     nq::hovered_node().map(Node)
 }
@@ -737,7 +737,7 @@ pub mod document {
         super::focused_node()
     }
 
-    /// The current hover target.
+    /// The innermost element under the pointer, the hover target.
     pub fn hovered() -> Option<Node> {
         super::hovered_node()
     }
