@@ -50,6 +50,7 @@ use lumen_http_ureq_capability as _;
 use lumen_layout_taffy_capability as _;
 #[cfg(feature = "mcp")]
 use lumen_mcp_capability as _;
+use lumen_os_crash_capability as _;
 use lumen_os_filedialog_capability as _;
 use lumen_os_hotkey_capability as _;
 use lumen_os_launcher_capability as _;

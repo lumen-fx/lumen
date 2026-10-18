@@ -534,12 +534,22 @@ mod tests {
         dir
     }
 
-    /// The preflight `run_app` runs, as it runs it: the config read the same
-    /// tolerant way, the environment built from it.
+    /// The single-instance preflight `run_app` runs, as it runs it: the
+    /// config read the same tolerant way, the environment built from it,
+    /// the entry found on the capability list the runtime links. Only that
+    /// entry runs: another capability's preflight (crash handling installs a
+    /// process-wide panic hook and fault handler) has no place in this test
+    /// process.
     fn preflight_for(dir: &Path) -> Preflight {
         let opts = RunOptions::new(dir);
         let cfg = crate::config::LumenToml::load_or_default(dir).unwrap_or_default();
-        lumen_capability::preflight(&capability_env(&opts, dir, &cfg))
+        let env = capability_env(&opts, dir, &cfg);
+        let lifecycle = lumen_capability::registered()
+            .into_iter()
+            .find(|c| c.name == "os-lifecycle")
+            .and_then(|c| c.preflight)
+            .expect("the runtime links the os-lifecycle capability");
+        lifecycle(&env)
     }
 
     #[test]

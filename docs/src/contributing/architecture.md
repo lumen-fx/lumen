@@ -296,6 +296,16 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumen-os-power**: screen-saver and sleep inhibition.
 - **lumen-os-lifecycle**: single-instance enforcement, autostart, and recent
   files. A Rust-only surface: no script builtin or config key reaches it yet.
+- **lumen-os-crash**: crash handling inside the app: the panic hook, the
+  native fault handler (EmbarkStudios' `crash-handler`), the start of the
+  helper, and the in-process report when there is no helper. Its preflight
+  installs it before the app is built, so a crash while the window or the
+  GPU starts is caught.
+- **lumen-crash** (the `lumen-crash` executable): the out-of-process helper
+  that writes the minidump of a crashed app (`minidumper`), the readable
+  report beside it, and the message box. It links nothing of the engine.
+- **lumen-crash-report**: the messages between an app and its helper and
+  the report format both of them write.
 
 ### Assembly and tooling
 

@@ -105,6 +105,15 @@ size, then again to fill.
 | `void lumen_app_free(LumenApp *app)` | Drop a handle without running. Safe on null. Do not call after `run` or `run_headless`. |
 | `uint32_t lumen_abi_version(void)` | The library's packed ABI version. |
 
+`lumen_app_run` installs [crash handling](../guides/packaging.md#when-the-app-crashes)
+before the window opens, unless `[crash] enabled = false`; the headless run
+does not. The `lumen-crash` helper is looked for beside the host's
+executable, then beside the Lumen library. Crash handling takes the
+process's panic hook and its fault handlers (signal handlers on Linux, the
+task's exception ports on macOS, the unhandled-exception filter on Windows) for the rest of the
+process's life; a host that installs its own after `lumen_app_run` started
+replaces that part of it.
+
 ## Native callbacks
 
 | Function | Behaviour |
@@ -662,6 +671,20 @@ The builder has no hook into one language's engine: `AppBuilder::rhai_extension`
 and the crate's `host-rhai` feature were removed when the script hosts became
 runtime modules, and `script_fn` and `native_fn` above replace them, reaching
 every language the app runs.
+
+### Crash reports
+
+`App::run` installs [crash handling](../guides/packaging.md#when-the-app-crashes)
+before the window opens: a panic on any thread or a native fault leaves a
+report in the app's data directory, and the `lumen-crash` helper, found beside
+the executable, writes the minidump and shows the message box. The headless
+runs install none.
+
+The panic hook goes in front of the one already set, which still runs. To use
+your own crash handling instead, set `[crash] enabled = false` in `lumen.toml`
+and install yours; a hook set with `std::panic::set_hook` after `App::run`
+started replaces Lumen's for panics, while native faults still reach Lumen's
+handler.
 
 ### Dialogs and the clipboard
 

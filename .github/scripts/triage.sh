@@ -81,6 +81,8 @@ area_for() {
     # a runtime capability either way, so A-Runtime is the least-bad existing
     # fit for both the native backend and its capability shim. Deliberate.
     backends/http-ureq/*|capabilities/http-fetch/*) echo A-Runtime ;;
+    # Crash handling has no area label of its own; it runs at app startup.
+    os/crash/*|os/crash-report/*|os/crash-helper/*|capabilities/os-crash/*) echo A-Runtime ;;
     public/lumenc/*|public/lumenc-plugin/*) echo A-CLI ;;
     tools/release/*|bucket/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
     tools/vscode-lumen/*|tools/jetbrains-lumen/*|tools/zed-lumen/*|tools/tree-sitter-lumen/*) echo A-Editor-Plugin ;;

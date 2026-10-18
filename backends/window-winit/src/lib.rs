@@ -385,7 +385,7 @@ fn attach_first(
         match renderer.attach(FrameTarget::Window(target.clone())) {
             Ok(()) => return Ok(()),
             Err(lumen_core::traits::RenderError::Init(why)) if !fallbacks.is_empty() => {
-                eprintln!(
+                lumen_core::warn_line!(
                     "lumen-window-winit: renderer init failed ({why}); trying the next renderer"
                 );
                 *renderer = fallbacks.pop_front().expect("checked non-empty");
@@ -470,7 +470,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("lumen-window-winit: create_window failed: {e:?}");
+                lumen_core::warn_line!("lumen-window-winit: create_window failed: {e:?}");
                 event_loop.exit();
                 return;
             }
@@ -573,7 +573,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             &mut self.fallbacks,
             Arc::new(WinitTarget(window.clone())),
         ) {
-            eprintln!("lumen-window-winit: renderer init failed: {e}");
+            lumen_core::warn_line!("lumen-window-winit: renderer init failed: {e}");
             event_loop.exit();
             return;
         }
@@ -868,7 +868,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 {
                     req.0 = false;
                     if let Err(e) = window.drag_window() {
-                        eprintln!("lumen-window-winit: drag_window failed: {e}");
+                        lumen_core::warn_line!("lumen-window-winit: drag_window failed: {e}");
                     }
                 }
                 // Apply the cursor shape the UI asked for this tick
@@ -1474,7 +1474,7 @@ fn apply_cursor(
                 Some(cursor)
             }
             Err(e) => {
-                eprintln!("lumen-window-winit: cannot use the cursor image: {e}");
+                lumen_core::warn_line!("lumen-window-winit: cannot use the cursor image: {e}");
                 None
             }
         }
@@ -1741,7 +1741,7 @@ fn present_frame(
             // harness a stdout marker measured identically to every native
             // framework (spawn->`first_frame`) plus an in-app `startup_ms:`.
             Ok(()) => emit_first_frame_marker(),
-            Err(e) => eprintln!("lumen-window-winit: render failed: {e}"),
+            Err(e) => lumen_core::warn_line!("lumen-window-winit: render failed: {e}"),
         }
         lumen_core::render_backend::publish_renderer_info(&mut app.render_world, renderer.info());
         // The present happened after the tick recorded its timing; add it.

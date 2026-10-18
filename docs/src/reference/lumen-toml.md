@@ -195,6 +195,15 @@ Every key is optional; leaving one out keeps the automatic behaviour.
 These gate startup, not linkage: the code is still in the binary. To leave a
 subsystem out of a build, use `[capabilities]`.
 
+## [crash]
+
+Crash handling: a report and a message box when the app dies of a panic or a
+native fault. See [When the app crashes](../guides/packaging.md#when-the-app-crashes).
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `enabled` | bool | `true` | Installs the panic hook and the fault handler and starts the `lumen-crash` helper on every windowed launch. `false` leaves all three out; a Rust app that wants its own panic hook sets this and installs it. A headless run never installs crash handling. |
+
 ## [capabilities]
 
 Which optional subsystems a build of this app carries, one key per
@@ -233,6 +242,7 @@ its builtins prints a warning when the app runs.
 | `os-launcher` | the app calls `open_url`, `open_path` or `reveal_path` | The URL and file launcher. |
 | `os-power` | the app calls `keep_awake` | Sleep inhibit. |
 | `os-lifecycle` | the app uses recent files, autostart or `single_instance` | Recent files, autostart, single-instance launch. |
+| `os-crash` | every app | Crash handling: the panic hook, the fault handler, and the start of the `lumen-crash` helper. `[crash] enabled = false` turns it off at startup instead. |
 | `render-gpu` | `[render] backend` is `gpu` or `auto` | The GPU renderer. |
 | `render-cpu` | `[render] backend` is `cpu` or `auto` | The CPU renderer. |
 | `mcp` | never; `mcp = true` asks for it | The introspection server. |

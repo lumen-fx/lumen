@@ -1,0 +1,24 @@
+[package]
+name = "lumen-crash-report"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "What a Lumen app and its lumen-crash helper agree on: the messages between them and the crash report they write."
+keywords = ["ui", "gui", "crash", "minidump", "lumen"]
+categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+# Kept free of the engine: the helper links this and nothing of Lumen's, so it
+# starts small and stays small while it waits.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+] }

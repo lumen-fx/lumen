@@ -105,6 +105,10 @@ pub struct LumenToml {
     /// [`crate::compiler_plugins::CompilerPlugins`] boundary, the same
     /// inversion the parser uses.
     pub plugins: Vec<toml::Value>,
+    /// `[crash]` table - the crash handler's settings. Accepted here so
+    /// `deny_unknown_fields` lets an app declare it; the runtime never reads
+    /// it. The `os-crash` capability reads it from [`Self::raw`].
+    pub crash: toml::Table,
     /// `[dependencies]` table - prebuilt dylibs loaded at startup in
     /// sorted-name order: engine-linked runtime modules and portable C-ABI
     /// plugins, told apart by their exports. The schema, the loader, and
