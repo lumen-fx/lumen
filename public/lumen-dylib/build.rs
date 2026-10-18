@@ -73,8 +73,25 @@ fn git_describe(manifest_dir: &PathBuf) -> Option<String> {
         .arg(manifest_dir)
         .args(["rev-parse", "--absolute-git-dir"]))?;
     let git_dir = PathBuf::from(git_dir.trim());
-    for state in ["HEAD", "index", "packed-refs"] {
-        println!("cargo:rerun-if-changed={}", git_dir.join(state).display());
+    // A linked worktree keeps its own HEAD and index but shares packed-refs
+    // with the main checkout, in the common directory. Only files that exist
+    // are watched: cargo reruns a script whose watched file is missing on
+    // every build, and everything built on the engine with it.
+    let common_dir = run(Command::new("git").arg("-C").arg(manifest_dir).args([
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ]))
+    .map(|d| PathBuf::from(d.trim()))
+    .unwrap_or_else(|| git_dir.clone());
+    for state in [
+        git_dir.join("HEAD"),
+        git_dir.join("index"),
+        common_dir.join("packed-refs"),
+    ] {
+        if state.exists() {
+            println!("cargo:rerun-if-changed={}", state.display());
+        }
     }
     let described = run(Command::new("git")
         .arg("-C")
