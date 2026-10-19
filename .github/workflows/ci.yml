@@ -216,6 +216,36 @@ jobs:
           cargo test --workspace --no-fail-fast
       - if: needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
         run: cargo test --workspace --no-fail-fast
+      # The suite runs headless, so nothing above opens a window. Windows
+      # enforces things only a shown window meets (AccessKit's adapter, for
+      # one, panics if it binds a window that was already visible), so the
+      # Windows leg also starts an app on the runner's desktop, captures the
+      # screen once it has drawn, and fails if the app exited.
+      - name: Open a real window
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\windowed"
+          New-Item -ItemType Directory -Force -Path $log | Out-Null
+          $p = Start-Process -FilePath "target\debug\lumenc.exe" -ArgumentList "run", "apps/widget-garden" `
+            -RedirectStandardError "$log\stderr.txt" -RedirectStandardOutput "$log\stdout.txt" -PassThru
+          Start-Sleep -Seconds 40
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$log\screen.png")
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force } else { "lumenc exited with $($p.ExitCode)" | Tee-Object -Append "$log\stderr.txt" }
+          Get-Content "$log\stderr.txt" -ErrorAction SilentlyContinue
+          if (-not $alive) { exit 1 }
+      - if: always() && needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windowed-run-windows
+          path: ${{ runner.temp }}/windowed/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Collect crash evidence
         if: failure() && needs.changes.outputs.rust == 'true' && runner.os != 'Windows'
         shell: bash

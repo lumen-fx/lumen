@@ -459,7 +459,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 self.opts.size.1,
             ))
             .with_maximized(self.opts.maximized)
-            .with_decorations(!self.opts.frameless);
+            .with_decorations(!self.opts.frameless)
+            // Shown once the accessibility bridge below is bound: AccessKit
+            // must attach to a window that has never been visible, and
+            // on Windows its adapter panics if the window was shown first.
+            .with_visible(false);
         if let Some((x, y)) = self.opts.start_position {
             attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
         }
@@ -550,6 +554,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             });
             self.a11y = Some(factory(event_loop, window.clone(), wake));
         }
+        window.set_visible(true);
         // W5.2: tell the a11y tree-build system what the human-readable
         // root label is so it can stop hard-coding "Lumen app". Sourced
         // from the window options title; the app passes the same string
