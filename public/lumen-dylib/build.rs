@@ -73,10 +73,10 @@ fn git_describe(manifest_dir: &PathBuf) -> Option<String> {
         .arg(manifest_dir)
         .args(["rev-parse", "--absolute-git-dir"]))?;
     let git_dir = PathBuf::from(git_dir.trim());
-    // A linked worktree keeps its own HEAD and index but shares packed-refs
-    // with the main checkout, in the common directory. Only files that exist
-    // are watched: cargo reruns a script whose watched file is missing on
-    // every build, and everything built on the engine with it.
+    // A linked worktree keeps HEAD and its index in its own git dir and the
+    // packed refs in the repository's common one. Only files that exist are
+    // watched: cargo counts a missing path as changed, which would rerun
+    // this script, and rebuild everything above the engine, on every build.
     let common_dir = run(Command::new("git").arg("-C").arg(manifest_dir).args([
         "rev-parse",
         "--path-format=absolute",
@@ -164,11 +164,13 @@ fn dirty_fingerprint(manifest_dir: &PathBuf) -> u64 {
         for line in status.lines() {
             if let Some(path) = line.get(3..).filter(|p| !p.is_empty()) {
                 // Rename lines read `old -> new`; watch the side that exists.
+                // A deleted path is not watched, for the reason `git_describe`
+                // gives: cargo would count it as changed on every build.
                 let path = path.rsplit(" -> ").next().unwrap_or(path);
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    toplevel.join(path.trim_matches('"')).display()
-                );
+                let path = toplevel.join(path.trim_matches('"'));
+                if path.exists() {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
             }
         }
     }
