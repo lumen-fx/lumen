@@ -478,6 +478,11 @@ fn cross_packaging_assembles_each_platform() {
 /// helper beside this `lumenc` cannot stand in.
 #[test]
 fn a_toolchain_without_the_crash_helper_still_packages() {
+    let (target, exe, helper) = if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        ("linux-x86_64", "Demo", "lumen-crash")
+    } else {
+        ("windows-x86_64", "Demo.exe", "lumen-crash.exe")
+    };
     let root = scratch("no-helper");
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
@@ -494,16 +499,16 @@ fn a_toolchain_without_the_crash_helper_still_packages() {
         "--name",
         "Demo",
         "--target",
-        "windows-x86_64",
+        target,
         "--lib-dir",
         libs.to_str().expect("utf-8 path"),
     ]);
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(result.status.success(), "packaging failed: {stderr}");
-    assert!(out.join("Demo.exe").is_file());
-    assert!(!out.join("lumen-crash.exe").exists());
+    assert!(out.join(exe).is_file());
+    assert!(!out.join(helper).exists());
     assert!(
-        stderr.contains("no lumen-crash.exe") && stderr.contains("no minidump"),
+        stderr.contains(&format!("no {helper} ")) && stderr.contains("no minidump"),
         "the missing helper is reported: {stderr}"
     );
 

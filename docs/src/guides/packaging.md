@@ -255,6 +255,10 @@ The data directory is the one a script's `files::data_dir()` returns:
 `~/Library/Application Support` on macOS, and `%APPDATA%` on Windows, with
 the id from [`[app] id`](../reference/lumen-toml.md#app).
 
+On Windows, an abort (`std::process::abort`, or a fail fast in native code)
+ends the process before any handler in it runs, so it leaves no report. An
+abort that follows a panic still leaves the panic's report.
+
 A panic the app survives is not a crash. Lumen contains a panic in a script
 or a runtime module and keeps the app running; such a panic leaves no report
 once the app ends normally.

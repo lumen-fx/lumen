@@ -10,6 +10,15 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 const CASE: &str = "LUMEN_CRASH_TEST_CASE";
+
+/// How a report names the fault a null write raises: a signal on Linux, a
+/// Mach exception on macOS, a structured exception on Windows.
+#[cfg(target_os = "linux")]
+const NULL_WRITE_FAULT: &str = "SIGSEGV";
+#[cfg(target_os = "macos")]
+const NULL_WRITE_FAULT: &str = "EXC_BAD_ACCESS";
+#[cfg(windows)]
+const NULL_WRITE_FAULT: &str = "EXCEPTION_ACCESS_VIOLATION";
 const DIR: &str = "LUMEN_CRASH_TEST_DIR";
 
 /// The crashing app. Runs only as a child of one of the tests below.
@@ -181,8 +190,11 @@ fn a_panic_that_ends_the_app_leaves_a_report_and_a_minidump() {
         "{text}"
     );
     assert!(text.contains("crash-test panic"), "{text}");
+    // A panic's location is the path as the compiler saw it, with the
+    // platform's separator.
     assert!(
-        text.contains("Location:   os/crash-helper/tests/crash.rs:"),
+        text.replace('\\', "/")
+            .contains("Location:   os/crash-helper/tests/crash.rs:"),
         "{text}"
     );
     assert!(text.contains("Backtrace\n---------\n"), "{text}");
@@ -217,10 +229,7 @@ fn a_packaged_app_finds_the_helper_beside_itself() {
     let names = wait_for_report(&dir, Duration::from_secs(20));
     let text = report(&dir, &names);
     assert!(text.contains("native fault"), "{text}");
-    #[cfg(unix)]
-    assert!(text.contains("SIGSEGV"), "{text}");
-    #[cfg(windows)]
-    assert!(text.contains("EXCEPTION_ACCESS_VIOLATION"), "{text}");
+    assert!(text.contains(NULL_WRITE_FAULT), "{text}");
     assert!(
         text.contains(&format!("crash-app{suffix}")),
         "the report names the packaged executable: {text}"
@@ -257,7 +266,9 @@ fn a_segfault_leaves_a_report_with_the_fault_and_a_minidump() {
     let names = wait_for_report(&dir, Duration::from_secs(20));
     let text = report(&dir, &names);
     assert!(
-        text.contains("stopped because of a native fault: SIGSEGV"),
+        text.contains(&format!(
+            "stopped because of a native fault: {NULL_WRITE_FAULT}"
+        )),
         "{text}"
     );
     assert!(text.contains("Address:    0x0000000000000000"), "{text}");
@@ -277,6 +288,10 @@ fn an_access_violation_leaves_a_report_with_the_fault_and_a_minidump() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Not on Windows: there `std::process::abort` ends the process with a fail
+/// fast, which no handler in the process sees and which leaves nothing for
+/// the helper to dump.
+#[cfg(unix)]
 #[test]
 fn an_abort_leaves_a_report() {
     let dir = crash("abort");
@@ -312,13 +327,18 @@ fn without_the_helper_a_fault_is_written_from_the_handler() {
         "{text}"
     );
     assert!(text.contains("App:        crash-test"), "{text}");
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     assert!(
         text.contains("Fault:      SIGSEGV (segmentation fault), signal 11"),
         "{text}"
     );
+    #[cfg(target_os = "macos")]
+    assert!(
+        text.contains("Fault:      EXC_BAD_ACCESS (bad memory access)"),
+        "{text}"
+    );
     #[cfg(windows)]
-    assert!(text.contains("EXCEPTION_ACCESS_VIOLATION"), "{text}");
+    assert!(text.contains(NULL_WRITE_FAULT), "{text}");
     assert!(text.contains("no minidump was written"), "{text}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
