@@ -135,6 +135,75 @@ pub fn compile_deps(
     compile_deps_reading(dir, target, lib_dir, false)
 }
 
+/// [`compile_deps`] for the UI of an SDK app, compiled on its own for the
+/// app's executable to carry (`lumenc build --ui`).
+///
+/// Such an app brings elements the markup app has no way to declare: the
+/// modules a Rust app compiles in through its `Cargo.toml` (see
+/// [`linked_modules`]), and the widgets it defines itself with
+/// `#[derive(Widget)]`, which register their tags when the app starts rather
+/// than when its UI compiles. Both are taken from the app's own files, so the
+/// compile accepts the elements the running app answers for.
+///
+/// # Errors
+///
+/// As [`target_deps`].
+pub fn sdk_ui_deps(dir: &Path, lib_dir: Option<&Path>) -> Result<TargetDeps, String> {
+    for tag in app_widget_tags(dir) {
+        lumen_widget::register_widget_tag_owned(&tag);
+    }
+    compile_deps_reading(dir, Target::Desktop, lib_dir, true)
+}
+
+/// The tags the app's own Rust widgets claim: the `tag = "..."` of every
+/// `#[widget(...)]` attribute in a `.rs` file under the app's `src/`, which
+/// is where the `Widget` derive reads it from.
+fn app_widget_tags(dir: &Path) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut pending = vec![dir.join("src")];
+    while let Some(at) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && let Ok(text) = std::fs::read_to_string(&path)
+            {
+                tags.extend(widget_tags_in(&text));
+            }
+        }
+    }
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+/// The `tag = "..."` values of the `#[widget(...)]` attributes in `text`.
+fn widget_tags_in(text: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("#[widget(") {
+        rest = &rest[at + "#[widget(".len()..];
+        let attr = rest.split(")]").next().unwrap_or("");
+        let Some(key) = attr.find("tag") else {
+            continue;
+        };
+        let after = attr[key + "tag".len()..].trim_start();
+        let Some(value) = after.strip_prefix('=').map(str::trim_start) else {
+            continue;
+        };
+        if let Some(quoted) = value.strip_prefix('"')
+            && let Some(end) = quoted.find('"')
+        {
+            tags.push(quoted[..end].to_string());
+        }
+    }
+    tags
+}
+
 fn compile_deps_reading(
     dir: &Path,
     target: Target,
@@ -501,5 +570,54 @@ pub mod site {
                 "sha384-ywB1P0WjXou1oD1pmsZQBycsMqsO3tFjGotgWkP/W+2AhgcroefMI1i67KE0yCWn"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tag of every `#[widget(...)]` attribute, wherever `tag` sits in
+    /// it; an attribute without one, or a field-level `#[widget(prop)]`,
+    /// names none.
+    #[test]
+    fn widget_tags_are_read_off_the_derive_attributes() {
+        let source = r#"
+            #[derive(Component, Widget)]
+            #[widget(tag = "smoke-gauge")]
+            struct Gauge {
+                #[widget(prop)]
+                label: String,
+            }
+            #[derive(Widget)]
+            #[widget(name = "x", tag="color-chip")]
+            struct Chip;
+        "#;
+        assert_eq!(widget_tags_in(source), ["smoke-gauge", "color-chip"]);
+    }
+
+    /// The scan covers the whole of `src/`, nested modules included.
+    #[test]
+    fn an_apps_widget_tags_come_from_every_file_under_src() {
+        let dir = std::env::temp_dir().join(format!("lumenc-widget-tags-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src").join("panels")).unwrap();
+        std::fs::write(
+            dir.join("src").join("main.rs"),
+            "#[widget(tag = \"b-tag\")] struct B;",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src").join("panels").join("a.rs"),
+            "#[widget(tag = \"a-tag\")] struct A;",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src").join("main.lmn"),
+            "#[widget(tag = \"not-rust\")]",
+        )
+        .unwrap();
+        assert_eq!(app_widget_tags(&dir), ["a-tag", "b-tag"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

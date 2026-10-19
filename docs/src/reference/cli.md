@@ -166,7 +166,7 @@ the page is skipped and the exit code is unchanged.
 ## build
 
 ```
-lumenc build <app_dir> <out.lmna> [--no-hooks] [--offline]
+lumenc build <app_dir> <out.lmna> [--ui] [--no-hooks] [--offline]
 ```
 
 Compiles the app ahead of time into a `.lmna` artifact: parses the entry
@@ -188,7 +188,14 @@ gate that mounts it, together with the page set navigation resolves against.
 
 An `<app_dir>` that is not a directory, a missing output path, or an extra
 positional argument exits 2. For an SDK app the output path is ignored and the
-native build tool runs instead.
+native build tool runs instead, unless `--ui` is given.
+
+`--ui` compiles the UI of an app of any kind to `<out.lmna>`, whatever
+language its code is in, with image paths relative to the app directory so
+the artifact travels with the executable. It accepts the elements a Rust app
+brings in its own code: the modules its `Cargo.toml` links and the tags of
+the `#[derive(Widget)]` widgets under its `src/`. A Rust app's build script
+runs it (`lumenui_build::compile`).
 
 Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 [Packaging](../guides/packaging.md).

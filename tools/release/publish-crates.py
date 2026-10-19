@@ -94,7 +94,10 @@ USER_AGENT = "lumen-release (https://github.com/lumen-fx/lumen)"
 # not part of this order.
 DEFAULT_ROOTS = ("lumenc", "lumen-launcher")
 
-# The Rust SDK crate in the tree. The module crates beside it are generated.
+# The Rust SDK crates in the tree: the build-script crate, which `lumenui`'s
+# own build script and every app's depend on, and `lumenui`. The module
+# crates beside them are generated.
+SDK_BUILD_MANIFEST = REPO / "sdk" / "lumenui-build" / "Cargo.toml"
 SDK_MANIFEST = REPO / "sdk" / "lumenui" / "Cargo.toml"
 DEFAULT_GH_REPO = "lumen-fx/lumen"
 
@@ -345,9 +348,10 @@ def manifest_package(manifest: Path) -> dict:
 
 
 def sdk_packages(wrapper_dir: Path) -> dict[str, dict]:
-    """`lumenui` and the module crates, written into `wrapper_dir` for the run."""
+    """`lumenui-build`, `lumenui` and the module crates, the last written into
+    `wrapper_dir` for the run."""
     packages = {}
-    for manifest in [SDK_MANIFEST, *generate_wrappers(wrapper_dir)]:
+    for manifest in [SDK_BUILD_MANIFEST, SDK_MANIFEST, *generate_wrappers(wrapper_dir)]:
         pkg = manifest_package(manifest)
         packages[pkg["name"]] = pkg
     return packages

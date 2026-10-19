@@ -37,14 +37,9 @@ include = ["build.rs", "src/**", "Cargo.toml"]
 name = "lumenui"
 
 [build-dependencies]
-# The download: the release's checksums, the target's engine manifest, and the
-# archive, verified before anything is unpacked.
-ureq = "3"
-sha2 = "0.10"
-tar = "0.4"
-# A pure-Rust zstd decoder, so building an app needs no C compiler for it.
-ruzstd = "0.8"
-serde_json = "1"
+# The download of the engine set, shared with the app's own UI compile: one
+# crate fetches from the release. bump-version.py keeps the version in step.
+lumenui-build = { version = "0.0.11", path = "../lumenui-build" }
 
 [package.metadata.docs.rs]
 # docs.rs builds without network access, so build.rs fetches nothing there and

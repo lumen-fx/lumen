@@ -311,6 +311,22 @@ pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::Compiled
     Ok(compiled)
 }
 
+/// AOT-compile the UI of an SDK app for its executable to carry (`lumenc
+/// build --ui`): [`compile_app`], with the elements the app brings in its own
+/// code accepted (see [`addons::sdk_ui_deps`]).
+///
+/// What the script compiler warned about is printed to stderr, one line each.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub fn compile_app_ui(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
+    let deps = addons::sdk_ui_deps(dir, None).map_err(RunError::Plugin)?;
+    let mut warnings = Vec::new();
+    let compiled = compile_app_with(dir, None, &deps, &mut warnings)?;
+    for warning in &warnings {
+        eprintln!("lumenc build: warning: {warning}");
+    }
+    Ok(compiled)
+}
+
 /// AOT-compile an app from source against what was resolved for its target,
 /// with the skin named outright when `skin` is set, which is how `lumenc web`
 /// builds a site. See [`lumen_runtime::compile_app_with_skin`].

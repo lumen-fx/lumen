@@ -253,16 +253,27 @@ pub fn dispatch(kind: AppKind, dir: &Path, mode: Mode) -> Result<Vec<CommandSpec
 
 /// Rust: `cargo run` (Run) / `cargo build --release` (Build), in the app dir.
 ///
-/// A plain cargo build with nothing added to its environment: `lumenui`
-/// links the release's prebuilt engine statically, so the executable cargo
-/// writes carries the whole runtime and needs no library beside it.
+/// `lumenui` links the release's prebuilt engine statically, so the
+/// executable cargo writes carries the whole runtime and needs no library
+/// beside it. The app's build script compiles its UI with a `lumenc`
+/// ([`LUMENC_ENV`]); this sets the one running now, so a build started from
+/// `lumenc` uses the compiler it was started from instead of looking for one.
 fn rust_specs(dir: &Path, mode: Mode) -> Vec<CommandSpec> {
     let spec = match mode {
         Mode::Run => CommandSpec::new("cargo", dir).arg("run"),
         Mode::Build => CommandSpec::new("cargo", dir).arg("build").arg("--release"),
     };
+    let spec = match std::env::current_exe() {
+        Ok(exe) => spec.envv(LUMENC_ENV, exe.to_string_lossy()),
+        Err(_) => spec,
+    };
     vec![spec]
 }
+
+/// The variable naming the `lumenc` a Rust app's build script compiles the
+/// app's UI with (`lumenui_build::compile`). Unset, the build script looks
+/// for one of its own version.
+pub const LUMENC_ENV: &str = "LUMEN_LUMENC";
 
 // -- Headless handoff --------------------------------------------------------
 
@@ -654,13 +665,19 @@ mod tests {
 
     /// `lumenui` links the prebuilt engine statically. `-C prefer-dynamic`
     /// would turn the standard library into a shared one the executable then
-    /// needs beside it, which no package carries.
+    /// needs beside it, which no package carries. The one variable a Rust
+    /// build gets is the compiler its build script compiles the UI with: the
+    /// program running now.
     #[test]
-    fn a_rust_build_adds_nothing_to_the_environment() {
+    fn a_rust_build_names_only_the_compiler_for_its_ui() {
         let dir = scratch("rust-env");
+        let exe = std::env::current_exe().unwrap();
         for mode in [Mode::Run, Mode::Build] {
             let specs = dispatch(AppKind::Rust, &dir, mode).unwrap();
-            assert!(specs[0].env.is_empty(), "{:?}", specs[0].env);
+            assert_eq!(
+                specs[0].env,
+                [(LUMENC_ENV.to_string(), exe.to_string_lossy().into_owned())],
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

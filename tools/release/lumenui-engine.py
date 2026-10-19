@@ -70,7 +70,8 @@ Why the rules in `collect` are the ones they are:
     unify with the engine's, and its dependencies would show up in the
     messages as a second build of crates the set already holds. `collect`
     takes it from beside the engine's uplifted rlib, where cargo puts a
-    requested binary. `sdk/lumenui/build.rs` copies it beside the app.
+    requested binary. `lumenui_build::link_engine`, which
+    `sdk/lumenui/build.rs` runs, copies it beside the app.
 
 Exit codes: 0 success, 1 a step failed, 2 bad usage.
 """
@@ -112,7 +113,7 @@ REQUESTED_RLIBS = {f"lib{LIB}.rlib"} | {
 }
 
 # The release's name for each target, the one every asset name carries. The
-# same table is in sdk/lumenui/build.rs.
+# same table is in sdk/lumenui-build/src/fetch.rs.
 TARGET_NAMES = {
     "x86_64-unknown-linux-gnu": "linux-x86_64",
     "aarch64-unknown-linux-gnu": "linux-aarch64",
@@ -603,19 +604,24 @@ def cmd_check(args: argparse.Namespace) -> None:
         if p["name"] == "lumenui" or p["name"].startswith("lumenui-")
     }
 
-    # The closure of the SDK crates' build-dependencies, through every edge
-    # kind (a build dependency's own build dependencies compile too).
+    # The closure of the build-dependencies of the SDK crates and of the app
+    # itself (its build script compiles the UI through `lumenui-build`),
+    # through every edge kind: a build dependency's own dependencies compile
+    # too. A crate already allowed for being an SDK crate (`lumenui-build`)
+    # still has its dependencies walked.
     allowed = set(meta["workspace_members"]) | sdk
     stack = [
         d["pkg"]
-        for crate in sdk
+        for crate in sdk | set(meta["workspace_members"])
         for d in nodes[crate]["deps"]
         if any(k["kind"] == "build" for k in d["dep_kinds"])
     ]
+    walked: set[str] = set()
     while stack:
         pid = stack.pop()
-        if pid in allowed:
+        if pid in walked:
             continue
+        walked.add(pid)
         allowed.add(pid)
         stack.extend(d["pkg"] for d in nodes[pid]["deps"])
     allowed_names = {by_id[i]["name"] for i in allowed}

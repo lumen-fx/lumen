@@ -57,6 +57,9 @@ REQUIRED = {
     # The published Rust SDK: outside the workspace, so it spells the version
     # out, and the version is the release whose prebuilt engine it downloads.
     "sdk/lumenui/Cargo.toml": "the Rust SDK's version",
+    # The Rust SDK's build-script crate: outside the workspace for the same
+    # reason, and the version is the release whose `lumenc` it compiles with.
+    "sdk/lumenui-build/Cargo.toml": "the Rust SDK build crate's version",
     # The Python SDK ships at the version of the ABI it binds, and
     # sdk/python/tests/test_version.py fails when the two disagree.
     "sdk/python/lumen/_version.py": "the Python SDK's version",
@@ -66,9 +69,10 @@ REQUIRED = {
 
 
 # Crates of this tree that the lockfile does not record, because nothing in the
-# workspace builds them: `lumenui` depends on no crate here, and the release's
-# engine is what it pairs with. Its version is the tree's all the same.
-OUTSIDE_LOCK = {"sdk/lumenui/Cargo.toml"}
+# workspace builds them: `lumenui` and `lumenui-build` depend on no crate here,
+# and the release is what they pair with. Their version is the tree's all the
+# same.
+OUTSIDE_LOCK = {"sdk/lumenui/Cargo.toml", "sdk/lumenui-build/Cargo.toml"}
 
 
 class Edit(NamedTuple):
