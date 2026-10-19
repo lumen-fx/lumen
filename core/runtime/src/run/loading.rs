@@ -744,6 +744,50 @@ pub(crate) fn mtime(p: &Path) -> Option<SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
+/// The source files under an app's `src/`, by kind, leaving out the entry
+/// markup and stylesheet the caller already tracks. What an app booted from
+/// compiled bytes watches for hot reload, since no load from source told it
+/// which files it reads.
+#[cfg(feature = "runtime-parse")]
+#[derive(Default)]
+pub(crate) struct SourceFiles {
+    pub(crate) markup: Vec<PathBuf>,
+    pub(crate) styles: Vec<PathBuf>,
+    pub(crate) scripts: Vec<PathBuf>,
+}
+
+/// [`SourceFiles`] under `src`, sorted so the watch lists compare stably.
+#[cfg(feature = "runtime-parse")]
+pub(crate) fn sources_under(src: &Path, entry: &Path, stylesheet: &Path) -> SourceFiles {
+    let mut found = SourceFiles::default();
+    let mut pending = vec![src.to_path_buf()];
+    while let Some(at) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else {
+            continue;
+        };
+        for entry_file in entries.flatten() {
+            let path = entry_file.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path == entry || path == stylesheet {
+                continue;
+            }
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("lmn") => found.markup.push(path),
+                Some("css") => found.styles.push(path),
+                Some("cdl" | "rhai" | "lua") => found.scripts.push(path),
+                _ => {}
+            }
+        }
+    }
+    found.markup.sort();
+    found.styles.sort();
+    found.scripts.sort();
+    found
+}
+
 /// Parse a CSS source and extract its `:root { --name: value; ... }`
 /// declarations via [`lumen_ir::css::Stylesheet::root_vars`]. A source that
 /// fails to parse contributes no vars rather than failing the caller - the

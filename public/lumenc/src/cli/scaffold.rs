@@ -240,11 +240,12 @@ fn pin_rust_toolchain(dest: &Path, channel: Option<&str>) -> Result<Option<Strin
 
 /// Make a scaffolded Rust SDK app's `Cargo.toml` this app's: the package is
 /// named after the directory it was written to, the way `cargo new` names
-/// one, and the `lumenui` dependency asks for `version`, the Lumen release
-/// this lumenc is. The templates are not versioned with Lumen, and `lumenui`
-/// links the prebuilt engine of exactly its own release, so the version comes
-/// from here rather than from the template. A template with no `Cargo.toml`
-/// is left alone.
+/// one, and the SDK crates (`lumenui` and its `lumenui-<module>` wrappers,
+/// and `lumenui-build` among the build dependencies) ask for `version`, the
+/// Lumen release this lumenc is. The templates are not versioned with Lumen,
+/// and the SDK crates pair with exactly their own release (its prebuilt
+/// engine, its compiler), so the version comes from here rather than from
+/// the template. A template with no `Cargo.toml` is left alone.
 fn adapt_cargo_manifest(dest: &Path, version: &str) -> Result<(), Error> {
     let path = dest.join("Cargo.toml");
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -263,18 +264,26 @@ fn adapt_cargo_manifest(dest: &Path, version: &str) -> Result<(), Error> {
     {
         package.insert("name", toml_edit::value(name));
     }
-    if let Some(dep) = doc
-        .get_mut("dependencies")
-        .and_then(|d| d.as_table_like_mut())
-        .and_then(|d| d.get_mut("lumenui"))
-    {
-        if let Some(table) = dep.as_table_like_mut() {
-            table.insert("version", toml_edit::value(version));
-        } else {
-            *dep = toml_edit::value(version);
+    for section in ["dependencies", "build-dependencies"] {
+        let Some(deps) = doc.get_mut(section).and_then(|d| d.as_table_like_mut()) else {
+            continue;
+        };
+        for (name, dep) in deps.iter_mut() {
+            if name.get() == "lumenui" || name.get().starts_with("lumenui-") {
+                pin_version(dep, version);
+            }
         }
     }
     std::fs::write(&path, doc.to_string()).map_err(|source| Error::Io { path, source })
+}
+
+/// Make the dependency `dep` ask for `version`, keeping its other keys.
+fn pin_version(dep: &mut toml_edit::Item, version: &str) {
+    if let Some(table) = dep.as_table_like_mut() {
+        table.insert("version", toml_edit::value(version));
+    } else {
+        *dep = toml_edit::value(version);
+    }
 }
 
 /// `dir` as a cargo package name: letters, digits, `-` and `_`, not
@@ -481,6 +490,27 @@ mod tests {
         assert_eq!(
             doc["dependencies"]["lumenui"]["default-features"].as_bool(),
             Some(false)
+        );
+
+        // The build script's crate and a module wrapper move with it.
+        std::fs::write(
+            dest.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n\n[dependencies]\nlumenui = \"0.0.1\"\n\
+             lumenui-canvas = \"0.0.1\"\nserde = \"1\"\n\n\
+             [build-dependencies]\nlumenui-build = \"0.0.1\"\n",
+        )
+        .unwrap();
+        adapt_cargo_manifest(&dest, "9.8.7").unwrap();
+        let text = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            doc["dependencies"]["lumenui-canvas"].as_str(),
+            Some("9.8.7")
+        );
+        assert_eq!(doc["dependencies"]["serde"].as_str(), Some("1"));
+        assert_eq!(
+            doc["build-dependencies"]["lumenui-build"].as_str(),
+            Some("9.8.7")
         );
     }
 

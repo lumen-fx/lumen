@@ -113,8 +113,8 @@ pub struct RunOptions {
     /// In-memory markup source. When `Some`, the runtime parses this
     /// string instead of reading `<dir>/src/main.lmn` from disk, and hot
     /// reload is disabled (there is no file to watch). Set by the Rust
-    /// SDK's `include_str!`-based embedding path; `dir` is still used
-    /// to resolve relative asset paths and `lumen.toml`.
+    /// SDK's `App::from_markup`; `dir` is still used to resolve relative
+    /// asset paths and `lumen.toml`.
     pub markup: Option<String>,
     /// In-memory stylesheet source. When `Some`, used instead of
     /// `<dir>/src/main.css`. Independent of [`Self::markup`]; `None` falls
@@ -135,7 +135,15 @@ pub struct RunOptions {
     /// (`lumen_app_new_from_lmna`) so the runtime never touches the parser or a
     /// source file. When `Some`, it wins over [`Self::artifact`] and
     /// [`Self::parser`]; `dir` is still used to resolve relative asset paths.
+    /// Hot reload stays off unless [`Self::watch_sources`] asks for it.
     pub artifact_bytes: Option<Vec<u8>>,
+    /// For an app booted from [`Self::artifact_bytes`]: watch the sources
+    /// under `<dir>/src/` it was compiled from, and on an edit reload the
+    /// tree from source the way a from-source run does. Needs
+    /// [`Self::hot_reload`] and a [`Self::parser`]. The Rust SDK sets it in a
+    /// debug build, whose UI is compiled at build time like a release
+    /// build's and still reloads while the window is open.
+    pub watch_sources: bool,
     /// True for a headless / bounded automation run (`--headless`, and the
     /// FFI/test `run_app_headless` contract). Suppresses the long-lived
     /// interactive daemons that only make sense for a windowed session: the
@@ -205,6 +213,7 @@ impl RunOptions {
             app_hooks: Vec::new(),
             artifact: None,
             artifact_bytes: None,
+            watch_sources: false,
             bounded: false,
             assets: None,
             parser: None,

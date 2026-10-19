@@ -491,7 +491,49 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         None => opts.hot_reload && !opts.bounded,
     };
     #[cfg(feature = "runtime-parse")]
-    if hot_reload_enabled && opts.markup.is_none() && opts.artifact.is_none() {
+    if hot_reload_enabled
+        && opts.markup.is_none()
+        && opts.artifact.is_none()
+        && (opts.artifact_bytes.is_none() || opts.watch_sources)
+    {
+        // An app booted from compiled bytes read no source to learn its
+        // files from, so every source under `src/` is watched as it stands
+        // now; the first edit reloads from source, and that load records the
+        // files the app really reads.
+        let (
+            html_mtime,
+            css_mtime,
+            script_paths,
+            script_mtimes,
+            include_paths,
+            include_mtimes,
+            css_import_paths,
+            css_import_mtimes,
+        ) = if opts.artifact_bytes.is_some() {
+            let found = sources_under(&crate::app_layout::src_dir(&dir), &html_path, &css_path);
+            let stamps = |paths: &[PathBuf]| paths.iter().map(|p| mtime(p)).collect::<Vec<_>>();
+            (
+                mtime(&html_path),
+                mtime(&css_path),
+                found.scripts.clone(),
+                stamps(&found.scripts),
+                found.markup.clone(),
+                stamps(&found.markup),
+                found.styles.clone(),
+                stamps(&found.styles),
+            )
+        } else {
+            (
+                html_mtime,
+                css_mtime,
+                script_paths,
+                script_mtimes,
+                include_paths,
+                include_mtimes,
+                css_import_paths,
+                css_import_mtimes,
+            )
+        };
         // Parent directories of every tracked source file (deduplicated).
         // Computed before the paths move into `HotReloadState`.
         let locale_dir = crate::run::i18n::locale_dir(&dir);
