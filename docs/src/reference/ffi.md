@@ -699,7 +699,8 @@ written back into the tree and a canvas encodes what was drawn. A system
 there sees what a handler changed on the same tick, and reads this tick's messages
 (`PointerMoved`, `ClickEvent`, `KeyPressed`, ...) and writes what this tick's
 frame shows, with no ordering of its own; `.chain()` and `.after` between your
-own systems still apply. `Signals` is the system parameter for signals, run
+own systems still apply. `Signals` is the system parameter for signals (and
+for lists: `set_list`, `list_len`), run
 conditions such as `on_click("id")` gate a system on a click, and
 `App::add_computed` derives a signal from others.
 

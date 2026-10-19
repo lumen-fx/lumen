@@ -266,6 +266,25 @@ fn a_handler_writes_a_list() {
     );
 }
 
+/// A system writes a list through `Signals` as a handler does through `Ui`.
+#[test]
+fn a_system_writes_a_list() {
+    fn fill(mut signals: Signals) {
+        signals.set_list(
+            "rows",
+            ["a", "b"].map(|name| Record::new().with("name", name)),
+        );
+        let n = signals.list_len("rows") as i64;
+        signals.set("rows_len", n);
+    }
+    let mut app = bare().add_systems(TickStage::Systems, fill).build_bare();
+    app.tick();
+    assert_eq!(
+        Property::<i64>::new("rows_len").get(app.world.resource::<PropertyStore>()),
+        Some(2)
+    );
+}
+
 /// A menu item's handler is keyed on the item's id.
 #[test]
 fn on_menu_takes_the_items_id() {

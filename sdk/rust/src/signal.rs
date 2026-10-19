@@ -21,6 +21,9 @@ use crate::{bevy_ecs, lumen_core};
 
 use bevy_ecs::system::{ResMut, SystemParam};
 use lumen_core::property_store::{Property, PropertyKey, PropertyStore, PropertyValue};
+use lumen_core::signals::ArraySignals;
+
+use crate::ui::Record;
 
 /// Bound on any type that round-trips through the [`PropertyStore`]. Satisfied
 /// by `i64`, `f64`, `f32`, `bool`, `String`, [`lumen_core::components::Color`],
@@ -45,9 +48,27 @@ impl<T> Signal for T where T: TryFrom<PropertyValue> + Into<PropertyValue> + Clo
 #[derive(SystemParam)]
 pub struct Signals<'w> {
     store: ResMut<'w, PropertyStore>,
+    arrays: Option<ResMut<'w, ArraySignals>>,
 }
 
 impl Signals<'_> {
+    /// Replace the array signal `name`, which a `<for each="$name">` renders
+    /// one row per record of. Records whose key stays keep their rows, which
+    /// are updated in place when a field changed.
+    pub fn set_list(&mut self, name: &str, rows: impl IntoIterator<Item = Record>) {
+        if let Some(arrays) = &mut self.arrays {
+            arrays.set(name, rows.into_iter().map(Record::into_item).collect());
+        }
+    }
+
+    /// How many records the array signal `name` holds.
+    pub fn list_len(&self, name: &str) -> usize {
+        self.arrays
+            .as_ref()
+            .and_then(|a| a.get(name))
+            .map_or(0, <[_]>::len)
+    }
+
     /// Reads the global signal `name` as `T`, or `None` when it was never set.
     ///
     /// Conversions follow [`PropertyValue`]'s coercions (an `I64` cell read as
