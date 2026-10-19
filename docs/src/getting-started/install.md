@@ -13,7 +13,9 @@ production and the one `lumenc web --serve` starts. It is published as a
 container image too, `ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and
 aarch64. It also carries `lumen-lsp`, the
 [language server](../reference/tooling.md#language-server) the editor
-integrations start; they find it beside `lumenc`.
+integrations start; they find it beside `lumenc`. And it carries
+`lumen-crash`, the [crash helper](../guides/packaging.md#when-the-app-crashes)
+that `lumenc package` copies beside every app it packages.
 
 ## Linux and macOS
 
@@ -136,7 +138,7 @@ brew install lumen
 ```
 
 The formula unpacks the same release archive the script installs, so `lumenc`,
-the runtime library, the launcher, `lumen-server`, `lumen-lsp`, the candela standard
+the runtime library, the launcher, `lumen-server`, `lumen-lsp`, `lumen-crash`, the candela standard
 library, the app templates, and the web halves of the first-party
 [modules](../reference/lumen-toml.md#dependencies) all come with it. `brew upgrade lumen` moves you
 to a newer release.
@@ -197,8 +199,9 @@ cargo install lumenc
 ```
 
 This needs a Rust toolchain. It builds `lumenc`, then fetches the matching
-Lumen source and builds the runtime library, the launcher, and the candela
-standard library from it, putting all three beside the installed `lumenc` so
+Lumen source and builds the runtime library, the launcher, the `lumen-crash`
+helper, and the candela standard library from it, putting them beside the
+installed `lumenc` so
 running and packaging an app work the same as they do from a release. Expect it
 to take a while: it is compiling the engine.
 

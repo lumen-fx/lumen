@@ -34,11 +34,22 @@ fn lib_name() -> &'static str {
     }
 }
 
-/// Whether the two toolchain files a package is assembled from are present.
-/// A whole-workspace test run builds both; a run of this crate alone does not,
-/// and the test reports that rather than failing on a missing input.
+fn crash_helper_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "lumen-crash.exe"
+    } else {
+        "lumen-crash"
+    }
+}
+
+/// Whether the toolchain files a package is assembled from are present: the
+/// stub, the library, and the crash helper. A whole-workspace test run builds
+/// them all; a run of this crate alone does not, and the test reports that
+/// rather than failing on a missing input.
 fn toolchain_present() -> bool {
-    build_dir().join(stub_name()).is_file() && build_dir().join(lib_name()).is_file()
+    build_dir().join(stub_name()).is_file()
+        && build_dir().join(lib_name()).is_file()
+        && build_dir().join(crash_helper_name()).is_file()
 }
 
 /// A scratch directory that removes itself when the test ends. A packaged app
@@ -156,9 +167,10 @@ fn run_package(args: &[&str]) -> std::process::Output {
 fn a_packaged_app_runs_from_anywhere() {
     if !toolchain_present() {
         eprintln!(
-            "skipping: no {} / {} in {} (build the workspace to get them)",
+            "skipping: no {} / {} / {} in {} (build the workspace to get them)",
             stub_name(),
             lib_name(),
+            crash_helper_name(),
             build_dir().display()
         );
         return;
@@ -198,6 +210,20 @@ fn a_packaged_app_runs_from_anywhere() {
         "the runtime library travels"
     );
     assert!(out.join("lumen.toml").is_file(), "lumen.toml travels");
+    let helper = out.join(crash_helper_name());
+    assert!(
+        helper.is_file(),
+        "the crash helper travels beside the executable"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&helper)
+            .expect("stat helper")
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0, "the crash helper stays executable");
+    }
     assert!(
         out.join("assets/logo.png").is_file(),
         "the app's files keep their relative paths"
@@ -243,7 +269,7 @@ fn a_packaged_app_runs_from_anywhere() {
 #[test]
 fn a_packaged_app_reaches_the_script_standard_library() {
     if !toolchain_present() {
-        eprintln!("skipping: the launcher stub and runtime library are not built");
+        eprintln!("skipping: the launcher stub, runtime library and crash helper are not built");
         return;
     }
     if cfg!(target_os = "macos") && Command::new("cc").arg("--version").output().is_err() {
@@ -317,9 +343,11 @@ fn a_packaged_app_reaches_the_script_standard_library() {
 /// the launcher and C library, and, because the app's script implies the
 /// candela host module, the shared engine, the standard library it was built
 /// against, and the module that ships beside them on Linux and macOS.
-const STAND_INS: [&str; 11] = [
+const STAND_INS: [&str; 13] = [
     "lumen-launcher",
     "lumen-launcher.exe",
+    "lumen-crash",
+    "lumen-crash.exe",
     "liblumen.so",
     "liblumen.dylib",
     "lumen.dll",
@@ -357,7 +385,10 @@ fn cross_packaging_assembles_each_platform() {
     let libs_arg = libs.to_str().expect("utf-8 path");
 
     // Windows and Linux carry the app inside the executable.
-    for (target, exe_name) in [("windows-x86_64", "Demo.exe"), ("linux-aarch64", "Demo")] {
+    for (target, exe_name, helper) in [
+        ("windows-x86_64", "Demo.exe", "lumen-crash.exe"),
+        ("linux-aarch64", "Demo", "lumen-crash"),
+    ] {
         let out = root.join(target);
         let result = run_package(&[
             app.to_str().expect("utf-8 path"),
@@ -383,6 +414,10 @@ fn cross_packaging_assembles_each_platform() {
         assert!(
             !out.join("Demo.lmna").exists(),
             "{target} needs no sidecar app file"
+        );
+        assert!(
+            out.join(helper).is_file(),
+            "{target} carries its own crash helper"
         );
         // The executable carries the engine, so its license text travels
         // beside it on every target.
@@ -424,10 +459,52 @@ fn cross_packaging_assembles_each_platform() {
         "a cross-built macOS package ships the app beside the executable"
     );
     assert!(out.join("liblumen.dylib").is_file());
+    assert!(
+        out.join("lumen-crash").is_file(),
+        "macOS carries the crash helper"
+    );
     let image = std::fs::read(out.join("Demo")).expect("read the packaged executable");
     assert_eq!(
         image, b"stand-in toolchain file",
         "the signed stub is copied unchanged"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A toolchain without the crash helper still packages: the app runs without
+/// it and writes its own short report on a crash, so `lumenc package` says
+/// what is missing and carries on. Another platform's files are used so the
+/// helper beside this `lumenc` cannot stand in.
+#[test]
+fn a_toolchain_without_the_crash_helper_still_packages() {
+    let root = scratch("no-helper");
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    write_app(&app);
+    let libs = root.join("libs");
+    std::fs::create_dir_all(&libs).expect("create lib dir");
+    for name in STAND_INS.iter().filter(|n| !n.starts_with("lumen-crash")) {
+        std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
+    }
+    let out = root.join("out");
+    let result = run_package(&[
+        app.to_str().expect("utf-8 path"),
+        out.to_str().expect("utf-8 path"),
+        "--name",
+        "Demo",
+        "--target",
+        "windows-x86_64",
+        "--lib-dir",
+        libs.to_str().expect("utf-8 path"),
+    ]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "packaging failed: {stderr}");
+    assert!(out.join("Demo.exe").is_file());
+    assert!(!out.join("lumen-crash.exe").exists());
+    assert!(
+        stderr.contains("no lumen-crash.exe") && stderr.contains("no minidump"),
+        "the missing helper is reported: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(&root);
@@ -579,7 +656,7 @@ fn an_unknown_target_is_refused() {
 #[test]
 fn a_packaged_multi_page_app_runs() {
     if !toolchain_present() {
-        eprintln!("skipping: the launcher stub and runtime library are not built");
+        eprintln!("skipping: the launcher stub, runtime library and crash helper are not built");
         return;
     }
     if cfg!(target_os = "macos") && Command::new("cc").arg("--version").output().is_err() {

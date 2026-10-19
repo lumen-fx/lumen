@@ -32,16 +32,20 @@ fn child() {
         panic!("crash-test capability panic");
     }
     let alone = case.ends_with("-alone");
-    let helper = if alone {
-        dir.join("no-such-helper")
+    // A packaged app names no helper: it finds the one beside itself.
+    let beside = case.starts_with("beside-");
+    let helper = if beside {
+        None
+    } else if alone {
+        Some(dir.join("no-such-helper"))
     } else {
-        PathBuf::from(env!("CARGO_BIN_EXE_lumen-crash"))
+        Some(PathBuf::from(env!("CARGO_BIN_EXE_lumen-crash")))
     };
     let installed = lumen_os_crash::install(lumen_os_crash::Config {
         app_name: "crash-test".into(),
         app_id: "crash-test".into(),
         crash_dir: dir,
-        helper: Some(helper),
+        helper,
         // On only when a person runs a case by hand to look at the dialog.
         dialog: std::env::var_os("LUMEN_CRASH_TEST_DIALOG").is_some(),
     });
@@ -52,7 +56,13 @@ fn child() {
     }
     lumen_os_crash::log_line("crash-test: about to crash");
     lumen_os_crash::set_gpu("Test GPU (Vulkan), render-gpu");
-    match case.trim_end_matches("-alone") {
+    if beside {
+        assert!(matches!(installed, lumen_os_crash::Installed::Helper(_)));
+    }
+    match case
+        .trim_start_matches("beside-")
+        .trim_end_matches("-alone")
+    {
         "panic" => panic!("crash-test panic"),
         "thread-panic" => {
             let worker = std::thread::Builder::new()
@@ -80,15 +90,25 @@ fn child() {
 
 /// Run `case` as a child crashing into a fresh folder; the folder.
 fn crash(case: &str) -> PathBuf {
+    crash_as(case, &std::env::current_exe().unwrap())
+}
+
+/// The folder a case's reports go to.
+fn case_dir(case: &str) -> PathBuf {
     let tag: String = case
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .take(24)
         .collect();
-    let dir = std::env::temp_dir().join(format!("lumen-crash-e2e-{tag}-{}", std::process::id()));
+    std::env::temp_dir().join(format!("lumen-crash-e2e-{tag}-{}", std::process::id()))
+}
+
+/// [`crash`], running `exe` (this test binary or a copy of it) as the app.
+fn crash_as(case: &str, exe: &Path) -> PathBuf {
+    let dir = case_dir(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let status = Command::new(std::env::current_exe().unwrap())
+    let status = Command::new(exe)
         .args(["child", "--exact", "--nocapture", "--test-threads=1"])
         .env(CASE, case)
         .env(DIR, &dir)
@@ -173,6 +193,41 @@ fn a_panic_that_ends_the_app_leaves_a_report_and_a_minidump() {
     assert!(text.contains("crash-test: about to crash"), "{text}");
     assert_minidump(&dir, &names, &text);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The packaged layout: the app and `lumen-crash` side by side in one
+/// folder, and the app naming no helper. It finds the one beside its
+/// executable, which writes the report and the minidump.
+#[test]
+fn a_packaged_app_finds_the_helper_beside_itself() {
+    let case = "beside-segv";
+    let package = case_dir(case).with_extension("app");
+    let _ = std::fs::remove_dir_all(&package);
+    std::fs::create_dir_all(&package).unwrap();
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let app = package.join(format!("crash-app{suffix}"));
+    std::fs::copy(std::env::current_exe().unwrap(), &app).unwrap();
+    std::fs::copy(
+        env!("CARGO_BIN_EXE_lumen-crash"),
+        package.join(format!("lumen-crash{suffix}")),
+    )
+    .unwrap();
+
+    let dir = crash_as(case, &app);
+    let names = wait_for_report(&dir, Duration::from_secs(20));
+    let text = report(&dir, &names);
+    assert!(text.contains("native fault"), "{text}");
+    #[cfg(unix)]
+    assert!(text.contains("SIGSEGV"), "{text}");
+    #[cfg(windows)]
+    assert!(text.contains("EXCEPTION_ACCESS_VIOLATION"), "{text}");
+    assert!(
+        text.contains(&format!("crash-app{suffix}")),
+        "the report names the packaged executable: {text}"
+    );
+    assert_minidump(&dir, &names, &text);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&package);
 }
 
 #[test]

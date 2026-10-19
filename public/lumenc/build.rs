@@ -10,9 +10,9 @@
 //! source install is the only way to get Lumen at all, and it has to produce
 //! the same three files.
 //!
-//! So this script fetches the matching tagged source, builds `liblumen` and
-//! `lumen-launcher` from it, and puts them where `lumenc` looks first: the
-//! directory it was installed into. The script standard library that build
+//! So this script fetches the matching tagged source, builds `liblumen`,
+//! `lumen-launcher` and the `lumen-crash` helper from it, and puts them where
+//! `lumenc` looks first: the directory it was installed into. The script standard library that build
 //! staged goes there too, under `libs/`, because candela resolves
 //! `import "std/..."` against that directory beside the running executable -
 //! which is `lumenc` itself while you develop, and the app once it is
@@ -155,6 +155,26 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
         copy(&built.join(name), &bin_dir.join(name))?;
     }
 
+    // The crash helper `lumenc package` copies beside every app. Built on its
+    // own so it keeps its own small feature set rather than the engine's, and
+    // reported on its own: without it a package still runs, and a crash
+    // leaves the in-process report with no minidump and no dialog.
+    let crash = crash_helper_name();
+    match run(
+        &cargo,
+        &["build", "--release", "-p", "lumen-crash"],
+        &source,
+        &[],
+    )
+    .and_then(|()| copy(&built.join(crash), &bin_dir.join(crash)))
+    {
+        Ok(()) => {}
+        Err(message) => warn(&format!(
+            "{message}, so {crash} is not beside lumenc. Packages it builds carry \
+             no crash helper: a crash writes a short report and no minidump."
+        )),
+    }
+
     // The script standard library, staged into the profile directory by the
     // candela host's own build script. It travels whole: the C-backed modules
     // sit in subdirectories under the names their `dylib` blocks record.
@@ -281,6 +301,14 @@ fn launcher_name() -> &'static str {
         "lumen-launcher.exe"
     } else {
         "lumen-launcher"
+    }
+}
+
+fn crash_helper_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "lumen-crash.exe"
+    } else {
+        "lumen-crash"
     }
 }
 

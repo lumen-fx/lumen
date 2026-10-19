@@ -677,8 +677,9 @@ every language the app runs.
 `App::run` installs [crash handling](../guides/packaging.md#when-the-app-crashes)
 before the window opens: a panic on any thread or a native fault leaves a
 report in the app's data directory, and the `lumen-crash` helper, found beside
-the executable, writes the minidump and shows the message box. The headless
-runs install none.
+the executable, writes the minidump and shows the message box. `lumenui`'s
+build script puts the helper in `target/<profile>/` beside the app, and
+`lumenc package` copies it into the package. The headless runs install none.
 
 The panic hook goes in front of the one already set, which still runs. To use
 your own crash handling instead, set `[crash] enabled = false` in `lumen.toml`

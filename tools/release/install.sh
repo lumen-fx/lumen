@@ -29,8 +29,9 @@
 # sha256sums.txt cannot be installed by this script.
 #
 # This installs the Lumen toolchain: lumenc, liblumen, the app launcher stub,
-# lumen-server, the production server for server-rendered sites, and lumen-lsp,
-# the language server the editor integrations start. There is
+# lumen-server, the production server for server-rendered sites, lumen-lsp,
+# the language server the editor integrations start, and lumen-crash, the
+# crash helper `lumenc package` copies beside every app. There is
 # nothing else to choose - no component flag, no candela
 # option. Candela is the scripting engine Lumen's script host modules link
 # (lumen-candela runs compiled bytecode, lumen-candela-dev compiles source),
@@ -135,8 +136,8 @@ Usage:
   install.sh [options]
 
 Installs lumenc, the liblumen runtime library, lumen-server, the lumen-lsp
-language server, shell completions, and lpm, the client of the package
-registry.
+language server, the lumen-crash crash helper, shell completions, and lpm,
+the client of the package registry.
 
 Options:
   --prefix DIR         Install root. Default: ~/.lumen
@@ -568,7 +569,7 @@ if [ -n "$INSTALLED" ]; then
 else
   say "  lumen $RELEASE"
 fi
-say "    lumenc, the liblumen runtime library, lumen-server, and lumen-lsp"
+say "    lumenc, the liblumen runtime library, lumen-server, lumen-lsp, and lumen-crash"
 say ""
 
 if ! ask "Install?"; then

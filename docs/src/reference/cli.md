@@ -501,6 +501,12 @@ directory beside `lumenc`, from `--lib-dir`, or from the release archive for a
 `--target`. A source holding no `libs/` warns and packages without it, since an
 app importing nothing from the library needs none of it.
 
+The `lumen-crash` helper goes beside the executable for every kind of app,
+`--static` included, from the same places: a Rust app's own build directory
+first, then beside `lumenc`, `--lib-dir`, or the release archive for a
+`--target`. A source without it warns and packages without it; the app then
+writes its own short crash report, with no minidump.
+
 `--static` writes the same folder with one executable in it: no runtime
 library, no shared engine, and no `libstd`, because all of that is inside the
 file. `libs/` still travels, and so does any portable plugin the app declares,
