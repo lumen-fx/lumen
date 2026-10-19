@@ -42,11 +42,11 @@ const COMPONENTS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/components.c
 fn body(class: &str, param: &str) -> Vec<Element> {
     vec![Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             classes: vec![class.to_string()],
             text: Some(format!("{{{param}}}")),
             ..Attributes::default()
-        },
+        }),
         interpolations: vec![InterpolationSlot::Arg(param.to_string())],
         ..Element::default()
     }]
@@ -88,11 +88,11 @@ fn tree() -> LayoutIR {
     }));
     let baked = Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             classes: vec!["baked".to_string()],
             text: Some("already here".to_string()),
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     LayoutIR {
@@ -111,11 +111,11 @@ fn filled_tree() -> LayoutIR {
     let mut ir = tree();
     ir.root.children[1] = Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             classes: vec!["shout".to_string()],
             text: Some("ann!".to_string()),
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     ir

@@ -24,7 +24,7 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn el(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         children,
         ..Default::default()
     }
@@ -34,7 +34,7 @@ fn el(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
 fn interpolated(tag: &str, attrs: Attributes, slots: Vec<InterpolationSlot>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         interpolations: slots,
         ..Default::default()
     }
@@ -115,10 +115,10 @@ impl Harness {
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("lumen.toml");
         let list = Element {
             tag: "column".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["list".to_string()],
                 ..Attributes::default()
-            },
+            }),
             ..Default::default()
         };
         let ir = LayoutIR {

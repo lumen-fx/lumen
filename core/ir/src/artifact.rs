@@ -390,10 +390,10 @@ mod tests {
                 ],
                 body: vec![Element {
                     tag: "label".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         text: Some("{title}".to_string()),
                         ..Attributes::default()
-                    },
+                    }),
                     interpolations: vec![InterpolationSlot::Arg("title".to_string())],
                     ..Element::default()
                 }],

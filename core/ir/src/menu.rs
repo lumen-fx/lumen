@@ -155,10 +155,10 @@ pub fn in_window_menubar(spec: &MenuBarSpec) -> Element {
                 .collect();
             let mut button = Element {
                 tag: "button".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     tab_index: Some(0),
                     ..Attributes::default()
-                },
+                }),
                 ..Default::default()
             };
             button.attrs.text = Some(menu.label.clone());

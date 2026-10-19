@@ -853,6 +853,62 @@ mod pipeline_integration_tests {
             all_texts(&mut app)
         );
     }
+    /// A document nested `MAX_DEPTH` levels below `<root>` (the parser's
+    /// cap), with a `<checkbox>` at the bottom. `composed` cycles through the
+    /// widgets that recurse from inside their own builders (`<tooltip>`,
+    /// `<tabs>`) and `<column>`; otherwise every level is a `<column>`, which
+    /// is the deepest single spawn.
+    fn deepest_document(composed: bool) -> String {
+        const MAX_DEPTH: u32 = 32;
+        let mut open = String::new();
+        let mut close = String::new();
+        for level in 1..MAX_DEPTH {
+            match if composed { level % 3 } else { 2 } {
+                0 => {
+                    open.push_str(&format!(r#"<tabs bind-value="tab{level}"><tab name="a">"#));
+                    close.insert_str(0, "</tab></tabs>");
+                }
+                1 => {
+                    open.push_str(r#"<tooltip text="tip">"#);
+                    close.insert_str(0, "</tooltip>");
+                }
+                _ => {
+                    open.push_str("<column>");
+                    close.insert_str(0, "</column>");
+                }
+            }
+        }
+        format!(r#"<root>{open}<checkbox text="leaf"/>{close}</root>"#)
+    }
+
+    /// The deepest document the parser accepts builds, spawns, lays out and
+    /// ticks within half the stack Windows gives a main thread, which is
+    /// where a windowed `lumenc run` does all of it; the other half is for the
+    /// frames above. Every tree walk recurses once per level, and an
+    /// unoptimized build keeps every local of a function in its frame, so a
+    /// by-value attribute bag or a widget branch left in a recursive function
+    /// multiplies by the depth and overflows here first.
+    #[test]
+    fn the_deepest_document_runs_within_the_main_thread_stack_budget() {
+        let _serial = crate::serial();
+        for composed in [false, true] {
+            let markup = deepest_document(composed);
+            let leaf = std::thread::Builder::new()
+                .stack_size(512 * 1024)
+                .spawn(move || {
+                    // Enough ticks for every nested `<tabs>` body to mount.
+                    let mut app = build_and_tick(&markup, 32);
+                    all_texts(&mut app).iter().any(|t| t == "leaf")
+                })
+                .expect("spawn app thread")
+                .join()
+                .expect("app thread");
+            assert!(
+                leaf,
+                "the innermost element never mounted (composed: {composed})"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

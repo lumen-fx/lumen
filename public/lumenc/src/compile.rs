@@ -633,10 +633,10 @@ mod tests {
     fn a_relative_app_dir_bakes_an_absolute_image_src() {
         let mut el = Element {
             tag: "image".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 src: Some("icons/gear.png".to_string()),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         resolve_asset_paths(&mut el, Path::new("tracker"));

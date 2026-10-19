@@ -45,11 +45,11 @@ fn in_turn() -> MutexGuard<'static, ()> {
 fn body(class: &str, param: &str) -> Vec<Element> {
     vec![Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             classes: vec![class.to_string()],
             text: Some(format!("{{{param}}}")),
             ..Attributes::default()
-        },
+        }),
         interpolations: vec![InterpolationSlot::Arg(param.to_string())],
         ..Element::default()
     }]
@@ -96,19 +96,19 @@ fn marker(who: &str) -> Element {
 fn tree() -> LayoutIR {
     let stage = Element {
         tag: "column".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("stage".to_string()),
             ..Attributes::default()
-        },
+        }),
         children: vec![marker("ann")],
         ..Element::default()
     };
     let rows = Element {
         tag: "for".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             each: Some("rows".to_string()),
             ..Attributes::default()
-        },
+        }),
         children: vec![marker("{title}")],
         ..Element::default()
     };

@@ -127,7 +127,7 @@ pub fn translate_ir(ir: &LayoutIR, i18n: &SharedI18n) -> LayoutIR {
 /// translated `placeholder`, `title` and `alt` reach the document: the
 /// emitter reads all three off the attributes it is handed.
 pub fn translate_element(element: &mut Element, i18n: &SharedI18n) {
-    let authored = AuthoredStrings::from(&element.attrs);
+    let authored = AuthoredStrings::from(&*element.attrs);
     let strings = translate(&authored, &|key| i18n.try_t(key));
     element.attrs.text = strings.text;
     element.attrs.placeholder = strings.placeholder;
@@ -152,11 +152,11 @@ mod tests {
     fn label(key: &str, text: &str) -> Element {
         Element {
             tag: "label".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 translatable: Some(key.to_string()),
                 text: Some(text.to_string()),
                 ..Attributes::default()
-            },
+            }),
             ..Element::default()
         }
     }
@@ -175,25 +175,25 @@ mod tests {
             children: vec![
                 Element {
                     tag: "input".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         translatable: Some("search".to_string()),
                         placeholder: Some("Search".to_string()),
                         ..Attributes::default()
-                    },
+                    }),
                     ..Element::default()
                 },
                 Element {
                     tag: "image".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         translatable: Some("logo".to_string()),
                         alt: Some("The Lumen logo".to_string()),
                         ..Attributes::default()
-                    },
+                    }),
                     ..Element::default()
                 },
                 Element {
                     tag: "button".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         text: Some("Save".to_string()),
                         tooltip: Some(TooltipSpec {
                             text: "Save the file".to_string(),
@@ -202,7 +202,7 @@ mod tests {
                             offset: None,
                         }),
                         ..Attributes::default()
-                    },
+                    }),
                     ..Element::default()
                 },
             ],
