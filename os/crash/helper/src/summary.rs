@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use lumen_crash_report::{Fault, Frame};
+use minidump::format::MINIDUMP_EXCEPTION;
 use minidump::system_info::Os;
 use minidump::{
     Minidump, MinidumpException, MinidumpMiscInfo, MinidumpModuleList, MinidumpSystemInfo,
@@ -32,19 +33,9 @@ pub fn fault(bytes: &[u8]) -> Option<Fault> {
         ))
     };
 
-    let record = &exception.raw.exception_record;
-    let sent = (system.os == Os::MacOs && record.number_parameters >= 3)
-        .then(|| {
-            mac_sent_signal(
-                record.exception_code,
-                record.exception_flags,
-                record.exception_information[2],
-            )
-        })
-        .flatten();
-    let (description, address) = match sent {
+    let (description, address) = match sent_signal(system.os, &exception.raw.exception_record) {
         // The address of a sent signal is only where the thread was.
-        Some(name) => (format!("{name} / EXC_SOFT_SIGNAL"), None),
+        Some(description) => (description, None),
         None => (
             exception
                 .get_crash_reason(system.os, system.cpu)
@@ -107,16 +98,23 @@ pub fn fault(bytes: &[u8]) -> Option<Fault> {
     })
 }
 
-/// The signal a macOS dump records as `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL`:
-/// one that was sent (`SIGABRT`, or one from `kill` or `raise`) rather than
-/// a fault, which is a Mach exception of its own. The signal's number is the
-/// exception's subcode. The numbers are macOS's.
-fn mac_sent_signal(kind: u32, code: u32, subcode: u64) -> Option<String> {
+/// The fault in words when `record` is a signal that was sent rather than
+/// a fault: `SIGSEGV / EXC_SOFT_SIGNAL`. Only macOS dumps record one apart,
+/// as `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL` and the signal's number in the
+/// subcode (`SIGABRT`, or one from `kill` or `raise`); a fault there is a
+/// Mach exception of its own.
+fn sent_signal(os: Os, record: &MINIDUMP_EXCEPTION) -> Option<String> {
     const EXC_SOFTWARE: u32 = 5;
     const EXC_SOFT_SIGNAL: u32 = 0x10003;
-    if kind != EXC_SOFTWARE || code != EXC_SOFT_SIGNAL {
+    if os != Os::MacOs
+        || record.exception_code != EXC_SOFTWARE
+        || record.exception_flags != EXC_SOFT_SIGNAL
+        || record.number_parameters < 3
+    {
         return None;
     }
+    // The numbers are macOS's.
+    let subcode = record.exception_information[2];
     let name = match subcode {
         4 => "SIGILL",
         5 => "SIGTRAP",
@@ -124,9 +122,9 @@ fn mac_sent_signal(kind: u32, code: u32, subcode: u64) -> Option<String> {
         8 => "SIGFPE",
         10 => "SIGBUS",
         11 => "SIGSEGV",
-        _ => return Some(format!("signal {subcode}")),
+        _ => return Some(format!("signal {subcode} / EXC_SOFT_SIGNAL")),
     };
-    Some(name.to_string())
+    Some(format!("{name} / EXC_SOFT_SIGNAL"))
 }
 
 /// The file name of a module path, either separator.
@@ -153,11 +151,35 @@ mod tests {
 
     #[test]
     fn a_sent_signal_on_macos_is_named_by_its_number() {
-        assert_eq!(mac_sent_signal(5, 0x10003, 11), Some("SIGSEGV".into()));
-        assert_eq!(mac_sent_signal(5, 0x10003, 6), Some("SIGABRT".into()));
-        assert_eq!(mac_sent_signal(5, 0x10003, 30), Some("signal 30".into()));
+        let record = |kind: u32, code: u32, signal: u64| {
+            let mut record = MINIDUMP_EXCEPTION {
+                exception_code: kind,
+                exception_flags: code,
+                number_parameters: 3,
+                ..Default::default()
+            };
+            record.exception_information[2] = signal;
+            record
+        };
+        let named = |signal| sent_signal(Os::MacOs, &record(5, 0x10003, signal));
+        for (signal, name) in [
+            (4, "SIGILL"),
+            (5, "SIGTRAP"),
+            (6, "SIGABRT"),
+            (8, "SIGFPE"),
+            (10, "SIGBUS"),
+            (11, "SIGSEGV"),
+            (30, "signal 30"),
+        ] {
+            assert_eq!(named(signal), Some(format!("{name} / EXC_SOFT_SIGNAL")));
+        }
         // A bad access is a fault, not a sent signal.
-        assert_eq!(mac_sent_signal(1, 1, 0), None);
+        assert_eq!(sent_signal(Os::MacOs, &record(1, 1, 0)), None);
+        // Another system's dump keeps its own reading.
+        assert_eq!(sent_signal(Os::Linux, &record(5, 0x10003, 11)), None);
+        let mut short = record(5, 0x10003, 11);
+        short.number_parameters = 2;
+        assert_eq!(sent_signal(Os::MacOs, &short), None);
     }
 
     #[test]

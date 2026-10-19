@@ -596,6 +596,97 @@ mod tests {
         }
     }
 
+    /// A crash context for a `SIGSEGV`: on Linux one at address 0x10, on
+    /// macOS a sent one, as the signal handlers there report it.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn segv_context() -> crash_handler::CrashContext {
+        // SAFETY: the context is plain data; all zeroes is a valid value.
+        let mut context: crash_handler::CrashContext = unsafe { std::mem::zeroed() };
+        context.siginfo.ssi_signo = libc::SIGSEGV as u32;
+        context.siginfo.ssi_addr = 0x10;
+        context
+    }
+
+    #[cfg(target_os = "macos")]
+    fn segv_context() -> crash_handler::CrashContext {
+        crash_handler::CrashContext {
+            task: 0,
+            thread: 0,
+            handler_thread: 0,
+            exception: Some(crash_context::ExceptionInfo {
+                kind: 5,
+                code: 0x10003,
+                subcode: Some(libc::SIGSEGV as u64),
+            }),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_handler_writes_the_fault_into_the_prepared_report() {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-crash-fallback-{}/crashes",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        prepare(&Config {
+            app_name: "fallback-test".into(),
+            app_id: "fallback-test".into(),
+            crash_dir: dir.clone(),
+            helper: None,
+            dialog: false,
+        });
+        write_fault(&segv_context());
+        // A second fault in the same second gets a name of its own.
+        write_fault(&segv_context());
+        let mut names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 2, "{names:?}");
+        let text = std::fs::read_to_string(dir.join(&names[0])).unwrap();
+        assert!(
+            text.starts_with(
+                "Lumen crash report\n\nfallback-test stopped because of a native fault.\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("App:        fallback-test"), "{text}");
+        assert!(text.contains("Time:       "), "{text}");
+        assert!(
+            text.contains("Fault:      SIGSEGV (segmentation fault), signal 11\n"),
+            "{text}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(text.contains("Address:    0x0000000000000010\n"), "{text}");
+        // A sent signal has no address.
+        #[cfg(target_os = "macos")]
+        assert!(!text.contains("Address:"), "{text}");
+        assert!(text.contains("no minidump was written"), "{text}");
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_signal_has_its_name() {
+        for (signo, name) in [
+            (libc::SIGSEGV, "SIGSEGV (segmentation fault)"),
+            (libc::SIGBUS, "SIGBUS (bus error)"),
+            (libc::SIGABRT, "SIGABRT (abort)"),
+            (libc::SIGILL, "SIGILL (illegal instruction)"),
+            (libc::SIGFPE, "SIGFPE (arithmetic error)"),
+            (libc::SIGTRAP, "SIGTRAP (trap)"),
+            (libc::SIGUSR1, "signal"),
+        ] {
+            let lines = signal_lines(signo);
+            assert_eq!(
+                lines.as_slice(),
+                format!("{name}, signal {signo}").as_bytes()
+            );
+        }
+    }
+
     #[test]
     fn a_full_buffer_drops_the_rest_instead_of_overrunning() {
         let mut buf: Buf<4> = Buf::new();
