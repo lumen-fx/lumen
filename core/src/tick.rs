@@ -25,6 +25,19 @@ pub enum TickStage {
     A11ySync,
 }
 
+/// Where an embedder's app logic runs inside [`TickStage::Systems`].
+///
+/// The runtime orders the set after the tick's input has been turned into
+/// clicks and other element events and after every control has pushed its
+/// value into its signal, and before the readers that write signals back
+/// into the tree. A system in it reads this tick's events and the current
+/// control values, and a signal it writes reaches the screen on the same
+/// tick, with no ordering of its own against engine systems. A module whose
+/// systems consume what app logic produced (a canvas encoding the draws of
+/// the tick) orders itself after this set.
+#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct AppSet;
+
 /// Per-tick frame clock resource.
 ///
 /// - [`Self::now`] is captured at the start of each [`crate::app::App::tick`] before the [`TickStage::Input`] systems run.

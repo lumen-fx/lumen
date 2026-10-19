@@ -159,9 +159,9 @@ impl Plugin for CanvasPlugin {
                 .before(ScriptSet::Ready)
                 .before(ScriptSet::Frame),
         );
-        // Encoding runs after the input dispatch, the frame hook, and the
-        // timers: every handler that could draw has run, so one encode per
-        // tick covers all of them.
+        // Encoding runs after the input dispatch, the frame hook, the timers
+        // and the embedder's own systems: every handler that could draw has
+        // run, so one encode per tick covers all of them.
         app.add_systems(
             TickStage::Systems,
             encode_canvases
@@ -169,7 +169,8 @@ impl Plugin for CanvasPlugin {
                 .after(adopt_canvases)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::Frame)
-                .after(ScriptSet::Timers),
+                .after(ScriptSet::Timers)
+                .after(lumen_module::lumen_core::tick::AppSet),
         );
     }
 }

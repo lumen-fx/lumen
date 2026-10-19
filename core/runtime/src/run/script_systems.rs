@@ -326,4 +326,24 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         // takes one click.
         install_retranslate(app);
     }
+    // The embedder's own systems (the Rust SDK's handlers and `add_systems`):
+    // after the tick's element events exist and every control has pushed its
+    // value into its signal, and before the derivations, the binding readers
+    // and the `<for>` reconciler, so what app logic writes is on screen the
+    // tick it was written.
+    app.configure_sets(
+        TickStage::Systems,
+        lumen_core::tick::AppSet
+            .after(ClickSet::Producers)
+            .after(lumen_core::signals::push_textinput_to_signal)
+            .after(lumen_core::signals::push_toggle_to_signal)
+            .after(lumen_core::signals::push_slider_to_signal)
+            .before(ScriptSet::Derivations)
+            .before(lumen_core::signals::apply_text_bindings)
+            .before(lumen_core::signals::apply_checked_bindings)
+            .before(lumen_core::signals::apply_value_bindings)
+            .before(lumen_core::signals::apply_disabled_bindings)
+            .before(lumen_primitives::progress::apply_progress_bindings)
+            .before(crate::spawn::reconcile_for_blocks),
+    );
 }
