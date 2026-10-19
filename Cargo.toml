@@ -479,8 +479,10 @@ windows-sys = "0.61"
 # (signals, structured exceptions) and the IPC that hands a crashed process
 # to the `lumen-crash` helper, which writes the minidump. Both from
 # EmbarkStudios' crash-handling set; `minidump` reads the dump back for the
-# report's summary.
+# report's summary. `crash-context` is the version `crash-handler` uses; its
+# macOS exception type is not re-exported.
 crash-handler = "0.8"
+crash-context = "0.8"
 minidumper = "0.11"
 minidump = "0.26"
 

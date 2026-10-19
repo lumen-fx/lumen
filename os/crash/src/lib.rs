@@ -5,8 +5,9 @@
 //!
 //! - a panic hook, chained in front of whatever hook was there, that records
 //!   every panic with its backtrace;
-//! - a native fault handler (signals on Linux and macOS, structured
-//!   exceptions on Windows) from EmbarkStudios' `crash-handler`;
+//! - a native fault handler (signals on Linux, Mach exceptions and signals
+//!   on macOS, structured exceptions on Windows) from EmbarkStudios'
+//!   `crash-handler`;
 //! - the `lumen-crash` helper, started beside the app and connected over
 //!   `minidumper`'s IPC. The helper writes the minidump from outside the
 //!   crashed process, writes the readable report beside it, and shows the

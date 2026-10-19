@@ -235,9 +235,10 @@ console, so a crash with no report looks like a window that opens and closes.
 Every windowed launch starts `lumen-crash`, a small helper process, beside the
 app; a headless run starts none. When the app dies of a Rust panic on any
 thread, or of a native fault (an access violation on Windows; `SIGSEGV`,
-`SIGBUS`, `SIGABRT` or `SIGILL` on Linux and macOS), the helper writes two
-files to the `crashes/` folder of the app's data directory, named for the
-moment of the crash in UTC:
+`SIGBUS`, `SIGILL`, `SIGFPE`, `SIGTRAP` or `SIGABRT` on Linux and macOS,
+whether a bad access raised it or `kill` or `raise` sent it), the helper
+writes two files to the `crashes/` folder of the app's data directory, named
+for the moment of the crash in UTC:
 
 - `2026-10-18_14-03-22.txt`, a summary to read: the panic's message, location,
   thread and backtrace, or the fault, its address, the module it happened in

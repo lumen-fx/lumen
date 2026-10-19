@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use lumen_crash_report::{Fault, Frame};
+use minidump::system_info::Os;
 use minidump::{
     Minidump, MinidumpException, MinidumpMiscInfo, MinidumpModuleList, MinidumpSystemInfo,
     MinidumpThreadList, MinidumpThreadNames, Module,
@@ -31,10 +32,26 @@ pub fn fault(bytes: &[u8]) -> Option<Fault> {
         ))
     };
 
-    let description = exception
-        .get_crash_reason(system.os, system.cpu)
-        .to_string();
-    let address = exception.get_crash_address(system.os, system.cpu);
+    let record = &exception.raw.exception_record;
+    let sent = (system.os == Os::MacOs && record.number_parameters >= 3)
+        .then(|| {
+            mac_sent_signal(
+                record.exception_code,
+                record.exception_flags,
+                record.exception_information[2],
+            )
+        })
+        .flatten();
+    let (description, address) = match sent {
+        // The address of a sent signal is only where the thread was.
+        Some(name) => (format!("{name} / EXC_SOFT_SIGNAL"), None),
+        None => (
+            exception
+                .get_crash_reason(system.os, system.cpu)
+                .to_string(),
+            Some(exception.get_crash_address(system.os, system.cpu)),
+        ),
+    };
     let context = exception.context(&system, misc.as_ref());
     let ip = context.as_ref().map(|c| c.get_instruction_pointer());
     let sp = context.as_ref().map(|c| c.get_stack_pointer());
@@ -81,13 +98,35 @@ pub fn fault(bytes: &[u8]) -> Option<Fault> {
 
     Some(Fault {
         description,
-        address: Some(address),
+        address,
         module: ip
             .and_then(module_of)
             .map(|(name, offset)| format!("{name} + {offset:#x}")),
         thread: Some(thread),
         stack,
     })
+}
+
+/// The signal a macOS dump records as `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL`:
+/// one that was sent (`SIGABRT`, or one from `kill` or `raise`) rather than
+/// a fault, which is a Mach exception of its own. The signal's number is the
+/// exception's subcode. The numbers are macOS's.
+fn mac_sent_signal(kind: u32, code: u32, subcode: u64) -> Option<String> {
+    const EXC_SOFTWARE: u32 = 5;
+    const EXC_SOFT_SIGNAL: u32 = 0x10003;
+    if kind != EXC_SOFTWARE || code != EXC_SOFT_SIGNAL {
+        return None;
+    }
+    let name = match subcode {
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        8 => "SIGFPE",
+        10 => "SIGBUS",
+        11 => "SIGSEGV",
+        _ => return Some(format!("signal {subcode}")),
+    };
+    Some(name.to_string())
 }
 
 /// The file name of a module path, either separator.
@@ -110,6 +149,15 @@ mod tests {
             "nvoglv64.dll"
         );
         assert_eq!(base_name("plain".into()), "plain");
+    }
+
+    #[test]
+    fn a_sent_signal_on_macos_is_named_by_its_number() {
+        assert_eq!(mac_sent_signal(5, 0x10003, 11), Some("SIGSEGV".into()));
+        assert_eq!(mac_sent_signal(5, 0x10003, 6), Some("SIGABRT".into()));
+        assert_eq!(mac_sent_signal(5, 0x10003, 30), Some("signal 30".into()));
+        // A bad access is a fault, not a sent signal.
+        assert_eq!(mac_sent_signal(1, 1, 0), None);
     }
 
     #[test]
