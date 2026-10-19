@@ -103,7 +103,7 @@ mod ui;
 pub use app::App;
 pub use conditions::{on_change, on_click, on_toggle};
 pub use error::{Error, Result};
-pub use events::{Event, EventKind, Row};
+pub use events::{Event, EventKind, HandlerSet, Row};
 pub use frame::Frame;
 /// How [`App::run_headless_rendered`] and [`App::screenshot`] run: the
 /// offscreen target's device pixel ratio and an optional tick bound.

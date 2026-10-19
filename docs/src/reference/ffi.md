@@ -693,9 +693,10 @@ fn show_layers(ui: &mut Ui) {
 The same `App` takes `bevy_ecs` systems where they fit better than a handler,
 such as work every tick or over many entities. `add_systems(TickStage::Systems,
 s)` puts them in the app's slot of the tick (`AppSet`): after the tick's input
-has become element events and every control has pushed its value into its
-signal, and before signals are written back into the tree and a canvas
-encodes what was drawn. A system there reads this tick's messages
+has become element events, every control has pushed its value into its
+signal and the handlers have run (`HandlerSet`), and before signals are
+written back into the tree and a canvas encodes what was drawn. A system
+there sees what a handler changed on the same tick, and reads this tick's messages
 (`PointerMoved`, `ClickEvent`, `KeyPressed`, ...) and writes what this tick's
 frame shows, with no ordering of its own; `.chain()` and `.after` between your
 own systems still apply. `Signals` is the system parameter for signals, run

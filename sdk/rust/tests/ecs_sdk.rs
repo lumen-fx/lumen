@@ -211,6 +211,33 @@ fn a_handler_changes_the_apps_resources() {
     assert_eq!(app.world.resource::<Tool>().0, "pen");
 }
 
+/// A system added with `add_systems` runs after the handlers, so it sees on
+/// the same tick what a handler changed.
+#[test]
+fn systems_see_what_a_handler_changed_on_its_tick() {
+    #[derive(Resource, Default)]
+    struct Tool(&'static str);
+
+    fn show(tool: Res<Tool>, mut signals: Signals) {
+        signals.set("tool_label", tool.0);
+    }
+
+    let mut app = bare()
+        .insert_resource(Tool("brush"))
+        .add_systems(TickStage::Systems, show)
+        .on_click("eraser", |ui, _| ui.resource_mut::<Tool>().0 = "eraser")
+        .build_bare();
+    let eraser = app.world.spawn(LumenId("eraser".to_string())).id();
+    click(&mut app, eraser);
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str("tool_label")
+            .as_deref(),
+        Some("eraser")
+    );
+}
+
 /// A list a handler writes is the array signal `<for each>` renders.
 #[test]
 fn a_handler_writes_a_list() {
