@@ -297,8 +297,11 @@ pub enum MenuEntrySpec {
 pub struct Element {
     /// Tag name (`root`, `column`, `tile`, `label`, ...).
     pub tag: String,
-    /// Resolved attribute bag in normalized form.
-    pub attrs: Attributes,
+    /// Resolved attribute bag in normalized form. Boxed because the bag is
+    /// large and every tree walk (parse, spawn, cascade) recurses once per
+    /// level: inline, each `Element` a frame holds carries the whole bag, and
+    /// an unoptimized build runs a deep document out of stack.
+    pub attrs: Box<Attributes>,
     /// Children, in source order.
     pub children: Vec<Element>,
     /// Round-8 wave-C: catalog of `{...}` placeholder slots that appear in
@@ -345,7 +348,7 @@ impl Default for Element {
     fn default() -> Self {
         Self {
             tag: String::new(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: Vec::new(),
             interpolations: Vec::new(),
             frag_use: None,
@@ -2392,10 +2395,10 @@ mod tests {
 
         let image = |path: &Path| Element {
             tag: "image".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 src: Some(path.to_string_lossy().into_owned()),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         let mut root = Element {

@@ -28,11 +28,11 @@ const LIST_ROWS: usize = 500;
 fn button(id: &str) -> Element {
     Element {
         tag: "button".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some(id.to_string()),
             tab_index: Some(0),
             ..Default::default()
-        },
+        }),
         ..Default::default()
     }
 }

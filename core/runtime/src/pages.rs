@@ -302,7 +302,7 @@ pub fn assemble(
         // cannot smuggle a window setting through here.
         let is_entry = page.key == plan.entry_key;
         let mut attrs = if is_entry {
-            Attributes::default()
+            Box::<Attributes>::default()
         } else {
             pir.root.attrs.clone()
         };

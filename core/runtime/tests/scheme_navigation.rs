@@ -27,11 +27,11 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn tile(id: &str) -> Element {
     Element {
         tag: "tile".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some(id.to_string()),
             classes: vec!["cell".to_string()],
             ..Default::default()
-        },
+        }),
         ..Default::default()
     }
 }
@@ -40,12 +40,12 @@ fn tile(id: &str) -> Element {
 fn page(key: &str, id: &str) -> Element {
     Element {
         tag: "if".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             if_signal: Some(nav::PATH_SIGNAL.to_string()),
             if_eq: Some(key.to_string()),
             if_mode: IfModeSpec::Render,
             ..Default::default()
-        },
+        }),
         children: vec![tile(id)],
         ..Default::default()
     }
@@ -115,10 +115,10 @@ impl Harness {
         let mut ir = LayoutIR {
             root: Element {
                 tag: "root".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     id: Some("app".to_string()),
                     ..Default::default()
-                },
+                }),
                 children: vec![page("index", "p1"), page("other", "p2")],
                 ..Default::default()
             },

@@ -301,10 +301,10 @@ mod tests {
     fn one_page() -> CompiledApp {
         let label = Element {
             tag: "label".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 text: Some("rendered here".to_string()),
                 ..Attributes::default()
-            },
+            }),
             ..Element::default()
         };
         CompiledApp {

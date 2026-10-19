@@ -602,6 +602,24 @@ fn drag_source(attrs: &Attributes) -> Option<lumen_os_dnd::DragSource> {
 }
 
 fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
+    let (id, children_now) = spawn_node(world, el, parent);
+    if children_now {
+        for child in &el.children {
+            spawn_element(world, child, Some(id));
+        }
+    }
+    id
+}
+
+/// Spawn `el` itself under `parent`, without its children. The second value
+/// says whether the caller spawns the children now; a `<for>`, an `<if>` and
+/// a `<dialog>` keep theirs as a body their reconciler mounts.
+///
+/// Separate from [`spawn_element`] because that function recurses once per
+/// level of the tree, and an unoptimized build keeps every local of this one
+/// (each component it builds) in the frame. Recursing from in here would hold
+/// all of it at every depth.
+fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entity, bool) {
     // Seed any synthetic signal defaults (currently only the
     // `<tabs>` parser pass authors this - picks the first `<tab>` as
     // the default active when no script has written the signal yet).
@@ -645,7 +663,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     }
     // Resolve the element's strings before the world is borrowed by `spawn`:
     // a `translatable="key"` element reads the loaded catalogue.
-    let authored = AuthoredStrings::from(&el.attrs);
+    let authored = AuthoredStrings::from(&*el.attrs);
     let strings = resolve_strings(
         world.get_resource::<lumen_core::i18n::AppI18n>(),
         &authored,
@@ -729,7 +747,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(lumen_core::components::A11yRole::Switch);
     }
     if el.tag == "slider" {
-        entity.insert(SliderValue::from(&el.attrs));
+        entity.insert(SliderValue::from(&*el.attrs));
     }
     if el.tag == "checkbox" && el.attrs.indeterminate {
         entity.insert(lumen_primitives::Indeterminate);
@@ -745,7 +763,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if el.tag == "progress" {
         // No `value` and no binding = indeterminate; a later `bind-value`
         // pull flips it determinate.
-        let bar = lumen_primitives::ProgressBar::from(&el.attrs);
+        let bar = lumen_primitives::ProgressBar::from(&*el.attrs);
         // The accessibility walk reads `A11yValue`, not `ProgressBar`;
         // `apply_progress_bindings` keeps the two in step.
         entity.insert(lumen_core::components::A11yValue {
@@ -1306,11 +1324,9 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             ));
         }
     } else {
-        for child in &el.children {
-            spawn_element(world, child, Some(id));
-        }
+        return (id, true);
     }
-    id
+    (id, false)
 }
 
 /// Bring a just-spawned tree in line with the state the app starts in, before
@@ -2447,7 +2463,7 @@ fn plan_row_element(
     }
     let changes = RowStringChanges::between(&old.attrs, &new.attrs);
     if changes.any() {
-        out.push((entity, Box::new(new.attrs.clone()), changes));
+        out.push((entity, new.attrs.clone(), changes));
     }
     if old.children.len() != new.children.len() {
         return false;

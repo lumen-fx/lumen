@@ -37,12 +37,12 @@ fn tree(text: &str) -> LayoutIR {
             tag: "root".to_string(),
             children: vec![Element {
                 tag: "label".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     classes: vec!["greeting".to_string()],
                     translatable: Some("greeting".to_string()),
                     text: Some(text.to_string()),
                     ..Attributes::default()
-                },
+                }),
                 ..Element::default()
             }],
             ..Element::default()

@@ -43,22 +43,22 @@ const CSS: &str = "
 fn tree() -> LayoutIR {
     let pane = |id: &str| Element {
         tag: "column".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some(id.to_string()),
             classes: vec!["split-pane".to_string()],
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     let gutter = Element {
         tag: "div".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("gutter".to_string()),
             part: Some(WidgetPart::SplitGutter),
             classes: vec!["split-gutter".to_string()],
             tab_index: Some(0),
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     let split = Element {

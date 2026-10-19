@@ -1212,10 +1212,10 @@ mod cascade_tests {
         .expect("css");
         let mut el = Element {
             tag: "tile".into(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["card".into()],
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         let dark = MediaContext {
@@ -1229,10 +1229,10 @@ mod cascade_tests {
         // Same stylesheet, light context -> base rule keeps winning.
         let mut el2 = Element {
             tag: "tile".into(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["card".into()],
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         let light = MediaContext {
@@ -1267,10 +1267,10 @@ mod cascade_tests {
         .expect("css");
         let mut el = Element {
             tag: "tile".into(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["themed".into()],
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         reapply_detached(&mut el, &css, &MediaContext::default());
@@ -1326,10 +1326,10 @@ mod cascade_tests {
 
         let mut el = Element {
             tag: "tile".into(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["every".into()],
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         reapply_detached(&mut el, &css, &MediaContext::default());
@@ -1378,10 +1378,10 @@ mod cascade_tests {
     fn card_el() -> Element {
         Element {
             tag: "tile".into(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["card".into()],
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         }
     }
@@ -1402,14 +1402,14 @@ mod cascade_tests {
         // Root flipped to theme-dark -> descendant rule wins.
         let root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        el.attrs = resolve(&el, &css, &media, &[root], SiblingPosition::default());
+        *el.attrs = resolve(&el, &css, &media, &[root], SiblingPosition::default());
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant .theme-dark .card selected");
 
         // Root not theme-dark -> base rule keeps winning.
         let root_light = AncestorInfo::new("root", vec!["theme-light".into()], None);
         let mut el2 = card_el();
-        el2.attrs = resolve(
+        *el2.attrs = resolve(
             &el2,
             &css,
             &media,
@@ -1437,13 +1437,13 @@ mod cascade_tests {
 
         let dark_root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        el.attrs = resolve(&el, &css, &media, &[dark_root], SiblingPosition::default());
+        *el.attrs = resolve(&el, &css, &media, &[dark_root], SiblingPosition::default());
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant var(--bg) resolved to dark scope");
 
         let plain_root = AncestorInfo::new("root", vec![], None);
         let mut el2 = card_el();
-        el2.attrs = resolve(
+        *el2.attrs = resolve(
             &el2,
             &css,
             &media,
@@ -1465,7 +1465,7 @@ mod cascade_tests {
         // Immediate parent is `.parent` -> matches.
         let parent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let mut el = card_el();
-        el.attrs = resolve(&el, &css, &media, &[parent], SiblingPosition::default());
+        *el.attrs = resolve(&el, &css, &media, &[parent], SiblingPosition::default());
         assert!(
             el.attrs.bg.is_some(),
             "direct child of .parent matches parent > child"
@@ -1476,7 +1476,7 @@ mod cascade_tests {
         let grandparent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let middle = AncestorInfo::new("tile", vec!["mid".into()], None);
         let mut el2 = card_el();
-        el2.attrs = resolve(
+        *el2.attrs = resolve(
             &el2,
             &css,
             &media,
@@ -1505,7 +1505,7 @@ mod cascade_tests {
         let row = AncestorInfo::new("row", vec![], None);
 
         let mut middle = card_el();
-        middle.attrs = resolve(
+        *middle.attrs = resolve(
             &middle,
             &css,
             &media,
@@ -1518,7 +1518,7 @@ mod cascade_tests {
         );
 
         let mut last = card_el();
-        last.attrs = resolve(&last, &css, &media, &[row], SiblingPosition::new(3, 3));
+        *last.attrs = resolve(&last, &css, &media, &[row], SiblingPosition::new(3, 3));
         assert!(
             solid(last.attrs.bg.as_ref().expect("bg")).g < 0.01,
             "the third of three siblings is the last child"

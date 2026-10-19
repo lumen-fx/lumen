@@ -71,11 +71,11 @@ pub(crate) fn mount_in_window_menubar(ir: &mut LayoutIR, native: bool) -> Option
     let mut staged = LayoutIR {
         root: Element {
             tag: ir.root.tag.clone(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 id: ir.root.attrs.id.clone(),
                 classes: ir.root.attrs.classes.clone(),
                 ..Attributes::default()
-            },
+            }),
             children: vec![bar],
             ..Default::default()
         },

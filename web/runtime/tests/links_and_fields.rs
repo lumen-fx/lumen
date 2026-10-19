@@ -40,12 +40,12 @@ const PROGRAM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/link_and_field.
 fn element(tag: &str, id: &str, href: Option<&str>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some(id.to_string()),
             text: Some(id.to_string()),
             href: href.map(str::to_string),
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     }
 }
