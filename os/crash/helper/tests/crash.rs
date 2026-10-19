@@ -66,10 +66,7 @@ fn child() {
     if beside {
         assert!(matches!(installed, lumen_os_crash::Installed::Helper(_)));
     }
-    match case
-        .trim_start_matches("beside-")
-        .trim_end_matches("-alone")
-    {
+    match base_case(&case) {
         "panic" => panic!("crash-test panic"),
         "thread-panic" => {
             let worker = std::thread::Builder::new()
@@ -80,6 +77,8 @@ fn child() {
             std::process::abort();
         }
         "segv" => raise_access_fault(),
+        #[cfg(unix)]
+        "fault" => read_unreadable_page(),
         "abort" => std::process::abort(),
         "survive" => {
             let caught = std::panic::catch_unwind(|| panic!("crash-test survived panic"));
@@ -89,6 +88,31 @@ fn child() {
             std::thread::sleep(Duration::from_millis(300));
         }
         other => panic!("unknown case {other}"),
+    }
+}
+
+/// A case without its `beside-` and `-alone` variations.
+fn base_case(case: &str) -> &str {
+    case.trim_start_matches("beside-")
+        .trim_end_matches("-alone")
+}
+
+/// A bad memory access: a read from a page mapped with no access.
+#[cfg(unix)]
+fn read_unreadable_page() {
+    // SAFETY: maps one fresh page and reads it; the read faults by design,
+    // which is the point of the case, and touches no memory Rust owns.
+    unsafe {
+        let page = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        );
+        assert_ne!(page, libc::MAP_FAILED);
+        std::ptr::read_volatile(page.cast::<u8>());
     }
 }
 
@@ -147,6 +171,21 @@ fn crash_as(case: &str, exe: &Path) -> PathBuf {
     } else {
         assert!(!status.success(), "{case}: {status}");
     }
+    // After the report, a fault or a sent signal still ends the process the
+    // way it would have without crash handling.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        let ended_by = status.signal();
+        match base_case(case) {
+            "segv" => assert_eq!(ended_by, Some(libc::SIGSEGV), "{case}: {status}"),
+            "fault" => assert!(
+                matches!(ended_by, Some(libc::SIGSEGV | libc::SIGBUS)),
+                "{case}: {status}"
+            ),
+            _ => {}
+        }
+    }
     dir
 }
 
@@ -183,6 +222,16 @@ fn report(dir: &Path, names: &[String]) -> String {
         .find(|n| n.ends_with(".txt"))
         .unwrap_or_else(|| panic!("no report in {}: {names:?}", dir.display()));
     std::fs::read_to_string(dir.join(txt)).unwrap()
+}
+
+/// Exactly one report and at most one minidump in `dir`, once the helper
+/// has had time to write a second if there were going to be one.
+fn assert_one_report(dir: &Path) {
+    std::thread::sleep(Duration::from_secs(1));
+    let names = files(dir);
+    let count = |ext: &str| names.iter().filter(|n| n.ends_with(ext)).count();
+    assert_eq!(count(".txt"), 1, "{names:?}");
+    assert!(count(".dmp") <= 1, "{names:?}");
 }
 
 fn assert_minidump(dir: &Path, names: &[String], text: &str) {
@@ -286,9 +335,59 @@ fn a_segfault_leaves_a_report_with_the_fault_and_a_minidump() {
         )),
         "{text}"
     );
+    // Linux records the signal's address, which is none for a sent one;
+    // macOS has no address for a sent signal and says it was one.
+    #[cfg(target_os = "linux")]
     assert!(text.contains("Address:    0x0000000000000000"), "{text}");
+    #[cfg(target_os = "macos")]
+    {
+        assert!(text.contains("SIGSEGV / EXC_SOFT_SIGNAL"), "{text}");
+        assert!(!text.contains("Address:"), "{text}");
+    }
     assert!(text.contains("Stack\n-----\n"), "{text}");
     assert_minidump(&dir, &names, &text);
+    assert_one_report(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A real bad access, which on macOS is a Mach exception before it is a
+/// signal: one report, naming the fault.
+#[cfg(unix)]
+#[test]
+fn a_bad_access_leaves_one_report_with_the_fault() {
+    let dir = crash("fault");
+    let names = wait_for_report(&dir, Duration::from_secs(20));
+    let text = report(&dir, &names);
+    #[cfg(target_os = "linux")]
+    assert!(
+        text.contains("stopped because of a native fault: SIGSEGV"),
+        "{text}"
+    );
+    #[cfg(target_os = "macos")]
+    assert!(
+        text.contains("stopped because of a native fault: EXC_BAD_ACCESS"),
+        "{text}"
+    );
+    assert_minidump(&dir, &names, &text);
+    assert_one_report(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Without the helper, a real bad access is written once from the handler.
+#[cfg(unix)]
+#[test]
+fn without_the_helper_a_bad_access_is_written_once() {
+    let dir = crash("fault-alone");
+    let names = wait_for_report(&dir, Duration::from_secs(5));
+    let text = report(&dir, &names);
+    #[cfg(target_os = "linux")]
+    assert!(text.contains("Fault:      SIGSEGV"), "{text}");
+    #[cfg(target_os = "macos")]
+    assert!(
+        text.contains("Fault:      EXC_BAD_ACCESS (bad memory access)"),
+        "{text}"
+    );
+    assert_one_report(&dir);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -312,8 +411,9 @@ fn an_abort_leaves_a_report() {
     let dir = crash("abort");
     let names = wait_for_report(&dir, Duration::from_secs(20));
     let text = report(&dir, &names);
-    assert!(text.contains("native fault"), "{text}");
+    assert!(text.contains("native fault: SIGABRT"), "{text}");
     assert_minidump(&dir, &names, &text);
+    assert_one_report(&dir);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -342,19 +442,15 @@ fn without_the_helper_a_fault_is_written_from_the_handler() {
         "{text}"
     );
     assert!(text.contains("App:        crash-test"), "{text}");
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     assert!(
         text.contains("Fault:      SIGSEGV (segmentation fault), signal 11"),
-        "{text}"
-    );
-    #[cfg(target_os = "macos")]
-    assert!(
-        text.contains("Fault:      EXC_BAD_ACCESS (bad memory access)"),
         "{text}"
     );
     #[cfg(windows)]
     assert!(text.contains(RAISED_FAULT), "{text}");
     assert!(text.contains("no minidump was written"), "{text}");
+    assert_one_report(&dir);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

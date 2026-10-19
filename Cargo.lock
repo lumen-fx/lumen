@@ -4167,6 +4167,7 @@ name = "lumen-os-crash"
 version = "0.0.11"
 dependencies = [
  "bevy_ecs",
+ "crash-context",
  "crash-handler",
  "libc",
  "lumen-capability",

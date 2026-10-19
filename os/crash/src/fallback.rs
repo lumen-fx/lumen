@@ -233,9 +233,9 @@ struct FaultLines {
     instruction: Option<u64>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn describe(context: &crash_handler::CrashContext) -> FaultLines {
-    let signo = context.siginfo.ssi_signo as i32;
+/// A signal, in the report's words: `SIGSEGV (segmentation fault), signal 11`.
+#[cfg(unix)]
+fn signal_lines(signo: i32) -> Buf<128> {
     let mut what = Buf::new();
     let name: &[u8] = match signo {
         libc::SIGSEGV => b"SIGSEGV (segmentation fault)",
@@ -249,6 +249,13 @@ fn describe(context: &crash_handler::CrashContext) -> FaultLines {
     what.push(name);
     what.push(b", signal ");
     what.decimal(signo as u64, 1);
+    what
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn describe(context: &crash_handler::CrashContext) -> FaultLines {
+    let signo = context.siginfo.ssi_signo as i32;
+    let what = signal_lines(signo);
     #[cfg(target_arch = "x86_64")]
     let instruction = Some(context.context.uc_mcontext.gregs[16] as u64);
     #[cfg(target_arch = "aarch64")]
@@ -264,11 +271,21 @@ fn describe(context: &crash_handler::CrashContext) -> FaultLines {
 
 #[cfg(target_os = "macos")]
 fn describe(context: &crash_handler::CrashContext) -> FaultLines {
-    let mut what = Buf::new();
     let (kind, code, subcode) = context
         .exception
         .map(|e| (e.kind, e.code, e.subcode))
         .unwrap_or((0, 0, None));
+    // `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL`: a signal that was sent rather
+    // than a fault (`SIGABRT`, or one `kill` or `raise` sent); the subcode
+    // is its number.
+    if kind == 5 && code == 0x10003 {
+        return FaultLines {
+            what: signal_lines(subcode.unwrap_or(0) as i32),
+            address: None,
+            instruction: None,
+        };
+    }
+    let mut what = Buf::new();
     let name: &[u8] = match kind {
         1 => b"EXC_BAD_ACCESS (bad memory access)",
         2 => b"EXC_BAD_INSTRUCTION (illegal instruction)",
