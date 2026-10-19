@@ -4,15 +4,14 @@
 // lib.rs says why they come from there rather than from a dependency.
 use crate::lumen_runtime;
 
-/// Errors returned by [`App::run`](crate::App::run) /
-/// [`App::run_headless`](crate::App::run_headless) and the
-/// [`simple::AppBuilder::run`](crate::simple::AppBuilder::run) facade.
+/// Errors returned by [`App::run`](crate::App::run) and its headless forms,
+/// and by [`CompiledUi::compile`](crate::CompiledUi::compile).
 #[derive(Debug)]
 pub enum Error {
-    /// Builder mis-configuration caught before the runtime started
-    /// (missing markup source, unreadable working directory, ...).
+    /// Something caught before the runtime started (an unreadable working
+    /// directory, a UI that would not encode, ...).
     Setup(String),
-    /// Failure from the underlying runtime pipeline: markup parse, CSS
+    /// Failure from the underlying runtime pipeline: the UI compile, CSS
     /// parse/apply, asset load, or the window backend. See
     /// [`lumen_runtime::RunError`] for the variants.
     Run(lumen_runtime::RunError),

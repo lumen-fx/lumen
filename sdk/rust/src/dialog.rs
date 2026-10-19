@@ -2,10 +2,10 @@
 //!
 //! [`FileDialog`] is the one dialog implementation the script functions
 //! `pick_file`, `pick_files`, `save_file` and `pick_folder` use too, in its
-//! typed form. Build the request, then either queue it from a system with
-//! [`FileDialog::then`] or open it with the world in hand with
-//! [`FileDialog::show`]; the callback gets the world and the chosen paths on
-//! the main thread, on a tick after the dialog closes.
+//! typed form. Build the request and open it from a handler with
+//! [`Ui::show_dialog`](crate::Ui::show_dialog); the callback gets the app and
+//! the chosen paths on the main thread, on a tick after the dialog closes. A
+//! system queues it with [`FileDialog::then`] instead.
 //!
 //! ```no_run
 //! # extern crate lumenui_engine as lumenui;
@@ -14,22 +14,20 @@
 //! #[derive(Resource, Default)]
 //! struct Document(Option<std::path::PathBuf>);
 //!
-//! fn open_menu(mut clicks: MessageReader<ClickEvent>, ids: Query<&LumenId>, mut commands: Commands) {
-//!     for click in clicks.read() {
-//!         if ids.get(click.entity).is_ok_and(|id| id.0 == "open") {
-//!             commands.queue(
-//!                 FileDialog::open()
-//!                     .filter("Images", &["png", "aseprite"])
-//!                     .then(|world: &mut World, paths| {
-//!                         if let Some(path) = paths.into_iter().next() {
-//!                             world.resource_mut::<Document>().0 = Some(path);
-//!                         }
-//!                     }),
-//!             );
-//!         }
-//!     }
-//! }
-//! # use lumenui::ecs::world::World;
+//! # fn demo() -> lumenui::Result<()> {
+//! lumenui::App::from_markup(r#"<root><button id="open" text="Open"/></root>"#)
+//!     .insert_resource(Document::default())
+//!     .on_click("open", |ui, _| {
+//!         let dialog = FileDialog::open().filter("Images", &["png", "aseprite"]);
+//!         ui.show_dialog(dialog, |ui, paths| {
+//!             if let Some(path) = paths.into_iter().next() {
+//!                 ui.set("title", path.display().to_string());
+//!                 ui.resource_mut::<Document>().0 = Some(path);
+//!             }
+//!         });
+//!     })
+//!     .run()
+//! # }
 //! ```
 
 pub use crate::lumen_os_filedialog::{FileDialog, FileDialogKind, MimeFilter, RequestId};

@@ -405,8 +405,10 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   later. Build tooling: no archive carries it. See
   [Building Lumen](building-lumen.md) for what the kit it feeds is for.
 - **lumenui-engine** (in `sdk/rust`, library `lumenui_engine`): the Rust SDK's
-  code. Plugin groups, typed signals, safe node handles, and event-condition
-  helpers. It reaches every other crate through the engine's `sdk` re-export
+  code. The `App`, the handlers on ids and the `Ui` they get (dispatched by
+  one exclusive system in `lumen_core::tick::AppSet`, which resolves the
+  nearest id and the `<for>` row), typed signals, safe node handles, and
+  event-condition helpers. It reaches every other crate through the engine's `sdk` re-export
   module rather than depending on them again; a second path to `lumen-core` or
   `bevy_ecs` would put a second copy of those types in an app, and two copies
   do not share a signal store. Not published: each release compiles it once per
@@ -415,11 +417,19 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `lumenui-engine-<target>.tar.zst`.
 - **lumenui** (in `sdk/lumenui`): the Rust SDK as an app depends on it, and the
   crate to publish on crates.io. It holds no code beyond `pub use lumenui_engine::*`; its
-  build script downloads the compiled set for its own version and target,
+  build script (`lumenui_build::link_engine`) downloads the compiled set for its own version and target,
   checks the manifest's rustc against the one building, and points rustc at the
   set with `-L`, so an app compiles none of the engine. Outside the workspace,
   with its own `[workspace]` table, because its manifest names no engine crate;
   `LUMEN_ENGINE_ARTIFACTS` points it at a set built from a checkout.
+- **lumenui-build** (in `sdk/lumenui-build`): the build-script crate, published
+  beside `lumenui` and outside the workspace the same way. An app's `build.rs`
+  calls `compile()`, which runs `lumenc build --ui` of the same version (from
+  `LUMEN_LUMENC`, `PATH`, or the release's toolchain archive) into `OUT_DIR`
+  and hands the path to `lumenui::ui!()` as `LUMENUI_UI`; `lumenui`'s own
+  build script calls `link_engine()`. Every download from a release, the
+  engine set and the toolchain archive alike, goes through its `fetch`
+  module.
 - **lumenui-canvas** and the other `lumenui-<name>` module crates: a runtime
   module for a Rust SDK app, published the same way, and generated rather than
   kept in the tree. `MODULES` in `tools/release/lumenui-engine.py` lists the

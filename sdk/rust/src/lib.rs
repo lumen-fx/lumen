@@ -1,125 +1,85 @@
 //! # Lumen Rust SDK
 //!
-//! An ECS-first surface over the [Lumen](https://github.com/lumen-fx/lumen) UI
-//! framework. Lumen runs on `bevy_ecs`; this crate exposes that power in
-//! bevy's own shape - plugin groups, real systems, typed resources - instead of
-//! hiding it behind builders and stringly-keyed callbacks.
+//! Write a [Lumen](https://github.com/lumen-fx/lumen) app's code in Rust. The
+//! app is the same as any Lumen app: `lumen.toml` describes it, its markup and
+//! stylesheets live in `src/`, and its assets sit beside it. The build
+//! compiles the UI, and the Rust code drives it the way a script does:
+//! handlers on element ids, signals by name, and the element tree.
 //!
-//! ## Quickstart
+//! ## An app
+//!
+//! ```text
+//! counter/
+//!   Cargo.toml        lumenui in [dependencies], lumenui-build in [build-dependencies]
+//!   build.rs          fn main() { lumenui_build::compile(); }
+//!   lumen.toml        [app] entry = "main.lmn"
+//!   src/main.lmn      <button id="bump" text="+1"/> <label bind-text="clicks"/>
+//!   src/main.rs
+//! ```
+//!
+//! ```ignore
+//! use lumenui::prelude::*;
+//!
+//! fn main() -> lumenui::Result<()> {
+//!     lumenui::app!()
+//!         .signal("clicks", 0i64)
+//!         .on_click("bump", |ui, _| ui.update("clicks", |n: i64| n + 1))
+//!         .on_click("reset", |ui, _| ui.set("clicks", 0i64))
+//!         .run()
+//! }
+//! ```
+//!
+//! [`app!()`](app) starts an [`App`] from the UI the build script compiled.
+//! A handler gets a [`Ui`] (signals, `<for>` lists, the element tree, menus,
+//! the app's own resources) and the [`Event`]. An event goes to the nearest
+//! element at or above its target that has a handler, so a click on a
+//! button's icon runs the button's handler; [`Event::row`] says which `<for>`
+//! row it was in.
+//!
+//! ## How the UI builds
+//!
+//! The build script compiles everything `lumen.toml` names (the entry, its
+//! includes and imports, templates, pages, scripts, translations) into one
+//! artifact, and the executable carries it. A markup or style error fails
+//! `cargo build`. Debug and release builds start from that artifact alike; a
+//! debug build also watches `src/` and reloads the UI on an edit while the
+//! window stays open. Assets (images, fonts) and `lumen.toml` stay beside the
+//! executable.
+//!
+//! ## Systems where they fit
+//!
+//! The same [`App`] takes `bevy_ecs` systems for the work that suits them,
+//! such as a paint loop over every pointer move.
+//! [`App::add_systems`] puts a system in [`TickStage::Systems`] after the
+//! tick's input and before the screen is updated, so it needs no ordering
+//! against the engine:
 //!
 //! ```no_run
 //! # extern crate lumenui_engine as lumenui;
 //! use lumenui::prelude::*;
 //!
-//! fn main() -> lumenui::Result<()> {
-//!     lumenui::App::new()
-//!         .add_plugins(
-//!             // Hot-reloads from disk in `cargo run`; embedded in
-//!             // `cargo run --release`. Same line, both behaviours.
-//!             LumenDefaultPlugins
-//!                 .with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
-//!         )
-//!         // After the systems that write clicks, so a click is counted
-//!         // on the tick it lands.
-//!         .add_systems(
-//!             TickStage::Systems,
-//!             (bump_counter, update_label).chain().after(ClickSet::Producers),
-//!         )
-//!         .run()
+//! #[derive(Resource, Default)]
+//! struct Stroke(Vec<Vec2>);
+//!
+//! fn paint(mut moves: MessageReader<PointerMoved>, mut stroke: ResMut<Stroke>) {
+//!     stroke.0.extend(moves.read().map(|m| m.position));
 //! }
 //!
-//! /// Count this tick's clicks into the `count` signal.
-//! fn bump_counter(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
-//!     let n = clicks.read().count();
-//!     if n > 0 {
-//!         let total = signals.get_or::<i64>("count", 0) + n as i64;
-//!         signals.set("count", total);
-//!     }
-//! }
-//!
-//! /// Push the count straight into the label's `TextContent` - a real ECS
-//! /// query, no binding indirection.
-//! fn update_label(signals: Signals, mut labels: Query<(&LumenId, &mut TextContent)>) {
-//!     let count = signals.get_or::<i64>("count", 0);
-//!     for (id, mut text) in &mut labels {
-//!         if id.0 == "counter-label" {
-//!             text.0 = format!("clicks: {count}");
-//!         }
-//!     }
-//! }
+//! # fn demo() -> lumenui::Result<()> {
+//! lumenui::App::from_markup("<root/>")
+//!     .insert_resource(Stroke::default())
+//!     .add_systems(TickStage::Systems, paint)
+//!     .run()
+//! # }
 //! ```
 //!
-//! Everything a user writes here is a *real* `bevy_ecs` system: it takes
-//! [`Query`], [`Res`], [`ResMut`], [`MessageReader`], [`Commands`], or the typed
-//! [`Signals`] param, and it is scheduled into the live [`TickStage`] schedule
-//! beside the framework's own systems.
-//!
-//! ## The four pillars
-//!
-//! 1. **ECS-first assembly** - [`App::new`] -> [`add_plugins`](App::add_plugins) ->
-//!    [`add_systems`](App::add_systems) -> [`run`](App::run). [`App`] wraps
-//!    lumen-core's ECS app and the lumenc boot pipeline.
-//! 2. **Decomposable plugin groups** - [`LumenDefaultPlugins`] is the full
-//!    stack; trim it with `.build().disable::<ScriptPlugin>()` or compose your
-//!    own with [`PluginGroup`] / [`PluginGroupBuilder`]. See [`plugins`].
-//! 3. **Typed signals** - [`Signals`] gives `signals.get::<i64>("count")`; the
-//!    [`signals!`] macro mints typed [`Property`] handle structs.
-//! 4. **Event ergonomics** - two levels. For a full system, run conditions
-//!    [`on_click`] / [`on_toggle`] / [`on_change`] gate it bevy-style:
-//!    `bump.run_if(on_click("bump")).after(ClickSet::Producers)`. For the
-//!    common "click an id -> write a
-//!    signal" case, register a closure directly:
-//!    [`App::on_click`](App::on_click) hands it an [`EventCtx`] with typed
-//!    `get` / `set`, no `MessageReader` boilerplate. Derived signals come from
-//!    [`App::add_computed`](App::add_computed).
-//!
-//! ## Dev hot reload vs release embed
-//!
-//! Point the UI at [`lumen_source!`] and the build profile decides how it
-//! loads - you write one line:
-//!
-//! ```no_run
-//! # extern crate lumenui_engine as lumenui;
-//! # use lumenui::prelude::*;
-//! # fn demo() -> lumenui::Result<()> { lumenui::App::new().add_plugins(
-//! LumenDefaultPlugins.with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css"))
-//! # ).run() }
-//! ```
-//!
-//! * `cargo run` (debug) - the markup / CSS stay on disk. The runtime reads
-//!   them from the app directory at startup and installs its `notify`-based
-//!   hot-reload watcher, so editing `main.lmn` / `main.css` updates the running
-//!   window live. No restart, no rebuild.
-//! * `cargo run --release` - the same files are `include_str!`-baked into the
-//!   binary. Startup skips disk I/O and runs no watcher: the ship-time AOT
-//!   optimisation.
-//!
-//! The macro selects the branch on `cfg(debug_assertions)`; the source line is
-//! identical either way. The disk/hot-reload path follows the app-dir
-//! convention - name the entry markup `main.lmn` and the stylesheet `main.css`
-//! and keep them in a `src/` directory, with the app's `lumen.toml` beside it
-//! (`lumenc run <dir>` uses the same layout).
-//!
-//! Escape hatches remain. The explicit
-//! [`with_markup`](plugins::LumenPluginsBuilder::with_markup) /
-//! [`with_css`](plugins::LumenPluginsBuilder::with_css) pair always embeds (any
-//! profile), and [`with_dir`](plugins::LumenPluginsBuilder::with_dir) always
-//! disk-loads and watches. Frameworks split the same way - SwiftUI / Flutter
-//! reload from the source tree in debug and freeze into the bundle for release;
-//! Dioxus / Leptos watch the asset dir under a dev server and `include_str!` for
-//! a shipped binary - the difference here is that the *runtime* already owns the
-//! watcher, so the SDK only chooses disk vs embed.
-//!
-//! ## Sugar layer
-//!
-//! Prefer a terse builder for a small app? [`mod@simple`] keeps the v1
-//! `App::builder().on_click(..)` surface, delegating to the same core.
+//! [`Signals`] is the system parameter for signals, and the [`dom`] handles
+//! work from a system as from a handler.
 //!
 //! ## Custom widgets
 //!
-//! The prelude re-exports [`Widget`](widget::Widget) and its derive; install
-//! widget or backend plugins with [`App::add_plugin`] /
-//! [`App::add_plugins`].
+//! The prelude re-exports [`Widget`](lumen_widget::Widget) and its derive;
+//! install the plugin the derive generates with [`App::add_plugin`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -138,37 +98,49 @@ mod events;
 mod frame;
 pub mod plugins;
 pub mod signal;
-mod simple_impl;
+mod ui;
 
 pub use app::App;
 pub use conditions::{on_change, on_click, on_toggle};
 pub use error::{Error, Result};
-pub use events::{EventCtx, EventKind};
+pub use events::{Event, EventKind, Row};
 pub use frame::Frame;
 /// How [`App::run_headless_rendered`] and [`App::screenshot`] run: the
 /// offscreen target's device pixel ratio and an optional tick bound.
 pub use lumen_runtime::HeadlessOptions;
-pub use plugins::{LumenDefaultPlugins, PluginGroup, PluginGroupBuilder, Source};
 pub use signal::Signals;
+pub use ui::{CompiledUi, Record, Ui};
 
-/// The v1 builder surface - a terse facade over the ECS core for small apps.
+/// The app's compiled UI, from what its build script wrote.
 ///
-/// ```no_run
-/// # extern crate lumenui_engine as lumenui;
-/// use lumenui::simple::App;
-/// use lumenui::prelude::*;
+/// Expands to a [`CompiledUi`] over the artifact `lumenui_build::compile()`
+/// put in the crate's `OUT_DIR`. In a debug build it also carries the crate
+/// directory, which the app watches to reload the UI on an edit.
 ///
-/// # fn demo() -> lumenui::Result<()> {
-/// App::builder()
-///     .markup("<root><label id=\"l\" bind-text=\"msg\" text=\"hi\"/></root>")
-///     .property("msg", "hello")
-///     .on_click("l", |ctx| ctx.set("msg", "clicked"))
-///     .run()
-/// # }
-/// ```
-pub mod simple {
-    pub use crate::events::{EventCtx, EventKind, Handler};
-    pub use crate::simple_impl::{App, AppBuilder};
+/// The build script is what makes the artifact; without one the macro fails
+/// with a message saying to add it.
+#[macro_export]
+macro_rules! ui {
+    () => {
+        $crate::CompiledUi::from_build(
+            ::core::include_bytes!(::core::env!(
+                "LUMENUI_UI",
+                "lumenui::ui!() needs the UI the app's build script compiles: add a build.rs \
+                 beside Cargo.toml with `fn main() { lumenui_build::compile(); }` and \
+                 `lumenui-build` under [build-dependencies]"
+            )),
+            ::core::env!("CARGO_MANIFEST_DIR"),
+            ::core::cfg!(debug_assertions),
+        )
+    };
+}
+
+/// An [`App`] over the app's compiled UI: `App::new(lumenui::ui!())`.
+#[macro_export]
+macro_rules! app {
+    () => {
+        $crate::App::new($crate::ui!())
+    };
 }
 
 // -- The crates behind the engine ---------------------------------------------
@@ -185,13 +157,13 @@ pub mod simple {
 // these are the same crates and the same types, and an app links them in.
 #[cfg(windows)]
 pub use lumen::sdk::{
-    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_runtime, lumen_script,
-    lumen_widget, lumen_widget_macros, lumenc,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_primitives, lumen_runtime,
+    lumen_scene, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
 };
 #[cfg(not(windows))]
 pub use lumen_engine::sdk::{
-    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_runtime, lumen_script,
-    lumen_widget, lumen_widget_macros,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_primitives, lumen_runtime,
+    lumen_scene, lumen_script, lumen_widget, lumen_widget_macros,
 };
 // The parser/compiler front-end sits outside the shared engine (the `lumenc`
 // binary links that library itself); its heavy dependencies still resolve
@@ -199,32 +171,16 @@ pub use lumen_engine::sdk::{
 #[cfg(not(windows))]
 pub use lumenc;
 
-// -- Advanced re-exports ------------------------------------------------------
-
-/// The lumen-core ECS app and [`Plugin`](lumen_core::app::Plugin) trait that
-/// plugins build against.
-pub use lumen_core::app as ecs_app;
-pub use lumen_core::{command, components, input, property_store, signals as core_signals, tick};
-pub use lumen_runtime as runtime;
-pub use lumen_widget as widget;
-
-/// The ECS crate (`bevy_ecs`) used across Lumen, re-exported so custom systems
-/// build against the exact workspace version.
-pub use bevy_ecs as ecs;
-
 /// The math crate (`glam`) the engine's components and messages carry, such as
 /// the `Vec2` of a click's position. Name it through here: a dependency of an
 /// app's own would be a second copy whose types are not these.
 pub use glam;
 
-/// Typed reactive property store and typed [`Property`] handle.
-pub use lumen_core::property_store::{Property, PropertyStore};
-
 /// The host-neutral description of a native function exposed to script, and
 /// the value type its arguments and result cross as. Build one with
 /// [`ScriptFn::from_fn`] from a plain Rust closure, with [`ScriptFn::new`] when
-/// it also wants a doc line or a namespace, or with
-/// [`simple::AppBuilder::native_fn`] for the untyped shape.
+/// it also wants a doc line or a namespace, or with [`App::native_fn`] for the
+/// untyped shape.
 pub use lumen_script::{
     ScriptField, ScriptFn, ScriptFnCx, ScriptNs, ScriptSig, ScriptStruct, ScriptTy, ScriptType,
     ScriptValue,
@@ -232,14 +188,14 @@ pub use lumen_script::{
 
 /// One-stop import: `use lumenui::prelude::*;`.
 ///
-/// Brings in [`App`], the plugin groups, typed [`Signals`], the run-condition
-/// adapters, the common components, the typed signal surface, and the
-/// `bevy_ecs` items systems need (`Query`, `Res`, `ResMut`, `Commands`,
-/// `MessageReader`, `.chain()` / `.run_if()` via `IntoScheduleConfigs`), and
-/// the derives an app defines its own data with (`Component`, `Resource`,
-/// `Message`, `Bundle`, `Widget`). Import it with a glob: the `bevy_ecs`
-/// derives find the ECS crate through the `bevy_ecs` name this module also
-/// brings in, so an app needs no dependency on that crate.
+/// Everything an app names in ordinary code: [`App`] and the handler
+/// surface ([`Ui`], [`Event`], [`Record`]), the DOM handles, signals, dialogs
+/// and the clipboard, the input types events carry, the common components,
+/// and the `bevy_ecs` items systems are written with, including the derives
+/// an app defines its own data with (`Component`, `Resource`, `Message`,
+/// `Bundle`, `Widget`). Import it with a glob: the `bevy_ecs` derives find the
+/// ECS crate through the `bevy_ecs` name this module also brings in, so an app
+/// needs no dependency on that crate.
 pub mod prelude {
     use crate::{lumen_core, lumen_widget, lumen_widget_macros};
 
@@ -250,33 +206,27 @@ pub mod prelude {
     // the engine's copy under that name, which is what the expansion finds.
     pub use crate::bevy_ecs;
 
-    pub use crate::{App, Error, Frame, HeadlessOptions, Result};
-    pub use crate::{EventCtx, EventKind};
+    pub use crate::{App, CompiledUi, Error, Frame, HeadlessOptions, Result};
+    pub use crate::{Event, EventKind, Record, Row, Ui};
     pub use crate::{on_change, on_click, on_toggle};
 
-    // Plugin surface.
-    pub use crate::lumen_source;
-    pub use crate::plugins::{
-        AppPlugins, AssetsPlugin, InputPlugin, LayoutPlugin, LumenDefaultPlugins, McpPlugin,
-        PluginGroup, PluginGroupBuilder, PrimitivesPlugin, RenderPlugin, ScriptPlugin, Source,
-        TextPlugin, WindowPlugin,
-    };
+    // An app's own plugin bundles.
+    pub use crate::plugins::{PluginGroup, PluginGroupBuilder};
 
     // Typed signals + the handle-struct macro.
     pub use crate::signal::Signals;
     pub use crate::signals;
 
-    // Dynamic DOM: node handles, query results, events, and the
-    // window / document / history namespaces.
-    pub use crate::dom::{self, Event, Listener, Node, NodeQuery};
+    // The element tree: node handles and query results.
+    pub use crate::dom::{self, Listener, Node, NodeQuery};
 
     // OS: native file dialogs and the clipboard.
     pub use crate::clipboard::{Clipboard, RgbaImage};
     pub use crate::dialog::FileDialog;
 
-    // ECS app + schedule labels.
+    // ECS app, its plugin trait, and the tick.
     pub use lumen_core::app::{App as EcsApp, Plugin};
-    pub use lumen_core::tick::{FrameTiming, TickStage};
+    pub use lumen_core::tick::{AppSet, FrameTiming, TickStage, WakeDeadline};
 
     // Which renderer draws the app, and on what.
     pub use lumen_core::render_backend::RendererInfo;
@@ -286,14 +236,16 @@ pub mod prelude {
         Color, Disabled, DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection,
         FlexJustify, Length, LumenClasses, LumenId, LumenTag, Opacity, Position, Selected,
         ShadowSpec, SliderValue, Style, TextAlign, TextContent, TextInput, TextStyle, TextWrap,
-        Toggleable, Visible, Visuals,
+        Toggleable, Transform, Visible, Visuals,
     };
 
-    // Input messages.
+    // Input: the messages a system reads and the types events carry.
     pub use lumen_core::input::{
-        ClickEvent, ClickSet, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-        Focused, HoverWithin, Hovered, KeyPressed, KeyReleased, LongPressEvent, MouseWheel,
-        PointerMoved, PointerPressed, PointerReleased, Pressed,
+        ClickEvent, ContextMenuEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent,
+        DragStartEvent, EditCommitted, Focused, HoverWithin, Hovered, Key, KeyPressed, KeyReleased,
+        LongPressEvent, MenuClicked, Modifiers, ModifiersState, MouseWheel, NamedKey,
+        PointerButton, PointerData, PointerKind, PointerMoved, PointerPressed, PointerReleased,
+        Pressed, WindowFocused,
     };
 
     // Typed signal surface.
@@ -303,12 +255,17 @@ pub mod prelude {
     pub use lumen_widget::{Attributes, Widget};
     pub use lumen_widget_macros::Widget;
 
+    // The math type positions and sizes are in.
+    pub use crate::glam::Vec2;
+
     // The bevy_ecs vocabulary systems are written in. `IntoScheduleConfigs`
     // brings `.chain()` / `.run_if()` / `.after()` into scope.
+    pub use bevy_ecs::hierarchy::{ChildOf, Children};
     pub use bevy_ecs::message::{MessageReader, MessageWriter};
     pub use bevy_ecs::prelude::{
         Bundle, Commands, Component, Entity, IntoScheduleConfigs, Local, Message, Query, Res,
         ResMut, Resource, With, Without,
     };
-    pub use bevy_ecs::query::Changed;
+    pub use bevy_ecs::query::{Added, Changed};
+    pub use bevy_ecs::system::{ParamSet, SystemParam};
 }

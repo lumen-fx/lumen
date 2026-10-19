@@ -12,11 +12,8 @@
 //! LUMEN_ENGINE_ARTIFACTS=<set> cargo run --manifest-path /tmp/lumenui-sdk/lumenui-canvas/Cargo.toml --example paint
 //! ```
 
-use lumenui::glam::Vec2;
-use lumenui::lumen_core::components::Transform;
-use lumenui::lumen_core::input::{PointerMoved, PointerPressed, PointerReleased};
 use lumenui::prelude::*;
-use lumenui_canvas::{Canvas, CanvasPlugin, CanvasSet, Context2d, PixelBuffer};
+use lumenui_canvas::{Canvas, CanvasPlugin, Context2d, PixelBuffer};
 
 /// The picture, in pixels.
 const SIDE: u32 = 64;
@@ -46,22 +43,20 @@ fn main() -> lumenui::Result<()> {
                 .expect("the buffer exists");
         }
     }
-    lumenui::App::new()
-        .add_plugins(
-            LumenDefaultPlugins
-                .with_markup(r#"<root><canvas id="art" width="512" height="512"/></root>"#)
-                .with_title("Lumen canvas paint"),
-        )
+    // An app names its markup in `lumen.toml` and starts from
+    // `lumenui::app!()`; an example has no build script to compile it, so
+    // this one gives its one element as text.
+    App::from_markup(r#"<root><canvas id="art" width="512" height="512"/></root>"#)
+        .window_title("Lumen canvas paint")
         .add_plugin(CanvasPlugin::default())
         .insert_resource(Art {
             pixels,
             painting: false,
             changed: true,
         })
-        .add_systems(
-            TickStage::Systems,
-            (brush, show.before(CanvasSet::Encode)).chain(),
-        )
+        // In the app's slot of the tick: after the pointer input, before the
+        // canvas encodes what was drawn.
+        .add_systems(TickStage::Systems, (brush, show).chain())
         .run()
 }
 

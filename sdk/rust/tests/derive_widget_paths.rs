@@ -25,7 +25,7 @@ fn the_derive_compiles_against_the_sdk_alone() {
     assert_eq!(Badge::name(), "Badge");
     assert_eq!(Badge::parser_tag(), "derive-paths-badge");
     let plugin = BadgePlugin;
-    assert_eq!(lumenui::ecs_app::Plugin::name(&plugin), "BadgePlugin");
+    assert_eq!(Plugin::name(&plugin), "BadgePlugin");
 }
 
 #[test]

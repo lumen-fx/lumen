@@ -58,8 +58,9 @@ fn a_derived_widget_tag_in_markup_carries_the_component_and_its_props() {
     .unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
-    lumenui::App::new()
-        .add_plugins(LumenDefaultPlugins.with_dir(&dir))
+    let markup = std::fs::read_to_string(dir.join("src").join("main.lmn")).unwrap();
+    lumenui::App::from_markup(markup)
+        .app_dir(&dir)
         .add_plugin(GaugePlugin)
         .add_systems(TickStage::Systems, record)
         .run_headless(2)

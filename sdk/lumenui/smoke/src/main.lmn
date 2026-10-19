@@ -1,0 +1,7 @@
+<root>
+  <include src="parts/greeting.lmn"/>
+  <smoke-gauge id="fuel" label="fuel"/>
+  <for id="items" each="$items" key="id">
+    <label text="{row.name}"/>
+  </for>
+</root>

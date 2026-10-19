@@ -45,9 +45,10 @@ fn a_plugins_tag_is_registered_before_the_markup_is_parsed() {
     .unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
 
-    // No `Gauge::register()` call: adding the plugin is the whole setup.
-    lumenui::App::new()
-        .add_plugins(LumenDefaultPlugins.with_dir(&dir))
+    // No `Gauge::register()` call: adding the plugin is the whole setup. The
+    // markup is parsed when the app starts, after its plugins built.
+    lumenui::App::from_markup("<root><plugin-order-gauge id=\"fuel\"/></root>")
+        .app_dir(&dir)
         .add_plugin(GaugePlugin)
         .add_systems(TickStage::Systems, record)
         .run_headless(2)
