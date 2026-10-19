@@ -63,6 +63,9 @@ fn try_compile() -> Result<(), String> {
             dir.join("Cargo.toml").display()
         ));
     }
+    // The whole of `src/` is watched, since a new page there is a new part
+    // of the UI. That reruns this script on every edit to the app's Rust
+    // too, so the compile itself only runs when what it reads changed.
     println!("cargo:rerun-if-changed={}", config.display());
     for watched in ["src", "locale"] {
         let path = dir.join(watched);
@@ -72,10 +75,24 @@ fn try_compile() -> Result<(), String> {
     }
     println!("cargo:rerun-if-env-changed={LUMENC}");
 
-    let lumenc = find_lumenc(version)?;
     let out = PathBuf::from(env("OUT_DIR")?)
         .join("lumen")
         .join("app.lmna");
+    let stamp = out.with_extension("stamp");
+    let inputs = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(format!("{version}\n{}", ui_fingerprint(&dir)));
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    if out.is_file() && std::fs::read_to_string(&stamp).is_ok_and(|s| s == inputs) {
+        println!("cargo:rustc-env={UI_ENV}={}", out.display());
+        return Ok(());
+    }
+
+    let lumenc = find_lumenc(version)?;
     let output = Command::new(&lumenc)
         .arg("build")
         .arg("--ui")
@@ -93,8 +110,55 @@ fn try_compile() -> Result<(), String> {
     for line in stderr.lines().filter(|l| l.contains("warning")) {
         println!("cargo:warning={line}");
     }
+    // Written last, so a compile that failed halfway is redone next time.
+    let _ = std::fs::write(&stamp, &inputs);
     println!("cargo:rustc-env={UI_ENV}={}", out.display());
     Ok(())
+}
+
+/// What the UI compile reads, as one string to compare: the path and text of
+/// every UI source under `src/` and `locale/`, `lumen.toml` and `Cargo.toml`
+/// (whose dependencies name the modules the app links), and the
+/// `#[widget(...)]` lines of the Rust sources (the tags the app's widgets
+/// add). Any other edit to the app's Rust leaves it unchanged.
+fn ui_fingerprint(dir: &Path) -> String {
+    const UI: &[&str] = &["lmn", "css", "cdl", "rhai", "lua", "ftl"];
+    let mut files: Vec<PathBuf> = vec![dir.join("lumen.toml"), dir.join("Cargo.toml")];
+    let mut pending = vec![dir.join("src"), dir.join("locale")];
+    while let Some(at) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut print = String::new();
+    for path in files {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let body = if ext == "rs" {
+            text.lines()
+                .filter(|l| l.contains("#[widget("))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else if UI.contains(&ext) || name == "lumen.toml" || name == "Cargo.toml" {
+            text
+        } else {
+            continue;
+        };
+        print.push_str(&format!("{}\n{}\n{body}\n", path.display(), body.len()));
+    }
+    print
 }
 
 /// The `lumenc` to compile with: see the crate docs for the order.
@@ -193,4 +257,41 @@ fn env(name: &str) -> Result<String, String> {
 fn fail(message: &str) -> ! {
     eprintln!("error: {message}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A UI edit, a new page and a widget's tag change what the compile
+    /// reads; an edit to the rest of the app's Rust does not.
+    #[test]
+    fn the_fingerprint_follows_what_the_compile_reads() {
+        let dir = std::env::temp_dir().join(format!("lumenui-build-print-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src").join("parts")).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[app]\nentry = \"main.lmn\"\n").unwrap();
+        std::fs::write(dir.join("src").join("main.lmn"), "<root/>").unwrap();
+        std::fs::write(dir.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+        let first = ui_fingerprint(&dir);
+
+        std::fs::write(dir.join("src").join("main.rs"), "fn main() { run(); }\n").unwrap();
+        assert_eq!(ui_fingerprint(&dir), first, "a Rust edit");
+
+        std::fs::write(
+            dir.join("src").join("main.rs"),
+            "#[widget(tag = \"gauge\")]\nfn main() { run(); }\n",
+        )
+        .unwrap();
+        let tagged = ui_fingerprint(&dir);
+        assert_ne!(tagged, first, "a widget's tag");
+
+        std::fs::write(dir.join("src").join("parts").join("side.lmn"), "<label/>").unwrap();
+        let paged = ui_fingerprint(&dir);
+        assert_ne!(paged, tagged, "a new markup file");
+
+        std::fs::write(dir.join("src").join("main.lmn"), "<root><label/></root>").unwrap();
+        assert_ne!(ui_fingerprint(&dir), paged, "a markup edit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
