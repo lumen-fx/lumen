@@ -593,6 +593,22 @@ impl App {
         self
     }
 
+    /// Configures system sets of the `Tick` schedule, placing them in the
+    /// given [`TickStage`]. How the runtime orders a set such as
+    /// [`crate::tick::AppSet`] against the engine's own systems.
+    pub fn configure_sets<M>(
+        &mut self,
+        stage: TickStage,
+        sets: impl IntoScheduleConfigs<bevy_ecs::intern::Interned<dyn bevy_ecs::schedule::SystemSet>, M>,
+    ) -> &mut Self {
+        let mut schedules = self.world.resource_mut::<Schedules>();
+        let schedule = schedules
+            .get_mut(Tick)
+            .expect("Tick schedule should be installed by App::new");
+        schedule.configure_sets(sets.in_set(stage));
+        self
+    }
+
     /// Adds render-world systems into the `Render` schedule under the given [`RenderStage`] set.
     pub fn add_render_systems<M>(
         &mut self,

@@ -9,7 +9,10 @@
 //! Every call is safe from anywhere: a system, an event handler, another
 //! thread. A drawing call is recorded and replayed into the canvas once per
 //! tick, by the module's encode system ([`CanvasSet::Encode`]); a system that
-//! draws runs before it to land in the same frame:
+//! draws runs before it to land in the same frame. The encode already runs
+//! after the embedder's [`AppSet`](lumen_module::lumen_core::tick::AppSet), so
+//! a Rust SDK app's systems need no edge of their own; a system added
+//! straight to the ECS app names one:
 //!
 //! ```
 //! # use bevy_ecs::prelude::*;

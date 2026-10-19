@@ -153,6 +153,14 @@ a system that writes those messages joins the set with
 on a tick that paints nothing new, so an idle app shows the old state until
 something else wakes it.
 
+App logic has a set of its own, `lumen_core::tick::AppSet`: the runtime orders
+it after `ClickSet::Producers` and the control-to-signal pushes and before the
+binding readers and the `<for>` reconciler. The Rust SDK's handlers run in it,
+and so does every system an app adds to `TickStage::Systems` through
+`lumenui::App::add_systems`. A plugin system that consumes what app logic
+produced, such as an encode of the tick's drawing, orders itself
+`.after(AppSet)`.
+
 A system that writes a signal or edits the DOM needs no edge to be seen. Ahead
 of the `bind-*` readers its write paints on its own tick; after them, the tick
 keeps the write for the next one and asks for it, so it paints one tick later.
