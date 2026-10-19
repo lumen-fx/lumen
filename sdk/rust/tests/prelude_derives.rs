@@ -52,7 +52,7 @@ fn spawn_targets(mut commands: Commands, existing: Query<(), With<Marker>>) {
 
 #[test]
 fn an_app_defines_components_resources_and_messages_from_the_prelude() {
-    let mut app = lumenui::App::new()
+    let mut app = lumenui::App::from_markup("<root/>")
         .insert_resource(Total::default())
         .add_message::<Struck>()
         .add_systems(TickStage::Systems, (spawn_targets, strike, tally).chain())

@@ -1,11 +1,10 @@
-//! The Bevy user's aha moment: it's a real ECS - you can touch *everything*.
+//! The ECS half of the SDK: a system that touches components directly.
 //!
-//! This app carries no signals and no bindings. A single system reads the
-//! [`ClickEvent`] stream and mutates the clicked entity's [`Visuals`]
-//! component directly, cycling its fill through a palette. The system runs
-//! after [`ClickSet::Producers`], so it reads a click on the tick it lands, and
-//! the renderer picks the new fill up on that frame because `Visuals` is the
-//! very component it extracts from.
+//! This app carries no signals and no bindings. One system reads the
+//! [`ClickEvent`] stream and changes the clicked tile's [`Visuals`] component,
+//! cycling its fill through a palette. Added with `add_systems`, it runs after
+//! the tick's clicks exist, and the renderer picks the new fill up on that
+//! frame because `Visuals` is the very component it draws from.
 //!
 //! Run with:
 //!
@@ -29,26 +28,17 @@ const PALETTE: [Color; 5] = [
 ];
 
 fn main() -> lumenui::Result<()> {
-    lumenui::App::new()
-        .add_plugins(
-            LumenDefaultPlugins
-                .with_source(lumen_source!(
-                    "examples/src/main.lmn",
-                    "examples/src/main.css"
-                ))
-                .with_title("Lumen systems demo - direct Visuals mutation"),
-        )
-        .add_systems(
-            TickStage::Systems,
-            recolor_clicked.after(ClickSet::Producers),
-        )
+    let ui = CompiledUi::compile(concat!(env!("CARGO_MANIFEST_DIR"), "/examples"))?;
+    App::new(ui)
+        .window_title("Lumen systems demo - direct Visuals mutation")
+        .add_systems(TickStage::Systems, recolor_clicked)
         .run()
 }
 
 /// On each click, advance the target tile's fill to the next palette entry.
 ///
 /// `next` is a per-system [`Local`], so the palette index survives across ticks
-/// without any resource or signal - pure ECS state.
+/// without any resource or signal.
 fn recolor_clicked(
     mut clicks: MessageReader<ClickEvent>,
     mut next: Local<usize>,

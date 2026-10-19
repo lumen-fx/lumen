@@ -438,18 +438,32 @@ Handlers and watches fire on Lumen's tick thread. See `sdk/python/README.md`.
 
 ## Rust SDK
 
-The `lumenui` crate is the Rust entry point. It does not go through the C ABI:
-it exposes the engine in its native ECS shape, so a handler is an ordinary
-`bevy_ecs` system scheduled beside the framework's own.
+The `lumenui` crate writes a Lumen app's code in Rust. It does not go through
+the C ABI. The app is described by `lumen.toml` like any Lumen app, its UI
+lives in `src/`, and the build compiles that UI into the executable. Rust code
+drives it the way a script does: handlers on element ids, signals by name, and
+the element tree. The engine's ECS (`bevy_ecs`) is there too, for systems
+where they fit better.
 
 ### Installing
 
-Add `lumenui` and pin the Rust toolchain the Lumen release was built with:
+Add `lumenui`, `lumenui-build` for the build script, and pin the Rust
+toolchain the Lumen release was built with:
 
 ```toml
 # Cargo.toml
 [dependencies]
 lumenui = "X.Y.Z"
+
+[build-dependencies]
+lumenui-build = "X.Y.Z"
+```
+
+```rust
+// build.rs
+fn main() {
+    lumenui_build::compile();
+}
 ```
 
 ```toml
@@ -457,6 +471,20 @@ lumenui = "X.Y.Z"
 [toolchain]
 channel = "<the rustc that Lumen X.Y.Z names>"
 ```
+
+`lumenc new <name> rust` writes all three.
+
+`lumenui_build::compile()` compiles the UI `lumen.toml` names (the entry and
+everything it includes and imports, templates, pages, scripts, translations)
+into an artifact in the build's `OUT_DIR`, and the app's executable carries
+it. A markup or style error fails `cargo build` with the compiler's message.
+It compiles with `lumenc` of the same version, because an engine reads only
+what its own release's compiler wrote. The `lumenc` it runs is the one
+`LUMEN_LUMENC` names (`lumenc run`, `build` and `package` set it to
+themselves), else a `lumenc` on `PATH` of that version, else the release's
+toolchain archive for the machine, downloaded once, checked against the
+release's `sha256sums.txt`, and kept beside the engine set in the user cache
+directory (`toolchain/` next to `lumenui-engine/`).
 
 Your build compiles your code and `lumenui`, and none of the engine. Each Lumen
 release ships the engine's compiled crates for every desktop target, and
@@ -503,6 +531,14 @@ static libraries. `lumenc run`, `lumenc build` and `lumenc package` build the
 app with plain cargo, the same build `cargo build` does, so the executable
 needs no Lumen library beside it. `lumenc new <name> rust` scaffolds such an
 app.
+
+The executable also carries the compiled UI, so what has to sit beside it is
+`lumen.toml` and the assets the UI names (images, fonts, `assets/`).
+`lumenc package` copies those and leaves the markup, stylesheets and scripts
+behind. Run from anywhere else, an app reads `lumen.toml` and its assets from
+the executable's directory when that holds a `lumen.toml`, else from the
+directory it was built in when that is still there, else the working
+directory.
 
 In a Lumen checkout the SDK's code is the `lumenui-engine` crate in `sdk/rust`,
 which an app can depend on by path under the name `lumenui`
@@ -552,34 +588,9 @@ than opening a window.
 
 ### Writing an app
 
-The surface is `App` for assembly, `LumenDefaultPlugins` for the standard stack
-(decomposable, so you can disable parts or compose your own group), `Signals`
-for typed signal access, the `signals!` macro for typed handles, run conditions
-such as `on_click` for gating systems, `App::on_click` for the common
-click-to-signal case, and `App::add_computed` for derived signals. `lumen_source!`
-picks hot reload from disk in a debug build and embedded markup in a release
-build from one line. Give it paths under the app's `src/`: a markup file in a
-directory named `src` makes the directory above it the app, so `lumen.toml`
-beside `src/` is read, as `lumenc run` reads it.
-
-A release build embeds the entry markup and stylesheet only. The files they
-name by relative path (an `@import`, an `@font-face` font, a `url()` image) and
-`lumen.toml` are read from the app directory: the executable's own directory
-when it holds a `lumen.toml`, which is how `lumenc package` lays an app out,
-else the directory `lumen_source!` embedded the sources from, and only when
-neither is there the working directory. A release binary therefore runs from
-any directory, packaged or on the machine that built it.
-
-A system that reads `ClickEvent`, `DoubleClickEvent` or `LongPressEvent`, or is
-gated on `on_click` / `on_toggle`, runs `.after(ClickSet::Producers)`: that set
-holds every system that writes those messages (the pointer, Enter and Space on
-a focused element, the double-click and long-press detectors), so the system
-sees a click on the tick it lands and what it changes paints on that frame.
-Without the edge it may run first and see the click a tick late. Closures
-registered with `App::on_click` and its siblings are already ordered this way.
-A system that writes a signal or edits the DOM needs no ordering to reach the
-screen: one the schedule runs after the `bind-*` readers or the DOM applier
-paints on the next tick, which runs without waiting for input.
+`lumenui::app!()` starts an `App` from the UI the build script compiled. Code
+reaches the UI the way a script does. A handler is a closure on an element id
+that gets a `Ui` (the app) and an `Event` (what happened):
 
 Two markers say where the pointer is. `Hovered` sits on the innermost element
 under the pointer, the one a click and the pointer events name. `HoverWithin`
@@ -591,57 +602,166 @@ included, queries `With<HoverWithin>`.
 use lumenui::prelude::*;
 
 fn main() -> lumenui::Result<()> {
-    lumenui::App::new()
-        .add_plugins(
-            LumenDefaultPlugins
-                .with_source(lumen_source!("examples/src/main.lmn", "examples/src/main.css")),
-        )
-        .insert_signal("count", 0i64)
-        .add_systems(
-            TickStage::Systems,
-            (bump_counter, update_label).chain().after(ClickSet::Producers),
-        )
+    lumenui::app!()
+        .signal("clicks", 0i64)
+        .on_click("bump", |ui, _| ui.update("clicks", |n: i64| n + 1))
+        .on_click("reset", |ui, _| ui.set("clicks", 0i64))
         .run()
-}
-
-fn bump_counter(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
-    let hits = clicks.read().count();
-    if hits > 0 {
-        let total = signals.get_or::<i64>("count", 0) + hits as i64;
-        signals.set("count", total);
-    }
 }
 ```
 
-For an app that is mostly markup and script with a little Rust behind it,
-`lumenui::simple::App::builder()` assembles one from a directory and runs it.
-`native_fn` on that builder is the Rust counterpart of `lumen_app_expose`: it
-takes a name, an arity, and a closure over `ScriptValue`, and registers into
-every host the app runs, so scripts call it whatever language they are written
-in.
+| Method | Runs when |
+| --- | --- |
+| `on_click(id, f)` | the element `id`, or anything inside it, is clicked |
+| `on_double_click(id, f)` | it is double-clicked; that tick its plain click does not fire |
+| `on_long_press(id, f)` | a press on it is held past the long-press threshold |
+| `on_context_menu(id, f)` | a context menu is asked for on it (right click, the ContextMenu key, Shift+F10) |
+| `on_toggle(id, f)` | the `<toggle>`, `<switch>` or `<checkbox>` `id` flips |
+| `on_slider(id, f)` | the `<slider>` `id` moves |
+| `on_menu(id, f)` | the `<menuitem>` `id` is chosen |
+| `on_any_click(f)`, `on(kind, id, f)`, `on_any(kind, f)` | the same, for any element or kind |
+| `on_ready(f)` | once, on the first tick the element tree can be queried |
+
+An event goes to the nearest element at or above its target that has a
+handler of that kind, so a click on a button's icon runs the button's
+handler. With none, it goes to the `on_any_*` handler of its kind. The
+`Event` says what happened: `id()` (the id of the element whose handler runs;
+for an `on_any_*` handler, the nearest id at or above the target), `target()`
+(the innermost element, as a `Node`), `row()` (the `<for>` row the target is
+in), `position()`, `button()`, `checked()`, `value()` and `modifiers()`.
+
+`Ui` is everything a handler works with:
+
+- Signals: `get::<T>(name)` (the type's default when unset), `try_get`,
+  `set(name, value)`, `update(name, f)`, `toggle(name)`. `App::signal(name,
+  value)` seeds one before the first frame.
+- Lists: `set_list(name, rows)` replaces the array signal a
+  `<for each="$name">` renders, `push_row` appends, `list_len` counts. A row
+  is a `Record` (`Record::new().with("id", 3).with("name", "Ink")`). A click
+  inside a row reads it back through `Event::row()`: `list()`, `key()`,
+  `index()`, `field(name)`.
+- The element tree: `get_by_id(id)`, `query(selector)` and `create(tag)`
+  return `Node` handles, the same DOM surface the script hosts have
+  (`set_text`, `add_class`, `set_class_on(class, on)`, `set_attr`,
+  `set_style`, `append`, `rect`, `computed_style_of`, `on(event, f)` and the
+  rest).
+- Menus and pages: `open_menu(id)`, `open_menu_at(id, x, y)`,
+  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`.
+- The app's own state: `resource::<T>()` and `resource_mut::<T>()` over the
+  resources inserted with `App::insert_resource`, and `resource_scope` to
+  change one alongside the rest of the app.
+- Dialogs: `show_dialog(dialog, then)`, below.
+
+Every write lands on the tick the handler runs, so what it wrote is on
+screen when that tick paints.
+
+```rust
+use lumenui::prelude::*;
+
+#[derive(Resource, Default)]
+struct Editor { layers: Vec<String>, active: usize }
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .insert_resource(Editor::default())
+        .on_click("add-layer", |ui, _| {
+            let n = ui.resource::<Editor>().layers.len() + 1;
+            ui.resource_mut::<Editor>().layers.push(format!("Layer {n}"));
+            show_layers(ui);
+        })
+        // `<for id="layers" each="$layers" key="id">` in the markup.
+        .on_click("layers", |ui, ev| {
+            if let Some(row) = ev.row() {
+                ui.resource_mut::<Editor>().active = row.index();
+                show_layers(ui);
+            }
+        })
+        .run()
+}
+
+fn show_layers(ui: &mut Ui) {
+    let editor = ui.resource::<Editor>();
+    let rows: Vec<Record> = editor.layers.iter().enumerate().map(|(i, name)| {
+        Record::new().with("id", i).with("name", name).with("active", i == editor.active)
+    }).collect();
+    ui.set_list("layers", rows);
+}
+```
+
+### Systems
+
+The same `App` takes `bevy_ecs` systems where they fit better than a handler,
+such as work every tick or over many entities. `add_systems(TickStage::Systems,
+s)` puts them in the app's slot of the tick (`AppSet`): after the tick's input
+has become element events and every control has pushed its value into its
+signal, and before signals are written back into the tree and a canvas
+encodes what was drawn. A system there reads this tick's messages
+(`PointerMoved`, `ClickEvent`, `KeyPressed`, ...) and writes what this tick's
+frame shows, with no ordering of its own; `.chain()` and `.after` between your
+own systems still apply. `Signals` is the system parameter for signals, run
+conditions such as `on_click("id")` gate a system on a click, and
+`App::add_computed` derives a signal from others.
+
+```rust
+use lumenui::prelude::*;
+
+#[derive(Resource, Default)]
+struct Stroke(Vec<Vec2>);
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .insert_resource(Stroke::default())
+        .on_click("clear", |ui, _| ui.resource_mut::<Stroke>().0.clear())
+        .add_systems(TickStage::Systems, paint)
+        .run()
+}
+
+fn paint(mut moves: MessageReader<PointerMoved>, mut stroke: ResMut<Stroke>) {
+    stroke.0.extend(moves.read().map(|m| m.position));
+}
+```
+
+### Debug and release builds
+
+Both start from the compiled UI. A debug build also watches `src/` and
+reloads the UI from source on an edit while the window stays open; signals
+and the app's resources keep their values. A change to what Rust code names
+(an id a handler is on, a signal it reads) takes a rebuild like any other
+code change.
+
+For a test, a tool, or an example with no build script of its own,
+`CompiledUi::compile(dir)` compiles an app directory when the program starts
+(`App::new(CompiledUi::compile(dir)?)`), and `App::from_markup(text)` runs
+markup given as text. `App::app_dir(dir)` reads `lumen.toml` and the assets
+from `dir`, which is how a test runs the app over a `lumen.toml` of its own.
+`window_title` and `window_size` override `[window]` for a value the app
+works out when it starts; a fixed one belongs in `lumen.toml`.
+
+### Script functions
+
+`native_fn` is the Rust counterpart of `lumen_app_expose`: it takes a name, an
+arity, and a closure over `ScriptValue`, and registers into every host the app
+runs, so scripts call it whatever language they are written in.
 
 ```rust
 use lumenui::ScriptValue;
-use lumenui::simple::App;
 
 fn main() -> lumenui::Result<()> {
-    App::builder()
-        .dir("app")
+    lumenui::app!()
         .native_fn("answer", 0, |_args| ScriptValue::I64(42))
         .run()
 }
 ```
 
-`script_fn` on the same builder takes a described function rather than a bare
-closure: parameter types, a return type, a one-line doc, a namespace of your
-choosing, and the languages that may see it. `ScriptFn::from_fn` reads the
-types off a plain Rust closure, and `ScriptFn::new` spells them out.
+`script_fn` takes a described function rather than a bare closure: parameter
+types, a return type, a one-line doc, a namespace of your choosing, and the
+languages that may see it. `ScriptFn::from_fn` reads the types off a plain
+Rust closure, and `ScriptFn::new` spells them out.
 
 ```rust
 use lumenui::{ScriptFn, ScriptTy, ScriptValue};
 
-App::builder()
-    .dir("app")
+lumenui::app!()
     .script_fn(ScriptFn::from_fn("set_pin", |pin: i64| pin > 0).param_names(["pin"]))
     .script_fn(
         ScriptFn::new("read_pin")
@@ -667,10 +787,11 @@ is the window a registration has to arrive in, and the one a widget plugin's
 tag has to arrive in for the markup to use it. See [Writing plugins](../contributing/plugins.md) for what a plugin
 can expose and how each language spells a namespace.
 
-The builder has no hook into one language's engine: `AppBuilder::rhai_extension`
-and the crate's `host-rhai` feature were removed when the script hosts became
-runtime modules, and `script_fn` and `native_fn` above replace them, reaching
-every language the app runs.
+A widget an app defines with `#[derive(Widget)]` is an element its markup
+can use: the build script reads the `tag` of every `#[widget(...)]` in the
+crate's `src/`, so the UI compiles with it, and the plugin the derive
+generates, added with `add_plugin`, makes the element at run time. A widget
+from another crate is not seen by the compile.
 
 ### Crash reports
 
@@ -692,25 +813,31 @@ handler.
 `FileDialog` opens the native file dialogs, the same ones the script
 functions open. Pick the kind with `FileDialog::open()`, `open_multiple()`,
 `save()` or `pick_folder()`, add `filter(label, &["png"])`, a starting
-`directory(path)` and a suggested `file_name(name)`, then hand it a callback.
-From a system, queue it with `commands.queue(dialog.then(callback))`; with the
-world in hand, `dialog.show(world, callback)`. The callback runs on the main
-thread on a tick after the dialog closes, with the world and the chosen paths,
-and with no paths when the user cancelled.
+`directory(path)` and a suggested `file_name(name)`, then open it from a
+handler with `ui.show_dialog(dialog, then)`. `then` runs on the main thread on
+a tick after the dialog closes, with a `Ui` and the chosen paths, and with no
+paths when the user cancelled. From a system, queue it with
+`commands.queue(dialog.then(callback))`, whose callback gets the world.
 
 ```rust
 use lumenui::prelude::*;
 
-fn open_document(mut commands: Commands) {
-    commands.queue(
-        FileDialog::open()
-            .filter("Images", &["png"])
-            .then(|world: &mut World, paths| {
+#[derive(Resource, Default)]
+struct Document(Option<std::path::PathBuf>);
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .insert_resource(Document::default())
+        .on_click("open", |ui, _| {
+            let dialog = FileDialog::open().filter("Images", &["png"]);
+            ui.show_dialog(dialog, |ui, paths| {
                 if let Some(path) = paths.into_iter().next() {
-                    world.insert_resource(OpenFile(path));
+                    ui.set("title", path.display().to_string());
+                    ui.resource_mut::<Document>().0 = Some(path);
                 }
-            }),
-    );
+            });
+        })
+        .run()
 }
 ```
 
@@ -728,7 +855,8 @@ fn paste(clipboard: Clipboard) {
 }
 ```
 
-Runnable examples live in `sdk/rust/examples`.
+Runnable examples live in `sdk/rust/examples`, and `sdk/lumenui/smoke` is a
+whole app in the shape above (`lumen.toml`, `build.rs`, `src/`).
 
 ### Frame timing and the renderer
 
@@ -846,8 +974,10 @@ write after it, even before the tick encodes, changes the buffer and not what
 was drawn. So redraw after a write: `clear`, then draw the buffer again. That
 is cheap whatever the buffer's size: drawing an unchanged buffer uploads
 nothing, and drawing one after a write uploads only the area the write touched.
-Drawing calls land in the frame of the tick that encodes them; a system ordered
-`.before(CanvasSet::Encode)` draws into the same frame.
+Drawing calls land in the frame of the tick that encodes them. The encode runs
+after the app's handlers and the systems `add_systems(TickStage::Systems, ..)`
+added, so what they draw is in that tick's frame; a system added to the ECS
+app another way orders itself `.before(CanvasSet::Encode)`.
 
 `CanvasReader` reads a canvas back, the counterpart of `getImageData`. It is a
 system parameter, because a read rasterizes everything drawn so far and text
@@ -876,7 +1006,7 @@ fn eyedropper(mut reader: CanvasReader) {
 
 ```rust
 use lumenui::prelude::*;
-use lumenui_canvas::{CanvasPlugin, CanvasSet, Context2d, PixelBuffer};
+use lumenui_canvas::{CanvasPlugin, Context2d, PixelBuffer};
 
 #[derive(Resource)]
 struct Art(PixelBuffer);
@@ -889,14 +1019,12 @@ fn paint(art: Res<Art>) {
     ctx.draw_buffer_scaled(&art.0, 0.0, 0.0, 512.0, 512.0);
 }
 
+// src/main.lmn holds `<canvas id="art" width="512" height="512"/>`.
 fn main() -> lumenui::Result<()> {
-    lumenui::App::new()
-        .add_plugins(LumenDefaultPlugins.with_markup(
-            r#"<root><canvas id="art" width="512" height="512"/></root>"#,
-        ))
+    lumenui::app!()
         .add_plugin(CanvasPlugin::default())
         .insert_resource(Art(PixelBuffer::new(64, 64).unwrap()))
-        .add_systems(TickStage::Systems, paint.before(CanvasSet::Encode))
+        .add_systems(TickStage::Systems, paint)
         .run()
 }
 ```

@@ -1830,6 +1830,10 @@ fn build_rust_app(src: &Path, target: Target) -> Result<PathBuf, String> {
     if let Some(triple) = cross {
         command.arg("--target").arg(triple);
     }
+    // The app's build script compiles its UI; hand it this compiler.
+    if let Ok(exe) = std::env::current_exe() {
+        command.env(crate::app_kind::LUMENC_ENV, exe);
+    }
     eprintln!("lumenc: cargo build --release (in {})", src.display());
     let output = command
         .output()
@@ -2628,9 +2632,11 @@ impl CopyRules {
                 skip_exts: &["py", "pyc", "spec"],
                 skip_files: &["pyproject.toml", "requirements.txt"],
             },
+            // The executable carries the UI its build script compiled, so
+            // the markup, stylesheets and scripts stay behind with the Rust.
             _ => Self {
                 skip_dirs: &["target"],
-                skip_exts: &["rs"],
+                skip_exts: &["rs", "lmn", "css", "cdl", "rhai", "lua"],
                 skip_files: &[
                     "Cargo.toml",
                     "Cargo.lock",
@@ -4428,14 +4434,23 @@ mod tests {
     /// An SDK app keeps its markup under `src/`, beside the source it was
     /// built from. The packager has to descend that directory to tell the two
     /// apart, so the decision is per extension rather than per directory.
+    /// A Rust app's executable carries its compiled UI, so its markup,
+    /// stylesheets and scripts stay behind too.
     #[test]
     fn an_sdk_package_descends_src() {
         for kind in [AppKind::Rust, AppKind::Cpp, AppKind::Python] {
             let rules = CopyRules::sdk(kind);
             assert!(!rules.skip_dirs.contains(&"src"), "{kind:?}");
-            assert!(!rules.skip_exts.contains(&"lmn"), "{kind:?}");
         }
-        assert!(CopyRules::sdk(AppKind::Rust).skip_exts.contains(&"rs"));
+        for kind in [AppKind::Cpp, AppKind::Python] {
+            assert!(!CopyRules::sdk(kind).skip_exts.contains(&"lmn"), "{kind:?}");
+        }
+        for ext in ["rs", "lmn", "css", "cdl"] {
+            assert!(
+                CopyRules::sdk(AppKind::Rust).skip_exts.contains(&ext),
+                "{ext}"
+            );
+        }
         assert!(CopyRules::sdk(AppKind::Cpp).skip_exts.contains(&"cpp"));
         // The toolchain pin is a build input like the manifest.
         assert!(

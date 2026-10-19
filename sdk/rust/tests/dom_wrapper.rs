@@ -9,9 +9,9 @@
 extern crate lumenui_engine as lumenui;
 
 use lumenui::dom::{self, Node};
-use lumenui::ecs_app::App as EcsApp;
+use lumenui::lumen_runtime::RunOptions;
 use lumenui::lumenc::build_headless_app;
-use lumenui::runtime::RunOptions;
+use lumenui::prelude::EcsApp;
 use std::path::PathBuf;
 
 // The DOM snapshot + external command bus are process-global; the app that

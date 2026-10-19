@@ -1,23 +1,19 @@
-//! The counter app rebuilt in the ECS-first SDK.
+//! A counter, written the way a script would be: one click handler and a
+//! DOM write.
 //!
-//! No builder, no string-keyed callbacks: two ordinary `bevy_ecs` systems are
-//! scheduled into [`TickStage::Systems`]. `bump_counter` folds this tick's
-//! clicks into the typed `count` signal; `update_label` reads it back and
-//! writes the label's [`TextContent`] directly through a query - a real ECS
-//! mutation, no binding indirection. Both run after [`ClickSet::Producers`],
-//! the systems that write the clicks, so a click shows on the frame it lands.
+//! Every tile click lands in `on_any_click` (the tiles have no handler of
+//! their own), which counts it in the `count` signal and writes the label's
+//! text through its DOM handle.
 //!
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumenui-engine --example counter          # hot-reloads examples/src/main.lmn live
-//! cargo run -p lumenui-engine --example counter --release # markup/CSS embedded, no watcher
+//! cargo run -p lumenui-engine --example counter
 //! ```
 //!
-//! The UI comes from [`lumen_source!`]: in a debug `cargo run` it is read from
-//! `examples/src/main.lmn` / `examples/src/main.css` on disk and hot-reloaded by the
-//! runtime watcher (edit the markup and the window updates live); a
-//! `--release` build `include_str!`-embeds the same files.
+//! An app compiles its UI in its build script and starts from
+//! `lumenui::app!()`. An example has no build script of its own, so this one
+//! compiles `examples/` (its `lumen.toml` and `src/`) when it starts.
 
 // In an app this is the published `lumenui` crate; inside the workspace the
 // engine crate it re-exports stands in for it under the same name.
@@ -26,44 +22,15 @@ extern crate lumenui_engine as lumenui;
 use lumenui::prelude::*;
 
 fn main() -> lumenui::Result<()> {
-    lumenui::App::new()
-        .add_plugins(
-            LumenDefaultPlugins
-                .with_source(lumen_source!(
-                    "examples/src/main.lmn",
-                    "examples/src/main.css"
-                ))
-                .with_title("Lumen counter (ECS SDK)")
-                .with_size(960, 720),
-        )
-        .insert_signal("count", 0i64)
-        .add_systems(
-            TickStage::Systems,
-            (bump_counter, update_label)
-                .chain()
-                .after(ClickSet::Producers),
-        )
-        .run()
-}
-
-/// Add this tick's click count to the `count` signal.
-fn bump_counter(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
-    let hits = clicks.read().count();
-    if hits > 0 {
-        let total = signals.get_or::<i64>("count", 0) + hits as i64;
-        signals.set("count", total);
-    }
-}
-
-/// Reflect the `count` signal into the counter label's text.
-fn update_label(signals: Signals, mut labels: Query<(&LumenId, &mut TextContent)>) {
-    let count = signals.get_or::<i64>("count", 0);
-    for (id, mut text) in &mut labels {
-        if id.0 == "counter-label" {
-            let next = format!("Lumen - clicks: {count}");
-            if text.0 != next {
-                text.0 = next;
+    let ui = CompiledUi::compile(concat!(env!("CARGO_MANIFEST_DIR"), "/examples"))?;
+    App::new(ui)
+        .signal("count", 0i64)
+        .on_any_click(|ui, _| {
+            ui.update("count", |n: i64| n + 1);
+            let count: i64 = ui.get("count");
+            if let Some(label) = ui.get_by_id("counter-label") {
+                label.set_text(&format!("Lumen - clicks: {count}"));
             }
-        }
-    }
+        })
+        .run()
 }

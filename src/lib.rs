@@ -72,7 +72,9 @@ pub mod sdk {
     pub use lumen_core;
     pub use lumen_os_clipboard;
     pub use lumen_os_filedialog;
+    pub use lumen_primitives;
     pub use lumen_runtime;
+    pub use lumen_scene;
     pub use lumen_script;
     pub use lumen_widget;
     pub use lumen_widget_macros;

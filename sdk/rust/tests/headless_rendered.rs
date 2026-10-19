@@ -10,8 +10,8 @@ extern crate lumenui_engine as lumenui;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use lumenui::lumen_runtime::app_kind::HeadlessHandoff;
 use lumenui::prelude::*;
-use lumenui::runtime::app_kind::HeadlessHandoff;
 
 static APP_ISOLATION: Mutex<()> = Mutex::new(());
 
@@ -43,8 +43,8 @@ fn fixture(tag: &str) -> PathBuf {
 fn a_screenshot_is_the_frame_the_app_painted() {
     let _guard = isolate();
     let dir = fixture("screenshot");
-    let frame = lumenui::App::new()
-        .add_plugins(LumenDefaultPlugins.with_dir(&dir).with_size(64, 48))
+    let frame = App::new(CompiledUi::compile(&dir).expect("the UI compiles"))
+        .window_size(64, 48)
         .screenshot(HeadlessOptions {
             dpr: 2.0,
             ticks: Some(2),
@@ -77,9 +77,7 @@ fn run_takes_the_headless_handoff() {
     for (k, v) in &env {
         unsafe { std::env::set_var(k, v) };
     }
-    let result = lumenui::App::new()
-        .add_plugins(LumenDefaultPlugins.with_dir(&dir))
-        .run();
+    let result = App::new(CompiledUi::compile(&dir).expect("the UI compiles")).run();
     for (k, _) in &env {
         unsafe { std::env::remove_var(k) };
     }

@@ -326,6 +326,17 @@ impl Node {
         self.set_attr("class", classes)
     }
 
+    /// Put `class` on the node when `on`, take it off otherwise (chainable).
+    /// Nothing is written when the class list already agrees, so calling it
+    /// every tick restyles nothing until the answer changes.
+    pub fn set_class_on(self, class: &str, on: bool) -> Self {
+        match (self.has_class(class), on) {
+            (false, true) => self.add_class(class),
+            (true, false) => self.remove_class(class),
+            _ => self,
+        }
+    }
+
     /// Serialize this node's children to `.lmn`-ish text (`innerHTML` read).
     pub fn inner_markup(self) -> String {
         ins::inner_markup(self.0)

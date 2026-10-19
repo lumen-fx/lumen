@@ -474,9 +474,11 @@ in. How the executable is produced is what differs:
   [PyInstaller](https://pyinstaller.org), which bundles the interpreter and the
   app's modules into one file. Install it first (`pip install pyinstaller`).
 
-Unlike a markup app, an SDK app reads its markup, stylesheet, and scripts at
-run time, so those files travel with it. What stays behind is the source it was
-compiled from and the build tree that compile left.
+A Rust app's executable carries its UI, compiled by its build script, so its
+markup, stylesheets and scripts stay behind with its Rust source; `lumen.toml`
+and the assets travel. A C++ or Python app reads its markup, stylesheet, and
+scripts at run time, so those files travel with it. What stays behind is the
+source it was compiled from and the build tree that compile left.
 
 A C++ or Python app gets an engine linked for it the way a markup app does,
 with one difference: its program can drive any subsystem through the C ABI,

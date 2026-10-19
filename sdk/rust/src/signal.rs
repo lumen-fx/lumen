@@ -151,8 +151,6 @@ impl Signals<'_> {
     /// ```
     /// # extern crate lumenui_engine as lumenui;
     /// use lumenui::prelude::*;
-    /// use lumenui::bevy_ecs::message::MessageReader;
-    /// use lumenui::input::ContextMenuEvent;
     ///
     /// fn canvas_menu(mut requests: MessageReader<ContextMenuEvent>, mut signals: Signals) {
     ///     for request in requests.read() {
@@ -174,6 +172,23 @@ impl Signals<'_> {
     pub fn close_menu(&mut self, id: &str) {
         self.store
             .set_global_bool(&format!("__menu_open:{id}"), false);
+    }
+
+    /// Open the `<menu id>` popup when it is closed and close it when it is
+    /// open.
+    pub fn toggle_menu(&mut self, id: &str) {
+        if self.is_menu_open(id) {
+            self.close_menu(id);
+        } else {
+            self.open_menu(id);
+        }
+    }
+
+    /// Whether the `<menu id>` popup is open.
+    pub fn is_menu_open(&self, id: &str) -> bool {
+        self.store
+            .get_global_bool(&format!("__menu_open:{id}"))
+            .unwrap_or(false)
     }
 
     // -- File-based-pages navigation ------------------------------------------
@@ -257,8 +272,8 @@ macro_rules! signals {
             $(
                 $(#[$fmeta])*
                 #[doc = concat!("Typed handle for the global signal `", stringify!($field), "`.")]
-                $vis fn $field() -> $crate::Property<$ty> {
-                    $crate::Property::new(stringify!($field))
+                $vis fn $field() -> $crate::prelude::Property<$ty> {
+                    $crate::prelude::Property::new(stringify!($field))
                 }
             )*
         }

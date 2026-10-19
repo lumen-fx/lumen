@@ -1,0 +1,6 @@
+[app]
+entry = "main.lmn"
+
+[window]
+title = "Lumen counter"
+size = [960, 720]

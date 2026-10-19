@@ -1,17 +1,27 @@
 //! # Lumen Rust SDK
 //!
-//! An ECS-first surface over the [Lumen](https://github.com/lumen-fx/lumen) UI
-//! framework: plugin groups, `bevy_ecs` systems, typed resources and signals.
-//! The [guide](https://docs.lumenfx.dev/reference/ffi/#rust-sdk) shows how
-//! to write an app, and the [API reference](https://api.lumenfx.dev/lumenui_engine/)
-//! documents every item this crate re-exports.
+//! Write a [Lumen](https://github.com/lumen-fx/lumen) app's code in Rust. The
+//! app is described by its `lumen.toml`, its UI lives in `src/`, and the build
+//! compiles the UI into the executable; Rust code drives it with handlers on
+//! element ids, signals and the element tree, and with `bevy_ecs` systems
+//! where they fit. The [guide](https://docs.lumenfx.dev/reference/ffi/#rust-sdk)
+//! shows how to write an app, and the
+//! [API reference](https://api.lumenfx.dev/lumenui_engine/) documents every
+//! item this crate re-exports.
 //!
-//! ```no_run
+//! ```ignore
+//! // build.rs, with `lumenui-build` under [build-dependencies]
+//! fn main() {
+//!     lumenui_build::compile();
+//! }
+//!
+//! // src/main.rs
 //! use lumenui::prelude::*;
 //!
 //! fn main() -> lumenui::Result<()> {
-//!     lumenui::App::new()
-//!         .add_plugins(LumenDefaultPlugins.with_markup("<root><label text=\"hi\"/></root>"))
+//!     lumenui::app!()
+//!         .signal("clicks", 0i64)
+//!         .on_click("bump", |ui, _| ui.update("clicks", |n: i64| n + 1))
 //!         .run()
 //! }
 //! ```

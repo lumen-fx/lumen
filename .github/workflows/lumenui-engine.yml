@@ -50,6 +50,9 @@ on:
     paths:
       - sdk/rust/**
       - sdk/lumenui/**
+      - sdk/lumenui-build/**
+      # What a Rust app's build script runs to compile its UI.
+      - public/lumenc/src/cli/build.rs
       # The modules in lumenui-engine.py's MODULES, which the set compiles.
       - std/canvas/**
       - core/widget-macros/**
@@ -163,6 +166,19 @@ jobs:
           --messages "$RUNNER_TEMP/lumenui-engine.jsonl"
           --out "$RUNNER_TEMP/lumenui-engine"
 
+      # The compiler an app's build script compiles its UI with
+      # (`lumenui_build::compile`), from this checkout: a release would hand
+      # the app's build its own version's lumenc, which for an unreleased
+      # version is this one. Named for every later step through LUMEN_LUMENC.
+      - name: Build the lumenc the apps compile their UI with
+        run: |
+          set -euo pipefail
+          cargo build -p lumenc --bin lumenc
+          lumenc="$GITHUB_WORKSPACE/target/debug/lumenc"
+          if [ "$RUNNER_OS" = Windows ]; then lumenc="$lumenc.exe"; fi
+          "$lumenc" --version
+          echo "LUMEN_LUMENC=$lumenc" >> "$GITHUB_ENV"
+
       # The module wrapper crates, outside the checkout, as a publish would
       # write them. Each `lumenui-<name>` directory is a crate, and its
       # `smoke` directory, where the module has one, an app on it.
@@ -181,8 +197,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --manifest-path sdk/lumenui/Cargo.toml -- --check
+          cargo fmt --manifest-path sdk/lumenui-build/Cargo.toml -- --check
           cargo fmt --manifest-path sdk/lumenui/smoke/Cargo.toml -- --check
           cargo clippy --manifest-path sdk/lumenui/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path sdk/lumenui-build/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path sdk/lumenui-build/Cargo.toml
           # Globbed relative to the directory: a Windows runner's temp path has
           # backslashes, which a glob reads as escapes.
           cd "$RUNNER_TEMP/lumenui-sdk"
@@ -197,7 +216,7 @@ jobs:
       # The app a user writes, outside the checkout so nothing of the
       # workspace (its config, its lockfile, its target directory) reaches it.
       # It names the release's compiler the way `lumenc new` makes an app do,
-      # and finds `lumenui` at this checkout's sdk/lumenui.
+      # and finds `lumenui` and `lumenui-build` at this checkout's sdk/.
       - name: Build an app against the set
         env:
           LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
@@ -211,8 +230,11 @@ jobs:
           app, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
           manifest = app / "Cargo.toml"
           lumenui = (repo / "sdk" / "lumenui").as_posix()
+          build = (repo / "sdk" / "lumenui-build").as_posix()
           manifest.write_text(
-              manifest.read_text().replace('path = ".."', f'path = "{lumenui}"')
+              manifest.read_text()
+              .replace('path = "../../lumenui-build"', f'path = "{build}"')
+              .replace('path = ".."', f'path = "{lumenui}"')
           )
           channel = re.search(
               r'^channel\s*=\s*"([^"]+)"', (repo / "rust-toolchain.toml").read_text(), re.M
@@ -297,19 +319,15 @@ jobs:
       # new` (which names the package, sets the `lumenui` version and writes
       # rust-toolchain.toml), outside the checkout. The scaffold asks for
       # `lumenui` at this checkout's version on crates.io, which has none of
-      # it before the release, so `[patch.crates-io]` points that crate, and
-      # any `lumenui-<name>` wrapper the template adds, at this checkout's
-      # copy. Only `lumenc new` is needed, so lumenc is built as the thin
-      # compiler, without the runtime and so without the engine.
+      # it before the release, so `[patch.crates-io]` points that crate,
+      # `lumenui-build`, and any `lumenui-<name>` wrapper the template adds,
+      # at this checkout's copy.
       - name: Scaffold the rust template
         run: |
           set -euo pipefail
           tools/fetch-templates.sh "$RUNNER_TEMP/templates"
-          cargo build -p lumenc --no-default-features --features runtime-parse --bin lumenc
-          lumenc="$GITHUB_WORKSPACE/target/debug/lumenc"
-          if [ "$RUNNER_OS" = Windows ]; then lumenc="$lumenc.exe"; fi
           rm -rf "$RUNNER_TEMP/rust-app"
-          (cd "$RUNNER_TEMP" && LUMEN_TEMPLATES_DIR="$RUNNER_TEMP/templates" "$lumenc" new rust-app rust)
+          (cd "$RUNNER_TEMP" && LUMEN_TEMPLATES_DIR="$RUNNER_TEMP/templates" "$LUMEN_LUMENC" new rust-app rust)
           python - "$RUNNER_TEMP/rust-app" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/lumenui-sdk" <<'PY'
           import pathlib, sys, tomllib
           app, repo, sdk = (pathlib.Path(a) for a in sys.argv[1:])
@@ -317,7 +335,10 @@ jobs:
           deps = tomllib.loads(manifest.read_text()).get("dependencies", {})
           if "lumenui" not in deps:
               sys.exit(f"{manifest} does not depend on lumenui")
-          patch = {"lumenui": repo / "sdk" / "lumenui"}
+          patch = {
+              "lumenui": repo / "sdk" / "lumenui",
+              "lumenui-build": repo / "sdk" / "lumenui-build",
+          }
           for name in deps:
               if name.startswith("lumenui-"):
                   if not (sdk / name).is_dir():

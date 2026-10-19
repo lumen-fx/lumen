@@ -1,11 +1,10 @@
-//! Integration tests for the ECS-first SDK surface: plugin-group composition,
-//! bare-app assembly, and the typed `Signals` param.
+//! Integration tests for the SDK surface on a bare app: plugin groups, systems
+//! with seeded signals, the typed `Signals` param, and the handlers on ids.
 
 // In an app this is the published `lumenui` crate; inside the workspace the
 // engine crate it re-exports stands in for it under the same name.
 extern crate lumenui_engine as lumenui;
 
-use lumenui::ecs_app::{App as EcsApp, Plugin};
 use lumenui::plugins::PluginGroupBuilder;
 use lumenui::prelude::*;
 
@@ -67,6 +66,11 @@ fn plugin_group_enabled_names_reflect_disable() {
     assert_eq!(names.len(), 1);
 }
 
+/// A bare app: what the tests below tick by hand.
+fn bare() -> lumenui::App {
+    lumenui::App::from_markup("<root/>")
+}
+
 // -- build_bare: user systems + seeds on a real, tickable ECS app -------------
 
 #[derive(Resource, Default)]
@@ -78,9 +82,9 @@ fn read_seed(signals: Signals, mut out: ResMut<Observed>) {
 
 #[test]
 fn build_bare_runs_user_systems_with_seeded_signals() {
-    let mut app = lumenui::App::new()
+    let mut app = bare()
         .add_plugin(RecordCountPlugin)
-        .insert_signal("count", 41i64)
+        .signal("count", 41i64)
         .add_systems(TickStage::Systems, read_seed)
         .build_bare();
 
@@ -104,8 +108,8 @@ fn write_then_bump(mut signals: Signals) {
 
 #[test]
 fn signals_param_reads_and_writes_typed() {
-    let mut app = lumenui::App::new()
-        .insert_signal("n", 10i64)
+    let mut app = bare()
+        .signal("n", 10i64)
         .add_systems(TickStage::Systems, write_then_bump)
         .build_bare();
 
@@ -134,84 +138,128 @@ fn signals_macro_mints_typed_handles() {
     assert_eq!(Counter::label().get(&store).as_deref(), Some("hi"));
 }
 
-// -- Terse native handlers on the ECS-first App -------------------------------
+// -- Handlers on ids ------------------------------------------------------------
 
-/// `App::on_click(id, closure)` installs the dispatch pipeline; a click on the
-/// matching id fires the closure and its signal write lands same-tick.
-#[test]
-fn on_click_closure_fires_and_writes_signal() {
-    use lumenui::prelude::*;
-
-    let mut app = lumenui::App::new()
-        .insert_signal("count", 0i64)
-        .on_click("go", |ctx| {
-            let n = ctx.get_or::<i64>("count", 0) + 1;
-            ctx.set("count", n);
-        })
-        .build_bare();
-
-    let go = app.world.spawn(LumenId("go".to_string())).id();
+fn click(app: &mut EcsApp, entity: Entity) {
     app.world.write_message(ClickEvent {
-        entity: go,
-        position: lumenui::glam::Vec2::ZERO,
-        button: lumenui::input::PointerButton::Primary,
+        entity,
+        position: Vec2::ZERO,
+        button: PointerButton::Primary,
         local: None,
     });
     app.tick();
+}
+
+fn hit(app: &EcsApp) -> Option<String> {
+    app.world
+        .resource::<PropertyStore>()
+        .get_global_str("hit")
+        .map(|s| s.to_string())
+}
+
+/// A click on the id fires the handler, and its signal write lands on the
+/// same tick.
+#[test]
+fn on_click_fires_and_writes_signal() {
+    let mut app = bare()
+        .signal("count", 0i64)
+        .on_click("go", |ui, _| ui.update("count", |n: i64| n + 1))
+        .build_bare();
+
+    let go = app.world.spawn(LumenId("go".to_string())).id();
+    click(&mut app, go);
 
     let store = app.world.resource::<PropertyStore>();
     assert_eq!(Property::<i64>::new("count").get(store), Some(1));
 }
 
-/// `on_any_click` is the wildcard fallback; a per-id `on_click` overrides it.
+/// `on_any_click` takes what no handler on an id takes, and reads the
+/// nearest id; a handler on an id wins for clicks inside it.
 #[test]
-fn on_any_click_is_wildcard_and_per_id_overrides() {
-    use lumenui::prelude::*;
-
-    let mut app = lumenui::App::new()
-        .on_any_click(|ctx| ctx.set("hit", "wildcard"))
-        .on_click("special", |ctx| ctx.set("hit", "special"))
+fn on_any_click_takes_the_rest_and_an_id_handler_wins_inside_it() {
+    let mut app = bare()
+        .on_any_click(|ui, ev| ui.set("hit", format!("any {}", ev.id().unwrap_or("-"))))
+        .on_click("special", |ui, _| ui.set("hit", "special"))
         .build_bare();
 
     let special = app.world.spawn(LumenId("special".to_string())).id();
-    app.world.write_message(ClickEvent {
-        entity: special,
-        position: lumenui::glam::Vec2::ZERO,
-        button: lumenui::input::PointerButton::Primary,
-        local: None,
-    });
-    app.tick();
-    assert_eq!(
-        app.world
-            .resource::<PropertyStore>()
-            .get_global_str("hit")
-            .as_deref(),
-        Some("special")
-    );
+    let icon = app.world.spawn(ChildOf(special)).id();
+    click(&mut app, icon);
+    assert_eq!(hit(&app).as_deref(), Some("special"));
+
+    let panel = app.world.spawn(LumenId("panel".to_string())).id();
+    click(&mut app, panel);
+    assert_eq!(hit(&app).as_deref(), Some("any panel"));
 
     let plain = app.world.spawn_empty().id();
-    app.world.write_message(ClickEvent {
-        entity: plain,
-        position: lumenui::glam::Vec2::ZERO,
-        button: lumenui::input::PointerButton::Primary,
-        local: None,
+    click(&mut app, plain);
+    assert_eq!(hit(&app).as_deref(), Some("any -"));
+}
+
+/// The app's resources are a handler's state.
+#[test]
+fn a_handler_changes_the_apps_resources() {
+    #[derive(Resource, Default)]
+    struct Tool(&'static str);
+
+    let mut app = bare()
+        .insert_resource(Tool::default())
+        .on_click("pen", |ui, _| ui.resource_mut::<Tool>().0 = "pen")
+        .build_bare();
+    let pen = app.world.spawn(LumenId("pen".to_string())).id();
+    click(&mut app, pen);
+    assert_eq!(app.world.resource::<Tool>().0, "pen");
+}
+
+/// A list a handler writes is the array signal `<for each>` renders.
+#[test]
+fn a_handler_writes_a_list() {
+    let mut app = bare()
+        .on_click("fill", |ui, _| {
+            ui.set_list(
+                "rows",
+                (1..=3).map(|i| Record::new().with("id", i).with("name", format!("row {i}"))),
+            );
+            ui.push_row("rows", Record::new().with("id", 4));
+            let n = ui.list_len("rows") as i64;
+            ui.set("rows_len", n);
+        })
+        .build_bare();
+    let fill = app.world.spawn(LumenId("fill".to_string())).id();
+    click(&mut app, fill);
+    let arrays = app
+        .world
+        .resource::<lumenui::lumen_core::signals::ArraySignals>();
+    let rows = arrays.get("rows").expect("the list was written");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[1].get("name").map(String::as_str), Some("row 2"));
+    assert_eq!(
+        Property::<i64>::new("rows_len").get(app.world.resource::<PropertyStore>()),
+        Some(4)
+    );
+}
+
+/// A menu item's handler is keyed on the item's id.
+#[test]
+fn on_menu_takes_the_items_id() {
+    let mut app = bare()
+        .on_menu("file-save", |ui, ev| {
+            ui.set("hit", ev.id().unwrap_or("-"));
+        })
+        .build_bare();
+    app.world.write_message(MenuClicked {
+        id: "file-save".to_string(),
     });
     app.tick();
-    assert_eq!(
-        app.world
-            .resource::<PropertyStore>()
-            .get_global_str("hit")
-            .as_deref(),
-        Some("wildcard")
-    );
+    assert_eq!(hit(&app).as_deref(), Some("file-save"));
 }
 
 // -- add_computed derives a signal from other signals -------------------------
 
 #[test]
 fn add_computed_recomputes_from_inputs() {
-    let mut app = lumenui::App::new()
-        .insert_signal("count", 3i64)
+    let mut app = bare()
+        .signal("count", 3i64)
         .add_computed("doubled", |s| s.get_or::<i64>("count", 0) * 2)
         .build_bare();
 
@@ -220,7 +268,7 @@ fn add_computed_recomputes_from_inputs() {
     assert_eq!(Property::<i64>::new("doubled").get(store), Some(6));
 }
 
-// -- Signals ergonomic helpers: update / update_or / toggle -------------------
+// -- Signals ergonomic helpers: update / toggle --------------------------------
 
 fn bump_update(mut signals: Signals) {
     signals.update::<i64>("n", |n| n + 1);
@@ -228,8 +276,8 @@ fn bump_update(mut signals: Signals) {
 
 #[test]
 fn signals_update_read_modify_writes() {
-    let mut app = lumenui::App::new()
-        .insert_signal("n", 5i64)
+    let mut app = bare()
+        .signal("n", 5i64)
         .add_systems(TickStage::Systems, bump_update)
         .build_bare();
 
@@ -245,9 +293,7 @@ fn flip(mut signals: Signals) {
 
 #[test]
 fn signals_toggle_flips_bool() {
-    let mut app = lumenui::App::new()
-        .add_systems(TickStage::Systems, flip)
-        .build_bare();
+    let mut app = bare().add_systems(TickStage::Systems, flip).build_bare();
 
     app.tick();
     assert_eq!(

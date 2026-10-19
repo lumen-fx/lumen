@@ -1,8 +1,9 @@
-# An app shaped the way a user's is: one dependency, `lumenui`, and nothing of
-# the engine. CI copies it out of the checkout, points the path below at this
-# repository's sdk/lumenui and `LUMEN_ENGINE_ARTIFACTS` at the engine set the
-# same run built, then checks that the build compiled none of the engine and
-# that the app runs. See tools/release/lumenui-engine.py.
+# An app shaped the way a user's is: `lumenui`, its build script on
+# `lumenui-build`, and nothing of the engine. CI copies it out of the checkout,
+# points the paths below at this repository's sdk/lumenui and
+# sdk/lumenui-build, `LUMEN_ENGINE_ARTIFACTS` at the engine set the same run
+# built and `LUMEN_LUMENC` at its lumenc, then checks that the build compiled
+# none of the engine and that the app runs. See tools/release/lumenui-engine.py.
 [workspace]
 
 [package]
@@ -13,3 +14,6 @@ publish = false
 
 [dependencies]
 lumenui = { path = ".." }
+
+[build-dependencies]
+lumenui-build = { path = "../../lumenui-build" }
