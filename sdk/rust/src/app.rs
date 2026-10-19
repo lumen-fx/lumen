@@ -509,6 +509,9 @@ impl App {
                 store.set(key, value);
             }
         }
+        // The lists a `<for>` renders, which a full app's stack brings.
+        ecs.world
+            .init_resource::<lumen_core::signals::ArraySignals>();
         // Plugins first, matching a real boot: there they run before the
         // script hosts load, which is ahead of everything added through
         // `deferred`.

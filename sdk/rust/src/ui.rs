@@ -254,6 +254,11 @@ impl Record {
     pub fn set(&mut self, name: impl Into<String>, value: impl ToString) {
         self.0.insert(name.into(), value.to_string());
     }
+
+    /// The record as the array signal stores it.
+    pub(crate) fn into_item(self) -> HashMap<String, String> {
+        self.0
+    }
 }
 
 impl From<HashMap<String, String>> for Record {
