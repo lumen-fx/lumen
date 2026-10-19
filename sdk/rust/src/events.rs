@@ -433,9 +433,17 @@ pub(crate) fn install_handlers(
         TickStage::Systems,
         (collect_ui_events, dispatch_handlers)
             .chain()
-            .in_set(AppSet),
+            .in_set(AppSet)
+            .in_set(HandlerSet),
     );
 }
+
+/// Where the handlers run inside [`AppSet`]: first, so the systems an app
+/// adds with [`App::add_systems`](crate::App::add_systems), which run after
+/// it, see on the same tick what a handler changed (a tool a click picked, a
+/// dialog a click opened).
+#[derive(bevy_ecs::schedule::SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct HandlerSet;
 
 fn ensure_message<M: bevy_ecs::message::Message>(app: &mut lumen_core::app::App) {
     if !app

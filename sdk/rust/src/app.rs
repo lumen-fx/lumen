@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::error::{Error, Result};
-use crate::events::{Event, EventKind, Handler, HandlerEntry, ReadyHandler, install_handlers};
+use crate::events::{
+    Event, EventKind, Handler, HandlerEntry, HandlerSet, ReadyHandler, install_handlers,
+};
 use crate::frame::Frame;
 use crate::plugins::AppPlugins;
 use crate::signal::Signals;
@@ -359,12 +361,12 @@ impl App {
     /// [`TickStage`].
     ///
     /// In [`TickStage::Systems`] they go in the app's slot of the tick,
-    /// [`AppSet`]: after the tick's input has become element events and
-    /// every control has pushed its value into its signal, and before the
-    /// signals are written back into the tree. A system there reads this
-    /// tick's events and writes what shows on this tick's frame, with no
-    /// ordering of its own; `.chain()` / `.after` between the app's own
-    /// systems still apply.
+    /// [`AppSet`]: after the tick's input has become element events, every
+    /// control has pushed its value into its signal and the app's handlers
+    /// have run, and before the signals are written back into the tree. A
+    /// system there reads this tick's events and what the handlers changed,
+    /// and writes what shows on this tick's frame, with no ordering of its
+    /// own; `.chain()` / `.after` between the app's own systems still apply.
     #[must_use]
     pub fn add_systems<M: 'static>(
         self,
@@ -374,7 +376,7 @@ impl App {
         let mut this = self;
         this.push_deferred(move |ecs| {
             if stage == TickStage::Systems {
-                ecs.add_systems(stage, systems.in_set(AppSet));
+                ecs.add_systems(stage, systems.in_set(AppSet).after(HandlerSet));
             } else {
                 ecs.add_systems(stage, systems);
             }
