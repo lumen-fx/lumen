@@ -166,6 +166,8 @@ members = [
     "backends/*",
     "dev/*",
     "os/*",
+    "os/crash/helper",
+    "os/crash/report",
     "std/*",
     # The script hosts' libraries, apart from the module entries above them so
     # a build script can depend on them without building a module.
@@ -285,8 +287,8 @@ lumen-module-registry = { path = "core/module-registry" }
 lumen-modules = { path = "core/modules" }
 lumen-os-clipboard = { path = "os/clipboard" }
 lumen-os-crash = { path = "os/crash" }
-lumen-crash-report = { path = "os/crash-report" }
-lumen-crash = { path = "os/crash-helper" }
+lumen-crash-report = { path = "os/crash/report" }
+lumen-crash = { path = "os/crash/helper" }
 lumen-os-dnd = { path = "os/dnd" }
 lumen-os-filedialog = { path = "os/filedialog" }
 lumen-os-hotkey = { path = "os/hotkey" }

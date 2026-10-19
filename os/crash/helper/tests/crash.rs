@@ -209,7 +209,7 @@ fn a_panic_that_ends_the_app_leaves_a_report_and_a_minidump() {
     // platform's separator.
     assert!(
         text.replace('\\', "/")
-            .contains("Location:   os/crash-helper/tests/crash.rs:"),
+            .contains("Location:   os/crash/helper/tests/crash.rs:"),
         "{text}"
     );
     assert!(text.contains("Backtrace\n---------\n"), "{text}");

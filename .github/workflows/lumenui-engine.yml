@@ -54,8 +54,8 @@ on:
       - std/canvas/**
       - core/widget-macros/**
       # The crash helper the set carries and lumenui's build script places.
-      - os/crash-helper/**
-      - os/crash-report/**
+      - os/crash/helper/**
+      - os/crash/report/**
       - tools/release/lumenui-engine.py
       - tools/release/publish-crates.py
       # What scaffolds the rust template: the gallery, the manifest and
