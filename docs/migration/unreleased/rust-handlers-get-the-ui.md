@@ -47,6 +47,6 @@ is the prelude's `EcsApp` and `Plugin`, `lumenui::runtime` is
 `core_signals` are the `lumenui::lumen_core` modules of those names. The
 prelude now brings the input types events carry (`PointerButton`, `Key`,
 `NamedKey`, `Modifiers`, `ModifiersState`, `MenuClicked`,
-`ContextMenuEvent`, ...), `Transform`, `WakeDeadline`, `Vec2`, `ChildOf`,
+`ContextMenuEvent`, ...), `Transform`, `WakeDeadline`, `Vec2`, `Mut`, `ChildOf`,
 `Children`, `SystemParam` and `ParamSet`, so most of those paths need no
 import at all. `Property` and `PropertyStore` are in the prelude only.

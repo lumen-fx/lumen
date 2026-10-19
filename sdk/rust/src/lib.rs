@@ -268,4 +268,6 @@ pub mod prelude {
     };
     pub use bevy_ecs::query::{Added, Changed};
     pub use bevy_ecs::system::{ParamSet, SystemParam};
+    // What `Ui::resource_mut` and `Ui::resource_scope` hand back.
+    pub use bevy_ecs::world::Mut;
 }
