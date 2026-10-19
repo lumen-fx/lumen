@@ -11,14 +11,12 @@ use std::time::{Duration, Instant};
 
 const CASE: &str = "LUMEN_CRASH_TEST_CASE";
 
-/// How a report names the fault a null write raises: a signal on Linux, a
-/// Mach exception on macOS, a structured exception on Windows.
-#[cfg(target_os = "linux")]
-const NULL_WRITE_FAULT: &str = "SIGSEGV";
-#[cfg(target_os = "macos")]
-const NULL_WRITE_FAULT: &str = "EXC_BAD_ACCESS";
+/// How a report names the fault the "segv" case raises: a signal on Unix,
+/// a structured exception on Windows.
+#[cfg(unix)]
+const RAISED_FAULT: &str = "SIGSEGV";
 #[cfg(windows)]
-const NULL_WRITE_FAULT: &str = "EXCEPTION_ACCESS_VIOLATION";
+const RAISED_FAULT: &str = "EXCEPTION_ACCESS_VIOLATION";
 const DIR: &str = "LUMEN_CRASH_TEST_DIR";
 
 /// The crashing app. Runs only as a child of one of the tests below.
@@ -81,10 +79,7 @@ fn child() {
             let _ = worker.join();
             std::process::abort();
         }
-        "segv" => {
-            // SAFETY: none; the point is the fault.
-            unsafe { std::ptr::null_mut::<u32>().write_volatile(7) };
-        }
+        "segv" => raise_access_fault(),
         "abort" => std::process::abort(),
         "survive" => {
             let caught = std::panic::catch_unwind(|| panic!("crash-test survived panic"));
@@ -94,6 +89,26 @@ fn child() {
             std::thread::sleep(Duration::from_millis(300));
         }
         other => panic!("unknown case {other}"),
+    }
+}
+
+/// Ends the process the way a bad memory access does, without one: the
+/// signal on Unix, the structured exception on Windows.
+fn raise_access_fault() {
+    #[cfg(unix)]
+    // SAFETY: raising a signal has no memory-safety preconditions.
+    unsafe {
+        libc::raise(libc::SIGSEGV);
+    }
+    #[cfg(windows)]
+    // SAFETY: the exception carries no arguments to read.
+    unsafe {
+        windows_sys::Win32::System::Diagnostics::Debug::RaiseException(
+            windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION as u32,
+            0,
+            0,
+            std::ptr::null(),
+        );
     }
 }
 
@@ -229,7 +244,7 @@ fn a_packaged_app_finds_the_helper_beside_itself() {
     let names = wait_for_report(&dir, Duration::from_secs(20));
     let text = report(&dir, &names);
     assert!(text.contains("native fault"), "{text}");
-    assert!(text.contains(NULL_WRITE_FAULT), "{text}");
+    assert!(text.contains(RAISED_FAULT), "{text}");
     assert!(
         text.contains(&format!("crash-app{suffix}")),
         "the report names the packaged executable: {text}"
@@ -267,7 +282,7 @@ fn a_segfault_leaves_a_report_with_the_fault_and_a_minidump() {
     let text = report(&dir, &names);
     assert!(
         text.contains(&format!(
-            "stopped because of a native fault: {NULL_WRITE_FAULT}"
+            "stopped because of a native fault: {RAISED_FAULT}"
         )),
         "{text}"
     );
@@ -338,7 +353,7 @@ fn without_the_helper_a_fault_is_written_from_the_handler() {
         "{text}"
     );
     #[cfg(windows)]
-    assert!(text.contains(NULL_WRITE_FAULT), "{text}");
+    assert!(text.contains(RAISED_FAULT), "{text}");
     assert!(text.contains("no minidump was written"), "{text}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -47,8 +47,25 @@ fn on_crash(context: &CrashContext) -> CrashEventResult {
     }
     if !simulated {
         crate::fallback::write_fault(context);
+        if sent_by_kill(context) {
+            return CrashEventResult::Handled(true);
+        }
     }
     CrashEventResult::Handled(false)
+}
+
+/// Whether the signal came from `kill` or `raise` rather than a fault. The
+/// handler that was there before ours (the standard library's, usually)
+/// would swallow such a signal, where a fault repeats itself on return;
+/// claiming it has the default action end the process instead.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn sent_by_kill(context: &CrashContext) -> bool {
+    context.siginfo.ssi_code <= 0
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn sent_by_kill(_: &CrashContext) -> bool {
+    false
 }
 
 /// Have the helper dump this moment, as if the current thread had faulted.
