@@ -24,8 +24,9 @@ Description: |-
 
   This package installs the toolchain: the lumenc command line, the Lumen
   runtime library it loads, the launcher a packaged app is built from,
-  lumen-server, the production server for server-rendered sites, and lumen-lsp,
-  the language server editors use. Building an app needs no Rust toolchain.
+  lumen-server, the production server for server-rendered sites, lumen-lsp,
+  the language server editors use, and lumen-crash, the crash helper every
+  packaged app carries. Building an app needs no Rust toolchain.
 Tags:
 - css
 - desktop

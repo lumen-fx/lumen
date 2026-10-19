@@ -14,6 +14,9 @@ directory and shows a message box. Headless runs are unchanged.
 What you may notice:
 
 - One more process, `lumen-crash`, runs for as long as the app does.
+- `lumenc package` output carries one more file, `lumen-crash` beside the
+  executable, and `cargo build` of a `lumenui` app puts it in
+  `target/<profile>/`. Ship it with the rest of the folder.
 - A program that installs its own fault handlers before `lumen_app_run`
   has them replaced for the faults listed above. A panic hook set before is
   kept and still runs.

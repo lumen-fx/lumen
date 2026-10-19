@@ -24,6 +24,10 @@
 # same way. `lumenc web --serve` finds the server beside lumenc in libexec, and
 # an editor finds the language server on PATH.
 #
+# lumen-crash, the crash helper, stays in libexec with no script in bin:
+# nobody runs it by hand, and `lumenc package` copies it from beside the
+# lumenc it runs as into every package.
+#
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on
 # (public/lumenc/src/package/update_check.rs); without it lumenc never checks for a
@@ -77,6 +81,7 @@ class Lumen < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/lumenc --version")
+    assert_predicate libexec/"lumen-crash", :executable?
 
     system bin/"lumenc", "new", "smoke"
     assert_predicate testpath/"smoke/main.lmn", :exist?

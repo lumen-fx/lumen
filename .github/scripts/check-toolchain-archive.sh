@@ -79,6 +79,12 @@ if [ ! -f "$dest/bin/lumen-lsp" ] && [ ! -f "$dest/bin/lumen-lsp.exe" ]; then
   exit 1
 fi
 
+# And the crash helper, which `lumenc package` copies beside every app.
+if [ ! -f "$dest/bin/lumen-crash" ] && [ ! -f "$dest/bin/lumen-crash.exe" ]; then
+  echo "the unpacked archive carries no bin/lumen-crash" >&2
+  exit 1
+fi
+
 # So do the web halves of the first-party modules, every one the tree has,
 # each where `lumenc web` looks for the web half of a `bundled = true` module.
 for web in "$(dirname "$0")"/../../std/*/web; do

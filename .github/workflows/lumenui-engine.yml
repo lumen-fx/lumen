@@ -53,6 +53,9 @@ on:
       # The modules in lumenui-engine.py's MODULES, which the set compiles.
       - std/canvas/**
       - core/widget-macros/**
+      # The crash helper the set carries and lumenui's build script places.
+      - os/crash-helper/**
+      - os/crash-report/**
       - tools/release/lumenui-engine.py
       - tools/release/publish-crates.py
       # What scaffolds the rust template: the gallery, the manifest and
@@ -231,8 +234,12 @@ jobs:
         run: |
           set -euo pipefail
           exe=target/debug/lumenui-smoke
-          if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
+          helper=target/debug/lumen-crash
+          if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; helper="$helper.exe"; fi
           "./$exe"
+          # lumenui's build script puts the set's crash helper beside the
+          # app, so a plain `cargo build` has it with no packaging step.
+          test -x "$helper" || { echo "no $helper beside the app" >&2; exit 1; }
 
       # The same proof for each module wrapper: an app on `lumenui` and the
       # wrapper alone builds from the set and compiles no engine or module

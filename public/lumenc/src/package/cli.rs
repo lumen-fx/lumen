@@ -61,6 +61,10 @@ const FOOTER_MAGIC: &[u8; 8] = b"LMNAPACK";
 /// both produce it.
 const STUB_STEM: &str = "lumen-launcher";
 
+/// Name of the crash helper every windowed app starts beside itself, as
+/// `lumen_crash_report::HELPER_NAME` spells it; the two must stay in step.
+const CRASH_HELPER_STEM: &str = "lumen-crash";
+
 /// Directory holding the script standard library, both where the toolchain
 /// stages it beside its own binaries and where a packaged app reads it.
 ///
@@ -292,6 +296,14 @@ impl Target {
         match self.os {
             Os::Windows => format!("{STUB_STEM}.exe"),
             _ => STUB_STEM.to_string(),
+        }
+    }
+
+    /// File name of the crash helper a packaged app starts beside itself.
+    fn crash_helper_name(self) -> String {
+        match self.os {
+            Os::Windows => format!("{CRASH_HELPER_STEM}.exe"),
+            _ => CRASH_HELPER_STEM.to_string(),
         }
     }
 
@@ -811,7 +823,7 @@ fn package_static(
     let toolchain_dirs: Vec<PathBuf> = std::iter::once(kit.clone())
         .chain(search_dirs(lib_dir, true))
         .collect();
-    stage_toolchain_files(&toolchain_dirs, lib_dir, out)?;
+    stage_toolchain_files(&toolchain_dirs, lib_dir, target, out)?;
     let plugins = stage_modules(
         src,
         out,
@@ -952,7 +964,7 @@ fn package_sdk(
             Some(shipped.engine),
         )
     };
-    stage_toolchain_files(&library_dirs, lib_dir, out)?;
+    stage_toolchain_files(&library_dirs, lib_dir, target, out)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -1214,18 +1226,60 @@ fn stage_script_library(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
 }
 
 /// Stage what every desktop package carries beside its executable, whichever
-/// path built it: the script standard library and the license files, both
-/// taken from the first of `dirs` that holds them.
+/// path built it: the script standard library, the crash helper, and the
+/// license files, each taken from the first of `dirs` that holds it.
 ///
-/// Every packaging path goes through here rather than staging the two on its
+/// Every packaging path goes through here rather than staging these on its
 /// own, so a path cannot ship the engine and leave its license text behind.
 fn stage_toolchain_files(
     dirs: &[PathBuf],
     lib_dir: Option<&Path>,
+    target: Target,
     out: &Path,
 ) -> Result<(), String> {
     stage_script_library(dirs, out)?;
+    stage_crash_helper(dirs, lib_dir, target, out)?;
     stage_license_files(dirs, lib_dir, out, "lumenc package")
+}
+
+/// Copy `lumen-crash` beside the executable, where a crashing app looks for
+/// it. It sits beside the engine library a C++ or Python program opens too,
+/// because the package root holds both.
+///
+/// `dirs` come first; for this machine's own platform the installation's
+/// directories follow, since the helper beside `lumenc` is this platform's.
+/// Another platform's helper only comes from that platform's files.
+///
+/// This reports rather than fails: a package without the helper runs, and a
+/// crash in it still leaves the short report the app writes itself.
+fn stage_crash_helper(
+    dirs: &[PathBuf],
+    lib_dir: Option<&Path>,
+    target: Target,
+    out: &Path,
+) -> Result<(), String> {
+    let name = target.crash_helper_name();
+    let mut candidates: Vec<PathBuf> = dirs.to_vec();
+    if target == Target::host() {
+        for dir in search_dirs(lib_dir, true) {
+            if !candidates.contains(&dir) {
+                candidates.push(dir);
+            }
+        }
+    }
+    let Some(from) = candidates
+        .iter()
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
+    else {
+        eprintln!(
+            "lumenc package: warning: no {name} in {}, so the package carries no crash \
+             helper: a crash writes a short report and no minidump",
+            searched(&candidates)
+        );
+        return Ok(());
+    };
+    copy_executable(&from, &out.join(&name))
 }
 
 /// The license files under the names an archive member carries, for a fetch
@@ -2099,7 +2153,7 @@ fn package(
         }
     }
 
-    stage_toolchain_files(std::slice::from_ref(&toolchain.dir), lib_dir, out)?;
+    stage_toolchain_files(std::slice::from_ref(&toolchain.dir), lib_dir, target, out)?;
     let modules = shipped.modules;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
@@ -2192,6 +2246,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
         {
             let optional: Vec<String> = dynamic_runtime_patterns(target)
                 .into_iter()
+                .chain(std::iter::once(target.crash_helper_name()))
                 .chain(license_members())
                 .collect();
             fetch_release_files(

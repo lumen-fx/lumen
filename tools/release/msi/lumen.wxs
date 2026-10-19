@@ -2,7 +2,7 @@
 <!--
   The Lumen Windows installer: lumenc, the liblumen runtime library, the app
   launcher stub, the lumen-server production server, the lumen-lsp language
-  server, the candela standard
+  server, the lumen-crash crash helper, the candela standard
   library, the `lumenc new` templates, the first-party browser add-ons, and
   an install receipt, installed for the current user.
 
@@ -106,6 +106,16 @@
       <!-- Component GUID generated once for lumen-lsp.exe; never change it, and never reuse it for another file or product. -->
       <Component Id="LumenLspExe" Guid="{CB84FD66-5A04-46CF-BDA5-D75350142B0A}" Directory="BINFOLDER">
         <File Id="LumenLspExe" Source="$(var.StageDir)\bin\lumen-lsp.exe" KeyPath="yes" />
+      </Component>
+
+      <!--
+        The crash helper every windowed app starts beside itself. `lumenc
+        package` copies it from beside lumenc.exe into each package; nobody
+        runs it directly.
+      -->
+      <!-- Component GUID generated once for lumen-crash.exe; never change it, and never reuse it for another file or product. -->
+      <Component Id="LumenCrashExe" Guid="{DABF91D7-7F9A-4F50-B649-0FD778E789B4}" Directory="BINFOLDER">
+        <File Id="LumenCrashExe" Source="$(var.StageDir)\bin\lumen-crash.exe" KeyPath="yes" />
       </Component>
 
       <!--

@@ -23,6 +23,11 @@
 //! 4. The manifest's rustc is compared with the one cargo runs before the
 //!    compiler is pointed at anything, because the compiler's own answer to a
 //!    mismatch (E0514) does not say what to do about it.
+//! 5. The set's `lumen-crash` helper is copied into the profile directory
+//!    (`target/debug`, `target/release`), beside the app's executable, where
+//!    a crashing app looks for it. A plain `cargo run` then writes full crash
+//!    reports with no packaging step. The copy is skipped when an identical
+//!    file is already there.
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -36,6 +41,8 @@ const MANIFEST: &str = "manifest.json";
 /// The marker a finished unpack leaves, so a cache interrupted halfway is
 /// fetched again rather than trusted.
 const COMPLETE: &str = ".complete";
+/// The crash helper the set carries under `bin/`.
+const HELPER: &str = "lumen-crash";
 
 fn main() {
     for var in [OVERRIDE, "LUMEN_GH_REPO", "DOCS_RS"] {
@@ -85,6 +92,67 @@ fn run() -> Result<(), String> {
     if native.is_dir() {
         println!("cargo:rustc-link-search=native={}", native.display());
     }
+    // The app builds and runs without the helper, so failing to place it (a
+    // running copy Windows will not replace, say) is a warning, not an error.
+    if let Err(message) = place_helper(&dir, &target) {
+        println!("cargo:warning=lumenui: {message}");
+    }
+    Ok(())
+}
+
+/// Copy the set's crash helper beside the executables this build produces.
+///
+/// The profile directory is three levels above `OUT_DIR`
+/// (`<profile>/build/<crate>-<hash>/out`), with or without `--target`. A set
+/// with no helper (one built before it joined the set) is not an error: the
+/// app then writes the short report itself.
+fn place_helper(dir: &Path, target: &str) -> Result<(), String> {
+    let name = if target.contains("windows") {
+        format!("{HELPER}.exe")
+    } else {
+        HELPER.to_string()
+    };
+    let from = dir.join("bin").join(&name);
+    if !from.is_file() {
+        println!(
+            "cargo:warning=lumenui: the prebuilt engine set in {} has no bin/{name}, so a \
+             crash leaves a short report and no minidump",
+            dir.display()
+        );
+        return Ok(());
+    }
+    let out_dir = PathBuf::from(env("OUT_DIR")?);
+    let Some(profile) = out_dir.ancestors().nth(3) else {
+        return Err(format!(
+            "cannot find the profile directory above {}",
+            out_dir.display()
+        ));
+    };
+    let to = profile.join(&name);
+    let bytes = std::fs::read(&from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    if std::fs::read(&to).is_ok_and(|have| have == bytes) {
+        return Ok(());
+    }
+    // Written beside and renamed into place, so an app still running the old
+    // helper never sees a half-written file.
+    let staging = profile.join(format!(".{name}.{}", std::process::id()));
+    std::fs::write(&staging, &bytes).map_err(|e| format!("write {}: {e}", staging.display()))?;
+    set_executable(&staging)?;
+    std::fs::rename(&staging, &to).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("move {name} into {}: {e}", profile.display())
+    })
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("chmod {}: {e}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 

@@ -13,9 +13,9 @@ really builds from them.
   build    Compile the engine for this machine's target, the way a release
            does, and record what cargo produced.
   collect  Turn that record into the set: exactly the target closure's
-           `.rlib` files, the host proc-macro libraries they name, and the
-           native static libraries they link without carrying, plus a
-           manifest. Writes the unpacked set, `lumenui-engine-<target>.tar.zst`
+           `.rlib` files, the host proc-macro libraries they name, the
+           native static libraries they link without carrying, and the
+           `lumen-crash` helper under `bin/`, plus a manifest. Writes the unpacked set, `lumenui-engine-<target>.tar.zst`
            and `lumenui-engine-<target>.json` (the manifest, also inside the
            archive, published on its own so a build can check the compiler
            before downloading the archive).
@@ -65,6 +65,12 @@ Why the rules in `collect` are the ones they are:
     bitcode refuses an app that turns LTO on.
   - `--remap-path-prefix` keeps this machine's checkout and cargo paths out of
     the set: they would otherwise end up in every app's panic messages.
+  - The `lumen-crash` helper is built in a cargo invocation of its own, into
+    the same target directory: in the engine's invocation its features would
+    unify with the engine's, and its dependencies would show up in the
+    messages as a second build of crates the set already holds. `collect`
+    takes it from beside the engine's uplifted rlib, where cargo puts a
+    requested binary. `sdk/lumenui/build.rs` copies it beside the app.
 
 Exit codes: 0 success, 1 a step failed, 2 bad usage.
 """
@@ -86,6 +92,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE = "lumenui-engine"
 LIB = "lumenui_engine"
+# The crash helper every windowed app starts beside itself. The set carries
+# it so `cargo build` of an app has one beside the app's executable.
+HELPER = "lumen-crash"
 
 # The runtime modules the Rust SDK carries, each published as the
 # `lumenui-<name>` crate `wrappers` generates for `lumen-<name>`. Adding a
@@ -180,6 +189,12 @@ def cmd_build(args: argparse.Namespace) -> None:
         proc = subprocess.run(cmd, cwd=REPO, env=env, stdout=out)
     if proc.returncode != 0:
         fail(f"cargo build failed ({proc.returncode})")
+
+    helper = ["cargo", "build", "--release", "--locked", "-p", HELPER, "--target", triple]
+    print("+", " ".join(helper), file=sys.stderr)
+    proc = subprocess.run(helper, cwd=REPO, env=env, stdout=sys.stderr)
+    if proc.returncode != 0:
+        fail(f"cargo build of {HELPER} failed ({proc.returncode})")
 
 
 # ------------------------------------------------------------------ collect
@@ -280,12 +295,23 @@ def collect_files(msgs: list[dict], triple: str) -> tuple[list[Path], list[Path]
     return sorted(deps.values()), sorted(native.values())
 
 
+def helper_file(deps: list[Path], triple: str) -> Path:
+    """The `lumen-crash` the build left beside the engine's uplifted rlib."""
+    engine = next(p for p in deps if p.name == f"lib{LIB}.rlib")
+    name = HELPER + (".exe" if "windows" in triple else "")
+    path = engine.parent / name
+    if not path.is_file():
+        fail(f"no {name} beside {engine}; `build` makes it")
+    return path
+
+
 def cmd_collect(args: argparse.Namespace) -> None:
     info = rustc_info()
     triple = info["host"]
     name = TARGET_NAMES.get(triple) or fail(f"no release name for {triple}")
     msgs = read_messages(args.messages)
     deps, native = collect_files(msgs, triple)
+    helper = helper_file(deps, triple)
 
     out = Path(args.out).resolve()
     stage = out / f"lumenui-engine-{name}"
@@ -293,7 +319,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         shutil.rmtree(stage)
     (stage / "deps").mkdir(parents=True)
     files = []
-    for group, paths in (("deps", deps), ("native", native)):
+    for group, paths in (("deps", deps), ("native", native), ("bin", [helper])):
         if paths:
             (stage / group).mkdir(exist_ok=True)
         for p in paths:
@@ -329,7 +355,9 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     raw = sum(f["size"] for f in files)
     print(f"set:      {stage}")
-    print(f"files:    {len(files)} ({len(deps)} in deps/, {len(native)} in native/)")
+    print(
+        f"files:    {len(files)} ({len(deps)} in deps/, {len(native)} in native/, 1 in bin/)"
+    )
     print(f"raw:      {raw / 2**20:.1f} MiB")
     print(f"archive:  {archive} ({archive.stat().st_size / 2**20:.1f} MiB)")
 

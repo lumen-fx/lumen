@@ -116,6 +116,9 @@ The candela standard library travels too, in a `libs/` folder beside the
 executable. Scripts read it as they compile, so `import "std/..."` and the
 array methods resolve in the folder the same way they do under `lumenc run`.
 
+`lumen-crash`, the helper that writes a [crash report](#when-the-app-crashes)
+when the app dies, travels beside the executable too.
+
 `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES` travel beside the executable as
 well. A packaged app ships the Lumen engine and the libraries the engine is
 built from, and several of those ask that their license text reach whoever
@@ -181,10 +184,10 @@ should carry or leave out regardless. The renderer follows
 that one renderer and none of the other, which is the way to keep a small app
 small, and `auto` links both so the app starts on a machine without a GPU. The
 candela standard library still travels in `libs/`, because scripts read it off
-disk as they compile whatever links the engine, and the three license files
-travel beside the executable as they do in a folder package. Copy the
-executable, `libs/`, the license files, and the app's files, and that is the
-whole app.
+disk as they compile whatever links the engine, and `lumen-crash` and the
+three license files travel beside the executable as they do in a folder
+package. Copy the executable, `libs/`, `lumen-crash`, the license files, and
+the app's files, and that is the whole app.
 
 Reach for it when you want one file to hand over rather than a folder to keep
 together, and on Windows when your app declares a module that ships with the
@@ -257,10 +260,16 @@ or a runtime module and keeps the app running; such a panic leaves no report
 once the app ends normally.
 
 The helper is found beside the app's executable, or beside the Lumen runtime
-library a C++ or Python program loads. Without it the app writes the summary
-itself, with no minidump and no message box; a native fault's summary then
-carries only the fault and its address. `lumenc package` does not copy the
-helper into the folder yet.
+library a C++ or Python program loads. `lumenc package` copies it there for
+every kind of app, from beside `lumenc` (or from the release it fetches when
+you package for another platform); ship the folder whole and the helper goes
+with it. A Rust app on `lumenui` gets it from its own build: `cargo build`
+puts `lumen-crash` beside the executable in `target/debug` or
+`target/release`, so `cargo run` writes full reports too.
+
+Without the helper the app writes the summary itself, with no minidump and no
+message box; a native fault's summary then carries only the fault and its
+address. `lumenc package` warns when it has no helper to copy.
 
 Turn crash handling off with
 [`[crash] enabled = false`](../reference/lumen-toml.md#crash). Set
