@@ -6,7 +6,6 @@
 //! waits a moment for the connection first.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -52,14 +51,8 @@ pub(crate) fn start(config: &Config) -> Installed {
         ));
     };
     let socket = SOCKET.get_or_init(socket_name);
-    let mut command = Command::new(&helper);
-    command
-        .args(["--socket", socket, "--pid", &std::process::id().to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    detach(&mut command);
-    let mut child = match command.spawn() {
+    let pid = std::process::id().to_string();
+    let mut child = match spawn::helper(&helper, &["--socket", socket, "--pid", &pid]) {
         Ok(child) => child,
         Err(e) => {
             return Installed::InProcess(format!("could not start {}: {e}", helper.display()));
@@ -77,7 +70,7 @@ pub(crate) fn start(config: &Config) -> Installed {
                     connected(client, &hello);
                     return;
                 }
-                let gone = matches!(child.try_wait(), Ok(Some(_)));
+                let gone = child.exited();
                 if gone || start.elapsed() > CONNECT_TIMEOUT {
                     HELPER_PID.store(0, Ordering::Relaxed);
                     set_connection(Connection::Down);
@@ -215,21 +208,226 @@ fn find_helper(configured: Option<&Path>) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Keep the helper out of the app's console session: a Ctrl+C in the
-/// terminal that started the app must not take the helper down with it.
-#[cfg(unix)]
-fn detach(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
+/// Starting the helper as a process of its own: no standard streams, and
+/// nothing else of the app's either. The helper outlives the app (it writes
+/// the report and waits on the dialog after the app is gone), so any handle
+/// it held of the app's would stay open: a pipe the app's output goes into
+/// would never reach its end.
+mod spawn {
+    use std::io;
+    use std::path::Path;
 
-#[cfg(windows)]
-fn detach(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
-}
+    /// Start `program` with `args`, detached from the app's console session
+    /// so a Ctrl+C in the terminal that started the app does not take the
+    /// helper down with it.
+    pub(super) fn helper(program: &Path, args: &[&str]) -> io::Result<Helper> {
+        imp::spawn(program, args)
+    }
 
-#[cfg(not(any(unix, windows)))]
-fn detach(_command: &mut Command) {}
+    pub(super) use imp::Helper;
+
+    #[cfg(unix)]
+    mod imp {
+        use std::io;
+        use std::os::unix::process::CommandExt;
+        use std::path::Path;
+        use std::process::{Child, Command, Stdio};
+
+        /// The started helper.
+        pub(in super::super) struct Helper(Child);
+
+        impl Helper {
+            pub(in super::super) fn id(&self) -> u32 {
+                self.0.id()
+            }
+
+            /// Whether the helper has ended.
+            pub(in super::super) fn exited(&mut self) -> bool {
+                matches!(self.0.try_wait(), Ok(Some(_)))
+            }
+        }
+
+        /// std closes every descriptor but the three standard ones in the
+        /// child, and those three are null here.
+        pub(super) fn spawn(program: &Path, args: &[&str]) -> io::Result<Helper> {
+            Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .map(Helper)
+        }
+    }
+
+    /// std starts a child with every inheritable handle of the parent (the
+    /// standard streams a shell redirected among them), so the helper is
+    /// started with `CreateProcessW` directly and inherits none.
+    #[cfg(windows)]
+    mod imp {
+        use std::ffi::OsStr;
+        use std::io;
+        use std::os::windows::ffi::OsStrExt;
+        use std::path::Path;
+
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateProcessW, PROCESS_INFORMATION,
+            STARTUPINFOW, WaitForSingleObject,
+        };
+
+        /// The started helper: its id and a handle to its process.
+        pub(in super::super) struct Helper {
+            id: u32,
+            process: HANDLE,
+        }
+
+        // SAFETY: a process handle is a kernel object reference, usable from
+        // any thread.
+        unsafe impl Send for Helper {}
+
+        impl Helper {
+            pub(in super::super) fn id(&self) -> u32 {
+                self.id
+            }
+
+            /// Whether the helper has ended.
+            pub(in super::super) fn exited(&mut self) -> bool {
+                // SAFETY: `process` is the handle CreateProcessW returned,
+                // open until drop.
+                unsafe { WaitForSingleObject(self.process, 0) == WAIT_OBJECT_0 }
+            }
+        }
+
+        impl Drop for Helper {
+            fn drop(&mut self) {
+                // SAFETY: closed once, here.
+                unsafe { CloseHandle(self.process) };
+            }
+        }
+
+        pub(super) fn spawn(program: &Path, args: &[&str]) -> io::Result<Helper> {
+            let mut line = quote(program.as_os_str());
+            for arg in args {
+                line.push(u16::from(b' '));
+                line.extend(quote(OsStr::new(arg)));
+            }
+            line.push(0);
+            let mut app: Vec<u16> = program.as_os_str().encode_wide().collect();
+            app.push(0);
+            // SAFETY: zeroed is a valid STARTUPINFOW once `cb` is set; no
+            // STARTF_USESTDHANDLES, so the child gets no standard streams.
+            let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            // SAFETY: plain out-parameter.
+            let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: both strings are NUL-terminated and live across the
+            // call; `bInheritHandles` is false, so no handle crosses over.
+            let ok = unsafe {
+                CreateProcessW(
+                    app.as_ptr(),
+                    line.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &startup,
+                    &mut info,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: the thread handle is not needed; closed once.
+            unsafe { CloseHandle(info.hThread) };
+            Ok(Helper {
+                id: info.dwProcessId,
+                process: info.hProcess,
+            })
+        }
+
+        /// One argument as the C runtime's command-line parser reads it back:
+        /// quoted when it holds a space, a tab or a quote, with the
+        /// backslashes before a quote doubled.
+        fn quote(arg: &OsStr) -> Vec<u16> {
+            let wide: Vec<u16> = arg.encode_wide().collect();
+            let plain = !wide.is_empty()
+                && !wide.iter().any(|&c| {
+                    c == u16::from(b' ') || c == u16::from(b'\t') || c == u16::from(b'"')
+                });
+            if plain {
+                return wide;
+            }
+            let backslash = u16::from(b'\\');
+            let mut out = vec![u16::from(b'"')];
+            let mut slashes = 0;
+            for &c in &wide {
+                if c == backslash {
+                    slashes += 1;
+                } else if c == u16::from(b'"') {
+                    out.extend(std::iter::repeat_n(backslash, slashes * 2 + 1));
+                    slashes = 0;
+                } else {
+                    out.extend(std::iter::repeat_n(backslash, slashes));
+                    slashes = 0;
+                }
+                if c != backslash {
+                    out.push(c);
+                }
+            }
+            out.extend(std::iter::repeat_n(backslash, slashes * 2));
+            out.push(u16::from(b'"'));
+            out
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            fn q(arg: &str) -> String {
+                String::from_utf16(&quote(OsStr::new(arg))).unwrap()
+            }
+
+            #[test]
+            fn arguments_quote_the_way_the_c_runtime_reads_them() {
+                assert_eq!(q("--pid"), "--pid");
+                assert_eq!(q(r"C:\Users\A B\x.sock"), r#""C:\Users\A B\x.sock""#);
+                assert_eq!(q(r"C:\dir with space\"), r#""C:\dir with space\\""#);
+                assert_eq!(q(r#"say "hi""#), r#""say \"hi\"""#);
+                assert_eq!(q(""), r#""""#);
+            }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    mod imp {
+        use std::io;
+        use std::path::Path;
+        use std::process::{Child, Command, Stdio};
+
+        pub(in super::super) struct Helper(Child);
+
+        impl Helper {
+            pub(in super::super) fn id(&self) -> u32 {
+                self.0.id()
+            }
+
+            pub(in super::super) fn exited(&mut self) -> bool {
+                matches!(self.0.try_wait(), Ok(Some(_)))
+            }
+        }
+
+        pub(super) fn spawn(program: &Path, args: &[&str]) -> io::Result<Helper> {
+            Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(Helper)
+        }
+    }
+}
