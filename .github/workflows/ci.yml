@@ -255,7 +255,10 @@ jobs:
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get install -y --no-install-recommends xvfb x11-utils
+          # An X server, xwininfo, and the X11 client libraries winit loads at
+          # run time, which the build-only dependencies above leave out.
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils \
+            libxkbcommon-x11-0 libx11-xcb1 libxcursor1 libxrandr2 libxi6
           log="$RUNNER_TEMP/window-control"
           mkdir -p "$log"
           timeout 300 xvfb-run -a -s "-screen 0 1280x1024x24" bash -c '
@@ -299,7 +302,9 @@ jobs:
           $hwnd = [IntPtr]::Zero
           for ($i = 0; $i -lt 900 -and $hwnd -eq [IntPtr]::Zero; $i++) {
             Start-Sleep -Milliseconds 200
-            $hwnd = [Win]::FindWindowW($null, "lumen-window-check")
+            # [NullString]: PowerShell hands a plain $null to a string
+            # parameter as "", which names no window class.
+            $hwnd = [Win]::FindWindowW([NullString]::Value, "lumen-window-check")
           }
           $failed = $false
           if ($hwnd -eq [IntPtr]::Zero) {
@@ -316,8 +321,14 @@ jobs:
             if ($w -ne 640 -or $h -ne 480) { $failed = $true }
           }
           if (-not $p.WaitForExit(120000)) {
-            Stop-Process -Id $p.Id -Force
             "the app did not close itself"
+            # Every thread's stack, to show where the exit is stuck.
+            $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+            if (Test-Path $cdb) {
+              & $cdb -p $p.Id -y "target\debug" -c "~*k 40; qd" > "$log\stacks.txt" 2>&1
+              Get-Content "$log\stacks.txt"
+            }
+            Stop-Process -Id $p.Id -Force
             $failed = $true
           } elseif ($p.ExitCode -ne 0) {
             "lumenc exited with $($p.ExitCode)"
