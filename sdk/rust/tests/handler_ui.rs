@@ -8,13 +8,17 @@ extern crate lumenui_engine as lumenui;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use lumenui::prelude::*;
 
-// The element tree a handler queries is process-global; one full app at a
-// time.
+// An app publishes process-global state (the element tree a handler
+// queries), so the tests here run one app at a time.
 static APP_ISOLATION: Mutex<()> = Mutex::new(());
+
+fn isolate() -> MutexGuard<'static, ()> {
+    APP_ISOLATION.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn bare() -> lumenui::App {
     lumenui::App::from_markup("<root/>")
@@ -47,6 +51,7 @@ fn menu_at(app: &EcsApp, id: &str) -> Option<String> {
 /// `toggle` flips a bool signal and hands back the new value.
 #[test]
 fn a_handler_toggles_a_signal() {
+    let _guard = isolate();
     let mut app = bare()
         .on_click("flip", |ui, _| {
             let on = ui.toggle("on");
@@ -64,6 +69,7 @@ fn a_handler_toggles_a_signal() {
 /// A handler opens a menu where the pointer is, toggles it, and closes it.
 #[test]
 fn a_handler_opens_toggles_and_closes_a_menu() {
+    let _guard = isolate();
     let mut app = bare()
         .on_click("open", |ui, _| ui.open_menu("file"))
         .on_click("open-at", |ui, _| ui.open_menu_at("ctx", 12.0, 34.5))
@@ -93,6 +99,7 @@ fn a_handler_opens_toggles_and_closes_a_menu() {
 /// `Ui`, and reads whether it is open.
 #[test]
 fn a_system_toggles_a_menu() {
+    let _guard = isolate();
     fn toggle(mut signals: Signals) {
         signals.toggle_menu("view");
         let open = signals.is_menu_open("view");
@@ -109,6 +116,7 @@ fn a_system_toggles_a_menu() {
 /// reaches the world for what `Ui` does not wrap.
 #[test]
 fn a_handler_reads_and_scopes_resources_and_reaches_the_world() {
+    let _guard = isolate();
     #[derive(Resource)]
     struct Zoom(i64);
     #[derive(Resource)]
@@ -145,6 +153,7 @@ fn a_handler_reads_and_scopes_resources_and_reaches_the_world() {
 /// lands in the list the same way.
 #[test]
 fn records_build_from_fields_maps_and_pairs() {
+    let _guard = isolate();
     let mut app = bare()
         .on_click("fill", |ui, _| {
             let mut first = Record::new();
@@ -173,6 +182,7 @@ fn records_build_from_fields_maps_and_pairs() {
 /// `on_toggle` on a click that lands inside a toggleable element of that id.
 #[test]
 fn run_conditions_follow_clicks_into_the_element() {
+    let _guard = isolate();
     #[derive(Resource, Default)]
     struct Count {
         clicks: u32,
@@ -227,6 +237,7 @@ fn run_conditions_follow_clicks_into_the_element() {
 /// build, and `hot_reload` overrides it either way.
 #[test]
 fn compiled_ui_from_a_build_names_its_directory_and_reload() {
+    let _guard = isolate();
     static BYTES: &[u8] = b"";
     let debug = CompiledUi::from_build(BYTES, "/app/crate", true);
     assert_eq!(debug.source_dir(), Some(Path::new("/app/crate")));
@@ -265,9 +276,7 @@ fn a_ready_handler_works_the_element_tree() {
         ));
     }
 
-    let _guard = APP_ISOLATION
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = isolate();
     let dir = fixture(
         "dom",
         r#"<root id="app"><column id="list" class="list kept"></column></root>"#,

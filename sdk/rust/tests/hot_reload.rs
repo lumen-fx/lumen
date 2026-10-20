@@ -18,7 +18,17 @@ use lumenui::prelude::{EcsApp, TextContent};
 // wired: a reload parses the edited sources with it.
 use lumenui::lumenc::build_headless_app;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+
+// An app publishes process-global state (the element tree, the loaded
+// artifact), so two apps in one test process must not run at once: one would
+// read the other's UI.
+static APP_ISOLATION: Mutex<()> = Mutex::new(());
+
+fn isolate() -> MutexGuard<'static, ()> {
+    APP_ISOLATION.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn scratch_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -55,6 +65,7 @@ fn write(path: &Path, text: &str) {
 
 #[test]
 fn a_compiled_ui_reloads_from_its_sources() {
+    let _guard = isolate();
     // Deterministic mtime-diff driver (no notify/fs-event flakiness).
     // SAFETY: single-threaded test setup, before any app thread starts.
     unsafe {
@@ -117,6 +128,7 @@ fn a_compiled_ui_reloads_from_its_sources() {
 /// app beside a stray `src/` keeps the UI it shipped with.
 #[test]
 fn compiled_bytes_without_watch_never_reload() {
+    let _guard = isolate();
     unsafe {
         std::env::set_var("LUMEN_HOT_RELOAD_POLL", "1");
     }
