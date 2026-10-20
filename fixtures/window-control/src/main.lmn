@@ -1,0 +1,4 @@
+<root>
+  <label id="state" bind-text="state" text="starting" />
+  <script src="main.cdl" />
+</root>

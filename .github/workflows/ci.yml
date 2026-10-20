@@ -246,6 +246,96 @@ jobs:
           path: ${{ runner.temp }}/windowed/
           if-no-files-found: ignore
           retention-days: 7
+      # What a script does to its own window (title, size, a close through
+      # the on_close veto) only shows on a platform window. The Linux and
+      # Windows legs start the window-control fixture, read its title and
+      # client size back from the platform while it runs, and wait for the
+      # app to close itself.
+      - name: Drive a real window
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils
+          log="$RUNNER_TEMP/window-control"
+          mkdir -p "$log"
+          timeout 300 xvfb-run -a -s "-screen 0 1280x1024x24" bash -c '
+            target/debug/lumenc run fixtures/window-control > "$0/out.txt" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 600); do
+              xwininfo -name lumen-window-check > /dev/null 2>&1 && break
+              sleep 0.2
+            done
+            sleep 2
+            xwininfo -name lumen-window-check > "$0/xwininfo.txt" 2>&1
+            wait "$pid"
+            echo "exit $?" >> "$0/out.txt"
+          ' "$log" || true
+          cat "$log/out.txt" "$log/xwininfo.txt"
+          grep -q "Width: 640" "$log/xwininfo.txt"
+          grep -q "Height: 480" "$log/xwininfo.txt"
+          grep -q "window-check title=lumen-window-check size=640.0x480.0" "$log/out.txt"
+          grep -q "window-check vetoed the first close" "$log/out.txt"
+          grep -q "window-check closing" "$log/out.txt"
+          grep -q "^exit 0$" "$log/out.txt"
+      - name: Drive a real window
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\window-control"
+          New-Item -ItemType Directory -Force -Path $log | Out-Null
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Win {
+              [StructLayout(LayoutKind.Sequential)] public struct Rect { public int L, T, R, B; }
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
+              [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+              [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+          }
+          "@
+          $p = Start-Process -FilePath "target\debug\lumenc.exe" -ArgumentList "run", "fixtures/window-control" `
+            -RedirectStandardError "$log\stderr.txt" -RedirectStandardOutput "$log\stdout.txt" -PassThru
+          $null = $p.Handle
+          $hwnd = [IntPtr]::Zero
+          for ($i = 0; $i -lt 900 -and $hwnd -eq [IntPtr]::Zero; $i++) {
+            Start-Sleep -Milliseconds 200
+            $hwnd = [Win]::FindWindowW($null, "lumen-window-check")
+          }
+          $failed = $false
+          if ($hwnd -eq [IntPtr]::Zero) {
+            "no window is titled lumen-window-check"
+            $failed = $true
+          } else {
+            Start-Sleep -Seconds 2
+            $rect = New-Object Win+Rect
+            [Win]::GetClientRect($hwnd, [ref]$rect) | Out-Null
+            $scale = [Win]::GetDpiForWindow($hwnd) / 96.0
+            $w = [math]::Round(($rect.R - $rect.L) / $scale)
+            $h = [math]::Round(($rect.B - $rect.T) / $scale)
+            "client area ${w}x${h} logical"
+            if ($w -ne 640 -or $h -ne 480) { $failed = $true }
+          }
+          if (-not $p.WaitForExit(120000)) {
+            Stop-Process -Id $p.Id -Force
+            "the app did not close itself"
+            $failed = $true
+          } elseif ($p.ExitCode -ne 0) {
+            "lumenc exited with $($p.ExitCode)"
+            $failed = $true
+          }
+          $out = Get-Content "$log\stdout.txt", "$log\stderr.txt" -ErrorAction SilentlyContinue
+          $out
+          foreach ($line in "window-check title=lumen-window-check size=640.0x480.0", "window-check vetoed the first close", "window-check closing") {
+            if (-not ($out -match [regex]::Escape($line))) { "missing: $line"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+      - if: always() && needs.changes.outputs.rust == 'true' && runner.os != 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-control-${{ matrix.os }}
+          path: ${{ runner.temp }}/window-control/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Collect crash evidence
         if: failure() && needs.changes.outputs.rust == 'true' && runner.os != 'Windows'
         shell: bash
