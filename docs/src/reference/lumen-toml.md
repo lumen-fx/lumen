@@ -46,7 +46,7 @@ Auto-detection for `kind` looks for a `Cargo.toml` depending on `lumen`
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `title` | string | the app directory name | Window title. |
-| `size` | `[w, h]` integers | `[960, 720]` | Window size in logical pixels. `lumenc run --size` overrides it. |
+| `size` | `[w, h]` integers | `[960, 720]` | Window size in logical pixels. The window opens maximized and takes this size when it is restored. `lumenc run --size` overrides it. |
 | `remember_state` | bool | `false` | Persists window position, size, and maximised state on close and restores them on the next launch. |
 | `menubar` | `"native"`, `"window"` | `"native"` | Where a [`<menubar>`](tags.md#menubar) shows. `native` hands it to the OS menu bar on macOS and Windows; `window` draws it at the top of the window, styled by the skin, on every platform. Linux has no OS menu bar, so there it is drawn in the window either way. |
 
