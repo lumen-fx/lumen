@@ -1,0 +1,14 @@
+# Real-window check for the app's own window control. The script retitles and
+# resizes its window, reports what the window has, vetoes its first close, and
+# then closes itself; CI starts it on a desktop and reads the title and size
+# back from the platform.
+[window]
+title = "window-control"
+size = [400, 300]
+
+[script]
+engine = "candela"
+
+# No introspection server: a CI run must not bind a port.
+[mcp]
+port = 0
