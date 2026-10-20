@@ -223,6 +223,16 @@ class App:
         status = self._lib.lumen_app_run_headless(ptr, int(ticks))
         _raise_for_status(self._lib, status, "lumen_app_run_headless")
 
+    def quit(self) -> None:
+        """Ask the running app to quit, from a handler while :meth:`run`
+        blocks. Every window is asked to close, and a veto from a close
+        hook (a script's ``on_close``) cancels the quit. To close only the
+        current window, use :func:`lumen.window.close`.
+        """
+
+        status = self._lib.lumen_app_quit()
+        _raise_for_status(self._lib, status, "lumen_app_quit")
+
     def close(self) -> None:
         """Free the handle without running it. Safe to call more than
         once, and safe to call after :meth:`run` (a no-op in that case).

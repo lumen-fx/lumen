@@ -21,7 +21,10 @@ use lumen_assets::AssetsPlugin;
 use lumen_capability::Preflight;
 use lumen_core::prelude::*;
 use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
-use lumen_core::window_backend::{WindowBackendEntry, WindowCorePlugin};
+use lumen_core::window_backend::{
+    CloseRequests, HeadlessWindowPlugin, WindowBackendEntry, WindowCorePlugin, run_close_request,
+    seed_primary_window,
+};
 use lumen_input::InputPlugin;
 use lumen_os_clipboard::ClipboardHost;
 use lumen_primitives::{
@@ -483,15 +486,25 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
     // server + hot-reload watcher (see [`RunOptions::bounded`]).
     opts.bounded = true;
     let (mut app, _window) = build_headless_app(opts)?;
+    let mut requests = CloseRequests::default();
     for _ in 0..ticks {
         app.tick();
+        // `window.close()` / `app.quit()` end the run early, through the
+        // same veto path a windowed close takes.
+        if let Some(reason) = requests.take(&app.world)
+            && run_close_request(&mut app, &mut requests, reason)
+        {
+            break;
+        }
     }
     Ok(())
 }
 
 /// Shared headless plumbing: [`build_app`] plus the window-free half of
-/// every window backend, [`WindowCorePlugin`] (the window messages, the
-/// `RedrawScheduler`, and the extract pipeline). A window backend installs
+/// every window backend, [`WindowCorePlugin`] (the window entity, the window
+/// messages, the `RedrawScheduler`, and the extract pipeline), and
+/// [`HeadlessWindowPlugin`], which applies the app's window changes straight
+/// to the viewport since no platform window stands between. A window backend installs
 /// the same plugin when it runs; only the event loop and the renderer bind
 /// need a display. Installing it here gives every headless schedule the
 /// same resource/system set, so a system that reads window state doesn't
@@ -505,6 +518,9 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
     let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;
     app.add_plugin(WindowCorePlugin);
+    app.add_plugin(HeadlessWindowPlugin);
+    let size = app.world.resource::<Viewport>().size;
+    seed_primary_window(&mut app.world, &window.options.title, size);
     Ok((app, window))
 }
 

@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
+use bevy_ecs::message::{Message, Messages};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
     DirtyLayout, Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenId,
@@ -42,7 +43,8 @@ use lumen_core::node::{
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_core::render_world::AnimationsActive;
-use lumen_core::window_state::{set_size, set_title};
+use lumen_core::window::{QuitRequest, Window, WindowRequest, primary_window};
+use lumen_core::window_backend::{WindowApply, is_window_size};
 use lumen_ir::fragment::FragmentTable;
 use lumen_ir::interpolate::Scope;
 use lumen_ir::layout_ir::Element;
@@ -116,9 +118,13 @@ pub fn install_dom(app: &mut App) {
             .after(ScriptSet::DomInput)
             .after(ScriptSet::DomState),
     );
+    // Before the window apply step, so a `window.set_size` from this tick's
+    // handlers reaches the window on the same tick.
     app.add_systems(
         TickStage::Systems,
-        apply_dom_commands.after(collect_dom_commands),
+        apply_dom_commands
+            .after(collect_dom_commands)
+            .before(WindowApply),
     );
     // A mutation pushed after the collector ran waits on the bus for the next
     // tick's; this asks for that tick, which a loop that parks once a tick
@@ -574,12 +580,12 @@ pub fn apply_dom_commands(world: &mut World) {
             ScriptCommand::UnbindEvent { token } => {
                 unregister_binding(token);
             }
-            ScriptCommand::WindowSetTitle { title } => {
-                set_title(&title);
-            }
+            ScriptCommand::WindowSetTitle { title } => set_window_title(world, title),
             ScriptCommand::WindowSetSize { width, height } => {
-                set_size(width, height);
+                set_window_size(world, glam::Vec2::new(width, height));
             }
+            ScriptCommand::WindowClose => request(world, WindowRequest::Close, "window.close"),
+            ScriptCommand::AppQuit => request(world, QuitRequest, "app.quit"),
             _ => {}
         }
     }
@@ -643,6 +649,44 @@ fn keep_split_gutters(world: &mut World, split: Entity) {
         for &gutter in &gutters {
             world.entity_mut(gutter).insert(DirtyLayout);
         }
+    }
+}
+
+/// `window.set_title`: the primary window's [`Window`] takes the title, and
+/// the window backend applies it. An app with no window (a browser page, a
+/// bare app in a test) has nothing to apply it to, so the title is only what
+/// `window.title()` reports.
+fn set_window_title(world: &mut World, title: String) {
+    match primary_window(world).and_then(|e| world.get_mut::<Window>(e)) {
+        Some(mut window) => window.title = title,
+        None => lumen_core::window_state::publish_title(&title),
+    }
+}
+
+/// `window.set_size`: the primary window's [`Window`] takes the size, and the
+/// window backend asks the platform for it. A size a window cannot have (zero,
+/// negative, not finite) is reported and dropped.
+fn set_window_size(world: &mut World, size: glam::Vec2) {
+    if !is_window_size(size.x, size.y) {
+        lumen_core::warn_line!(
+            "window.set_size({}, {}): a window size is two positive numbers; ignored",
+            size.x,
+            size.y
+        );
+        return;
+    }
+    if let Some(mut window) = primary_window(world).and_then(|e| world.get_mut::<Window>(e)) {
+        window.size = size;
+    }
+}
+
+/// Hand a close or quit request to whatever drives the window. A world with no
+/// window driver has the request type unregistered, and nothing would answer.
+fn request<M: Message>(world: &mut World, message: M, call: &str) {
+    if world.contains_resource::<Messages<M>>() {
+        world.write_message(message);
+    } else {
+        lumen_core::warn_line!("{call}(): nothing here drives a window; ignored");
     }
 }
 

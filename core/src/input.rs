@@ -1547,15 +1547,37 @@ pub struct WindowOccluded {
     pub occluded: bool,
 }
 
-/// Emitted by window backends on `WindowEvent::CloseRequested`. Apps that
-/// want to veto the close (e.g. to show a "save before quit?" dialog) set
-/// `vetoed = true` in a system reading this message; if no system vetoes,
-/// the backend exits the event loop on the next `about_to_wait`.
+/// Emitted by window backends when the window is about to close: the OS
+/// asked (the close button, a signal), or the app did (`window.close()`,
+/// `app.quit()`). Apps that want to veto the close (e.g. to show a "save
+/// before quit?" dialog) write a fresh `CloseRequest { vetoed: true, .. }`
+/// in a system reading this message during the same tick; if no system
+/// vetoes, the backend closes the window and the app exits.
 ///
 /// Vetoing here mirrors `QCloseEvent::ignore()` and GTK4's
 /// `close-request -> TRUE`.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct CloseRequest {
+    /// What asked for the close. A veto carries the reason of the request
+    /// it answers.
+    pub reason: CloseReason,
     /// Set by an app system to keep the window open.
     pub vetoed: bool,
+}
+
+/// What asked the window to close, carried on [`CloseRequest`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CloseReason {
+    /// The platform: the window's close button, a window-manager shortcut
+    /// such as Alt+F4, or the taskbar.
+    #[default]
+    Platform,
+    /// The process is being stopped from outside the app: an interrupt or
+    /// termination signal, Ctrl+C in the console, or the end of a bounded
+    /// headless run.
+    Shutdown,
+    /// The app closed its window (`window.close()`).
+    WindowClose,
+    /// The app asked to quit (`app.quit()`).
+    AppQuit,
 }

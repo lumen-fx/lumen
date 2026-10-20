@@ -201,6 +201,9 @@ pub struct History;
 /// The `window.location` handle (parsed current URL parts).
 #[derive(Debug, Clone, Copy)]
 pub struct Location;
+/// The `app` namespace handle (`app.quit()`).
+#[derive(Debug, Clone, Copy)]
+pub struct AppNs;
 
 /// Register the fluent DOM mutators on `Node` (phases 2 + 3). Every mutator
 /// pushes a [`ScriptCommand`] into the shared sink and returns the receiver
@@ -612,6 +615,7 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
     engine.register_type_with_name::<Document>("Document");
     engine.register_type_with_name::<History>("History");
     engine.register_type_with_name::<Location>("Location");
+    engine.register_type_with_name::<AppNs>("App");
 
     // window navigation + state.
     engine.register_fn(
@@ -659,6 +663,20 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
                 });
             },
         );
+    }
+    // Close this window through the veto path its close button takes; quit
+    // asks every window, and a veto cancels it.
+    {
+        let s = sink.clone();
+        engine.register_fn("close", move |_w: &mut Window| {
+            s.lock().push(ScriptCommand::WindowClose);
+        });
+    }
+    {
+        let s = sink.clone();
+        engine.register_fn("quit", move |_a: &mut AppNs| {
+            s.lock().push(ScriptCommand::AppQuit);
+        });
     }
 
     // window.location parts. The path is the page Lumen resolved; the query
@@ -1984,6 +2002,7 @@ impl RhaiHost {
         scope.push_constant("window", Window);
         scope.push_constant("document", Document);
         scope.push_constant("history", History);
+        scope.push_constant("app", AppNs);
 
         let mut host = Self {
             engine,
@@ -2082,6 +2101,7 @@ impl RhaiHost {
         self.scope.push_constant("window", Window);
         self.scope.push_constant("document", Document);
         self.scope.push_constant("history", History);
+        self.scope.push_constant("app", AppNs);
         self.sink.lock().clear();
         self.signals_local.lock().clear();
         if let Ok(mut h) = self.handlers.write() {
@@ -2973,6 +2993,20 @@ lumen_module::lumen_module!(
 #[cfg(test)]
 mod error_drain_tests {
     use super::*;
+
+    /// `window.close()` and `app.quit()` queue the requests the window
+    /// driver answers through the close veto path.
+    #[test]
+    fn close_and_quit_queue_their_requests() {
+        let mut host = RhaiHost::new();
+        host.load("fn bye() { window.close(); app.quit(); }")
+            .expect("compile inline script");
+        let out = ScriptHost::call(&mut host, "bye", &[]).expect("bye runs");
+        assert!(matches!(
+            &out.commands[..],
+            [ScriptCommand::WindowClose, ScriptCommand::AppQuit]
+        ));
+    }
 
     /// A handler that queues a command and then raises keeps the command:
     /// the failure carries it to the runtime, which applies it the way a

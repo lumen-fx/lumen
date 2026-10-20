@@ -1889,13 +1889,17 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 ) {
     // Veto responses (`vetoed: true`) circulate on the same bus; only
     // genuine backend-emitted requests trigger the hook.
-    let requests = cursor.read(&msgs).filter(|ev| !ev.vetoed).count();
-    let mut veto = false;
-    for _ in 0..requests {
+    let requests: Vec<_> = cursor
+        .read(&msgs)
+        .filter(|ev| !ev.vetoed)
+        .map(|ev| ev.reason)
+        .collect();
+    let mut veto = None;
+    for reason in requests {
         match host.call("on_close", &[]) {
             Ok(outcome) => {
                 if matches!(&outcome.ret, Some(ScriptValue::Bool(false))) {
-                    veto = true;
+                    veto = Some(reason);
                 }
                 forward_outcome(outcome, &mut out);
             }
@@ -1907,8 +1911,11 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
             }
         }
     }
-    if veto {
-        msgs.write(lumen_core::input::CloseRequest { vetoed: true });
+    if let Some(reason) = veto {
+        msgs.write(lumen_core::input::CloseRequest {
+            reason,
+            vetoed: true,
+        });
     }
 }
 

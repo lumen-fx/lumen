@@ -10,8 +10,71 @@
 //! The menu tree ([`MenuModel`], [`Menu`], [`MenuEntry`]) is pure data: it
 //! says what the menu bar contains, not how a platform draws it.
 //! `lumen-os-menu` re-exports these types and owns the native attach.
+//!
+//! Once the app runs, its window is an entity in the main world carrying
+//! [`Window`] and [`PrimaryWindow`]. [`Window`] is the state the app wants
+//! the window to have; the window backend applies a change to the platform
+//! window and writes back what the platform settled on. The app asks for the
+//! window to close, or for the whole app to quit, with [`WindowRequest`] and
+//! [`QuitRequest`]; the backend answers both through the
+//! [`crate::input::CloseRequest`] veto path.
+
+use bevy_ecs::prelude::*;
+use glam::Vec2;
 
 use crate::components::Color;
+
+/// The app's window as the app wants it to be.
+///
+/// Lives on the window entity, next to [`PrimaryWindow`]. App code (the
+/// `window.set_title` / `window.set_size` script calls, the C ABI, the SDKs,
+/// a Rust system) writes the fields; the window backend applies what changed
+/// to the platform window after the tick, and writes back the size the
+/// platform settled on when the window is resized from outside the app.
+/// What the window has right now is what the `window.title()` /
+/// `window.size()` getters report, through [`crate::window_state`].
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Window {
+    /// Window title.
+    pub title: String,
+    /// Inner size in logical pixels.
+    pub size: Vec2,
+}
+
+/// Marks the app's first window: the one a launch opens, and the one
+/// `window.*` calls apply to.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PrimaryWindow;
+
+/// The primary window's entity, if the app has a window.
+pub fn primary_window(world: &mut World) -> Option<Entity> {
+    world
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .iter(world)
+        .next()
+}
+
+/// A request from the app to its window backend.
+///
+/// The backend reads these after each tick and obeys them; a run with no
+/// display obeys them the same way, so a script that closes its window
+/// behaves alike headless and on screen.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowRequest {
+    /// Close the window (`window.close()`). The close runs the same veto
+    /// path the window's close button does: [`crate::input::CloseRequest`]
+    /// with [`crate::input::CloseReason::WindowClose`], and an `on_close`
+    /// hook can keep the window open.
+    Close,
+}
+
+/// A request from the app to quit (`app.quit()`).
+///
+/// Every window is asked to close through the
+/// [`crate::input::CloseRequest`] veto path, with
+/// [`crate::input::CloseReason::AppQuit`]; a veto cancels the quit.
+#[derive(Message, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuitRequest;
 
 /// Fallback GPU clear color painted before the very first frame - what a
 /// user sees for an instant during window creation, and behind any pixel

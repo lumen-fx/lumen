@@ -200,6 +200,7 @@ FFI frames is undefined behavior.
 | Dynamic DOM | `lumen::dom` - `spawn`, `get_by_id`, `query`, `Node`, `Event`, `Listener` | `lumen_node_*`, `lumen_dom_*` |
 | Colors | `lumen::Color` - `from_hex`, `to_hex` | RGBA bytes |
 | Navigation | `lumen::navigate`, `navigate_back`, `navigate_forward`, `current_page` | `lumen_navigate*`, `lumen_current_page` |
+| Window | `lumen::window` - `title`, `set_title`, `size`, `set_size`, `dpr`, `close`; `lumen::App::quit` | `lumen_window_*`, `lumen_app_quit` |
 | Values | `lumen::Value` (nil/bool/int/float/string/array/map), `lumen::Args` | `LumenValue`, `LumenFn` |
 | Errors | `lumen::Error`, `last_error()`, `status_message()` | `lumen_last_error`, `lumen_status_message` |
 

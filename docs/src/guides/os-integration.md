@@ -43,7 +43,7 @@ Selecting an item calls `on_menu`:
 
 ```rhai
 fn on_menu(id) {
-    if id == "file-quit" { /* ... */ }
+    if id == "file-quit" { app.quit(); }
 }
 ```
 

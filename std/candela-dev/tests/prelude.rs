@@ -381,6 +381,25 @@ fn main() {}
     );
 }
 
+/// `window::close()` and `app::quit()` come with the prelude and queue the
+/// requests the window driver answers through the close veto path.
+#[test]
+fn prelude_grants_close_and_quit() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn close_it() { window::close(); }
+fn quit_it() { app::quit(); }
+fn main() {}
+"#;
+    host.load(src, "close_app.cdl")
+        .expect("window::close and app::quit compile via the prelude");
+    let out = host.call("close_it", &[]).expect("close_it ok");
+    assert!(matches!(&out.commands[..], [ScriptCommand::WindowClose]));
+    let out = host.call("quit_it", &[]).expect("quit_it ok");
+    assert!(matches!(&out.commands[..], [ScriptCommand::AppQuit]));
+}
+
 /// The prelude also grants the color scheme and the file-based page
 /// navigation. Scheme changes ride the command sink; navigation rides the
 /// host-neutral `lumen_core::nav` bus, so `page(path)` is observable through

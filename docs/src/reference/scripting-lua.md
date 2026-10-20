@@ -59,7 +59,7 @@ Define these as global functions. Each is optional; a missing hook is a no-op.
 | --- | --- |
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `get_by_id` returns `nil`. |
 | `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here, including inside the `<if>` and `<for>` bodies the signals `on_start` wrote open. Re-armed after a hot reload, so it runs again on the fresh tree. |
-| `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
+| `on_close()` | Before the window closes: on its close button, an interrupt signal, or the app's own window close or quit. Return `false` to veto the close and keep the window open. |
 | `on_archive_done(tag, dest, count)` | When an extraction started through the `lumen-archive` module finishes; `count` is the number of files written. |
 | `on_archive_error(tag, message)` | When an extraction started through the `lumen-archive` module is refused or fails. |
 | `on_audio_end(path)` | When a track played through the `lumen-audio` module reaches its end; `path` is the path passed to `audio_play`. |
@@ -434,20 +434,26 @@ the handler with `open_menu_at`.
 Two types have a default action: `click` (link navigation) and `contextmenu`
 (the browser's own menu, in a web build). `prevent_default` skips it.
 
-## window, document, history
+## window, document, history, app
 
 Pre-bound global tables.
+
+The window setters ask for a change, which the window takes after the tick:
+the getters report what the window has, so a new title or size reads back on a
+later tick. The window manager may refuse or adjust a size; a tiling window
+manager sizes windows itself.
 
 | Call | Returns | Behaviour |
 | --- | --- | --- |
 | `window.set_href(path)` | | Navigate to a page path. |
 | `window.href()` | string | The current page path. |
 | `window.reload()` | | Re-navigate to the current page. |
-| `window.title()` | string | Window title. |
-| `window.set_title(title)` | | Set the window title. |
+| `window.title()` | string | The title the window has. |
+| `window.set_title(title)` | | Ask for a new window title. |
 | `window.dpr()` | number | Device pixel ratio. |
-| `window.size()` | table | `{ width, height }` in logical pixels. |
-| `window.set_size(width, height)` | | Resize the window, in logical pixels. |
+| `window.size()` | table | `{ width, height }` the window has, in logical pixels. |
+| `window.set_size(width, height)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
+| `window.close()` | | Close the window. `on_close` runs first and can keep it open; closing the only window ends the app. |
 | `window.location.path()` | string | The current page path. |
 | `window.location.query()` | string | The query string of the request the document is being rendered for, without the leading `?`. |
 | `window.location.hash()` | string | The fragment of the request the document is being rendered for, without the leading `#`. |
@@ -460,6 +466,7 @@ Pre-bound global tables.
 | `document.focused()` | `Node` or `nil` | The focused element. |
 | `document.hovered()` | `Node` or `nil` | The innermost element under the pointer. |
 | `document.create(tag)` | `Node` | Create a detached element. |
+| `app.quit()` | | Quit the app. `on_close` runs first and can cancel the quit. |
 
 ## Page navigation
 

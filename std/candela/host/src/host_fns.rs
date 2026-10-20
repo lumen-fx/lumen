@@ -88,6 +88,7 @@ pub const RESIDUAL_DECLARATIONS: &[(&str, &str)] = &[
     ("window", "float[] size();"),
     ("window", "set_title(string);"),
     ("window", "set_size(float, float);"),
+    ("window", "close();"),
     ("window", "string location_path();"),
     ("window", "string location_query();"),
     ("window", "string location_hash();"),
@@ -100,6 +101,7 @@ pub const RESIDUAL_DECLARATIONS: &[(&str, &str)] = &[
     ("document", "int focused();"),
     ("document", "int hovered();"),
     ("document", "int create(string);"),
+    ("app", "quit();"),
 ];
 
 /// A surface that binds candela `host` declarations to Rust closures.
@@ -897,8 +899,8 @@ fn register_event_bindings<S: HostFnSink>(engine: &mut S, r: &Registries) {
     }
 }
 
-/// Register the `window` / `document` / `history` namespaces (section 4.8)
-/// for candela. Unlike per-node handles, candela namespaces
+/// Register the `window` / `document` / `history` / `app` namespaces
+/// (section 4.8) for candela. Unlike per-node handles, candela namespaces
 /// (`window.set_href(..)`) compile today, so these bind natively. Each is a
 /// separate host namespace the app declares with its own `host "..." { ... }`
 /// block.
@@ -942,6 +944,20 @@ fn register_web_namespaces<S: HostFnSink>(engine: &mut S, r: &Registries) {
                 width: w as f32,
                 height: h as f32,
             });
+        });
+    }
+    // Close this window through the same veto path its close button takes.
+    {
+        let sink = r.sink.clone();
+        engine.register_host_fn("window", "close", move || {
+            sink.lock().unwrap().push(ScriptCommand::WindowClose);
+        });
+    }
+    // Quit the app: every window is asked to close, and a veto cancels it.
+    {
+        let sink = r.sink.clone();
+        engine.register_host_fn("app", "quit", move || {
+            sink.lock().unwrap().push(ScriptCommand::AppQuit);
         });
     }
     // window.location parts as flat `location_*` fns (candela has no nested
