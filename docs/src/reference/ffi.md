@@ -239,7 +239,8 @@ returns `LUMEN_ERR_INVALID_HANDLE`.
 
 The setters ask for a change, which the window takes after the tick; the
 getters report what the window has, so a new title or size reads back on a
-later tick. The window manager may refuse or adjust a size.
+later tick. The window manager may refuse or adjust a size. A maximized
+window is restored to take a new size.
 
 | Function | Behaviour |
 | --- | --- |

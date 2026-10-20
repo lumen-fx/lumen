@@ -2546,8 +2546,6 @@ pub fn access() -> lumen_script::ScriptHostAccess {
     lumen_script::ScriptHostAccess::of::<LuaHost>(|_| Vec::new())
 }
 
-// The module entry: whether the loader opened this crate's library or found
-// it linked in, installing it registers the language.
 #[cfg(test)]
 mod window_tests {
     use super::*;
@@ -2570,6 +2568,8 @@ mod window_tests {
     }
 }
 
+// The module entry: whether the loader opened this crate's library or found
+// it linked in, installing it registers the language.
 lumen_module::lumen_module!(
     "lumen-lua",
     |_config: lumen_module::ModuleConfig| LuaPlugin,

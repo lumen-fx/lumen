@@ -442,7 +442,8 @@ Pre-bound scope constants.
 The window setters ask for a change, which the window takes after the tick:
 the getters report what the window has, so a new title or size reads back on a
 later tick. The window manager may refuse or adjust a size; a tiling window
-manager sizes windows itself.
+manager sizes windows itself. A maximized window is restored to take a new
+size.
 
 | Call | Returns | Behaviour |
 | --- | --- | --- |

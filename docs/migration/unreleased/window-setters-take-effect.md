@@ -11,8 +11,9 @@ the window on screen kept its title and size. They now change the window.
 The getters report what the window has, so they read the new title or size on
 a later tick, once the window has it, rather than straight after the call. A
 size the window manager refuses or adjusts reads back as the size the window
-got. A size with a side that is not positive is ignored, and the C ABI returns
-`LUMEN_ERR_BAD_ARG` for it.
+got. A maximized window is restored to take the new size. A size with a side
+that is not positive is ignored, and the C ABI returns `LUMEN_ERR_BAD_ARG` for
+it.
 
 An app that called these and relied on the window not changing should drop
 the calls. An app that read a size back in the same handler that set it should

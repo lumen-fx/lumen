@@ -1390,6 +1390,13 @@ impl WinitHandler {
         }
         if let Some(size) = size {
             self.applied_size = size;
+            // A maximized window has the size the screen gives it and keeps
+            // a size request for later (Windows) or refuses it (window
+            // managers). Asking for a size leaves the maximized state
+            // first, as the window's restore button does.
+            if window.is_maximized() {
+                window.set_maximized(false);
+            }
             let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
             // `Some` means the platform applied the size at once and may
             // send no `Resized`; take it the way a resize event lands.
