@@ -197,7 +197,17 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// only ever read through the pointer the runtime hands a callback, and the
 /// fields before the new ones keep their offsets, so a callback built against
 /// 0.14 reads its fields unchanged; additive, so a minor bump.
-pub const LUMEN_ABI_MINOR: u32 = 15;
+///
+/// 0.16 gave the window entry points a window: [`LumenWindow`] (the window
+/// entity's packed bits, [`LUMEN_WINDOW_CURRENT`] for the current window) is
+/// now the first parameter of [`lumen_window_set_title`],
+/// [`lumen_window_set_size`] and [`lumen_window_dpr`], which until now
+/// changed a cache the window never read and now change the window. Added
+/// [`lumen_window_title`], [`lumen_window_size`], [`lumen_window_close`]
+/// (close through the [`lumen_app_on_close`] veto path) and
+/// [`lumen_app_quit`]. Kept names changed arity, so embedders rebuild against
+/// the new header rather than relinking.
+pub const LUMEN_ABI_MINOR: u32 = 16;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -388,10 +398,10 @@ pub type LumenFn = unsafe extern "C" fn(
 pub type LumenClickFn = unsafe extern "C" fn(id: *const c_char, user_data: *mut c_void);
 
 /// App-level close callback (ABI 0.5). Registered with
-/// [`lumen_app_on_close`]; invoked once per OS close request - the
-/// window close button, or (Unix) the first SIGINT/SIGTERM - *before*
-/// the runtime tears anything down, so embedders get a last chance to
-/// persist state.
+/// [`lumen_app_on_close`]; invoked once per close request - the window
+/// close button, (Unix) the first SIGINT/SIGTERM, [`lumen_window_close`],
+/// or [`lumen_app_quit`] - *before* the runtime tears anything down, so
+/// embedders get a last chance to persist state.
 ///
 /// Return nonzero to allow the close (the loop exits and `lumen_app_run`
 /// returns), or 0 to veto it and keep the window open - mirroring the
@@ -816,14 +826,15 @@ pub unsafe extern "C" fn lumen_app_on_click(
 
 /// Register an app-level close hook (ABI 0.5).
 ///
-/// `cb` fires once per OS close request - the window close button, or
-/// (Unix) the first SIGINT/SIGTERM - on the Lumen tick thread, *before*
-/// the runtime tears down the window, GPU state, or script host. Return
-/// nonzero to allow the close; return 0 to veto it and keep the window
-/// open (the hook fires again on the next close request). A second
-/// registration **replaces** the first. Must be called before
-/// `lumen_app_run`. The hook never fires under `lumen_app_run_headless`
-/// (no window, no OS close request).
+/// `cb` fires once per close request - the window close button, (Unix)
+/// the first SIGINT/SIGTERM, [`lumen_window_close`], or [`lumen_app_quit`] -
+/// on the Lumen tick thread, *before* the runtime tears down the window,
+/// GPU state, or script host. Return nonzero to allow the close; return 0
+/// to veto it and keep the window open (the hook fires again on the next
+/// close request). A second registration **replaces** the first. Must be
+/// called before `lumen_app_run`. Under `lumen_app_run_headless` the hook
+/// fires only for [`lumen_window_close`] and [`lumen_app_quit`]: there is
+/// no OS close request.
 ///
 /// The native hook coexists with any script-side `on_close()` - both
 /// observe the same close request, and either may veto it.
@@ -1200,10 +1211,10 @@ fn build_run_options(app: LumenApp) -> RunOptions {
     }
 
     // App-level close hook (ABI 0.5). The window backend emits
-    // `CloseRequest { vetoed: false }` on the OS close request and runs
+    // `CloseRequest { vetoed: false, .. }` on a close request and runs
     // one veto tick before tearing anything down; this system observes
     // the request during that tick, calls the native hook, and - when
-    // the hook returns 0 - writes `CloseRequest { vetoed: true }` so the
+    // the hook returns 0 - writes `CloseRequest { vetoed: true, .. }` so the
     // backend keeps the window open (the same veto protocol app systems
     // and the script-side `on_close()` use). Reads the buffer through a
     // `MessageCursor` because the veto write needs `ResMut` access to
@@ -1217,16 +1228,23 @@ fn build_run_options(app: LumenApp) -> RunOptions {
             app.add_systems(
                 TickStage::Systems,
                 move |mut msgs: bevy_ecs::system::ResMut<Messages<CloseRequest>>| {
-                    let requests = cursor.read(&msgs).filter(|ev| !ev.vetoed).count();
-                    let mut veto = false;
-                    for _ in 0..requests {
+                    let requests: Vec<_> = cursor
+                        .read(&msgs)
+                        .filter(|ev| !ev.vetoed)
+                        .map(|ev| ev.reason)
+                        .collect();
+                    let mut veto = None;
+                    for reason in requests {
                         let allow = unsafe { close_cb(close_ud.as_ptr()) };
                         if allow == 0 {
-                            veto = true;
+                            veto = Some(reason);
                         }
                     }
-                    if veto {
-                        msgs.write(CloseRequest { vetoed: true });
+                    if let Some(reason) = veto {
+                        msgs.write(CloseRequest {
+                            reason,
+                            vetoed: true,
+                        });
                     }
                 },
             );
@@ -3398,10 +3416,38 @@ pub unsafe extern "C" fn lumen_window_reload() -> LumenStatus {
     })
 }
 
-/// `window.set_title`. Thread-safe.
+/// A window handle: the window entity's packed bits, like [`LumenNode`].
+/// [`LUMEN_WINDOW_CURRENT`] names the current window: the window of the
+/// event being handled, else the primary window.
+pub type LumenWindow = u64;
+
+/// The current window: the window of the event being handled, else the
+/// primary window.
+pub const LUMEN_WINDOW_CURRENT: LumenWindow = 0;
+
+/// Check that `window` names a window this app has: [`LUMEN_WINDOW_CURRENT`]
+/// or the primary window's handle.
+fn ffi_window(window: LumenWindow, ctx: &str) -> Result<(), LumenStatus> {
+    if window == LUMEN_WINDOW_CURRENT || window == lumen_core::window_state::primary_handle() {
+        Ok(())
+    } else {
+        set_last_error(format!("{ctx}: no window with handle {window}"));
+        Err(LumenStatus::ErrInvalidHandle)
+    }
+}
+
+/// `window.set_title`: ask for a new title. The window backend applies it
+/// after the tick; [`lumen_window_title`] reports the title the window has.
+/// Thread-safe.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_window_set_title(title: *const c_char) -> LumenStatus {
+pub unsafe extern "C" fn lumen_window_set_title(
+    window: LumenWindow,
+    title: *const c_char,
+) -> LumenStatus {
     catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_set_title") {
+            return status;
+        }
         let title = match ffi_selector(title, "lumen_window_set_title") {
             Ok(s) => s,
             Err(status) => return status,
@@ -3410,17 +3456,83 @@ pub unsafe extern "C" fn lumen_window_set_title(title: *const c_char) -> LumenSt
     })
 }
 
-/// `window.set_size` in logical pixels. Thread-safe.
+/// `window.title`: read the title the window has into `buf` (UTF-8 +
+/// trailing NUL), following the shared string-out convention: on success
+/// `*out_len` (when non-null) is the byte length excluding the NUL; when
+/// `buf` is null or too small, `*out_len` is set to the required capacity
+/// and [`LumenStatus::ErrBufferTooSmall`] is returned. Thread-safe.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_window_set_size(width: f32, height: f32) -> LumenStatus {
-    catch(|| push_dom(lumen_script::ScriptCommand::WindowSetSize { width, height }))
+pub unsafe extern "C" fn lumen_window_title(
+    window: LumenWindow,
+    buf: *mut c_char,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> LumenStatus {
+    catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_title") {
+            return status;
+        }
+        write_string_out(&lumen_core::window_state::title(), buf, buf_len, out_len)
+    })
 }
 
-/// `window.dpr`: current device-pixel ratio, written to `*out`.
+/// `window.set_size`: ask for a new inner size in logical pixels. The window
+/// manager may refuse or adjust it; [`lumen_window_size`] reports the size
+/// the window has. A size that is not two positive finite numbers returns
+/// [`LumenStatus::ErrBadArg`]. Thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_window_set_size(
+    window: LumenWindow,
+    width: f32,
+    height: f32,
+) -> LumenStatus {
+    catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_set_size") {
+            return status;
+        }
+        if !lumen_core::window_backend::is_window_size(width, height) {
+            set_last_error(format!(
+                "lumen_window_set_size: {width} x {height} is not a window size"
+            ));
+            return LumenStatus::ErrBadArg;
+        }
+        push_dom(lumen_script::ScriptCommand::WindowSetSize { width, height })
+    })
+}
+
+/// `window.size`: the window's inner size in logical pixels, written to
+/// `*width` and `*height`. Thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_window_size(
+    window: LumenWindow,
+    width: *mut f32,
+    height: *mut f32,
+) -> LumenStatus {
+    catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_size") {
+            return status;
+        }
+        if width.is_null() || height.is_null() {
+            set_last_error("lumen_window_size: null out");
+            return LumenStatus::ErrBadArg;
+        }
+        let (w, h) = lumen_core::window_state::size();
+        unsafe {
+            *width = w;
+            *height = h;
+        }
+        LumenStatus::Ok
+    })
+}
+
+/// `window.dpr`: the window's device-pixel ratio, written to `*out`.
 /// Thread-safe.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_window_dpr(out: *mut f32) -> LumenStatus {
+pub unsafe extern "C" fn lumen_window_dpr(window: LumenWindow, out: *mut f32) -> LumenStatus {
     catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_dpr") {
+            return status;
+        }
         if out.is_null() {
             set_last_error("lumen_window_dpr: null out");
             return LumenStatus::ErrBadArg;
@@ -3428,6 +3540,27 @@ pub unsafe extern "C" fn lumen_window_dpr(out: *mut f32) -> LumenStatus {
         unsafe { *out = lumen_core::window_state::dpr() };
         LumenStatus::Ok
     })
+}
+
+/// `window.close`: close the window through the same veto path its close
+/// button takes, so a [`lumen_app_on_close`] hook (or a script's `on_close`)
+/// can keep it open. Closing the only window ends the app. Thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_window_close(window: LumenWindow) -> LumenStatus {
+    catch(|| {
+        if let Err(status) = ffi_window(window, "lumen_window_close") {
+            return status;
+        }
+        push_dom(lumen_script::ScriptCommand::WindowClose)
+    })
+}
+
+/// `app.quit`: ask the running app to quit. Every window is asked to close,
+/// and a veto from any close hook cancels the quit. Thread-safe; takes no
+/// [`LumenApp`] because [`lumen_app_run`] consumes the handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_app_quit() -> LumenStatus {
+    catch(|| push_dom(lumen_script::ScriptCommand::AppQuit))
 }
 
 /// `history.go(delta)`: step `delta` entries (negative back, positive

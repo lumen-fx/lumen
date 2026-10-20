@@ -120,7 +120,8 @@ replaces that part of it.
 | --- | --- |
 | `LumenStatus lumen_app_expose(LumenApp *app, const char *name, uint32_t arg_count, LumenFn func, void *user_data)` | Expose a native function to the app's script under `name`, with the given arity. |
 | `LumenStatus lumen_app_on_click(LumenApp *app, const char *id, LumenClickFn cb, void *user_data)` | Route clicks on the element with that `id` to a native callback. A second registration for the same id replaces the first. Register before `lumen_app_run`. Not delivered under `lumen_app_run_headless`, which injects no input. |
-| `LumenStatus lumen_app_on_close(LumenApp *app, LumenCloseFn cb, void *user_data)` | Register a close hook. It fires on an OS close request before teardown; return non-zero to allow the close, `0` to veto. A second registration replaces the first. On Unix a second SIGINT or SIGTERM bypasses the hook. Does not fire under `lumen_app_run_headless`. |
+| `LumenStatus lumen_app_on_close(LumenApp *app, LumenCloseFn cb, void *user_data)` | Register a close hook. It fires before the window closes, on its close button, a signal, `lumen_window_close`, or `lumen_app_quit`; return non-zero to allow the close, `0` to veto. A second registration replaces the first. On Unix a second SIGINT or SIGTERM bypasses the hook. Under `lumen_app_run_headless` it fires for `lumen_window_close` and `lumen_app_quit` only. |
+| `LumenStatus lumen_app_quit(void)` | Ask the running app to quit, from a callback while `lumen_app_run` blocks. Every window is asked to close, and a veto from the close hook cancels the quit. Takes no `LumenApp`, which `lumen_app_run` consumed. |
 | `LumenStatus lumen_signal_watch(const char *name, LumenWatchFn cb, void *user_data)` | Subscribe to changes of a global signal. Fires once per tick in which the value commits, plus once with the current value on the first tick after registration. Registration is global, independent of any app handle, and additive: a second watch on the same name adds a second watcher. Fires only while the app runs. |
 
 Callback types:
@@ -231,11 +232,23 @@ bool, and color getters do see such writes.
 
 ## Window
 
+`LumenWindow` is a window handle, a `uint64_t` like `LumenNode`.
+`LUMEN_WINDOW_CURRENT` (`0`) names the current window: the window of the event
+being handled, else the app's main window. A handle that names no window
+returns `LUMEN_ERR_INVALID_HANDLE`.
+
+The setters ask for a change, which the window takes after the tick; the
+getters report what the window has, so a new title or size reads back on a
+later tick. The window manager may refuse or adjust a size.
+
 | Function | Behaviour |
 | --- | --- |
-| `lumen_window_set_title(const char *title)` | Set the window title. |
-| `lumen_window_set_size(float width, float height)` | Resize the window, in logical pixels. |
-| `lumen_window_dpr(float *out)` | Current device pixel ratio. |
+| `lumen_window_set_title(LumenWindow window, const char *title)` | Ask for a new window title. |
+| `lumen_window_title(LumenWindow window, char *buf, size_t buf_len, size_t *out_len)` | The title the window has, string-out convention. |
+| `lumen_window_set_size(LumenWindow window, float width, float height)` | Ask for a new window size, in logical pixels. A side that is not positive returns `LUMEN_ERR_BAD_ARG`. |
+| `lumen_window_size(LumenWindow window, float *width, float *height)` | The size the window has, in logical pixels. |
+| `lumen_window_dpr(LumenWindow window, float *out)` | The window's device pixel ratio. |
+| `lumen_window_close(LumenWindow window)` | Close the window. The close hook runs first and can keep it open; closing the only window ends the app. |
 
 ## Query and traverse
 
@@ -357,8 +370,9 @@ Header-only C++17 bindings over the C ABI, in `sdk/cpp`. One include,
 
 The surface is `lumen::App` for lifecycle and callbacks, `lumen::Signal<T>` for
 typed reactive handles (`int64_t`, `double`, `bool`, `std::string`,
-`lumen::Color`), `lumen::dom` for the element tree, `lumen::Value` and
-`lumen::Args` for exposed callbacks, and `lumen::raw` for the unwrapped C calls.
+`lumen::Color`), `lumen::dom` for the element tree, `lumen::window` and
+`lumen::App::quit` for the app's window, `lumen::Value` and `lumen::Args` for
+exposed callbacks, and `lumen::raw` for the unwrapped C calls.
 Lifecycle failures throw `lumen::Error`, carrying the status code and the
 last-error text; the signal surface does not throw and returns
 `std::optional<T>` where a value may be absent. No C++ exception crosses back
@@ -396,7 +410,8 @@ Rust library is the only thing to build.
 The surface is `lumen.Model` and `lumen.Field` for declarative reactive state,
 `lumen.Signal[T]` for a single typed signal, `lumen.computed` for derived
 values, `signal.watch` for change subscriptions, `lumen.dom` for the element
-tree, and `lumen.raw` for the unwrapped C calls. A non-OK status raises a
+tree, `lumen.window` and `App.quit` for the app's window, and `lumen.raw` for
+the unwrapped C calls. A non-OK status raises a
 dedicated exception under `lumen.LumenError`. The package ships a `py.typed`
 marker, so the annotations drive type checkers and completion.
 
@@ -794,6 +809,23 @@ can use: the build script reads the `tag` of every `#[widget(...)]` in the
 crate's `src/`, so the UI compiles with it, and the plugin the derive
 generates, added with `add_plugin`, makes the element at run time. A widget
 from another crate is not seen by the compile.
+
+### The window
+
+`lumenui::dom::window` reads and changes the app's window: `title`,
+`set_title`, `size`, `set_size`, `dpr`, and `close`. `lumenui::dom::app::quit`
+quits the app. The setters ask for a change, which the window takes after the
+tick, and the getters report what the window has. `close` and `quit` run the
+close hooks first, as the window's close button does.
+
+A system that wants to keep the window open reads
+`lumenui::lumen_core::input::CloseRequest`, whose `reason` says what asked
+(`Platform` for the close button, `Shutdown` for a signal, `WindowClose` and
+`AppQuit` for the app itself), and writes a `CloseRequest { vetoed: true, .. }`
+in the same tick. The window is an entity carrying
+`lumenui::lumen_core::window::Window` and `PrimaryWindow`; a system may write
+`Window`'s `title` and `size` directly, which is what `set_title` and
+`set_size` do.
 
 ### Crash reports
 

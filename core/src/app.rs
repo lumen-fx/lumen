@@ -360,10 +360,11 @@ impl App {
         // `on_close` dispatcher, the C-ABI `lumen_app_on_close` router,
         // and SDK systems - can rely on the resource existing in every
         // context, including headless runs that never install a window
-        // backend. Window backends write `CloseRequest { vetoed: false }`
-        // on an OS close request (window button, SIGINT/SIGTERM); a
-        // system that wants to keep the window open writes a fresh
-        // `CloseRequest { vetoed: true }` on the same tick.
+        // backend. Window backends write `CloseRequest { vetoed: false, .. }`
+        // on a close request (window button, SIGINT/SIGTERM,
+        // `window.close()`, `app.quit()`); a system that wants to keep the
+        // window open writes a fresh `CloseRequest { vetoed: true, .. }` on
+        // the same tick.
         MessageRegistry::register_message::<CloseRequest>(&mut world);
 
         // Install the main `Tick` schedule with a fixed five-stage ordering.
@@ -434,8 +435,11 @@ impl App {
         );
         s.add_systems(TickStage::Input, crate::tick::reset_wake_deadline);
         // `window.size()` / `window.dpr()` read a process-wide cache that
-        // scripts reach without a world; keep it on the live viewport.
+        // scripts reach without a world; keep it on the live viewport. At the
+        // start of the tick for a backend's write between ticks, and at the
+        // end for a write inside one (a headless window applying its size).
         s.add_systems(TickStage::Input, crate::window_state::publish_viewport);
+        s.add_systems(TickStage::A11ySync, crate::window_state::publish_viewport);
         // Wave-D dirty-queue lifecycle. `clear_signal_dirty` keeps the legacy
         // `Signals::dirty` set tidy for embedders that still hold a `Res<Signals>`
         // reference; `clear_property_store_dirty` runs against the canonical

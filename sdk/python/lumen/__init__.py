@@ -32,7 +32,7 @@ See ``lumen.errors`` for the exception hierarchy every ``lumen_*`` call
 can raise, and the package README for install/run instructions.
 """
 
-from . import dom, raw
+from . import dom, raw, window
 from ._version import __version__
 from .api import App, get_library
 from .dom import Event, Listener, Node
@@ -66,6 +66,7 @@ __all__ = [
     "computed",
     "raw",
     "dom",
+    "window",
     "Node",
     "Event",
     "Listener",

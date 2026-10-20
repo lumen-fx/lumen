@@ -810,7 +810,7 @@ declaring anything. An app that spells the block itself keeps it: the host skips
 a namespace the source already declares, which is what a script written against
 an older release, and an artifact built from one, rely on.
 
-`lumen`, `window`, `document` and `history` are the runtime's own namespaces and
+`lumen`, `window`, `document`, `history` and `app` are the runtime's own namespaces and
 the prelude declares them. A plugin that registers into one of them gets a
 warning and no declaration, because a second block for a namespace displaces the
 first and would cost the app every runtime function in it. Pick a name of your

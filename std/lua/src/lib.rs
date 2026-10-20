@@ -1962,6 +1962,14 @@ fn build_lua(
             "dpr",
             lua.create_function(|_, ()| Ok(lumen_core::window_state::dpr()))?,
         )?;
+        // Close this window through the veto path its close button takes.
+        window.set(
+            "close",
+            lua.create_function(|_, ()| {
+                lumen_script::node_query::push_external_dom_command(ScriptCommand::WindowClose);
+                Ok(())
+            })?,
+        )?;
         // window.location parts. The path is the page Lumen resolved; the
         // query and the fragment come from the request the document is being
         // rendered for, and are empty when there is none.
@@ -2007,6 +2015,17 @@ fn build_lua(
             })?,
         )?;
         g.set("history", history)?;
+
+        // app.quit(): every window is asked to close, and a veto cancels it.
+        let app = lua.create_table()?;
+        app.set(
+            "quit",
+            lua.create_function(|_, ()| {
+                lumen_script::node_query::push_external_dom_command(ScriptCommand::AppQuit);
+                Ok(())
+            })?,
+        )?;
+        g.set("app", app)?;
     }
 
     // -- Signal / ArraySignal factories --------------------------------
@@ -2529,6 +2548,28 @@ pub fn access() -> lumen_script::ScriptHostAccess {
 
 // The module entry: whether the loader opened this crate's library or found
 // it linked in, installing it registers the language.
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    /// `window.close()` and `app.quit()` queue the requests the window
+    /// driver answers through the close veto path.
+    #[test]
+    fn close_and_quit_queue_their_requests() {
+        let mut host = LuaHost::new();
+        host.load("function bye() window.close(); app.quit() end")
+            .expect("compile inline script");
+        let _ = lumen_script::node_query::drain_external_dom_commands();
+        ScriptHost::call(&mut host, "bye", &[]).expect("bye runs");
+        let queued = lumen_script::node_query::drain_external_dom_commands();
+        let close = queued
+            .iter()
+            .any(|c| matches!(c, ScriptCommand::WindowClose));
+        let quit = queued.iter().any(|c| matches!(c, ScriptCommand::AppQuit));
+        assert!(close && quit, "unexpected commands: {queued:?}");
+    }
+}
+
 lumen_module::lumen_module!(
     "lumen-lua",
     |_config: lumen_module::ModuleConfig| LuaPlugin,

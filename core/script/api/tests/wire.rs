@@ -408,6 +408,8 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
         ),
         ("RequestFrame", ScriptCommand::RequestFrame),
         ("SetLocale", ScriptCommand::SetLocale { tag: s("de-DE") }),
+        ("WindowClose", ScriptCommand::WindowClose),
+        ("AppQuit", ScriptCommand::AppQuit),
     ]
 }
 
@@ -557,6 +559,8 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
     ("QueryAutostart", "38000000010000000000000067"),
     ("RequestFrame", "39000000"),
     ("SetLocale", "3a000000050000000000000064652d4445"),
+    ("WindowClose", "3b000000"),
+    ("AppQuit", "3c000000"),
 ];
 
 const VALUE_GOLDEN: &[(&str, &str)] = &[

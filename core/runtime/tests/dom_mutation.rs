@@ -406,16 +406,113 @@ fn window_setters_apply_headlessly() {
     assert!(lumen_core::nav::navigate("settings"));
     h.settle();
 
-    // window.set_title / set_size flow through the DOM command applier and
-    // land in the state cache the getters read.
+    // window.set_title / set_size flow through the DOM command applier into
+    // the app's window, which a run with no display applies at once: the
+    // viewport takes the size, and the getters read what the window has.
     push_external_dom_command(ScriptCommand::WindowSetTitle {
         title: "Docs".into(),
     });
     push_external_dom_command(ScriptCommand::WindowSetSize {
-        width: 800.0,
-        height: 600.0,
+        width: 640.0,
+        height: 480.0,
     });
     h.settle();
     assert_eq!(lumen_core::window_state::title(), "Docs");
-    assert_eq!(lumen_core::window_state::size(), (800.0, 600.0));
+    assert_eq!(lumen_core::window_state::size(), (640.0, 480.0));
+    assert_eq!(
+        h.app
+            .world
+            .resource::<lumen_core::render_world::Viewport>()
+            .size,
+        glam::Vec2::new(640.0, 480.0),
+        "layout runs at the size the window took"
+    );
+
+    // A size no window can have is dropped.
+    push_external_dom_command(ScriptCommand::WindowSetSize {
+        width: 0.0,
+        height: 480.0,
+    });
+    h.settle();
+    assert_eq!(lumen_core::window_state::size(), (640.0, 480.0));
+}
+
+/// What a bounded headless run saw of the close path.
+#[derive(Default)]
+struct CloseLog {
+    ticks: u32,
+    reasons: Vec<lumen_core::input::CloseReason>,
+}
+
+static CLOSE_LOG: std::sync::Mutex<Option<CloseLog>> = std::sync::Mutex::new(None);
+
+/// Run `ticks` headless ticks of the harness app, pushing `cmd` on the third
+/// one, with a close hook that vetoes when `veto` is set. Returns the log.
+fn run_with_close(cmd: ScriptCommand, veto: bool, ticks: u32) -> CloseLog {
+    use bevy_ecs::message::{MessageCursor, Messages};
+    use lumen_core::input::CloseRequest;
+    use lumen_core::prelude::TickStage;
+
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = node_query::drain_external_dom_commands();
+    *CLOSE_LOG.lock().unwrap() = Some(CloseLog::default());
+    let dir = std::env::temp_dir().join(format!("lumen_dom_close_{}_{veto}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bytes = artifact::serialize(&CompiledApp::default()).unwrap();
+    let mut cmd = Some(cmd);
+    let mut cursor = MessageCursor::<CloseRequest>::default();
+    let opts = RunOptions::new(&dir)
+        .with_artifact_bytes(bytes)
+        .with_app_hook(move |app| {
+            app.add_systems(
+                TickStage::Systems,
+                move |mut msgs: bevy_ecs::system::ResMut<Messages<CloseRequest>>| {
+                    let mut log = CLOSE_LOG.lock().unwrap();
+                    let log = log.as_mut().unwrap();
+                    log.ticks += 1;
+                    if log.ticks == 3
+                        && let Some(cmd) = cmd.take()
+                    {
+                        push_external_dom_command(cmd);
+                    }
+                    let asked: Vec<_> = cursor
+                        .read(&msgs)
+                        .filter(|m| !m.vetoed)
+                        .map(|m| m.reason)
+                        .collect();
+                    for reason in asked {
+                        log.reasons.push(reason);
+                        if veto {
+                            msgs.write(CloseRequest {
+                                reason,
+                                vetoed: true,
+                            });
+                        }
+                    }
+                },
+            );
+        });
+    lumen_runtime::run_app_headless(opts, ticks).expect("headless run");
+    let _ = std::fs::remove_dir_all(&dir);
+    CLOSE_LOG.lock().unwrap().take().unwrap()
+}
+
+/// `app.quit()` ends a bounded headless run early, through the close hook.
+#[test]
+fn a_quit_ends_a_headless_run() {
+    let log = run_with_close(ScriptCommand::AppQuit, false, 50);
+    assert_eq!(log.reasons, [lumen_core::input::CloseReason::AppQuit]);
+    assert!(
+        log.ticks < 10,
+        "the run stopped after the quit: {} ticks",
+        log.ticks
+    );
+}
+
+/// `window.close()` asks the hook first, and a veto keeps the run going.
+#[test]
+fn a_vetoed_window_close_keeps_the_run_going() {
+    let log = run_with_close(ScriptCommand::WindowClose, true, 20);
+    assert_eq!(log.reasons, [lumen_core::input::CloseReason::WindowClose]);
+    assert_eq!(log.ticks, 21, "every tick ran, plus the veto tick");
 }

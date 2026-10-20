@@ -763,6 +763,12 @@ pub enum ScriptCommand {
         /// BCP-47 tag, such as `"de-DE"`.
         tag: String,
     },
+    /// Close the window (`window.close()`), through the same veto path the
+    /// window's close button takes: `on_close` runs and can keep it open.
+    WindowClose,
+    /// Quit the app (`app.quit()`): every window is asked to close, and a
+    /// veto from any `on_close` cancels the quit.
+    AppQuit,
 }
 
 impl ScriptCommand {
@@ -791,6 +797,8 @@ impl ScriptCommand {
                 | ScriptCommand::UnbindEvent { .. }
                 | ScriptCommand::WindowSetTitle { .. }
                 | ScriptCommand::WindowSetSize { .. }
+                | ScriptCommand::WindowClose
+                | ScriptCommand::AppQuit
         )
     }
 

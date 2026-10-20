@@ -755,8 +755,11 @@ pub mod document {
 }
 
 /// The `window` namespace (design 4.8): navigation + window state.
+///
+/// The setters ask for a change; the window backend applies it after the
+/// tick, and the getters report what the window has.
 pub mod window {
-    use super::lumen_core;
+    use super::{ScriptCommand, lumen_core, nq};
 
     /// Navigate to a page path (`window.location.href = ...`).
     pub fn set_href(path: &str) {
@@ -780,7 +783,9 @@ pub mod window {
 
     /// Set the window title.
     pub fn set_title(title: &str) {
-        lumen_core::window_state::set_title(title);
+        nq::push_external_dom_command(ScriptCommand::WindowSetTitle {
+            title: title.to_string(),
+        });
     }
 
     /// The window size in logical pixels `(width, height)`.
@@ -788,14 +793,32 @@ pub mod window {
         lumen_core::window_state::size()
     }
 
-    /// Resize the window (logical pixels).
+    /// Resize the window (logical pixels). The window manager may refuse or
+    /// adjust the size; [`size`] reports what the window has.
     pub fn set_size(width: f32, height: f32) {
-        lumen_core::window_state::set_size(width, height);
+        nq::push_external_dom_command(ScriptCommand::WindowSetSize { width, height });
     }
 
     /// The device-pixel ratio.
     pub fn dpr() -> f32 {
         lumen_core::window_state::dpr()
+    }
+
+    /// Close the window, through the same veto path its close button takes:
+    /// a close hook can keep it open. Closing the only window ends the app.
+    pub fn close() {
+        nq::push_external_dom_command(ScriptCommand::WindowClose);
+    }
+}
+
+/// The `app` namespace: the app as a whole.
+pub mod app {
+    use super::{ScriptCommand, nq};
+
+    /// Quit the app. Every window is asked to close, and a veto from any
+    /// close hook cancels the quit.
+    pub fn quit() {
+        nq::push_external_dom_command(ScriptCommand::AppQuit);
     }
 }
 

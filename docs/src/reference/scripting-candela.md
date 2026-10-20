@@ -72,7 +72,7 @@ Write the import in every `.cdl` file that uses the surface. An app's candela
 files join into one program and the declarations land once for the whole
 program, so a repeated import costs nothing.
 
-The prelude also declares the `window`, `document`, and `history` namespaces and
+The prelude also declares the `window`, `document`, `history`, and `app` namespaces and
 defines the `Node`, `Event`, `Signal<T>`, and `ArraySignal` method wrappers
 described below, plus the `Color` record a color signal reads back as.
 
@@ -191,7 +191,7 @@ Define these as free functions. Each is optional; a missing hook is a no-op.
 | --- | --- |
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `node_get_by_id` returns `0`. |
 | `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here, including inside the `<if>` and `<for>` bodies the signals `on_start` wrote open. Re-armed after a hot reload, so it runs again on the fresh tree. |
-| `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
+| `on_close()` | Before the window closes: on its close button, an interrupt signal, or the app's own window close or quit. Return `false` to veto the close and keep the window open. |
 | `on_archive_done(tag: string, dest: string, count: int)` | When an extraction started through the `lumen-archive` module finishes; `count` is the number of files written. |
 | `on_archive_error(tag: string, message: string)` | When an extraction started through the `lumen-archive` module is refused or fails. |
 | `on_audio_end(path: string)` | When a track played through the `lumen-audio` module reaches its end; `path` is the path passed to `audio_play`. |
@@ -772,20 +772,26 @@ lm_append(parent, tag, cls, text) -> int
 It creates a `tag` element, applies `cls` and `text` when they are non-empty,
 appends the result under `parent`, and returns the new handle.
 
-## window, document, history
+## window, document, history, app
 
 Each is its own host namespace, declared by the same prelude import.
+
+The window setters ask for a change, which the window takes after the tick:
+the getters report what the window has, so a new title or size reads back on a
+later tick. The window manager may refuse or adjust a size; a tiling window
+manager sizes windows itself.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `window::set_href(path: string)` | | Navigate to a page path. |
 | `window::href()` | `string` | The current page path. |
 | `window::reload()` | | Re-navigate to the current page. |
-| `window::title()` | `string` | Window title. |
-| `window::set_title(title: string)` | | Set the window title. |
+| `window::title()` | `string` | The title the window has. |
+| `window::set_title(title: string)` | | Ask for a new window title. |
 | `window::dpr()` | `float` | Device pixel ratio. |
-| `window::size()` | `float[]` | `[width, height]` in logical pixels. |
-| `window::set_size(width: float, height: float)` | | Resize the window, in logical pixels. |
+| `window::size()` | `float[]` | `[width, height]` the window has, in logical pixels. |
+| `window::set_size(width: float, height: float)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
+| `window::close()` | | Close the window. `on_close` runs first and can keep it open; closing the only window ends the app. |
 | `window::location_path()` | `string` | The current page path. |
 | `window::location_query()` | `string` | The query string of the request the document is being rendered for, without the leading `?`. |
 | `window::location_hash()` | `string` | The fragment of the request the document is being rendered for, without the leading `#`. |
@@ -798,6 +804,7 @@ Each is its own host namespace, declared by the same prelude import.
 | `document::focused()` | `int` | The focused element, or `0`. |
 | `document::hovered()` | `int` | The innermost element under the pointer, or `0`. |
 | `document::create(tag: string)` | `int` | Create a detached element. |
+| `app::quit()` | | Quit the app. `on_close` runs first and can cancel the quit. |
 
 ## Page navigation
 

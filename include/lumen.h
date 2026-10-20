@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 15u
+#define LUMEN_API_VERSION_MINOR 16u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \

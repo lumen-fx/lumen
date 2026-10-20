@@ -52,6 +52,7 @@ binding names; override with `Field(name="other")`.
 | A derived value | `lumen.computed(name, fn, *deps)` |
 | To react to a change | `signal.watch(fn)` |
 | To query / mutate the live element tree | `lumen.dom` |
+| To retitle, resize, or close the window, or quit | `lumen.window`, `App.quit` |
 | A raw `lumen_signal_*` C call | `lumen.raw` (appendix) |
 
 ### Dynamic DOM (`lumen.dom`)
@@ -71,6 +72,22 @@ if list_node:
     list_node.append(row)
 
 row.on("click", lambda e: print("clicked", e.target().handle, e.type()))
+```
+
+### The window (`lumen.window`)
+
+`lumen.window` reads and changes the app's window: `title()`, `set_title()`,
+`size()`, `set_size()`, `dpr()`, and `close()`. `App.quit()` quits the app
+from a handler. The setters ask for a change, which the window takes after
+the tick; the getters report what the window has. `close()` and `quit()` run
+the app's close hooks first, which can keep the window open.
+
+```python
+from lumen import window
+
+@app.on_click("done")
+def done():
+    window.close()
 ```
 
 ### `Model` / `Field`

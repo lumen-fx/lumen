@@ -472,6 +472,17 @@ lookups; `Render` submits draw work.
 `Viewport` is a resource in both worlds. The window backend writes both copies
 on resize, which is why layout and rendering agree on the coordinate space.
 
+The window itself is an entity in the main world, carrying `Window` (the title
+and size the app wants) and `PrimaryWindow`. App code writes `Window`; after
+each tick the window backend hands what changed to the platform window and
+writes back the size the platform settled on. The app asks to close its window
+or to quit with the `WindowRequest` and `QuitRequest` messages, which the
+backend answers through the same `CloseRequest` veto tick its close button
+runs. A headless run installs `HeadlessWindowPlugin` in the backend's place,
+which applies `Window` straight to the viewport. The `window.title()` and
+`window.size()` script getters read a process-wide mirror of what the window
+has, since a script host has no world to read.
+
 Each schedule runs on `bevy_ecs`'s multi-threaded executor: systems within a
 stage that touch disjoint data run across the worker pool, while systems the
 scheduler finds in conflict (same resource, same component set) still run in

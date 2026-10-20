@@ -89,6 +89,24 @@ Two entry points run automatically:
 `on_ready` is re-armed by hot reload, so a script that builds elements rebuilds
 them after every edit.
 
+`on_close()` runs before the window closes, whatever asked: its close button,
+an interrupt signal, or the app itself through `window::close()` or
+`app::quit()`. Return `false` to keep the window open, for a "save changes?"
+prompt; any other return lets it close. A Quit menu item is one call:
+
+```rust
+fn on_menu(id: string) {
+    if id == "file-quit" {
+        app::quit();
+    }
+}
+
+fn on_close() {
+    // Keep the window open while there are unsaved changes.
+    return !signal<bool>("dirty").get();
+}
+```
+
 ## Handling events
 
 There are three ways to receive an event, and they compose.

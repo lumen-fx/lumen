@@ -14,11 +14,12 @@
 //!   resumed -> window + accessibility bridge + renderer attach
 //!   Resized -> renderer resize + viewport rewrite + synchronous repaint
 //!   RedrawRequested -> pump accessibility requests, app.tick(), present
-//!   CloseRequested / SIGINT / SIGTERM -> emit CloseRequest, run one veto
-//!             tick (script `on_close` / `lumen_app_on_close` / app
-//!             systems), then exit unless vetoed; `exiting` persists
-//!             window state and detaches the renderer while the platform
-//!             connection is still alive
+//!   CloseRequested / SIGINT / SIGTERM / `window.close()` / `app.quit()`
+//!             -> emit CloseRequest, run one veto tick (script `on_close` /
+//!             `lumen_app_on_close` / app systems), then exit unless vetoed;
+//!             `exiting` persists window state and detaches the renderer
+//!             while the platform connection is still alive
+//!   about_to_wait -> apply the app's `Window` title / size changes
 
 #![warn(missing_docs)]
 
@@ -26,7 +27,7 @@ pub mod capability;
 mod pointer;
 
 use bevy_ecs::message::Messages;
-use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOccluded};
+use lumen_core::input::{CloseReason, PendingFileDrops, WindowFocused, WindowOccluded};
 use lumen_core::prelude::*;
 use lumen_core::text_events::ImeSurroundingResponse;
 use lumen_core::text_model::TextBuffer;
@@ -36,7 +37,10 @@ use lumen_core::traits::{
     WindowBackend, WindowError,
 };
 use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
-use lumen_core::window_backend::{RedrawScheduler, WindowCorePlugin};
+use lumen_core::window_backend::{
+    CloseRequests, RedrawScheduler, WindowCorePlugin, is_window_size, run_close_request,
+    seed_primary_window,
+};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
@@ -324,9 +328,15 @@ fn run(
         }
     }
 
+    let primary = lumen_core::window::primary_window(&mut app.world);
     let mut handler = WinitHandler {
+        applied_title: opts.title.clone(),
+        applied_size: glam::Vec2::new(opts.size.0 as f32, opts.size.1 as f32),
         app,
         opts,
+        primary,
+        close_requests: CloseRequests::default(),
+        pending_close: None,
         renderer,
         fallbacks: fallbacks.into(),
         a11y_factory: a11y,
@@ -349,6 +359,8 @@ fn run(
         let mut vp = handler.app.render_world.resource_mut::<Viewport>();
         vp.size = size;
         vp.clear = clear;
+        let title = handler.opts.title.clone();
+        seed_primary_window(&mut handler.app.world, &title, size);
     }
     event_loop
         .run_app(&mut handler)
@@ -398,6 +410,22 @@ fn attach_first(
 struct WinitHandler {
     app: App,
     opts: WindowOptions,
+    /// The primary window's entity, whose
+    /// [`lumen_core::window::Window`] the app writes and this backend
+    /// applies.
+    primary: Option<Entity>,
+    /// The title last handed to the platform window.
+    applied_title: String,
+    /// The inner size, in logical pixels, last asked of the platform window
+    /// or reported by it. A [`lumen_core::window::Window`] size that differs
+    /// is a new request.
+    applied_size: glam::Vec2,
+    /// The app's `window.close()` / `app.quit()` requests, read after every
+    /// tick: a request lives for two ticks, and one batch of events can run
+    /// more than that.
+    close_requests: CloseRequests,
+    /// A close the app asked for, run from `about_to_wait`.
+    pending_close: Option<CloseReason>,
     /// Presents the frames. Attached to the window in
     /// [`ApplicationHandler::resumed`] and detached in
     /// [`ApplicationHandler::exiting`].
@@ -525,6 +553,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 vp.size = logical;
                 vp.scale_factor = scale_factor;
             }
+            // The window the platform opened is the one the app has.
+            seed_primary_window(&mut self.app.world, &self.opts.title, logical);
+            self.applied_size = logical;
         }
         // Seed `Viewport.monitor_*` from the window's current monitor.
         // `Window::current_monitor` returns `None` before the window is mapped on some platforms; the values reseed via `MonitorChanged`.
@@ -639,7 +670,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // the window close button; a second signal force-exits
                 // from the watcher thread if a hook vetoes or teardown
                 // wedges.
-                self.process_close_request();
+                self.process_close_request(CloseReason::Shutdown);
             }
         }
     }
@@ -669,7 +700,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // commits: the deferred design gated the veto tick on a
                 // redraw that a paused `RedrawScheduler` never scheduled,
                 // so closing an unfocused window was silently dropped.
-                self.process_close_request();
+                self.process_close_request(CloseReason::Platform);
             }
             WindowEvent::ThemeChanged(theme) => {
                 // Last-resort path on Linux when the XDG portal listener
@@ -683,68 +714,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     sch.pending = true;
                 }
             }
-            WindowEvent::Resized(new_size) => {
-                // Resize-flood coalescing: a live drag delivers many
-                // `Resized` events. The renderer returns `false` when the
-                // physical size is unchanged, so we skip the surface
-                // recreate + viewport rewrite + relayout + paint that a
-                // duplicate event would otherwise force. Only a genuine
-                // size change does work, and each distinct size gets
-                // exactly one synchronous paint.
-                if new_size.width > 0
-                    && new_size.height > 0
-                    && self.renderer.resize(new_size.width, new_size.height)
-                {
-                    // `Viewport.size` carries LOGICAL pixels (see
-                    // `lumen_core::render_world::Viewport::size`). winit
-                    // delivers `new_size` as `PhysicalSize`; convert via
-                    // the window's current scale factor before writing.
-                    let scale_factor = window.scale_factor() as f32;
-                    let logical = new_size.to_logical::<f32>(scale_factor as f64);
-                    let size = glam::Vec2::new(logical.width, logical.height);
-                    tracing::debug!(
-                        target: "lumen::window::resize",
-                        physical_w = new_size.width,
-                        physical_h = new_size.height,
-                        scale = scale_factor,
-                        logical_w = size.x,
-                        logical_h = size.y,
-                        "resize",
-                    );
-                    for vp in [
-                        self.app.world.resource_mut::<Viewport>(),
-                        self.app.render_world.resource_mut::<Viewport>(),
-                    ] {
-                        let mut vp = vp;
-                        vp.size = size;
-                        vp.scale_factor = scale_factor;
-                    }
-                    // Smart reactive resize: relayout + repaint synchronously
-                    // inside the resize event. `sync_viewport` (LayoutSync)
-                    // sees the new `Viewport.size` and re-lays out every
-                    // root; `roll_up_frame_dirty` folds `Viewport::is_changed`
-                    // into `FrameDirty`; `present_frame` then commits a
-                    // correctly-sized buffer this frame. This is the smooth
-                    // path GTK/Qt take (paint in the configure/resize
-                    // callback) versus deferring to the next loop iteration.
-                    self.app.tick();
-                    // Resize recreated the intermediate texture - force a full
-                    // repaint even if this tick's tree matches the last one.
-                    present_frame(
-                        &mut self.app,
-                        self.renderer.as_mut(),
-                        self.a11y.as_deref_mut(),
-                        true,
-                    );
-                }
-                // Fallback: request one follow-up redraw in case the
-                // synchronous present skipped (surface `Outdated` during a
-                // fast drag). It's a cheap no-op tick when the viewport is
-                // already settled and nothing is dirty.
-                if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
-                    sch.pending = true;
-                }
-            }
+            WindowEvent::Resized(new_size) => self.resized(&window, new_size),
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut inner_size_writer,
@@ -791,7 +761,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // render walker re-seeds its root transform with the new
                 // dpr, and `present_frame` commits the correctly-scaled
                 // buffer this frame.
-                self.app.tick();
+                self.tick();
                 // DPI change recreated the intermediate texture - force a full
                 // repaint.
                 present_frame(
@@ -856,7 +826,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 if let Some(a11y) = self.a11y.as_mut() {
                     a11y.pump(&mut self.app.world);
                 }
-                self.app.tick();
+                self.tick();
                 // Consume any title-bar press -> request a native
                 // window drag. Cleared after the call so a single
                 // press initiates a single drag.
@@ -1192,10 +1162,16 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
     ///    spinner; see [`RedrawScheduler`] doc comment for the Qt/GTK
     ///    parallel.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A `window.close()` / `app.quit()` the ticks of this batch asked
+        // for runs the same veto path the close button does.
+        if let Some(reason) = self.pending_close.take() {
+            self.process_close_request(reason);
+        }
         if self.close_committed {
             event_loop.exit();
             return;
         }
+        self.apply_window_changes();
         // A deadline a system asked to be woken at (a script timer) that
         // has come due needs a tick: this is the pass the `WaitUntil` set
         // below resumes into.
@@ -1272,6 +1248,18 @@ fn idle_control_flow(wake_at: Option<std::time::Instant>, now: std::time::Instan
 }
 
 impl WinitHandler {
+    /// Run one tick and keep any close the app asked for during it. A quit
+    /// outranks a window close.
+    fn tick(&mut self) {
+        self.app.tick();
+        if let Some(reason) = self.close_requests.take(&self.app.world) {
+            self.pending_close = match (self.pending_close, reason) {
+                (Some(CloseReason::AppQuit), _) => Some(CloseReason::AppQuit),
+                _ => Some(reason),
+            };
+        }
+    }
+
     /// Write a touch or pen contact's message. The primary contact also
     /// drives the pointer Lumen's own widgets follow (hover, press, drag),
     /// the way a browser makes the primary touch act as the mouse.
@@ -1340,50 +1328,162 @@ impl WinitHandler {
     }
 
     /// Graceful close, shared by the window close button
-    /// ([`WindowEvent::CloseRequested`]) and Unix signals
-    /// ([`UserEvent::CloseRequested`]).
+    /// ([`WindowEvent::CloseRequested`]), Unix signals
+    /// ([`UserEvent::CloseRequested`]), and the app's own `window.close()` /
+    /// `app.quit()`.
     ///
-    /// Emits `CloseRequest { vetoed: false }`, then runs one synchronous
-    /// tick so every app-level close hook observes it before any
-    /// teardown: the script host's `on_close` dispatcher, the C-ABI
-    /// `lumen_app_on_close` router, and any app system reading
-    /// [`CloseRequest`]. A hook keeps the window open by writing a fresh
-    /// `CloseRequest { vetoed: true }` during that tick - mirroring
-    /// `QCloseEvent::ignore()` / GTK4's `close-request -> TRUE`. When
-    /// nothing vetoes, `close_committed` is set and `about_to_wait`
-    /// exits the loop; [`ApplicationHandler::exiting`] then persists
-    /// window state and releases the renderer in order.
+    /// Runs [`run_close_request`]: emits `CloseRequest { reason, vetoed:
+    /// false }`, then one synchronous tick so every app-level close hook
+    /// observes it before any teardown: the script host's `on_close`
+    /// dispatcher, the C-ABI `lumen_app_on_close` router, and any app
+    /// system reading [`lumen_core::input::CloseRequest`]. A hook keeps the
+    /// window open by writing a fresh `CloseRequest { vetoed: true, .. }`
+    /// during that tick - mirroring `QCloseEvent::ignore()` / GTK4's
+    /// `close-request -> TRUE`. When nothing vetoes, `close_committed` is
+    /// set and `about_to_wait` exits the loop; [`ApplicationHandler::exiting`]
+    /// then persists window state and releases the renderer in order.
     ///
     /// Runs synchronously in the event arm (the same pattern as the
     /// live-resize paint in `Resized`) rather than deferring to the next
     /// `RedrawRequested`, so the close also works while the
     /// [`RedrawScheduler`] is paused (unfocused / occluded window) and
     /// before the window exists.
-    fn process_close_request(&mut self) {
+    fn process_close_request(&mut self, reason: CloseReason) {
         if self.close_committed {
             return;
         }
-        if let Some(mut msgs) = self.app.world.get_resource_mut::<Messages<CloseRequest>>() {
-            msgs.write(CloseRequest { vetoed: false });
-        }
-        self.app.tick();
-        let vetoed = self
-            .app
-            .world
-            .get_resource::<Messages<CloseRequest>>()
-            .map(|msgs| msgs.iter_current_update_messages().any(|m| m.vetoed))
-            .unwrap_or(false);
-        if vetoed {
+        if run_close_request(&mut self.app, &mut self.close_requests, reason) {
+            self.close_committed = true;
+        } else if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
             // Keep running; schedule a paint so whatever the veto
             // handler changed (e.g. a "save before quit?" dialog)
             // becomes visible.
-            if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
-                sch.pending = true;
-            }
-        } else {
-            self.close_committed = true;
+            sch.pending = true;
         }
     }
+
+    /// Hand the app's [`lumen_core::window::Window`] changes to the platform
+    /// window: a new title at once, a new size as a request the window
+    /// manager answers with a resize (or refuses). The getters then report
+    /// what the window has: the title once applied, the size once the
+    /// platform resized the window.
+    fn apply_window_changes(&mut self) {
+        let (Some(window), Some(entity)) = (self.window.clone(), self.primary) else {
+            return;
+        };
+        let Some((title, size)) = self
+            .app
+            .world
+            .get::<lumen_core::window::Window>(entity)
+            .map(|wanted| window_changes(wanted, &self.applied_title, self.applied_size))
+        else {
+            return;
+        };
+        if let Some(title) = title {
+            window.set_title(&title);
+            lumen_core::window_state::publish_title(&title);
+            // The accessibility tree's root is named after the window.
+            self.app
+                .world
+                .insert_resource(lumen_core::components::A11yRootLabel(title.clone()));
+            self.applied_title = title;
+        }
+        if let Some(size) = size {
+            self.applied_size = size;
+            let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
+            // `Some` means the platform applied the size at once and may
+            // send no `Resized`; take it the way a resize event lands.
+            if let Some(physical) = window.request_inner_size(requested) {
+                self.resized(&window, physical);
+            }
+        }
+    }
+
+    /// The window's inner size changed (a `Resized` event, or a size request
+    /// the platform applied at once).
+    ///
+    /// Resize-flood coalescing: a live drag delivers many `Resized` events.
+    /// The renderer returns `false` when the physical size is unchanged, so
+    /// we skip the surface recreate + viewport rewrite + relayout + paint that
+    /// a duplicate event would otherwise force. Only a genuine size change
+    /// does work, and each distinct size gets exactly one synchronous paint.
+    fn resized(&mut self, window: &Window, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width > 0
+            && new_size.height > 0
+            && self.renderer.resize(new_size.width, new_size.height)
+        {
+            // `Viewport.size` carries LOGICAL pixels (see
+            // `lumen_core::render_world::Viewport::size`). winit
+            // delivers `new_size` as `PhysicalSize`; convert via
+            // the window's current scale factor before writing.
+            let scale_factor = window.scale_factor() as f32;
+            let logical = new_size.to_logical::<f32>(scale_factor as f64);
+            let size = glam::Vec2::new(logical.width, logical.height);
+            tracing::debug!(
+                target: "lumen::window::resize",
+                physical_w = new_size.width,
+                physical_h = new_size.height,
+                scale = scale_factor,
+                logical_w = size.x,
+                logical_h = size.y,
+                "resize",
+            );
+            for vp in [
+                self.app.world.resource_mut::<Viewport>(),
+                self.app.render_world.resource_mut::<Viewport>(),
+            ] {
+                let mut vp = vp;
+                vp.size = size;
+                vp.scale_factor = scale_factor;
+            }
+            // The window has this size now, whoever asked for it.
+            if let Some(entity) = self.primary
+                && let Some(mut wanted) =
+                    self.app.world.get_mut::<lumen_core::window::Window>(entity)
+            {
+                wanted.bypass_change_detection().size = size;
+            }
+            self.applied_size = size;
+            // Smart reactive resize: relayout + repaint synchronously
+            // inside the resize event. `sync_viewport` (LayoutSync)
+            // sees the new `Viewport.size` and re-lays out every
+            // root; `roll_up_frame_dirty` folds `Viewport::is_changed`
+            // into `FrameDirty`; `present_frame` then commits a
+            // correctly-sized buffer this frame. This is the smooth
+            // path GTK/Qt take (paint in the configure/resize
+            // callback) versus deferring to the next loop iteration.
+            self.tick();
+            // Resize recreated the intermediate texture - force a full
+            // repaint even if this tick's tree matches the last one.
+            present_frame(
+                &mut self.app,
+                self.renderer.as_mut(),
+                self.a11y.as_deref_mut(),
+                true,
+            );
+        }
+        // Fallback: request one follow-up redraw in case the
+        // synchronous present skipped (surface `Outdated` during a
+        // fast drag). It's a cheap no-op tick when the viewport is
+        // already settled and nothing is dirty.
+        if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
+            sch.pending = true;
+        }
+    }
+}
+
+/// What of `wanted` the platform window does not have yet: a title other than
+/// the one last applied, and a size other than the one last asked for or
+/// reported. A size no window can have is never asked for.
+fn window_changes(
+    wanted: &lumen_core::window::Window,
+    applied_title: &str,
+    applied_size: glam::Vec2,
+) -> (Option<String>, Option<glam::Vec2>) {
+    let title = (wanted.title != applied_title).then(|| wanted.title.clone());
+    let size = (wanted.size != applied_size && is_window_size(wanted.size.x, wanted.size.y))
+        .then_some(wanted.size);
+    (title, size)
 }
 
 /// W3.5: build an [`ImeSurroundingResponse`] for the currently focused
@@ -1904,7 +2004,7 @@ fn wheel_delta(delta: MouseScrollDelta) -> glam::Vec2 {
 
 #[cfg(test)]
 mod tests {
-    use super::{attach_first, idle_control_flow, present_frame, wheel_delta};
+    use super::{attach_first, idle_control_flow, present_frame, wheel_delta, window_changes};
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, FrameTarget, RenderError,
@@ -2261,5 +2361,44 @@ mod tests {
             ))),
             glam::Vec2::new(5.0, 40.0)
         );
+    }
+
+    fn wanted(title: &str, w: f32, h: f32) -> lumen_core::window::Window {
+        lumen_core::window::Window {
+            title: title.into(),
+            size: glam::Vec2::new(w, h),
+        }
+    }
+
+    /// The platform window gets what the app asked for and does not have,
+    /// and nothing else: an unchanged window costs no platform call.
+    #[test]
+    fn only_what_changed_reaches_the_platform_window() {
+        let applied = glam::Vec2::new(800.0, 600.0);
+        assert_eq!(
+            window_changes(&wanted("App", 800.0, 600.0), "App", applied),
+            (None, None)
+        );
+        assert_eq!(
+            window_changes(&wanted("Docs", 800.0, 600.0), "App", applied),
+            (Some("Docs".to_string()), None)
+        );
+        assert_eq!(
+            window_changes(&wanted("App", 640.0, 480.0), "App", applied),
+            (None, Some(glam::Vec2::new(640.0, 480.0)))
+        );
+    }
+
+    /// A size no window can have is never asked of the platform.
+    #[test]
+    fn an_impossible_size_is_not_requested() {
+        let applied = glam::Vec2::new(800.0, 600.0);
+        for (w, h) in [(0.0, 480.0), (640.0, -1.0), (f32::NAN, 480.0)] {
+            assert_eq!(
+                window_changes(&wanted("App", w, h), "App", applied).1,
+                None,
+                "{w} x {h}"
+            );
+        }
     }
 }

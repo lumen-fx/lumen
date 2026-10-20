@@ -344,7 +344,12 @@ fn main() {}
 /// `window::size()` reads the current window extent as `[width, height]`.
 #[test]
 fn window_size_reads_two_floats() {
-    lumen_core::window_state::set_size(1024.0, 768.0);
+    // The getter reads what the window has: the viewport an app runs at.
+    let mut app = lumen_core::app::App::new();
+    app.world
+        .resource_mut::<lumen_core::render_world::Viewport>()
+        .size = [1024.0, 768.0].into();
+    app.tick();
     let mut host = load(
         r#"
 import "lumen.cdl";

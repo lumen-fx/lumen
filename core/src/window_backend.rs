@@ -8,17 +8,26 @@
 //! backend.
 //!
 //! [`WindowCorePlugin`] is the half of a window that needs no display: the
-//! messages a window backend writes and the redraw state it reads. A
-//! backend installs it when it runs; a headless run installs it alone, so
-//! systems that read window state behave the same with no window open.
+//! window entity, the messages a window backend writes and reads, and the
+//! redraw state. A backend installs it when it runs; a headless run installs
+//! it alone, plus [`HeadlessWindowPlugin`], which stands in for the platform
+//! window, so systems that read window state behave the same with no window
+//! open.
+//!
+//! [`CloseRequests`] and [`run_close_request`] are the close path every
+//! driver shares: the app's `window.close()` / `app.quit()` requests, and the
+//! veto tick that lets an `on_close` hook keep the window open.
 
 use crate::app::{App, Plugin};
 use crate::backends::{BackendEntry, Backends};
-use crate::input::{WindowFocused, WindowOccluded};
-use crate::render_world::install_extract_pipeline;
+use crate::input::{CloseReason, CloseRequest, WindowFocused, WindowOccluded};
+use crate::render_world::{FrameDirty, Viewport, install_extract_pipeline};
 use crate::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
 use crate::traits::WindowBackend;
-use bevy_ecs::prelude::Resource;
+use crate::window::{PrimaryWindow, QuitRequest, Window, WindowRequest};
+use crate::window_state;
+use bevy_ecs::message::{MessageCursor, Messages};
+use bevy_ecs::prelude::*;
 
 /// One window backend: its name, its rank, and how to make it.
 #[derive(Clone, Copy, Debug)]
@@ -128,9 +137,14 @@ impl RedrawScheduler {
 
 /// The window-free half of every window backend.
 ///
-/// Registers the messages a window backend writes ([`WindowFocused`],
-/// [`WindowOccluded`], the IME surrounding-text pair, and
-/// [`TextEditRequest`] for IME commits), inserts a default
+/// Spawns the primary window entity ([`Window`] + [`PrimaryWindow`]), sized
+/// from the main world's [`Viewport`] and titled from the app's
+/// [`crate::components::A11yRootLabel`] when it has one; the driver that
+/// opens the window seeds both with what it opened through
+/// [`seed_primary_window`]. Registers the messages a window backend writes
+/// ([`WindowFocused`], [`WindowOccluded`], the IME surrounding-text pair, and
+/// [`TextEditRequest`] for IME commits) and the requests it obeys
+/// ([`WindowRequest`], [`QuitRequest`]), inserts a default
 /// [`RedrawScheduler`], and installs the extract pipeline a window presents
 /// from. A window backend installs it before it opens a window unless the
 /// app already has it; a headless run installs it alone.
@@ -150,8 +164,188 @@ impl Plugin for WindowCorePlugin {
         app.add_message::<ImeSurroundingRequested>();
         app.add_message::<ImeSurroundingResponse>();
         app.add_message::<TextEditRequest>();
+        app.add_message::<WindowRequest>();
+        app.add_message::<QuitRequest>();
         app.world.insert_resource(RedrawScheduler::default());
+        if crate::window::primary_window(&mut app.world).is_none() {
+            let size = app
+                .world
+                .get_resource::<Viewport>()
+                .map(|v| v.size)
+                .unwrap_or_default();
+            let title = app
+                .world
+                .get_resource::<crate::components::A11yRootLabel>()
+                .map(|l| l.0.clone())
+                .unwrap_or_default();
+            let window = app
+                .world
+                .spawn((Window { title, size }, PrimaryWindow))
+                .id();
+            window_state::publish_primary(Some(window));
+        }
     }
+}
+
+/// Record what the driver opened as the primary window's state: the title
+/// and logical size the platform window (or the headless stand-in) has. The
+/// write is the platform reporting, not the app asking, so nothing applies
+/// it back. Publishes the title for the `window.title()` getter.
+pub fn seed_primary_window(world: &mut World, title: &str, size: glam::Vec2) {
+    let Some(entity) = crate::window::primary_window(world) else {
+        return;
+    };
+    if let Some(mut window) = world.get_mut::<Window>(entity) {
+        let window = window.bypass_change_detection();
+        window.title = title.to_string();
+        window.size = size;
+    }
+    window_state::publish_title(title);
+}
+
+/// The window stand-in for a run with no display.
+///
+/// With no platform window between the app and its viewport, a change to
+/// the primary [`Window`] applies at once: a new size becomes the viewport
+/// (both worlds, so an offscreen renderer draws at it) and lays out on the
+/// same tick, and a new title is what `window.title()` reports. Installed by
+/// the headless runners beside [`WindowCorePlugin`]; a window backend never
+/// installs it, since there the platform decides what the window gets.
+pub struct HeadlessWindowPlugin;
+
+impl Plugin for HeadlessWindowPlugin {
+    fn build(self, app: &mut App) {
+        app.add_systems(
+            crate::tick::TickStage::Systems,
+            apply_window_headless.in_set(WindowApply),
+        );
+        app.add_extract_fn(mirror_viewport_to_render);
+    }
+}
+
+/// The systems that apply the app's [`Window`] changes to a window. A system
+/// that writes [`Window`] in [`crate::tick::TickStage::Systems`] runs before
+/// this set, so its change applies on the same tick.
+#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct WindowApply;
+
+/// [`HeadlessWindowPlugin`]'s apply step.
+///
+/// A [`Window`] the app wrote since it was spawned becomes the viewport and
+/// the published title. A viewport written from outside (a runner seeding
+/// it, a test sizing it) is the size the stand-in window has, so it is
+/// written back to [`Window`] the way a backend reports a resize. Telling
+/// the two apart by the change ticks keeps the first tick, when everything
+/// reads as changed, from undoing a viewport set after the window spawned.
+fn apply_window_headless(
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    viewport: Option<ResMut<Viewport>>,
+    frame: Option<ResMut<FrameDirty>>,
+) {
+    let Ok(mut window) = windows.single_mut() else {
+        return;
+    };
+    let asked = window.is_changed() && window.last_changed() != window.added();
+    if asked {
+        window_state::publish_title(&window.title);
+    }
+    let Some(mut viewport) = viewport else {
+        return;
+    };
+    if asked {
+        if is_window_size(window.size.x, window.size.y) && viewport.size != window.size {
+            viewport.size = window.size;
+            if let Some(mut frame) = frame {
+                frame.dirty = true;
+            }
+        }
+    } else if viewport.is_changed() && viewport.size != window.size {
+        window.bypass_change_detection().size = viewport.size;
+    }
+}
+
+/// Carry the main world's viewport size and scale to the render world's, which
+/// a headless run has no platform window to keep current.
+fn mirror_viewport_to_render(main: &mut World, render: &mut World) {
+    let Some((size, scale)) = main
+        .get_resource::<Viewport>()
+        .map(|v| (v.size, v.scale_factor))
+    else {
+        return;
+    };
+    if let Some(mut viewport) = render.get_resource_mut::<Viewport>()
+        && (viewport.size != size || viewport.scale_factor != scale)
+    {
+        viewport.size = size;
+        viewport.scale_factor = scale;
+    }
+}
+
+/// Whether `width` x `height` is a size a window can have: both sides finite
+/// and positive.
+pub fn is_window_size(width: f32, height: f32) -> bool {
+    width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
+}
+
+/// The app's close and quit requests, read once each.
+///
+/// A driver keeps one and calls [`Self::take`] after every tick; a request
+/// means it runs [`run_close_request`] with the reason returned.
+#[derive(Default)]
+pub struct CloseRequests {
+    close: MessageCursor<WindowRequest>,
+    quit: MessageCursor<QuitRequest>,
+}
+
+impl CloseRequests {
+    /// The close the app asked for since the last call, if any. A quit wins
+    /// over a window close made in the same tick.
+    pub fn take(&mut self, world: &World) -> Option<CloseReason> {
+        let quit = world
+            .get_resource::<Messages<QuitRequest>>()
+            .is_some_and(|msgs| self.quit.read(msgs).count() > 0);
+        let close = world
+            .get_resource::<Messages<WindowRequest>>()
+            .is_some_and(|msgs| {
+                self.close
+                    .read(msgs)
+                    .filter(|r| matches!(r, WindowRequest::Close))
+                    .count()
+                    > 0
+            });
+        if quit {
+            Some(CloseReason::AppQuit)
+        } else if close {
+            Some(CloseReason::WindowClose)
+        } else {
+            None
+        }
+    }
+}
+
+/// Run the close veto path: write `CloseRequest { reason, vetoed: false }`,
+/// run one tick so every close hook (a script's `on_close`, the C ABI's
+/// `lumen_app_on_close`, an app system reading [`CloseRequest`]) sees it, and
+/// report whether the close goes ahead. A hook keeps the window open by
+/// writing `CloseRequest { vetoed: true, .. }` during that tick.
+///
+/// `requests` is drained after the veto tick: a hook that asks for a close
+/// while answering one does not start a second round.
+pub fn run_close_request(app: &mut App, requests: &mut CloseRequests, reason: CloseReason) -> bool {
+    if let Some(mut msgs) = app.world.get_resource_mut::<Messages<CloseRequest>>() {
+        msgs.write(CloseRequest {
+            reason,
+            vetoed: false,
+        });
+    }
+    app.tick();
+    let _ = requests.take(&app.world);
+    let vetoed = app
+        .world
+        .get_resource::<Messages<CloseRequest>>()
+        .map(|msgs| msgs.iter_current_update_messages().any(|m| m.vetoed))
+        .unwrap_or(false);
+    !vetoed
 }
 
 #[cfg(test)]

@@ -207,6 +207,7 @@ host "window" {
     float[] size();
     set_title(string);
     set_size(float, float);
+    close();
     string location_path();
     string location_query();
     string location_hash();
@@ -227,4 +228,9 @@ host "document" {
     int focused();
     int hovered();
     int create(string);
+}
+
+host "app" {
+    // Registered by the candela host itself.
+    quit();
 }

@@ -36,11 +36,12 @@
 //! ## Exit
 //!
 //! SIGINT / SIGTERM (and the end of a bounded `--ticks N` run) take the
-//! graceful-close path: a `CloseRequest { vetoed: false }` is written to
-//! the message bus and one final tick runs so close-observing systems
-//! fire, then the fn returns `Ok(())` (process exit code 0). Unlike the
-//! windowed close, a veto does not keep the app alive - a signalled CI
-//! run must terminate.
+//! graceful-close path: a `CloseRequest { reason: Shutdown, vetoed: false }`
+//! is written to the message bus and one final tick runs so close-observing
+//! systems fire, then the fn returns `Ok(())` (process exit code 0). Unlike
+//! the windowed close, a veto does not keep the app alive - a signalled CI
+//! run must terminate. The app's own `window.close()` / `app.quit()` take
+//! the windowed path instead: a veto keeps the run going.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -48,11 +49,12 @@ use std::time::{Duration, Instant};
 
 use bevy_ecs::message::Messages;
 use bevy_ecs::prelude::Resource;
-use lumen_core::input::CloseRequest;
+use lumen_core::input::{CloseReason, CloseRequest};
 use lumen_core::prelude::*;
 use lumen_core::render_backend::{RenderBackend, install_offscreen};
 use lumen_core::render_world::{FrameDirty, SurfaceCapture};
 use lumen_core::tick::{wake_deadline, work_pending};
+use lumen_core::window_backend::{CloseRequests, run_close_request, seed_primary_window};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 
@@ -286,6 +288,7 @@ pub fn run_app_headless_rendered(
         vp.scale_factor = dpr;
         vp.clear = window.options.clear;
     }
+    seed_primary_window(&mut app.world, &window.options.title, logical);
 
     // Join the renderer thread. A GPU adapter is requested without a
     // surface, so a machine with no display still gets one where a driver
@@ -362,6 +365,7 @@ pub fn run_app_headless_rendered(
     );
 
     let mut ticked: u64 = 0;
+    let mut requests = CloseRequests::default();
     // Deadline anchor for work-paced frames. `Some(d)` = the deadline the
     // frame we just ran was released at; the next frame is due at
     // `d + WORK_FRAME_INTERVAL` regardless of how long the tick took -
@@ -395,6 +399,14 @@ pub fn run_app_headless_rendered(
         // re-raise it and the work check below schedules a follow-up.
         if let Some(mut fd) = app.world.get_resource_mut::<FrameDirty>() {
             fd.dirty = false;
+        }
+
+        // `window.close()` / `app.quit()` take the windowed close path: the
+        // veto tick runs, and the run ends unless a hook kept it open.
+        if let Some(reason) = requests.take(&app.world)
+            && run_close_request(&mut app, &mut requests, reason)
+        {
+            return Ok(());
         }
 
         if let Some(n) = headless.ticks
@@ -476,7 +488,10 @@ pub fn run_app_headless_rendered(
     // Graceful close: same message the windowed backend emits on
     // `CloseRequested`, plus one tick so close-observing systems fire.
     if let Some(mut msgs) = app.world.get_resource_mut::<Messages<CloseRequest>>() {
-        msgs.write(CloseRequest { vetoed: false });
+        msgs.write(CloseRequest {
+            reason: CloseReason::Shutdown,
+            vetoed: false,
+        });
     }
     app.tick();
     Ok(())

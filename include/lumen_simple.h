@@ -124,8 +124,18 @@
  only ever read through the pointer the runtime hands a callback, and the
  fields before the new ones keep their offsets, so a callback built against
  0.14 reads its fields unchanged; additive, so a minor bump.
+
+ 0.16 gave the window entry points a window: [`LumenWindow`] (the window
+ entity's packed bits, [`LUMEN_WINDOW_CURRENT`] for the current window) is
+ now the first parameter of [`lumen_window_set_title`],
+ [`lumen_window_set_size`] and [`lumen_window_dpr`], which until now
+ changed a cache the window never read and now change the window. Added
+ [`lumen_window_title`], [`lumen_window_size`], [`lumen_window_close`]
+ (close through the [`lumen_app_on_close`] veto path) and
+ [`lumen_app_quit`]. Kept names changed arity, so embedders rebuild against
+ the new header rather than relinking.
  */
-#define LUMEN_ABI_MINOR 15
+#define LUMEN_ABI_MINOR 16
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
@@ -315,9 +325,22 @@ typedef struct {
 } LumenFrameInfo;
 
 /*
+ A window handle: the window entity's packed bits, like [`LumenNode`].
+ [`LUMEN_WINDOW_CURRENT`] names the current window: the window of the
+ event being handled, else the primary window.
+ */
+typedef uint64_t LumenWindow;
+
+/*
  Off token returned by [`lumen_on`]; pass to [`lumen_off`] to unbind.
  */
 typedef uint64_t LumenEventToken;
+
+/*
+ The current window: the window of the event being handled, else the
+ primary window.
+ */
+#define LUMEN_WINDOW_CURRENT 0
 
 #ifdef __cplusplus
 extern "C" {
@@ -862,20 +885,54 @@ extern "C" {
  LumenStatus lumen_window_reload(void) ;
 
 /*
- `window.set_title`. Thread-safe.
- */
- LumenStatus lumen_window_set_title(const char *title) ;
-
-/*
- `window.set_size` in logical pixels. Thread-safe.
- */
- LumenStatus lumen_window_set_size(float width, float height) ;
-
-/*
- `window.dpr`: current device-pixel ratio, written to `*out`.
+ `window.set_title`: ask for a new title. The window backend applies it
+ after the tick; [`lumen_window_title`] reports the title the window has.
  Thread-safe.
  */
- LumenStatus lumen_window_dpr(float *out) ;
+ LumenStatus lumen_window_set_title(LumenWindow window, const char *title) ;
+
+/*
+ `window.title`: read the title the window has into `buf` (UTF-8 +
+ trailing NUL), following the shared string-out convention: on success
+ `*out_len` (when non-null) is the byte length excluding the NUL; when
+ `buf` is null or too small, `*out_len` is set to the required capacity
+ and [`LumenStatus::ErrBufferTooSmall`] is returned. Thread-safe.
+ */
+ LumenStatus lumen_window_title(LumenWindow window, char *buf, size_t buf_len, size_t *out_len) ;
+
+/*
+ `window.set_size`: ask for a new inner size in logical pixels. The window
+ manager may refuse or adjust it; [`lumen_window_size`] reports the size
+ the window has. A size that is not two positive finite numbers returns
+ [`LumenStatus::ErrBadArg`]. Thread-safe.
+ */
+ LumenStatus lumen_window_set_size(LumenWindow window, float width, float height) ;
+
+/*
+ `window.size`: the window's inner size in logical pixels, written to
+ `*width` and `*height`. Thread-safe.
+ */
+ LumenStatus lumen_window_size(LumenWindow window, float *width, float *height) ;
+
+/*
+ `window.dpr`: the window's device-pixel ratio, written to `*out`.
+ Thread-safe.
+ */
+ LumenStatus lumen_window_dpr(LumenWindow window, float *out) ;
+
+/*
+ `window.close`: close the window through the same veto path its close
+ button takes, so a [`lumen_app_on_close`] hook (or a script's `on_close`)
+ can keep it open. Closing the only window ends the app. Thread-safe.
+ */
+ LumenStatus lumen_window_close(LumenWindow window) ;
+
+/*
+ `app.quit`: ask the running app to quit. Every window is asked to close,
+ and a veto from any close hook cancels the quit. Thread-safe; takes no
+ [`LumenApp`] because [`lumen_app_run`] consumes the handle.
+ */
+ LumenStatus lumen_app_quit(void) ;
 
 /*
  `history.go(delta)`: step `delta` entries (negative back, positive

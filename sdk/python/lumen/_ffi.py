@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 15
+ABI_MINOR = 16
 ABI_PATCH = 0
 
 
@@ -930,6 +930,23 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
     lib.lumen_frame_info.restype = c.c_uint32
     lib.lumen_signals_all.argtypes = [P(LumenKVList)]
     lib.lumen_signals_all.restype = c.c_uint32
+
+    # -- window (ABI 0.16): `LumenWindow` is a uint64 handle, 0 = current --
+    Window = c.c_uint64
+    lib.lumen_window_set_title.argtypes = [Window, c.c_char_p]
+    lib.lumen_window_set_title.restype = c.c_uint32
+    lib.lumen_window_title.argtypes = [Window, c.c_char_p, c.c_size_t, P(c.c_size_t)]
+    lib.lumen_window_title.restype = c.c_uint32
+    lib.lumen_window_set_size.argtypes = [Window, c.c_float, c.c_float]
+    lib.lumen_window_set_size.restype = c.c_uint32
+    lib.lumen_window_size.argtypes = [Window, P(c.c_float), P(c.c_float)]
+    lib.lumen_window_size.restype = c.c_uint32
+    lib.lumen_window_dpr.argtypes = [Window, P(c.c_float)]
+    lib.lumen_window_dpr.restype = c.c_uint32
+    lib.lumen_window_close.argtypes = [Window]
+    lib.lumen_window_close.restype = c.c_uint32
+    lib.lumen_app_quit.argtypes = []
+    lib.lumen_app_quit.restype = c.c_uint32
 
     # -- releasers for owned introspection buffers --
     lib.lumen_kvlist_free.argtypes = [LumenKVList]

@@ -533,10 +533,10 @@ public:
         }
     }
 
-    /// Register an app-level close hook (ABI 0.5). It fires once per OS
-    /// close request - the window close button, or (Unix) the first
-    /// SIGINT/SIGTERM - BEFORE the runtime tears down the window, GPU
-    /// state, or script host, and can veto the close.
+    /// Register an app-level close hook (ABI 0.5). It fires once per close
+    /// request - the window close button, (Unix) the first SIGINT/SIGTERM,
+    /// `window::close()`, or `App::quit()` - BEFORE the runtime tears down
+    /// the window, GPU state, or script host, and can veto the close.
     ///
     /// Accepts either a `bool()` handler (return `true` to allow the close,
     /// `false` to keep the window open) or a `void()` handler (a shutdown
@@ -547,8 +547,9 @@ public:
     ///     app.on_close([&] { flush_logs(); });          // void: always close
     ///
     /// A second registration replaces the first. The callable is heap-owned
-    /// by this `App` (same lifetime rules as `expose` / `on_click`). It does
-    /// NOT fire under `run_headless` (there is no OS close request). On Unix a
+    /// by this `App` (same lifetime rules as `expose` / `on_click`). It also
+    /// fires for `window::close()` and `App::quit()`; under `run_headless`
+    /// those are the only close requests there are. On Unix a
     /// second SIGINT/SIGTERM bypasses the hook, so a vetoing handler cannot
     /// wedge shutdown. If the handler throws, the close is allowed (the
     /// exception is swallowed - unwinding across the C boundary is UB).
@@ -564,6 +565,12 @@ public:
                           "on_close(fn): fn must be callable as bool() or void().");
         }
     }
+
+    /// Ask the running app to quit, from a handler while `run()` blocks.
+    /// Every window is asked to close, and a veto from the `on_close` hook
+    /// (or a script's `on_close`) cancels the quit. To close only the
+    /// current window, use `lumen::window::close()`.
+    static LumenStatus quit() noexcept { return lumen_app_quit(); }
 
     /// Enter the Lumen event loop and block until the window closes.
     /// Returns the raw exit status (`LUMEN_OK` on clean shutdown). Consumes
@@ -885,6 +892,60 @@ inline std::optional<std::string> current_page() noexcept {
         return lumen_current_page(buf, len, out);
     });
 }
+
+// =====================================================================
+// Window - the app's own window (ABI 0.16).
+//
+// Thin wrappers over the `lumen_window_*` ABI, applied to the current
+// window (`LUMEN_WINDOW_CURRENT`: the window of the event being handled,
+// else the primary window). The setters ask for a change, which the window
+// applies after the tick; the getters report what the window has, so a new
+// title or size reads back once the app has ticked and the platform has
+// applied it. The window manager may refuse or adjust a size. All are
+// thread-safe and `noexcept`.
+// =====================================================================
+
+namespace window {
+
+/// The title the window has, or `std::nullopt` when it cannot be read.
+inline std::optional<std::string> title() noexcept {
+    return raw::detail::read_string_out([&](char* buf, std::size_t len, std::size_t* out) {
+        return lumen_window_title(LUMEN_WINDOW_CURRENT, buf, len, out);
+    });
+}
+
+/// Ask for a new window title.
+inline LumenStatus set_title(std::string_view title) noexcept {
+    std::string t(title);
+    return lumen_window_set_title(LUMEN_WINDOW_CURRENT, t.c_str());
+}
+
+/// The window's inner size in logical pixels, `{width, height}`.
+inline std::optional<std::pair<float, float>> size() noexcept {
+    float w = 0.0f, h = 0.0f;
+    if (lumen_window_size(LUMEN_WINDOW_CURRENT, &w, &h) != LUMEN_OK) return std::nullopt;
+    return std::pair<float, float>{w, h};
+}
+
+/// Ask for a new inner size in logical pixels. Both sides must be positive;
+/// otherwise `LUMEN_ERR_BAD_ARG`.
+inline LumenStatus set_size(float width, float height) noexcept {
+    return lumen_window_set_size(LUMEN_WINDOW_CURRENT, width, height);
+}
+
+/// The window's device-pixel ratio.
+inline std::optional<float> dpr() noexcept {
+    float out = 1.0f;
+    if (lumen_window_dpr(LUMEN_WINDOW_CURRENT, &out) != LUMEN_OK) return std::nullopt;
+    return out;
+}
+
+/// Close the window, through the same veto path its close button takes: the
+/// `App::on_close` hook can keep it open. Closing the only window ends the
+/// app.
+inline LumenStatus close() noexcept { return lumen_window_close(LUMEN_WINDOW_CURRENT); }
+
+} // namespace window
 
 // =====================================================================
 // Signal<T> - typed reactive handle over one named signal.

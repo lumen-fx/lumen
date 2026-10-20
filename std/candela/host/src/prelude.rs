@@ -179,7 +179,7 @@ pub fn line_col(source: &str, byte: usize) -> (u32, u32) {
 /// built for the artifact path keeps working.
 ///
 /// The search runs over the source with the prelude already spliced in, so the
-/// namespaces the runtime owns (`window`, `document`, `history`) count as
+/// namespaces the runtime owns (`window`, `document`, `history`, `app`) count as
 /// declared for an app that imports it. A second block for one of those would
 /// displace the prelude's, and every runtime function in it would fail to
 /// resolve at run time while the program still compiled.
