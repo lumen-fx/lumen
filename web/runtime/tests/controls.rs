@@ -67,7 +67,7 @@ fn tree() -> LayoutIR {
     };
     let el = |tag: &str, attrs: Attributes| Element {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         ..Element::default()
     };
     LayoutIR {

@@ -31,21 +31,21 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn page(key: &str, src: &str) -> Element {
     let image = Element {
         tag: "image".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some(format!("{key}-image")),
             src: Some(src.to_string()),
             ..Default::default()
-        },
+        }),
         ..Default::default()
     };
     Element {
         tag: "if".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             if_signal: Some(nav::PATH_SIGNAL.to_string()),
             if_eq: Some(key.to_string()),
             if_mode: IfModeSpec::Render,
             ..Default::default()
-        },
+        }),
         children: vec![image],
         ..Default::default()
     }

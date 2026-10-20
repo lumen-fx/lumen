@@ -14,11 +14,11 @@ use lumen_script::node_query;
 fn el(tag: &str, id: Option<&str>, classes: &[&str], children: Vec<Element>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: id.map(str::to_string),
             classes: classes.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
-        },
+        }),
         children,
         ..Default::default()
     }

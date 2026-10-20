@@ -36,14 +36,14 @@ const ROW_SIZE_PX: f32 = 30.0;
 fn el(tag: &str, id: Option<&str>, children: Vec<Element>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: id.map(str::to_string),
             // An editable only gets its `TextBuffer` once it carries
             // `TextContent`, which the authored `text` attribute is what
             // supplies; without it the field swallows every keystroke.
             text: (tag == "input").then(String::new),
             ..Default::default()
-        },
+        }),
         children,
         ..Default::default()
     }

@@ -174,7 +174,6 @@ pub fn report_once(key: &str, fault: &FragmentFault) {
 mod tests {
     use super::*;
     use lumen_ir::fragment::{FragmentKind, FragmentParam};
-    use lumen_ir::layout_ir::Attributes;
 
     fn fragment(params: Vec<FragmentParam>, body: Vec<Element>) -> Fragment {
         Fragment {
@@ -255,10 +254,7 @@ mod tests {
     #[test]
     fn a_named_slot_keeps_its_name() {
         let mut slot = el(SLOT_TAG);
-        slot.attrs = Attributes {
-            slot_name: Some("footer".to_string()),
-            ..Attributes::default()
-        };
+        slot.attrs.slot_name = Some("footer".to_string());
         assert_eq!(slot_name_of(&slot).as_deref(), Some("footer"));
     }
 }

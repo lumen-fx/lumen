@@ -33,13 +33,13 @@ fn run(source: &str) -> EcsApp {
         tag: "root".to_string(),
         children: vec![Element {
             tag: "label".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 id: Some("out".to_string()),
                 // `set_text` writes into an element that already carries text,
                 // so the label starts with a placeholder the script replaces.
                 text: Some("waiting".to_string()),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         }],
         ..Default::default()

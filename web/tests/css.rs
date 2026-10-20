@@ -374,7 +374,7 @@ fn site(mode: CssMode) -> SiteSpec {
     let mut ir = LayoutIR {
         root: Element {
             tag: "root".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 bg: Some(lumen_ir::layout_ir::BgSpec::Solid(
                     lumen_ir::layout_ir::Rgba {
                         r: 0.0,
@@ -384,7 +384,7 @@ fn site(mode: CssMode) -> SiteSpec {
                     },
                 )),
                 ..Attributes::default()
-            },
+            }),
             ..Element::default()
         },
         ..LayoutIR::default()

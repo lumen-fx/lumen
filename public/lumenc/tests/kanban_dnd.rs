@@ -68,18 +68,6 @@ fn lane_id_for(col: &str) -> &'static str {
 
 #[test]
 fn dragging_a_card_onto_another_lane_moves_it() {
-    // The full app build + cascade + taffy layout recurses deeper than a
-    // default 2 MiB test-thread stack; run the case on a roomy stack (the
-    // windowed path runs on the 8 MiB main thread).
-    std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
-        .spawn(run_case)
-        .expect("spawn test thread")
-        .join()
-        .expect("kanban dnd case");
-}
-
-fn run_case() {
     let dir = isolated_kanban();
     let mut opts = RunOptions::new(&dir);
     opts.hot_reload = false; // no notify watcher thread in a test

@@ -37,11 +37,11 @@ const POINTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pointer.cdlb"))
 fn tree() -> LayoutIR {
     let pad = Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("pad".to_string()),
             text: Some("pad".to_string()),
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     LayoutIR {

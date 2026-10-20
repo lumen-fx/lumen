@@ -50,10 +50,10 @@ fn app() -> CompiledApp {
                 tag: "root".to_string(),
                 children: vec![Element {
                     tag: "label".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         text: Some("rendered".to_string()),
                         ..Attributes::default()
-                    },
+                    }),
                     ..Element::default()
                 }],
                 ..Element::default()

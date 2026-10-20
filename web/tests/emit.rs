@@ -21,7 +21,7 @@ use lumen_web::{
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         children,
         ..Element::default()
     }
@@ -450,20 +450,20 @@ fn a_hidden_image_does_not_take_the_eager_slot() {
 fn widget_with_caption(tag: &str, part: WidgetPart, attrs: Attributes, caption: &str) -> Element {
     let indicator = Element {
         tag: "tile".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             part: Some(part),
             classes: vec![part.class().to_string()],
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     let label = Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             text: Some(caption.to_string()),
             classes: vec![format!("{tag}-label")],
             ..Attributes::default()
-        },
+        }),
         ..Element::default()
     };
     element(tag, attrs, vec![indicator, label])

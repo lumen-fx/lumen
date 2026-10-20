@@ -628,7 +628,7 @@ fn dialog_desugars_to_absolute_if_with_hide_mode() {
     assert_eq!(dlg.tag, "dialog");
     // Its placement is a user-agent default the style computation applies,
     // so a rule or an attribute can still move it.
-    let mut style = lumen_core::components::Style::from(&dlg.attrs);
+    let mut style = lumen_core::components::Style::from(&*dlg.attrs);
     lumenc::spawn::apply_ua_style_defaults(&dlg.tag, &dlg.attrs, false, &mut style);
     assert_eq!(style.position, lumen_core::components::Position::Absolute);
     let inset = style.inset;
