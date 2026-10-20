@@ -322,10 +322,10 @@ mod tests {
     fn body(text: &str) -> Vec<Element> {
         vec![Element {
             tag: "label".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 text: Some(text.to_string()),
                 ..Attributes::default()
-            },
+            }),
             ..Element::default()
         }]
     }

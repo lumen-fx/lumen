@@ -51,10 +51,10 @@ wasm_bindgen_test_configure!(run_in_browser);
 fn element(tag: &str, text: Option<&str>, children: Vec<IrElement>) -> IrElement {
     IrElement {
         tag: tag.to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             text: text.map(str::to_string),
             ..Attributes::default()
-        },
+        }),
         children,
         ..IrElement::default()
     }
@@ -865,12 +865,12 @@ fn a_single_file_app_swaps_its_one_page_in_place() {
 fn page_gate(key: &str, text: &str) -> IrElement {
     IrElement {
         tag: "if".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             if_signal: Some(lumen_core::nav::PATH_SIGNAL.to_string()),
             if_eq: Some(key.to_string()),
             if_mode: IfModeSpec::Render,
             ..Attributes::default()
-        },
+        }),
         children: vec![element("label", Some(text), Vec::new())],
         ..IrElement::default()
     }
@@ -2132,7 +2132,7 @@ fn widget(tag: &str, part: WidgetPart, attrs: Attributes, caption: &str) -> IrEl
     label.attrs.classes = vec![format!("{tag}-label")];
     IrElement {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         children: vec![indicator, label],
         ..IrElement::default()
     }
@@ -2209,11 +2209,11 @@ fn a_page_of_controls_is_adopted_without_being_touched() {
 fn gated_control_tree() -> LayoutIR {
     let gate = IrElement {
         tag: "if".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             if_signal: Some("shown".to_string()),
             if_mode: IfModeSpec::Render,
             ..Attributes::default()
-        },
+        }),
         children: vec![widget(
             "checkbox",
             WidgetPart::CheckboxBox,
@@ -2450,11 +2450,11 @@ fn a_radio_group_mounted_at_runtime_is_one_group() {
     let tree = || {
         let gate = IrElement {
             tag: "if".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 if_signal: Some("shown".to_string()),
                 if_mode: IfModeSpec::Render,
                 ..Attributes::default()
-            },
+            }),
             children: radio_group(),
             ..IrElement::default()
         };

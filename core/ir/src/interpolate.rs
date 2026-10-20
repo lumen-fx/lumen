@@ -120,7 +120,7 @@ pub fn substitute_element(template: &Element, scope: &Scope<'_>) -> Element {
 /// children alone.
 fn substitute_in_place(element: &mut Element, scope: &Scope<'_>) {
     if let Some(attrs) = substitute_attrs(&element.attrs, &element.interpolations, scope) {
-        element.attrs = attrs;
+        *element.attrs = attrs;
     }
     // A component's props are written the way its text is, so a use site
     // inside a `<for>` body names the row's fields and is called with the
@@ -570,10 +570,10 @@ mod tests {
         let row = item(&[("name", "alpha")]);
         let leaf = Element {
             tag: "label".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 text: Some("{row.name} #{$index}".to_string()),
                 ..Attributes::default()
-            },
+            }),
             interpolations: vec![
                 InterpolationSlot::Row("name".to_string()),
                 InterpolationSlot::RowIndex,
@@ -582,10 +582,10 @@ mod tests {
         };
         let template = Element {
             tag: "row".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 classes: vec!["item-{$index}".to_string()],
                 ..Attributes::default()
-            },
+            }),
             children: vec![leaf],
             interpolations: vec![InterpolationSlot::RowIndex],
             ..Element::default()

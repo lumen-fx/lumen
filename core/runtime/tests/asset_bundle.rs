@@ -49,18 +49,18 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 fn image_app(dir: &std::path::Path) -> Vec<u8> {
     let image = Element {
         tag: "image".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("dot".to_string()),
             src: Some(dir.join("icons/dot.png").to_string_lossy().into_owned()),
             ..Default::default()
-        },
+        }),
         children: Vec::new(),
         ..Default::default()
     };
     let ir = LayoutIR {
         root: Element {
             tag: "root".to_string(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: vec![image],
             ..Default::default()
         },

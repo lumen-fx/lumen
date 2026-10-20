@@ -1058,11 +1058,12 @@ fn set_built_styles(attrs: &mut Attributes, decls: &[(&str, &str)]) {
 /// legal inside one of them. `None` means the tag spawns as itself and the
 /// caller builds it directly.
 ///
-/// Separate from [`build_element`] because that function recurses once per
-/// level of markup. An unoptimized build gives every local in these branches
-/// its own stack slot whether or not the branch runs, so leaving them inline
-/// puts the whole widget catalog on the stack at every depth, and a document
-/// nested a few levels deep runs the thread out of stack.
+/// Separate from [`build_element`], and each widget in its own function,
+/// because the parser recurses once per level of markup and `<tooltip>` and
+/// `<tabs>` recurse from inside their builders. An unoptimized build gives
+/// every local in a function its own stack slot whether or not the branch
+/// that uses it runs, so a builder holding the whole widget catalog would put
+/// all of it on the stack at every depth those two are nested.
 #[allow(clippy::too_many_arguments)]
 fn build_composed_widget(
     node: roxmltree::Node,
@@ -1075,522 +1076,571 @@ fn build_composed_widget(
     in_for_body: bool,
     depth: u32,
 ) -> Result<Option<Element>, ParseError> {
-    // `<tooltip text="..." delay="...">...trigger...</tooltip>` flattens to
-    // the trigger child with a `TooltipSpec` attached. The trigger
-    // must be a single layout element; multi-child tooltips are
-    // rejected here so authors get a clear parse error instead of a
-    // silent first-child pickup.
-    if tag == "tooltip" {
-        let text = node.attribute("text").unwrap_or("").to_string();
-        // The wrapper authors the popup body, so it carries the key for it.
-        // Empty is rejected here for the same reason the generic attribute
-        // rejects it: an empty key can never resolve.
-        let translatable = match node.attribute("translatable").map(str::trim) {
-            Some("") => {
-                return Err(ParseError::Xml(format!(
-                    "<tooltip> at byte {}: translatable attribute requires a \
-                     catalogue key (e.g. \"app-title\")",
-                    node.range().start
-                )));
-            }
-            other => other.map(str::to_string),
-        };
-        let delay_ms = node.attribute("delay").and_then(|s| s.parse::<u32>().ok());
-        let offset = node.attribute("offset").and_then(|s| s.parse::<f32>().ok());
-        let mut child_nodes = node
-            .children()
-            .filter(|c| c.is_element() && c.tag_name().name() != "script");
-        let Some(child) = child_nodes.next() else {
-            return Err(ParseError::Xml(format!(
-                "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element",
-                node.range().start
-            )));
-        };
-        if child_nodes.next().is_some() {
-            return Err(ParseError::Xml(format!(
-                "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element \
-                 (got >1)",
-                node.range().start
-            )));
-        }
-        let mut elem = build_element(
-            child,
+    match tag {
+        "tooltip" => build_tooltip(
+            node,
             script_buf,
             external_scripts,
             src,
             lint_findings,
             frag,
             in_for_body,
-            depth + 1,
-        )?;
-        elem.attrs.tooltip = Some(crate::layout_ir::TooltipSpec {
-            text,
-            translatable,
-            delay_ms,
-            offset,
-        });
-        elem.attrs.widget = Some(WidgetRole::Tooltip);
-        return Ok(Some(elem));
-    }
-
-    // `<tabs bind-value="active_tab">` collapses into a column with a
-    // tab strip on top + one `<if eq>` body per `<tab>`. The strip
-    // buttons each carry a `tab_strip_button = (signal, value)` so
-    // the runtime click->signal system can flip the active tab
-    // without an author-side script.
-    if tag == "tabs" {
-        let signal_name = node
-            .attribute("bind-value")
-            .map(signal_attr_name)
-            .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<tabs> at byte {} requires bind-value=\"signal-name\"",
-                    node.range().start
-                ))
-            })?;
-        let mut tab_buttons: Vec<Element> = Vec::new();
-        let mut tab_bodies: Vec<Element> = Vec::new();
-        let mut first_name: Option<String> = None;
-        for child in node
-            .children()
-            .filter(|c| c.is_element() && c.tag_name().name() != "script")
-        {
-            if child.tag_name().name() != "tab" {
-                return Err(ParseError::Xml(format!(
-                    "<tabs> child at byte {} must be <tab>, got <{}>",
-                    child.range().start,
-                    child.tag_name().name()
-                )));
-            }
-            let tab_name = child
-                .attribute("name")
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    ParseError::Xml(format!(
-                        "<tab> at byte {} requires a name=\"...\" attribute",
-                        child.range().start
-                    ))
-                })?;
-            let tab_label = child
-                .attribute("label")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| tab_name.clone());
-            if first_name.is_none() {
-                first_name = Some(tab_name.clone());
-            }
-            // Strip button - `<button>` with TabStripButton attrs so
-            // the runtime knows to write `signal_name = tab_name` on
-            // click.
-            let mut btn = Element {
-                tag: "button".to_string(),
-                attrs: Attributes {
-                    tab_index: Some(0),
-                    ..Attributes::default()
-                },
-                children: Vec::new(),
-                ..Default::default()
-            };
-            // Its height, padding and share of the strip are theme
-            // metrics on `.tab-btn` in the user-agent sheet.
-            btn.attrs.text = Some(tab_label);
-            btn.attrs.classes = vec!["tab-btn".to_string()];
-            btn.attrs.tab_strip = Some((signal_name.clone(), tab_name.clone()));
-            // `disabled="true"` on a `<tab>`: the strip button is
-            // unclickable, skipped by arrow nav, `:disabled`-styled.
-            // The body `<if>` still mounts if the tab is somehow
-            // activated by a script write - parity with QTabBar, where
-            // disabling a tab doesn't unmount its page.
-            btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
-            tab_buttons.push(btn);
-            // Body - wrap children in `<if signal=... mode="hide" eq=tab_name>...</if>`
-            let mut body_children: Vec<Element> = Vec::new();
-            for body_child in child
-                .children()
-                .filter(|c| c.is_element() && c.tag_name().name() != "script")
-            {
-                body_children.push(build_element(
-                    body_child,
-                    script_buf,
-                    external_scripts,
-                    src,
-                    lint_findings,
-                    frag,
-                    in_for_body,
-                    depth + 1,
-                )?);
-            }
-            let mut if_block = Element {
-                tag: "if".to_string(),
-                attrs: Attributes::default(),
-                children: body_children,
-                ..Default::default()
-            };
-            if_block.attrs.if_signal = Some(signal_name.clone());
-            if_block.attrs.if_eq = Some(tab_name);
-            if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
-            tab_bodies.push(if_block);
-        }
-        // Seed the default active tab so the first body mounts at
-        // startup. Stored on the synthetic strip via a marker the
-        // spawn pass converts into a Signals seed. The strip and the
-        // column take their direction from their tags, as written ones do,
-        // and their width and spacing from `.tab-strip` / `.tabs` in the
-        // user-agent sheet.
-        let mut strip = Element {
-            tag: "row".to_string(),
-            children: tab_buttons,
-            ..Default::default()
-        };
-        strip.attrs.classes = vec!["tab-strip".to_string()];
-        let mut column = Element {
-            tag: "column".to_string(),
-            children: std::iter::once(strip).chain(tab_bodies).collect(),
-            ..Default::default()
-        };
-        column.attrs.classes = vec!["tabs".to_string()];
-        if let Some(default) = first_name {
-            column.attrs.signal_seed = Some((signal_name, default));
-        }
-        column.attrs.widget = Some(WidgetRole::Tabs);
-        return Ok(Some(column));
-    }
-
-    // `<tab>` outside of `<tabs>` is meaningless - collapsing it to
-    // its first child would be silently surprising. Reject so authors
-    // get a clear error.
-    if tag == "tab" {
-        return Err(ParseError::Xml(format!(
-            "<tab> at byte {} may only appear inside <tabs>",
-            node.range().start
-        )));
-    }
-
-    // `<dropdown bind-value="signal">` + `<option value="x"
-    // label="X"/>` children collapse to a column with a header button
-    // The header text binds to the active value signal; clicking it toggles a synthetic
-    // `__dropdown_open:<signal>` flag (managed by `lumen_primitives::DropdownButton`).
-    // Each option button writes the value and clears the flag.
-    if tag == "dropdown" {
-        let signal_name = node
-            .attribute("bind-value")
-            .map(signal_attr_name)
-            .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<dropdown> at byte {} requires bind-value=\"signal-name\"",
-                    node.range().start
-                ))
-            })?;
-        let open_signal = format!("__dropdown_open:{signal_name}");
-        // An authored `placeholder` means "start with nothing picked":
-        // the header shows the placeholder until a click or a script
-        // writes the value signal. Without one, the first `<option>`
-        // seeds the signal, so the dropdown opens on a real selection
-        // the way `<tabs>` opens on its first tab.
-        let placeholder = node.attribute("placeholder");
-        let seed_first_option = placeholder.is_none();
-        let placeholder = placeholder.unwrap_or_default().to_string();
-        let mut options: Vec<Element> = Vec::new();
-        let mut option_specs: Vec<(String, String, bool)> = Vec::new();
-        let mut default_value: Option<String> = None;
-        for child in node
-            .children()
-            .filter(|c| c.is_element() && c.tag_name().name() != "script")
-        {
-            if child.tag_name().name() != "option" {
-                return Err(ParseError::Xml(format!(
-                    "<dropdown> child at byte {} must be <option>, got <{}>",
-                    child.range().start,
-                    child.tag_name().name()
-                )));
-            }
-            let value = child
-                .attribute("value")
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    ParseError::Xml(format!(
-                        "<option> at byte {} requires value=\"...\"",
-                        child.range().start
-                    ))
-                })?;
-            let label = child
-                .attribute("label")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| value.clone());
-            // `disabled="true"` on an `<option>` - same truthiness rule
-            // every boolean attribute follows.
-            let disabled = bool_attribute_of(child, "disabled", src, lint_findings);
-            option_specs.push((value.clone(), label.clone(), disabled));
-            if default_value.is_none() {
-                default_value = Some(value.clone());
-            }
-            // An option row carries no sizing of its own: how tall it is
-            // and how far its text sits from the edge are theme metrics,
-            // and they live on `.dropdown-option` in the user-agent sheet
-            // where a skin or an app can overrule them.
-            let mut opt_btn = Element {
-                tag: "button".to_string(),
-                attrs: Attributes::default(),
-                children: Vec::new(),
-                ..Default::default()
-            };
-            opt_btn.attrs.text = Some(label);
-            opt_btn.attrs.classes = vec!["dropdown-option".to_string()];
-            opt_btn.attrs.dropdown_option = Some((signal_name.clone(), value, open_signal.clone()));
-            opt_btn.attrs.disabled = disabled;
-            options.push(opt_btn);
-        }
-        // Header button - text bound to the active value (placeholder
-        // when empty). Click flips the open-panel signal. Focusable
-        // (`tab-index 0`, same explicit opt-in the `<tabs>` strip uses
-        // - synthetic elements bypass the per-tag default pass) so the
-        // closed combobox takes keyboard interaction like a
-        // `QComboBox`: Up/Down value stepping, Alt+Down / Space /
-        // Enter open, type-ahead.
-        // Its size is the control's: `.dropdown-button` fills the
-        // `<dropdown>` box in the user-agent sheet, so what the author
-        // sizes is what the closed combobox measures, and its height and
-        // padding stay theme metrics a skin can overrule.
-        let mut header = Element {
-            tag: "button".to_string(),
-            attrs: Attributes {
-                tab_index: Some(0),
-                ..Attributes::default()
-            },
-            children: Vec::new(),
-            ..Default::default()
-        };
-        header.attrs.text = Some(placeholder);
-        header.attrs.classes = vec!["dropdown-button".to_string()];
-        header.attrs.bind = Some(crate::layout_ir::BindSpec {
-            kind: BindKind::Text,
-            name: signal_name.clone(),
-        });
-        header.attrs.dropdown_button = Some(crate::layout_ir::DropdownButtonSpec {
-            open_signal: open_signal.clone(),
-            value_signal: signal_name.clone(),
-            options: option_specs,
-        });
-        // `Attributes` carries one `signal_seed` slot per element and
-        // the wrapper column's is spent on the open-panel flag, so the
-        // value seed rides on the header button. `spawn_element` reads
-        // the slot on every element and seeds only when nothing has
-        // written the signal yet, so a script's own initial value still
-        // wins.
-        if seed_first_option && let Some(default) = default_value {
-            header.attrs.signal_seed = Some((signal_name.clone(), default));
-        }
-
-        // Panel - absolute-positioned overlay with the options stack.
-        let mut panel = Element {
-            tag: "column".to_string(),
-            children: options,
-            ..Default::default()
-        };
-        set_built_styles(
-            &mut panel.attrs,
-            &[("position", "absolute"), ("inset", "40 0 -1 0")],
-        );
-        panel.attrs.classes = vec!["dropdown-panel".to_string()];
-        // Tag the panel so the runtime can dismiss it on an outside
-        // click and flip it above the trigger near the viewport bottom.
-        panel.attrs.popup_panel = Some(open_signal.clone());
-
-        // Wrap the panel in `<if eq="true" mode="hide">` keyed on the
-        // open signal so it shows / hides without despawning options.
-        let mut panel_if = Element {
-            tag: "if".to_string(),
-            attrs: Attributes::default(),
-            children: vec![panel],
-            ..Default::default()
-        };
-        panel_if.attrs.if_signal = Some(open_signal.clone());
-        panel_if.attrs.if_eq = Some("true".to_string());
-        panel_if.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
-
-        // The box the author sizes and styles. It keeps the authored tag
-        // and takes the attributes written on it, so `width="240"` and a
-        // `dropdown { ... }` rule reach the control the same way they
-        // reach a `<button>`; the parts it expands into are reachable by
-        // class beneath it.
-        // Its column direction comes from the `dropdown` rule in the
-        // user-agent sheet, and like every element it anchors the floating
-        // panel inside it.
-        let mut attrs = Attributes::default();
-        let mut slots: Vec<InterpolationSlot> = Vec::new();
-        apply_authored_attributes(
+            depth,
+        )
+        .map(Some),
+        "tabs" => build_tabs(
             node,
-            tag,
-            &mut attrs,
-            &mut slots,
+            script_buf,
+            external_scripts,
             src,
             lint_findings,
             frag,
             in_for_body,
-        )?;
-        // `bind-value` and `placeholder` are the widget's own vocabulary,
-        // spent above on the header's text binding and its resting text.
-        // Leaving them here would bind the box to the same signal and
-        // give it a second copy of the hint.
-        attrs.bind = None;
-        attrs.placeholder = None;
-        attrs.classes.push("dropdown".to_string());
-        // Seed the open-panel signal to "false" so the panel hides at
-        // startup.
-        attrs.signal_seed = Some((open_signal, "false".to_string()));
-        attrs.widget = Some(WidgetRole::Dropdown);
-        return Ok(Some(Element {
-            tag: tag.to_string(),
-            attrs,
-            children: vec![header, panel_if],
-            interpolations: slots,
-            ..Default::default()
-        }));
-    }
-
-    // `<option>` outside of `<dropdown>` is meaningless - same
-    // rejection rule as `<tab>` outside of `<tabs>`.
-    if tag == "option" {
-        return Err(ParseError::Xml(format!(
+            depth,
+        )
+        .map(Some),
+        // `<tab>` outside of `<tabs>` is meaningless - collapsing it to
+        // its first child would be silently surprising. Reject so authors
+        // get a clear error.
+        "tab" => Err(ParseError::Xml(format!(
+            "<tab> at byte {} may only appear inside <tabs>",
+            node.range().start
+        ))),
+        "dropdown" => build_dropdown(node, tag, src, lint_findings, frag, in_for_body).map(Some),
+        // `<option>` outside of `<dropdown>` is meaningless - same
+        // rejection rule as `<tab>` outside of `<tabs>`.
+        "option" => Err(ParseError::Xml(format!(
             "<option> at byte {} may only appear inside <dropdown>",
+            node.range().start
+        ))),
+        "menu" => build_menu(node, src, lint_findings).map(Some),
+        "menuitem" | "separator" => Err(ParseError::Xml(format!(
+            "<{tag}> at byte {} may only appear inside <menu> or <menubar>",
+            node.range().start
+        ))),
+        "date-picker" | "time-picker" => {
+            build_picker(node, tag, src, lint_findings, frag, in_for_body).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// `<tooltip text="..." delay="...">...trigger...</tooltip>` flattens to
+/// the trigger child with a `TooltipSpec` attached. The trigger
+/// must be a single layout element; multi-child tooltips are
+/// rejected here so authors get a clear parse error instead of a
+/// silent first-child pickup.
+#[allow(clippy::too_many_arguments)]
+fn build_tooltip(
+    node: roxmltree::Node,
+    script_buf: &mut InlineScripts,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<Element, ParseError> {
+    let text = node.attribute("text").unwrap_or("").to_string();
+    // The wrapper authors the popup body, so it carries the key for it.
+    // Empty is rejected here for the same reason the generic attribute
+    // rejects it: an empty key can never resolve.
+    let translatable = match node.attribute("translatable").map(str::trim) {
+        Some("") => {
+            return Err(ParseError::Xml(format!(
+                "<tooltip> at byte {}: translatable attribute requires a \
+                 catalogue key (e.g. \"app-title\")",
+                node.range().start
+            )));
+        }
+        other => other.map(str::to_string),
+    };
+    let delay_ms = node.attribute("delay").and_then(|s| s.parse::<u32>().ok());
+    let offset = node.attribute("offset").and_then(|s| s.parse::<f32>().ok());
+    let mut child_nodes = node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() != "script");
+    let Some(child) = child_nodes.next() else {
+        return Err(ParseError::Xml(format!(
+            "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element",
+            node.range().start
+        )));
+    };
+    if child_nodes.next().is_some() {
+        return Err(ParseError::Xml(format!(
+            "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element \
+             (got >1)",
             node.range().start
         )));
     }
+    let mut elem = build_element(
+        child,
+        script_buf,
+        external_scripts,
+        src,
+        lint_findings,
+        frag,
+        in_for_body,
+        depth + 1,
+    )?;
+    elem.attrs.tooltip = Some(crate::layout_ir::TooltipSpec {
+        text,
+        translatable,
+        delay_ms,
+        offset,
+    });
+    elem.attrs.widget = Some(WidgetRole::Tooltip);
+    Ok(elem)
+}
 
-    // `<menu id="m">` collapses into an `<if eq="true">` keyed on `__menu_open:m`.
-    // Body becomes an `<overlay class="menu-panel">` carrying one button per `<menuitem>` and a thin spacer per `<separator>`.
-    // `<menubar>`-nested `<menu>` blocks are extracted upstream by `extract_menubar` and never reach `build_element`.
-    if tag == "menu" {
-        let menu_id = node.attribute("id").map(|s| s.to_string()).ok_or_else(|| {
+/// `<tabs bind-value="active_tab">` collapses into a column with a
+/// tab strip on top + one `<if eq>` body per `<tab>`. The strip
+/// buttons each carry a `tab_strip_button = (signal, value)` so
+/// the runtime click->signal system can flip the active tab
+/// without an author-side script.
+#[allow(clippy::too_many_arguments)]
+fn build_tabs(
+    node: roxmltree::Node,
+    script_buf: &mut InlineScripts,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<Element, ParseError> {
+    let signal_name = node
+        .attribute("bind-value")
+        .map(signal_attr_name)
+        .ok_or_else(|| {
             ParseError::Xml(format!(
-                "<menu> at byte {} requires id=\"...\"",
+                "<tabs> at byte {} requires bind-value=\"signal-name\"",
                 node.range().start
             ))
         })?;
-        let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
-        for child in node
+    let mut tab_buttons: Vec<Element> = Vec::new();
+    let mut tab_bodies: Vec<Element> = Vec::new();
+    let mut first_name: Option<String> = None;
+    for child in node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() != "script")
+    {
+        if child.tag_name().name() != "tab" {
+            return Err(ParseError::Xml(format!(
+                "<tabs> child at byte {} must be <tab>, got <{}>",
+                child.range().start,
+                child.tag_name().name()
+            )));
+        }
+        let tab_name = child
+            .attribute("name")
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ParseError::Xml(format!(
+                    "<tab> at byte {} requires a name=\"...\" attribute",
+                    child.range().start
+                ))
+            })?;
+        let tab_label = child
+            .attribute("label")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| tab_name.clone());
+        if first_name.is_none() {
+            first_name = Some(tab_name.clone());
+        }
+        // Strip button - `<button>` with TabStripButton attrs so
+        // the runtime knows to write `signal_name = tab_name` on
+        // click.
+        let mut btn = Element {
+            tag: "button".to_string(),
+            ..Default::default()
+        };
+        btn.attrs.tab_index = Some(0);
+        // Its height, padding and share of the strip are theme
+        // metrics on `.tab-btn` in the user-agent sheet.
+        btn.attrs.text = Some(tab_label);
+        btn.attrs.classes = vec!["tab-btn".to_string()];
+        btn.attrs.tab_strip = Some((signal_name.clone(), tab_name.clone()));
+        // `disabled="true"` on a `<tab>`: the strip button is
+        // unclickable, skipped by arrow nav, `:disabled`-styled.
+        // The body `<if>` still mounts if the tab is somehow
+        // activated by a script write - parity with QTabBar, where
+        // disabling a tab doesn't unmount its page.
+        btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
+        tab_buttons.push(btn);
+        // Body - wrap children in `<if signal=... mode="hide" eq=tab_name>...</if>`
+        let mut body_children: Vec<Element> = Vec::new();
+        for body_child in child
             .children()
             .filter(|c| c.is_element() && c.tag_name().name() != "script")
         {
-            match child.tag_name().name() {
-                "menuitem" => {
-                    let item_id =
-                        child
-                            .attribute("id")
-                            .map(|s| s.to_string())
-                            .ok_or_else(|| {
-                                ParseError::Xml(format!(
-                                    "<menuitem> at byte {} requires id=\"...\"",
-                                    child.range().start
-                                ))
-                            })?;
-                    let label = child
-                        .attribute("label")
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| item_id.clone());
-                    rows.push(lumen_ir::menu::MenuRow::Item {
-                        id: item_id,
-                        label,
-                        disabled: bool_attribute_of(child, "disabled", src, lint_findings),
-                    });
-                }
-                "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),
-                other => {
-                    return Err(ParseError::Xml(format!(
-                        "<menu> child at byte {} must be <menuitem> or <separator>, got <{}>",
-                        child.range().start,
-                        other
-                    )));
-                }
-            }
+            body_children.push(build_element(
+                body_child,
+                script_buf,
+                external_scripts,
+                src,
+                lint_findings,
+                frag,
+                in_for_body,
+                depth + 1,
+            )?);
         }
-        // The popup an in-window menu bar builds its menus from too.
-        return Ok(Some(lumen_ir::menu::popup_menu(&menu_id, &rows)));
-    }
-
-    if matches!(tag, "menuitem" | "separator") {
-        return Err(ParseError::Xml(format!(
-            "<{tag}> at byte {} may only appear inside <menu> or <menubar>",
-            node.range().start
-        )));
-    }
-
-    // Collapse `<date-picker>` and `<time-picker>` into a validated `<input>` with a built-in pattern that enforces the shape.
-    // Form validation mirrors the value into `valid:<id>`; authors hook the existing `text-input` commit dispatch on submit.
-    if matches!(tag, "date-picker" | "time-picker") {
-        let is_time = tag == "time-picker";
-        let signal_name = node
-            .attribute("bind-value")
-            .map(signal_attr_name)
-            .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<{tag}> at byte {} requires bind-value=\"signal-name\"",
-                    node.range().start
-                ))
-            })?;
-        // The generated field is an `<input>`, so the attributes written on
-        // the picker (`class`, `tab-index`, `required`, sizing, ...) reach it
-        // the way they reach a written `<input>`.
-        let mut attrs = Attributes::default();
-        let mut slots: Vec<InterpolationSlot> = Vec::new();
-        apply_authored_attributes(
-            node,
-            "input",
-            &mut attrs,
-            &mut slots,
-            src,
-            lint_findings,
-            frag,
-            in_for_body,
-        )?;
-        if attrs.placeholder.is_none() {
-            attrs.placeholder = Some(if is_time {
-                "HH:MM".to_string()
-            } else {
-                "YYYY-MM-DD".to_string()
-            });
-        }
-        // Its default width is `.date-picker` / `.time-picker` in the
-        // user-agent sheet.
-        // In the Tab order like every other text field, unless the author
-        // took it out.
-        if attrs.tab_index.is_none() {
-            attrs.tab_index = Some(0);
-        }
-        // Structural patterns, checked by `lumen_primitives::validation`:
-        // `shape:time` is 24-hour `HH:MM` (hour 00-23, minute 00-59),
-        // `shape:date` is ISO 8601 `YYYY-MM-DD` (month 01-12, day
-        // 01-31). Both are shape checks, not calendar checks - 2026-02-31
-        // passes.
-        let pattern = if is_time { "shape:time" } else { "shape:date" };
-        let class = if is_time {
-            "time-picker"
-        } else {
-            "date-picker"
-        };
-        // `bind-value` is the picker's own vocabulary: the field edits the
-        // signal as text.
-        attrs.bind = Some(crate::layout_ir::BindSpec {
-            kind: BindKind::Text,
-            name: signal_name,
-        });
-        attrs.pattern = Some(pattern.to_string());
-        attrs.classes.insert(0, class.to_string());
-        attrs.widget = Some(if is_time {
-            WidgetRole::TimePicker
-        } else {
-            WidgetRole::DatePicker
-        });
-        let input = Element {
-            tag: "input".to_string(),
-            attrs,
-            children: Vec::new(),
-            interpolations: slots,
+        let mut if_block = Element {
+            tag: "if".to_string(),
+            attrs: Box::default(),
+            children: body_children,
             ..Default::default()
         };
-        return Ok(Some(input));
+        if_block.attrs.if_signal = Some(signal_name.clone());
+        if_block.attrs.if_eq = Some(tab_name);
+        if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
+        tab_bodies.push(if_block);
+    }
+    // Seed the default active tab so the first body mounts at
+    // startup. Stored on the synthetic strip via a marker the
+    // spawn pass converts into a Signals seed. The strip and the
+    // column take their direction from their tags, as written ones do,
+    // and their width and spacing from `.tab-strip` / `.tabs` in the
+    // user-agent sheet.
+    let mut strip = Element {
+        tag: "row".to_string(),
+        children: tab_buttons,
+        ..Default::default()
+    };
+    strip.attrs.classes = vec!["tab-strip".to_string()];
+    let mut column = Element {
+        tag: "column".to_string(),
+        children: std::iter::once(strip).chain(tab_bodies).collect(),
+        ..Default::default()
+    };
+    column.attrs.classes = vec!["tabs".to_string()];
+    if let Some(default) = first_name {
+        column.attrs.signal_seed = Some((signal_name, default));
+    }
+    column.attrs.widget = Some(WidgetRole::Tabs);
+    Ok(column)
+}
+
+/// `<dropdown bind-value="signal">` + `<option value="x"
+/// label="X"/>` children collapse to a column with a header button
+/// The header text binds to the active value signal; clicking it toggles a synthetic
+/// `__dropdown_open:<signal>` flag (managed by `lumen_primitives::DropdownButton`).
+/// Each option button writes the value and clears the flag.
+fn build_dropdown(
+    node: roxmltree::Node,
+    tag: &str,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+) -> Result<Element, ParseError> {
+    let signal_name = node
+        .attribute("bind-value")
+        .map(signal_attr_name)
+        .ok_or_else(|| {
+            ParseError::Xml(format!(
+                "<dropdown> at byte {} requires bind-value=\"signal-name\"",
+                node.range().start
+            ))
+        })?;
+    let open_signal = format!("__dropdown_open:{signal_name}");
+    // An authored `placeholder` means "start with nothing picked":
+    // the header shows the placeholder until a click or a script
+    // writes the value signal. Without one, the first `<option>`
+    // seeds the signal, so the dropdown opens on a real selection
+    // the way `<tabs>` opens on its first tab.
+    let placeholder = node.attribute("placeholder");
+    let seed_first_option = placeholder.is_none();
+    let placeholder = placeholder.unwrap_or_default().to_string();
+    let mut options: Vec<Element> = Vec::new();
+    let mut option_specs: Vec<(String, String, bool)> = Vec::new();
+    let mut default_value: Option<String> = None;
+    for child in node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() != "script")
+    {
+        if child.tag_name().name() != "option" {
+            return Err(ParseError::Xml(format!(
+                "<dropdown> child at byte {} must be <option>, got <{}>",
+                child.range().start,
+                child.tag_name().name()
+            )));
+        }
+        let value = child
+            .attribute("value")
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ParseError::Xml(format!(
+                    "<option> at byte {} requires value=\"...\"",
+                    child.range().start
+                ))
+            })?;
+        let label = child
+            .attribute("label")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| value.clone());
+        // `disabled="true"` on an `<option>` - same truthiness rule
+        // every boolean attribute follows.
+        let disabled = bool_attribute_of(child, "disabled", src, lint_findings);
+        option_specs.push((value.clone(), label.clone(), disabled));
+        if default_value.is_none() {
+            default_value = Some(value.clone());
+        }
+        // An option row carries no sizing of its own: how tall it is
+        // and how far its text sits from the edge are theme metrics,
+        // and they live on `.dropdown-option` in the user-agent sheet
+        // where a skin or an app can overrule them.
+        let mut opt_btn = Element {
+            tag: "button".to_string(),
+            attrs: Box::default(),
+            children: Vec::new(),
+            ..Default::default()
+        };
+        opt_btn.attrs.text = Some(label);
+        opt_btn.attrs.classes = vec!["dropdown-option".to_string()];
+        opt_btn.attrs.dropdown_option = Some((signal_name.clone(), value, open_signal.clone()));
+        opt_btn.attrs.disabled = disabled;
+        options.push(opt_btn);
+    }
+    // Header button - text bound to the active value (placeholder
+    // when empty). Click flips the open-panel signal. Focusable
+    // (`tab-index 0`, same explicit opt-in the `<tabs>` strip uses
+    // - synthetic elements bypass the per-tag default pass) so the
+    // closed combobox takes keyboard interaction like a
+    // `QComboBox`: Up/Down value stepping, Alt+Down / Space /
+    // Enter open, type-ahead.
+    // Its size is the control's: `.dropdown-button` fills the
+    // `<dropdown>` box in the user-agent sheet, so what the author
+    // sizes is what the closed combobox measures, and its height and
+    // padding stay theme metrics a skin can overrule.
+    let mut header = Element {
+        tag: "button".to_string(),
+        ..Default::default()
+    };
+    header.attrs.tab_index = Some(0);
+    header.attrs.text = Some(placeholder);
+    header.attrs.classes = vec!["dropdown-button".to_string()];
+    header.attrs.bind = Some(crate::layout_ir::BindSpec {
+        kind: BindKind::Text,
+        name: signal_name.clone(),
+    });
+    header.attrs.dropdown_button = Some(crate::layout_ir::DropdownButtonSpec {
+        open_signal: open_signal.clone(),
+        value_signal: signal_name.clone(),
+        options: option_specs,
+    });
+    // `Attributes` carries one `signal_seed` slot per element and
+    // the wrapper column's is spent on the open-panel flag, so the
+    // value seed rides on the header button. `spawn_element` reads
+    // the slot on every element and seeds only when nothing has
+    // written the signal yet, so a script's own initial value still
+    // wins.
+    if seed_first_option && let Some(default) = default_value {
+        header.attrs.signal_seed = Some((signal_name.clone(), default));
     }
 
-    Ok(None)
+    // Panel - absolute-positioned overlay with the options stack.
+    let mut panel = Element {
+        tag: "column".to_string(),
+        children: options,
+        ..Default::default()
+    };
+    set_built_styles(
+        &mut panel.attrs,
+        &[("position", "absolute"), ("inset", "40 0 -1 0")],
+    );
+    panel.attrs.classes = vec!["dropdown-panel".to_string()];
+    // Tag the panel so the runtime can dismiss it on an outside
+    // click and flip it above the trigger near the viewport bottom.
+    panel.attrs.popup_panel = Some(open_signal.clone());
+
+    // Wrap the panel in `<if eq="true" mode="hide">` keyed on the
+    // open signal so it shows / hides without despawning options.
+    let mut panel_if = Element {
+        tag: "if".to_string(),
+        attrs: Box::default(),
+        children: vec![panel],
+        ..Default::default()
+    };
+    panel_if.attrs.if_signal = Some(open_signal.clone());
+    panel_if.attrs.if_eq = Some("true".to_string());
+    panel_if.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
+
+    // The box the author sizes and styles. It keeps the authored tag
+    // and takes the attributes written on it, so `width="240"` and a
+    // `dropdown { ... }` rule reach the control the same way they
+    // reach a `<button>`; the parts it expands into are reachable by
+    // class beneath it.
+    // Its column direction comes from the `dropdown` rule in the
+    // user-agent sheet, and like every element it anchors the floating
+    // panel inside it.
+    let mut attrs = Box::<Attributes>::default();
+    let mut slots: Vec<InterpolationSlot> = Vec::new();
+    apply_authored_attributes(
+        node,
+        tag,
+        &mut attrs,
+        &mut slots,
+        src,
+        lint_findings,
+        frag,
+        in_for_body,
+    )?;
+    // `bind-value` and `placeholder` are the widget's own vocabulary,
+    // spent above on the header's text binding and its resting text.
+    // Leaving them here would bind the box to the same signal and
+    // give it a second copy of the hint.
+    attrs.bind = None;
+    attrs.placeholder = None;
+    attrs.classes.push("dropdown".to_string());
+    // Seed the open-panel signal to "false" so the panel hides at
+    // startup.
+    attrs.signal_seed = Some((open_signal, "false".to_string()));
+    attrs.widget = Some(WidgetRole::Dropdown);
+    Ok(Element {
+        tag: tag.to_string(),
+        attrs,
+        children: vec![header, panel_if],
+        interpolations: slots,
+        ..Default::default()
+    })
+}
+
+/// `<menu id="m">` collapses into an `<if eq="true">` keyed on `__menu_open:m`.
+/// Body becomes an `<overlay class="menu-panel">` carrying one button per `<menuitem>` and a thin spacer per `<separator>`.
+/// `<menubar>`-nested `<menu>` blocks are extracted upstream by `extract_menubar` and never reach `build_element`.
+fn build_menu(
+    node: roxmltree::Node,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+) -> Result<Element, ParseError> {
+    let menu_id = node.attribute("id").map(|s| s.to_string()).ok_or_else(|| {
+        ParseError::Xml(format!(
+            "<menu> at byte {} requires id=\"...\"",
+            node.range().start
+        ))
+    })?;
+    let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
+    for child in node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() != "script")
+    {
+        match child.tag_name().name() {
+            "menuitem" => {
+                let item_id = child
+                    .attribute("id")
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| {
+                        ParseError::Xml(format!(
+                            "<menuitem> at byte {} requires id=\"...\"",
+                            child.range().start
+                        ))
+                    })?;
+                let label = child
+                    .attribute("label")
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| item_id.clone());
+                rows.push(lumen_ir::menu::MenuRow::Item {
+                    id: item_id,
+                    label,
+                    disabled: bool_attribute_of(child, "disabled", src, lint_findings),
+                });
+            }
+            "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),
+            other => {
+                return Err(ParseError::Xml(format!(
+                    "<menu> child at byte {} must be <menuitem> or <separator>, got <{}>",
+                    child.range().start,
+                    other
+                )));
+            }
+        }
+    }
+    // The popup an in-window menu bar builds its menus from too.
+    Ok(lumen_ir::menu::popup_menu(&menu_id, &rows))
+}
+
+/// Collapse `<date-picker>` and `<time-picker>` into a validated `<input>` with a built-in pattern that enforces the shape.
+/// Form validation mirrors the value into `valid:<id>`; authors hook the existing `text-input` commit dispatch on submit.
+fn build_picker(
+    node: roxmltree::Node,
+    tag: &str,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+) -> Result<Element, ParseError> {
+    let is_time = tag == "time-picker";
+    let signal_name = node
+        .attribute("bind-value")
+        .map(signal_attr_name)
+        .ok_or_else(|| {
+            ParseError::Xml(format!(
+                "<{tag}> at byte {} requires bind-value=\"signal-name\"",
+                node.range().start
+            ))
+        })?;
+    // The generated field is an `<input>`, so the attributes written on
+    // the picker (`class`, `tab-index`, `required`, sizing, ...) reach it
+    // the way they reach a written `<input>`.
+    let mut attrs = Box::<Attributes>::default();
+    let mut slots: Vec<InterpolationSlot> = Vec::new();
+    apply_authored_attributes(
+        node,
+        "input",
+        &mut attrs,
+        &mut slots,
+        src,
+        lint_findings,
+        frag,
+        in_for_body,
+    )?;
+    if attrs.placeholder.is_none() {
+        attrs.placeholder = Some(if is_time {
+            "HH:MM".to_string()
+        } else {
+            "YYYY-MM-DD".to_string()
+        });
+    }
+    // Its default width is `.date-picker` / `.time-picker` in the
+    // user-agent sheet.
+    // In the Tab order like every other text field, unless the author
+    // took it out.
+    if attrs.tab_index.is_none() {
+        attrs.tab_index = Some(0);
+    }
+    // Structural patterns, checked by `lumen_primitives::validation`:
+    // `shape:time` is 24-hour `HH:MM` (hour 00-23, minute 00-59),
+    // `shape:date` is ISO 8601 `YYYY-MM-DD` (month 01-12, day
+    // 01-31). Both are shape checks, not calendar checks - 2026-02-31
+    // passes.
+    let pattern = if is_time { "shape:time" } else { "shape:date" };
+    let class = if is_time {
+        "time-picker"
+    } else {
+        "date-picker"
+    };
+    // `bind-value` is the picker's own vocabulary: the field edits the
+    // signal as text.
+    attrs.bind = Some(crate::layout_ir::BindSpec {
+        kind: BindKind::Text,
+        name: signal_name,
+    });
+    attrs.pattern = Some(pattern.to_string());
+    attrs.classes.insert(0, class.to_string());
+    attrs.widget = Some(if is_time {
+        WidgetRole::TimePicker
+    } else {
+        WidgetRole::DatePicker
+    });
+    let input = Element {
+        tag: "input".to_string(),
+        attrs,
+        children: Vec::new(),
+        interpolations: slots,
+        ..Default::default()
+    };
+    Ok(input)
 }
 
 /// Synthesize the part children a widget tag paints itself out of, after the
@@ -1648,10 +1698,10 @@ fn synthesize_widget_parts(
         let box_class = part.class();
         let mut indicator = Element {
             tag: "tile".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 part: Some(part),
                 ..Attributes::default()
-            },
+            }),
             children: Vec::new(),
             ..Default::default()
         };
@@ -1661,7 +1711,7 @@ fn synthesize_widget_parts(
         if let Some(label) = attrs.text.take() {
             let mut lbl = Element {
                 tag: "label".to_string(),
-                attrs: Attributes::default(),
+                attrs: Box::default(),
                 children: Vec::new(),
                 ..Default::default()
             };
@@ -1692,10 +1742,10 @@ fn synthesize_widget_parts(
         let button = |part: crate::layout_ir::WidgetPart, label: &str| {
             let mut b = Element {
                 tag: "button".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     part: Some(part),
                     ..Attributes::default()
-                },
+                }),
                 ..Default::default()
             };
             b.attrs.text = Some(label.to_string());
@@ -1704,10 +1754,10 @@ fn synthesize_widget_parts(
         };
         let mut steps = Element {
             tag: "row".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 part: Some(crate::layout_ir::WidgetPart::NumberSteps),
                 ..Attributes::default()
-            },
+            }),
             children: vec![
                 button(crate::layout_ir::WidgetPart::StepDown, "-"),
                 button(crate::layout_ir::WidgetPart::StepUp, "+"),
@@ -1755,10 +1805,10 @@ fn synthesize_widget_parts(
         let part = |tag: &str, part: Option<P>, class: &str, kids: Vec<Element>| {
             let mut el = Element {
                 tag: tag.to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     part,
                     ..Attributes::default()
-                },
+                }),
                 children: kids,
                 ..Default::default()
             };
@@ -1854,11 +1904,11 @@ fn synthesize_widget_parts(
         let gutter = || {
             let mut g = Element {
                 tag: "div".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     part: Some(crate::layout_ir::WidgetPart::SplitGutter),
                     tab_index: Some(0),
                     ..Attributes::default()
-                },
+                }),
                 ..Default::default()
             };
             g.attrs.classes = vec![
@@ -1889,10 +1939,10 @@ fn synthesize_widget_parts(
     if tag == "progress" {
         let mut fill = Element {
             tag: "tile".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 part: Some(crate::layout_ir::WidgetPart::ProgressFill),
                 ..Attributes::default()
-            },
+            }),
             children: Vec::new(),
             ..Default::default()
         };
@@ -2141,53 +2191,52 @@ fn build_element(
         return Ok(composed);
     }
 
-    let mut attrs = Attributes {
-        // A tag's default styles (a `<column>`'s direction, an
-        // `<overlay>`'s placement, a `<spacer>`'s grow, control sizing
-        // floors) are user-agent rules in `core/runtime/src/skins/ua.css`,
-        // not values written here. Written here they would be inline
-        // origin, which outranks every rule, and a restyle that rebuilds
-        // the element from the cascade could not rebuild them. The web
-        // target keeps its own copy of them in web/src/reset.css. Two
-        // cases that don't fit a plain CSS rule (a `<switch>` `min-width`
-        // that only applies when `width` is also unset, and the `<input>`
-        // / `<textarea>` `overflow: hidden` default backing off a
-        // shorthand `overflow` authored anywhere) stay in
-        // `lumen_scene::spawn::apply_ua_style_defaults`, which spawning
-        // and a restyle both run.
-        // <input> seeds an empty editable buffer so the focus router
-        // and the renderer have something to point at without the
-        // author having to write `text=""`.
-        text: if tag == "input" {
-            Some(String::new())
-        } else {
-            None
-        },
-        // Make every <input> / <textarea> / <button> / <toggle> /
-        // <slider> / <checkbox> focusable by default - implicit tabindex
-        // 0, mirroring the web (form controls are in the sequential
-        // focus order without an explicit `tabindex`) and Qt
-        // (`QLineEdit`/`QTextEdit`/`QAbstractButton` default
-        // `focusPolicy = StrongFocus`). Author can override with explicit
-        // `tab-index="-1"`. `<radio>` seeds -1: the roving-tabindex
-        // system (`lumen_primitives::sync_radio_tab_index`) promotes
-        // exactly one group member to 0 at runtime, so Tab enters/leaves
-        // the GROUP rather than each member.
-        tab_index: match tag.as_str() {
-            "input" | "textarea" | "button" | "toggle" | "switch" | "slider" | "checkbox" => {
-                Some(0)
-            }
-            "radio" => Some(-1),
-            _ => None,
-        },
-        // A registered custom tag keeps its attributes as authored, for the
-        // widget the spawner hands them to; `apply_attribute` fills it.
-        widget_attributes: if KNOWN_TAGS.contains(&tag.as_str()) {
-            None
-        } else {
-            Some(Vec::new())
-        },
-        ..Default::default()
+    // Built on the heap: this function recurses once per level of markup,
+    // and an unoptimized build keeps a by-value attribute bag (and the
+    // temporary a struct literal fills it from) in every frame.
+    let mut attrs = Box::<Attributes>::default();
+    // A tag's default styles (a `<column>`'s direction, an
+    // `<overlay>`'s placement, a `<spacer>`'s grow, control sizing
+    // floors) are user-agent rules in `core/runtime/src/skins/ua.css`,
+    // not values written here. Written here they would be inline
+    // origin, which outranks every rule, and a restyle that rebuilds
+    // the element from the cascade could not rebuild them. The web
+    // target keeps its own copy of them in web/src/reset.css. Two
+    // cases that don't fit a plain CSS rule (a `<switch>` `min-width`
+    // that only applies when `width` is also unset, and the `<input>`
+    // / `<textarea>` `overflow: hidden` default backing off a
+    // shorthand `overflow` authored anywhere) stay in
+    // `lumen_scene::spawn::apply_ua_style_defaults`, which spawning
+    // and a restyle both run.
+    // <input> seeds an empty editable buffer so the focus router
+    // and the renderer have something to point at without the
+    // author having to write `text=""`.
+    attrs.text = if tag == "input" {
+        Some(String::new())
+    } else {
+        None
+    };
+    // Make every <input> / <textarea> / <button> / <toggle> /
+    // <slider> / <checkbox> focusable by default - implicit tabindex
+    // 0, mirroring the web (form controls are in the sequential
+    // focus order without an explicit `tabindex`) and Qt
+    // (`QLineEdit`/`QTextEdit`/`QAbstractButton` default
+    // `focusPolicy = StrongFocus`). Author can override with explicit
+    // `tab-index="-1"`. `<radio>` seeds -1: the roving-tabindex
+    // system (`lumen_primitives::sync_radio_tab_index`) promotes
+    // exactly one group member to 0 at runtime, so Tab enters/leaves
+    // the GROUP rather than each member.
+    attrs.tab_index = match tag.as_str() {
+        "input" | "textarea" | "button" | "toggle" | "switch" | "slider" | "checkbox" => Some(0),
+        "radio" => Some(-1),
+        _ => None,
+    };
+    // A registered custom tag keeps its attributes as authored, for the
+    // widget the spawner hands them to; `apply_attribute` fills it.
+    attrs.widget_attributes = if KNOWN_TAGS.contains(&tag.as_str()) {
+        None
+    } else {
+        Some(Vec::new())
     };
 
     let mut slots: Vec<InterpolationSlot> = Vec::new();
@@ -2406,7 +2455,7 @@ fn build_fragment_use(
         .map(|a| (a.name().to_string(), a.value().to_string()))
         .collect();
     let mut slots = Vec::new();
-    let mut attrs = Attributes::default();
+    let mut attrs = Box::<Attributes>::default();
     if let Some(a) = node.attributes().find(|a| a.name() == "id") {
         attrs.id = Some(normalize_dollar_interpolation(
             a.value(),
@@ -2466,10 +2515,8 @@ fn build_slot(
     in_for_body: bool,
     depth: u32,
 ) -> Result<Element, ParseError> {
-    let mut attrs = Attributes {
-        slot_name: node.attribute("name").map(|n| n.to_string()),
-        ..Attributes::default()
-    };
+    let mut attrs = Box::<Attributes>::default();
+    attrs.slot_name = node.attribute("name").map(|n| n.to_string());
     let mut children = Vec::new();
     let mut slots = Vec::new();
     let default = node.attribute("default").unwrap_or_default();
@@ -3392,5 +3439,67 @@ mod widget_tag_tests {
         ))
         .expect("parse");
         assert_eq!(bag(&ir.root.children[0]), [("label", "oil")]);
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    /// Half the stack Windows gives a program's main thread, which is where
+    /// `lumenc run` parses the app before it opens the window. The other half
+    /// is for the frames above the parser.
+    const PARSER_STACK_BUDGET: usize = 512 * 1024;
+
+    /// A document nested `levels` deep below `<root>`, cycling through the
+    /// tags that recurse through their own builder (a `<tooltip>` trigger and
+    /// a `<tabs>` body) as well as a plain `<column>`, with a `<checkbox>` at
+    /// the bottom so the deepest frame also synthesizes widget parts.
+    fn nested(levels: u32) -> String {
+        let mut open = String::new();
+        let mut close = String::new();
+        for level in 1..levels {
+            match level % 3 {
+                0 => {
+                    open.push_str(&format!(r#"<tabs bind-value="tab{level}"><tab name="a">"#));
+                    close.insert_str(0, "</tab></tabs>");
+                }
+                1 => {
+                    open.push_str(r#"<tooltip text="tip">"#);
+                    close.insert_str(0, "</tooltip>");
+                }
+                _ => {
+                    open.push_str("<column>");
+                    close.insert_str(0, "</column>");
+                }
+            }
+        }
+        format!(r#"<root>{open}<checkbox text="leaf"/>{close}</root>"#)
+    }
+
+    /// Parse on a thread with `stack` bytes, so a frame that grows past what
+    /// the cap was sized for fails here as a stack overflow rather than in a
+    /// user's debug build on Windows.
+    fn parse_on_stack(markup: String, stack: usize) -> Result<LayoutIR, ParseError> {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(move || parse_html(&markup))
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread")
+    }
+
+    #[test]
+    fn the_deepest_document_the_cap_allows_parses_within_the_stack_budget() {
+        let ir = parse_on_stack(nested(MAX_ELEMENT_DEPTH), PARSER_STACK_BUDGET)
+            .expect("a document at the depth cap parses");
+        assert_eq!(ir.root.tag, "root");
+    }
+
+    #[test]
+    fn one_level_past_the_cap_is_a_parse_error() {
+        let err = parse_on_stack(nested(MAX_ELEMENT_DEPTH + 1), PARSER_STACK_BUDGET)
+            .expect_err("a document past the depth cap is rejected");
+        assert!(err.to_string().contains("too deeply nested"), "{err}");
     }
 }

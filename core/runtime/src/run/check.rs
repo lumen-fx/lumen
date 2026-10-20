@@ -657,10 +657,10 @@ mod tests {
     fn image(src: &str) -> Element {
         Element {
             tag: "image".to_string(),
-            attrs: Attributes {
+            attrs: Box::new(Attributes {
                 src: Some(src.to_string()),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         }
     }

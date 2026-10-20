@@ -32,10 +32,10 @@ const TAG: &str = "echo-view";
 fn element(tag: &str, text: Option<&str>, children: Vec<IrElement>) -> IrElement {
     IrElement {
         tag: tag.to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             text: text.map(str::to_string),
             ..Attributes::default()
-        },
+        }),
         children,
         ..IrElement::default()
     }

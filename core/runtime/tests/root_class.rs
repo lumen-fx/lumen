@@ -44,17 +44,17 @@ impl Harness {
         let ir = LayoutIR {
             root: Element {
                 tag: "root".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     id: Some("app".to_string()),
                     classes: vec!["shell".to_string()],
                     ..Default::default()
-                },
+                }),
                 children: vec![Element {
                     tag: "tile".to_string(),
-                    attrs: Attributes {
+                    attrs: Box::new(Attributes {
                         id: Some("box".to_string()),
                         ..Default::default()
-                    },
+                    }),
                     ..Default::default()
                 }],
                 ..Default::default()

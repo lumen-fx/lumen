@@ -53,7 +53,7 @@ fn in_turn() -> MutexGuard<'static, ()> {
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
     Element {
         tag: tag.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         children,
         ..Element::default()
     }

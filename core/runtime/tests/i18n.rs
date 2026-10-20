@@ -35,11 +35,11 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn label(text: Option<&str>, translatable: Option<&str>) -> Element {
     Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             text: text.map(str::to_string),
             translatable: translatable.map(str::to_string),
             ..Default::default()
-        },
+        }),
         children: Vec::new(),
         ..Default::default()
     }
@@ -48,11 +48,11 @@ fn label(text: Option<&str>, translatable: Option<&str>) -> Element {
 fn formatted_label(text: &str, format: &str) -> Element {
     Element {
         tag: "label".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             text: Some(text.to_string()),
             format: Some(format.to_string()),
             ..Default::default()
-        },
+        }),
         children: Vec::new(),
         ..Default::default()
     }
@@ -107,7 +107,7 @@ fn marked_markup_spawns_translated() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             label(Some("Hello!"), Some("greet")),
             // Only en-US carries this one: the fallback chain resolves it.
@@ -147,7 +147,7 @@ fn a_compiled_catalogue_fills_in_where_no_loose_file_is() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let root = || Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             label(Some("Hello!"), Some("greet")),
             label(Some("Goodbye!"), Some("bye")),
@@ -211,7 +211,7 @@ fn a_selected_arm_spawns_bidi_isolated() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![label(Some("You have messages"), Some("inbox"))],
         ..Default::default()
     };
@@ -243,7 +243,7 @@ fn a_named_fallback_locale_replaces_en_us() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             label(Some("Guten Tag"), Some("greet")),
             // Only the German catalogue carries this one.
@@ -273,7 +273,7 @@ fn untranslated_falls_back_to_authored_text_then_key() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             label(Some("Source text"), Some("absent-key")),
             label(None, Some("no-text-key")),
@@ -305,21 +305,21 @@ fn a_placeholder_and_a_tooltip_body_spawn_translated() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             Element {
                 tag: "input".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     placeholder: Some("Search catalogue".to_string()),
                     translatable: Some("search".to_string()),
                     ..Default::default()
-                },
+                }),
                 children: Vec::new(),
                 ..Default::default()
             },
             Element {
                 tag: "button".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     text: Some("Save".to_string()),
                     tooltip: Some(TooltipSpec {
                         text: "Save the file".to_string(),
@@ -328,7 +328,7 @@ fn a_placeholder_and_a_tooltip_body_spawn_translated() {
                         offset: None,
                     }),
                     ..Default::default()
-                },
+                }),
                 children: Vec::new(),
                 ..Default::default()
             },
@@ -370,7 +370,7 @@ fn script_translator_hook_resolves_the_catalogue() {
         &dir,
         Element {
             tag: "root".to_string(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: Vec::new(),
             ..Default::default()
         },
@@ -395,7 +395,7 @@ fn catalogue_reload_replaces_strings() {
         &dir,
         Element {
             tag: "root".to_string(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: Vec::new(),
             ..Default::default()
         },
@@ -425,7 +425,7 @@ fn formatted_markup_spawns_for_the_locale() {
 
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![
             formatted_label("1234.5", "currency:EUR"),
             formatted_label("2024-06-15T09:30:00Z", "date"),
@@ -463,7 +463,7 @@ fn a_bound_signal_is_formatted_on_every_write() {
     });
     let root = Element {
         tag: "root".to_string(),
-        attrs: Attributes::default(),
+        attrs: Box::default(),
         children: vec![live],
         ..Default::default()
     };
@@ -491,7 +491,7 @@ fn script_formatter_hook_reads_the_app_locale() {
         &dir,
         Element {
             tag: "root".to_string(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: Vec::new(),
             ..Default::default()
         },
@@ -550,11 +550,11 @@ fn direction_of(app: &mut lumen_core::app::App, id: &str) -> LayoutDirection {
 fn root_with_dir(dir: Option<LayoutDirection>) -> Element {
     Element {
         tag: "root".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("root".to_string()),
             dir,
             ..Default::default()
-        },
+        }),
         children: Vec::new(),
         ..Default::default()
     }
@@ -678,36 +678,36 @@ fn tooltips(app: &mut lumen_core::app::App) -> Vec<String> {
 fn switchable_tree() -> Element {
     Element {
         tag: "root".to_string(),
-        attrs: Attributes {
+        attrs: Box::new(Attributes {
             id: Some("root".to_string()),
             ..Default::default()
-        },
+        }),
         children: vec![
             label(Some("Good morning"), Some("greet")),
             Element {
                 tag: "input".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     id: Some("draft".to_string()),
                     text: Some("Good morning".to_string()),
                     translatable: Some("greet".to_string()),
                     ..Default::default()
-                },
+                }),
                 children: Vec::new(),
                 ..Default::default()
             },
             Element {
                 tag: "input".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     placeholder: Some("Search the catalogue".to_string()),
                     translatable: Some("search".to_string()),
                     ..Default::default()
-                },
+                }),
                 children: Vec::new(),
                 ..Default::default()
             },
             Element {
                 tag: "button".to_string(),
-                attrs: Attributes {
+                attrs: Box::new(Attributes {
                     text: Some("Save".to_string()),
                     tooltip: Some(TooltipSpec {
                         text: "Save the file".to_string(),
@@ -716,7 +716,7 @@ fn switchable_tree() -> Element {
                         offset: None,
                     }),
                     ..Default::default()
-                },
+                }),
                 children: Vec::new(),
                 ..Default::default()
             },
@@ -840,7 +840,7 @@ fn a_tag_that_is_not_a_locale_leaves_the_app_where_it_was() {
         &dir,
         Element {
             tag: "root".to_string(),
-            attrs: Attributes::default(),
+            attrs: Box::default(),
             children: vec![label(Some("Good morning"), Some("greet"))],
             ..Default::default()
         },

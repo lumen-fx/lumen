@@ -53,7 +53,7 @@ fn canvas_element(id: &str, size: Option<(f32, f32)>) -> Element {
     }
     Element {
         tag: lumen_canvas::TAG.to_string(),
-        attrs,
+        attrs: Box::new(attrs),
         ..Default::default()
     }
 }

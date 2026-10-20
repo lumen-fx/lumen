@@ -78,18 +78,6 @@ fn click_on(app: &mut App, id: &str) {
 
 #[test]
 fn scaffolded_counter_counts_clicks() {
-    // The full app build + cascade + taffy layout recurses deeper than a
-    // default 2 MiB test-thread stack; run the case on a roomy stack (the
-    // windowed path runs on the 8 MiB main thread).
-    std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
-        .spawn(run_case)
-        .expect("spawn test thread")
-        .join()
-        .expect("counter template case");
-}
-
-fn run_case() {
     let Some(dir) = scaffolded_counter("clicks") else {
         return;
     };
@@ -145,15 +133,6 @@ fn run_case() {
 /// graph here keeps that edge honest.
 #[test]
 fn click_lands_in_one_tick_with_extra_systems_installed() {
-    std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
-        .spawn(run_padded_case)
-        .expect("spawn test thread")
-        .join()
-        .expect("padded counter case");
-}
-
-fn run_padded_case() {
     use lumen_core::prelude::TickStage;
 
     let Some(dir) = scaffolded_counter("padded") else {
@@ -192,15 +171,6 @@ fn run_padded_case() {
 /// path.
 #[test]
 fn the_dom_dispatch_reaches_the_applier_through_the_graph() {
-    std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
-        .spawn(run_edge_case)
-        .expect("spawn test thread")
-        .join()
-        .expect("applier edge case");
-}
-
-fn run_edge_case() {
     use bevy_ecs::prelude::{IntoScheduleConfigs, Schedules};
     use lumen_core::app::Tick;
     use lumen_core::prelude::TickStage;
