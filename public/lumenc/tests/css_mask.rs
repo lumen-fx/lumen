@@ -190,3 +190,40 @@ fn without_masks_nothing_is_extracted() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A mask image scaled up under `image-rendering: pixelated`, here inherited
+/// from the row, samples the nearest pixel as an `<image>` does: the 2x1 mask
+/// stretched over a 40x40 box keeps a hard edge down the middle rather than a
+/// blended ramp.
+#[test]
+fn a_pixelated_mask_keeps_its_hard_edges() {
+    const CSS: &str = r#"
+root { padding: 0; align: start; }
+#bar { gap: 10px; align: start; image-rendering: pixelated; }
+#tinted, #parent { width: 40px; height: 40px; bg: #ff0000; }
+#kid { width: 20px; height: 40px; bg: #00ff00; }
+#tinted {
+  mask-image: url("art/mask.png");
+  mask-size: 40px 40px;
+  mask-repeat: no-repeat;
+}
+"#;
+    for backend in [Backend::Cpu, Backend::Gpu] {
+        if let (Backend::Gpu, Some(why)) = (backend, gpu_unavailable_reason()) {
+            eprintln!("skipping the GPU half: {why}");
+            continue;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-css-mask-pixelated-{backend:?}-{}",
+            std::process::id()
+        ));
+        let mut app = boot(&dir, backend, MARKUP, CSS);
+        settle(&mut app);
+        for (x, want) in [(18.5, RED), (19.5, RED), (20.5, BLACK), (21.5, BLACK)] {
+            let got = pixel(&mut app, "tinted", x, 20.0);
+            assert_eq!(got, want, "x = {x} on {backend:?}");
+        }
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
