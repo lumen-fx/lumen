@@ -66,7 +66,12 @@ pub(crate) fn start(config: &Config) -> Installed {
         .spawn(move || {
             let start = Instant::now();
             loop {
-                if let Ok(client) = Client::with_name(socket_name_of(socket)) {
+                // Up only once the helper answers: a connection succeeds
+                // while it waits in the listener's queue, and on macOS the
+                // handshake reads a helper that closed it unread as a yes.
+                if let Ok(client) = Client::with_name(socket_name_of(socket))
+                    && client.ping().is_ok()
+                {
                     connected(client, &hello);
                     return;
                 }
