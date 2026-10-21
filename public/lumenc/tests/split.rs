@@ -116,6 +116,117 @@ const ROW: &str = r#"<root>
 fn gutters_resize_the_panes() {
     row_split();
     column_split();
+    script_split();
+}
+
+/// What the split `s` holds, in order: a pane's id, or `|` for a gutter.
+fn split_children(app: &mut App) -> Vec<String> {
+    let mut q = app.world.query::<(bevy_ecs::entity::Entity, &LumenId)>();
+    let split = q
+        .iter(&app.world)
+        .find(|(_, id)| id.0 == "s")
+        .map(|(e, _)| e)
+        .expect("the split");
+    let children: Vec<bevy_ecs::entity::Entity> = app
+        .world
+        .get::<bevy_ecs::hierarchy::Children>(split)
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    children
+        .into_iter()
+        .map(|c| match app.world.get::<SplitGutter>(c) {
+            Some(_) => "|".to_string(),
+            None => app
+                .world
+                .get::<LumenId>(c)
+                .map_or_else(|| "?".to_string(), |id| id.0.clone()),
+        })
+        .collect()
+}
+
+/// A split a script builds gets the gutters markup would, between every two
+/// panes, and they resize it the same way; a pane taken out takes its gutter
+/// with it.
+fn script_split() {
+    let mut app = build(
+        r#"<root>
+  <script>
+    import "lumen.cdl";
+    fn pane(id: string) -> int {
+        let p = lumen::node_spawn("column");
+        lumen::node_set_id(p, id);
+        lumen::node_set_style(p, "grow", "1");
+        return p;
+    }
+    fn on_ready() {
+        let s = lumen::node_spawn("split");
+        lumen::node_set_id(s, "s");
+        lumen::node_set_style(s, "width", "400");
+        lumen::node_set_style(s, "height", "200");
+        lumen::node_append(lumen::node_document(), s);
+        let a = pane("a");
+        lumen::node_set_style(a, "min-width", "100");
+        lumen::node_append(s, a);
+        lumen::node_append(s, pane("b"));
+        lumen::node_append(s, pane("c"));
+    }
+    fn main() {}
+  </script>
+</root>"#,
+        "",
+    );
+    assert_eq!(split_children(&mut app), ["a", "|", "b", "|", "c"]);
+
+    let b = lumen_script::node_query::run_get_by_id("b").expect("pane b");
+    lumen_script::node_query::push_external_dom_command(lumen_script::ScriptCommand::RemoveNode {
+        node: b,
+    });
+    for _ in 0..4 {
+        app.tick();
+    }
+    assert_eq!(split_children(&mut app), ["a", "|", "c"]);
+    let mut gutters = app
+        .world
+        .query_filtered::<(), bevy_ecs::query::With<SplitGutter>>();
+    assert_eq!(
+        gutters.iter(&app.world).count(),
+        1,
+        "the spare gutter is gone"
+    );
+
+    let (_, g) = gutter(&mut app);
+    assert_eq!(g.size.x, 6.0, "the gutter is styled like a written one");
+    assert_eq!(rect(&mut app, "a").size.x, 197.0);
+    assert_eq!(rect(&mut app, "c").size.x, 197.0);
+    let at = g.absolute + g.size / 2.0;
+    run(
+        &mut app,
+        vec![
+            SimulateKind::PointerDown {
+                x: at.x,
+                y: at.y,
+                button: None,
+                pointer: Default::default(),
+            },
+            SimulateKind::PointerMove {
+                x: at.x + 50.0,
+                y: at.y,
+                pointer: Default::default(),
+            },
+            SimulateKind::PointerUp {
+                x: at.x + 50.0,
+                y: at.y,
+                button: None,
+                pointer: Default::default(),
+            },
+        ],
+    );
+    assert_eq!(
+        rect(&mut app, "a").size.x,
+        247.0,
+        "a drag resizes the panes"
+    );
+    assert_eq!(rect(&mut app, "c").size.x, 147.0);
 }
 
 fn row_split() {

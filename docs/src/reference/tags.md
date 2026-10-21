@@ -342,7 +342,8 @@ children covers nothing, because that parent measures zero. See
 
 Panes the user resizes. Each child is a pane, and a gutter goes between
 every two of them; dragging a gutter with the pointer moves the boundary
-between the two panes beside it.
+between the two panes beside it. A split a script builds, or adds panes to,
+gets its gutters the same way.
 
 ```html
 <split class="workspace">
