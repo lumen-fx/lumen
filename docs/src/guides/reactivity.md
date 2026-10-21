@@ -174,9 +174,11 @@ overwrite what the user is typing. The edit ends when the field loses focus, or
 when Enter commits a single-line field, and the field then takes the signal's
 value. A submit handler that clears the signal therefore clears the field while
 it keeps focus, with the caret after the new text, and the next key starts a
-new edit. Only an edit in progress holds a write back; any other focused
-element, such as a `<dropdown>` header that the popup returns focus to, keeps
-showing whatever its signal says.
+new edit. Only an edit in progress holds a write back. A field that has just
+taken focus, such as the first field of a dialog as it opens, shows every write
+until the first key reaches it, and any other focused element, such as a
+`<dropdown>` header that the popup returns focus to, keeps showing whatever its
+signal says.
 
 ## Where to look things up
 

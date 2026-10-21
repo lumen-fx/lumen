@@ -1340,12 +1340,13 @@ pub struct KeyReleased {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Focused;
 
-/// Marker on a focused single-line text field whose edit Enter committed, until
-/// the next key reaches it. A field with an edit in flight holds back signal
-/// writes so a script cannot clobber the typing; a committed field has none in
-/// flight, so [`crate::signals::apply_text_bindings`] gives it the signal's
-/// value while it keeps focus, and a submit handler that clears the signal
-/// clears the field.
+/// Marker on a focused text field with no edit in flight: focus has just
+/// arrived, or Enter committed a single-line edit, and no key has reached it
+/// since. A field with an edit in flight holds back signal writes so a script
+/// cannot clobber the typing; a field with this marker has none, so
+/// [`crate::signals::apply_text_bindings`] gives it the signal's value while
+/// it keeps focus. A dialog's first field shows what the app wrote to its
+/// signal, and a submit handler that clears the signal clears the field.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct EditCommitted;
 

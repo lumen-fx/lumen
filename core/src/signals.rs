@@ -342,7 +342,8 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// keep the old locale's grouping until the next write to `count`.
 ///
 /// Editing-protection gate: an entity is skipped while an edit is in flight on
-/// it, meaning a focused [`TextInput`] or an active [`ImeState`] preedit.
+/// it, meaning a focused [`TextInput`] a key has reached since it took focus
+/// (one without [`EditCommitted`]) or an active [`ImeState`] preedit.
 /// Overwriting `TextContent` mid-edit would race the keystroke / IME path in
 /// [`crate::input::route_ime_events`] and `lumen_input::type_into_focused`,
 /// wiping the user's in-progress typing or leaving the caret dangling past the
