@@ -115,8 +115,8 @@ pub struct IfMarker {
     /// When `Some(expected)`, mounts only when `Signals[signal_name] == expected`.
     /// When `None`, mounts when `Signals[signal_name]` is non-empty and not literal `"false"`/`"0"`.
     pub eq: Option<String>,
-    /// [`IfMode::Hide`] only: the visibility state last applied to the
-    /// entity (`None` = never applied). The reconciler only touches
+    /// The visibility state last applied to the entity (`None` = never
+    /// applied). The reconciler only touches
     /// `Style` / `Visible` on a transition - re-inserting every tick
     /// kept `FrameDirty` permanently set (D5).
     pub applied_visible: Option<bool>,
@@ -1369,6 +1369,10 @@ pub fn settle_tree(world: &mut bevy_ecs::world::World) {
 ///   scroll, per-row signals) survives. Both writes happen only on an
 ///   actual transition (D5) - steady ticks touch nothing, so
 ///   `FrameDirty` stays clear.
+///
+/// In both modes the block's own box hides the same way while it is falsy,
+/// so a block with styles of its own, such as a page gate wearing its page's
+/// `<root>` background, paints nothing and takes no space until it holds.
 pub fn reconcile_if_blocks(
     store: bevy_ecs::system::Res<PropertyStore>,
     mut markers: bevy_ecs::system::Query<(
@@ -1395,10 +1399,7 @@ pub fn reconcile_if_blocks(
         };
         match marker.mode {
             IfMode::Render => {
-                if now_truthy == marker.currently_mounted {
-                    continue;
-                }
-                if now_truthy {
+                if now_truthy && !marker.currently_mounted {
                     for tmpl in &marker.body {
                         // A gated body was walked with the tree it came in
                         // with, so its placeholders hold what the app was
@@ -1421,7 +1422,7 @@ pub fn reconcile_if_blocks(
                         commands.entity(parent_id).insert(bundle);
                     }
                     marker.currently_mounted = true;
-                } else {
+                } else if !now_truthy && marker.currently_mounted {
                     if let Some(kids) = children {
                         for child in kids.iter() {
                             commands.entity(child).despawn();
@@ -1446,56 +1447,60 @@ pub fn reconcile_if_blocks(
                     }
                     marker.currently_mounted = true;
                 }
-                // D5: apply visibility only on a transition. The
-                // unconditional per-tick re-insert kept Changed<Visible>
-                // (and thus FrameDirty) permanently hot.
-                if marker.applied_visible == Some(now_truthy) {
-                    continue;
-                }
-                marker.applied_visible = Some(now_truthy);
-                commands
-                    .entity(parent_id)
-                    .insert(lumen_core::components::Visible(now_truthy));
-                // Entering transition on show (mount-direction only -
-                // hide stays instant; CSS can't run removal transitions
-                // without JS either). Check the `<if>` entity itself
-                // (e.g. `<dialog>`) and its mounted body roots (e.g.
-                // the synthetic dropdown / menu `.dropdown-panel`
-                // children, which carry the CSS transition specs).
-                if now_truthy {
-                    let mut targets: Vec<Entity> = vec![parent_id];
-                    if let Some(kids) = children {
-                        targets.extend(kids.iter());
-                    }
-                    for target in targets {
-                        if let Ok((specs, cur)) = fade_targets.get(target)
-                            && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
-                        {
-                            commands.entity(target).insert(bundle);
-                        }
-                    }
-                }
-                // section 17.4: hide releases the block's layout space via
-                // Display::None; show lets go of it. The Style mutation
-                // trips Changed<Style> -> DirtyLayout, so siblings reflow on
-                // this same tick's LayoutSync.
-                if let Ok((mut style, mut overrides)) = styles.get_mut(parent_id) {
-                    let out = if now_truthy {
-                        overrides.release::<IfMarker>()
-                    } else {
-                        let live = Live {
-                            style: Some(&style),
-                            ..Live::default()
-                        };
-                        let hidden = StyleValues {
-                            display: Some(lumen_core::components::Display::None),
-                            ..StyleValues::default()
-                        };
-                        overrides.hold::<IfMarker>(hidden, &live)
-                    };
-                    out.write_style(&mut style);
+            }
+        }
+        // The block's own box shows only while it holds: a falsy block
+        // takes no space and paints nothing, whether its body is despawned
+        // (`Render`) or kept (`Hide`). A page gate carries its page's
+        // `<root>` styles, so an inactive page would otherwise paint its
+        // background over the active one. D5: applied only on a
+        // transition. The unconditional per-tick re-insert kept
+        // Changed<Visible> (and thus FrameDirty) permanently hot.
+        if marker.applied_visible == Some(now_truthy) {
+            continue;
+        }
+        marker.applied_visible = Some(now_truthy);
+        commands
+            .entity(parent_id)
+            .insert(lumen_core::components::Visible(now_truthy));
+        // Entering transition on show (mount-direction only - hide stays
+        // instant; CSS can't run removal transitions without JS either).
+        // Check the `<if>` entity itself (e.g. `<dialog>`) and its mounted
+        // body roots (e.g. the synthetic dropdown / menu `.dropdown-panel`
+        // children, which carry the CSS transition specs). A `Render` block
+        // fades in from its mount above.
+        if now_truthy && marker.mode == IfMode::Hide {
+            let mut targets: Vec<Entity> = vec![parent_id];
+            if let Some(kids) = children {
+                targets.extend(kids.iter());
+            }
+            for target in targets {
+                if let Ok((specs, cur)) = fade_targets.get(target)
+                    && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
+                {
+                    commands.entity(target).insert(bundle);
                 }
             }
+        }
+        // section 17.4: hide releases the block's layout space via
+        // Display::None; show lets go of it. The Style mutation trips
+        // Changed<Style> -> DirtyLayout, so siblings reflow on this same
+        // tick's LayoutSync.
+        if let Ok((mut style, mut overrides)) = styles.get_mut(parent_id) {
+            let out = if now_truthy {
+                overrides.release::<IfMarker>()
+            } else {
+                let live = Live {
+                    style: Some(&style),
+                    ..Live::default()
+                };
+                let hidden = StyleValues {
+                    display: Some(lumen_core::components::Display::None),
+                    ..StyleValues::default()
+                };
+                overrides.hold::<IfMarker>(hidden, &live)
+            };
+            out.write_style(&mut style);
         }
     }
 }

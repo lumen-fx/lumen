@@ -787,6 +787,9 @@ Mounts its children conditionally.
 | `eq` | text | Mount only when the signal equals this value, instead of testing truthiness. |
 | `mode` | `render`, `hide` | `render` (default) despawns and respawns the body on each toggle. `hide` mounts once and toggles visibility, preserving focus, scroll, and per-row state. |
 
+While the gate is closed the `<if>` itself takes no space and paints nothing,
+in either mode, so styles written on it show only with its body.
+
 ### `<template>`, `<use>`, and `<slot>`
 
 `<template name="Card">...</template>` declares a reusable subtree.
