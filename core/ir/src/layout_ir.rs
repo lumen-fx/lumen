@@ -1815,6 +1815,26 @@ impl WidgetPart {
     }
 }
 
+/// The class a `<split>` gives each of its panes.
+pub const SPLIT_PANE_CLASS: &str = "split-pane";
+
+/// The separator a `<split>` puts between two of its panes: a focusable `div`
+/// that is the split's [`WidgetPart::SplitGutter`]. The parser puts one between
+/// every two children it reads, and the runtime one between every two a
+/// script adds, so a split is the same widget however it was built.
+pub fn split_gutter() -> Element {
+    Element {
+        tag: "div".to_string(),
+        attrs: Box::new(Attributes {
+            part: Some(WidgetPart::SplitGutter),
+            tab_index: Some(0),
+            classes: vec![WidgetPart::SplitGutter.class().to_string()],
+            ..Attributes::default()
+        }),
+        ..Default::default()
+    }
+}
+
 /// A widget tag that the parser replaces with plain boxes - see
 /// [`Attributes::widget`].
 ///

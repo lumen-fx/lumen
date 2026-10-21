@@ -1,12 +1,13 @@
 //! `<split>`: panes side by side with a draggable gutter between each pair.
 //!
-//! The parser puts a `.split-gutter` between every two children of a
-//! `<split>`. A gutter is a focusable separator, as the web's window
-//! splitter pattern describes one: dragging it with the primary button, or
-//! the arrow keys while it is focused, moves the boundary between the two
-//! panes beside it, and Home and End give the pane before it its smallest
-//! and its largest size. The panes lay out along the split's own
-//! `flex-direction`, a row unless a style says otherwise, and each keeps
+//! A `.split-gutter` goes between every two children of a `<split>`: the
+//! parser puts them in for markup, and the DOM applier keeps them in step
+//! when a script adds or removes panes. A gutter is a focusable separator,
+//! as the web's window splitter pattern describes one: dragging it with the
+//! primary button, or the arrow keys while it is focused, moves the boundary
+//! between the two panes beside it, and Home and End give the pane before it
+//! its smallest and its largest size. The panes lay out along the split's
+//! own `flex-direction`, a row unless a style says otherwise, and each keeps
 //! within its own `min-width` / `max-width` (`min-height` / `max-height` in
 //! a column).
 //!

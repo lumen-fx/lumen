@@ -1901,32 +1901,16 @@ fn synthesize_widget_parts(
     // runtime drags and steps the gutters; their looks are CSS. A `<for>`
     // or an `<if>` among the children is one pane.
     if tag == "split" && children.len() > 1 {
-        let gutter = || {
-            let mut g = Element {
-                tag: "div".to_string(),
-                attrs: Box::new(Attributes {
-                    part: Some(crate::layout_ir::WidgetPart::SplitGutter),
-                    tab_index: Some(0),
-                    ..Attributes::default()
-                }),
-                ..Default::default()
-            };
-            g.attrs.classes = vec![
-                crate::layout_ir::WidgetPart::SplitGutter
-                    .class()
-                    .to_string(),
-            ];
-            g
-        };
+        use crate::layout_ir::{SPLIT_PANE_CLASS, split_gutter};
         let panes = std::mem::take(children);
         let count = panes.len();
         for (i, mut pane) in panes.into_iter().enumerate() {
-            if !pane.attrs.classes.iter().any(|c| c == "split-pane") {
-                pane.attrs.classes.push("split-pane".to_string());
+            if !pane.attrs.classes.iter().any(|c| c == SPLIT_PANE_CLASS) {
+                pane.attrs.classes.push(SPLIT_PANE_CLASS.to_string());
             }
             children.push(pane);
             if i + 1 < count {
-                children.push(gutter());
+                children.push(split_gutter());
             }
         }
     }

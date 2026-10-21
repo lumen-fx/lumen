@@ -585,8 +585,63 @@ pub fn apply_dom_commands(world: &mut World) {
     }
 
     for entity in reshaped {
+        keep_split_gutters(world, entity);
         if let Ok(mut e) = world.get_entity_mut(entity) {
             e.insert(StyleDirty);
+        }
+    }
+}
+
+/// When `split` is a `<split>`, put one gutter between every two of its
+/// children and none anywhere else, as the parser does for one read from
+/// markup: a gutter it lacks is built, one it no longer needs goes, and the
+/// rest move into place. Each child that is not a gutter is a pane. A split
+/// a script built, or one it appended to, can then be resized like a written
+/// one. The caller restyles the split's subtree, which styles a new gutter.
+fn keep_split_gutters(world: &mut World, split: Entity) {
+    use lumen_ir::layout_ir::{SPLIT_PANE_CLASS, split_gutter};
+    use lumen_primitives::{Split, SplitGutter, SplitPane};
+    if world.get::<Split>(split).is_none() {
+        return;
+    }
+    let children: Vec<Entity> = world
+        .get::<Children>(split)
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    let (mut gutters, panes): (Vec<Entity>, Vec<Entity>) = children
+        .iter()
+        .partition(|&&e| world.get::<SplitGutter>(e).is_some());
+    for &pane in &panes {
+        if world.get::<SplitPane>(pane).is_some() {
+            continue;
+        }
+        let mut e = world.entity_mut(pane);
+        let mut classes = e.take::<LumenClasses>().unwrap_or_default();
+        if !classes.has(SPLIT_PANE_CLASS) {
+            classes.0.push(SPLIT_PANE_CLASS.into());
+        }
+        e.insert((classes, SplitPane));
+    }
+    let wanted = panes.len().saturating_sub(1);
+    for extra in gutters.split_off(wanted.min(gutters.len())) {
+        world.entity_mut(extra).despawn();
+    }
+    while gutters.len() < wanted {
+        let gutter =
+            crate::spawn::spawn_subtree(world, &split_gutter(), None, Placeholders::Resolved);
+        gutters.push(gutter);
+    }
+    let mut order = Vec::with_capacity(panes.len() + wanted);
+    for (i, &pane) in panes.iter().enumerate() {
+        order.push(pane);
+        if let Some(&gutter) = gutters.get(i) {
+            order.push(gutter);
+        }
+    }
+    if order != children {
+        world.entity_mut(split).replace_children(&order);
+        for &gutter in &gutters {
+            world.entity_mut(gutter).insert(DirtyLayout);
         }
     }
 }
