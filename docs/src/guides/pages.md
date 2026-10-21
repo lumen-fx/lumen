@@ -30,7 +30,10 @@ home page `<root>` is the app's root element, so what you write there sits
 behind every page instead of just one.
 
 Multi-page mode switches on as soon as `src/` holds more than one `.lmn` file.
-An app with a single `main.lmn` keeps loading exactly as before.
+An app with a single `main.lmn` keeps loading exactly as before. A file you
+only `<include>` counts as well, so keep fragments in a subfolder such as
+`src/parts/`; `lumenc` warns when the home page includes a file that is also a
+page.
 
 The home page is `src/index.lmn`. If there is no `index.lmn`, Lumen uses the
 file named by `[app] entry` in `lumen.toml`, then `main.lmn`, then the first

@@ -305,6 +305,25 @@ pub(crate) fn load_ir(
         .map_err(|e| RunError::ParseHtml(attribute(e)))?;
     let mut include_mtimes: Vec<Option<SystemTime>> =
         include_paths.iter().map(|p| mtime(p)).collect();
+    // A fragment the entry includes, kept directly in `src/`, is also a page
+    // of its own there, and the second page switches the app to multi-page
+    // mode. Say so, since nothing else on screen would.
+    if sources.markup.is_none()
+        && let Some(plan) = plan
+        && plan.multipage
+    {
+        for page in plan.included_pages(&include_paths) {
+            eprintln!(
+                "lumenc: {} is included by {} and is also a page, because every .lmn file \
+                 directly in {} is one; move it into a subfolder, such as {}, to keep it a \
+                 fragment only",
+                page.path.display(),
+                html_path.display(),
+                plan.dir.display(),
+                plan.dir.join("parts").display(),
+            );
+        }
+    }
     // Inline var() substitution runs on the fully-spliced markup. An
     // unresolvable call degrades to empty text plus a printed warning
     // instead of aborting the whole load - matching how the stylesheet

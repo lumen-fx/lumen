@@ -140,6 +140,9 @@ Included files are watched, so editing a fragment reloads the running app.
 </root>
 ```
 
+Keep included files in a subfolder such as `src/parts/`. Every `.lmn` file
+directly in `src/` is a page of its own (see [Multi-page apps](pages.md)).
+
 Includes are resolved before parsing, which means a `<template>` declared in
 an included file is usable from every file in the app.
 For reusable parameterised chunks, see [Composition](composition.md).
