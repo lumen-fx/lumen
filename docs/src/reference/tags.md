@@ -21,7 +21,7 @@ templates is capped at 64 levels of nesting.
 | length | `auto`, `<n>`, `<n>px`, `<n>%` | A bare number is pixels. |
 | number | `<n>`, `<n>px` | The `px` suffix is accepted and stripped. |
 | integer | `<n>` | |
-| color | `#rrggbb`, `#rrggbbaa` | Named colours and `rgb()` are not accepted. |
+| color | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa` | A shorthand digit counts twice, so `#d8f` is `#dd88ff`. Named colours and `rgb()` are not accepted. |
 | gradient | `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)` | `bg` only. See [CSS values](css.md#gradients). |
 | image | `url("path")`, `url('path')`, `url(path)` | `bg` only. The path resolves against the app directory. See [background images](css.md#background-images). |
 | edges | 1 to 4 terms, top-right-bottom-left | `8`, `8 16`, `8 16 4`, `8 16 4 12`. Each term may be `<n>`, `<n>px`, or `<n>%`. |

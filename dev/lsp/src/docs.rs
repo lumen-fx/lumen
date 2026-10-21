@@ -279,7 +279,7 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
         "height" => "**`height`** - `auto` | `<n>px` | `<n>%`. Element height.",
         "flex" => "**`flex`** - `row` | `column`. Flex direction for children.",
         "bg" => {
-            "**`bg`** - `#rrggbb`, `#rrggbbaa`, a gradient, or `url(\"path\")`. Background colour, gradient, or image painted behind the content."
+            "**`bg`** - a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), a gradient, or `url(\"path\")`. Background colour, gradient, or image painted behind the content."
         }
         "radius" => {
             "**`radius`** - 1-4 pixel values. One value = uniform corner radius; 2-4 follow the CSS `border-radius` rotation `[top-left, top-right, bottom-right, bottom-left]` (`radius: 4 4 0 0` rounds only the top). CSS-side longhands: `border-<corner>-radius`."
@@ -287,9 +287,11 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
         "padding" => "**`padding`** - `<n>` (uniform) or `<l> <r> <t> <b>` (px).",
         "margin" => "**`margin`** - `<n>` (uniform) or `<l> <r> <t> <b>` (px).",
         "text" => "**`text`** - text content. Equivalent to placing text between tags.",
-        "text-color" => "**`text-color`** - `#rrggbb` or `#rrggbbaa`. Glyph color.",
+        "text-color" => {
+            "**`text-color`** - `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Glyph color."
+        }
         "selection-color" => {
-            "**`selection-color`** - `#rrggbb` or `#rrggbbaa`. Text-selection highlight \
+            "**`selection-color`** - `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Text-selection highlight \
              color on `<input>` / `<textarea>`; the default skin routes it through \
              `--lumen-selection`. Unset = text color at 32 % alpha."
         }
@@ -309,7 +311,9 @@ it. The text falls back to the authored `text`, then to the key itself. \
         }
         "id" => "**`id`** - string. Emits a `LumenId` marker for lookup.",
         "class" => "**`class`** - whitespace-separated class names for CSS matching.",
-        "hover-bg" => "**`hover-bg`** - `#rrggbb` or `#rrggbbaa`. Background while hovered.",
+        "hover-bg" => {
+            "**`hover-bg`** - `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Background while hovered."
+        }
         "draggable" => "**`draggable`** - boolean. When true, drag input translates the element.",
         "href" => {
             "**`href`** - page path on `<a>`. Clicking navigates there; resolved by longest existing `.lmn` prefix, not as a URL."
