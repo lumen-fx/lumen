@@ -218,10 +218,9 @@ fn on_close_registration_replaces_and_rejects_nulls() {
         unsafe { lumen_app_on_close(std::ptr::null_mut(), Some(cb), std::ptr::null_mut()) },
         LumenStatus::ErrInvalidHandle
     );
-    // Building headless with a registered close hook must not panic -
-    // the router system installs, but no OS close request ever fires
-    // headlessly (documented: the hook never fires under
-    // lumen_app_run_headless).
+    // Building headless with a registered close hook must not panic. The
+    // router system installs; with no OS close request and no
+    // `lumen_window_close` / `lumen_app_quit`, the hook never fires.
     assert_eq!(
         unsafe { lumen_app_run_headless(handle, 2) },
         LumenStatus::Ok
@@ -904,4 +903,139 @@ fn app_new_rejects_a_bad_plugin_declaration() {
         "{}",
         last_error()
     );
+}
+
+// -- The app's own window (ABI 0.16) ---------------------------------------
+
+/// What the window test's callbacks saw, in call order.
+static WINDOW_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Called from the script's `on_start`: exercise the window entry points'
+/// argument checks, ask for a new size, and close the window.
+unsafe extern "C" fn native_close(
+    _out: *mut LumenValue,
+    _argc: c_int,
+    _argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    use lumen::{
+        LUMEN_WINDOW_CURRENT, lumen_window_close, lumen_window_dpr, lumen_window_set_size,
+        lumen_window_size, lumen_window_title,
+    };
+    let mut log = WINDOW_LOG.lock().unwrap();
+    let (mut w, mut h) = (0.0f32, 0.0f32);
+    let mut dpr = 0.0f32;
+    let mut len = 0usize;
+    unsafe {
+        log.push(format!(
+            "bad size {:?}",
+            lumen_window_set_size(LUMEN_WINDOW_CURRENT, 0.0, 480.0)
+        ));
+        log.push(format!(
+            "no such window {:?}",
+            lumen_window_title(u64::MAX, std::ptr::null_mut(), 0, &mut len)
+        ));
+        log.push(format!(
+            "null out {:?}",
+            lumen_window_size(LUMEN_WINDOW_CURRENT, std::ptr::null_mut(), &mut h)
+        ));
+        log.push(format!(
+            "size {:?}",
+            lumen_window_size(LUMEN_WINDOW_CURRENT, &mut w, &mut h)
+        ));
+        log.push(format!(
+            "dpr {:?}",
+            lumen_window_dpr(LUMEN_WINDOW_CURRENT, &mut dpr)
+        ));
+        log.push(format!(
+            "set size {:?}",
+            lumen_window_set_size(LUMEN_WINDOW_CURRENT, 640.0, 480.0)
+        ));
+        log.push(format!(
+            "close {:?}",
+            lumen_window_close(LUMEN_WINDOW_CURRENT)
+        ));
+    }
+}
+
+/// Called from the script's `on_start`: quit the app.
+unsafe extern "C" fn native_quit(
+    _out: *mut LumenValue,
+    _argc: c_int,
+    _argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    let status = lumen::lumen_app_quit();
+    WINDOW_LOG.lock().unwrap().push(format!("quit {status:?}"));
+}
+
+/// A close hook that records each call with the size the window has.
+fn record_hook() {
+    let (mut w, mut h) = (0.0f32, 0.0f32);
+    unsafe { lumen::lumen_window_size(lumen::LUMEN_WINDOW_CURRENT, &mut w, &mut h) };
+    WINDOW_LOG.lock().unwrap().push(format!("hook {w}x{h}"));
+}
+
+extern "C" fn record_and_veto(_ud: *mut c_void) -> c_int {
+    record_hook();
+    0
+}
+
+extern "C" fn record_and_allow(_ud: *mut c_void) -> c_int {
+    record_hook();
+    1
+}
+
+/// Run a rhai app whose `on_start` calls the native `func`, with `hook` as
+/// the close hook, and return what the callbacks logged.
+fn run_window_app(name: &str, func: LumenFn, hook: LumenCloseFn) -> Vec<String> {
+    let _isolated = isolate();
+    WINDOW_LOG.lock().unwrap().clear();
+    let dir = write_script_fixture(name, "main.rhai", "fn on_start() {\n    native();\n}\n");
+    let cdir = CString::new(dir.to_str().unwrap()).unwrap();
+    let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
+    assert!(!handle.is_null(), "app must construct: {}", last_error());
+    let native = CString::new("native").unwrap();
+    assert_eq!(
+        unsafe { lumen_app_expose(handle, native.as_ptr(), 0, Some(func), std::ptr::null_mut()) },
+        LumenStatus::Ok
+    );
+    assert_eq!(
+        unsafe { lumen_app_on_close(handle, Some(hook), std::ptr::null_mut()) },
+        LumenStatus::Ok
+    );
+    assert_eq!(
+        unsafe { lumen_app_run_headless(handle, 10) },
+        LumenStatus::Ok,
+        "headless run should succeed: {}",
+        last_error()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    WINDOW_LOG.lock().unwrap().clone()
+}
+
+#[test]
+fn window_close_runs_the_close_hook_which_can_veto() {
+    let log = run_window_app("window_close", native_close, record_and_veto);
+    assert_eq!(
+        log,
+        [
+            "bad size ErrBadArg",
+            "no such window ErrInvalidHandle",
+            "null out ErrBadArg",
+            "size Ok",
+            "dpr Ok",
+            "set size Ok",
+            "close Ok",
+            // The hook sees the size the window took on the tick that asked
+            // for it, and vetoes; the run goes on to its end.
+            "hook 640x480",
+        ],
+    );
+}
+
+#[test]
+fn app_quit_runs_the_close_hook() {
+    let log = run_window_app("app_quit", native_quit, record_and_allow);
+    assert_eq!(log, ["quit Ok", "hook 800x600"]);
 }

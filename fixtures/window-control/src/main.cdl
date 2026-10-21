@@ -24,6 +24,8 @@ fn on_timer(name) {
 }
 
 fn on_close() {
+    let size = window::size();
+    print("window-check on_close title=" + window::title() + " size=" + str(size[0]) + "x" + str(size[1]));
     let closes = signal<int>("closes");
     let seen = closes.get();
     closes.set(seen + 1);
