@@ -1114,7 +1114,10 @@ pub fn hit_test(
     ),
     visibles: Query<&lumen_core::components::Visible>,
     styles: Query<&lumen_core::components::Style>,
-    disableds: Query<(), With<lumen_core::components::Disabled>>,
+    (disableds, transparents): (
+        Query<(), With<lumen_core::components::Disabled>>,
+        Query<(), With<lumen_core::input::PointerTransparent>>,
+    ),
     pressed_entities: Query<Entity, With<Pressed>>,
     transforms: Query<&Transform>,
     scrollbar_ix: Option<Res<lumen_core::input::ScrollbarInteraction>>,
@@ -1166,6 +1169,9 @@ pub fn hit_test(
                     continue;
                 }
                 if disabled_via_ancestors(e, &parents, &disableds) {
+                    continue;
+                }
+                if transparent_via_ancestors(e, &parents, &transparents) {
                     continue;
                 }
                 if point_clipped_by_ancestors(p, e, &parents, &styles, &transforms, &scrolls) {
@@ -1304,6 +1310,19 @@ pub fn disabled_via_ancestors(
             Err(_) => return false,
         }
     }
+}
+
+/// Whether `entity` or an ancestor carries
+/// [`PointerTransparent`](lumen_core::input::PointerTransparent), so the
+/// pointer passes through it.
+fn transparent_via_ancestors(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    transparents: &Query<(), With<lumen_core::input::PointerTransparent>>,
+) -> bool {
+    std::iter::once(entity)
+        .chain(parents.iter_ancestors(entity))
+        .any(|e| transparents.contains(e))
 }
 
 /// Escape cancels an in-flight press (spec section 0): every entity carrying

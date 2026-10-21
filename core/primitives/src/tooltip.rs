@@ -31,7 +31,7 @@ use glam::Vec2;
 use lumen_core::components::{
     DomHidden, Edges, LumenClasses, LumenTag, Position, Style, StyleDirty, TextContent, Transform,
 };
-use lumen_core::input::HoverWithin;
+use lumen_core::input::{HoverWithin, PointerTransparent};
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
@@ -277,6 +277,10 @@ fn spawn_tooltip_popups(
             // by open order (later-opened on top) and escapes the clips of
             // the tree it sits in.
             lumen_core::render_world::OverlayLayer,
+            // The pointer passes through the popup, as through a browser's
+            // `title` tooltip: moving onto it leaves the trigger hovered
+            // rather than unhovering it and closing the popup.
+            PointerTransparent,
             LumenTag("tooltip".into()),
             LumenClasses(vec!["tooltip".into()]),
             DomHidden,

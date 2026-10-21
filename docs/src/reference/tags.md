@@ -920,9 +920,11 @@ text color, padding, radius, border, shadow, and font. It inherits from the
 root, which puts the root's custom properties in scope, and it paints above
 everything else. Its position is the runtime's: it opens beside the pointer
 and moves to the pointer's other side near the window's edges, so `inset`
-and `position` in a `.tooltip` rule have no effect. Scripts do not see it,
-and it does not count as one of the root's children for `:last-child` and
-the other structural selectors.
+and `position` in a `.tooltip` rule have no effect. The pointer passes
+through it to whatever is underneath, so moving onto the popup leaves the
+trigger hovered and the popup open. Scripts do not see it, and it does not
+count as one of the root's children for `:last-child` and the other
+structural selectors.
 
 ```css
 .tooltip { bg: var(--accent); text-color: #ffffff; padding: 4 8; radius: 4; }
