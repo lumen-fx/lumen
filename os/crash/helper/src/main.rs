@@ -344,7 +344,14 @@ impl ServerHandler for Handler {
         // A panic's dump drops the connection it came on; the app opened its
         // next one before asking, so the count only reaches zero when the
         // app is gone.
-        if num_clients == 0 {
+        //
+        // Unless the app never said who it is: a connection that closes
+        // before its hello is an attempt that failed, not the app leaving.
+        // On macOS the socket listens a moment before the Mach port the
+        // dumps travel on is registered, and an app that connects in that
+        // moment finds no port, closes, and tries again. The watch thread
+        // ends the loop if the app dies before it gets through.
+        if num_clients == 0 && self.state().hello.is_some() {
             LoopAction::Exit
         } else {
             LoopAction::Continue

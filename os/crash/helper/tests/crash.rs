@@ -5,6 +5,7 @@
 //! which does nothing unless the environment names a case), so the crash
 //! takes down a child process and not the test runner. The dialog is off.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -40,8 +41,7 @@ fn child() {
     }
     let alone = case.ends_with("-alone");
     // A packaged app names no helper: it finds the one beside itself.
-    let beside = case.starts_with("beside-");
-    let helper = if beside {
+    let helper = if case.starts_with("beside-") {
         None
     } else if alone {
         Some(dir.join("no-such-helper"))
@@ -57,15 +57,22 @@ fn child() {
         dialog: std::env::var_os("LUMEN_CRASH_TEST_DIALOG").is_some(),
     });
     if alone {
-        assert!(matches!(installed, lumen_os_crash::Installed::InProcess(_)));
+        assert!(
+            matches!(installed, lumen_os_crash::Installed::InProcess(_)),
+            "{installed:?}"
+        );
     } else {
-        assert!(lumen_os_crash::wait_for_helper(Duration::from_secs(10)));
+        assert!(
+            matches!(installed, lumen_os_crash::Installed::Helper(_)),
+            "{installed:?}"
+        );
+        assert!(
+            lumen_os_crash::wait_for_helper(Duration::from_secs(10)),
+            "the helper did not answer: {installed:?}"
+        );
     }
     lumen_os_crash::log_line("crash-test: about to crash");
     lumen_os_crash::set_gpu("Test GPU (Vulkan), render-gpu");
-    if beside {
-        assert!(matches!(installed, lumen_os_crash::Installed::Helper(_)));
-    }
     match base_case(&case) {
         "panic" => panic!("crash-test panic"),
         "thread-panic" => {
@@ -156,20 +163,24 @@ fn crash_as(case: &str, exe: &Path) -> PathBuf {
     let dir = case_dir(case);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let status = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(["child", "--exact", "--nocapture", "--test-threads=1"])
         .env(CASE, case)
         .env(DIR, &dir)
         .env("XDG_DATA_HOME", dir.join("data"))
         .env_remove("RUST_BACKTRACE")
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap();
+        .stderr(std::process::Stdio::piped());
+    let output = command.output().unwrap();
+    let status = output.status;
+    // What the child said, for a failure: a child that panicked before its
+    // crash tells why here.
+    let said = String::from_utf8_lossy(&output.stderr);
     if case.starts_with("survive") {
-        assert!(status.success(), "{case}: {status}");
+        assert!(status.success(), "{case}: {status}\n{said}");
     } else {
-        assert!(!status.success(), "{case}: {status}");
+        assert!(!status.success(), "{case}: {status}\n{said}");
     }
     // After the report, a fault or a sent signal still ends the process the
     // way it would have without crash handling.
@@ -178,10 +189,10 @@ fn crash_as(case: &str, exe: &Path) -> PathBuf {
         use std::os::unix::process::ExitStatusExt;
         let ended_by = status.signal();
         match base_case(case) {
-            "segv" => assert_eq!(ended_by, Some(libc::SIGSEGV), "{case}: {status}"),
+            "segv" => assert_eq!(ended_by, Some(libc::SIGSEGV), "{case}: {status}\n{said}"),
             "fault" => assert!(
                 matches!(ended_by, Some(libc::SIGSEGV | libc::SIGBUS)),
-                "{case}: {status}"
+                "{case}: {status}\n{said}"
             ),
             _ => {}
         }
@@ -452,6 +463,80 @@ fn without_the_helper_a_fault_is_written_from_the_handler() {
     assert!(text.contains("no minidump was written"), "{text}");
     assert_one_report(&dir);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A connection that closes before the app says who it is does not end the
+/// helper. On macOS a client reaches the socket before the helper's Mach
+/// port is registered, finds no port, and closes; the app's next attempt
+/// has to find the helper still there.
+#[test]
+fn a_connection_that_closes_unannounced_leaves_the_helper_running() {
+    let dir = case_dir("unannounced");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket = helper_socket(&dir);
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_lumen-crash"))
+        .args([
+            "--socket",
+            &socket,
+            "--pid",
+            &std::process::id().to_string(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let connect = || {
+        let start = Instant::now();
+        loop {
+            match minidumper::Client::with_name(socket_name(&socket)) {
+                Ok(client) => return client,
+                Err(e) if start.elapsed() > Duration::from_secs(10) => {
+                    panic!("no helper to connect to: {e}")
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    };
+    drop(connect());
+    // The helper's loop wakes every 10 ms; give it many turns to see the
+    // closed connection.
+    std::thread::sleep(Duration::from_millis(500));
+    let ended = helper.try_wait().unwrap();
+    if let Some(status) = ended {
+        let mut stderr = String::new();
+        let _ = helper.stderr.take().unwrap().read_to_string(&mut stderr);
+        panic!("the helper ended with {status}: {stderr}");
+    }
+    let client = connect();
+    assert!(client.ping().is_ok(), "the helper does not answer");
+    let _ = helper.kill();
+    let _ = helper.wait();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A socket name for a helper the test starts by hand.
+fn helper_socket(dir: &Path) -> String {
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        format!("lumen-crash-e2e-{}", std::process::id())
+    } else if cfg!(windows) {
+        dir.join("helper.sock").display().to_string()
+    } else {
+        // `sun_path` holds 104 bytes on macOS, and the runner's temp
+        // directory is long.
+        format!("/tmp/lumen-crash-e2e-{}.sock", std::process::id())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn socket_name(name: &str) -> minidumper::SocketName<'_> {
+    minidumper::SocketName::abstract_namespace(name)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn socket_name(name: &str) -> minidumper::SocketName<'_> {
+    minidumper::SocketName::Path(Path::new(name))
 }
 
 /// The runtime's preflight puts reports in the app's data folder and names
