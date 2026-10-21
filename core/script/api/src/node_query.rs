@@ -13,7 +13,9 @@
 //! [`lumen_ir::css::selector_matches`]. Sibling combinators (`+`, `~`)
 //! inherit the matcher's conservative-fail behavior.
 
-use lumen_core::node::{DomIndex, DomRecord, NodeHandle, dom_index_snapshot};
+use lumen_core::node::{
+    DomIndex, DomRecord, DomStates, NodeHandle, dom_index_snapshot, dom_states_snapshot,
+};
 use lumen_ir::css::AncestorInfo;
 
 use bevy_ecs::entity::Entity;
@@ -130,25 +132,41 @@ pub(crate) fn ancestor_infos(index: &DomIndex, entity: Entity) -> Vec<AncestorIn
     chain
 }
 
-/// Does `entity` match any selector in `selectors`?
-fn matches_any(index: &DomIndex, entity: Entity, selectors: &[lumen_ir::css::SelectorBuf]) -> bool {
+/// Does `entity` match any selector in `selectors`? A state pseudo-class
+/// tests the live state in `states`, for the element and each ancestor.
+fn matches_any(
+    index: &DomIndex,
+    states: &DomStates,
+    entity: Entity,
+    selectors: &[lumen_ir::css::SelectorBuf],
+) -> bool {
     let Some(rec) = index.record(entity) else {
         return false;
     };
-    let subject = subject_info(rec);
-    let ancestors = ancestor_infos(index, entity);
+    let subject = subject_info(rec).with_state(states.get(entity));
+    let mut ancestors: Vec<AncestorInfo> = index
+        .ancestors(entity)
+        .into_iter()
+        .filter_map(|e| Some(subject_info(index.record(e)?).with_state(states.get(e))))
+        .collect();
+    ancestors.reverse();
     selectors
         .iter()
         .any(|sel| lumen_ir::css::selector_matches(sel, &subject, &ancestors))
 }
 
 /// Run a selector query against `index`, returning matched entities in
-/// document order. Errors carry the selector parse message.
-pub fn query_entities(index: &DomIndex, selector: &str) -> Result<Vec<Entity>, String> {
+/// document order; a state pseudo-class such as `:hover` tests `states`.
+/// Errors carry the selector parse message.
+pub fn query_entities(
+    index: &DomIndex,
+    states: &DomStates,
+    selector: &str,
+) -> Result<Vec<Entity>, String> {
     let selectors = lumen_ir::css::parse_selector_list(selector)?;
     let mut hits: Vec<(u32, Entity)> = Vec::new();
     for rec in index.records() {
-        if matches_any(index, rec.entity, &selectors) {
+        if matches_any(index, states, rec.entity, &selectors) {
             hits.push((rec.doc_order, rec.entity));
         }
     }
@@ -160,13 +178,14 @@ pub fn query_entities(index: &DomIndex, selector: &str) -> Result<Vec<Entity>, S
 /// the nearest element matching `selector` (`node.closest(sel)`).
 pub fn closest_entity(
     index: &DomIndex,
+    states: &DomStates,
     start: Entity,
     selector: &str,
 ) -> Result<Option<Entity>, String> {
     let selectors = lumen_ir::css::parse_selector_list(selector)?;
     let mut cur = Some(start);
     while let Some(e) = cur {
-        if matches_any(index, e, &selectors) {
+        if matches_any(index, states, e, &selectors) {
             return Ok(Some(e));
         }
         cur = index.parent(e);
@@ -182,7 +201,7 @@ pub fn closest_entity(
 /// `query(sel)`: run against the current snapshot, packed handles.
 pub fn run_query(selector: &str) -> Result<NodeQueryResult, String> {
     let index = dom_index_snapshot();
-    let nodes = query_entities(&index, selector)?
+    let nodes = query_entities(&index, &dom_states_snapshot(), selector)?
         .into_iter()
         .map(|e| NodeHandle::new(e).pack())
         .collect();
@@ -255,7 +274,10 @@ pub fn node_closest(handle: u64, selector: &str) -> Result<Option<u64>, String> 
         return Ok(None);
     };
     let index = dom_index_snapshot();
-    Ok(closest_entity(&index, entity, selector)?.map(|e| NodeHandle::new(e).pack()))
+    Ok(
+        closest_entity(&index, &dom_states_snapshot(), entity, selector)?
+            .map(|e| NodeHandle::new(e).pack()),
+    )
 }
 
 /// `node.exists()` / `node_valid(h)`: whether the handle is present in the
@@ -664,29 +686,84 @@ mod tests {
         (idx, root, card, save, cancel)
     }
 
+    /// A state pseudo-class tests the live state, on the subject and on each
+    /// ancestor a selector steps through; with no state recorded nothing is
+    /// in one.
+    #[test]
+    fn a_state_pseudo_class_follows_the_live_state() {
+        use lumen_core::node::ElementState as S;
+        let (idx, root, card, save, cancel) = fixture();
+        for sel in [":hover", ":focus", ":active", ":checked", ":disabled"] {
+            assert!(
+                query_entities(&idx, &DomStates::default(), sel)
+                    .unwrap()
+                    .is_empty(),
+                "{sel} matches nothing while nothing is in that state"
+            );
+        }
+        let states = DomStates::new([
+            (root, S::HOVER),
+            (card, S::HOVER),
+            (save, S::HOVER | S::ACTIVE),
+            (cancel, S::FOCUS | S::FOCUS_VISIBLE),
+        ]);
+        let query = |sel: &str| query_entities(&idx, &states, sel).unwrap();
+        assert_eq!(query(":hover"), [root, card, save]);
+        assert_eq!(query(".card:hover > :active"), [save]);
+        assert_eq!(query(":focus"), [cancel]);
+        assert_eq!(query(":focus-visible"), [cancel]);
+        assert_eq!(query("button:not(:hover)"), [cancel]);
+        assert_eq!(
+            closest_entity(&idx, &states, cancel, ":hover").unwrap(),
+            Some(card)
+        );
+    }
+
     #[test]
     fn query_by_id_class_and_descendant() {
         let (idx, _root, _card, save, cancel) = fixture();
-        assert_eq!(query_entities(&idx, "#save").unwrap(), vec![save]);
-        assert_eq!(query_entities(&idx, ".row").unwrap(), vec![save, cancel]);
         assert_eq!(
-            query_entities(&idx, ".card button").unwrap(),
+            query_entities(&idx, &DomStates::default(), "#save").unwrap(),
+            vec![save]
+        );
+        assert_eq!(
+            query_entities(&idx, &DomStates::default(), ".row").unwrap(),
             vec![save, cancel]
         );
         assert_eq!(
-            query_entities(&idx, ".card > .row").unwrap(),
+            query_entities(&idx, &DomStates::default(), ".card button").unwrap(),
             vec![save, cancel]
         );
-        assert!(query_entities(&idx, ".nope").unwrap().is_empty());
+        assert_eq!(
+            query_entities(&idx, &DomStates::default(), ".card > .row").unwrap(),
+            vec![save, cancel]
+        );
+        assert!(
+            query_entities(&idx, &DomStates::default(), ".nope")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn closest_walks_up() {
         let (idx, root, card, save, _cancel) = fixture();
-        assert_eq!(closest_entity(&idx, save, ".card").unwrap(), Some(card));
-        assert_eq!(closest_entity(&idx, save, ".app").unwrap(), Some(root));
-        assert_eq!(closest_entity(&idx, save, ".row").unwrap(), Some(save));
-        assert_eq!(closest_entity(&idx, save, ".none").unwrap(), None);
+        assert_eq!(
+            closest_entity(&idx, &DomStates::default(), save, ".card").unwrap(),
+            Some(card)
+        );
+        assert_eq!(
+            closest_entity(&idx, &DomStates::default(), save, ".app").unwrap(),
+            Some(root)
+        );
+        assert_eq!(
+            closest_entity(&idx, &DomStates::default(), save, ".row").unwrap(),
+            Some(save)
+        );
+        assert_eq!(
+            closest_entity(&idx, &DomStates::default(), save, ".none").unwrap(),
+            None
+        );
     }
 
     #[test]

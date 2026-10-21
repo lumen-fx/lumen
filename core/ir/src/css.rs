@@ -26,6 +26,7 @@ use crate::values::{
     bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges,
     parse_inset_term, parse_length,
 };
+use lumen_core::node::ElementState;
 use std::rc::Rc;
 // ---------------------------------------------------------------------------
 // Public AST
@@ -725,6 +726,10 @@ struct ElementRef {
     /// sibling's sibling list is this same list, which the matcher
     /// carries in its cursor.
     siblings: Option<Rc<[ElementRef]>>,
+    /// The element's live states, for a query. `None` is the cascade's
+    /// view: a state pseudo-class matches, and the runtime applies what it
+    /// routes only while the element is in that state.
+    state: Option<ElementState>,
 }
 
 impl ElementRef {
@@ -736,6 +741,7 @@ impl ElementRef {
             child_index,
             sibling_count,
             siblings: None,
+            state: None,
         }
     }
 
@@ -1416,18 +1422,20 @@ fn matches_pseudo(p: &PseudoClass, node: &NodeCtx) -> bool {
     let is_root = node.is_root;
     let has_element_children = node.has_element_children;
     let text_body = node.text_body;
+    // A state pseudo-class matches in the cascade, which routes what it sets
+    // to the runtime to apply only while the element is in that state (the
+    // subject side feeds `SubjectPseudo` for that routing). A query knows the
+    // element's live states and tests them.
+    let in_state = |flag: ElementState| el.state.is_none_or(|s| s.contains(flag));
     match p {
-        // State-conditional pseudos: matched as true at parse time;
-        // the runtime ECS attaches the appropriate state component.
-        // The subject side feeds `SubjectPseudo` for property routing.
-        PseudoClass::Hover
-        | PseudoClass::Focus
-        | PseudoClass::FocusVisible
-        | PseudoClass::Active
-        | PseudoClass::Disabled
-        | PseudoClass::Checked
-        | PseudoClass::Selected
-        | PseudoClass::DragOver => true,
+        PseudoClass::Hover => in_state(ElementState::HOVER),
+        PseudoClass::Focus => in_state(ElementState::FOCUS),
+        PseudoClass::FocusVisible => in_state(ElementState::FOCUS_VISIBLE),
+        PseudoClass::Active => in_state(ElementState::ACTIVE),
+        PseudoClass::Disabled => in_state(ElementState::DISABLED),
+        PseudoClass::Checked => in_state(ElementState::CHECKED),
+        PseudoClass::Selected => in_state(ElementState::SELECTED),
+        PseudoClass::DragOver => in_state(ElementState::DRAG_OVER),
         PseudoClass::Root => is_root || el.tag == "root",
         PseudoClass::FirstChild => el.child_index == 1,
         PseudoClass::LastChild => el.child_index == el.sibling_count,
@@ -2318,6 +2326,7 @@ impl Siblings {
                     child_index: i as i32 + 1,
                     sibling_count: count,
                     siblings: None,
+                    state: None,
                 })
                 .collect(),
         )
@@ -2363,6 +2372,10 @@ pub struct AncestorInfo {
     /// order they apply: its markup's styling attributes, then what a
     /// script set with `set_style`. These outrank every rule.
     pub declarations: Vec<(String, String)>,
+    /// The element's live states, which a query's state pseudo-classes test.
+    /// `None` for the cascade, where they match and the runtime applies what
+    /// they set while the state holds.
+    pub state: Option<ElementState>,
 }
 
 impl AncestorInfo {
@@ -2380,6 +2393,7 @@ impl AncestorInfo {
             has_element_children: true,
             text: None,
             declarations: Vec::new(),
+            state: None,
         }
     }
 
@@ -2411,6 +2425,13 @@ impl AncestorInfo {
         self
     }
 
+    /// Builder: set the element's live states, so a state pseudo-class
+    /// matches only while the element is in that state.
+    pub fn with_state(mut self, state: ElementState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
     fn to_ref(&self) -> ElementRef {
         ElementRef {
             tag: self.tag.clone(),
@@ -2419,6 +2440,7 @@ impl AncestorInfo {
             child_index: self.child_index,
             sibling_count: self.sibling_count,
             siblings: self.siblings.as_ref().map(|s| s.0.clone()),
+            state: self.state,
         }
     }
 }
@@ -5032,6 +5054,7 @@ mod cascade_origin_tests {
             child_index: 1,
             sibling_count: 1,
             siblings: None,
+            state: None,
         };
         let matched =
             collect_matching_rules(&css, &MediaContext::default(), &me, &[], false, None, false);
@@ -5083,6 +5106,7 @@ mod cascade_origin_tests {
             child_index: 1,
             sibling_count: 1,
             siblings: None,
+            state: None,
         };
         let matched =
             collect_matching_rules(&css, &MediaContext::default(), &me, &[], false, None, false);

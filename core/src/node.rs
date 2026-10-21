@@ -465,6 +465,87 @@ pub fn dom_index_snapshot() -> Arc<DomIndex> {
         .unwrap_or_else(|_| Arc::new(DomIndex::default()))
 }
 
+// ---------------------------------------------------------------------------
+// Live element states
+// ---------------------------------------------------------------------------
+
+bitflags::bitflags! {
+    /// The live states CSS's state pseudo-classes test, one bit per
+    /// pseudo-class. A selector query reads them so `query(":hover")` and
+    /// `node.matches(":focus")` follow the pointer and the focus, as they do
+    /// in a browser.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    pub struct ElementState: u8 {
+        /// `:hover`: the pointer is over the element or a descendant.
+        const HOVER = 1 << 0;
+        /// `:focus`: the element holds the focus.
+        const FOCUS = 1 << 1;
+        /// `:focus-visible`: focused, and the focus ring shows.
+        const FOCUS_VISIBLE = 1 << 2;
+        /// `:active`: pressed, and the press has not been dragged off.
+        const ACTIVE = 1 << 3;
+        /// `:disabled`.
+        const DISABLED = 1 << 4;
+        /// `:checked`: a checked toggle or checkbox.
+        const CHECKED = 1 << 5;
+        /// `:selected`: the chosen member of a group, such as a tab or radio.
+        const SELECTED = 1 << 6;
+        /// `:drag-over`: an acceptable drag hovers the element.
+        const DRAG_OVER = 1 << 7;
+    }
+}
+
+/// The elements in a state a pseudo-class tests, keyed by entity bits. An
+/// element in none is absent. Published beside [`DomIndex`], and rebuilt on a
+/// tick where a state changed, which leaves the index itself alone.
+#[derive(Debug, Default)]
+pub struct DomStates {
+    states: HashMap<u64, ElementState>,
+}
+
+impl DomStates {
+    /// A snapshot holding `states`.
+    pub fn new(states: impl IntoIterator<Item = (Entity, ElementState)>) -> Self {
+        Self {
+            states: states
+                .into_iter()
+                .filter(|(_, s)| !s.is_empty())
+                .map(|(e, s)| (e.to_bits(), s))
+                .collect(),
+        }
+    }
+
+    /// The states `entity` is in; empty for one in none.
+    pub fn get(&self, entity: Entity) -> ElementState {
+        self.states
+            .get(&entity.to_bits())
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+static DOM_STATES_CACHE: OnceLock<RwLock<Arc<DomStates>>> = OnceLock::new();
+
+fn dom_states_cache() -> &'static RwLock<Arc<DomStates>> {
+    DOM_STATES_CACHE.get_or_init(|| RwLock::new(Arc::new(DomStates::default())))
+}
+
+/// Publish the live element states for cross-thread readers, as
+/// [`publish_dom_index`] does the tree.
+pub fn publish_dom_states(states: DomStates) {
+    if let Ok(mut guard) = dom_states_cache().write() {
+        *guard = Arc::new(states);
+    }
+}
+
+/// Read the current element states.
+pub fn dom_states_snapshot() -> Arc<DomStates> {
+    dom_states_cache()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| Arc::new(DomStates::default()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
