@@ -140,3 +140,44 @@ fn author_css_styles_the_tooltip() {
         "the popup opens beside the pointer: {at:?} vs {cursor:?}"
     );
 }
+
+/// The pointer passes through an open popup to what lies under it, as with a
+/// browser's `title` tooltip. A popup that took the hit unhovered its own
+/// trigger, closed, and reopened after the delay, so it flickered whenever
+/// the pointer drifted onto it.
+#[test]
+fn the_pointer_passes_through_an_open_tooltip() {
+    let mut app = build(
+        r#"<root>
+  <tooltip text="Save the file" delay="0"><button id="save" text="Save" width="300" height="200"/></tooltip>
+</root>"#,
+        "",
+    );
+    let popup = hover_until_open(&mut app, "save");
+    let corner = app.world.get::<Transform>(popup).unwrap().absolute;
+    let onto = corner + Vec2::splat(2.0);
+    let save = rect(&mut app, "save");
+    assert!(
+        onto.cmplt(save.absolute + save.size).all(),
+        "the test moves onto a part of the popup that covers the trigger"
+    );
+    app.world.resource_mut::<PointerState>().position = Some(onto);
+    app.world.write_message(PointerMoved {
+        position: onto,
+        local: None,
+        pointer: Default::default(),
+    });
+    for _ in 0..4 {
+        app.tick();
+        let mut q = app.world.query_filtered::<Entity, With<TooltipPopup>>();
+        let open: Vec<Entity> = q.iter(&app.world).collect();
+        assert_eq!(open, [popup], "the popup stays open under the pointer");
+    }
+    let trigger = entity(&mut app, "save");
+    assert!(
+        app.world
+            .get::<lumen_core::input::Hovered>(trigger)
+            .is_some(),
+        "the trigger keeps the hit"
+    );
+}
