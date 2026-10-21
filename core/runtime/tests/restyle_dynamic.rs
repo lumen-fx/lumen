@@ -241,6 +241,74 @@ fn set_style_repaints_over_the_stylesheet() {
     );
 }
 
+/// A custom property set inline reaches every `var()` under the element, as
+/// `style.setProperty("--accent", ...)` does on the web. The walk used to
+/// send an element's own declarations through the property table only,
+/// which has no custom properties, so the write was dropped.
+#[test]
+fn an_inline_custom_property_reaches_var_below_it() {
+    let mut h = Harness::new(
+        vec![
+            rule("root", &[("--accent", "#112233")], 0),
+            rule("#box", &[("bg", "var(--accent)")], 1),
+        ],
+        "",
+    );
+    assert!(
+        near(h.box_fill().expect("stylesheet fill"), "#112233"),
+        "the stylesheet's custom property should paint first"
+    );
+    let root = node_query::run_get_by_id("app").expect("#app is in the DOM index");
+    push_external_dom_command(lumen_script::ScriptCommand::SetStyleProp {
+        node: root,
+        name: "--accent".to_string(),
+        value: "#ff0000".to_string(),
+    });
+    h.settle();
+    assert!(
+        near(h.box_fill().expect("fill"), "#ff0000"),
+        "the inline custom property must beat the rule's and reach the child"
+    );
+
+    push_external_dom_command(lumen_script::ScriptCommand::RemoveStyleProp {
+        node: root,
+        name: "--accent".to_string(),
+    });
+    h.settle();
+    assert!(
+        near(h.box_fill().expect("fill"), "#112233"),
+        "removing it hands the variable back to the stylesheet"
+    );
+}
+
+/// An inline value can read a `var()` itself, from the element's own custom
+/// properties or an ancestor's.
+#[test]
+fn an_inline_value_reads_var() {
+    let mut h = Harness::new(vec![rule("root", &[("--accent", "#112233")], 0)], "");
+    push_external_dom_command(lumen_script::ScriptCommand::SetStyleProp {
+        node: h.box_handle(),
+        name: "bg".to_string(),
+        value: "var(--accent)".to_string(),
+    });
+    h.settle();
+    assert!(
+        near(h.box_fill().expect("fill"), "#112233"),
+        "the inline value resolves against the inherited variable"
+    );
+
+    push_external_dom_command(lumen_script::ScriptCommand::SetStyleProp {
+        node: h.box_handle(),
+        name: "--accent".to_string(),
+        value: "#00ff00".to_string(),
+    });
+    h.settle();
+    assert!(
+        near(h.box_fill().expect("fill"), "#00ff00"),
+        "the element's own custom property wins over the inherited one"
+    );
+}
+
 /// An app with no stylesheet at all still applies its inline layer, so
 /// `set_style` works on a tree that was never styled by CSS.
 #[test]
