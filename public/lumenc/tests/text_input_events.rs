@@ -125,3 +125,74 @@ fn typing_reaches_the_script_text_handler() {
          stays stale until the field is committed"
     );
 }
+
+/// What the field shows on screen.
+fn text_of(app: &mut App, id: &str) -> String {
+    let e = find(app, id);
+    app.world
+        .get::<lumen_core::components::TextContent>(e)
+        .map(|t| t.0.clone())
+        .unwrap_or_default()
+}
+
+fn write_signal(app: &mut App, name: &str, value: &str) {
+    app.world
+        .resource_mut::<lumen_core::property_store::PropertyStore>()
+        .set_global_str(name, value);
+    for _ in 0..3 {
+        app.tick();
+    }
+}
+
+/// A dialog that focuses its first field as it opens shows what the app
+/// wrote to the field's signal, and keeps showing later writes while the
+/// field has focus and nothing has been typed. Focus alone used to count as
+/// an edit in flight, so the field stayed empty. Once the user types, the
+/// typing wins over a write until the edit ends.
+#[test]
+fn a_freshly_focused_field_shows_writes_to_its_signal() {
+    let mut app = build_and_tick(
+        r##"<root>
+  <button id="open" text="Open"/>
+  <dialog open="lp_open">
+    <input id="name" bind-text="lp_name" text="" width="200" height="30"/>
+  </dialog>
+</root>"##,
+        4,
+    );
+    write_signal(&mut app, "lp_name", "Layer 1");
+    write_signal(&mut app, "lp_open", "1");
+    let name = find(&mut app, "name");
+    assert!(
+        app.world.get::<lumen_core::input::Focused>(name).is_some(),
+        "the dialog focuses its first field"
+    );
+    assert_eq!(text_of(&mut app, "name"), "Layer 1");
+
+    write_signal(&mut app, "lp_name", "Layer 2");
+    assert_eq!(
+        text_of(&mut app, "name"),
+        "Layer 2",
+        "a later write shows too"
+    );
+
+    app.world
+        .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
+        .write(KeyPressed {
+            key: Key::Character("x".to_string()),
+            modifiers: Modifiers::default(),
+            repeat: false,
+            time_stamp: lumen_core::time::Instant::now(),
+        });
+    for _ in 0..3 {
+        app.tick();
+    }
+    let typed = text_of(&mut app, "name");
+    assert!(typed.ends_with('x'), "the key reached the field: {typed:?}");
+    write_signal(&mut app, "lp_name", "Clobbered");
+    assert_eq!(
+        text_of(&mut app, "name"),
+        typed,
+        "an edit in flight holds a write back"
+    );
+}

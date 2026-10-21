@@ -731,11 +731,16 @@ pub fn activate_focused_on_enter(
                         });
                     }
                     // Enter ends a single-line edit: the field takes the
-                    // signal writes it held back while the user typed.
+                    // signal writes it held back while the user typed. In a
+                    // multiline field it types a line break, which edits.
                     if !*multiline {
                         commands
                             .entity(entity)
                             .insert(lumen_core::input::EditCommitted);
+                    } else {
+                        commands
+                            .entity(entity)
+                            .remove::<lumen_core::input::EditCommitted>();
                     }
                 } else {
                     // Any other key starts the next edit, which the
@@ -928,6 +933,29 @@ impl Plugin for KeyDispatchPlugin {
                 .in_set(ClickSet::Producers)
                 .after(dispatch_focused_keys),
         );
+        app.add_systems(
+            TickStage::Systems,
+            settle_newly_focused_fields
+                .before(dispatch_focused_keys)
+                .before(lumen_core::signals::apply_text_bindings),
+        );
+    }
+}
+
+/// Mark a text field that just took focus as having no edit in flight
+/// ([`lumen_core::input::EditCommitted`]): no key has reached it yet, so a
+/// write to its bound signal still shows, as it does on a field that never
+/// had focus. The first key it takes starts an edit and clears the mark.
+/// A dialog that focuses its first field as it opens is the case this
+/// serves: the field shows what the app wrote to its signal.
+pub fn settle_newly_focused_fields(
+    mut commands: Commands,
+    fields: Query<Entity, (Added<lumen_core::input::Focused>, With<TextInput>)>,
+) {
+    for field in &fields {
+        commands
+            .entity(field)
+            .try_insert(lumen_core::input::EditCommitted);
     }
 }
 
