@@ -7,7 +7,8 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const CASE: &str = "LUMEN_CRASH_TEST_CASE";
@@ -143,6 +144,21 @@ fn raise_access_fault() {
     }
 }
 
+/// Held while a test writes an executable and while one starts a process.
+/// The tests run on threads of one process: a process started from one
+/// thread holds every descriptor of the parent from its fork until its
+/// exec, so an executable another thread is still writing would be open
+/// for writing in it, and running that executable fails with "text file
+/// busy" until the started process gets to its exec.
+static FORKS: Mutex<()> = Mutex::new(());
+
+/// Start `command`. `spawn` returns once the child has run its exec, which
+/// closes what it inherited.
+fn spawn(command: &mut Command) -> Child {
+    let _forks = FORKS.lock().unwrap_or_else(|e| e.into_inner());
+    command.spawn().unwrap()
+}
+
 /// Run `case` as a child crashing into a fresh folder; the folder.
 fn crash(case: &str) -> PathBuf {
     crash_as(case, &std::env::current_exe().unwrap())
@@ -172,7 +188,7 @@ fn crash_as(case: &str, exe: &Path) -> PathBuf {
         .env_remove("RUST_BACKTRACE")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
-    let output = command.output().unwrap();
+    let output = spawn(&mut command).wait_with_output().unwrap();
     let status = output.status;
     // What the child said, for a failure: a child that panicked before its
     // crash tells why here.
@@ -293,12 +309,15 @@ fn a_packaged_app_finds_the_helper_beside_itself() {
     std::fs::create_dir_all(&package).unwrap();
     let suffix = std::env::consts::EXE_SUFFIX;
     let app = package.join(format!("crash-app{suffix}"));
-    std::fs::copy(std::env::current_exe().unwrap(), &app).unwrap();
-    std::fs::copy(
-        env!("CARGO_BIN_EXE_lumen-crash"),
-        package.join(format!("lumen-crash{suffix}")),
-    )
-    .unwrap();
+    {
+        let _forks = FORKS.lock().unwrap_or_else(|e| e.into_inner());
+        std::fs::copy(std::env::current_exe().unwrap(), &app).unwrap();
+        std::fs::copy(
+            env!("CARGO_BIN_EXE_lumen-crash"),
+            package.join(format!("lumen-crash{suffix}")),
+        )
+        .unwrap();
+    }
 
     let dir = crash_as(case, &app);
     let names = wait_for_report(&dir, Duration::from_secs(20));
@@ -475,18 +494,18 @@ fn a_connection_that_closes_unannounced_leaves_the_helper_running() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let socket = helper_socket(&dir);
-    let mut helper = Command::new(env!("CARGO_BIN_EXE_lumen-crash"))
-        .args([
-            "--socket",
-            &socket,
-            "--pid",
-            &std::process::id().to_string(),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut helper = spawn(
+        Command::new(env!("CARGO_BIN_EXE_lumen-crash"))
+            .args([
+                "--socket",
+                &socket,
+                "--pid",
+                &std::process::id().to_string(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped()),
+    );
     let connect = || {
         let start = Instant::now();
         loop {
