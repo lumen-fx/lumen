@@ -7,12 +7,22 @@ fn on_ready() {
     window::set_title("lumen-window-check");
     window::set_size(640.0, 480.0);
     lumen::signal_set("state", "asked");
-    lumen::set_timeout("report", 2000);
+    lumen::set_timeout("report", 250);
 }
 
 fn on_timer(name) {
     if name == "report" {
+        // The platform applies the change on its own time, and a slow first
+        // frame can hold it back; look again until the window has it, or
+        // for ten seconds.
         let size = window::size();
+        let tries = signal<int>("tries");
+        let applied = window::title() == "lumen-window-check" && size[0] == 640.0 && size[1] == 480.0;
+        if !applied && tries.get() < 40 {
+            tries.set(tries.get() + 1);
+            lumen::set_timeout("report", 250);
+            return;
+        }
         print("window-check title=" + window::title() + " size=" + str(size[0]) + "x" + str(size[1]));
         lumen::signal_set("state", "reported");
         // Long enough for a test runner to read the window back from the
