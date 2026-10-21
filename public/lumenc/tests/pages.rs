@@ -787,11 +787,31 @@ fn a_page_root_keeps_its_attributes() {
         .count();
     assert_eq!(padded, 1, "the home page's padding should apply once");
 
+    // The settings page is not showing, so neither is its box: its background
+    // would otherwise paint over the home page and its padding take room.
+    let page = entity_by_id(&mut app, "settings-root");
+    let shown = |app: &App| {
+        let visible = app
+            .world
+            .get::<lumen_core::components::Visible>(page)
+            .is_none_or(|v| v.0);
+        let displayed = app
+            .world
+            .get::<lumen_core::components::Style>(page)
+            .is_some_and(|s| s.display != lumen_core::components::Display::None);
+        (visible, displayed)
+    };
+    assert_eq!(
+        shown(&app),
+        (false, false),
+        "an inactive page shows nothing"
+    );
+
     lumen_core::nav::navigate("settings");
     tick_n(&mut app, 5);
     assert!(texts(&mut app).iter().any(|t| t == "SETTINGS_PAGE"));
+    assert_eq!(shown(&app), (true, true), "the active page shows its box");
 
-    let page = entity_by_id(&mut app, "settings-root");
     let style = app
         .world
         .get::<lumen_core::components::Style>(page)
