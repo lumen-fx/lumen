@@ -239,7 +239,7 @@ pub struct WindowApply;
 /// reads as changed, from undoing a viewport set after the window spawned.
 fn apply_window_headless(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    viewport: Option<ResMut<Viewport>>,
+    mut viewport: ResMut<Viewport>,
     frame: Option<ResMut<FrameDirty>>,
 ) {
     let Ok(mut window) = windows.single_mut() else {
@@ -248,11 +248,6 @@ fn apply_window_headless(
     let asked = window.is_changed() && window.last_changed() != window.added();
     if asked {
         window_state::publish_title(&window.title);
-    }
-    let Some(mut viewport) = viewport else {
-        return;
-    };
-    if asked {
         if is_window_size(window.size.x, window.size.y) && viewport.size != window.size {
             viewport.size = window.size;
             if let Some(mut frame) = frame {
@@ -267,11 +262,9 @@ fn apply_window_headless(
 /// Carry the main world's viewport size and scale to the render world's, which
 /// a headless run has no platform window to keep current.
 fn mirror_viewport_to_render(main: &mut World, render: &mut World) {
-    let Some((size, scale)) = main
-        .get_resource::<Viewport>()
-        .map(|v| (v.size, v.scale_factor))
-    else {
-        return;
+    let (size, scale) = {
+        let viewport = main.resource::<Viewport>();
+        (viewport.size, viewport.scale_factor)
     };
     if let Some(mut viewport) = render.get_resource_mut::<Viewport>()
         && (viewport.size != size || viewport.scale_factor != scale)

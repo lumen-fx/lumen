@@ -242,3 +242,57 @@ fn a_close_asked_during_the_veto_tick_is_dropped() {
     app.tick();
     assert_eq!(requests.take(&app.world), None);
 }
+
+/// An app that already has a primary window keeps it: installing the core
+/// plugin spawns no second one.
+#[test]
+fn an_app_with_a_window_keeps_it() {
+    let _guard = serial();
+    let mut app = App::new();
+    let mine = app
+        .world
+        .spawn((
+            Window {
+                title: "Mine".into(),
+                size: Vec2::new(300.0, 200.0),
+            },
+            lumen_core::window::PrimaryWindow,
+        ))
+        .id();
+    app.add_plugin(WindowCorePlugin);
+    assert_eq!(primary_window(&mut app.world), Some(mine));
+    let windows = app
+        .world
+        .query_filtered::<Entity, With<lumen_core::window::PrimaryWindow>>()
+        .iter(&app.world)
+        .count();
+    assert_eq!(windows, 1);
+    assert_eq!(app.world.get::<Window>(mine).unwrap().title, "Mine");
+}
+
+/// With no window to seed, seeding writes nothing, not even the title the
+/// getter reads.
+#[test]
+fn seeding_without_a_window_changes_nothing() {
+    let _guard = serial();
+    let mut app = App::new();
+    lumen_core::window_state::publish_title("Before");
+    seed_primary_window(&mut app.world, "Ghost", Vec2::new(10.0, 10.0));
+    assert_eq!(primary_window(&mut app.world), None);
+    assert_eq!(title(), "Before");
+}
+
+/// The headless stand-in carries on when its window is gone: the tick runs
+/// and the title the getter reads stays the last one the window had.
+#[test]
+fn a_headless_app_runs_on_without_its_window() {
+    let _guard = serial();
+    let mut app = headless_app();
+    app.tick();
+    let window = primary_window(&mut app.world).unwrap();
+    app.world.despawn(window);
+    let size = app.world.resource::<Viewport>().size;
+    app.tick();
+    assert_eq!(title(), "Start");
+    assert_eq!(app.world.resource::<Viewport>().size, size);
+}

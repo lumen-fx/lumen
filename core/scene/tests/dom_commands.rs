@@ -165,3 +165,26 @@ fn a_tree_edit_restyles_the_subtree_it_changed() {
     assert!(world.get::<StyleDirty>(panel).is_none());
     assert_eq!(*world.resource::<StyleVersion>(), StyleVersion::default());
 }
+
+/// A world nothing drives a window for (a browser page, a bare app) still
+/// answers `window.set_title` through the getter, and drops a close or quit
+/// with no one to obey it instead of queueing a request nobody reads.
+#[test]
+fn window_commands_without_a_window_keep_to_the_getter() {
+    use lumen_core::window::{QuitRequest, WindowRequest};
+
+    let mut world = world();
+    apply(
+        &mut world,
+        vec![
+            ScriptCommand::WindowSetTitle {
+                title: "Unwindowed".into(),
+            },
+            ScriptCommand::WindowClose,
+            ScriptCommand::AppQuit,
+        ],
+    );
+    assert_eq!(lumen_core::window_state::title(), "Unwindowed");
+    assert!(!world.contains_resource::<Messages<WindowRequest>>());
+    assert!(!world.contains_resource::<Messages<QuitRequest>>());
+}

@@ -920,7 +920,7 @@ unsafe extern "C" fn native_close(
 ) {
     use lumen::{
         LUMEN_WINDOW_CURRENT, lumen_window_close, lumen_window_dpr, lumen_window_set_size,
-        lumen_window_size, lumen_window_title,
+        lumen_window_set_title, lumen_window_size, lumen_window_title,
     };
     let mut log = WINDOW_LOG.lock().unwrap();
     let (mut w, mut h) = (0.0f32, 0.0f32);
@@ -952,6 +952,10 @@ unsafe extern "C" fn native_close(
             lumen_window_set_size(LUMEN_WINDOW_CURRENT, 640.0, 480.0)
         ));
         log.push(format!(
+            "set title {:?}",
+            lumen_window_set_title(LUMEN_WINDOW_CURRENT, c"Docs".as_ptr())
+        ));
+        log.push(format!(
             "close {:?}",
             lumen_window_close(LUMEN_WINDOW_CURRENT)
         ));
@@ -969,11 +973,28 @@ unsafe extern "C" fn native_quit(
     WINDOW_LOG.lock().unwrap().push(format!("quit {status:?}"));
 }
 
-/// A close hook that records each call with the size the window has.
+/// A close hook that records each call with the size and title the window
+/// has.
 fn record_hook() {
     let (mut w, mut h) = (0.0f32, 0.0f32);
     unsafe { lumen::lumen_window_size(lumen::LUMEN_WINDOW_CURRENT, &mut w, &mut h) };
-    WINDOW_LOG.lock().unwrap().push(format!("hook {w}x{h}"));
+    let mut buf = [0 as c_char; 64];
+    let mut len = 0usize;
+    let status = unsafe {
+        lumen::lumen_window_title(
+            lumen::LUMEN_WINDOW_CURRENT,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut len,
+        )
+    };
+    assert_eq!(status, LumenStatus::Ok);
+    let title = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+    assert_eq!(title.len(), len);
+    WINDOW_LOG
+        .lock()
+        .unwrap()
+        .push(format!("hook {w}x{h} {title:?}"));
 }
 
 extern "C" fn record_and_veto(_ud: *mut c_void) -> c_int {
@@ -1026,10 +1047,11 @@ fn window_close_runs_the_close_hook_which_can_veto() {
             "size Ok",
             "dpr Ok",
             "set size Ok",
+            "set title Ok",
             "close Ok",
-            // The hook sees the size the window took on the tick that asked
-            // for it, and vetoes; the run goes on to its end.
-            "hook 640x480",
+            // The hook sees the size and title the window took on the tick
+            // that asked for them, and vetoes; the run goes on to its end.
+            "hook 640x480 \"Docs\"",
         ],
     );
 }
@@ -1037,5 +1059,50 @@ fn window_close_runs_the_close_hook_which_can_veto() {
 #[test]
 fn app_quit_runs_the_close_hook() {
     let log = run_window_app("app_quit", native_quit, record_and_allow);
-    assert_eq!(log, ["quit Ok", "hook 800x600"]);
+    // The window is titled after the app's directory.
+    let title = format!("lumen_expose_app_quit_{}", std::process::id());
+    assert_eq!(
+        log,
+        ["quit Ok".to_string(), format!("hook 800x600 {title:?}")]
+    );
+}
+
+/// Every window entry point checks the handle first: one that names no
+/// window of this app is refused with the call named in the error, and
+/// nothing reaches the app.
+#[test]
+fn window_calls_refuse_a_handle_that_names_no_window() {
+    use lumen::{
+        lumen_window_close, lumen_window_dpr, lumen_window_set_size, lumen_window_set_title,
+        lumen_window_size, lumen_window_title,
+    };
+    let bad = u64::MAX;
+    let (mut w, mut h, mut dpr) = (0.0f32, 0.0f32, 0.0f32);
+    let mut len = 0usize;
+    let refused = |name: &str, status: LumenStatus| {
+        assert_eq!(status, LumenStatus::ErrInvalidHandle, "{name}");
+        let error = last_error();
+        assert!(
+            error.starts_with(&format!("{name}: no window with handle {bad}")),
+            "{error}"
+        );
+    };
+    unsafe {
+        refused(
+            "lumen_window_set_title",
+            lumen_window_set_title(bad, c"Docs".as_ptr()),
+        );
+        refused(
+            "lumen_window_title",
+            lumen_window_title(bad, std::ptr::null_mut(), 0, &mut len),
+        );
+        refused(
+            "lumen_window_set_size",
+            lumen_window_set_size(bad, 640.0, 480.0),
+        );
+        refused("lumen_window_size", lumen_window_size(bad, &mut w, &mut h));
+        refused("lumen_window_dpr", lumen_window_dpr(bad, &mut dpr));
+        refused("lumen_window_close", lumen_window_close(bad));
+    }
+    assert_eq!((w, h, dpr, len), (0.0, 0.0, 0.0, 0), "no out was written");
 }
