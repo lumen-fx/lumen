@@ -1169,6 +1169,10 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         }
         if self.close_committed {
             event_loop.exit();
+            // Windows waits for the next message after `about_to_wait`
+            // before it checks for an exit, and a close the app asked for
+            // brings no further message; do not wait.
+            event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
         self.apply_window_changes();
@@ -1443,14 +1447,19 @@ impl WinitHandler {
                 vp.size = size;
                 vp.scale_factor = scale_factor;
             }
-            // The window has this size now, whoever asked for it.
+            // The window has this size now.
             if let Some(entity) = self.primary
                 && let Some(mut wanted) =
                     self.app.world.get_mut::<lumen_core::window::Window>(entity)
             {
-                wanted.bypass_change_detection().size = size;
+                take_platform_size(
+                    wanted.bypass_change_detection(),
+                    &mut self.applied_size,
+                    size,
+                );
+            } else {
+                self.applied_size = size;
             }
-            self.applied_size = size;
             // Smart reactive resize: relayout + repaint synchronously
             // inside the resize event. `sync_viewport` (LayoutSync)
             // sees the new `Viewport.size` and re-lays out every
@@ -1491,6 +1500,23 @@ fn window_changes(
     let size = (wanted.size != applied_size && is_window_size(wanted.size.x, wanted.size.y))
         .then_some(wanted.size);
     (title, size)
+}
+
+/// Record that the platform window has `size`. The app's [`Window`] takes it
+/// unless the app asked for a size the platform has not been asked for yet: a
+/// resize the platform made on its own (maximizing the window it just showed,
+/// say) must not drop that request, which goes out after the tick.
+///
+/// [`Window`]: lumen_core::window::Window
+fn take_platform_size(
+    wanted: &mut lumen_core::window::Window,
+    applied_size: &mut glam::Vec2,
+    size: glam::Vec2,
+) {
+    if wanted.size == *applied_size {
+        wanted.size = size;
+    }
+    *applied_size = size;
 }
 
 /// W3.5: build an [`ImeSurroundingResponse`] for the currently focused
@@ -2011,7 +2037,10 @@ fn wheel_delta(delta: MouseScrollDelta) -> glam::Vec2 {
 
 #[cfg(test)]
 mod tests {
-    use super::{attach_first, idle_control_flow, present_frame, wheel_delta, window_changes};
+    use super::{
+        attach_first, idle_control_flow, present_frame, take_platform_size, wheel_delta,
+        window_changes,
+    };
     use bevy_ecs::world::World;
     use lumen_core::prelude::{
         A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, FrameTarget, RenderError,
@@ -2394,6 +2423,32 @@ mod tests {
             window_changes(&wanted("App", 640.0, 480.0), "App", applied),
             (None, Some(glam::Vec2::new(640.0, 480.0)))
         );
+    }
+
+    /// A resize the platform makes on its own reaches the app's window
+    /// unless the app has asked for a size the platform has not seen yet.
+    #[test]
+    fn a_platform_resize_keeps_a_size_the_app_has_not_sent() {
+        let maximized = glam::Vec2::new(1024.0, 697.0);
+        // Nothing pending: the window takes what the platform did.
+        let mut window = wanted("App", 800.0, 600.0);
+        let mut applied = glam::Vec2::new(800.0, 600.0);
+        take_platform_size(&mut window, &mut applied, maximized);
+        assert_eq!((window.size, applied), (maximized, maximized));
+        // A request not yet sent survives, and is still a change to send.
+        let mut window = wanted("App", 640.0, 480.0);
+        let mut applied = glam::Vec2::new(800.0, 600.0);
+        take_platform_size(&mut window, &mut applied, maximized);
+        assert_eq!(window.size, glam::Vec2::new(640.0, 480.0));
+        assert_eq!(
+            window_changes(&window, "App", applied).1,
+            Some(glam::Vec2::new(640.0, 480.0))
+        );
+        // Once sent, the platform's answer is what the window has.
+        let mut applied = glam::Vec2::new(640.0, 480.0);
+        let adjusted = glam::Vec2::new(650.0, 480.0);
+        take_platform_size(&mut window, &mut applied, adjusted);
+        assert_eq!((window.size, applied), (adjusted, adjusted));
     }
 
     /// A size no window can have is never asked of the platform.
