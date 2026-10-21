@@ -179,10 +179,11 @@ FFI frames is undefined behavior.
   onto the heap; the `App` owns it and stays valid for the whole run (`run`
   blocks and the `App` must outlive it). Anything captured by reference
   must outlive the `App`, so prefer locals declared before it, or globals.
-  `on_close` (ABI 0.5) fires on an OS close request before teardown and may
-  veto: return `true` from a `bool()` handler to allow the close, `false` to
-  keep the window open (a `void()` handler always allows). It does not fire
-  under `run_headless`.
+  `on_close` (ABI 0.5) fires before the window closes, on its close button, a
+  signal, `lumen::window::close()` or `App::quit()`, and may veto: return
+  `true` from a `bool()` handler to allow the close, `false` to keep the window
+  open (a `void()` handler always allows). Under `run_headless` it fires for
+  `lumen::window::close()` and `App::quit()` only.
 - `Signal<T>::watch` callables live for the program's duration, since the ABI
   has no unsubscribe. They are heap-anchored independently of the originating
   handle.

@@ -207,9 +207,10 @@ typedef void (*LumenWatchFn)(const char* name, const LumenValue* value,
 
 /*
  * App-level close callback (ABI 0.5). Registered with
- * lumen_app_on_close(); Lumen calls it once per OS close request - the
- * window close button, or (Unix) the first SIGINT/SIGTERM - BEFORE the
- * runtime tears down the window, GPU state, or script host. Return
+ * lumen_app_on_close(); Lumen calls it once per close request - the
+ * window close button, (Unix) the first SIGINT/SIGTERM,
+ * lumen_window_close(), or lumen_app_quit() - BEFORE the runtime tears
+ * down the window, GPU state, or script host. Return
  * nonzero to allow the close (lumen_app_run() then returns), or 0 to
  * veto it and keep the window open (the hook fires again on the next
  * close request). On Unix a second SIGINT/SIGTERM bypasses the hook and
@@ -262,13 +263,15 @@ LumenStatus lumen_app_on_click(LumenApp* app,
                                void* user_data);
 
 /*
- * Register an app-level close hook (ABI 0.5). `cb` fires once per OS
- * close request (window close button; Unix first SIGINT/SIGTERM) before
- * any teardown, and may veto the close by returning 0 - the native
- * counterpart of the script-side on_close() returning false; both
- * coexist and either may veto. A second registration REPLACES the
- * first. Call before lumen_app_run(). The hook never fires under
- * lumen_app_run_headless() (no window, no OS close request).
+ * Register an app-level close hook (ABI 0.5). `cb` fires once per close
+ * request (window close button; Unix first SIGINT/SIGTERM;
+ * lumen_window_close(); lumen_app_quit()) before any teardown, and may
+ * veto the close by returning 0 - the native counterpart of the
+ * script-side on_close() returning false; both coexist and either may
+ * veto. A second registration REPLACES the first. Call before
+ * lumen_app_run(). Under lumen_app_run_headless() the hook fires for
+ * lumen_window_close() and lumen_app_quit() only: there is no OS close
+ * request.
  */
 LumenStatus lumen_app_on_close(LumenApp* app,
                                LumenCloseFn cb,
