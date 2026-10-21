@@ -109,6 +109,12 @@ class flip. Declare a second scope on the root and every descendant reading
 .theme-light { --bg: #f8f9fb; --text: #1a1d23; }
 ```
 
+A script can set a custom property on one element, as `style.setProperty` does
+on the web. `set_style("--accent", "#ff3b30")` on an element reaches every
+`var(--accent)` in that element and its descendants, ahead of what any rule
+declares, and `style_remove("--accent")` hands it back to the stylesheet. A
+value a script sets can read a property too: `set_style("bg", "var(--accent)")`.
+
 A token can hold an image as well as a colour, so the art behind a screen is
 themed the same way:
 

@@ -812,6 +812,7 @@ fn apply_to_element(
         &me,
         has_element_children,
         text_body.as_deref(),
+        &OwnDeclarations::NONE,
         warnings,
     );
     el.attrs.text = text_body;
@@ -856,6 +857,21 @@ struct Scope {
     text: Inherited,
 }
 
+/// The declarations an element makes itself that need its var scope to
+/// resolve: its custom properties, and any value reading a `var()`. `ctx`
+/// names the element in a warning.
+struct OwnDeclarations<'a> {
+    ctx: &'a str,
+    declarations: &'a [(String, String)],
+}
+
+impl OwnDeclarations<'_> {
+    const NONE: OwnDeclarations<'static> = OwnDeclarations {
+        ctx: "",
+        declarations: &[],
+    };
+}
+
 /// Resolve one element's attributes against the stylesheet, in place, and
 /// return the scope its children inherit.
 ///
@@ -874,21 +890,12 @@ fn cascade_one(
     me: &ElementRef,
     has_element_children: bool,
     text_body: Option<&str>,
+    own: &OwnDeclarations<'_>,
     warnings: &mut Vec<CssWarning>,
 ) -> Scope {
     let inherited_vars = &scope.vars;
     let inherited_text = &scope.text;
     let is_root = parents.is_empty();
-
-    // Snapshot pre-CSS (inline-set) attrs so origin precedence still
-    // beats user CSS on a per-field basis.
-    let inline_snapshot = attrs.clone();
-
-    // Inheritance base (CSS-inherited text props): apply the parent's
-    // computed value as a specificity-0 base, only where this element
-    // has no inline value yet. Any matching rule (applied below) or the
-    // inline origin (restored below) overrides it.
-    inherited_text.apply_base(attrs);
 
     // Collect matching rules, cascade-sorted (ascending - later wins).
     let matched = collect_matching_rules(
@@ -922,6 +929,45 @@ fn cascade_one(
             }
         }
     }
+    // The element's own custom properties are inline origin, so they beat
+    // every rule's, as `style.setProperty("--x", ...)` does on the web.
+    for (name, value) in own.declarations {
+        if let Some(var) = name.strip_prefix("--") {
+            vars.insert(var.to_string(), value.clone());
+        }
+    }
+    // Its own declarations that read a `var()` wait for the scope above;
+    // once resolved they join the inline origin like any other.
+    for (name, value) in own.declarations {
+        if name.starts_with("--") {
+            continue;
+        }
+        let applied = resolve_vars(own.ctx, name, value, &vars)
+            .and_then(|resolved| apply_declaration("markup", name, &resolved, attrs));
+        match applied {
+            Ok(true) => {}
+            Ok(false) => warnings.push(CssWarning {
+                selector: own.ctx.to_string(),
+                property: name.clone(),
+                message: "unknown property (declaration ignored)".to_string(),
+            }),
+            Err(e) => warnings.push(CssWarning {
+                selector: own.ctx.to_string(),
+                property: name.clone(),
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    // Snapshot pre-CSS (inline-set) attrs so origin precedence still
+    // beats user CSS on a per-field basis.
+    let inline_snapshot = attrs.clone();
+
+    // Inheritance base (CSS-inherited text props): apply the parent's
+    // computed value as a specificity-0 base, only where this element
+    // has no inline value yet. Any matching rule (applied below) or the
+    // inline origin (restored below) overrides it.
+    inherited_text.apply_base(attrs);
 
     // Apply pass: per-declaration cascade. CSS Cascade section 6.4 makes
     // `!important` participate at the declaration level, not the rule
@@ -2430,16 +2476,22 @@ impl<'a> RestyleWalk<'a> {
             id: node.id.clone(),
             ..Default::default()
         };
+        let ctx = format!("<{}>", node.tag);
+        let mut deferred = Vec::new();
         for (property, value) in &node.declarations {
+            if property.starts_with("--") || value.contains("var(") {
+                deferred.push((property.clone(), value.clone()));
+                continue;
+            }
             match apply_declaration("markup", property, value, &mut attrs) {
                 Ok(true) => {}
                 Ok(false) => self.warnings.push(CssWarning {
-                    selector: format!("<{}>", node.tag),
+                    selector: ctx.clone(),
                     property: property.clone(),
                     message: "unknown property (declaration ignored)".to_string(),
                 }),
                 Err(e) => self.warnings.push(CssWarning {
-                    selector: format!("<{}>", node.tag),
+                    selector: ctx.clone(),
                     property: property.clone(),
                     message: e.to_string(),
                 }),
@@ -2455,6 +2507,10 @@ impl<'a> RestyleWalk<'a> {
             &me,
             node.has_element_children,
             node.text.as_deref(),
+            &OwnDeclarations {
+                ctx: &ctx,
+                declarations: &deferred,
+            },
             &mut self.warnings,
         );
         self.last = Some((me, scope));
@@ -5999,5 +6055,32 @@ mod selector_text_tests {
             selector_to_css(&one(":nth-child(2n-1)")),
             ":nth-child(2n-1)"
         );
+    }
+}
+
+#[cfg(test)]
+mod own_declaration_tests {
+    use super::*;
+
+    /// An element's own declarations that read a `var()` resolve against its
+    /// scope, its own custom properties included; one that cannot resolve,
+    /// or names no property, is skipped with a warning naming the element.
+    #[test]
+    fn own_declarations_resolve_against_the_element_scope() {
+        let sheet = Stylesheet::default();
+        let media = MediaContext::default();
+        let node = AncestorInfo::new("tile", Vec::new(), None).with_declarations(vec![
+            ("--accent".to_string(), "#ff0000".to_string()),
+            ("bg".to_string(), "var(--accent)".to_string()),
+            ("no-such-property".to_string(), "var(--accent)".to_string()),
+            ("text-color".to_string(), "var(--missing)".to_string()),
+        ]);
+        let mut walk = RestyleWalk::new(&sheet, &media, &[]);
+        let attrs = walk.resolve(&node);
+        assert_eq!(computed_property(&attrs, "bg").as_deref(), Some("#ff0000"));
+        let warnings = walk.take_warnings();
+        let named: Vec<&str> = warnings.iter().map(|w| w.property.as_str()).collect();
+        assert_eq!(named, ["no-such-property", "text-color"]);
+        assert!(warnings.iter().all(|w| w.selector == "<tile>"));
     }
 }
