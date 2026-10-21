@@ -87,6 +87,9 @@ pub struct PagePlan {
     pub fragment_files: Vec<PathBuf>,
     /// Directory the page files live in: the app's `src/`.
     pub dir: PathBuf,
+    /// `true` when the pages are every `.lmn` file the scan of [`Self::dir`]
+    /// found, `false` when `[pages] include` named them.
+    pub scanned: bool,
 }
 
 impl PagePlan {
@@ -96,6 +99,51 @@ impl PagePlan {
         let mut keys: Vec<String> = self.pages.iter().map(|p| p.key.clone()).collect();
         keys.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
         keys
+    }
+
+    /// Whether `path` is a page only because it sits directly in `src/`: the
+    /// scan made it one, and it is not the home page. A fragment kept there
+    /// for an `<include>` is read as a page of its own this way.
+    fn scanned_page(&self, path: &Path) -> bool {
+        self.scanned
+            && path != self.entry_file
+            && self.pages.iter().any(|p| same_file(&p.path, path))
+    }
+
+    /// Say why `path` failed to parse on its own when the directory scan is
+    /// what made it a page, so an error about a fragment kept beside the
+    /// entry names the cause and the fix. Any other file's error is left as
+    /// it is.
+    pub fn explain_page_error(&self, path: &Path, error: String) -> String {
+        if !self.scanned_page(path) {
+            return error;
+        }
+        format!(
+            "{error}\n  {} was read as a page, because every .lmn file directly in {} is \
+             one. A fragment that is only included belongs in a subfolder, such as {}.",
+            path.display(),
+            self.dir.display(),
+            self.dir.join("parts").display(),
+        )
+    }
+
+    /// The pages the entry also `<include>`s, given the files its includes
+    /// resolved to. Each is a fragment kept directly in `src/`, which the scan
+    /// made a page as well.
+    pub fn included_pages<'a>(&'a self, included: &'a [PathBuf]) -> Vec<&'a PageFile> {
+        self.pages
+            .iter()
+            .filter(|p| self.scanned_page(&p.path))
+            .filter(|p| included.iter().any(|i| same_file(i, &p.path)))
+            .collect()
+    }
+}
+
+/// Whether two paths name one file, however each was spelled.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 
@@ -228,6 +276,7 @@ pub fn discover(src_dir: &Path, cfg: &LumenToml) -> PagePlan {
         pages: files,
         fragment_files,
         dir: src_dir.to_path_buf(),
+        scanned: cfg.pages.include.is_none(),
     }
 }
 
@@ -287,7 +336,12 @@ pub fn assemble(
         };
         let pir = parser
             .parse_html_with_loader(&raw, &page.path, fragments)
-            .map_err(|e| format!("parse page {}: {e}", page.path.display()))?;
+            .map_err(|e| {
+                plan.explain_page_error(
+                    &page.path,
+                    format!("parse page {}: {e}", page.path.display()),
+                )
+            })?;
 
         // A synthetic `<if>` gate keyed on the reserved active-page signal.
         //
@@ -386,7 +440,7 @@ pub fn collect_fragments(
         };
         let declared = parser
             .collect_fragments(&src, path)
-            .map_err(|e| format!("parse {}: {e}", path.display()))?;
+            .map_err(|e| plan.explain_page_error(path, format!("parse {}: {e}", path.display())))?;
         table
             .merge(declared)
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -558,6 +612,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A fragment kept directly in `src/` is a page by the scan. The loader
+    /// is told which pages the entry also includes, and an error about such a
+    /// file says it was read as a page and where a fragment belongs; an error
+    /// about the entry, or about a page `[pages] include` named, is left alone.
+    #[test]
+    fn a_fragment_beside_the_entry_is_named_as_a_scanned_page() {
+        let dir = temp_app_dir("fragment_beside_entry");
+        std::fs::write(dir.join("panel.lmn"), "<row/>").unwrap();
+        let plan = discover(&dir, &LumenToml::default());
+        assert!(plan.scanned);
+        let panel = dir.join("panel.lmn");
+        let index = dir.join("index.lmn");
+
+        let included = vec![dir.join(".").join("panel.lmn")];
+        let keys: Vec<&str> = plan
+            .included_pages(&included)
+            .iter()
+            .map(|p| p.key.as_str())
+            .collect();
+        assert_eq!(keys, ["panel"]);
+        assert!(plan.included_pages(std::slice::from_ref(&index)).is_empty());
+
+        let explained = plan.explain_page_error(&panel, "bad token".into());
+        assert!(explained.starts_with("bad token\n"), "{explained}");
+        assert!(explained.contains("read as a page"), "{explained}");
+        assert!(explained.contains("parts"), "{explained}");
+        assert_eq!(plan.explain_page_error(&index, "bad".into()), "bad");
+
+        let mut cfg = LumenToml::default();
+        cfg.pages.include = Some(vec!["index.lmn".into(), "panel.lmn".into()]);
+        let listed = discover(&dir, &cfg);
+        assert!(!listed.scanned);
+        assert_eq!(listed.explain_page_error(&panel, "bad".into()), "bad");
+        assert!(listed.included_pages(&included).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn keys_are_longest_first() {
         let plan = PagePlan {
@@ -580,6 +672,7 @@ mod tests {
             ],
             fragment_files: Vec::new(),
             dir: PathBuf::new(),
+            scanned: true,
         };
         let keys = plan.keys();
         assert_eq!(keys[0], "settings"); // longest first
