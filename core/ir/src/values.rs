@@ -22,33 +22,39 @@ pub fn parse_length(ctx: &str, name: &str, value: &str) -> Result<LengthSpec, Pa
     Ok(LengthSpec::Px(parse_num(ctx, name, value, v)?))
 }
 
-/// `#rrggbb` or `#rrggbbaa`.
+/// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. A shorthand digit stands for
+/// itself twice, as in CSS: `#d8f` is `#dd88ff`.
 pub fn parse_color(ctx: &str, name: &str, value: &str) -> Result<Rgba, ParseError> {
+    const EXPECTED: &str = "expected '#rgb', '#rgba', '#rrggbb' or '#rrggbbaa'";
     let v = value.trim();
     let body = v
         .strip_prefix('#')
-        .ok_or_else(|| bad(ctx, name, value, "expected '#rrggbb' or '#rrggbbaa'".into()))?;
-    if body.len() != 6 && body.len() != 8 {
-        return Err(bad(
-            ctx,
-            name,
-            value,
-            "expected '#rrggbb' or '#rrggbbaa'".into(),
-        ));
+        .ok_or_else(|| bad(ctx, name, value, EXPECTED.into()))?;
+    if !body.is_ascii() {
+        return Err(bad(ctx, name, value, EXPECTED.into()));
     }
-    let pair = |i: usize| -> Result<u8, ParseError> {
-        u8::from_str_radix(&body[i..i + 2], 16)
+    let short = match body.len() {
+        3 | 4 => true,
+        6 | 8 => false,
+        _ => return Err(bad(ctx, name, value, EXPECTED.into())),
+    };
+    let channel = |i: usize| -> Result<f32, ParseError> {
+        let digits = if short {
+            body[i..i + 1].repeat(2)
+        } else {
+            body[i * 2..i * 2 + 2].to_string()
+        };
+        u8::from_str_radix(&digits, 16)
+            .map(|c| c as f32 / 255.0)
             .map_err(|e| bad(ctx, name, value, format!("bad hex: {e}")))
     };
-    let r = pair(0)? as f32 / 255.0;
-    let g = pair(2)? as f32 / 255.0;
-    let b = pair(4)? as f32 / 255.0;
-    let a = if body.len() == 8 {
-        pair(6)? as f32 / 255.0
-    } else {
-        1.0
-    };
-    Ok(Rgba { r, g, b, a })
+    let channels = if short { body.len() } else { body.len() / 2 };
+    Ok(Rgba {
+        r: channel(0)?,
+        g: channel(1)?,
+        b: channel(2)?,
+        a: if channels == 4 { channel(3)? } else { 1.0 },
+    })
 }
 
 /// Parse a `bg=` value: a hex color, a gradient function, or an image named
@@ -973,6 +979,22 @@ mod tests {
 
     fn cursor(value: &str) -> Result<CursorSpec, ParseError> {
         parse_cursor("x", "cursor", value)
+    }
+
+    #[test]
+    fn a_hex_color_takes_the_shorthand_forms_too() {
+        let rgba = |v: &str| {
+            let c = parse_color("x", "color", v).unwrap();
+            [c.r, c.g, c.b, c.a].map(|ch| (ch * 255.0).round() as u8)
+        };
+        assert_eq!(rgba("#ddd"), [0xdd, 0xdd, 0xdd, 0xff]);
+        assert_eq!(rgba("#D8f"), [0xdd, 0x88, 0xff, 0xff]);
+        assert_eq!(rgba("#d8f8"), [0xdd, 0x88, 0xff, 0x88]);
+        assert_eq!(rgba("#dd88ff"), [0xdd, 0x88, 0xff, 0xff]);
+        assert_eq!(rgba("#dd88ff80"), [0xdd, 0x88, 0xff, 0x80]);
+        for wrong in ["#dd", "#ddddd", "#ggg", "ddd", "#d\u{e9}"] {
+            assert!(parse_color("x", "color", wrong).is_err(), "{wrong}");
+        }
     }
 
     #[test]

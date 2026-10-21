@@ -71,9 +71,9 @@ Attributes come in a few families, and most of them apply to any tag:
 - **Layout**: `grow`, `shrink`, `align`, `justify`, `position`, `inset`,
   `z-index`, `overflow`.
 - **Paint**: `bg`, `text-color`, `hover-bg`, `press-bg`, `radius`, `border`,
-  `shadow`, `opacity`. Colours are `#rrggbb` or `#rrggbbaa` literals; `bg` also
-  takes a gradient or an image, `bg="url('art/hero.png')"`, with `bg-fit`
-  saying how the image fills the box.
+  `shadow`, `opacity`. Colours are hex literals: `#rgb`, `#rgba`, `#rrggbb`
+  or `#rrggbbaa`; `bg` also takes a gradient or an image,
+  `bg="url('art/hero.png')"`, with `bg-fit` saying how the image fills the box.
 - **Text**: `font-size`, `font-weight`, `font-family`, `line-height`,
   `text-align`, `wrap`, `max-lines`.
 - **Behaviour**: `id`, `class`, `tab-index`, `disabled`, `draggable`,

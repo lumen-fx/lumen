@@ -261,7 +261,7 @@ in-app switch for anything heavily animated or low-contrast.
 | --- | --- |
 | length | `auto`, `<n>`, `<n>px`, `<n>%`. A bare number is pixels. |
 | number | `<n>`, `<n>px`. The `px` suffix is accepted and stripped. |
-| color | `#rrggbb`, `#rrggbbaa`. |
+| color | `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`. A shorthand digit counts twice, so `#d8f` is `#dd88ff`. |
 | edges | 1 to 4 terms in top-right-bottom-left rotation; each `<n>`, `<n>px`, or `<n>%`. |
 | border width | `thin` (1px), `medium` (3px), `thick` (5px), or a px length. Percentages are rejected. |
 | duration | `<n>ms` or `<n>s`. |
