@@ -224,6 +224,11 @@ The surface covers:
 - **Reading a node back**: `get_attr`, `text`, `classes`, `has_class`,
   `style_get`, `computed_style`, `outer_markup`, `inner_markup`, and geometry.
 
+A selector in `query` and `closest` tests live state the way a browser does:
+`query(":hover")` is the element under the pointer and its ancestors,
+`:focus` the focused element, and `:active`, `:checked`, `:selected`,
+`:disabled` and `:drag-over` follow their states.
+
 These names are the same in every host. Two of them exist in a one-argument
 and a no-argument form, and because candela keys a host function by name
 alone, the no-argument form gets its own name everywhere: `page(path)`

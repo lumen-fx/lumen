@@ -29,11 +29,16 @@ use std::collections::HashMap;
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
-    DirtyLayout, Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag,
-    StyleDirty, TextContent, TextInput,
+    DirtyLayout, Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenId,
+    LumenTag, Selected, StyleDirty, TextContent, TextInput, Toggleable,
 };
-use lumen_core::input::ClickSet;
-use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
+use lumen_core::input::{
+    ClickSet, FocusVisible, Focused, HoverWithin, Hovered, PointerState, Pressed,
+};
+use lumen_core::node::{
+    DomIndex, DomRecord, DomStates, ElementState, NodeHandle, is_reserved_token, publish_dom_index,
+    publish_dom_states,
+};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_core::render_world::AnimationsActive;
@@ -75,6 +80,16 @@ pub fn install_dom(app: &mut App) {
     app.add_systems(
         TickStage::Systems,
         build_dom_index
+            .before(ScriptSet::Dispatch)
+            .before(lumen_input::dispatch_focused_keys),
+    );
+    // The live states a query's `:hover` and the other state pseudo-classes
+    // test, published on the same terms as the index, after the hit test
+    // has placed this tick's hover.
+    app.add_systems(
+        TickStage::Systems,
+        build_dom_states
+            .after(lumen_input::hit_test)
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
@@ -243,6 +258,103 @@ pub fn build_dom_index(
         });
     }
     publish_dom_index(DomIndex::build(records));
+}
+
+/// The state markers [`build_dom_states`] reads, one per state
+/// pseudo-class.
+type StateMarkers = (
+    Has<HoverWithin>,
+    Has<Focused>,
+    Has<FocusVisible>,
+    Has<Pressed>,
+    Has<Hovered>,
+    Has<Disabled>,
+    Option<&'static Toggleable>,
+    Has<Selected>,
+    Has<DropHovered>,
+);
+
+/// Publish the live state of every element in one, for a query's state
+/// pseudo-classes: the hover chain for `:hover`, the focus for `:focus` and
+/// `:focus-visible`, a press for `:active`, and the markers and toggle state
+/// the rest test. `:active` reads as the press tint does: a press dragged off
+/// its element leaves it.
+///
+/// Rebuilds only on a tick where a marker came, went or a toggle flipped, or
+/// the primary button changed, which `:active` reads.
+#[allow(clippy::type_complexity)]
+pub fn build_dom_states(
+    marked: Query<
+        (Entity, StateMarkers),
+        Or<(
+            With<HoverWithin>,
+            With<Focused>,
+            With<Pressed>,
+            With<Disabled>,
+            With<Toggleable>,
+            With<Selected>,
+            With<DropHovered>,
+        )>,
+    >,
+    changed: Query<
+        (),
+        Or<(
+            Added<HoverWithin>,
+            Added<Focused>,
+            Added<FocusVisible>,
+            Added<Pressed>,
+            Added<Hovered>,
+            Added<Disabled>,
+            Changed<Toggleable>,
+            Added<Selected>,
+            Added<DropHovered>,
+        )>,
+    >,
+    mut removed: (
+        RemovedComponents<HoverWithin>,
+        RemovedComponents<Focused>,
+        RemovedComponents<FocusVisible>,
+        RemovedComponents<Pressed>,
+        RemovedComponents<Hovered>,
+        RemovedComponents<Disabled>,
+        RemovedComponents<Toggleable>,
+        RemovedComponents<Selected>,
+        RemovedComponents<DropHovered>,
+    ),
+    pointer: Option<Res<PointerState>>,
+    mut last_primary_down: Local<Option<bool>>,
+) {
+    let removals = removed.0.read().count()
+        + removed.1.read().count()
+        + removed.2.read().count()
+        + removed.3.read().count()
+        + removed.4.read().count()
+        + removed.5.read().count()
+        + removed.6.read().count()
+        + removed.7.read().count()
+        + removed.8.read().count();
+    let primary_down = pointer.is_some_and(|p| p.primary_down);
+    let first = last_primary_down.is_none();
+    let button_moved = *last_primary_down != Some(primary_down);
+    *last_primary_down = Some(primary_down);
+    if !first && removals == 0 && changed.is_empty() && !button_moved {
+        return;
+    }
+    let states = marked.iter().map(
+        |(entity, (hover, focus, visible, pressed, target, disabled, toggle, selected, over))| {
+            let mut s = ElementState::empty();
+            s.set(ElementState::HOVER, hover);
+            s.set(ElementState::FOCUS, focus);
+            s.set(ElementState::FOCUS_VISIBLE, focus && visible);
+            s.set(ElementState::ACTIVE, pressed && (target || !primary_down));
+            s.set(ElementState::DISABLED, disabled);
+            s.set(ElementState::CHECKED, toggle.is_some_and(|t| t.checked));
+            s.set(ElementState::SELECTED, selected);
+            s.set(ElementState::DRAG_OVER, over);
+            (entity, s)
+        },
+    );
+    publish_dom_states(DomStates::new(states));
 }
 
 /// Commands gathered this tick, in issue order, for [`apply_dom_commands`].
