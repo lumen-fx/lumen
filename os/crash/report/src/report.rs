@@ -189,10 +189,19 @@ impl Report {
 
     /// Write the report into `dir` as `<stem>.txt`, creating `dir` when
     /// missing. Returns the file's path.
+    ///
+    /// The text goes to a hidden file first and is renamed into place, so
+    /// whoever opens the report (the user, from the dialog) never finds it
+    /// half written.
     pub fn write(&self, dir: &Path, stem: &str) -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(format!("{stem}.txt"));
-        std::fs::write(&path, self.render())?;
+        let part = dir.join(format!(".{stem}.txt.part"));
+        std::fs::write(&part, self.render())?;
+        if let Err(e) = std::fs::rename(&part, &path) {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
         Ok(path)
     }
 }
@@ -295,6 +304,13 @@ mod tests {
                 .unwrap()
                 .contains("pixl stopped unexpectedly.")
         );
+        // The file it was written through is gone.
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, ["x.txt"]);
         std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
     }
 }
