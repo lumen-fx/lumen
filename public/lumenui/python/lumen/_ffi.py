@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 16
+ABI_MINOR = 17
 ABI_PATCH = 0
 
 
@@ -1017,3 +1017,17 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
     lib.lumen_event_stop_propagation.restype = c.c_uint32
     lib.lumen_event_stop_immediate_propagation.argtypes = []
     lib.lumen_event_stop_immediate_propagation.restype = c.c_uint32
+    lib.lumen_event_detail.argtypes = [P(LumenValue)]
+    lib.lumen_event_detail.restype = c.c_uint32
+
+    # -- script functions (ABI 0.17) --
+    lib.lumen_call.argtypes = [
+        c.c_char_p,
+        c.c_char_p,
+        c.c_uint32,
+        P(LumenValue),
+        P(LumenValue),
+    ]
+    lib.lumen_call.restype = c.c_uint32
+    lib.lumen_value_free.argtypes = [P(LumenValue)]
+    lib.lumen_value_free.restype = None

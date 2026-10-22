@@ -167,6 +167,45 @@ Array and map arguments reach the callback as `LUMEN_NIL`; scalars and strings
 cross in full. The value a callback writes carries every kind, arrays and maps
 included.
 
+## Script functions
+
+C reaches the same functions a script calls: every function a module
+registers, the portable builtins, and the app's own exposed functions.
+
+| Function | Behaviour |
+| --- | --- |
+| `LumenStatus lumen_call(const char *ns, const char *name, uint32_t argc, const LumenValue *argv, LumenValue *out)` | Call the function `name` in namespace `ns` with `argc` arguments. `ns` is the namespace a script writes (`"canvas"` for `canvas::fill_rect`, `"files"` for the file system module); `NULL`, `""` or `"lumen"` is the runtime's own and `"native"` the embedder's. The result goes into `*out`; pass `NULL` to drop it. |
+| `void lumen_value_free(LumenValue *value)` | Release a value Lumen wrote into `*value` (a `lumen_call` result, an event's detail): its strings, arrays and maps, all the way down. `*value` reads as `LUMEN_NIL` afterwards. |
+
+```c
+LumenValue args[5] = {
+    {LUMEN_STRING, {.string = "art"}},
+    {LUMEN_FLOAT, {.float_ = 0}}, {LUMEN_FLOAT, {.float_ = 0}},
+    {LUMEN_FLOAT, {.float_ = 16}}, {LUMEN_FLOAT, {.float_ = 16}},
+};
+LumenValue out;
+if (lumen_call("canvas", "fill_rect", 5, args, &out) == LUMEN_OK)
+    lumen_value_free(&out);
+```
+
+The arguments are borrowed for the call and checked against the function's
+signature the way a script's call is: a missing or mistyped argument returns
+`LUMEN_ERR_BAD_ARG`, as does a name nothing registered, and a function that
+reports a failure returns `LUMEN_ERR_SCRIPT`. `lumen_last_error` says which.
+Unlike an exposed callback's arguments, arrays and maps cross in full in both
+directions. A value Lumen writes is the caller's: release it with
+`lumen_value_free`, and never pass that function a value you built yourself.
+
+`lumen_call` works once the app is built, so call it from a callback, a
+handler or another thread while `lumen_app_run` runs, or after
+`lumen_app_run_headless` returns. Commands a function issues (a DOM change, a
+signal write) apply on the app's next tick. A module's functions are there
+when the app declares the module under `[dependencies]`.
+
+The C++ and Python SDKs wrap `lumen_call` once (`lumen::call`, `lumen.call`)
+and add a typed wrapper per first-party module, generated from the
+signatures the module registers; see their sections below.
+
 ## Values
 
 `LumenValue` is a tagged union: a `LumenKind` discriminant plus a payload.
@@ -349,11 +388,14 @@ borrowed for the call; copy anything you keep.
 The C++, Python, and Rust SDKs expose the same readings on their `Event` and
 the three capture calls on their `Node`.
 
-String fields and propagation controls are separate calls, valid only inside the
-callback:
+String fields, the detail and propagation controls are separate calls, valid
+only inside the callback:
 
 - `lumen_event_type` / `lumen_event_key` / `lumen_event_value` - string-out
   convention
+- `lumen_event_detail(LumenValue *out)` - what a module's custom event
+  carries, as a map; an empty map for a built-in event. Release it with
+  `lumen_value_free`
 - `lumen_event_target()` / `lumen_event_current_target()` - packed handles, `0`
   outside a callback
 - `lumen_event_prevent_default()` - cancel the default action, which is link
@@ -362,7 +404,11 @@ callback:
 - `lumen_event_stop_immediate_propagation()` - stop the event entirely
 
 Event types and propagation match the script hosts; see
-[Scripting](../guides/scripting.md).
+[Scripting](../guides/scripting.md). A module raises events of its own under
+names of its own, such as a dock's `layoutchange`: bind them with `lumen_on`
+like a built-in event and read what they carry with `lumen_event_detail`.
+`lumen_event_prevent_default` on a cancelable one tells the module not to go
+ahead.
 
 ## C++ SDK
 
@@ -402,6 +448,23 @@ Link with CMake (`add_subdirectory(public/lumenui/cpp)` provides the
 or with pkg-config. `liblumen` must be findable at run time. Runnable examples
 covering the whole surface live in `public/lumenui/cpp/examples`; see
 `public/lumenui/cpp/README.md`.
+
+`lumen::call(ns, name, {args...})` calls a script function and returns a
+`lumen::Value`, throwing `lumen::Error` when the call fails, and an event's
+`detail()` is a `lumen::Value` map. Each first-party module also has a
+generated header, `<lumen_<module>.hpp>`, whose functions take and return the
+types the module declares and call `lumen::call` for you:
+
+```cpp
+#include <lumen_canvas.hpp>
+
+lumen::canvas::fill_rect("art", 0, 0, 16, 16);
+std::int64_t w = lumen::canvas::width("art");
+```
+
+The header and its namespace are named after the module without its `lumen-`
+prefix (`<lumen_fs.hpp>` and `lumen::fs` for `lumen-fs`), whatever namespace a
+script uses for the same functions.
 
 ## Python SDK
 
@@ -452,6 +515,18 @@ public/lumenui/python/examples/counter.py
 
 Handlers and watches fire on Lumen's tick thread. See
 `public/lumenui/python/README.md`.
+
+`lumen.call(ns, name, *args)` calls a script function with plain Python
+values and returns one, raising `LumenBadArgError` or `LumenScriptError` when
+the call fails, and an event's `detail()` is a `dict`. Each first-party
+module also has a generated wrapper module, named after it without its
+`lumen-` prefix, whose functions carry the module's types:
+
+```python
+import lumen.canvas
+
+lumen.canvas.fill_rect("art", 0, 0, 16, 16)
+```
 
 ## Rust SDK
 
@@ -744,6 +819,13 @@ fn paint(mut moves: MessageReader<PointerMoved>, mut stroke: ResMut<Stroke>) {
     stroke.0.extend(moves.read().map(|m| m.position));
 }
 ```
+
+A system also drives the built-in widgets the way a plugin does: it reads and
+sets a `<split>`'s pane sizes through `SplitSizes` and hears the user end a
+resize through `SplitResized`, picks a `<tabs>`' tab through `TabPicks`, and
+raises an element event of its own with a `CustomEvent` message. See
+[Composing the built-in widgets](../contributing/plugins.md#composing-the-built-in-widgets)
+and [Raising element events](../contributing/plugins.md#raising-element-events).
 
 ### Debug and release builds
 

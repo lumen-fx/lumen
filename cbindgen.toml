@@ -110,6 +110,11 @@ exclude = [
     "LumenEventFn",
     "LumenEvent",
     "lumen_on",
+    # ABI 0.17. These take a `LumenValue`, whose hand-written definition
+    # lives in `lumen.h`, so they are declared there.
+    "lumen_call",
+    "lumen_event_detail",
+    "lumen_value_free",
 ]
 
 [defines]

@@ -90,6 +90,9 @@ cbindgen.workspace = true
 # open the host modules beside.
 lumen-lua = { workspace = true }
 lumen-rhai = { workspace = true }
+# A first-party module linked in, for the suite that calls a module's
+# functions through `lumen_call`.
+lumen-fs = { workspace = true }
 
 # The engine as a shared library, for the `dynamic-engine` release shape (see
 # [features]). Only off Windows - no linkable engine exists there.

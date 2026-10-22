@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 16u
+#define LUMEN_API_VERSION_MINOR 17u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -450,6 +450,39 @@ LumenEventToken lumen_on(LumenNode node,
                          int capture,
                          LumenEventFn callback,
                          void* user_data);
+
+/*
+ * What the current event carries (ABI 0.17): a module's custom event writes
+ * its detail map into `*out`, a built-in event an empty map. The caller owns
+ * the value and releases it with lumen_value_free. Valid only inside a
+ * LumenEventFn callback. Thread-safe.
+ */
+LumenStatus lumen_event_detail(LumenValue* out);
+
+/*
+ * Call the script function `name` in namespace `ns` (ABI 0.17): a module's
+ * function (`lumen_call("canvas", "fill_rect", ...)`), a portable builtin, or
+ * the app's own. `ns` is the namespace a script writes; NULL, "" or "lumen"
+ * is the runtime's own and "native" the embedder's. The `argc` values at
+ * `argv` are borrowed for the call and checked against the function's
+ * signature. The result goes into `*out`, which the caller owns and releases
+ * with lumen_value_free; pass NULL to drop it. LUMEN_ERR_BAD_ARG for an
+ * unknown function or arguments that do not fit, LUMEN_ERR_SCRIPT when the
+ * function fails; lumen_last_error says why. Callable from any thread once
+ * the app is built.
+ */
+LumenStatus lumen_call(const char* ns,
+                       const char* name,
+                       uint32_t argc,
+                       const LumenValue* argv,
+                       LumenValue* out);
+
+/*
+ * Release a value Lumen wrote (lumen_call, lumen_event_detail): its strings,
+ * arrays and maps, all the way down. `*value` reads as LUMEN_NIL afterwards.
+ * Never call it on a value the caller built.
+ */
+void lumen_value_free(LumenValue* value);
 
 /*
  * Returns a static, NUL-terminated UTF-8 description of `status`.

@@ -207,7 +207,15 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// (close through the [`lumen_app_on_close`] veto path) and
 /// [`lumen_app_quit`]. Kept names changed arity, so embedders rebuild against
 /// the new header rather than relinking.
-pub const LUMEN_ABI_MINOR: u32 = 16;
+///
+/// 0.17 reached the app's script functions and module events from C:
+/// [`lumen_call`] calls any function in the script-function registry (a
+/// module's, a portable builtin, the app's own) and writes an owned result
+/// that [`lumen_value_free`] releases, and [`lumen_event_detail`] reads what a
+/// module's custom event carries. An element-event callback bound with
+/// [`lumen_on`] to a custom event's name receives it like a built-in event.
+/// Additive, so a minor bump.
+pub const LUMEN_ABI_MINOR: u32 = 17;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -3903,6 +3911,276 @@ pub extern "C" fn lumen_event_stop_immediate_propagation() -> LumenStatus {
     })
 }
 
+/// Write what the current event carries into `*out`: the detail map of a
+/// module's custom event, an empty map for a built-in event. The caller owns
+/// the value and releases it with [`lumen_value_free`]. Valid only inside a
+/// [`LumenEventFn`] callback. Thread-safe.
+///
+/// # Safety
+///
+/// `out` must be null or point to writable storage for one [`LumenValue`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_event_detail(out: *mut LumenValue) -> LumenStatus {
+    catch(|| {
+        if out.is_null() {
+            set_last_error("lumen_event_detail: out is null");
+            return LumenStatus::ErrBadArg;
+        }
+        let detail = ScriptValue::Map(lumen_script::event::event_detail());
+        // SAFETY: the caller hands writable storage for one value.
+        unsafe { out.write(owned_lumen_value(&detail)) };
+        LumenStatus::Ok
+    })
+}
+
+// ============================================================
+// Calling the app's script functions (ABI 0.17).
+// ============================================================
+
+/// Call the script function `name` in namespace `ns` with `argc` arguments
+/// at `argv`, and write what it returns into `*out`: every function a module
+/// registers (`lumen_call("canvas", "fill_rect", ...)`), the portable
+/// builtins, and the app's own. `ns` names the function's namespace as a
+/// script writes it; null, `""` or `"lumen"` is the runtime's own, and
+/// `"native"` is the embedder's. The arguments are checked against the
+/// function's signature as a script's call is; commands the function issues
+/// apply on the app's next tick. Callable from any thread once the app is
+/// built, including from a callback.
+///
+/// `*out` is owned by the caller and released with [`lumen_value_free`]; pass
+/// null to drop the result. Returns [`LumenStatus::ErrBadArg`] for a function
+/// that does not exist or arguments that do not fit, and
+/// [`LumenStatus::ErrScript`] when the function reports a failure; the
+/// message is in [`lumen_last_error`].
+///
+/// # Safety
+///
+/// `ns` must be null or NUL-terminated UTF-8; `name` must be NUL-terminated
+/// UTF-8; `argv` must point to `argc` initialized values (or be null when
+/// `argc` is 0); `out` must be null or point to writable storage for one
+/// [`LumenValue`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_call(
+    ns: *const c_char,
+    name: *const c_char,
+    argc: u32,
+    argv: *const LumenValue,
+    out: *mut LumenValue,
+) -> LumenStatus {
+    catch(|| {
+        // SAFETY: the caller hands NUL-terminated strings or null.
+        let ns = match unsafe { opt_str(ns) } {
+            Ok(ns) => ns.unwrap_or(""),
+            Err(status) => return status,
+        };
+        let name = match unsafe { opt_str(name) } {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                set_last_error("lumen_call: name is null");
+                return LumenStatus::ErrBadArg;
+            }
+            Err(status) => return status,
+        };
+        if argv.is_null() && argc > 0 {
+            set_last_error("lumen_call: argv is null");
+            return LumenStatus::ErrBadArg;
+        }
+        let args: Vec<ScriptValue> = if argc == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: the caller hands `argc` initialized values at `argv`.
+            unsafe { std::slice::from_raw_parts(argv, argc as usize) }
+                .iter()
+                .map(lumen_to_script_value)
+                .collect()
+        };
+        let space = match ns {
+            "" | "lumen" => lumen_script::ScriptNs::Builtin,
+            "native" => lumen_script::ScriptNs::Extension,
+            other => lumen_script::ScriptNs::Named(other.to_string()),
+        };
+        match lumen_script::call_script_fn(&space, name, &args) {
+            Ok(value) => {
+                if !out.is_null() {
+                    // SAFETY: the caller hands writable storage or null.
+                    unsafe { out.write(owned_lumen_value(&value)) };
+                }
+                LumenStatus::Ok
+            }
+            Err(e) => {
+                let shown = if ns.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{ns}::{name}")
+                };
+                set_last_error(format!("lumen_call {shown}: {e}"));
+                match e {
+                    lumen_script::ScriptCallError::Failed(_) => LumenStatus::ErrScript,
+                    _ => LumenStatus::ErrBadArg,
+                }
+            }
+        }
+    })
+}
+
+/// Release a value Lumen wrote into `*value` ([`lumen_call`],
+/// [`lumen_event_detail`]): its strings, arrays and maps, all the way down.
+/// `*value` reads as nil afterwards, so a second call is harmless. Never call
+/// it on a value the caller built itself.
+///
+/// # Safety
+///
+/// `value` must be null or point to a value Lumen wrote and nothing has
+/// released yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_value_free(value: *mut LumenValue) {
+    let _ = catch(|| {
+        if !value.is_null() {
+            // SAFETY: the caller hands a value Lumen wrote.
+            unsafe {
+                release_owned(*value);
+                value.write(LumenValue {
+                    kind: LumenKind::Nil,
+                    as_: LumenValueData { integer: 0 },
+                });
+            }
+        }
+        LumenStatus::Ok
+    });
+}
+
+/// A `&str` from a C string, `None` for null.
+///
+/// # Safety
+///
+/// `p` must be null or NUL-terminated.
+unsafe fn opt_str<'a>(p: *const c_char) -> Result<Option<&'a str>, LumenStatus> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: the caller hands a NUL-terminated string.
+    match unsafe { CStr::from_ptr(p) }.to_str() {
+        Ok(s) => Ok(Some(s)),
+        Err(_) => {
+            set_last_error("string argument is not UTF-8");
+            Err(LumenStatus::ErrBadArg)
+        }
+    }
+}
+
+/// A [`LumenValue`] that owns its strings, arrays and maps, for handing to C;
+/// [`release_owned`] frees it.
+fn owned_lumen_value(v: &ScriptValue) -> LumenValue {
+    match v {
+        ScriptValue::Unit => LumenValue {
+            kind: LumenKind::Nil,
+            as_: LumenValueData { integer: 0 },
+        },
+        ScriptValue::Bool(b) => LumenValue {
+            kind: LumenKind::Bool,
+            as_: LumenValueData {
+                boolean: c_int::from(*b),
+            },
+        },
+        ScriptValue::I64(i) => LumenValue {
+            kind: LumenKind::Int,
+            as_: LumenValueData { integer: *i },
+        },
+        ScriptValue::F64(f) => LumenValue {
+            kind: LumenKind::Float,
+            as_: LumenValueData { float_: *f },
+        },
+        ScriptValue::Str(s) => LumenValue {
+            kind: LumenKind::String,
+            as_: LumenValueData {
+                string: owned_c_string(s),
+            },
+        },
+        ScriptValue::Array(items) => {
+            let items: Box<[LumenValue]> = items.iter().map(owned_lumen_value).collect();
+            let len = items.len();
+            LumenValue {
+                kind: LumenKind::Array,
+                as_: LumenValueData {
+                    array: LumenArrayView {
+                        items: Box::into_raw(items).cast::<LumenValue>(),
+                        len,
+                    },
+                },
+            }
+        }
+        ScriptValue::Map(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let entries: Box<[LumenMapEntry]> = keys
+                .into_iter()
+                .map(|k| LumenMapEntry {
+                    key: owned_c_string(k),
+                    value: owned_lumen_value(&map[k]),
+                })
+                .collect();
+            let len = entries.len();
+            LumenValue {
+                kind: LumenKind::Map,
+                as_: LumenValueData {
+                    map: LumenMapView {
+                        entries: Box::into_raw(entries).cast::<LumenMapEntry>(),
+                        len,
+                    },
+                },
+            }
+        }
+    }
+}
+
+/// A heap C string [`release_owned`] frees; an interior NUL ends it early.
+fn owned_c_string(s: &str) -> *const c_char {
+    let cut = s.split('\0').next().unwrap_or_default();
+    CString::new(cut).unwrap_or_default().into_raw()
+}
+
+/// Free everything [`owned_lumen_value`] allocated for `v`.
+///
+/// # Safety
+///
+/// `v` must come from [`owned_lumen_value`] and not have been released.
+unsafe fn release_owned(v: LumenValue) {
+    // SAFETY (whole body): every pointer below was made by
+    // `owned_lumen_value` with the matching `into_raw`, and the lengths are
+    // the ones it recorded.
+    unsafe {
+        match v.kind {
+            LumenKind::String if !v.as_.string.is_null() => {
+                drop(CString::from_raw(v.as_.string.cast_mut()));
+            }
+            LumenKind::Array if !v.as_.array.items.is_null() => {
+                let view = v.as_.array;
+                let items = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    view.items.cast_mut(),
+                    view.len,
+                ));
+                for item in items.iter() {
+                    release_owned(*item);
+                }
+            }
+            LumenKind::Map if !v.as_.map.entries.is_null() => {
+                let view = v.as_.map;
+                let entries = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    view.entries.cast_mut(),
+                    view.len,
+                ));
+                for entry in entries.iter() {
+                    if !entry.key.is_null() {
+                        drop(CString::from_raw(entry.key.cast_mut()));
+                    }
+                    release_owned(entry.value);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4386,5 +4664,142 @@ mod tests {
             );
             assert_eq!(CStr::from_ptr(buf.as_ptr()).to_str().unwrap(), "b");
         }
+    }
+
+    /// A published script function is reachable by namespace and name; its
+    /// arguments are checked, its result comes back as an owned tree that
+    /// `lumen_value_free` releases, and its failures and the unknown names
+    /// come back as statuses.
+    #[test]
+    fn lumen_call_reaches_a_published_function() {
+        use lumen_script::{ScriptFnRegistry, ScriptNs, ScriptTy};
+        let mut registry = ScriptFnRegistry::default();
+        registry.push(
+            ScriptFn::new("pair")
+                .ns(ScriptNs::Named("ffi_test".into()))
+                .param("name", ScriptTy::Str)
+                .param("n", ScriptTy::Int)
+                .ret(ScriptTy::Any)
+                .build(|cx| {
+                    let n = cx.int_arg(1);
+                    if n < 0 {
+                        return Err("n is negative".into());
+                    }
+                    let mut map = HashMap::new();
+                    map.insert("name".to_string(), ScriptValue::Str(cx.str_arg(0)));
+                    map.insert(
+                        "n".to_string(),
+                        ScriptValue::Array(vec![ScriptValue::I64(n), ScriptValue::F64(0.5)]),
+                    );
+                    Ok(ScriptValue::Map(map))
+                }),
+        );
+        lumen_script::publish_script_fns(&registry);
+
+        let ns = CString::new("ffi_test").unwrap();
+        let name = CString::new("pair").unwrap();
+        let word = CString::new("hello").unwrap();
+        let args = [
+            LumenValue {
+                kind: LumenKind::String,
+                as_: LumenValueData {
+                    string: word.as_ptr(),
+                },
+            },
+            LumenValue {
+                kind: LumenKind::Int,
+                as_: LumenValueData { integer: 3 },
+            },
+        ];
+        let mut out = LumenValue {
+            kind: LumenKind::Nil,
+            as_: LumenValueData { integer: 0 },
+        };
+        let status = unsafe { lumen_call(ns.as_ptr(), name.as_ptr(), 2, args.as_ptr(), &mut out) };
+        assert_eq!(status, LumenStatus::Ok);
+        assert_eq!(out.kind, LumenKind::Map);
+        let back = lumen_to_script_value(&out);
+        let ScriptValue::Map(map) = back else {
+            panic!("a map came back");
+        };
+        assert_eq!(map["name"], ScriptValue::Str("hello".into()));
+        assert_eq!(
+            map["n"],
+            ScriptValue::Array(vec![ScriptValue::I64(3), ScriptValue::F64(0.5)])
+        );
+        unsafe {
+            lumen_value_free(&mut out);
+            assert_eq!(out.kind, LumenKind::Nil, "released values read as nil");
+            lumen_value_free(&mut out);
+            lumen_value_free(ptr::null_mut());
+        }
+
+        let negative = [
+            args[0],
+            LumenValue {
+                kind: LumenKind::Int,
+                as_: LumenValueData { integer: -1 },
+            },
+        ];
+        let status = unsafe {
+            lumen_call(
+                ns.as_ptr(),
+                name.as_ptr(),
+                2,
+                negative.as_ptr(),
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, LumenStatus::ErrScript);
+        let status = unsafe {
+            lumen_call(
+                ns.as_ptr(),
+                name.as_ptr(),
+                1,
+                args.as_ptr(),
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, LumenStatus::ErrBadArg, "a missing argument");
+        let other = CString::new("nope").unwrap();
+        let status =
+            unsafe { lumen_call(ns.as_ptr(), other.as_ptr(), 0, ptr::null(), ptr::null_mut()) };
+        assert_eq!(status, LumenStatus::ErrBadArg, "an unknown function");
+        let status =
+            unsafe { lumen_call(ptr::null(), ptr::null(), 0, ptr::null(), ptr::null_mut()) };
+        assert_eq!(status, LumenStatus::ErrBadArg, "no name");
+    }
+
+    /// A custom event's detail reaches a callback as an owned map; a
+    /// built-in event's is an empty one.
+    #[test]
+    fn lumen_event_detail_reads_the_current_event() {
+        let mut detail = HashMap::new();
+        detail.insert("reason".to_string(), ScriptValue::Str("user".into()));
+        lumen_script::event::set_current_event(lumen_script::event::EventData {
+            event_type: "panelclose".into(),
+            detail,
+            ..Default::default()
+        });
+        let mut out = LumenValue {
+            kind: LumenKind::Nil,
+            as_: LumenValueData { integer: 0 },
+        };
+        assert_eq!(unsafe { lumen_event_detail(&mut out) }, LumenStatus::Ok);
+        let mut expected = HashMap::new();
+        expected.insert("reason".to_string(), ScriptValue::Str("user".into()));
+        assert_eq!(lumen_to_script_value(&out), ScriptValue::Map(expected));
+        unsafe { lumen_value_free(&mut out) };
+        lumen_script::event::set_current_event(lumen_script::event::EventData::default());
+        assert_eq!(unsafe { lumen_event_detail(&mut out) }, LumenStatus::Ok);
+        assert_eq!(
+            lumen_to_script_value(&out),
+            ScriptValue::Map(HashMap::new())
+        );
+        unsafe { lumen_value_free(&mut out) };
+        assert_eq!(
+            unsafe { lumen_event_detail(ptr::null_mut()) },
+            LumenStatus::ErrBadArg
+        );
     }
 }

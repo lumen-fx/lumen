@@ -3569,6 +3569,7 @@ dependencies = [
  "lumen-candela",
  "lumen-core",
  "lumen-dylib",
+ "lumen-fs",
  "lumen-lua",
  "lumen-os-clipboard",
  "lumen-os-filedialog",

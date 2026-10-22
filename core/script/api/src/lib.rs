@@ -110,10 +110,10 @@ pub use language::{
 pub use lumen_ir::source_map::SourceMap;
 pub use runtime::*;
 pub use script_fn::{
-    Arity0, CallScratch, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptField, ScriptFn, ScriptFnAppExt,
-    ScriptFnBody, ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs,
-    ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptStruct, ScriptTy,
-    ScriptType, with_call_scratch,
+    Arity0, CallScratch, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptCallError, ScriptField, ScriptFn,
+    ScriptFnAppExt, ScriptFnBody, ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore,
+    ScriptNs, ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptStruct,
+    ScriptTy, ScriptType, call_script_fn, publish_script_fns, with_call_scratch,
 };
 pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION, push_plugin_event};
 

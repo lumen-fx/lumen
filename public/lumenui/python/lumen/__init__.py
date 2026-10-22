@@ -34,7 +34,7 @@ can raise, and the package README for install/run instructions.
 
 from . import dom, raw, window
 from ._version import __version__
-from .api import App, get_library
+from .api import App, call, get_library
 from .dom import Event, Listener, Node
 from .model import Field, Model
 from .signals import Color, Signal, computed
@@ -59,6 +59,7 @@ from .errors import (
 
 __all__ = [
     "App",
+    "call",
     "Model",
     "Field",
     "Signal",

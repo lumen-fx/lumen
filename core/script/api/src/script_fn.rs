@@ -1345,6 +1345,72 @@ impl ScriptFnRegistry {
     }
 }
 
+/// The app's script functions, as last published for callers outside a
+/// script.
+static PUBLISHED: std::sync::RwLock<Vec<ScriptFn>> = std::sync::RwLock::new(Vec::new());
+
+/// Make the functions `registry` holds callable from outside any script,
+/// through [`call_script_fn`]: what the C ABI's `lumen_call` reaches. The app
+/// publishes its registry once it is complete, so every module's functions are
+/// there; a second app in the process replaces the first one's.
+pub fn publish_script_fns(registry: &ScriptFnRegistry) {
+    let mut published = PUBLISHED.write().unwrap_or_else(|e| e.into_inner());
+    *published = registry.fns().to_vec();
+}
+
+/// Why [`call_script_fn`] did not call anything, or what the call reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScriptCallError {
+    /// No published function has that namespace and name.
+    Unknown,
+    /// The arguments do not fit the function's signature.
+    BadArgs(String),
+    /// The function ran and reported a failure.
+    Failed(String),
+}
+
+impl std::fmt::Display for ScriptCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => f.write_str("no such function"),
+            Self::BadArgs(why) | Self::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Call the published function `name` in `ns` with `args`, checked against
+/// its signature as a script's call is, from any thread. Commands the body
+/// emits go onto the app's event bus and apply on its next tick, the way a
+/// module's background work reaches the app. A later function of the same
+/// namespace and name shadows an earlier one, as in the script hosts.
+///
+/// # Errors
+///
+/// [`ScriptCallError::Unknown`] when nothing is published under that name,
+/// [`ScriptCallError::BadArgs`] when the arguments do not fit, and
+/// [`ScriptCallError::Failed`] with the body's own message when it fails.
+pub fn call_script_fn(
+    ns: &ScriptNs,
+    name: &str,
+    args: &[ScriptValue],
+) -> Result<ScriptValue, ScriptCallError> {
+    let f = {
+        let published = PUBLISHED.read().unwrap_or_else(|e| e.into_inner());
+        published
+            .iter()
+            .rev()
+            .find(|f| f.name == name && f.ns == *ns)
+            .cloned()
+    }
+    .ok_or(ScriptCallError::Unknown)?;
+    f.sig.check_args(args).map_err(ScriptCallError::BadArgs)?;
+    let (result, commands) = f.invoke(args);
+    if !commands.is_empty() {
+        crate::wire::push_plugin_event(crate::wire::PluginEvent::Commands(commands));
+    }
+    result.map_err(ScriptCallError::Failed)
+}
+
 /// Register script functions on an [`App`].
 ///
 /// Install the plugin that calls these through `RunOptions::with_plugin`, or

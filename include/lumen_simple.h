@@ -134,8 +134,16 @@
  (close through the [`lumen_app_on_close`] veto path) and
  [`lumen_app_quit`]. Kept names changed arity, so embedders rebuild against
  the new header rather than relinking.
+
+ 0.17 reached the app's script functions and module events from C:
+ [`lumen_call`] calls any function in the script-function registry (a
+ module's, a portable builtin, the app's own) and writes an owned result
+ that [`lumen_value_free`] releases, and [`lumen_event_detail`] reads what a
+ module's custom event carries. An element-event callback bound with
+ [`lumen_on`] to a custom event's name receives it like a built-in event.
+ Additive, so a minor bump.
  */
-#define LUMEN_ABI_MINOR 16
+#define LUMEN_ABI_MINOR 17
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).

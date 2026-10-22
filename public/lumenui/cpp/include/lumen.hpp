@@ -357,6 +357,46 @@ private:
 };
 
 // =====================================================================
+// Calling the app's script functions (ABI 0.17).
+// =====================================================================
+
+namespace detail {
+
+/// Copy a value Lumen wrote into an owned `Value`, then release Lumen's.
+inline Value take_value(LumenValue& v) {
+    Value out = Value::adopt(v);
+    lumen_value_free(&v);
+    return out;
+}
+
+} // namespace detail
+
+/// Call the app's script function `name` in namespace `ns`: a module's
+/// (`lumen::call("canvas", "fill_rect", {...})`), a portable builtin (`ns`
+/// of `""` or `"lumen"`) or the app's own exposed function (`"native"`).
+/// The arguments are checked against the function's signature. Throws
+/// `lumen::Error` for an unknown function, arguments that do not fit, or a
+/// failure the function reports. Callable once the app is running, from any
+/// thread, including from a handler.
+inline Value call(std::string_view ns, std::string_view name,
+                  const std::vector<Value>& args = {}) {
+    std::vector<std::vector<LumenValue>> views;
+    std::vector<std::vector<LumenMapEntry>> entries;
+    std::vector<LumenValue> argv;
+    argv.reserve(args.size());
+    for (auto const& a : args) argv.push_back(a.view(views, entries));
+    const std::string ns_owned(ns);
+    const std::string name_owned(name);
+    LumenValue out{};
+    out.kind = LUMEN_NIL;
+    detail::check(lumen_call(ns_owned.c_str(), name_owned.c_str(),
+                             static_cast<std::uint32_t>(argv.size()),
+                             argv.empty() ? nullptr : argv.data(), &out),
+                  "lumen::call");
+    return detail::take_value(out);
+}
+
+// =====================================================================
 // Args - read-only view of a callback's (argc, argv).
 // =====================================================================
 
@@ -1510,6 +1550,14 @@ public:
     std::string key() const { return read_str(lumen_event_key); }
     /// The value for input / change events.
     std::string value() const { return read_str(lumen_event_value); }
+    /// What a module's custom event carries, a map; empty for a built-in
+    /// event.
+    Value detail() const {
+        LumenValue out{};
+        out.kind = LUMEN_NIL;
+        if (lumen_event_detail(&out) != LUMEN_OK) return Value::map({});
+        return ::lumen::detail::take_value(out);
+    }
 
     /// Pointer position local to the target `(x, y)`.
     std::pair<double, double> position() const {

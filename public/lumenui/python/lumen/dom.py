@@ -595,6 +595,17 @@ class Event:
 
         return _read_string_out(get_library().lumen_event_value)
 
+    def detail(self) -> dict:
+        """What a module's custom event carries; empty for a built-in one."""
+
+        from .api import take_value
+
+        out = _ffi.LumenValue()
+        if get_library().lumen_event_detail(ctypes.byref(out)) != _ffi.LumenStatus.OK:
+            return {}
+        detail = take_value(out)
+        return detail if isinstance(detail, dict) else {}
+
     def position(self) -> tuple[float, float]:
         """Pointer position local to the target ``(x, y)``."""
 
