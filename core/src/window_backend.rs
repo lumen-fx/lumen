@@ -201,13 +201,23 @@ impl Plugin for WindowCorePlugin {
         app.world.insert_resource(RedrawScheduler::default());
         app.world.init_resource::<Monitors>();
         app.world.init_resource::<QuitPolicy>();
-        app.add_systems(crate::tick::TickStage::Input, remember_focus_per_window);
-        app.add_systems(crate::tick::TickStage::A11ySync, raise_window_of_focus);
+        // With one window none of these has anything to do, so they are not
+        // dispatched at all.
+        app.add_systems(
+            crate::tick::TickStage::Input,
+            remember_focus_per_window.run_if(on_message::<WindowFocused>),
+        );
         app.add_systems(
             crate::tick::TickStage::A11ySync,
-            clear_with_surface_background,
+            (raise_window_of_focus, clear_with_surface_background).run_if(several_windows),
         );
     }
+}
+
+/// Run condition: some element shows in a window other than the primary
+/// one.
+pub fn several_windows(partitions: Option<Res<WindowPartitions>>) -> bool {
+    partitions.is_some_and(|p| !p.is_single())
 }
 
 /// A window other than the primary one clears its frame to its surface

@@ -366,7 +366,9 @@ impl Plugin for DevtoolsPlugin {
         app.add_systems(TickStage::Systems, sync_dock_inset);
         app.add_systems(
             TickStage::Systems,
-            sync_devtools_window.after(handle_clicks),
+            sync_devtools_window
+                .after(handle_clicks)
+                .run_if(resource_changed::<DevtoolsState>.or_eager(on_message::<WindowClosing>)),
         );
         app.add_systems(TickStage::Systems, update_highlight);
         app.add_systems(TickStage::A11ySync, refresh_panes);
