@@ -368,9 +368,9 @@ fn main() {}
         .expect("the window/document namespaces compile via the prelude");
     let out = host.call("go", &[]).expect("go ok");
     assert!(
-        out.commands
-            .iter()
-            .any(|c| matches!(c, ScriptCommand::WindowSetTitle { title } if title == "Waveform")),
+        out.commands.iter().any(
+            |c| matches!(c, ScriptCommand::WindowSetTitle { title, .. } if title == "Waveform")
+        ),
         "window::set_title reached the sink"
     );
     assert!(
@@ -395,7 +395,10 @@ fn main() {}
     host.load(src, "close_app.cdl")
         .expect("window::close and app::quit compile via the prelude");
     let out = host.call("close_it", &[]).expect("close_it ok");
-    assert!(matches!(&out.commands[..], [ScriptCommand::WindowClose]));
+    assert!(matches!(
+        &out.commands[..],
+        [ScriptCommand::WindowClose { .. }]
+    ));
     let out = host.call("quit_it", &[]).expect("quit_it ok");
     assert!(matches!(&out.commands[..], [ScriptCommand::AppQuit]));
 }

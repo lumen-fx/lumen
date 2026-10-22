@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 use lumen_canvas::{CanvasPlugin, CanvasReader, CompositeOperation, Context2d, PixelBuffer};
 use lumen_core::app::App;
 use lumen_core::components::{Color, Length, LumenId, LumenTag, Style, Transform, Visible};
-use lumen_core::prelude::{TickStage, Viewport};
+use lumen_core::prelude::TickStage;
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 
@@ -47,7 +47,7 @@ fn app(backend: Backend) -> App {
     };
     app.add_plugin(CanvasPlugin::default());
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(1.0, 0.0, 0.0);
     }
@@ -71,12 +71,14 @@ fn app(backend: Backend) -> App {
 
 fn frame(app: &App) -> Vec<u8> {
     match app.render_world.get_non_send::<WgpuRenderer>() {
-        Some(gpu) => gpu.read_rgba8().expect("readback"),
+        Some(gpu) => gpu
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
+            .expect("readback"),
         None => app
             .render_world
             .get_non_send::<CpuRenderer>()
             .expect("a renderer")
-            .read_rgba8(),
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window")),
     }
 }
 

@@ -22,8 +22,9 @@ use crate::components::{
     Visible, Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
-use crate::node_ir::transform_extracted_to_nodes;
+use crate::node_ir::{Node, transform_extracted_to_nodes};
 use crate::tick::TickStage;
+use crate::window::{PrimaryWindow, Window, WindowOf, WindowPartitions, WindowViewport};
 use bevy_ecs::prelude::*;
 use bevy_ecs::query::Or;
 use glam::Vec2;
@@ -102,45 +103,6 @@ pub enum RenderStage {
     Render,
 }
 
-/// Window viewport, inserted as a `Resource` into both the main and render worlds.
-/// The window plugin writes both copies on every resize.
-#[derive(Resource, Clone, Debug)]
-pub struct Viewport {
-    /// Logical-pixel window size. The window backend divides the raw
-    /// `PhysicalSize` it receives from winit by [`scale_factor`] before
-    /// writing here, so layout consumers see the same coordinate space
-    /// CSS / pointer events do.
-    ///
-    /// [`scale_factor`]: Self::scale_factor
-    pub size: Vec2,
-    /// Background clear color.
-    pub clear: Color,
-    /// Current window scale factor (logical -> physical multiplier). Written
-    /// by the window backend on startup, `Resized`, and `ScaleFactorChanged`.
-    /// Defaults to `1.0` so headless / pre-window code paths can multiply
-    /// through unconditionally.
-    pub scale_factor: f32,
-    /// HiDPI factor of the current monitor (e.g. `1.0`, `1.5`, `2.0`); written by the window backend on startup and `MonitorChanged`. `None` while monitor info is unavailable.
-    pub monitor_scale: Option<f32>,
-    /// Physical-pixel size of the current monitor; written by the window backend.
-    pub monitor_size: Option<Vec2>,
-    /// Monitor name reported by winit (for example `"DELL U2719D"`).
-    pub monitor_name: Option<String>,
-}
-
-impl Default for Viewport {
-    fn default() -> Self {
-        Self {
-            size: Vec2::new(800.0, 600.0),
-            clear: Color::rgba(0.0, 0.0, 0.0, 0.0),
-            scale_factor: 1.0,
-            monitor_scale: None,
-            monitor_size: None,
-            monitor_name: None,
-        }
-    }
-}
-
 /// Main-world resource shrinking the layout viewport of every normal root
 /// while a panel is docked to a window edge (browser-devtools semantics: the
 /// page reflows into the remaining space instead of being covered). Roots in
@@ -157,9 +119,286 @@ pub struct DockInsets {
     pub bottom: f32,
 }
 
+/// One window, as the render world sees it: the frame the renderer paints
+/// into the window, the tree it paints, and the tree it painted last.
+///
+/// Spawned and kept in step by [`sync_render_windows`] at the start of every
+/// extract, one per main-world [`Window`], beside a copy of the window's
+/// [`WindowViewport`] (and [`PrimaryWindow`] on the primary one's).
+/// [`transform_extracted_to_nodes`] fills [`Self::scene`]; a renderer paints
+/// it into the target keyed by [`Self::window`].
+#[derive(Component, Debug)]
+pub struct RenderWindow {
+    /// The main-world window entity: the target a renderer is attached to
+    /// for this window.
+    pub window: Entity,
+    /// Whether the window is shown. A hidden window paints nothing.
+    pub visible: bool,
+    /// This frame's retained tree for the window, built in
+    /// [`RenderStage::Prepare`]. `None` until the first build.
+    pub scene: Option<Arc<Node>>,
+    /// The tree last painted into the window's frame; the damage diff
+    /// compares the next tree against it. `None` before the first paint.
+    pub previous: Option<Arc<Node>>,
+}
+
+/// Render-world index of the [`RenderWindow`] entities, by main-world window.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct RenderWindows {
+    /// The primary window's main-world entity.
+    pub primary: Option<Entity>,
+    /// Main-world window -> its render-world entity.
+    pub by_window: HashMap<Entity, Entity>,
+}
+
+impl RenderWindows {
+    /// The render-world entity standing for `window`.
+    pub fn get(&self, window: Entity) -> Option<Entity> {
+        self.by_window.get(&window).copied()
+    }
+}
+
+/// The render-world entity that stands for `window`.
+pub fn render_window_entity(render: &World, window: Entity) -> Option<Entity> {
+    render.get_resource::<RenderWindows>()?.get(window)
+}
+
+/// The [`RenderWindow`] that stands for `window`.
+pub fn render_window(render: &World, window: Entity) -> Option<&RenderWindow> {
+    render.get::<RenderWindow>(render_window_entity(render, window)?)
+}
+
+/// The [`RenderWindow`] that stands for `window`, to write.
+pub fn render_window_mut(render: &mut World, window: Entity) -> Option<Mut<'_, RenderWindow>> {
+    let entity = render_window_entity(render, window)?;
+    render.get_mut::<RenderWindow>(entity)
+}
+
+/// The viewport the renderer draws `window` at.
+pub fn render_viewport(render: &World, window: Entity) -> Option<&WindowViewport> {
+    render.get::<WindowViewport>(render_window_entity(render, window)?)
+}
+
+/// Whether `window` is the primary window, as the render world knows it.
+pub fn is_primary_target(render: &World, window: Entity) -> bool {
+    render
+        .get_resource::<RenderWindows>()
+        .is_some_and(|w| w.primary == Some(window))
+}
+
+/// Spawn the render-world stand-in for `window` with `viewport`, as
+/// [`sync_render_windows`] does for every window of an app. For a renderer
+/// test that paints a bare render world.
+pub fn spawn_render_window(
+    render: &mut World,
+    window: Entity,
+    viewport: WindowViewport,
+    primary: bool,
+) -> Entity {
+    let mut e = render.spawn((
+        RenderWindow {
+            window,
+            visible: true,
+            scene: None,
+            previous: None,
+        },
+        viewport,
+    ));
+    if primary {
+        e.insert(PrimaryWindow);
+    }
+    let entity = e.id();
+    let mut index = render.get_resource_or_init::<RenderWindows>();
+    index.by_window.insert(window, entity);
+    if primary {
+        index.primary = Some(window);
+    }
+    entity
+}
+
+/// Extract step that keeps one [`RenderWindow`] per main-world [`Window`]:
+/// spawns one for a window that opened, copies a changed viewport or
+/// visibility across, and despawns the stand-in of a window that closed.
+/// Runs at the start of every extract, before the extract fns, so they and
+/// the renderer read this frame's windows.
+pub fn sync_render_windows(main: &mut World, render: &mut World) {
+    let live: Vec<(Entity, WindowViewport, bool, bool)> = {
+        let mut q = main.query::<(Entity, &WindowViewport, &Window, Has<PrimaryWindow>)>();
+        q.iter(main)
+            .map(|(e, v, w, p)| (e, v.clone(), w.visible, p))
+            .collect()
+    };
+    let mut index = render
+        .remove_resource::<RenderWindows>()
+        .unwrap_or_default();
+    index.primary = live.iter().find(|(.., p)| *p).map(|(e, ..)| *e);
+    for (window, viewport, visible, primary) in &live {
+        match index
+            .get(*window)
+            .filter(|re| render.get_entity(*re).is_ok())
+        {
+            Some(re) => {
+                let mut e = render.entity_mut(re);
+                if e.get::<WindowViewport>() != Some(viewport) {
+                    e.insert(viewport.clone());
+                }
+                if let Some(mut rw) = e.get_mut::<RenderWindow>()
+                    && rw.visible != *visible
+                {
+                    rw.visible = *visible;
+                }
+            }
+            None => {
+                let mut e = render.spawn((
+                    RenderWindow {
+                        window: *window,
+                        visible: *visible,
+                        scene: None,
+                        previous: None,
+                    },
+                    viewport.clone(),
+                ));
+                if *primary {
+                    e.insert(PrimaryWindow);
+                }
+                index.by_window.insert(*window, e.id());
+            }
+        }
+    }
+    if index.by_window.len() != live.len() {
+        index.by_window.retain(|window, re| {
+            let keep = live.iter().any(|(w, ..)| w == window);
+            if !keep && let Ok(e) = render.get_entity_mut(*re) {
+                e.despawn();
+            }
+            keep
+        });
+    }
+    render.insert_resource(index);
+}
+
+/// Marks an extracted render entity that paints into a window other than the
+/// primary one. Entities without it paint into the primary window.
+///
+/// Set by [`tag_extracted_windows`] after the extract fns ran, from the
+/// [`WindowPartitions`] of the main world, for every entity listed in
+/// [`RenderEntityMap`]. With one window nothing carries it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExtractedWindow(pub Entity);
+
+/// Whether the last [`tag_extracted_windows`] tagged anything, so the next
+/// one-window frame knows whether there are tags to take off.
+#[derive(Resource, Debug, Default)]
+struct WindowTagsPresent(bool);
+
+/// Extract step that tags each extracted render entity with the window its
+/// main entity shows in ([`ExtractedWindow`]), for every entity
+/// [`RenderEntityMap`] lists. Runs after every extract fn, plugin ones
+/// included. With one window it does nothing, unless the frame before had
+/// several and left tags to remove.
+pub fn tag_extracted_windows(main: &mut World, render: &mut World) {
+    let partitions = main
+        .get_resource::<WindowPartitions>()
+        .filter(|p| !p.is_single())
+        .cloned();
+    let tagged_before = render
+        .get_resource::<WindowTagsPresent>()
+        .is_some_and(|t| t.0);
+    if partitions.is_none() && !tagged_before {
+        return;
+    }
+    let pairs: Vec<(Entity, Entity)> = {
+        let Some(map) = render.get_resource::<RenderEntityMap>() else {
+            return;
+        };
+        let singles = [
+            &map.rect,
+            &map.text,
+            &map.outline,
+            &map.border,
+            &map.image,
+            &map.svg,
+            &map.clip,
+            &map.opacity_group,
+            &map.mask_group,
+            &map.scrollbar,
+        ];
+        let mut pairs: Vec<(Entity, Entity)> = Vec::new();
+        for m in singles {
+            pairs.extend(m.iter().map(|(main_e, render_e)| (*main_e, *render_e)));
+        }
+        pairs.extend(map.native.iter().map(|((_, main_e), re)| (*main_e, *re)));
+        for (main_e, stack) in &map.shadow {
+            pairs.extend(stack.iter().map(|re| (*main_e, *re)));
+        }
+        pairs
+    };
+    for (main_e, render_e) in pairs {
+        let Ok(mut e) = render.get_entity_mut(render_e) else {
+            continue;
+        };
+        let want = partitions
+            .as_ref()
+            .filter(|p| p.is_secondary(main_e))
+            .and_then(|p| p.window_of(main_e));
+        match want {
+            Some(window) => {
+                if e.get::<ExtractedWindow>() != Some(&ExtractedWindow(window)) {
+                    e.insert(ExtractedWindow(window));
+                }
+            }
+            None => {
+                if e.contains::<ExtractedWindow>() {
+                    e.remove::<ExtractedWindow>();
+                }
+            }
+        }
+    }
+    render.insert_resource(WindowTagsPresent(partitions.is_some()));
+}
+
+/// The scale factor each element is painted at: its window's. One lookup
+/// with one window.
+pub struct WindowScales {
+    primary: f32,
+    windows: Option<(WindowPartitions, HashMap<Entity, f32>)>,
+}
+
+impl WindowScales {
+    /// Read every window's scale from `main`.
+    pub fn read(main: &mut World) -> Self {
+        let sane = |s: f32| if s.is_finite() && s > 0.0 { s } else { 1.0 };
+        let primary = sane(crate::window::primary_viewport(main).map_or(1.0, |v| v.scale_factor));
+        let windows = main
+            .get_resource::<WindowPartitions>()
+            .filter(|p| !p.is_single())
+            .cloned()
+            .map(|partitions| {
+                let mut q = main.query::<(Entity, &WindowViewport)>();
+                let scales = q
+                    .iter(main)
+                    .map(|(e, v)| (e, sane(v.scale_factor)))
+                    .collect();
+                (partitions, scales)
+            });
+        Self { primary, windows }
+    }
+
+    /// The scale `element` paints at.
+    pub fn of(&self, element: Entity) -> f32 {
+        match &self.windows {
+            Some((partitions, scales)) if partitions.is_secondary(element) => partitions
+                .window_of(element)
+                .and_then(|w| scales.get(&w).copied())
+                .unwrap_or(self.primary),
+            _ => self.primary,
+        }
+    }
+}
+
 /// Per-frame flag indicating that the upcoming frame requires a fresh GPU encode.
 ///
-/// - Set by [`roll_up_frame_dirty`] from `Changed<T>` filters on render-relevant components: [`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`], [`TextInputScroll`], [`Opacity`], [`Visible`], [`Viewport`], [`crate::components::LumenClasses`], [`ScrollOffset`], plus the [`crate::property_store::PropertyStore`] notify queue (any property write since the previous tick), plus child-set mutations (newly added [`Visible`] / removed `ChildOf`).
+/// - Set by [`roll_up_frame_dirty`] from `Changed<T>` filters on render-relevant components: [`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`], [`TextInputScroll`], [`Opacity`], [`Visible`], a window's [`WindowViewport`], [`Window`] or [`WindowOf`], [`crate::components::LumenClasses`], [`ScrollOffset`], plus the [`crate::property_store::PropertyStore`] notify queue (any property write since the previous tick), plus child-set mutations (newly added [`Visible`] / removed `ChildOf`).
 /// - Cleared by the window backend after submitting the frame.
 /// - When unset, window backends skip GPU encode and submit in `RedrawRequested`.
 ///
@@ -353,7 +592,8 @@ pub struct ExtractSchedule;
 /// Sources, in order of preference:
 /// 1. [`crate::property_store::PropertyStore::dirty_peek`] - the typed notify queue. Any global / entity property write since the last tick flips dirty. This is the long-term replacement for the per-component `Changed<T>` filters; wave 1 reads the queue so newly-installed bindable components (typed signals, theme, custom properties) flip dirty without needing a Query column here.
 /// 2. `Changed<T>` filters on the legacy render-relevant components ([`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`] (caret / selection moves), [`TextInputScroll`], [`Opacity`], [`Visible`], [`crate::components::LumenClasses`]). Kept until the wave 2 migration moves these onto [`crate::property_store::PropertyStore`] notify.
-/// 3. [`Viewport`] resource change.
+/// 3. A window opened, closed, resized or rescaled ([`Window`], [`WindowViewport`]), or a surface root
+///    moved between windows ([`WindowOf`]).
 /// 4. Child-set mutations: `Added<Visible>` (newly-spawned / newly-hidden entities - fixes the `FrameDirty ignores child-set mutations` audit bug in `renderer.md:86`) and `RemovedComponents<ChildOf>` (despawn / reparent - same bug).
 ///
 /// `dirty_peek` is non-destructive; downstream observer systems remain free to `drain_dirty` later in the tick.
@@ -363,7 +603,8 @@ pub struct ExtractSchedule;
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn roll_up_frame_dirty(
     mut fd: ResMut<FrameDirty>,
-    viewport: Res<Viewport>,
+    windows: Query<(), Or<(Changed<WindowViewport>, Changed<Window>, Changed<WindowOf>)>>,
+    mut removed_windows: (RemovedComponents<Window>, RemovedComponents<WindowOf>),
     property_store: Option<Res<crate::property_store::PropertyStore>>,
     component_changed: Query<
         (),
@@ -413,13 +654,15 @@ pub fn roll_up_frame_dirty(
     // `.count()` advances the cursor past every entry this tick while still
     // reporting whether any ChildOf was removed.
     let removed_any = removed_childof.read().count() > 0;
+    let windows_gone = removed_windows.0.read().count() > 0 || removed_windows.1.read().count() > 0;
     if fd.dirty {
         return;
     }
+    let windows_changed = windows_gone || !windows.is_empty();
     let property_dirty = property_store
         .as_ref()
         .is_some_and(|s| !s.dirty_peek().is_empty());
-    if property_dirty || removed_any || viewport.is_changed() || !component_changed.is_empty() {
+    if property_dirty || removed_any || windows_changed || !component_changed.is_empty() {
         fd.dirty = true;
         // Diagnostic: name the source(s). Env read is cached; disabled runs
         // pay one atomic load.
@@ -437,8 +680,8 @@ pub fn roll_up_frame_dirty(
             if removed_any {
                 sources.push("removed ChildOf".into());
             }
-            if viewport.is_changed() {
-                sources.push("viewport".into());
+            if windows_changed {
+                sources.push("window".into());
             }
             let names = [
                 "Transform",
@@ -1176,22 +1419,44 @@ pub fn cull_hidden(
     }
 }
 
-/// Despawns extracted entities whose AABB lies fully outside the [`Viewport`].
+/// Despawns extracted entities whose AABB lies fully outside their window's viewport.
 ///
-/// - Runs in [`RenderStage::Prepare`] (registered automatically by `App::new`).
-/// - Performs only an AABB test against the viewport; partial-overlap clipping is the renderer's responsibility.
+/// - Runs in [`RenderStage::Prepare`] (registered by [`install_extract_pipeline`]).
+/// - Performs only an AABB test against the viewport of the window the entity paints into (see
+///   [`ExtractedWindow`]); partial-overlap clipping is the renderer's responsibility.
 pub fn cull_offscreen(
     mut commands: Commands,
-    viewport: Res<Viewport>,
-    rects: Query<(Entity, &ExtractedRect)>,
-    texts: Query<(Entity, &ExtractedText)>,
-    natives: Query<(Entity, &crate::native::ExtractedNative)>,
+    windows: Query<(&RenderWindow, &WindowViewport, Has<PrimaryWindow>)>,
+    rects: Query<(Entity, &ExtractedRect, Option<&ExtractedWindow>)>,
+    texts: Query<(Entity, &ExtractedText, Option<&ExtractedWindow>)>,
+    natives: Query<(
+        Entity,
+        &crate::native::ExtractedNative,
+        Option<&ExtractedWindow>,
+    )>,
 ) {
-    let vw = viewport.size.x;
-    let vh = viewport.size.y;
+    let mut primary = Vec2::new(f32::INFINITY, f32::INFINITY);
+    let mut sizes: Vec<(Entity, Vec2)> = Vec::new();
+    for (window, viewport, is_primary) in &windows {
+        if is_primary {
+            primary = viewport.size;
+        } else {
+            sizes.push((window.window, viewport.size));
+        }
+    }
+    let size_of = |tag: Option<&ExtractedWindow>| -> Vec2 {
+        match tag {
+            None => primary,
+            Some(t) => sizes
+                .iter()
+                .find(|(w, _)| *w == t.0)
+                .map_or(Vec2::ZERO, |(_, s)| *s),
+        }
+    };
     // Plugin leaves declare their bounds, so they cull on the same AABB test as rects. Without it
     // an off-screen leaf keeps calling its painter and keeps reporting damage outside the window.
-    for (e, n) in &natives {
+    for (e, n, tag) in &natives {
+        let Vec2 { x: vw, y: vh } = size_of(tag);
         if n.bounds.origin.x + n.bounds.size.x <= 0.0
             || n.bounds.origin.y + n.bounds.size.y <= 0.0
             || n.bounds.origin.x >= vw
@@ -1200,7 +1465,8 @@ pub fn cull_offscreen(
             commands.entity(e).despawn();
         }
     }
-    for (e, r) in &rects {
+    for (e, r, tag) in &rects {
+        let Vec2 { x: vw, y: vh } = size_of(tag);
         if r.origin.x + r.size.x <= 0.0
             || r.origin.y + r.size.y <= 0.0
             || r.origin.x >= vw
@@ -1209,7 +1475,8 @@ pub fn cull_offscreen(
             commands.entity(e).despawn();
         }
     }
-    for (e, t) in &texts {
+    for (e, t, tag) in &texts {
+        let Vec2 { x: vw, y: vh } = size_of(tag);
         // Approximate the text bounds with `size_px * char_count + 1` for width and `size_px` for height.
         let h = t.size_px;
         let w = t.size_px * (t.text.chars().count() as f32 + 1.0);
@@ -1431,11 +1698,7 @@ pub fn snap_to_device_pixels(origin: Vec2, size: Vec2, scale: f32) -> (Vec2, Vec
 /// - Skips entities whose AABB falls fully outside the nearest scroll / overflow-hidden ancestor.
 /// - Snaps each rect's edges to device pixels ([`snap_to_device_pixels`]).
 pub fn extract_rects(main: &mut World, render: &mut World) {
-    let scale = main
-        .get_resource::<Viewport>()
-        .map(|v| v.scale_factor)
-        .filter(|s| s.is_finite() && *s > 0.0)
-        .unwrap_or(1.0);
+    let scales = WindowScales::read(main);
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
@@ -1456,7 +1719,7 @@ pub fn extract_rects(main: &mut World, render: &mut World) {
             {
                 return None;
             }
-            let (origin, size) = snap_to_device_pixels(origin, t.size, scale);
+            let (origin, size) = snap_to_device_pixels(origin, t.size, scales.of(e));
             Some((
                 e,
                 ExtractedRect {
@@ -1837,8 +2100,20 @@ pub fn build_parent_map(
     }
     use bevy_ecs::hierarchy::{ChildOf, Children};
     let mut pq = main.query::<(Entity, &ChildOf)>();
-    let parents: std::collections::HashMap<Entity, Entity> =
+    let mut parents: std::collections::HashMap<Entity, Entity> =
         pq.iter(main).map(|(e, p)| (e, p.parent())).collect();
+    // Surface roots ([`WindowOf`]) paint in a window of their own. They are
+    // roots of the paint forest here, so no ancestor's clip, scroll offset,
+    // opacity or hiding reaches them, and their subtrees stay out of their
+    // ancestors' brackets. With one window there are none and this is one
+    // empty query.
+    let surfaces: std::collections::HashSet<Entity> = {
+        let mut sq = main.query_filtered::<Entity, With<WindowOf>>();
+        sq.iter(main).collect()
+    };
+    if !surfaces.is_empty() {
+        parents.retain(|e, _| !surfaces.contains(e));
+    }
     // CSS `z-index`: paint-order override among siblings. Entities
     // without the component are `auto` (= 0, document order).
     let z_of: std::collections::HashMap<Entity, i32> = {
@@ -1873,6 +2148,12 @@ pub fn build_parent_map(
         .keys()
         .copied()
         .filter(|e| !parents.contains_key(e))
+        .chain(
+            surfaces
+                .iter()
+                .copied()
+                .filter(|e| !children.contains_key(e)),
+        )
         .collect();
     roots.sort_by_key(|e| e.to_bits());
     // Pre-order DFS assigning stride-2 document-order ranks. Overlay roots are neither ranked nor
@@ -1893,7 +2174,7 @@ pub fn build_parent_map(
                 kids.iter()
                     .rev()
                     .copied()
-                    .filter(|k| !overlay_set.contains(k)),
+                    .filter(|k| !overlay_set.contains(k) && !surfaces.contains(k)),
             );
         }
     }
@@ -2370,6 +2651,8 @@ pub fn paint_order_of(
 /// One CPU-side snapshot of the on-screen window surface produced by a GPU->CPU readback.
 #[derive(Clone, Debug)]
 pub struct SurfaceFrame {
+    /// The window the frame is of.
+    pub window: Entity,
     /// Pixel width.
     pub width: u32,
     /// Pixel height.
@@ -2380,12 +2663,16 @@ pub struct SurfaceFrame {
 
 /// Coordination handle for on-screen surface screenshots, inserted as a `Resource` into both worlds.
 ///
-/// - The render backend inspects [`Self::is_requested`] each frame; when set, it performs a GPU->CPU readback, writes the result via [`Self::write`], and clears the flag.
-/// - Both fields are `Arc`-wrapped (`Send + Sync`) so MCP-server worker threads can clone the handle and read filled frames.
+/// - A request names the window it wants ([`Self::request_window`]; [`Self::request`] asks for the primary
+///   one). The render backend checks [`Self::wants`] when it presents a window; when it does, it reads the
+///   window's frame back, writes it via [`Self::write`], and clears the flag.
+/// - The fields are `Arc`-wrapped (`Send + Sync`) so MCP-server worker threads can clone the handle and read filled frames.
 #[derive(Resource, Clone, Default)]
 pub struct SurfaceCapture {
     /// One-shot capture request flag; the renderer clears it after writing.
     pub request: Arc<AtomicBool>,
+    /// The window the pending request wants; `None` is the primary window.
+    pub window: Arc<Mutex<Option<Entity>>>,
     /// Latest captured frame; the renderer replaces it wholesale.
     pub store: Arc<Mutex<Option<SurfaceFrame>>>,
     /// Optional handle to interrupt a parked platform event loop. The
@@ -2412,15 +2699,40 @@ impl SurfaceCapture {
         let _ = self.waker.set(waker);
     }
 
+    /// Asks for the primary window's next frame: [`Self::request_window`]
+    /// with `None`.
+    pub fn request(&self) {
+        self.request_window(None);
+    }
+
+    /// Asks for the next frame of `window` (`None`: the primary window).
     /// Sets the request flag with `Release` ordering, then nudges the
     /// platform event loop (if [`Self::set_waker`] wired one) so a parked
     /// windowed backend wakes to service the readback this frame instead of
     /// sitting idle until the request times out. Idempotent.
-    pub fn request(&self) {
+    pub fn request_window(&self, window: Option<Entity>) {
+        if let Ok(mut slot) = self.window.lock() {
+            *slot = window;
+        }
         self.request.store(true, Ordering::Release);
         if let Some(waker) = self.waker.get() {
             waker.wake();
         }
+    }
+
+    /// The window the pending request wants, `None` for the primary one.
+    pub fn requested_window(&self) -> Option<Entity> {
+        self.window.lock().ok().and_then(|w| *w)
+    }
+
+    /// Whether a pending request wants the frame of `window`, which is the
+    /// primary window when `primary` is set.
+    pub fn wants(&self, window: Entity, primary: bool) -> bool {
+        self.is_requested()
+            && match self.requested_window() {
+                Some(asked) => asked == window,
+                None => primary,
+            }
     }
 
     /// Clears the request flag with `Release` ordering.
@@ -3003,10 +3315,13 @@ mod tests {
         let mut main = World::new();
         let mut render = World::new();
         render.insert_resource(RenderEntityMap::default());
-        main.insert_resource(Viewport {
-            scale_factor: 2.0,
-            ..Viewport::default()
-        });
+        crate::window::spawn_primary_window(
+            &mut main,
+            WindowViewport {
+                scale_factor: 2.0,
+                ..WindowViewport::default()
+            },
+        );
         let row = |y: f32| {
             (
                 Transform {

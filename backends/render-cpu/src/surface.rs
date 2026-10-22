@@ -115,7 +115,10 @@ mod tests {
         }
         let mut renderer = CpuRenderer::new();
         assert!(matches!(
-            renderer.attach(FrameTarget::Window(Arc::new(NoHandles))),
+            renderer.attach(
+                bevy_ecs::entity::Entity::PLACEHOLDER,
+                FrameTarget::Window(Arc::new(NoHandles))
+            ),
             Err(RenderError::Init(_))
         ));
         assert!(!renderer.is_attached());

@@ -175,7 +175,7 @@ fn app_with(images: Arc<Vec<PixelImage>>, layout: Layout, frame: u32, at: glam::
     app.add_extract_fn(extract_images);
     app.register_native_painter(EXTENSION, ImagesPainter);
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::splat(frame as f32);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -198,7 +198,7 @@ fn read_back(app: &App) -> Vec<u8> {
     app.render_world
         .get_non_send::<WgpuRenderer>()
         .expect("renderer")
-        .read_rgba8()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("readback")
 }
 
@@ -255,7 +255,7 @@ fn an_image_drawn_again_after_a_frame_that_sampled_nothing_draws() {
     app.add_extract_fn(extract_images);
     app.register_native_painter(EXTENSION, ImagesPainter);
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::splat(frame as f32);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -279,7 +279,7 @@ fn an_image_drawn_again_after_a_frame_that_sampled_nothing_draws() {
             .render_world
             .get_non_send::<WgpuRenderer>()
             .expect("renderer")
-            .read_rgba8()
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
             .expect("readback");
         pixel(&pixels, frame, 32, 32)
     };

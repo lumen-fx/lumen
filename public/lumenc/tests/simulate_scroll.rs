@@ -12,7 +12,6 @@ use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::LumenId;
 use lumen_core::input::ScrollOffset;
-use lumen_core::prelude::Viewport;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
@@ -34,7 +33,7 @@ fn build(markup: &str) -> App {
         .with_markup(markup.to_string());
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
-    app.world.resource_mut::<Viewport>().size = Vec2::new(400.0, 300.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(400.0, 300.0);
     for _ in 0..4 {
         app.tick();
     }
@@ -76,6 +75,7 @@ fn a_simulated_wheel_scrolls_the_container_under_the_point() {
             dy: 50.0,
         },
         wait_for: None,
+        window: None,
     });
     for _ in 0..30 {
         app.tick();

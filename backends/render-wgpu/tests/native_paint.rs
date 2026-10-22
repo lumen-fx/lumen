@@ -106,7 +106,7 @@ fn app_with_painter(register: bool) -> App {
     if register {
         app.register_native_painter(EXTENSION, SolidPainter);
     }
-    let mut vp = app.render_world.resource_mut::<Viewport>();
+    let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
     vp.size = glam::Vec2::new(W as f32, H as f32);
     vp.clear = Color::rgb(0.0, 0.0, 0.0);
     app
@@ -121,7 +121,7 @@ fn read_back(app: &App) -> Vec<u8> {
     app.render_world
         .get_non_send::<WgpuRenderer>()
         .expect("renderer")
-        .read_rgba8()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("readback")
 }
 
@@ -422,20 +422,25 @@ fn rect_node(bounds: (f32, f32, f32, f32), color: Color) -> Arc<Node> {
 /// Presents a hand-built tree through an offscreen renderer, so a test can place a leaf under
 /// nodes the tree builder does not emit yet, like opacity groups.
 fn render_tree(root: &Arc<Node>, painters: NativePainters) -> Vec<u8> {
-    let mut renderer = WgpuRenderer::new_offscreen(W, H).expect("offscreen renderer");
+    let target = Entity::PLACEHOLDER;
+    let mut renderer = WgpuRenderer::new_offscreen(target, W, H).expect("offscreen renderer");
     let mut world = World::new();
-    world.insert_resource(Viewport {
-        size: glam::Vec2::new(W as f32, H as f32),
-        clear: Color::rgb(0.0, 0.0, 0.0),
-        ..Default::default()
-    });
-    world.insert_resource(RetainedScene {
-        root: Some(root.clone()),
-    });
-    world.insert_resource(PreviousScene::default());
+    lumen_core::render_world::spawn_render_window(
+        &mut world,
+        target,
+        lumen_core::window::WindowViewport {
+            size: glam::Vec2::new(W as f32, H as f32),
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            ..Default::default()
+        },
+        true,
+    );
+    lumen_core::render_world::render_window_mut(&mut world, target)
+        .expect("a render window")
+        .scene = Some(root.clone());
     world.insert_resource(painters);
-    renderer.present(&mut world).expect("present");
-    renderer.read_rgba8().expect("readback")
+    renderer.present(target, &mut world).expect("present");
+    renderer.read_rgba8(target).expect("readback")
 }
 
 /// A bounds clip composites nothing, so asking to be clipped cannot change what a leaf's alpha

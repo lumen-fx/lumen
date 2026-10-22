@@ -181,7 +181,8 @@ const RUN_USAGE: &str = "lumenc run - run an app
 
 USAGE:
     lumenc run <dir> [--profile chrome|tracy|stderr]
-                     [--headless [--size WxH] [--dpr N] [--ticks N]]
+                     [--headless [--size WxH] [--dpr N] [--ticks N]
+                                 [--monitors LIST] [--positioning=off]]
                      [--artifact <file>] [--assets <file.lpak>]
                      [--no-hooks] [--offline]
 
@@ -200,6 +201,13 @@ USAGE:
     --dpr N           Scale the offscreen target; screenshot pixels are
                       logical x dpr (default 1.0).
     --ticks N         Run exactly N ticks, then exit.
+    --monitors LIST   The virtual desktop the app's windows are placed on:
+                      comma-separated WIDTHxHEIGHT[@SCALE] monitors, left
+                      to right (e.g. 1920x1080@1,2560x1440@2). The primary
+                      window opens on the first, at its scale. Default: one
+                      1920x1080 monitor at --dpr.
+    --positioning=off Ignore the positions windows ask for and place them,
+                      as Wayland does.
     --artifact FILE   Run a precompiled artifact (lumenc build) instead of
                       parsing source.
     --assets FILE     Read the app's assets from a .lpak archive instead of
@@ -220,6 +228,8 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut size: Option<(u32, u32)> = None;
     let mut dpr: Option<f32> = None;
     let mut ticks: Option<u64> = None;
+    let mut monitors: Vec<lumenc::MonitorInfo> = Vec::new();
+    let mut positioning = true;
     let mut no_hooks = false;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
@@ -228,6 +238,27 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
                 println!("{RUN_USAGE}");
                 return ExitCode::SUCCESS;
             }
+            s if s == "--monitors" || s.starts_with("--monitors=") => {
+                let v = match s.strip_prefix("--monitors=") {
+                    Some(v) => Some(v.to_string()),
+                    None => args.next(),
+                };
+                match v.as_deref().map(lumenc::parse_monitors) {
+                    Some(Ok(list)) => monitors = list,
+                    Some(Err(e)) => {
+                        eprintln!("lumenc run: --monitors: {e}");
+                        return ExitCode::from(2);
+                    }
+                    None => {
+                        eprintln!(
+                            "lumenc run: --monitors needs a list (e.g. --monitors 1920x1080@1,2560x1440@2)"
+                        );
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--positioning=off" => positioning = false,
+            "--positioning=on" => positioning = true,
             "--no-hooks" => no_hooks = true,
             "--profile" => {
                 let Some(v) = args.next() else {
@@ -339,8 +370,16 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
         }
     };
     let kind = lumenc::app_kind::resolve(&dir_path, cfg.app.kind);
-    if !headless && (size.is_some() || dpr.is_some() || ticks.is_some()) {
-        eprintln!("lumenc run: --size / --dpr / --ticks require --headless");
+    if !headless
+        && (size.is_some()
+            || dpr.is_some()
+            || ticks.is_some()
+            || !monitors.is_empty()
+            || !positioning)
+    {
+        eprintln!(
+            "lumenc run: --size / --dpr / --ticks / --monitors / --positioning require --headless"
+        );
         return ExitCode::from(2);
     }
     if kind != lumenc::app_kind::AppKind::Markup {
@@ -441,6 +480,8 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             lumenc::HeadlessOptions {
                 dpr: dpr.unwrap_or(1.0),
                 ticks,
+                monitors,
+                positioning,
             },
         )
     } else {

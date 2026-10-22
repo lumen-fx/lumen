@@ -10,7 +10,6 @@ use bevy_ecs::entity::Entity;
 use glam::Vec2;
 use lumen_core::app::{App, Plugin};
 use lumen_core::components::{Color, Fill, LumenId, Style, TextContent, Transform, Visuals};
-use lumen_core::prelude::Viewport;
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
@@ -68,7 +67,7 @@ fn build(css: &str, catalogue: Option<&str>) -> App {
         .with_plugin(Shipper);
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
-    app.world.resource_mut::<Viewport>().size = Vec2::new(400.0, 300.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(400.0, 300.0);
     for _ in 0..4 {
         app.tick();
     }

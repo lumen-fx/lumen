@@ -22,8 +22,8 @@ use lumen_capability::Preflight;
 use lumen_core::prelude::*;
 use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
 use lumen_core::window_backend::{
-    CloseRequests, HeadlessWindowPlugin, WindowBackendEntry, WindowCorePlugin, run_close_request,
-    seed_primary_window,
+    CloseOutcome, CloseRequests, HeadlessWindowPlugin, WindowBackendEntry, WindowCorePlugin,
+    run_close_ask, seed_window,
 };
 use lumen_input::InputPlugin;
 use lumen_os_clipboard::ClipboardHost;
@@ -491,8 +491,8 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
         app.tick();
         // `window.close()` / `app.quit()` end the run early, through the
         // same veto path a windowed close takes.
-        if let Some(reason) = requests.take(&app.world)
-            && run_close_request(&mut app, &mut requests, reason)
+        if let Some(ask) = requests.take(&app.world)
+            && run_close_ask(&mut app, &mut requests, ask) == CloseOutcome::Quit
         {
             break;
         }
@@ -519,8 +519,12 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
     install_assets(&mut app, assets.as_deref(), &dir)?;
     app.add_plugin(WindowCorePlugin);
     app.add_plugin(HeadlessWindowPlugin);
-    let size = app.world.resource::<Viewport>().size;
-    seed_primary_window(&mut app.world, &window.options.title, size);
+    let primary = lumen_core::window::primary_window(&mut app.world)
+        .ok_or_else(|| RunError::Headless("the app has no primary window".into()))?;
+    let size = lumen_core::window::primary_viewport(&app.world)
+        .map(|v| v.size)
+        .unwrap_or_default();
+    seed_window(&mut app.world, primary, &window.options.title, size);
     Ok((app, window))
 }
 

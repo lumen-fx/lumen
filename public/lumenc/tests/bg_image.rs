@@ -16,7 +16,7 @@
 use bevy_ecs::entity::Entity;
 use glam::Vec2;
 use lumen_core::components::{ImageComponent, LumenClasses, Transform};
-use lumen_core::prelude::{App, Color, ColorScheme, LumenId, StyleManager, Viewport};
+use lumen_core::prelude::{App, Color, ColorScheme, LumenId, StyleManager};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use lumen_text_cosmic::CosmicShaper;
 use lumenc::{RunOptions, build_headless_app};
@@ -75,10 +75,8 @@ fn boot(dir: &std::path::Path) -> App {
     opts.size = (W, H);
     let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     app.add_plugin(WgpuRendererPlugin::new(W, H).with_text_shaper(CosmicShaper::new()));
-    for vp in [
-        &mut *app.world.resource_mut::<Viewport>(),
-        &mut *app.render_world.resource_mut::<Viewport>(),
-    ] {
+    {
+        let vp = &mut *lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = Vec2::new(W as f32, H as f32);
         vp.scale_factor = 1.0;
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
@@ -112,7 +110,7 @@ fn frame(app: &App) -> Vec<u8> {
     app.render_world
         .get_non_send::<WgpuRenderer>()
         .expect("offscreen renderer present")
-        .read_rgba8()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("framebuffer readback")
 }
 

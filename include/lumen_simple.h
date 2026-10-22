@@ -931,7 +931,7 @@ extern "C" {
 /*
  `window.close`: close the window through the same veto path its close
  button takes, so a [`lumen_app_on_close`] hook (or a script's `on_close`)
- can keep it open. Closing the only window ends the app. Thread-safe.
+ can keep it open. Closing the primary window ends the app. Thread-safe.
  */
  LumenStatus lumen_window_close(LumenWindow window) ;
 

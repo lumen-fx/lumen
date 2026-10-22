@@ -652,6 +652,7 @@ mod press_tint_tests {
         world.insert_resource(PointerState {
             position: None,
             primary_down,
+            window: None,
         });
         let e = world
             .spawn((

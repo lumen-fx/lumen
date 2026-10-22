@@ -544,6 +544,7 @@ mod fsm_tests {
         *world.resource_mut::<PointerState>() = PointerState {
             position: pos,
             primary_down: down,
+            window: None,
         };
     }
 

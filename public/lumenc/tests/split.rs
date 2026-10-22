@@ -10,7 +10,6 @@ use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenAttributes, LumenId, Transform};
 use lumen_core::input::{CursorKeyword, CursorRequest, FocusTracker, PointerMoved, PointerState};
-use lumen_core::prelude::Viewport;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
 use lumen_primitives::{Split, SplitGutter, SplitResized, SplitSet, SplitSizes};
 use lumenc::RunOptions;
@@ -39,7 +38,7 @@ fn build(markup: &str, css: &str) -> App {
     let mut opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
-    app.world.resource_mut::<Viewport>().size = Vec2::new(600.0, 400.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(600.0, 400.0);
     for _ in 0..4 {
         app.tick();
     }
@@ -71,6 +70,7 @@ fn run(app: &mut App, kinds: Vec<SimulateKind>) {
         queue.push(SimulateRequest {
             kind,
             wait_for: None,
+            window: None,
         });
     }
     for _ in 0..30 {

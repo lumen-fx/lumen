@@ -67,14 +67,21 @@ mod tests {
         assert_eq!(cpu.priority, PRIORITY);
 
         let mut renderer = (cpu.renderer)();
-        assert!(!renderer.resize(4, 4), "nothing to resize before a target");
-        renderer
-            .attach(FrameTarget::Offscreen {
-                width: 4,
-                height: 4,
-            })
-            .expect("the CPU always starts");
         let mut app = App::new();
+        let primary = lumen_core::window::primary_window(&mut app.world).expect("a window");
+        assert!(
+            !renderer.resize(primary, 4, 4),
+            "nothing to resize before a target"
+        );
+        renderer
+            .attach(
+                primary,
+                FrameTarget::Offscreen {
+                    width: 4,
+                    height: 4,
+                },
+            )
+            .expect("the CPU always starts");
         install_offscreen(&mut app, renderer);
         let capture = SurfaceCapture::default();
         capture.request();

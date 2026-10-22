@@ -932,15 +932,17 @@ fn register_web_namespaces<S: HostFnSink>(engine: &mut S, r: &Registries) {
     {
         let sink = r.sink.clone();
         engine.register_host_fn("window", "set_title", move |title: String| {
-            sink.lock()
-                .unwrap()
-                .push(ScriptCommand::WindowSetTitle { title });
+            sink.lock().unwrap().push(ScriptCommand::WindowSetTitle {
+                window: lumen_core::window_state::current(),
+                title,
+            });
         });
     }
     {
         let sink = r.sink.clone();
         engine.register_host_fn("window", "set_size", move |w: f64, h: f64| {
             sink.lock().unwrap().push(ScriptCommand::WindowSetSize {
+                window: lumen_core::window_state::current(),
                 width: w as f32,
                 height: h as f32,
             });
@@ -950,7 +952,9 @@ fn register_web_namespaces<S: HostFnSink>(engine: &mut S, r: &Registries) {
     {
         let sink = r.sink.clone();
         engine.register_host_fn("window", "close", move || {
-            sink.lock().unwrap().push(ScriptCommand::WindowClose);
+            sink.lock().unwrap().push(ScriptCommand::WindowClose {
+                window: lumen_core::window_state::current(),
+            });
         });
     }
     // Quit the app: every window is asked to close, and a veto cancels it.

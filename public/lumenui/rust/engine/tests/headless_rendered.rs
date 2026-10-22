@@ -48,6 +48,7 @@ fn a_screenshot_is_the_frame_the_app_painted() {
         .screenshot(HeadlessOptions {
             dpr: 2.0,
             ticks: Some(2),
+            ..HeadlessOptions::default()
         })
         .expect("the app paints a frame");
     assert_eq!((frame.width(), frame.height()), (128, 96));

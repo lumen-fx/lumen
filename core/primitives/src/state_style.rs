@@ -351,7 +351,10 @@ pub fn eject_interaction_on_disable(
     focusables: Query<(Entity, &TabIndex, Option<&DocumentOrder>), Without<Disabled>>,
     tab_info: Query<(&TabIndex, Option<&DocumentOrder>)>,
     parents: Query<&ChildOf>,
-    visibles: Query<&lumen_core::components::Visible>,
+    (visibles, surfaces): (
+        Query<&lumen_core::components::Visible>,
+        Query<(), With<lumen_core::window::WindowOf>>,
+    ),
     styles: Query<&lumen_core::components::Style>,
 ) {
     for entity in &newly_disabled {
@@ -380,7 +383,9 @@ pub fn eject_interaction_on_disable(
         // entity in (TabIndex, DocumentOrder, Entity) order, wrapping.
         let mut sorted: Vec<(i32, u32, Entity)> = focusables
             .iter()
-            .filter(|(e, t, _)| t.0 >= 0 && !hidden_via_ancestors(*e, &parents, &visibles, &styles))
+            .filter(|(e, t, _)| {
+                t.0 >= 0 && !hidden_via_ancestors(*e, &parents, &visibles, &styles, &surfaces)
+            })
             .map(|(e, t, doc)| (t.0, doc.map(|d| d.0).unwrap_or(u32::MAX), e))
             .collect();
         sorted.sort();

@@ -4,15 +4,17 @@
 //! `layout-taffy` capability (see [`capability`]), and installs these systems
 //! in [`TickStage::LayoutSync`]:
 //!
-//! 1. [`sync_viewport`] - copies the viewport into the layout resource
-//!    and dirties every root on resize.
+//! 1. [`sync_viewport`] - copies the window viewports into the layout
+//!    resource and dirties the roots of a window that was resized.
 //! 2. [`react_to_style_changes`] / [`react_to_children_changes`] /
 //!    [`react_to_text_changes`] - `Changed<...>` reactivity hooks (W2.6)
 //!    that mark touched entities [`DirtyLayout`] so the engine reflows
 //!    without callers having to remember to insert the marker.
 //! 3. [`propagate_dirty_layout`] - for each dirty entity, walks the
 //!    [`ChildOf`] chain and marks every ancestor [`DirtyLayout`].
-//!    Enforces plan invariant 1: dirty propagates to root.
+//!    Enforces plan invariant 1: dirty propagates to root. The walk stops
+//!    at a surface root ([`WindowOf`]), which is a layout root of its own
+//!    in its window.
 //! 4. [`sync_layout`] - pushes lumen [`Style`] into taffy (diffed
 //!    against the previous taffy style - W2.6), computes layout for
 //!    every dirty subtree root through the memoising solver in `memo.rs`
@@ -63,6 +65,14 @@ use lumen_core::layout_backend::LayoutSolve;
 use lumen_core::traits::LayoutEngine;
 use memo::{Geometry, compute_layout_memoised};
 
+/// The roots of the document's own tree: styled, parentless, and not shown
+/// in a window of their own.
+type DocumentRoots = (With<Style>, Without<ChildOf>, Without<WindowOf>);
+
+/// Where dirtiness stops climbing: a relayout boundary, or a surface root,
+/// which lays out against its own window.
+type LayoutBoundary = Or<(With<RelayoutBoundary>, With<WindowOf>)>;
+
 /// The taffy layout engine. As a plugin it installs the non-send layout
 /// state and registers the LayoutSync systems with explicit ordering; as a
 /// [`LayoutEngine`] it is what a launch installs from the registry.
@@ -85,6 +95,12 @@ impl Plugin for TaffyLayoutPlugin {
         app.add_systems(
             TickStage::LayoutSync,
             react_to_style_changes.after(sync_viewport),
+        );
+        app.add_systems(
+            TickStage::LayoutSync,
+            react_to_window_changes
+                .after(sync_viewport)
+                .before(propagate_dirty_layout),
         );
         app.add_systems(
             TickStage::LayoutSync,
@@ -417,6 +433,10 @@ pub struct LayoutResource {
     /// [`sync_viewport`]; normal roots solve against the reduced space,
     /// top-layer ([`OverlayLayer`]) roots keep the full viewport.
     dock_insets: (f32, f32),
+    /// The logical size of every window other than the primary one that has
+    /// surface roots, as last laid out. A change dirties that window's
+    /// surface roots.
+    windows: HashMap<Entity, Vec2>,
 }
 
 impl LayoutResource {
@@ -435,6 +455,7 @@ impl LayoutResource {
             solves_last_sync: 0,
             visits_last_sync: 0,
             dock_insets: (0.0, 0.0),
+            windows: HashMap::new(),
         }
     }
 
@@ -493,19 +514,23 @@ impl Default for LayoutResource {
     }
 }
 
-/// First system in LayoutSync: pull the viewport from the main-world
-/// [`Viewport`] resource into the taffy [`LayoutResource`]. When the
-/// viewport changes size, every root entity (no [`ChildOf`]) gets
-/// [`DirtyLayout`] so its subtree re-lays out with the new available
-/// space.
+/// First system in LayoutSync: pull the window viewports into the taffy
+/// [`LayoutResource`]. When the primary window changes size, every root of
+/// the document (an entity with no [`ChildOf`]) gets [`DirtyLayout`] so its
+/// subtree re-lays out with the new available space; when another window
+/// changes size, its surface roots ([`WindowOf`]) do.
 pub fn sync_viewport(
     mut commands: Commands,
-    viewport: Res<Viewport>,
+    viewports: Viewports,
     insets: Option<Res<lumen_core::render_world::DockInsets>>,
     mut layout: NonSendMut<LayoutResource>,
-    roots_q: Query<Entity, (With<Style>, Without<ChildOf>)>,
+    roots_q: Query<Entity, DocumentRoots>,
+    surfaces: Query<(Entity, &WindowOf), With<Style>>,
 ) {
-    let want = (viewport.size.x, viewport.size.y);
+    let want = viewports
+        .primary()
+        .map(|v| (v.size.x, v.size.y))
+        .unwrap_or((800.0, 600.0));
     let want_insets = insets
         .map(|i| (i.right.max(0.0), i.bottom.max(0.0)))
         .unwrap_or((0.0, 0.0));
@@ -513,13 +538,55 @@ pub fn sync_viewport(
         (AvailableSpace::Definite(w), AvailableSpace::Definite(h)) => Some((w, h)),
         _ => None,
     };
-    if have == Some(want) && layout.dock_insets == want_insets {
+    if have != Some(want) || layout.dock_insets != want_insets {
+        layout.set_viewport(want.0, want.1);
+        layout.dock_insets = want_insets;
+        for e in &roots_q {
+            commands.entity(e).insert(DirtyLayout);
+        }
+    }
+    if surfaces.is_empty() && layout.windows.is_empty() {
         return;
     }
-    layout.set_viewport(want.0, want.1);
-    layout.dock_insets = want_insets;
-    for e in &roots_q {
+    let mut seen: HashMap<Entity, Vec2> = HashMap::new();
+    for (root, of) in &surfaces {
+        let window = of.window();
+        let size = viewports
+            .of_window(window)
+            .map(|v| v.size)
+            .unwrap_or(Vec2::ZERO);
+        seen.insert(window, size);
+        if layout.windows.get(&window) != Some(&size) {
+            commands.entity(root).insert(DirtyLayout);
+        }
+    }
+    if layout.windows != seen {
+        layout.windows = seen;
+    }
+}
+
+/// A surface root that joined or left a window lays out again where it now
+/// is, and so does the parent it used to be laid out in.
+pub fn react_to_window_changes(
+    mut commands: Commands,
+    changed: Query<(Entity, Option<&ChildOf>), Changed<WindowOf>>,
+    mut removed: RemovedComponents<WindowOf>,
+    parents: Query<&ChildOf>,
+    alive: Query<(), With<Style>>,
+) {
+    for (e, parent) in &changed {
         commands.entity(e).insert(DirtyLayout);
+        if let Some(p) = parent {
+            commands.entity(p.parent()).insert(DirtyLayout);
+        }
+    }
+    for e in removed.read() {
+        if alive.contains(e) {
+            commands.entity(e).insert(DirtyLayout);
+            if let Ok(p) = parents.get(e) {
+                commands.entity(p.parent()).insert(DirtyLayout);
+            }
+        }
     }
 }
 
@@ -645,11 +712,12 @@ pub fn propagate_dirty_layout(
     mut commands: Commands,
     dirty: Query<Entity, With<DirtyLayout>>,
     parents: Query<&ChildOf>,
-    boundaries: Query<(), With<RelayoutBoundary>>,
+    boundaries: Query<(), LayoutBoundary>,
 ) {
     for entity in &dirty {
         // If the dirty entity is itself a boundary, propagation stops
-        // immediately - its own DirtyLayout is enough.
+        // immediately - its own DirtyLayout is enough. A surface root is a
+        // layout root in its window: nothing above it depends on its box.
         if boundaries.contains(entity) {
             continue;
         }
@@ -704,8 +772,13 @@ pub fn sync_layout(
     scroll_q: Query<(Entity, &ScrollOffset), With<Scroll>>,
     mut memo: ResMut<TextMeasureMemo>,
     // Dock-inset exemption: top-layer roots solve against the full
-    // viewport while a docked panel shrinks everyone else's.
-    overlay_q: Query<(), With<lumen_core::render_world::OverlayLayer>>,
+    // viewport while a docked panel shrinks everyone else's. Surface roots
+    // solve against their own window's viewport.
+    (overlay_q, surface_q, viewport_q): (
+        Query<(), With<lumen_core::render_world::OverlayLayer>>,
+        Query<&WindowOf>,
+        Query<&WindowViewport>,
+    ),
 ) {
     // Idle-tick fast path: with no dirty entities there is no relayout to
     // do, so we also skip the map/tree bookkeeping below. Entity despawns
@@ -820,16 +893,17 @@ pub fn sync_layout(
 
     // Roots inside the dirty set: entities whose parent is not dirty
     // (or who have no parent).
+    // A surface root is always a root: it lays out in its own window.
     let dirty_roots: Vec<Entity> = dirty_q
         .iter()
         .filter(|e| match parent_q.get(*e) {
-            Ok(p) => dirty_q.get(p.parent()).is_err(),
+            Ok(p) => surface_q.contains(*e) || dirty_q.get(p.parent()).is_err(),
             Err(_) => true,
         })
         .collect();
 
     for root in &dirty_roots {
-        rebuild_taffy_subtree(layout, *root, &children_q);
+        rebuild_taffy_subtree(layout, *root, &children_q, &surface_q);
     }
 
     // D1: a dirty root that has a (clean) parent is a RelayoutBoundary
@@ -851,7 +925,7 @@ pub fn sync_layout(
     }
     let mut pins: HashMap<Entity, SubtreePin> = HashMap::new();
     for root in &dirty_roots {
-        if parent_q.get(*root).is_err() {
+        if parent_q.get(*root).is_err() || surface_q.contains(*root) {
             continue;
         }
         // No prior geometry (first layout of a freshly-spawned subtree
@@ -996,6 +1070,15 @@ pub fn sync_layout(
             height: shrink(viewport.height, bottom),
         }
     };
+    // The space a surface root solves against: its window's whole viewport.
+    let window_space = |root: Entity| -> Option<taffy::Size<AvailableSpace>> {
+        let window = surface_q.get(root).ok()?.window();
+        let size = viewport_q.get(window).map(|v| v.size).unwrap_or(Vec2::ZERO);
+        Some(taffy::Size {
+            width: AvailableSpace::Definite(size.x),
+            height: AvailableSpace::Definite(size.y),
+        })
+    };
     layout.solves_last_sync = 0;
     layout.visits_last_sync = 0;
     let shaper: &mut dyn TextShaper = &mut **shaper;
@@ -1008,7 +1091,9 @@ pub fn sync_layout(
         // prior box; true roots solve against the viewport, minus the
         // docked-panel insets unless the root sits in the top paint band.
         let available = pins.get(root).map(|p| p.available).unwrap_or({
-            if overlay_q.contains(*root) {
+            if let Some(space) = window_space(*root) {
+                space
+            } else if overlay_q.contains(*root) {
                 viewport
             } else {
                 inset_viewport
@@ -1136,7 +1221,8 @@ pub fn sync_layout(
             // popup) resolves it against the space it was solved in,
             // the viewport. taffy places every compute root at the
             // origin, which would pin it there.
-            if parent_q.get(*root).is_ok() {
+            let surface = window_space(*root);
+            if parent_q.get(*root).is_ok() && surface.is_none() {
                 return None;
             }
             let (_, style) = style_q.get(*root).ok()?;
@@ -1145,7 +1231,9 @@ pub fn sync_layout(
             }
             let node = *layout.map.get(root)?;
             let size = layout.geometry.get(node).unwrap_or_default().size;
-            let space = if overlay_q.contains(*root) {
+            let space = if let Some(space) = surface {
+                space
+            } else if overlay_q.contains(*root) {
                 viewport
             } else {
                 inset_viewport
@@ -1160,7 +1248,9 @@ pub fn sync_layout(
                 definite_or_zero(space),
             ))
         });
+        // A surface root sits at its window's origin.
         let parent_origin = match parent_q.get(*root) {
+            Ok(_) if surface_q.contains(*root) => Vec2::ZERO,
             Ok(p) => transform_q
                 .get(p.parent())
                 .map(|t| t.absolute)
@@ -1173,6 +1263,7 @@ pub fn sync_layout(
             parent_origin,
             absolute_override,
             &children_q,
+            &surface_q,
             &mut transform_q,
             &mut commands,
             &measured_baselines,
@@ -1425,10 +1516,14 @@ fn fallback_size(known: taffy::Size<Option<f32>>) -> taffy::Size<f32> {
     }
 }
 
+/// Bring `entity`'s taffy children in line with its [`Children`], and the
+/// same under it. A surface root ([`WindowOf`]) under it is no taffy child:
+/// it is a layout root of its own in its window.
 fn rebuild_taffy_subtree(
     layout: &mut LayoutResource,
     entity: Entity,
     children_q: &Query<&Children>,
+    surface_q: &Query<&WindowOf>,
 ) {
     let Some(&parent_node) = layout.map.get(&entity) else {
         return;
@@ -1436,6 +1531,7 @@ fn rebuild_taffy_subtree(
     let child_ids: Vec<NodeId> = match children_q.get(entity) {
         Ok(children) => children
             .iter()
+            .filter(|c| !surface_q.contains(*c))
             .filter_map(|c| layout.map.get(&c).copied())
             .collect(),
         Err(_) => Vec::new(),
@@ -1450,9 +1546,12 @@ fn rebuild_taffy_subtree(
     }
 
     if let Ok(children) = children_q.get(entity) {
-        let owned: Vec<Entity> = children.iter().collect();
+        let owned: Vec<Entity> = children
+            .iter()
+            .filter(|c| !surface_q.contains(*c))
+            .collect();
         for child in owned {
-            rebuild_taffy_subtree(layout, child, children_q);
+            rebuild_taffy_subtree(layout, child, children_q, surface_q);
         }
     }
 }
@@ -1464,6 +1563,7 @@ fn write_transforms_recursive(
     parent_origin: Vec2,
     absolute_override: Option<Vec2>,
     children_q: &Query<&Children>,
+    surface_q: &Query<&WindowOf>,
     transform_q: &mut Query<&mut Transform>,
     commands: &mut Commands,
     measured_baselines: &HashMap<Entity, f32>,
@@ -1505,7 +1605,11 @@ fn write_transforms_recursive(
     }
 
     if let Ok(children) = children_q.get(entity) {
-        let owned: Vec<Entity> = children.iter().collect();
+        // A surface root under this one is written by its own window's solve.
+        let owned: Vec<Entity> = children
+            .iter()
+            .filter(|c| !surface_q.contains(*c))
+            .collect();
         for child in owned {
             write_transforms_recursive(
                 layout,
@@ -1513,6 +1617,7 @@ fn write_transforms_recursive(
                 absolute,
                 None,
                 children_q,
+                surface_q,
                 transform_q,
                 commands,
                 measured_baselines,
@@ -2116,10 +2221,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(1000.0, 600.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(1000.0, 600.0),
+                ..WindowViewport::default()
+            },
+        );
         world.insert_resource(DockInsets::default());
 
         let full = Style {
@@ -2156,6 +2264,124 @@ mod tests {
         *world.resource_mut::<DockInsets>() = DockInsets::default();
         schedule.run(&mut world);
         assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
+    }
+
+    /// A surface root lays out in its own window: against that window's
+    /// viewport, from that window's origin, and without taking any room in
+    /// the parent it sits under. Resizing its window lays it out again;
+    /// resizing the primary window does not touch it, and a change inside it
+    /// stops at it rather than dirtying the document above.
+    #[test]
+    fn a_surface_root_lays_out_in_its_window() {
+        use lumen_core::components::*;
+        use lumen_core::window::{Window, WindowOf};
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::default());
+        world.insert_resource(TextMeasureMemo::default());
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(1000.0, 600.0),
+                ..WindowViewport::default()
+            },
+        );
+        let popout = world
+            .spawn(Window::new("Popout", glam::Vec2::new(300.0, 200.0)))
+            .id();
+        world.get_mut::<WindowViewport>(popout).unwrap().size = glam::Vec2::new(300.0, 200.0);
+
+        let full = Style {
+            width: Length::Percent(100.0),
+            height: Length::Percent(100.0),
+            ..Style::default()
+        };
+        let column = Style {
+            flex_direction: FlexDirection::Column,
+            width: Length::Percent(100.0),
+            height: Length::Percent(100.0),
+            ..Style::default()
+        };
+        let root = world.spawn((column, DirtyLayout)).id();
+        let header = world
+            .spawn((
+                Style {
+                    height: Length::Px(40.0),
+                    ..Style::default()
+                },
+                ChildOf(root),
+                DirtyLayout,
+            ))
+            .id();
+        let surface = world
+            .spawn((full.clone(), ChildOf(root), WindowOf(popout), DirtyLayout))
+            .id();
+        let leaf = world
+            .spawn((
+                Style {
+                    width: Length::Percent(50.0),
+                    height: Length::Px(20.0),
+                    ..Style::default()
+                },
+                ChildOf(surface),
+                DirtyLayout,
+            ))
+            .id();
+        let after = world
+            .spawn((
+                Style {
+                    height: Length::Px(10.0),
+                    ..Style::default()
+                },
+                ChildOf(root),
+                DirtyLayout,
+            ))
+            .id();
+
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(react_to_window_changes.after(sync_viewport));
+        schedule.add_systems(propagate_dirty_layout.after(react_to_window_changes));
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(propagate_dirty_layout));
+        schedule.run(&mut world);
+
+        let tf = |world: &bevy_ecs::world::World, e| *world.get::<Transform>(e).unwrap();
+        assert_eq!(tf(&world, surface).absolute, glam::Vec2::ZERO);
+        assert_eq!(tf(&world, surface).size, glam::Vec2::new(300.0, 200.0));
+        assert_eq!(tf(&world, leaf).size, glam::Vec2::new(150.0, 20.0));
+        assert_eq!(
+            tf(&world, after).absolute.y,
+            40.0,
+            "the surface root takes no room in its parent"
+        );
+        assert_eq!(tf(&world, header).size.x, 1000.0);
+
+        // Its window grows: it lays out again; the document stays put.
+        world.get_mut::<WindowViewport>(popout).unwrap().size = glam::Vec2::new(500.0, 200.0);
+        schedule.run(&mut world);
+        assert_eq!(tf(&world, leaf).size.x, 250.0);
+        assert_eq!(tf(&world, header).size.x, 1000.0);
+
+        // A change inside it dirties it and not the document above it.
+        world.entity_mut(leaf).insert(DirtyLayout);
+        let mut propagate = bevy_ecs::schedule::Schedule::default();
+        propagate.add_systems(propagate_dirty_layout);
+        propagate.run(&mut world);
+        assert!(world.get::<DirtyLayout>(surface).is_some());
+        assert!(world.get::<DirtyLayout>(root).is_none());
+        schedule.run(&mut world);
+
+        // Back in the document, it lays out in the flow again, under the
+        // header (which now shrinks to make room for it).
+        world.entity_mut(surface).remove::<WindowOf>();
+        schedule.run(&mut world);
+        let header_box = tf(&world, header);
+        assert!(header_box.size.y < 40.0);
+        assert_eq!(tf(&world, surface).absolute.y, header_box.size.y);
+        assert_eq!(tf(&world, surface).size.x, 1000.0);
+        assert!(tf(&world, after).absolute.y > tf(&world, surface).absolute.y);
     }
 
     /// Shaper with a fixed 10 px advance per char that wraps on spaces,
@@ -2209,10 +2435,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::new(GridShaper));
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(600.0, 400.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(600.0, 400.0),
+                ..WindowViewport::default()
+            },
+        );
         let root = world
             .spawn((
                 Style {
@@ -2299,10 +2528,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(400.0, 400.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(400.0, 400.0),
+                ..WindowViewport::default()
+            },
+        );
         let column = |extra: Style| Style {
             flex_direction: LumenFlexDir::Column,
             ..extra
@@ -2368,10 +2600,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(1000.0, 600.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(1000.0, 600.0),
+                ..WindowViewport::default()
+            },
+        );
         let popup = world
             .spawn((
                 Style {
@@ -2415,10 +2650,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(1000.0, 600.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(1000.0, 600.0),
+                ..WindowViewport::default()
+            },
+        );
 
         let root = world
             .spawn((
@@ -2498,10 +2736,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(300.0, 100.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(300.0, 100.0),
+                ..WindowViewport::default()
+            },
+        );
 
         // Parent grid with `1fr 2fr` columns.
         let parent = world
@@ -2565,10 +2806,13 @@ mod tests {
         world.insert_non_send(LayoutResource::new());
         world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
-        world.insert_resource(Viewport {
-            size: glam::Vec2::new(400.0, 100.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            WindowViewport {
+                size: glam::Vec2::new(400.0, 100.0),
+                ..WindowViewport::default()
+            },
+        );
         let parent = world
             .spawn((
                 Style {

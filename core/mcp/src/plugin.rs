@@ -23,9 +23,7 @@ use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::task::TimerService;
 
 use crate::simulate::{SimulateKind, SimulatePointer, SimulateQueue};
-use lumen_core::render_world::{
-    ExtractedRect, ExtractedText, RenderStage, SurfaceCapture, Viewport,
-};
+use lumen_core::render_world::{ExtractedRect, ExtractedText, RenderStage, SurfaceCapture};
 use lumen_core::tick::TickStage;
 
 use lumen_assets::{ImageSource, LoadedImage, LoadedSvg};
@@ -39,7 +37,7 @@ use crate::snapshot::{
     RecordedKeyPressed, RecordedKeyReleased, RecordedMouseWheel, RecordedPointerMoved,
     RecordedPointerPressed, RecordedPointerReleased, ShadowView, SignalView, SliderValueView,
     Snapshot, SnapshotHandle, StyleView, TextStyleView, TransformView, V2, ViewportView,
-    VisualsView,
+    VisualsView, WindowView,
 };
 
 /// Selects between the TCP listener (default, lets the `lumenc` CLI
@@ -326,6 +324,20 @@ fn drain_simulate_queue(
     let Some((seq, req)) = popped else {
         return;
     };
+    // A pointer event happens in the window it names, else the primary one.
+    let is_pointer = !matches!(
+        req.kind,
+        SimulateKind::Key { .. }
+            | SimulateKind::KeyDown { .. }
+            | SimulateKind::KeyUp { .. }
+            | SimulateKind::Type { .. }
+    );
+    if is_pointer {
+        let window = req.window.and_then(Entity::try_from_bits);
+        if pointer.window != window {
+            pointer.window = window;
+        }
+    }
     let prior_seq = progress.drained_seq;
     progress.drained_seq = seq;
     if remaining {
@@ -778,9 +790,19 @@ fn finish_tick_timing_render(handle: Res<SnapshotHandle>) {
     }
 }
 
+/// The window entities the snapshot lists, primary first.
+type WindowRow<'a> = (
+    Entity,
+    &'a lumen_core::window::Window,
+    &'a lumen_core::window::WindowViewport,
+    &'a lumen_core::window::WindowRuntime,
+    Has<lumen_core::window::PrimaryWindow>,
+    Option<&'a lumen_core::window::WindowName>,
+);
+
 fn snap_frame_and_resources(
     handle: Res<SnapshotHandle>,
-    viewport: Res<Viewport>,
+    windows: Query<WindowRow>,
     pointer: Res<PointerState>,
     modifiers: Res<ModifiersState>,
     focus: Res<FocusTracker>,
@@ -789,10 +811,35 @@ fn snap_frame_and_resources(
         return;
     };
     snap.frame = snap.frame.wrapping_add(1);
-    snap.viewport = ViewportView {
-        size: V2::from(viewport.size),
-        clear: ColorView::from(viewport.clear),
-    };
+    let mut rows: Vec<_> = windows.iter().collect();
+    rows.sort_by_key(|(e, .., primary, _)| (!*primary, *e));
+    snap.viewport = rows
+        .iter()
+        .find(|(.., primary, _)| *primary)
+        .map(|(_, _, viewport, ..)| ViewportView {
+            size: V2::from(viewport.size),
+            clear: ColorView::from(viewport.clear),
+        })
+        .unwrap_or_default();
+    snap.windows = rows
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (e, window, viewport, runtime, primary, name))| WindowView {
+                id: e.to_bits(),
+                index,
+                name: name.map(|n| n.0.clone()),
+                title: window.title.clone(),
+                size: V2::from(viewport.size),
+                scale: viewport.scale_factor,
+                primary: *primary,
+                visible: window.visible,
+                focused: runtime.focused,
+                position: runtime.position.map(|p| [p.x, p.y]),
+                monitor: runtime.monitor.clone(),
+            },
+        )
+        .collect();
     snap.pointer = PointerStateView {
         position: pointer.position.map(V2::from),
         primary_down: pointer.primary_down,
@@ -1265,10 +1312,23 @@ fn snap_signals(handle: Res<SnapshotHandle>, store: Option<Res<PropertyStore>>) 
     snap.signals = views;
 }
 
-fn snap_finalize_entities(handle: Res<SnapshotHandle>) {
+fn snap_finalize_entities(
+    handle: Res<SnapshotHandle>,
+    partitions: Option<Res<lumen_core::window::WindowPartitions>>,
+) {
     let Ok(mut snap) = handle.0.write() else {
         return;
     };
+    // With several windows, each entity outside the primary one says which
+    // window it shows in.
+    if let Some(parts) = partitions.filter(|p| !p.is_single()) {
+        for (bits, inspect) in snap.inspect.iter_mut() {
+            inspect.window = Entity::try_from_bits(*bits)
+                .filter(|e| parts.is_secondary(*e))
+                .and_then(|e| parts.window_of(e))
+                .map(Entity::to_bits);
+        }
+    }
     let mut entities: Vec<EntityView> = snap
         .inspect
         .iter()
@@ -1727,6 +1787,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         app.tick();
 
@@ -1784,12 +1845,14 @@ mod simulate_tests {
                 },
             },
             wait_for: None,
+            window: None,
         });
         queue.push(SimulateRequest {
             kind: SimulateKind::Type {
                 text: "X".to_string(),
             },
             wait_for: None,
+            window: None,
         });
         app.tick();
         app.tick();
@@ -1857,6 +1920,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         app.tick();
 
@@ -1881,6 +1945,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         let seq_b = queue.push(SimulateRequest {
             kind: SimulateKind::PointerMove {
@@ -1889,6 +1954,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         assert_eq!((seq_a, seq_b), (1, 2), "monotonic sequence numbers");
 
@@ -1926,6 +1992,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         assert_eq!(
             queue.completed_seq(),
@@ -1959,6 +2026,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         queue.push(SimulateRequest {
             kind: SimulateKind::PointerMove {
@@ -1967,6 +2035,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         assert_eq!(count.load(Ordering::SeqCst), 2, "one wake per push");
 
@@ -2028,6 +2097,7 @@ mod simulate_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         });
         assert!(
             woken.load(Ordering::SeqCst),

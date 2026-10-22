@@ -471,19 +471,10 @@ The **render world** carries per-frame drawable data and GPU resource caches.
 Its schedule runs two stages: `Prepare` builds buffers, scenes, and cache
 lookups; `Render` submits draw work.
 
-`Viewport` is a resource in both worlds. The window backend writes both copies
-on resize, which is why layout and rendering agree on the coordinate space.
-
-The window itself is an entity in the main world, carrying `Window` (the title
-and size the app wants) and `PrimaryWindow`. App code writes `Window`; after
-each tick the window backend hands what changed to the platform window and
-writes back the size the platform settled on. The app asks to close its window
-or to quit with the `WindowRequest` and `QuitRequest` messages, which the
-backend answers through the same `CloseRequest` veto tick its close button
-runs. A headless run installs `HeadlessWindowPlugin` in the backend's place,
-which applies `Window` straight to the viewport. The `window.title()` and
-`window.size()` script getters read a process-wide mirror of what the window
-has, since a script host has no world to read.
+Each window's `WindowViewport` (its logical size, scale factor, and clear
+colour) is a component on the window's entity in both worlds. The window
+backend writes both copies on resize, which is why layout and rendering agree
+on the coordinate space.
 
 Each schedule runs on `bevy_ecs`'s multi-threaded executor: systems within a
 stage that touch disjoint data run across the worker pool, while systems the
@@ -498,6 +489,58 @@ via `request_threads_at_least` or overridden by `[runtime] threads` /
 `LUMEN_THREADS`) and is read once, at the first tick. The CPU renderer's
 rasterizing threads are not part of that budget: vello_cpu runs its own pool,
 sized from the frame (see lumen-render-cpu above).
+
+## Windows
+
+An app has one or more windows, and each is an entity in the main world.
+`App::new` spawns the primary one, marked `PrimaryWindow`; spawning another
+entity with a `Window` component opens a window, and despawning it closes the
+window. `Window` is what the app wants: title, size, kind, visibility,
+decorations, position, size limits, and an owner window. `WindowViewport` is
+what the window has, and `WindowRuntime` is what the platform reports back:
+focus, occlusion, minimized and maximized state, position, and monitor.
+App code writes `Window`; after each tick the window backend hands what changed
+to the platform window and writes back what the platform settled on. A
+headless run installs `HeadlessWindowPlugin` in the backend's place, which
+applies `Window` straight to the viewport and places windows on a virtual
+desktop. The `Monitors` resource lists the displays; positions are physical
+desktop pixels.
+
+Windows do not own trees. There is one document, and an element shows in a
+secondary window when it carries `WindowOf(window)`; it is then a surface
+root. It stays where it is in the document, so queries, selectors, signals,
+inherited styles, and event bubbling see it under its parent as before. It
+leaves its parent's layout and paint instead: layout solves it as a root
+against its window's viewport, and it paints in that window, outside every
+ancestor's clip, scroll offset, opacity group, and visibility. The
+`WindowPartitions` resource answers which window an element is in. It is
+rebuilt only when `WindowOf` or the hierarchy changes, and an app with no
+surface roots skips it entirely.
+
+Input follows the same split. Hit testing considers only the elements in the
+window under the pointer (`PointerState::window`), but the hover chain that
+puts `:hover` on an element's ancestors, and event bubbling, run up the one
+tree across window boundaries, the way they would in one browser document. Media
+queries evaluate per window: an element matches against its own window's
+viewport. One element has focus app-wide; each window remembers the element it
+last had in `LastFocus` and gets it back when it regains focus, focusing an
+element in a window that lacks focus raises that window, and Tab cycles within
+the focused window. A window carrying `InputBlocked` ignores input and refuses
+accessibility actions. Popups, tooltips, and menus position against the
+viewport of their anchor's window and parent under its surface root.
+
+Closing goes through one path. The platform close button,
+`WindowRequest::Close(window)`, and `QuitRequest` all run a `CloseRequest`
+veto tick carrying the window being closed. A window about to close announces
+it with `WindowClosing` a tick ahead of its despawn, so whatever put content
+in it can take that content back; content still under it despawns with it.
+Closing the primary window quits the app, unless `[app] quit = "explicit"`
+makes it hide every window and keep running until the app quits.
+
+The `window.title()` and `window.size()` script getters read a process-wide
+mirror of what each window has, since a script host has no world to read. They
+answer for the window of the event being handled, and for the primary window
+outside a handler.
 
 ## A tick
 
@@ -563,9 +606,17 @@ order, z-index, and entity identity, never from the order archetypes happen to
 iterate; without that, adding and removing hover and press markers reshuffles
 archetypes and the wrong things draw on top.
 
-The `Prepare` stage then culls: entities outside the viewport, and entities
+Extract runs once per frame for every window. Each window has a
+`RenderWindow` entity in the render world holding its own retained tree, the
+tree its last frame painted, and its `WindowViewport`. When an app has surface
+roots, every drawable from an element in a secondary window is tagged with
+that window (`ExtractedWindow`) after the chain runs, and the rest belong to
+the primary window, so a single-window app pays nothing for the split.
+
+The `Prepare` stage then culls each window's drawables against that window's
+viewport: entities outside it, and entities
 whose main-world entity is hidden by a `Visible(false)` on itself or an
-ancestor. What survives is folded into a retained node tree, a typed scene
+ancestor. What survives is folded into one retained node tree per window, a typed scene
 graph with container, transform, opacity, clip, rect, shadow, outline, text,
 image, and native variants. An opacity node is a group: its subtree paints into
 a layer that fades once, which is how CSS `opacity` on an element with children
@@ -758,11 +809,16 @@ capability's `Select::OnConfig` rule; see
 [optional subsystems](plugins.md#optional-subsystems).
 
 Each backend has one renderer, behind the `Renderer` trait, and a window and
-an offscreen image are two kinds of target it attaches to. The window backend
-attaches a window, reports resizes, and asks for a frame; a headless run
-attaches an offscreen image and hands the renderer to `install_offscreen`,
-whose render-world system resizes it to the viewport and asks for a frame the
-same way. Everything from the retained tree to the pixels stays on the
+an offscreen image are two kinds of target it attaches to. Targets are keyed
+by the main-world window entity, and one renderer holds every window's target
+on one device. The window backend attaches each window as it opens, reports
+resizes, asks for a frame per window, and detaches a window that closed; a
+headless run attaches an offscreen image per window and hands the renderer to
+`install_offscreen`, whose render-world system keeps a target for every window,
+resizes each to its viewport, and asks for frames the same way. Each window
+presents only when its own tree changed. The focused window presents in step
+with the display, and the others present without waiting on it, so one window
+never stalls another. Everything from the retained tree to the pixels stays on the
 renderer's side of that line, so no scene or device type is ever named by the
 caller, and a headless run exercises the same device bring-up, frame gate,
 walk, and encode a windowed app ships. Vello's compute pipeline pins its render
@@ -783,9 +839,13 @@ pipeline), lives in `lumen-core`, so a headless run installs it alone and
 reads the same window state with no window open.
 
 Accessibility splits along the same line. The world-side half walks the tree
-once per tick in `A11ySync` and leaves an update behind; the platform half,
-behind the `A11yBackend` trait, publishes it and carries requests the other
-way. Screen readers arrive on their own threads, so those requests are queued
+once per tick in `A11ySync` and leaves an update behind for each window; the
+platform half, behind the `A11yBackend` trait, binds one adapter per window,
+publishes that window's update, and carries requests the other way. The
+primary window's tree is the document minus the content of other windows; a
+secondary window's tree is rooted at a window node named by its title and
+holds its surface roots. A window opens hidden and is shown only once its
+adapter is bound, the order the platform adapters require. Screen readers arrive on their own threads, so those requests are queued
 and applied on the main thread, in the tick that paints their result.
 
 ## Pluggable backends

@@ -388,11 +388,21 @@ pub(crate) struct LastMediaContext(pub(crate) lumen_ir::css::MediaContext);
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct AppliedStyleVersion(pub(crate) u64);
 
-/// Build a [`MediaContext`] from the live [`StyleManager`] (color scheme)
-/// and [`Viewport`] (logical width). Missing resources (pre-window)
-/// leave the corresponding field unknown so no `@media` rule matches
-/// spuriously.
+/// The [`MediaContext`] of the primary window: the live [`StyleManager`]
+/// (color scheme) and the primary window's logical width. Missing
+/// resources (pre-window) leave the corresponding field unknown so no
+/// `@media` rule matches spuriously.
 pub(crate) fn media_context_from_world(world: &World) -> lumen_ir::css::MediaContext {
+    media_context_for(world, None)
+}
+
+/// The [`MediaContext`] `window` evaluates `@media` rules against (`None`:
+/// the primary window): the app-wide color scheme and the window's own
+/// logical width.
+pub(crate) fn media_context_for(
+    world: &World,
+    window: Option<Entity>,
+) -> lumen_ir::css::MediaContext {
     use lumen_ir::css::{ColorSchemePreference, MediaContext};
     let color_scheme = world
         .get_resource::<lumen_core::components::StyleManager>()
@@ -403,15 +413,56 @@ pub(crate) fn media_context_from_world(world: &World) -> lumen_ir::css::MediaCon
                 ColorSchemePreference::Light
             }
         });
-    let viewport_width = world
-        .get_resource::<lumen_core::prelude::Viewport>()
-        .map(|v| v.size.x);
+    let viewport_width = match window {
+        Some(window) => world
+            .get::<lumen_core::window::WindowViewport>(window)
+            .map(|v| v.size.x),
+        None => lumen_core::window::primary_viewport(world).map(|v| v.size.x),
+    };
     MediaContext {
         color_scheme,
         viewport_width,
         ..Default::default()
     }
 }
+
+/// The media context a surface root's subtree restyles against: its
+/// window's. `None` for an element that is not a surface root.
+fn surface_media(world: &World, entity: Entity) -> Option<lumen_ir::css::MediaContext> {
+    let window = world.get::<lumen_core::window::WindowOf>(entity)?.window();
+    Some(media_context_for(world, Some(window)))
+}
+
+/// Whether going from `prev` to `media` changes what a stylesheet's
+/// `@media` rules match: a color-scheme flip the sheet reacts to, or a width
+/// crossing one of its breakpoints.
+fn media_crosses(
+    cache: Option<&StyleInvalidationCache>,
+    prev: &lumen_ir::css::MediaContext,
+    media: &lumen_ir::css::MediaContext,
+) -> bool {
+    let uses_scheme = cache
+        .map(|c| c.media_features.color_scheme)
+        .unwrap_or(false);
+    let scheme_changed = uses_scheme && prev.color_scheme != media.color_scheme;
+    let width_crossed = match (prev.viewport_width, media.viewport_width) {
+        (Some(o), Some(n)) => cache
+            .map(|c| c.width_breakpoints.iter().any(|t| (o >= *t) != (n >= *t)))
+            .unwrap_or(false),
+        (None, Some(_)) | (Some(_), None) => cache
+            .map(|c| !c.width_breakpoints.is_empty())
+            .unwrap_or(false),
+        (None, None) => false,
+    };
+    scheme_changed || width_crossed
+}
+
+/// The window and media context each surface root last restyled against,
+/// by surface root.
+#[derive(Resource, Default)]
+pub(crate) struct LastWindowMedia(
+    std::collections::HashMap<Entity, (Entity, lumen_ir::css::MediaContext)>,
+);
 
 /// W4.7 (media half): detect an OS color-scheme flip or a viewport-width
 /// resize that crosses a stylesheet breakpoint, and bump [`StyleVersion`]
@@ -424,32 +475,23 @@ pub(crate) fn media_context_from_world(world: &World) -> lumen_ir::css::MediaCon
 /// crosses one of [`StyleInvalidationCache::width_breakpoints`]. A plain
 /// drag-resize inside a band, or a theme flip on a stylesheet with no
 /// `@media`, is a cheap no-op.
+///
+/// Every other window evaluates media queries against its own width: a
+/// crossing there restyles that window's surface roots only, as does the
+/// first sight of a surface root in a window.
 pub(crate) fn detect_media_change(world: &mut World) {
     let media = media_context_from_world(world);
     let prev = world.get_resource::<LastMediaContext>().map(|m| m.0);
     // Borrow the invalidation cache in place - the breakpoint list was
     // being cloned into a fresh `Vec` every tick just to be read once.
-    // Scoping the borrow lets us drop it before the mutable insert below.
     let changed = match prev {
         // First observation with a real context: force one re-resolve.
         None => true,
-        Some(prev) => {
-            let cache = world.get_resource::<StyleInvalidationCache>();
-            let uses_scheme = cache
-                .map(|c| c.media_features.color_scheme)
-                .unwrap_or(false);
-            let scheme_changed = uses_scheme && prev.color_scheme != media.color_scheme;
-            let width_crossed = match (prev.viewport_width, media.viewport_width) {
-                (Some(o), Some(n)) => cache
-                    .map(|c| c.width_breakpoints.iter().any(|t| (o >= *t) != (n >= *t)))
-                    .unwrap_or(false),
-                (None, Some(_)) | (Some(_), None) => cache
-                    .map(|c| !c.width_breakpoints.is_empty())
-                    .unwrap_or(false),
-                (None, None) => false,
-            };
-            scheme_changed || width_crossed
-        }
+        Some(prev) => media_crosses(
+            world.get_resource::<StyleInvalidationCache>(),
+            &prev,
+            &media,
+        ),
     };
     // Refresh the baseline so breakpoint-crossing detection tracks the
     // latest width even on ticks that don't bump. Only a different context
@@ -459,6 +501,79 @@ pub(crate) fn detect_media_change(world: &mut World) {
     }
     if changed {
         StyleVersion::bump(world);
+    }
+    detect_window_media_change(world);
+}
+
+/// The other windows' half of [`detect_media_change`]: a surface root that
+/// is new, moved to another window, or whose window crossed a breakpoint
+/// restyles; one that went back into the primary window restyles against
+/// it. With one window it reads one resource and returns.
+fn detect_window_media_change(world: &mut World) {
+    let roots: Vec<(Entity, Entity)> = world
+        .get_resource::<lumen_core::window::WindowPartitions>()
+        .map(|p| p.surface_roots().to_vec())
+        .unwrap_or_default();
+    let has_last = world
+        .get_resource::<LastWindowMedia>()
+        .is_some_and(|l| !l.0.is_empty());
+    if roots.is_empty() && !has_last {
+        return;
+    }
+    let mut last = world
+        .remove_resource::<LastWindowMedia>()
+        .unwrap_or_default();
+    let mut seen: std::collections::HashMap<Entity, (Entity, lumen_ir::css::MediaContext)> =
+        std::collections::HashMap::new();
+    let mut dirty: Vec<Entity> = Vec::new();
+    for &(root, window) in &roots {
+        // Only the document's own elements restyle from its stylesheets; a
+        // tree outside it (the devtools panel) styles itself.
+        if !in_document(world, root) {
+            continue;
+        }
+        let media = media_context_for(world, Some(window));
+        let crossed = match last.0.get(&root) {
+            Some((was, prev)) => {
+                *was != window
+                    || media_crosses(world.get_resource::<StyleInvalidationCache>(), prev, &media)
+            }
+            None => true,
+        };
+        if crossed {
+            dirty.push(root);
+        }
+        seen.insert(root, (window, media));
+    }
+    // A root no longer a surface root restyles against the primary window.
+    dirty.extend(last.0.keys().filter(|r| !seen.contains_key(r)).copied());
+    for root in dirty {
+        if let Ok(mut e) = world.get_entity_mut(root) {
+            e.insert(lumen_core::components::StyleDirty);
+        }
+    }
+    last.0 = seen;
+    world.insert_resource(last);
+}
+
+/// Whether `entity` is under the document root, or there is no document
+/// root to be under.
+fn in_document(world: &World, entity: Entity) -> bool {
+    let Some(root) = world
+        .get_resource::<lumen_scene::spawn::DocumentRoot>()
+        .map(|r| r.0)
+    else {
+        return true;
+    };
+    let mut cur = entity;
+    loop {
+        if cur == root {
+            return true;
+        }
+        match world.get::<ChildOf>(cur) {
+            Some(parent) => cur = parent.parent(),
+            None => return false,
+        }
     }
 }
 
@@ -569,15 +684,19 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
     let siblings = sheet.uses_sibling_combinators();
     let mut warnings = Vec::new();
     for root in roots {
-        let ancestors: Vec<lumen_ir::css::AncestorInfo> = ancestors_of(world, root)
-            .into_iter()
-            .rev()
-            .map(|a| {
-                let place = place_of(world, a, siblings);
-                cascade_node(world, a, place, !tagged_children(world, a).is_empty())
-            })
-            .collect();
-        let mut walk = lumen_ir::css::RestyleWalk::new(&sheet, &media, &ancestors);
+        // The ancestors resolve root-first, each against the media of the
+        // window it shows in: a surface root on the way switches the walk
+        // to its window's width.
+        let mut walk = lumen_ir::css::RestyleWalk::new(&sheet, &media, &[]);
+        for a in ancestors_of(world, root).into_iter().rev() {
+            if let Some(window_media) = surface_media(world, a) {
+                walk.set_media(window_media);
+            }
+            let place = place_of(world, a, siblings);
+            let info = cascade_node(world, a, place, !tagged_children(world, a).is_empty());
+            walk.resolve(&info);
+            walk.enter();
+        }
         let place = place_of(world, root, siblings);
         restyle_subtree(world, &mut walk, root, place, siblings, animate);
         warnings.extend(walk.take_warnings());
@@ -597,8 +716,29 @@ struct Place {
 }
 
 /// Resolve `entity` against `walk` and everything under it, rebuilding
-/// each element's style components.
+/// each element's style components. A surface root's subtree resolves
+/// against its window's media.
 fn restyle_subtree(
+    world: &mut World,
+    walk: &mut lumen_ir::css::RestyleWalk<'_>,
+    entity: Entity,
+    place: Place,
+    siblings: bool,
+    animate: bool,
+) {
+    match surface_media(world, entity) {
+        Some(window_media) => {
+            let outer = walk.media();
+            walk.set_media(window_media);
+            restyle_element(world, walk, entity, place, siblings, animate);
+            walk.set_media(outer);
+        }
+        None => restyle_element(world, walk, entity, place, siblings, animate),
+    }
+}
+
+/// [`restyle_subtree`] for one element, with the walk's media already set.
+fn restyle_element(
     world: &mut World,
     walk: &mut lumen_ir::css::RestyleWalk<'_>,
     entity: Entity,

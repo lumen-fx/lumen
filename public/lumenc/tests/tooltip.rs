@@ -14,7 +14,6 @@ use lumen_core::components::{
     Color, Fill, LumenId, Style, StyleVersion, TextStyle, Transform, Visuals,
 };
 use lumen_core::input::{PointerMoved, PointerState};
-use lumen_core::prelude::Viewport;
 use lumen_primitives::TooltipPopup;
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
@@ -42,7 +41,7 @@ fn build(markup: &str, css: &str) -> App {
     let mut opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
-    app.world.resource_mut::<Viewport>().size = Vec2::new(600.0, 400.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(600.0, 400.0);
     for _ in 0..4 {
         app.tick();
     }

@@ -44,7 +44,7 @@ use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_core::render_world::AnimationsActive;
 use lumen_core::window::{QuitRequest, Window, WindowRequest, primary_window};
-use lumen_core::window_backend::{WindowApply, is_window_size};
+use lumen_core::window_backend::{RedrawScheduler, WindowApply, is_window_size};
 use lumen_ir::fragment::FragmentTable;
 use lumen_ir::interpolate::Scope;
 use lumen_ir::layout_ir::Element;
@@ -594,11 +594,20 @@ pub fn apply_dom_commands(world: &mut World) {
             ScriptCommand::UnbindEvent { token } => {
                 unregister_binding(token);
             }
-            ScriptCommand::WindowSetTitle { title } => set_window_title(world, title),
-            ScriptCommand::WindowSetSize { width, height } => {
-                set_window_size(world, glam::Vec2::new(width, height));
+            ScriptCommand::WindowSetTitle { window, title } => {
+                set_window_title(world, window, title);
             }
-            ScriptCommand::WindowClose => request(world, WindowRequest::Close, "window.close"),
+            ScriptCommand::WindowSetSize {
+                window,
+                width,
+                height,
+            } => {
+                set_window_size(world, window, glam::Vec2::new(width, height));
+            }
+            ScriptCommand::WindowClose { window } => match target_window(world, window) {
+                Some(window) => request(world, WindowRequest::Close(window), "window.close"),
+                None => lumen_core::warn_line!("window.close(): there is no window to close"),
+            },
             ScriptCommand::AppQuit => request(world, QuitRequest, "app.quit"),
             _ => {}
         }
@@ -611,21 +620,35 @@ pub fn apply_dom_commands(world: &mut World) {
     }
 }
 
-/// `window.set_title`: the primary window's [`Window`] takes the title, and
-/// the window backend applies it. An app with no window (a browser page, a
-/// bare app in a test) has nothing to apply it to, so the title is only what
-/// `window.title()` reports.
-fn set_window_title(world: &mut World, title: String) {
-    match primary_window(world).and_then(|e| world.get_mut::<Window>(e)) {
-        Some(mut window) => window.title = title,
-        None => lumen_core::window_state::publish_title(&title),
+/// The window a window command names: the open window `handle` packs, or
+/// the primary window for `0` (and for a handle whose window has closed
+/// since the call was made).
+fn target_window(world: &mut World, handle: u64) -> Option<Entity> {
+    Entity::try_from_bits(handle)
+        .filter(|_| handle != 0)
+        .filter(|e| world.get::<Window>(*e).is_some())
+        .or_else(|| primary_window(world))
+}
+
+/// `window.set_title`: the window's [`Window`] takes the title, and the
+/// window backend applies it. With nothing driving windows (a browser page,
+/// a server render, a bare app in a test) there is no platform window to
+/// wait for, so the title is what `window.title()` reports at once.
+fn set_window_title(world: &mut World, handle: u64, title: String) {
+    let driven = world.contains_resource::<RedrawScheduler>();
+    let window = target_window(world, handle);
+    if !driven {
+        lumen_core::window_state::publish_title(window, &title);
+    }
+    if let Some(mut wanted) = window.and_then(|e| world.get_mut::<Window>(e)) {
+        wanted.title = title;
     }
 }
 
-/// `window.set_size`: the primary window's [`Window`] takes the size, and the
-/// window backend asks the platform for it. A size a window cannot have (zero,
+/// `window.set_size`: the window's [`Window`] takes the size, and the window
+/// backend asks the platform for it. A size a window cannot have (zero,
 /// negative, not finite) is reported and dropped.
-fn set_window_size(world: &mut World, size: glam::Vec2) {
+fn set_window_size(world: &mut World, handle: u64, size: glam::Vec2) {
     if !is_window_size(size.x, size.y) {
         lumen_core::warn_line!(
             "window.set_size({}, {}): a window size is two positive numbers; ignored",
@@ -634,7 +657,8 @@ fn set_window_size(world: &mut World, size: glam::Vec2) {
         );
         return;
     }
-    if let Some(mut window) = primary_window(world).and_then(|e| world.get_mut::<Window>(e)) {
+    if let Some(mut window) = target_window(world, handle).and_then(|e| world.get_mut::<Window>(e))
+    {
         window.size = size;
     }
 }

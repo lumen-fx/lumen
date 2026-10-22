@@ -13,7 +13,7 @@
 
 use glam::Vec2;
 use lumen_core::components::{LumenClasses, Transform};
-use lumen_core::prelude::{App, Color, ColorScheme, LumenId, StyleManager, Viewport};
+use lumen_core::prelude::{App, Color, ColorScheme, LumenId, StyleManager};
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use lumenc::{RunOptions, build_headless_app};
@@ -58,10 +58,8 @@ fn boot(dir: &std::path::Path, backend: Backend) -> App {
         Backend::Cpu => app.add_plugin(CpuRendererPlugin::new(W, H)),
         Backend::Gpu => app.add_plugin(WgpuRendererPlugin::new(W, H)),
     };
-    for vp in [
-        &mut *app.world.resource_mut::<Viewport>(),
-        &mut *app.render_world.resource_mut::<Viewport>(),
-    ] {
+    {
+        let vp = &mut *lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = Vec2::new(W as f32, H as f32);
         vp.scale_factor = 1.0;
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
@@ -102,12 +100,13 @@ fn origin_of(app: &mut App, id: &str) -> Vec2 {
 fn seam(app: &mut App, id: &str) -> ([u8; 3], [u8; 3]) {
     let at = origin_of(app, id) + Vec2::new(19.0, 10.0);
     let pixels = match app.render_world.get_non_send::<CpuRenderer>() {
-        Some(cpu) => cpu.read_rgba8(),
+        Some(cpu) => cpu
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window")),
         None => app
             .render_world
             .get_non_send::<WgpuRenderer>()
             .expect("offscreen renderer present")
-            .read_rgba8()
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
             .expect("framebuffer readback"),
     };
     let px = |x: usize, y: usize| {

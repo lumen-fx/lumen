@@ -91,6 +91,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     }
 
     let mut app = App::new();
+    // What closing the main window does (`[app] quit`).
+    app.world
+        .insert_resource(lumen_core::window::QuitPolicy::from(cfg.app.quit));
     // The run mode, before anything is installed: a plugin that only makes
     // sense for a person at a window reads this from `Plugin::build`. Same bit
     // the capability and portable-plugin environments carry, from the same
@@ -122,9 +125,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // pipelines) needs nothing from the rest of the build it overlaps.
     if let Some((width, height)) = opts.offscreen_prestart.take() {
         let candidates = crate::run::render_backends(&app, &cfg)?;
+        let primary = lumen_core::window::primary_window(&mut app.world)
+            .ok_or_else(|| RunError::Headless("the app has no primary window".into()))?;
         app.world
             .insert_resource(crate::run_headless::OffscreenPrestart::spawn(
-                candidates, width, height,
+                candidates, primary, width, height,
             )?);
     }
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
@@ -267,7 +272,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // Initial load runs before the window exists, so there's no real
     // OS theme / viewport yet. Apply with the best-guess default
     // context; `detect_media_change` re-applies with the live context on
-    // the first tick after the window seeds `StyleManager` / `Viewport`.
+    // the first tick after the window seeds `StyleManager` and the window's viewport.
     //
     // Either deserialize a precompiled AOT artifact (parser-free path) or
     // parse `main.lmn` + `main.css` from source (`runtime-parse`).

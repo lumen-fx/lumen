@@ -46,6 +46,7 @@ fn bounded_headless_run_renders_and_exits() {
         HeadlessOptions {
             dpr: 1.0,
             ticks: Some(5),
+            ..HeadlessOptions::default()
         },
     )
     .expect("bounded headless run");
@@ -66,6 +67,7 @@ fn bounded_headless_run_at_fractional_dpr() {
         HeadlessOptions {
             dpr: 1.5,
             ticks: Some(3),
+            ..HeadlessOptions::default()
         },
     )
     .expect("headless run at dpr 1.5");

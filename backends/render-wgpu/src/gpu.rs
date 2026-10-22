@@ -129,6 +129,7 @@ impl HasDisplayHandle for DisplayTarget {
 /// An adapter found on one backend set, and the window surface created on
 /// the same instance when there is a window.
 struct Found {
+    instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     surface: Option<wgpu::Surface<'static>>,
 }
@@ -164,7 +165,11 @@ fn find_adapter(
         }))
         .map_err(|e| format!("request_adapter: {e}"))?
     };
-    Ok(Found { adapter, surface })
+    Ok(Found {
+        instance,
+        adapter,
+        surface,
+    })
 }
 
 /// An adapter on this OS's native backend, or, in a `gl-fallback` build,
@@ -193,9 +198,10 @@ fn find_any_adapter(window: Option<&Arc<dyn RenderTarget>>) -> Result<Found, Str
     }
 }
 
-/// The `Rgba8Unorm` texture a frame is rendered into, with a linear view
-/// vello writes through and an sRGB view of the same bytes a blit samples.
-struct FrameTexture {
+/// The `Rgba8Unorm` texture a window's frame is rendered into, with a linear
+/// view vello writes through and an sRGB view of the same bytes a blit
+/// samples. One per target.
+pub(crate) struct FrameTexture {
     texture: wgpu::Texture,
     /// Storage-bindable view vello writes through.
     linear: wgpu::TextureView,
@@ -207,7 +213,7 @@ struct FrameTexture {
 }
 
 impl FrameTexture {
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lumen vello target"),
@@ -247,6 +253,16 @@ impl FrameTexture {
             width,
             height,
         }
+    }
+
+    /// Size in physical pixels.
+    pub(crate) fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The texture as a blit reads it.
+    pub(crate) fn srgb_view(&self) -> &wgpu::TextureView {
+        &self.srgb
     }
 }
 
@@ -347,10 +363,14 @@ fn upload_tiles(
     true
 }
 
-/// Everything a frame needs on the GPU, whatever its target: the device,
-/// the vello renderer, the sink frames are painted into, the fragment
-/// cache, and the texture the frame lands in.
+/// Everything a frame needs on the GPU, whatever its target, shared by every
+/// window: the device, the vello renderer, the sink frames are painted into,
+/// the fragment cache, and the resident images. Each target brings its own
+/// frame texture and kept layers.
 pub(crate) struct GpuCore {
+    /// The instance the device came from, which a window opened later
+    /// creates its surface on.
+    pub(crate) instance: wgpu::Instance,
     pub(crate) adapter: wgpu::Adapter,
     pub(crate) adapter_info: wgpu::AdapterInfo,
     pub(crate) device: wgpu::Device,
@@ -360,10 +380,8 @@ pub(crate) struct GpuCore {
     painter: PaintTarget,
     /// Position-independent encoded paths for rects, shadows, outlines,
     /// and SVGs keyed by appearance, each reused across every position it
-    /// appears at and across frames.
+    /// appears at, across frames, and across windows.
     cache: FragmentCache,
-    /// Faded groups' layers, kept from frame to frame.
-    layers: LayerCache,
     /// The textures standing in for kept layers' images, each with the layer
     /// it belongs to; a texture goes once its layer is dropped.
     textures: Vec<(Weak<GpuLayer>, vello::peniko::ImageData)>,
@@ -382,7 +400,6 @@ pub(crate) struct GpuCore {
     resident: HashMap<u64, u64>,
     /// A one-pixel target for the empty renders that age vello's atlas.
     pixel_target: Option<wgpu::TextureView>,
-    frame: FrameTexture,
     /// Where a pixel image changed all over is laid out whole before it is
     /// uploaded, so a frame that uploads several reuses one allocation.
     /// Emptied at the end of the frame.
@@ -398,21 +415,22 @@ struct PixelTexture {
 }
 
 impl GpuCore {
-    /// Bring up a device and a `width` x `height` frame texture. With a
-    /// window, also returns the surface for it, created on the instance the
-    /// adapter came from.
+    /// Bring up a device. With a window, also returns the surface for it,
+    /// created on the instance the adapter came from.
     ///
     /// The adapter and device requests run under tracing spans on the
     /// `lumen::render::gpu_init` target and under a watchdog that turns a
     /// wedged driver into a diagnostic.
     pub(crate) fn bring_up(
         window: Option<&Arc<dyn RenderTarget>>,
-        width: u32,
-        height: u32,
     ) -> Result<(Self, Option<wgpu::Surface<'static>>), String> {
         let _init_span = tracing::info_span!(target: GPU_INIT_TARGET, "lumen_gpu_init").entered();
         let watchdog = InitWatchdog::spawn(gpu_init_deadline_ms());
-        let Found { adapter, surface } = find_any_adapter(window)?;
+        let Found {
+            instance,
+            adapter,
+            surface,
+        } = find_any_adapter(window)?;
         let (device, queue) = {
             let _span = tracing::info_span!(target: GPU_INIT_TARGET, "request_device").entered();
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -432,12 +450,12 @@ impl GpuCore {
         let adapter_info = adapter.get_info();
         let vello = vello::Renderer::new(&device, vello_options(&adapter_info))
             .map_err(|e| format!("vello renderer init: {e:?}"))?;
-        let frame = FrameTexture::new(&device, width, height);
         let mut sink = VelloPainter::new();
         sink.limit_layer_side(device.limits().max_texture_dimension_2d);
         let painter: PaintTarget = Box::new(sink);
         Ok((
             Self {
+                instance,
                 adapter,
                 adapter_info,
                 device,
@@ -445,51 +463,28 @@ impl GpuCore {
                 vello,
                 painter,
                 cache: FragmentCache::default(),
-                layers: LayerCache::default(),
                 textures: Vec::new(),
                 pixels: HashMap::new(),
                 copies: HashMap::new(),
                 passes: Vec::new(),
                 resident: HashMap::new(),
                 pixel_target: None,
-                frame,
                 scratch: Vec::new(),
             },
             surface,
         ))
     }
 
-    /// What the kept layers of faded groups hold and how often they were
-    /// reused.
-    pub(crate) fn layer_stats(&self) -> lumen_paint::LayerStats {
-        self.layers.stats()
-    }
-
-    /// Size of the frame texture in physical pixels.
-    pub(crate) fn size(&self) -> (u32, u32) {
-        (self.frame.width, self.frame.height)
-    }
-
-    /// Reallocate the frame texture at a new size, at least one pixel each
-    /// way. Returns `true` when the size changed; the new texture holds no
-    /// frame.
-    pub(crate) fn resize(&mut self, width: u32, height: u32) -> bool {
-        if (width.max(1), height.max(1)) == self.size() {
-            return false;
-        }
-        self.frame = FrameTexture::new(&self.device, width, height);
-        true
-    }
-
-    /// The frame texture as a blit reads it.
-    pub(crate) fn srgb_view(&self) -> &wgpu::TextureView {
-        &self.frame.srgb
-    }
-
-    /// Paint the render world's retained scene and render it into the
-    /// frame texture.
-    pub(crate) fn render(&mut self, render_world: &mut World) -> Result<(), String> {
-        let (width, height) = (self.frame.width, self.frame.height);
+    /// Paint `target`'s retained tree and render it into `frame`, with the
+    /// target's kept layers in `layers`.
+    pub(crate) fn render(
+        &mut self,
+        target: bevy_ecs::entity::Entity,
+        frame: &FrameTexture,
+        layers: &mut LayerCache,
+        render_world: &mut World,
+    ) -> Result<(), String> {
+        let (width, height) = frame.size();
         let sink = self
             .painter
             .native()
@@ -499,9 +494,10 @@ impl GpuCore {
         sink.set_target_size(width, height);
         lumen_paint::paint_frame(
             render_world,
+            target,
             &mut self.painter,
             Some(&mut self.cache),
-            Some(&mut self.layers),
+            Some(layers),
         );
         let split = self.overflows_atlas();
         let mut jobs = Vec::new();
@@ -515,9 +511,10 @@ impl GpuCore {
             sink.begin_split(width, height);
             lumen_paint::paint_frame(
                 render_world,
+                target,
                 &mut self.painter,
                 Some(&mut self.cache),
-                Some(&mut self.layers),
+                Some(layers),
             );
             jobs = self
                 .painter
@@ -559,9 +556,9 @@ impl GpuCore {
                 .scene_mut(),
         );
         let params = RenderParams {
-            base_color: lumen_paint::clear_color(render_world),
-            width: self.frame.width,
-            height: self.frame.height,
+            base_color: lumen_paint::clear_color(render_world, target),
+            width,
+            height,
             antialiasing_method: AaConfig::Area,
         };
         let scene = self
@@ -571,13 +568,7 @@ impl GpuCore {
             .expect("the GPU renderer paints through a VelloPainter")
             .scene();
         self.vello
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                scene,
-                &self.frame.linear,
-                &params,
-            )
+            .render_to_texture(&self.device, &self.queue, scene, &frame.linear, &params)
             .map_err(|e| format!("vello render: {e:?}"))?;
         stamp(render_world, RenderTimestamps::mark_submitted);
         self.resident = scene_images(scene);
@@ -919,17 +910,11 @@ impl GpuCore {
         });
     }
 
-    /// Copy the frame texture to the CPU as tightly packed RGBA8: exactly
-    /// the bytes vello wrote, with no colour conversion.
-    pub(crate) fn read_rgba8(&self) -> Result<Vec<u8>, String> {
-        let (width, height) = self.size();
-        read_texture(
-            &self.device,
-            &self.queue,
-            &self.frame.texture,
-            width,
-            height,
-        )
+    /// Copy `frame` to the CPU as tightly packed RGBA8: exactly the bytes
+    /// vello wrote, with no colour conversion.
+    pub(crate) fn read_rgba8(&self, frame: &FrameTexture) -> Result<Vec<u8>, String> {
+        let (width, height) = frame.size();
+        read_texture(&self.device, &self.queue, &frame.texture, width, height)
     }
 
     /// A rasterizer on this core's device, for the render world to publish.

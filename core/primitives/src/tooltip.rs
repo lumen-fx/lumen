@@ -33,10 +33,10 @@ use lumen_core::components::{
 };
 use lumen_core::input::{HoverWithin, PointerEvents};
 use lumen_core::prelude::*;
-use lumen_core::render_world::Viewport;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
 use lumen_core::tick::WakeDeadline;
 use lumen_core::time::{Duration, Instant};
+use lumen_core::window::{Viewports, WindowOf};
 use lumen_widget_macros::Widget;
 
 /// Authored on the trigger via `<tooltip text="..." delay="...">`. The
@@ -215,15 +215,12 @@ fn spawn_tooltip_popups(
     existing: Query<&TooltipPopup>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
-    viewport: Option<Res<Viewport>>,
+    (viewports, surfaces): (Viewports, Query<(), With<WindowOf>>),
     pointer: Option<Res<lumen_core::input::PointerState>>,
     wake: Option<Res<WakeDeadline>>,
 ) {
     let already: std::collections::HashSet<Entity> = existing.iter().map(|p| p.trigger).collect();
     let now = Instant::now();
-    let viewport_size = viewport
-        .map(|v| v.size)
-        .unwrap_or(Vec2::new(f32::INFINITY, f32::INFINITY));
     let cursor = pointer.as_ref().and_then(|p| p.position);
     let innermost = innermost_trigger(triggers.iter().map(|(e, ..)| e), &parents);
     // The innermost trigger is picked before its dwell stamp lands, so an
@@ -243,8 +240,18 @@ fn spawn_tooltip_popups(
         }
         let est = estimated_tooltip_size(&src.text);
         let anchor = cursor.unwrap_or(t.absolute);
+        // The popup opens in the trigger's window and clamps to it.
+        let viewport_size = viewports
+            .of(trigger)
+            .map(|v| v.size)
+            .unwrap_or(Vec2::new(f32::INFINITY, f32::INFINITY));
         let origin = cursor_tooltip_origin(anchor, est, viewport_size, src.offset);
-        let root = parents.iter_ancestors(trigger).last();
+        // Its root is the root of the trigger's window: the nearest surface
+        // root above the trigger, else the top of the tree.
+        let root = std::iter::once(trigger)
+            .chain(parents.iter_ancestors(trigger))
+            .find(|e| surfaces.contains(*e))
+            .or_else(|| parents.iter_ancestors(trigger).last());
         // The inset resolves against the root, the popup's containing
         // block; a trigger with no tree above it leaves the popup a root of
         // its own, whose inset resolves against the window.

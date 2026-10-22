@@ -1508,11 +1508,15 @@ fn resolve_one(
 /// `Without<ProgressFill>` split in `lumen_primitives`'s progress sync,
 /// or the unfiltered pointer/keyboard paths in `lumen_input`) can pass a
 /// disjoint query without a second archetype conflict.
+///
+/// The walk stops at a surface root ([`crate::window::WindowOf`]): a subtree
+/// shown in a window of its own is not hidden by an ancestor in another.
 pub fn hidden_via_ancestors<F: bevy_ecs::query::QueryFilter>(
     entity: Entity,
     parents: &Query<&bevy_ecs::hierarchy::ChildOf>,
     visibles: &Query<&Visible>,
     styles: &Query<&Style, F>,
+    surfaces: &Query<(), With<crate::window::WindowOf>>,
 ) -> bool {
     let mut cur = entity;
     loop {
@@ -1524,6 +1528,9 @@ pub fn hidden_via_ancestors<F: bevy_ecs::query::QueryFilter>(
             .is_ok_and(|s| matches!(s.display, Display::None))
         {
             return true;
+        }
+        if surfaces.contains(cur) {
+            return false;
         }
         match parents.get(cur) {
             Ok(co) => cur = co.parent(),
@@ -2952,15 +2959,6 @@ impl std::fmt::Debug for PendingA11yUpdate {
 ///   synthetic `NodeId(u64::MAX)` root.
 #[derive(bevy_ecs::resource::Resource, Clone, Copy, Debug)]
 pub struct RootWindowEntity(pub Entity);
-
-/// Optional human-readable label for the AccessKit tree root.
-///
-/// - Written by the window backend from `WindowOptions.title` once the
-///   window exists.
-/// - When absent the translation layer falls back to the legacy
-///   `"Lumen app"` hard-coded string.
-#[derive(bevy_ecs::resource::Resource, Clone, Debug)]
-pub struct A11yRootLabel(pub String);
 
 /// Queue of entities the assistive tech requested be scrolled into view.
 ///

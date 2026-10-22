@@ -15,7 +15,6 @@ use bevy_ecs::system::RunSystemOnce;
 use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenId, TextContent, Transform, Visible};
-use lumen_core::prelude::Viewport;
 use lumen_core::property_store::PropertyStore;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
 use lumen_primitives::{TabPicks, TabStrip, TabStripButton, Tabs};
@@ -45,7 +44,7 @@ fn build(markup: &str) -> App {
     let mut opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
-    app.world.resource_mut::<Viewport>().size = Vec2::new(600.0, 400.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(600.0, 400.0);
     for _ in 0..4 {
         app.tick();
     }
@@ -126,6 +125,7 @@ fn click_button(app: &mut App, label: &str) {
             pointer: None,
         },
         wait_for: None,
+        window: None,
     });
     tick(app, 10);
 }

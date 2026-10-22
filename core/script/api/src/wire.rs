@@ -28,7 +28,7 @@
 /// as a different command. Add new variants at the end of their enum. Any other
 /// change to a shape listed above (a renamed or retyped field, a removed
 /// variant) bumps this constant.
-pub const SCRIPT_WIRE_VERSION: u16 = 4;
+pub const SCRIPT_WIRE_VERSION: u16 = 5;
 
 /// [`PropertyKey`](lumen_core::property_store::PropertyKey) on the wire.
 ///

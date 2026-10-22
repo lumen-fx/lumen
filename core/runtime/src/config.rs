@@ -10,6 +10,7 @@
 //! locale = "de-DE"            # default: the OS locale, else en-US
 //! fallback_locale = "de-DE"   # default: en-US; the language the source strings are in
 //! single_instance = true      # default: false; second launch forwards argv and exits
+//! quit = "explicit"           # default: "primary"; closing the main window hides it instead
 //!
 //! [window]
 //! title = "My App"            # default: app directory name
@@ -171,6 +172,32 @@ pub struct AppCfg {
     /// non-interactive embedding never contend over one socket.
     #[serde(default)]
     pub single_instance: bool,
+    /// What closing the main window does. `"primary"` (the default): the app
+    /// quits, and every other window it opened closes with it.
+    /// `"explicit"`: the main window and the others hide, and the app keeps
+    /// running until it calls `app.quit()`, which is what a tray app wants.
+    pub quit: QuitCfg,
+}
+
+/// `[app] quit`: what closing the main window does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum QuitCfg {
+    /// Closing the main window quits the app.
+    #[default]
+    Primary,
+    /// Closing the main window hides every window; only `app.quit()` ends
+    /// the app.
+    Explicit,
+}
+
+impl From<QuitCfg> for lumen_core::window::QuitPolicy {
+    fn from(cfg: QuitCfg) -> Self {
+        match cfg {
+            QuitCfg::Primary => Self::Primary,
+            QuitCfg::Explicit => Self::Explicit,
+        }
+    }
 }
 
 /// Parse one of `[app]`'s BCP-47 tags into a validated language identifier,

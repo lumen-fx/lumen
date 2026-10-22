@@ -25,47 +25,43 @@ use lumen_core::render_backend::{DeviceKind, RendererInfo, install_offscreen};
 use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
 use lumen_paint::kurbo::Affine;
 use lumen_paint::{LayerCache, LayerStats, PaintTarget, Rasterize, Rasterizer, Recording};
+use std::collections::HashMap;
 use surface::Presenter;
 use vello_cpu::Pixmap;
 
 /// The largest target the rasterizer takes on either axis, in pixels.
 pub const MAX_DIMENSION: u32 = u16::MAX as u32;
 
-/// CPU renderer: a [`CpuPainter`], the pixels of the last frame it
-/// rasterized, and the window they are shown in, if any.
+/// CPU renderer: one [`CpuPainter`] shared by every window, and per window
+/// the pixels of the last frame it rasterized and where they are shown.
 ///
-/// Construction is free: a window backend builds one before the window
-/// exists and attaches the window once it does, and a headless launch
-/// attaches an offscreen image (see [`Self::new_offscreen`]).
+/// Construction is free: a window backend builds one before the windows
+/// exist and attaches each one once it does, and a headless launch attaches
+/// an offscreen image per window (see [`Self::new_offscreen`]).
 pub struct CpuRenderer {
     painter: PaintTarget,
-    pixmap: Pixmap,
-    /// `None` while detached.
-    target: Option<Target>,
-    /// Whether the pixmap holds a rasterized frame at its current size.
-    holds_frame: bool,
+    targets: HashMap<Entity, Target>,
     render_count: u64,
-    /// Faded groups' layers, kept from frame to frame.
-    layers: LayerCache,
 }
 
-/// What a [`CpuRenderer`] shows its frames on.
-enum Target {
-    /// Nowhere: the pixmap is the result, read back on request.
-    Offscreen,
-    /// A window, through softbuffer.
-    Window(Presenter),
+/// One window's share of the renderer.
+struct Target {
+    pixmap: Pixmap,
+    /// Where the pixmap is shown: nowhere for an offscreen image, the window
+    /// through softbuffer otherwise.
+    presenter: Option<Presenter>,
+    /// Whether the pixmap holds a rasterized frame at its current size.
+    holds_frame: bool,
+    /// Faded groups' layers, kept from frame to frame.
+    layers: LayerCache,
 }
 
 impl Default for CpuRenderer {
     fn default() -> Self {
         Self {
             painter: Box::new(CpuPainter::new(1, 1)),
-            pixmap: Pixmap::new(1, 1),
-            target: None,
-            holds_frame: false,
+            targets: HashMap::new(),
             render_count: 0,
-            layers: LayerCache::default(),
         }
     }
 }
@@ -76,61 +72,63 @@ impl CpuRenderer {
         Self::default()
     }
 
-    /// A renderer attached to a `width` x `height` offscreen image. Sizes
-    /// clamp to `1..=`[`MAX_DIMENSION`]. The CPU always starts, so this
-    /// cannot fail.
-    pub fn new_offscreen(width: u32, height: u32) -> Self {
+    /// A renderer with `target` attached to a `width` x `height` offscreen
+    /// image. Sizes clamp to `1..=`[`MAX_DIMENSION`]. The CPU always starts,
+    /// so this cannot fail.
+    pub fn new_offscreen(target: Entity, width: u32, height: u32) -> Self {
         let mut renderer = Self::new();
-        renderer.bind_offscreen(width, height);
+        renderer.bind_offscreen(target, width, height);
         renderer
     }
 
-    /// Whether a target is currently bound.
+    /// Whether any target is bound.
     pub fn is_attached(&self) -> bool {
-        self.target.is_some()
+        !self.targets.is_empty()
     }
 
-    /// Pixel size of the target.
-    pub fn size(&self) -> (u32, u32) {
-        (
-            u32::from(self.pixmap.width()),
-            u32::from(self.pixmap.height()),
-        )
+    /// Pixel size of `target`'s image, or `None` when it is not attached.
+    pub fn size(&self, target: Entity) -> Option<(u32, u32)> {
+        self.targets.get(&target).map(|t| pixmap_size(&t.pixmap))
     }
 
-    /// Frames rasterized since construction. Frames the present gate
-    /// skipped do not count, so a static UI leaves it flat.
+    /// Frames rasterized since construction, across every target. Frames
+    /// the present gate skipped do not count, so a static UI leaves it flat.
     pub fn render_count(&self) -> u64 {
         self.render_count
     }
 
-    /// What the kept layers of faded groups hold and how often they were
-    /// reused.
-    pub fn layer_stats(&self) -> LayerStats {
-        self.layers.stats()
+    /// What `target`'s kept layers of faded groups hold and how often they
+    /// were reused.
+    pub fn layer_stats(&self, target: Entity) -> Option<LayerStats> {
+        self.targets.get(&target).map(|t| t.layers.stats())
     }
 
-    /// The last frame as tightly packed, straight-alpha RGBA8.
-    pub fn read_rgba8(&self) -> Vec<u8> {
-        straight_rgba8(&self.pixmap)
+    /// `target`'s last frame as tightly packed, straight-alpha RGBA8, empty
+    /// when it is not attached.
+    pub fn read_rgba8(&self, target: Entity) -> Vec<u8> {
+        self.targets
+            .get(&target)
+            .map(|t| straight_rgba8(&t.pixmap))
+            .unwrap_or_default()
     }
 
-    fn bind_offscreen(&mut self, width: u32, height: u32) {
-        self.target = Some(Target::Offscreen);
-        self.set_size(width, height);
-    }
-
-    /// Size the pixmap to `width` x `height`, clamped. Returns `true` when
-    /// the size changed; the new pixmap holds no frame.
-    fn set_size(&mut self, width: u32, height: u32) -> bool {
+    fn bind_offscreen(&mut self, target: Entity, width: u32, height: u32) {
         let (w, h) = clamp_size(width, height);
-        if (u32::from(w), u32::from(h)) == self.size() {
-            return false;
-        }
-        self.pixmap = Pixmap::new(w, h);
-        self.holds_frame = false;
-        true
+        self.targets.insert(
+            target,
+            Target {
+                pixmap: Pixmap::new(w, h),
+                presenter: None,
+                holds_frame: false,
+                layers: LayerCache::default(),
+            },
+        );
     }
+}
+
+/// A pixmap's size as `u32`s.
+fn pixmap_size(pixmap: &Pixmap) -> (u32, u32) {
+    (u32::from(pixmap.width()), u32::from(pixmap.height()))
 }
 
 impl Renderer for CpuRenderer {
@@ -147,42 +145,60 @@ impl Renderer for CpuRenderer {
         }
     }
 
-    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
-        self.target = None;
-        self.holds_frame = false;
-        match target {
-            FrameTarget::Offscreen { width, height } => self.bind_offscreen(width, height),
+    fn attach(&mut self, target: Entity, frame: FrameTarget) -> Result<(), RenderError> {
+        self.targets.remove(&target);
+        match frame {
+            FrameTarget::Offscreen { width, height } => self.bind_offscreen(target, width, height),
             FrameTarget::Window(window) => {
                 let (width, height) = window.physical_size();
                 let mut presenter = Presenter::new(window)?;
-                self.set_size(width, height);
-                let (w, h) = self.size();
-                presenter.resize(w, h)?;
-                self.target = Some(Target::Window(presenter));
+                let (w, h) = clamp_size(width, height);
+                presenter.resize(u32::from(w), u32::from(h))?;
+                self.targets.insert(
+                    target,
+                    Target {
+                        pixmap: Pixmap::new(w, h),
+                        presenter: Some(presenter),
+                        holds_frame: false,
+                        layers: LayerCache::default(),
+                    },
+                );
             }
         }
         Ok(())
     }
 
-    fn resize(&mut self, width: u32, height: u32) -> bool {
-        if self.target.is_none() || !self.set_size(width, height) {
+    fn resize(&mut self, target: Entity, width: u32, height: u32) -> bool {
+        let Some(t) = self.targets.get_mut(&target) else {
+            return false;
+        };
+        let (w, h) = clamp_size(width, height);
+        if (u32::from(w), u32::from(h)) == pixmap_size(&t.pixmap) {
             return false;
         }
-        let (w, h) = self.size();
-        if let Some(Target::Window(presenter)) = self.target.as_mut()
-            && let Err(e) = presenter.resize(w, h)
+        t.pixmap = Pixmap::new(w, h);
+        t.holds_frame = false;
+        if let Some(presenter) = t.presenter.as_mut()
+            && let Err(e) = presenter.resize(u32::from(w), u32::from(h))
         {
             tracing::warn!(target: "lumen::render", "softbuffer resize failed: {e}");
         }
         true
     }
 
-    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool {
-        self.target.is_some() && lumen_paint::wants_frame(render_world, request, self.holds_frame)
+    fn wants_present(
+        &mut self,
+        target: Entity,
+        render_world: &mut World,
+        request: FrameRequest,
+    ) -> bool {
+        self.targets
+            .get(&target)
+            .is_some_and(|t| lumen_paint::wants_frame(render_world, target, request, t.holds_frame))
     }
 
-    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
-        let Some(target) = self.target.as_mut() else {
+    fn present(&mut self, target: Entity, render_world: &mut World) -> Result<(), RenderError> {
+        let Some(t) = self.targets.get_mut(&target) else {
             return Err(RenderError::Detached);
         };
         // What a drawing read back as pixels is rasterized with: this
@@ -190,35 +206,47 @@ impl Renderer for CpuRenderer {
         if !render_world.contains_resource::<Rasterizer>() {
             render_world.insert_resource(Rasterizer::new(CpuRasterizer));
         }
-        let (w, h) = (self.pixmap.width(), self.pixmap.height());
-        cpu_painter(&mut self.painter).begin_frame(w, h, lumen_paint::clear_color(render_world));
+        let (w, h) = (t.pixmap.width(), t.pixmap.height());
+        cpu_painter(&mut self.painter).begin_frame(
+            w,
+            h,
+            lumen_paint::clear_color(render_world, target),
+        );
         lumen_paint::paint_frame(
             render_world,
+            target,
             &mut self.painter,
             None,
-            Some(&mut self.layers),
+            Some(&mut t.layers),
         );
         stamp(render_world, RenderTimestamps::mark_encoded);
-        cpu_painter(&mut self.painter).render_into(&mut self.pixmap);
+        cpu_painter(&mut self.painter).render_into(&mut t.pixmap);
         stamp(render_world, RenderTimestamps::mark_submitted);
-        self.holds_frame = true;
+        t.holds_frame = true;
         self.render_count += 1;
-        let pixmap = &self.pixmap;
-        lumen_paint::answer_capture(render_world, (u32::from(w), u32::from(h)), || {
+        let pixmap = &t.pixmap;
+        lumen_paint::answer_capture(render_world, target, (u32::from(w), u32::from(h)), || {
             Ok(straight_rgba8(pixmap))
         });
-        match target {
-            Target::Window(presenter) => {
-                presenter.present(pixmap)?;
-                stamp(render_world, RenderTimestamps::mark_presented);
-                Ok(())
-            }
-            Target::Offscreen => Ok(()),
+        if let Some(presenter) = t.presenter.as_mut() {
+            presenter.present(&t.pixmap)?;
+            stamp(render_world, RenderTimestamps::mark_presented);
         }
+        Ok(())
     }
 
-    fn detach(&mut self) {
-        self.target = None;
+    fn targets(&self) -> Vec<Entity> {
+        let mut targets: Vec<Entity> = self.targets.keys().copied().collect();
+        targets.sort();
+        targets
+    }
+
+    fn detach(&mut self, target: Entity) {
+        self.targets.remove(&target);
+    }
+
+    fn detach_all(&mut self) {
+        self.targets.clear();
     }
 }
 
@@ -290,19 +318,23 @@ fn straight_rgba8(pixmap: &Pixmap) -> Vec<u8> {
 }
 
 /// Plugin: installs an offscreen [`CpuRenderer`] into the render world,
-/// driven each frame by [`install_offscreen`]'s render-world system.
+/// driven each frame by [`install_offscreen`]'s render-world system, which
+/// gives every window an image of its own.
 ///
 /// Text is painted through the render world's [`lumen_text::ShaperService`];
 /// without one text is skipped.
 pub struct CpuRendererPlugin {
-    renderer: CpuRenderer,
+    renderer: Option<CpuRenderer>,
+    size: (u32, u32),
 }
 
 impl CpuRendererPlugin {
-    /// A plugin rendering into a `width` x `height` image.
+    /// A plugin rendering the primary window into a `width` x `height`
+    /// image to begin with.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            renderer: CpuRenderer::new_offscreen(width, height),
+            renderer: None,
+            size: (width, height),
         }
     }
 }
@@ -310,13 +342,21 @@ impl CpuRendererPlugin {
 impl From<CpuRenderer> for CpuRendererPlugin {
     /// A plugin installing an already-attached renderer.
     fn from(renderer: CpuRenderer) -> Self {
-        Self { renderer }
+        Self {
+            renderer: Some(renderer),
+            size: (1, 1),
+        }
     }
 }
 
 impl Plugin for CpuRendererPlugin {
     fn build(self, app: &mut App) {
-        install_offscreen(app, self.renderer);
+        let renderer = self.renderer.unwrap_or_else(|| {
+            let primary =
+                lumen_core::window::primary_window(&mut app.world).expect("a primary window");
+            CpuRenderer::new_offscreen(primary, self.size.0, self.size.1)
+        });
+        install_offscreen(app, renderer);
     }
 }
 
@@ -333,6 +373,10 @@ mod tests {
     use super::*;
     use lumen_core::components::Color as LumenColor;
     use lumen_core::render_world::SurfaceCapture;
+
+    fn primary_window(app: &mut App) -> Entity {
+        lumen_core::window::primary_window(&mut app.world).expect("a primary window")
+    }
 
     /// #528: after a frame the app can read that the CPU renderer drew it,
     /// and when it finished rasterizing.
@@ -392,8 +436,9 @@ mod tests {
     fn the_plugin_renders_the_retained_scene() {
         let mut app = App::new();
         app.add_plugin(CpuRendererPlugin::new(32, 32));
-        for world in [&mut app.world, &mut app.render_world] {
-            let mut vp = world.resource_mut::<Viewport>();
+        let primary = primary_window(&mut app);
+        {
+            let mut vp = primary_viewport_mut(&mut app.world);
             vp.size = glam::Vec2::new(32.0, 32.0);
             vp.clear = LumenColor::rgb(0.0, 0.0, 0.0);
         }
@@ -410,7 +455,7 @@ mod tests {
         ));
         app.tick();
         let renderer = app.render_world.non_send::<CpuRenderer>();
-        let rgba = renderer.read_rgba8();
+        let rgba = renderer.read_rgba8(primary);
         let at = |x: usize, y: usize| rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].to_vec();
         assert_eq!(at(16, 16), [255, 0, 0, 255]);
         assert_eq!(at(2, 2), [0, 0, 0, 255]);
@@ -426,9 +471,7 @@ mod tests {
         let capture = SurfaceCapture::default();
         app.render_world.insert_resource(capture.clone());
         let set_size = |app: &mut App, size: glam::Vec2| {
-            for world in [&mut app.world, &mut app.render_world] {
-                world.resource_mut::<Viewport>().size = size;
-            }
+            primary_viewport_mut(&mut app.world).size = size;
         };
         set_size(&mut app, glam::Vec2::new(8.0, 8.0));
 
@@ -452,18 +495,34 @@ mod tests {
     /// size is a new, empty image.
     #[test]
     fn resizing_to_the_same_size_keeps_the_frame() {
-        let mut renderer = CpuRenderer::new_offscreen(4, 4);
+        let target = Entity::PLACEHOLDER;
+        let mut renderer = CpuRenderer::new_offscreen(target, 4, 4);
         let mut world = World::new();
-        world.insert_resource(Viewport {
-            clear: LumenColor::rgb(1.0, 0.0, 0.0),
-            ..Default::default()
-        });
-        renderer.present(&mut world).expect("offscreen present");
-        assert!(!renderer.resize(4, 4));
-        assert_eq!(&renderer.read_rgba8()[..4], &[255, 0, 0, 255]);
-        assert!(renderer.resize(2, 2));
-        assert_eq!(renderer.size(), (2, 2));
-        assert_eq!(&renderer.read_rgba8()[..4], &[0, 0, 0, 0], "a new target");
+        lumen_core::render_world::spawn_render_window(
+            &mut world,
+            target,
+            WindowViewport {
+                clear: LumenColor::rgb(1.0, 0.0, 0.0),
+                ..Default::default()
+            },
+            true,
+        );
+        renderer
+            .present(target, &mut world)
+            .expect("offscreen present");
+        assert!(!renderer.resize(target, 4, 4));
+        assert_eq!(&renderer.read_rgba8(target)[..4], &[255, 0, 0, 255]);
+        assert!(renderer.resize(target, 2, 2));
+        assert_eq!(renderer.size(target), Some((2, 2)));
+        assert_eq!(
+            &renderer.read_rgba8(target)[..4],
+            &[0, 0, 0, 0],
+            "a new target"
+        );
+        assert!(renderer.layer_stats(target).is_some());
+        assert_eq!(renderer.targets(), vec![target]);
+        renderer.detach(target);
+        assert!(renderer.read_rgba8(target).is_empty());
     }
 
     /// With no target bound the renderer answers every call without
@@ -471,19 +530,21 @@ mod tests {
     #[test]
     fn a_detached_renderer_has_nothing_to_present() {
         let mut renderer = CpuRenderer::new();
+        let target = Entity::PLACEHOLDER;
         assert!(!renderer.is_attached());
-        assert!(!renderer.resize(800, 600));
+        assert!(!renderer.resize(target, 800, 600));
+        assert_eq!(renderer.size(target), None);
         let mut world = World::new();
-        world.insert_resource(Viewport::default());
         let request = FrameRequest {
             dirty: true,
             force_full: true,
         };
-        assert!(!renderer.wants_present(&mut world, request));
+        assert!(!renderer.wants_present(target, &mut world, request));
         assert!(matches!(
-            renderer.present(&mut world),
+            renderer.present(target, &mut world),
             Err(RenderError::Detached)
         ));
-        renderer.detach();
+        renderer.detach(target);
+        renderer.detach_all();
     }
 }

@@ -37,24 +37,37 @@
 //!
 //! SIGINT / SIGTERM (and the end of a bounded `--ticks N` run) take the
 //! graceful-close path: a `CloseRequest { reason: Shutdown, vetoed: false }`
-//! is written to the message bus and one final tick runs so close-observing
-//! systems fire, then the fn returns `Ok(())` (process exit code 0). Unlike
-//! the windowed close, a veto does not keep the app alive - a signalled CI
-//! run must terminate. The app's own `window.close()` / `app.quit()` take
-//! the windowed path instead: a veto keeps the run going.
+//! for every window is written to the message bus and one final tick runs so
+//! close-observing systems fire, then the fn returns `Ok(())` (process exit
+//! code 0). Unlike the windowed close, a veto does not keep the app alive - a
+//! signalled CI run must terminate. The app's own `window.close()` /
+//! `app.quit()` take the windowed path instead: a veto keeps the run going,
+//! closing a secondary window closes just that window, and closing the
+//! primary one ends the run unless `[app] quit = "explicit"` keeps it going.
+//!
+//! ## Windows
+//!
+//! Every window the app opens gets an offscreen frame of its own, placed on
+//! a virtual desktop of monitors ([`HeadlessOptions::monitors`], one
+//! 1920x1080 screen by default), which is what `--monitors` sets. With
+//! [`HeadlessOptions::positioning`] off (`--positioning=off`), the desktop
+//! ignores the positions windows ask for, as Wayland does.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use bevy_ecs::message::Messages;
 use bevy_ecs::prelude::Resource;
-use lumen_core::input::{CloseReason, CloseRequest};
+use lumen_core::input::CloseReason;
 use lumen_core::prelude::*;
 use lumen_core::render_backend::{RenderBackend, install_offscreen};
 use lumen_core::render_world::{FrameDirty, SurfaceCapture};
 use lumen_core::tick::{wake_deadline, work_pending};
-use lumen_core::window_backend::{CloseRequests, run_close_request, seed_primary_window};
+use lumen_core::window::{MonitorInfo, Monitors};
+use lumen_core::window_backend::{
+    CloseOutcome, CloseRequests, HeadlessDesktop, default_virtual_monitor, run_close_ask,
+    run_close_request, seed_window,
+};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 
@@ -140,15 +153,23 @@ impl BootTrace {
 /// Options specific to the rendered headless mode. Sizing comes from
 /// [`RunOptions::size`] / `lumen.toml [window] size` exactly like the
 /// windowed path, so it is not duplicated here.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct HeadlessOptions {
-    /// Device pixel ratio for the offscreen target. `Viewport.size` stays
-    /// logical (like the windowed path); the render texture - and thus
-    /// every screenshot - is `logical x dpr` physical pixels.
+    /// Device pixel ratio for the primary window's offscreen target. The
+    /// window's viewport stays logical (like the windowed path); the render
+    /// texture - and thus every screenshot - is `logical x dpr` physical
+    /// pixels. Ignored when [`Self::monitors`] is given: the primary window
+    /// then takes the scale of the first monitor.
     pub dpr: f32,
     /// `Some(n)`: run exactly `n` ticks back-to-back, then take the
     /// graceful-close path and return. `None`: run until SIGINT/SIGTERM.
     pub ticks: Option<u64>,
+    /// The virtual desktop the windows are placed on, left to right. Empty
+    /// is one 1920x1080 monitor at [`Self::dpr`].
+    pub monitors: Vec<MonitorInfo>,
+    /// Whether windows land where they ask to be put. `false` behaves like
+    /// Wayland: positions are ignored and every window is placed for it.
+    pub positioning: bool,
 }
 
 impl Default for HeadlessOptions {
@@ -156,8 +177,53 @@ impl Default for HeadlessOptions {
         Self {
             dpr: 1.0,
             ticks: None,
+            monitors: Vec::new(),
+            positioning: true,
         }
     }
+}
+
+/// Parse a `--monitors` value: comma-separated `WIDTHxHEIGHT@SCALE`
+/// entries (`@SCALE` optional, default 1), laid out left to right on the
+/// virtual desktop. `"1920x1080@1,2560x1440@2"` is a 1x screen with a 2x
+/// screen to its right.
+pub fn parse_monitors(spec: &str) -> Result<Vec<MonitorInfo>, String> {
+    let mut x = 0i32;
+    let mut out = Vec::new();
+    for (i, part) in spec.split(',').map(str::trim).enumerate() {
+        let (size, scale) = match part.split_once('@') {
+            Some((size, scale)) => (
+                size,
+                scale
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .ok_or_else(|| format!("'{part}': the scale after @ is a positive number"))?,
+            ),
+            None => (part, 1.0),
+        };
+        let (w, h) = size
+            .split_once(['x', 'X'])
+            .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .ok_or_else(|| {
+                format!("'{part}': a monitor is WIDTHxHEIGHT[@SCALE], such as 1920x1080@1")
+            })?;
+        let position = glam::IVec2::new(x, 0);
+        let size = glam::UVec2::new(w, h);
+        out.push(MonitorInfo {
+            name: format!("virtual-{}", i + 1),
+            position,
+            size,
+            work_area: (position, size),
+            scale,
+        });
+        x += w as i32;
+    }
+    if out.is_empty() {
+        return Err("no monitor given".into());
+    }
+    Ok(out)
 }
 
 /// Condvar-backed stand-in for the winit event loop's parked wait.
@@ -277,18 +343,34 @@ pub fn run_app_headless_rendered(
     #[cfg(not(feature = "runtime-parse"))]
     let hot_reload_poll = false;
 
+    // The virtual desktop the windows are placed on: the monitors asked for,
+    // or one screen at --dpr.
+    let monitors = if headless.monitors.is_empty() {
+        vec![default_virtual_monitor(dpr)]
+    } else {
+        headless.monitors.clone()
+    };
+    let primary_scale = monitors.first().map_or(dpr, |m| m.scale);
+    app.world.insert_resource(Monitors(monitors));
+    app.world.insert_resource(HeadlessDesktop {
+        positioning: headless.positioning,
+    });
+
     // Viewport: logical size from the resolved window options (CLI --size
     // beats `lumen.toml [window] size` beats the built-in default, exactly
-    // like windowed), scale factor from --dpr. Mirrors the viewport seed a
-    // window backend writes before its window opens, plus its dpr reconcile.
+    // like windowed), scale factor from --dpr or the first monitor. Mirrors
+    // the viewport seed a window backend writes before its window opens,
+    // plus its dpr reconcile.
     let logical = glam::Vec2::new(window.options.size.0 as f32, window.options.size.1 as f32);
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = logical;
-        vp.scale_factor = dpr;
+        vp.scale_factor = primary_scale;
         vp.clear = window.options.clear;
     }
-    seed_primary_window(&mut app.world, &window.options.title, logical);
+    let primary = lumen_core::window::primary_window(&mut app.world)
+        .ok_or_else(|| RunError::Headless("the app has no primary window".into()))?;
+    seed_window(&mut app.world, primary, &window.options.title, logical);
 
     // Join the renderer thread. A GPU adapter is requested without a
     // surface, so a machine with no display still gets one where a driver
@@ -402,9 +484,9 @@ pub fn run_app_headless_rendered(
         }
 
         // `window.close()` / `app.quit()` take the windowed close path: the
-        // veto tick runs, and the run ends unless a hook kept it open.
-        if let Some(reason) = requests.take(&app.world)
-            && run_close_request(&mut app, &mut requests, reason)
+        // veto tick runs, and the run ends when what closed ends the app.
+        if let Some(ask) = requests.take(&app.world)
+            && run_close_ask(&mut app, &mut requests, ask) == CloseOutcome::Quit
         {
             return Ok(());
         }
@@ -485,15 +567,10 @@ pub fn run_app_headless_rendered(
         }
     }
 
-    // Graceful close: same message the windowed backend emits on
-    // `CloseRequested`, plus one tick so close-observing systems fire.
-    if let Some(mut msgs) = app.world.get_resource_mut::<Messages<CloseRequest>>() {
-        msgs.write(CloseRequest {
-            reason: CloseReason::Shutdown,
-            vetoed: false,
-        });
-    }
-    app.tick();
+    // Graceful close: the close every window gets when the process is
+    // stopped, plus one tick so close-observing systems fire. A veto does
+    // not keep a signalled run alive.
+    let _ = run_close_request(&mut app, &mut requests, None, CloseReason::Shutdown);
     Ok(())
 }
 
@@ -511,6 +588,7 @@ impl OffscreenPrestart {
     /// on a new thread.
     pub(crate) fn spawn(
         candidates: Vec<RenderBackend>,
+        target: Entity,
         width: u32,
         height: u32,
     ) -> Result<Self, RunError> {
@@ -518,7 +596,7 @@ impl OffscreenPrestart {
             .name("lumen-renderer-init".into())
             .spawn(move || {
                 let t = Instant::now();
-                let r = first_offscreen(&candidates, width, height);
+                let r = first_offscreen(&candidates, target, width, height);
                 (r, t.elapsed())
             })
             .map_err(|e| RunError::Headless(format!("spawn renderer init thread: {e}")))?;
@@ -538,19 +616,20 @@ impl OffscreenPrestart {
     }
 }
 
-/// The offscreen renderer of the first of `candidates` that starts, at
-/// `width` x `height` physical pixels. A backend that cannot start is
-/// reported and the next one tried; when none starts, the error names each
-/// one's reason.
+/// The offscreen renderer of the first of `candidates` that starts, with
+/// `target` (the primary window) attached at `width` x `height` physical
+/// pixels. A backend that cannot start is reported and the next one tried;
+/// when none starts, the error names each one's reason.
 fn first_offscreen(
     candidates: &[RenderBackend],
+    target: Entity,
     width: u32,
     height: u32,
 ) -> Result<Box<dyn Renderer>, String> {
     let mut failures = Vec::new();
     for backend in candidates {
         let mut renderer = (backend.renderer)();
-        match renderer.attach(FrameTarget::Offscreen { width, height }) {
+        match renderer.attach(target, FrameTarget::Offscreen { width, height }) {
             Ok(()) => {
                 if !failures.is_empty() {
                     eprintln!(
@@ -572,4 +651,41 @@ fn first_offscreen(
     } else {
         failures.join("; ")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_monitors;
+    use glam::{IVec2, UVec2};
+
+    #[test]
+    fn monitors_lay_out_left_to_right() {
+        let list = parse_monitors("1920x1080@1, 2560X1440@2,800x600").unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].name, "virtual-1");
+        assert_eq!(list[1].position, IVec2::new(1920, 0));
+        assert_eq!(list[1].size, UVec2::new(2560, 1440));
+        assert_eq!(list[1].scale, 2.0);
+        assert_eq!(
+            list[1].work_area,
+            (IVec2::new(1920, 0), UVec2::new(2560, 1440))
+        );
+        assert_eq!(list[2].position, IVec2::new(4480, 0));
+        assert_eq!(list[2].scale, 1.0, "no @ is scale 1");
+    }
+
+    #[test]
+    fn a_bad_monitor_is_refused() {
+        for bad in [
+            "",
+            "1920",
+            "0x1080",
+            "1920x1080@0",
+            "1920x1080@x",
+            "ax1",
+            "1920x1080@inf",
+        ] {
+            assert!(parse_monitors(bad).is_err(), "{bad:?}");
+        }
+    }
 }

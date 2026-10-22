@@ -35,6 +35,7 @@ engine = "candela"
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. It also picks the number, date, and currency formatter behind the `format` attribute and the scripts' `format_*` builtins, and sets the app's base writing direction, which a `dir` attribute overrides. A script changes the locale later with `set_locale(tag)`; this names where the app starts. A tag that is not valid BCP-47 is a parse error. |
 | `fallback_locale` | BCP-47 tag | `en-US` | The language the app's source strings are written in. A key missing from the active locale's catalogue is looked up here before the element falls back to its own authored text. Set it to the active locale to leave nothing to fall through to. It is also the catalogue `lumenc i18n extract` writes by default. A tag that is not valid BCP-47 is a parse error. |
+| `quit` | `"primary"`, `"explicit"` | `"primary"` | When the app ends. `primary` quits when the primary window closes, through the same `on_close` veto as any close. `explicit` hides every window instead and keeps the app running until a script calls `app.quit()` or the process is signalled; use it for an app that lives in the tray. Closing any other window only closes that window. |
 | `single_instance` | bool | `false` | A second launch forwards its command-line arguments to the already-running window (`on_second_instance(args)`) and exits instead of opening a second one. Windowed runs only; a `--headless` run never locks. See [OS integration](../guides/os-integration.md#single-instance-launches). |
 
 Auto-detection for `kind` looks for a `Cargo.toml` depending on `lumen`
@@ -45,8 +46,8 @@ Auto-detection for `kind` looks for a `Cargo.toml` depending on `lumen`
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `title` | string | the app directory name | Window title. |
-| `size` | `[w, h]` integers | `[960, 720]` | Window size in logical pixels. The window opens maximized and takes this size when it is restored. `lumenc run --size` overrides it. |
+| `title` | string | the app directory name | The primary window's title. |
+| `size` | `[w, h]` integers | `[960, 720]` | The primary window's size in logical pixels. The window opens maximized and takes this size when it is restored. `lumenc run --size` overrides it. |
 | `remember_state` | bool | `false` | Persists window position, size, and maximised state on close and restores them on the next launch. |
 | `menubar` | `"native"`, `"window"` | `"native"` | Where a [`<menubar>`](tags.md#menubar) shows. `native` hands it to the OS menu bar on macOS and Windows; `window` draws it at the top of the window, styled by the skin, on every platform. Linux has no OS menu bar, so there it is drawn in the window either way. |
 

@@ -56,6 +56,7 @@ pub fn dispatch_with_ctx(method: &str, params: Option<&Value>, snap: &Snapshot) 
             Err(e) => DispatchResult::InvalidParams(e),
         },
         "lumen.lint" => DispatchResult::Ok(method_lint(snap)),
+        "lumen.windows" => DispatchResult::Ok(method_windows(snap)),
         "lumen.diff_since" => match parse_diff(params) {
             Ok(p) => DispatchResult::Ok(method_diff_since(snap, &p)),
             Err(e) => DispatchResult::InvalidParams(e),
@@ -140,10 +141,60 @@ fn method_list_extracted(snap: &Snapshot) -> Value {
 fn method_resources(snap: &Snapshot) -> Value {
     json!({
         "viewport": snap.viewport,
+        "windows": snap.windows,
         "pointer": snap.pointer,
         "modifiers": snap.modifiers,
         "focus": snap.focus,
     })
+}
+
+/// Every window of the app, the primary one first: what the `window`
+/// argument of the other tools picks from.
+fn method_windows(snap: &Snapshot) -> Value {
+    json!({
+        "summary": format!("{} window(s)", snap.windows.len()),
+        "windows": snap.windows,
+        "stale_for_ms": staleness_ms(snap),
+        "confidence": "high",
+    })
+}
+
+/// Resolve a tool's `window` argument to a window id: a number is a window
+/// id as `lumen_windows` lists it; a string is `"primary"`, a window's
+/// position in that list (`"0"` is the primary window), or a window's name.
+pub fn resolve_window(snap: &Snapshot, arg: &Value) -> Result<u64, String> {
+    let found = match arg {
+        Value::Number(n) => n
+            .as_u64()
+            .and_then(|id| snap.windows.iter().find(|w| w.id == id)),
+        Value::String(s) if s == "primary" => snap.windows.iter().find(|w| w.primary),
+        Value::String(s) => match s.parse::<usize>() {
+            Ok(index) => snap.windows.get(index),
+            Err(_) => snap
+                .windows
+                .iter()
+                .find(|w| w.name.as_deref() == Some(s.as_str())),
+        },
+        _ => None,
+    };
+    found.map(|w| w.id).ok_or_else(|| {
+        format!(
+            "no window {arg}; the app has {} (see lumen_windows)",
+            snap.windows.len()
+        )
+    })
+}
+
+/// The window an inspected entity shows in.
+fn window_of(snap: &Snapshot, inv: &EntityInspect) -> Option<u64> {
+    inv.window
+        .or_else(|| snap.windows.iter().find(|w| w.primary).map(|w| w.id))
+}
+
+/// The window a tool's optional `window` argument names, `None` when it
+/// names none (every window is in scope).
+fn window_filter(snap: &Snapshot, arg: Option<&Value>) -> Result<Option<u64>, String> {
+    arg.map(|a| resolve_window(snap, a)).transpose()
 }
 
 #[derive(Deserialize, Default)]
@@ -152,6 +203,8 @@ struct SnapshotTextParams {
     max_lines: Option<usize>,
     cursor: Option<u64>,
     omit_invisible: Option<bool>,
+    /// Only the entities of this window (see [`resolve_window`]).
+    window: Option<Value>,
 }
 
 fn parse_snapshot_text(params: Option<&Value>) -> Result<SnapshotTextParams, String> {
@@ -159,7 +212,7 @@ fn parse_snapshot_text(params: Option<&Value>) -> Result<SnapshotTextParams, Str
         return Ok(SnapshotTextParams::default());
     };
     serde_json::from_value(p.clone())
-        .map_err(|e| format!("expected {{max_lines?, cursor?, omit_invisible?}}: {e}"))
+        .map_err(|e| format!("expected {{max_lines?, cursor?, omit_invisible?, window?}}: {e}"))
 }
 
 const SNAPSHOT_TEXT_DEFAULT_LINES: usize = 200;
@@ -176,8 +229,15 @@ fn method_snapshot_text(snap: &Snapshot, p: &SnapshotTextParams) -> Value {
         .min(SNAPSHOT_TEXT_MAX_LINES);
     let omit_invisible = p.omit_invisible.unwrap_or(true);
     let cursor = p.cursor.unwrap_or(0);
+    let window = match window_filter(snap, p.window.as_ref()) {
+        Ok(w) => w,
+        Err(e) => return json!({ "error": e }),
+    };
 
-    let order = order_entities(snap);
+    let order: Vec<(&EntityInspect, usize)> = order_entities(snap)
+        .into_iter()
+        .filter(|(inv, _)| window.is_none() || window_of(snap, inv) == window)
+        .collect();
 
     let mut lines: Vec<String> = Vec::with_capacity(max_lines);
     let mut total_visible = 0usize;
@@ -423,6 +483,9 @@ pub(crate) fn envelope(
 struct SnapshotTreeParams {
     max_nodes: Option<usize>,
     omit_invisible: Option<bool>,
+    /// Only the subtrees in this window (see [`resolve_window`]): its
+    /// surface roots become the roots of the tree.
+    window: Option<Value>,
 }
 
 fn parse_snapshot_tree(params: Option<&Value>) -> Result<SnapshotTreeParams, String> {
@@ -430,7 +493,7 @@ fn parse_snapshot_tree(params: Option<&Value>) -> Result<SnapshotTreeParams, Str
         return Ok(SnapshotTreeParams::default());
     };
     serde_json::from_value(p.clone())
-        .map_err(|e| format!("expected {{max_nodes?, omit_invisible?}}: {e}"))
+        .map_err(|e| format!("expected {{max_nodes?, omit_invisible?, window?}}: {e}"))
 }
 
 const SNAPSHOT_TREE_DEFAULT_NODES: usize = 2000;
@@ -451,6 +514,11 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
         .unwrap_or(SNAPSHOT_TREE_DEFAULT_NODES)
         .min(SNAPSHOT_TREE_MAX_NODES);
     let omit_invisible = p.omit_invisible.unwrap_or(false);
+    let window = match window_filter(snap, p.window.as_ref()) {
+        Ok(w) => w,
+        Err(e) => return json!({ "error": e }),
+    };
+    let in_scope = |inv: &EntityInspect| window.is_none() || window_of(snap, inv) == window;
 
     let mut budget = max_nodes;
     let mut emitted: HashSet<u64> = HashSet::new();
@@ -459,6 +527,7 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
     fn build_node(
         snap: &Snapshot,
         inv: &EntityInspect,
+        in_scope: &dyn Fn(&EntityInspect) -> bool,
         omit_invisible: bool,
         budget: &mut usize,
         emitted: &mut HashSet<u64>,
@@ -479,8 +548,16 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
         let mut children: Vec<Value> = Vec::with_capacity(inv.children.len());
         for cid in &inv.children {
             if let Some(child) = snap.inspect.get(cid)
-                && let Some(node) =
-                    build_node(snap, child, omit_invisible, budget, emitted, truncated)
+                && in_scope(child)
+                && let Some(node) = build_node(
+                    snap,
+                    child,
+                    in_scope,
+                    omit_invisible,
+                    budget,
+                    emitted,
+                    truncated,
+                )
             {
                 children.push(node);
             }
@@ -505,10 +582,18 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
         Some(Value::Object(node))
     }
 
+    // With a window named, a root is any of its entities whose parent is in
+    // another window: a surface root sits under its dock in the one tree.
     let mut roots: Vec<&EntityInspect> = snap
         .inspect
         .values()
-        .filter(|inv| inv.parent.is_none())
+        .filter(|inv| in_scope(inv))
+        .filter(|inv| match inv.parent {
+            None => true,
+            Some(parent) => {
+                window.is_some() && snap.inspect.get(&parent).is_none_or(|p| !in_scope(p))
+            }
+        })
         .collect();
     roots.sort_by(|a, b| cmp_yx_id(a, b));
 
@@ -517,6 +602,7 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
         if let Some(node) = build_node(
             snap,
             root,
+            &in_scope,
             omit_invisible,
             &mut budget,
             &mut emitted,
@@ -530,13 +616,14 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
     let mut orphans: Vec<&EntityInspect> = snap
         .inspect
         .values()
-        .filter(|inv| !emitted.contains(&inv.id))
+        .filter(|inv| !emitted.contains(&inv.id) && in_scope(inv))
         .collect();
     orphans.sort_by(|a, b| cmp_yx_id(a, b));
     for inv in orphans {
         if let Some(node) = build_node(
             snap,
             inv,
+            &in_scope,
             omit_invisible,
             &mut budget,
             &mut emitted,
@@ -752,7 +839,7 @@ fn on_screen_rect(snap: &Snapshot, inv: &EntityInspect) -> (f32, f32, f32, f32) 
 
 fn entity_summary(snap: &Snapshot, inv: &EntityInspect) -> Value {
     let (x, y, w, h) = on_screen_rect(snap, inv);
-    json!({
+    let mut row = json!({
         "id": inv.id,
         "role": role_of(inv),
         "label": label_of(inv),
@@ -761,13 +848,25 @@ fn entity_summary(snap: &Snapshot, inv: &EntityInspect) -> Value {
         "w": w,
         "h": h,
         "state": state_flags(inv),
-    })
+    });
+    // With more than one window, the rect is in the coordinates of the
+    // window the entity shows in, which the row then names.
+    if snap.windows.len() > 1
+        && let Some(window) = window_of(snap, inv)
+    {
+        row["window"] = json!(window);
+    }
+    row
 }
 
 #[derive(Deserialize)]
 struct ElementAtParams {
     x: f32,
     y: f32,
+    /// The window the point is in (see [`resolve_window`]); the primary
+    /// window when absent.
+    #[serde(default)]
+    window: Option<Value>,
 }
 
 fn parse_element_at(params: Option<&Value>) -> Result<ElementAtParams, String> {
@@ -782,8 +881,22 @@ fn parse_element_at(params: Option<&Value>) -> Result<ElementAtParams, String> {
 /// rect that contains the query point - a coarse proxy for "topmost" since
 /// the snapshot does not yet capture z-order or hierarchy.
 fn method_element_at(snap: &Snapshot, p: &ElementAtParams) -> Value {
+    // A point is in one window's coordinates: the one named, else the
+    // primary one.
+    let window = match p.window.as_ref() {
+        Some(arg) => match resolve_window(snap, arg) {
+            Ok(w) => Some(w),
+            Err(e) => return json!({ "error": e }),
+        },
+        None => snap.windows.iter().find(|w| w.primary).map(|w| w.id),
+    };
     let mut best: Option<(&EntityInspect, f32)> = None;
-    for inv in snap.inspect.values().filter(|inv| !inv.hidden) {
+    for inv in snap
+        .inspect
+        .values()
+        .filter(|inv| !inv.hidden)
+        .filter(|inv| window.is_none() || window_of(snap, inv) == window)
+    {
         // Scroll-corrected on-screen rect - the same space the real
         // hit-test (`lumen_input::hit_test`) and the painted frame use.
         let (x, y, w, h) = on_screen_rect(snap, inv);
@@ -1190,7 +1303,7 @@ fn method_recent_messages(snap: &Snapshot, kind: &str, max: usize) -> Option<Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::{Snapshot, StyleView, TransformView, V2};
+    use crate::snapshot::{Snapshot, StyleView, TransformView, V2, WindowView};
 
     type TestEntry = (u64, f32, f32, f32, f32, Option<&'static str>, bool);
 
@@ -1265,7 +1378,14 @@ mod tests {
             snap.inspect.get_mut(&id).unwrap().hidden = true;
         }
 
-        let hit = method_element_at(&snap, &ElementAtParams { x: 300.0, y: 150.0 });
+        let hit = method_element_at(
+            &snap,
+            &ElementAtParams {
+                x: 300.0,
+                y: 150.0,
+                window: None,
+            },
+        );
         assert_eq!(hit["element"]["id"], json!(1), "{hit}");
 
         let found = method_find(
@@ -1309,6 +1429,7 @@ mod tests {
             max_lines: Some(3),
             cursor: None,
             omit_invisible: None,
+            window: None,
         };
         let v = method_snapshot_text(&snap, &p);
         assert_eq!(v["truncated"], json!(true));
@@ -1317,6 +1438,7 @@ mod tests {
             max_lines: Some(3),
             cursor: Some(next),
             omit_invisible: None,
+            window: None,
         };
         let v2 = method_snapshot_text(&snap, &p2);
         let lines2 = v2["lines"].as_array().unwrap();
@@ -1431,6 +1553,7 @@ mod tests {
         let p = SnapshotTreeParams {
             max_nodes: Some(4),
             omit_invisible: None,
+            window: None,
         };
         let out = method_snapshot_tree(&snap, &p);
         assert_eq!(out["truncated"], json!(true));
@@ -1621,7 +1744,14 @@ mod tests {
     #[test]
     fn element_at_hits_scrolled_content() {
         let snap = make_scrolled_snap();
-        let hit = method_element_at(&snap, &ElementAtParams { x: 200.0, y: 620.0 });
+        let hit = method_element_at(
+            &snap,
+            &ElementAtParams {
+                x: 200.0,
+                y: 620.0,
+                window: None,
+            },
+        );
         assert_eq!(hit["hit"], json!(true));
         assert_eq!(hit["element"]["id"], json!(2));
         assert_eq!(hit["element"]["y"], json!(612.0));
@@ -1633,7 +1763,11 @@ mod tests {
             (1, 0.0, 0.0, 100.0, 100.0, None, false),
             (2, 20.0, 20.0, 30.0, 30.0, Some("button"), false),
         ]);
-        let p = ElementAtParams { x: 25.0, y: 25.0 };
+        let p = ElementAtParams {
+            x: 25.0,
+            y: 25.0,
+            window: None,
+        };
         let out = method_element_at(&snap, &p);
         assert_eq!(out["hit"], json!(true));
         assert_eq!(out["element"]["id"], json!(2));
@@ -1642,7 +1776,11 @@ mod tests {
     #[test]
     fn element_at_returns_no_hit_outside() {
         let snap = make_snap_with_entities(&[(1, 0.0, 0.0, 10.0, 10.0, None, false)]);
-        let p = ElementAtParams { x: 100.0, y: 100.0 };
+        let p = ElementAtParams {
+            x: 100.0,
+            y: 100.0,
+            window: None,
+        };
         let out = method_element_at(&snap, &p);
         assert_eq!(out["hit"], json!(false));
     }
@@ -1819,5 +1957,190 @@ mod tests {
         assert!(out["next_suggested_tools"].is_array());
         assert_eq!(out["confidence"], json!("high"));
         assert!(out["stale_for_ms"].is_u64());
+    }
+
+    /// A dock (1) holding a button (2) in the primary window, and a panel (3)
+    /// under the dock that shows in a second window, holding a button (4)
+    /// at the same window-local place.
+    fn two_window_snap() -> Snapshot {
+        let mut snap = make_snap_with_entities(&[
+            (1, 0.0, 0.0, 300.0, 300.0, None, false),
+            (2, 10.0, 10.0, 40.0, 40.0, Some("in primary"), false),
+            (3, 0.0, 0.0, 200.0, 200.0, None, false),
+            (4, 10.0, 10.0, 40.0, 40.0, Some("in popout"), false),
+        ]);
+        snap.inspect.get_mut(&1).unwrap().children = vec![2, 3];
+        snap.inspect.get_mut(&2).unwrap().parent = Some(1);
+        snap.inspect.get_mut(&3).unwrap().parent = Some(1);
+        snap.inspect.get_mut(&3).unwrap().children = vec![4];
+        snap.inspect.get_mut(&4).unwrap().parent = Some(3);
+        snap.inspect.get_mut(&3).unwrap().window = Some(900);
+        snap.inspect.get_mut(&4).unwrap().window = Some(900);
+        snap.windows = vec![
+            WindowView {
+                id: 800,
+                index: 0,
+                title: "App".into(),
+                primary: true,
+                ..Default::default()
+            },
+            WindowView {
+                id: 900,
+                index: 1,
+                name: Some("devtools".into()),
+                title: "Tools".into(),
+                ..Default::default()
+            },
+        ];
+        snap
+    }
+
+    #[test]
+    fn a_window_argument_names_a_window_four_ways() {
+        let snap = two_window_snap();
+        for (arg, want) in [
+            (json!(900), 900),
+            (json!("primary"), 800),
+            (json!("1"), 900),
+            (json!("devtools"), 900),
+        ] {
+            assert_eq!(resolve_window(&snap, &arg), Ok(want), "{arg}");
+        }
+        for bad in [json!(7), json!("5"), json!("nope"), json!(true)] {
+            let err = resolve_window(&snap, &bad).unwrap_err();
+            assert!(err.contains("lumen_windows"), "{err}");
+        }
+        let listed = dispatch_with_ctx("lumen.windows", None, &snap);
+        let DispatchResult::Ok(v) = listed else {
+            panic!("lumen.windows answers");
+        };
+        assert_eq!(v["windows"][1]["name"], json!("devtools"));
+        assert_eq!(v["windows"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_snapshots_filter_by_window() {
+        let snap = two_window_snap();
+        let text = method_snapshot_text(
+            &snap,
+            &SnapshotTextParams {
+                window: Some(json!("devtools")),
+                ..Default::default()
+            },
+        );
+        let lines = text["lines"].as_array().unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.as_str().unwrap().contains("in popout")),
+            "{text}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.as_str().unwrap().contains("in primary")),
+            "{text}"
+        );
+        let bad = method_snapshot_text(
+            &snap,
+            &SnapshotTextParams {
+                window: Some(json!("nope")),
+                ..Default::default()
+            },
+        );
+        assert!(bad["error"].is_string());
+
+        // The pop-out's tree is rooted at its surface root.
+        let tree = method_snapshot_tree(
+            &snap,
+            &SnapshotTreeParams {
+                window: Some(json!(900)),
+                ..Default::default()
+            },
+        );
+        let roots = tree["tree"].as_array().unwrap();
+        assert_eq!(roots.len(), 1, "{tree}");
+        assert_eq!(roots[0]["id"], json!(3));
+        assert_eq!(roots[0]["children"][0]["id"], json!(4));
+        let primary = method_snapshot_tree(
+            &snap,
+            &SnapshotTreeParams {
+                window: Some(json!("primary")),
+                ..Default::default()
+            },
+        );
+        let roots = primary["tree"].as_array().unwrap();
+        assert_eq!(roots.len(), 1, "{primary}");
+        assert_eq!(roots[0]["id"], json!(1));
+        assert_eq!(
+            roots[0]["children"].as_array().unwrap().len(),
+            1,
+            "the panel is in the other window: {primary}"
+        );
+        let bad = method_snapshot_tree(
+            &snap,
+            &SnapshotTreeParams {
+                window: Some(json!("nope")),
+                ..Default::default()
+            },
+        );
+        assert!(bad["error"].is_string());
+        // Without a window the one tree covers both.
+        let all = method_snapshot_tree(&snap, &SnapshotTreeParams::default());
+        assert_eq!(all["total"], json!(4));
+    }
+
+    #[test]
+    fn element_at_and_find_answer_per_window() {
+        let snap = two_window_snap();
+        let at = |window: Option<Value>| {
+            method_element_at(
+                &snap,
+                &ElementAtParams {
+                    x: 20.0,
+                    y: 20.0,
+                    window,
+                },
+            )
+        };
+        assert_eq!(at(None)["element"]["id"], json!(2));
+        assert_eq!(at(Some(json!("devtools")))["element"]["id"], json!(4));
+        assert!(at(Some(json!("nope")))["error"].is_string());
+
+        let found = method_find(
+            &snap,
+            &FindParams {
+                by_text: Some("in popout".into()),
+                by_role: None,
+                by_id: None,
+                limit: None,
+            },
+        );
+        assert_eq!(found["results"][0]["window"], json!(900));
+        let found = method_find(
+            &snap,
+            &FindParams {
+                by_text: Some("in primary".into()),
+                by_role: None,
+                by_id: None,
+                limit: None,
+            },
+        );
+        assert_eq!(found["results"][0]["window"], json!(800));
+    }
+
+    #[test]
+    fn find_rows_name_no_window_in_a_one_window_app() {
+        let snap = make_snap_with_entities(&[(1, 0.0, 0.0, 10.0, 10.0, Some("x"), false)]);
+        let found = method_find(
+            &snap,
+            &FindParams {
+                by_text: Some("x".into()),
+                by_role: None,
+                by_id: None,
+                limit: None,
+            },
+        );
+        assert!(found["results"][0].get("window").is_none(), "{found}");
     }
 }

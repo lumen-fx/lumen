@@ -29,7 +29,7 @@ fn render_selected_input() -> Option<Vec<u8>> {
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(W, H).with_text_shaper(CosmicShaper::new()));
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -67,7 +67,11 @@ fn render_selected_input() -> Option<Vec<u8>> {
     app.tick();
 
     let renderer = app.render_world.get_non_send::<WgpuRenderer>().unwrap();
-    Some(renderer.read_rgba8().expect("readback"))
+    Some(
+        renderer
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
+            .expect("readback"),
+    )
 }
 
 /// Count pixels matching a dominant-channel predicate.

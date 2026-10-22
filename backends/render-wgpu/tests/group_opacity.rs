@@ -10,7 +10,6 @@ use lumen_core::app::App;
 use lumen_core::components::{
     Border, Color, Edges, Fill, Opacity, ShadowSpec, TextContent, TextStyle, Transform, Visuals,
 };
-use lumen_core::render_world::Viewport;
 use lumen_paint::LayerStats;
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use lumen_text_cosmic::CosmicShaper;
@@ -50,8 +49,8 @@ fn cards() -> Option<Cards> {
     }
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(W, H));
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(1.0, 1.0, 1.0);
     }
@@ -114,7 +113,11 @@ impl Cards {
             .expect("the ticker")
             .fill = Some(Fill::Solid(Color::rgb(shade, 1.0, 0.0)));
         self.app.tick();
-        self.renderer().read_rgba8().expect("readback")
+        self.renderer()
+            .read_rgba8(
+                lumen_core::window::primary_entity(&self.app.world).expect("a primary window"),
+            )
+            .expect("readback")
     }
 
     fn renderer(&self) -> &WgpuRenderer {
@@ -122,7 +125,11 @@ impl Cards {
     }
 
     fn stats(&self) -> LayerStats {
-        self.renderer().layer_stats().expect("attached")
+        self.renderer()
+            .layer_stats(
+                lumen_core::window::primary_entity(&self.app.world).expect("a primary window"),
+            )
+            .expect("attached")
     }
 }
 
@@ -248,8 +255,8 @@ fn label(opacity: f32, faded: bool) -> Option<(Vec<Vec<u8>>, LayerStats)> {
     }
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(W, LABEL_H).with_text_shaper(CosmicShaper::new()));
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, LABEL_H as f32);
         vp.clear = Color::rgb(1.0, 1.0, 1.0);
     }
@@ -288,13 +295,17 @@ fn label(opacity: f32, faded: bool) -> Option<(Vec<Vec<u8>>, LayerStats)> {
                 .fill = Some(Fill::Solid(Color::rgb(n as f32 / 3.0, 1.0, 0.0)));
             app.tick();
             let renderer = app.render_world.non_send::<WgpuRenderer>();
-            renderer.read_rgba8().expect("readback")
+            renderer
+                .read_rgba8(
+                    lumen_core::window::primary_entity(&app.world).expect("a primary window"),
+                )
+                .expect("readback")
         })
         .collect();
     let stats = app
         .render_world
         .non_send::<WgpuRenderer>()
-        .layer_stats()
+        .layer_stats(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("attached");
     Some((frames, stats))
 }

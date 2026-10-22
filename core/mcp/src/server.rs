@@ -19,6 +19,7 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use bevy_ecs::entity::Entity;
 use lumen_core::render_world::SurfaceCapture;
 use lumen_core::task::{BoxFuture, Timer};
 use serde_json::{Value, json};
@@ -388,10 +389,19 @@ fn wrap_or_raw(id: Value, result: Value, wrap_in_tool_envelope: bool) -> Value {
 ///   so a downstream tool can lay its own overlay without re-querying.
 async fn run_screenshot(ctx: &ServerCtx, params: Option<&Value>) -> Value {
     let opts = parse_screenshot_opts(params);
+    // The window to capture: the one `window` names, else the primary one,
+    // so a stale frame of another window is never handed back for it.
+    let window = match params.and_then(|p| p.get("window")) {
+        Some(arg) => match resolve_window_arg(ctx, arg) {
+            Ok(w) => Some(w),
+            Err(e) => return json!({ "available": false, "reason": e }),
+        },
+        None => resolve_window_arg(ctx, &json!("primary")).ok(),
+    };
 
     // 1. Capture raw RGBA8 + dimensions, from the live surface or the
     //    headless fallback.
-    let (mut rgba8, width, height, source) = match capture_raw(ctx).await {
+    let (mut rgba8, width, height, source) = match capture_raw(ctx, window).await {
         Some(t) => t,
         None => {
             return json!({
@@ -405,7 +415,7 @@ async fn run_screenshot(ctx: &ServerCtx, params: Option<&Value>) -> Value {
     let need_bounds =
         opts.include_bounds_map || !opts.highlight_ids.is_empty() || opts.highlight_lint;
     let (bounds_map, highlight_set) = if need_bounds {
-        compute_bounds_and_highlights(ctx, &opts)
+        compute_bounds_and_highlights(ctx, &opts, window)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -518,12 +528,19 @@ struct BoundsEntry {
 fn compute_bounds_and_highlights(
     ctx: &ServerCtx,
     opts: &ScreenshotOpts,
+    window: Option<Entity>,
 ) -> (Vec<BoundsEntry>, Vec<u64>) {
     let Ok(snap) = ctx.snapshot.read() else {
         return (Vec::new(), Vec::new());
     };
+    // Only the entities that show in the captured window are on it.
+    let primary = snap.windows.iter().find(|w| w.primary).map(|w| w.id);
+    let captured = window.map(Entity::to_bits).or(primary);
     let mut bounds: Vec<BoundsEntry> = Vec::with_capacity(snap.inspect.len());
     for inv in snap.inspect.values() {
+        if inv.window.or(primary) != captured {
+            continue;
+        }
         let Some(t) = inv.transform else {
             continue;
         };
@@ -562,19 +579,35 @@ fn compute_bounds_and_highlights(
 /// the render world services capture requests, or the app is stalled) the
 /// last frame the store holds is returned instead, tagged `surface-stale` so
 /// a client can tell it is looking at an older frame.
-async fn capture_raw(ctx: &ServerCtx) -> Option<(Vec<u8>, u32, u32, &'static str)> {
+async fn capture_raw(
+    ctx: &ServerCtx,
+    window: Option<Entity>,
+) -> Option<(Vec<u8>, u32, u32, &'static str)> {
     let capture = ctx.surface_capture.clone()?;
-    capture.request();
+    capture.request_window(window);
+    // A frame of another window than the one asked for is not an answer.
+    let wanted =
+        |frame: &lumen_core::render_world::SurfaceFrame| window.is_none_or(|w| frame.window == w);
     for _ in 0..32 {
         if !capture.is_requested()
-            && let Some(frame) = capture.read()
+            && let Some(frame) = capture.read().filter(wanted)
         {
             return Some((frame.rgba8, frame.width, frame.height, "surface"));
         }
         ctx.timer.sleep(Duration::from_millis(16)).await;
     }
-    let frame = capture.read()?;
+    let frame = capture.read().filter(wanted)?;
     Some((frame.rgba8, frame.width, frame.height, "surface-stale"))
+}
+
+/// Resolve a `window` argument against the snapshot's window list.
+fn resolve_window_arg(ctx: &ServerCtx, arg: &Value) -> Result<Entity, String> {
+    let snap = ctx
+        .snapshot
+        .read()
+        .map_err(|_| "the snapshot is unavailable".to_string())?;
+    let bits = crate::methods::resolve_window(&snap, arg)?;
+    Entity::try_from_bits(bits).ok_or_else(|| format!("no window {arg}"))
 }
 
 fn encode_png_base64(width: u32, height: u32, rgba8: &[u8]) -> Option<String> {
@@ -895,7 +928,9 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
     let Some(p) = params else {
         return json!({"error": "missing params {kind, ...}"});
     };
-    let req: SimulateRequest = match serde_json::from_value(p.clone()) {
+    let mut p = p.clone();
+    let window_arg = p.as_object_mut().and_then(|o| o.remove("window"));
+    let mut req: SimulateRequest = match serde_json::from_value(p) {
         Ok(r) => r,
         Err(e) => {
             return json!({
@@ -904,6 +939,13 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
             });
         }
     };
+    // Pointer positions are in the coordinates of the window named.
+    if let Some(arg) = window_arg {
+        match resolve_window_arg(ctx, &arg) {
+            Ok(w) => req.window = Some(w.to_bits()),
+            Err(e) => return json!({ "error": e }),
+        }
+    }
 
     let wait_for = req.wait_for.clone();
     let (start_frame, ring_start) = snapshot_metrics(ctx, wait_for.as_deref());
@@ -1095,6 +1137,7 @@ mod capture_tests {
 
     fn frame(width: u32, height: u32, value: u8) -> SurfaceFrame {
         SurfaceFrame {
+            window: Entity::PLACEHOLDER,
             width,
             height,
             rgba8: vec![value; (width * height * 4) as usize],
@@ -1129,7 +1172,7 @@ mod capture_tests {
             frame: frame(2, 2, 7),
         });
 
-        let (rgba8, width, height, source) = capture_raw(&ctx).await.expect("a frame");
+        let (rgba8, width, height, source) = capture_raw(&ctx, None).await.expect("a frame");
         assert_eq!((width, height), (2, 2));
         assert_eq!(rgba8, vec![7u8; 16]);
         assert_eq!(source, "surface");
@@ -1144,7 +1187,7 @@ mod capture_tests {
         capture.write(frame(1, 1, 3));
         let ctx = ctx_with(Some(capture), &waits);
 
-        let (rgba8, width, height, source) = capture_raw(&ctx).await.expect("a stale frame");
+        let (rgba8, width, height, source) = capture_raw(&ctx, None).await.expect("a stale frame");
         assert_eq!((width, height), (1, 1));
         assert_eq!(rgba8, vec![3u8; 4]);
         assert_eq!(source, "surface-stale");
@@ -1155,13 +1198,30 @@ mod capture_tests {
         );
     }
 
+    /// A frame of another window than the one asked for is no answer, fresh
+    /// or stale.
+    #[tokio::test]
+    async fn a_frame_of_another_window_is_not_returned() {
+        let waits = Arc::new(AtomicUsize::new(0));
+        let capture = SurfaceCapture::default();
+        capture.write(frame(1, 1, 3));
+        let ctx = ctx_with(Some(capture.clone()), &waits);
+        let other = Entity::from_raw_u32(5).unwrap();
+        assert!(capture_raw(&ctx, Some(other)).await.is_none());
+        assert_eq!(capture.requested_window(), Some(other));
+        assert!(
+            capture_raw(&ctx, Some(Entity::PLACEHOLDER)).await.is_some(),
+            "the frame of the window asked for is"
+        );
+    }
+
     /// No frame was ever captured: the screenshot call reports that rather
     /// than inventing pixels.
     #[tokio::test]
     async fn no_frame_at_all_reports_unavailable() {
         let waits = Arc::new(AtomicUsize::new(0));
         let ctx = ctx_with(Some(SurfaceCapture::default()), &waits);
-        assert!(capture_raw(&ctx).await.is_none());
+        assert!(capture_raw(&ctx, None).await.is_none());
 
         let response = run_screenshot(&ctx, None).await;
         assert_eq!(response["available"], serde_json::json!(false));

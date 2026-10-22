@@ -93,5 +93,5 @@ pub use run::{
 };
 #[cfg(feature = "runtime-parse")]
 pub use run::{CompileDeps, ModuleSurface, check_app, compile_app, compile_app_with_skin};
-pub use run_headless::{HeadlessOptions, run_app_headless_rendered};
+pub use run_headless::{HeadlessOptions, parse_monitors, run_app_headless_rendered};
 pub use source_parser::SourceParser;

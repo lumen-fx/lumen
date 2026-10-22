@@ -355,6 +355,11 @@ pub struct SimulateRequest {
     /// same string constants used by `lumen.recent_messages`.
     #[serde(default)]
     pub wait_for: Option<String>,
+    /// The window a pointer event happens in, as entity bits; the primary
+    /// window when absent. Set by the transport from the request's `window`
+    /// argument.
+    #[serde(skip)]
+    pub window: Option<u64>,
 }
 
 impl From<SimulateModifiers> for Modifiers {
@@ -399,6 +404,7 @@ mod waker_tests {
                 pointer: None,
             },
             wait_for: None,
+            window: None,
         }
     }
 

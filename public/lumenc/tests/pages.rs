@@ -707,9 +707,8 @@ fn a_full_height_page_shell_fits_the_window() {
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     tick_n(&mut app, 4);
 
-    let window_h = app
-        .world
-        .resource::<lumen_core::render_world::Viewport>()
+    let window_h = lumen_core::window::primary_viewport(&app.world)
+        .expect("a primary window")
         .size
         .y;
     assert!(window_h > 0.0, "the headless window has a height");

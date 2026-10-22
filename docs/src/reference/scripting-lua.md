@@ -445,7 +445,9 @@ Two types have a default action: `click` (link navigation) and `contextmenu`
 
 Pre-bound global tables.
 
-The window setters ask for a change, which the window takes after the tick:
+The window functions act on the current window: the window of the event
+being handled, else the app's main window. The window setters ask for a
+change, which the window takes after the tick:
 the getters report what the window has, so a new title or size reads back on a
 later tick. The window manager may refuse or adjust a size; a tiling window
 manager sizes windows itself. A maximized window is restored to take a new
@@ -461,7 +463,7 @@ size.
 | `window.dpr()` | number | Device pixel ratio. |
 | `window.size()` | table | `{ width, height }` the window has, in logical pixels. |
 | `window.set_size(width, height)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
-| `window.close()` | | Close the window. `on_close` runs first and can keep it open; closing the only window ends the app. |
+| `window.close()` | | Close the window. `on_close` runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
 | `window.location.path()` | string | The current page path. |
 | `window.location.query()` | string | The query string of the request the document is being rendered for, without the leading `?`. |
 | `window.location.hash()` | string | The fragment of the request the document is being rendered for, without the leading `#`. |

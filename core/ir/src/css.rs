@@ -2266,7 +2266,7 @@ pub fn reapply_detached(el: &mut Element, css: &Stylesheet, media: &MediaContext
     .with_declarations(el.attrs.markup_styles.clone());
     let mut walk = RestyleWalk {
         css,
-        media,
+        media: *media,
         parents: Vec::new(),
         scopes: vec![seed],
         last: None,
@@ -2460,7 +2460,7 @@ impl AncestorInfo {
 /// selectors match on the chain entered so far.
 pub struct RestyleWalk<'a> {
     css: &'a Stylesheet,
-    media: &'a MediaContext,
+    media: MediaContext,
     /// The elements entered, root-first.
     parents: Vec<ElementRef>,
     /// What each level hands down; the last is the current one's.
@@ -2478,7 +2478,7 @@ impl<'a> RestyleWalk<'a> {
     pub fn new(css: &'a Stylesheet, media: &'a MediaContext, ancestors: &[AncestorInfo]) -> Self {
         let mut walk = Self {
             css,
-            media,
+            media: *media,
             parents: Vec::with_capacity(ancestors.len() + 8),
             scopes: vec![Scope::default()],
             last: None,
@@ -2526,7 +2526,7 @@ impl<'a> RestyleWalk<'a> {
         let scope = cascade_one(
             &mut attrs,
             self.css,
-            self.media,
+            &self.media,
             self.scopes.last().expect("a walk always has a scope"),
             &self.parents,
             &me,
@@ -2540,6 +2540,18 @@ impl<'a> RestyleWalk<'a> {
         );
         self.last = Some((me, scope));
         attrs
+    }
+
+    /// The media `@media` rules match against from here on.
+    pub fn media(&self) -> MediaContext {
+        self.media
+    }
+
+    /// Match `@media` rules against `media` from the next element on: what a
+    /// walk entering a subtree shown in another window, at another width,
+    /// does, and restores on the way out.
+    pub fn set_media(&mut self, media: MediaContext) {
+        self.media = media;
     }
 
     /// Descend into the element resolved last.

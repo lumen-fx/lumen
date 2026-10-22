@@ -32,11 +32,13 @@ pub use sink::{BACKEND_ID, VelloPainter};
 pub use vello;
 
 use bevy_ecs::world::World;
-use gpu::GpuCore;
+use gpu::{FrameTexture, GpuCore};
 use lumen_core::prelude::*;
 use lumen_core::render_backend::{DeviceKind, DeviceMemory, RendererInfo, install_offscreen};
-use lumen_core::traits::{FrameRequest, FrameTarget, RenderError};
+use lumen_core::traits::{FrameRequest, FrameTarget, PresentMode, RenderError};
+use lumen_paint::LayerCache;
 use lumen_text::{ShaperService, TextShaper};
+use std::collections::HashMap;
 use surface::SurfaceFront;
 use vello::RendererOptions;
 use vello::wgpu;
@@ -74,7 +76,7 @@ const NATIVE_BACKENDS: wgpu::Backends = {
 /// lavapipe) is close to but not interchangeable with a GPU's, so it is not a
 /// substrate for pixel-level checks.
 pub fn gpu_unavailable_reason() -> Option<String> {
-    match WgpuRenderer::new_offscreen(4, 4) {
+    match WgpuRenderer::new_offscreen(Entity::PLACEHOLDER, 4, 4) {
         Ok(r) if r.is_software_adapter() => Some(format!(
             "adapter '{}' is a software rasterizer",
             r.adapter_info()
@@ -104,36 +106,37 @@ fn is_warp(adapter: &wgpu::AdapterInfo) -> bool {
     adapter.backend == wgpu::Backend::Dx12 && adapter.device_type == wgpu::DeviceType::Cpu
 }
 
-/// What a renderer is bound to: the GPU core, plus the swap chain when the
-/// target is a window.
+/// One window's share of the renderer: the texture its frames land in, the
+/// layers its faded groups keep, and its swap chain when it is on screen.
 ///
-/// Field order matters on teardown: the device is drained first (see
-/// [`Drop`]), then the surface drops ahead of the device it was configured
-/// for.
-struct Bound {
+/// Field order matters on teardown: the surface drops ahead of the device it
+/// was configured for, which the renderer drains first.
+struct Target {
     window: Option<SurfaceFront>,
-    gpu: GpuCore,
+    frame: FrameTexture,
+    /// Faded groups' layers, kept from frame to frame. Per window: a layer
+    /// is painted at its window's scale.
+    layers: LayerCache,
     /// Whether the frame texture holds a painted frame at its current
     /// size. A fresh or resized texture does not, and paints regardless of
     /// the scene diff.
     holds_frame: bool,
 }
 
-impl Drop for Bound {
-    fn drop(&mut self) {
-        self.gpu.drain();
-    }
-}
-
-/// WGPU + vello renderer, for a window or an offscreen image.
+/// WGPU + vello renderer, for any number of windows and offscreen images on
+/// one device.
 ///
 /// Construction is free and does no GPU work: a window backend builds one
-/// before the window exists and attaches the window once it does, and a
-/// headless launch attaches an offscreen image (see
-/// [`Self::new_offscreen`]).
+/// before the windows exist and attaches each one once it does, and a
+/// headless launch attaches an offscreen image per window (see
+/// [`Self::new_offscreen`]). The first target brings the device up; later
+/// ones only add a frame texture and, for a window, a swap chain.
 #[derive(Default)]
 pub struct WgpuRenderer {
-    bound: Option<Bound>,
+    /// Every target, by its main-world window entity. Dropped before the
+    /// core (see [`Drop`]).
+    targets: HashMap<Entity, Target>,
+    core: Option<GpuCore>,
     /// Frames rendered since construction. Frames the present gate skipped
     /// do not count, so a static UI redrawn on a false-positive dirty flag
     /// leaves it flat.
@@ -142,6 +145,12 @@ pub struct WgpuRenderer {
     /// allocation, so [`Renderer::info`] takes one at most every
     /// [`MEMORY_REPORT_INTERVAL`].
     memory: Option<(std::time::Instant, Option<DeviceMemory>)>,
+}
+
+impl Drop for WgpuRenderer {
+    fn drop(&mut self) {
+        self.detach_all();
+    }
 }
 
 /// How long a memory report stands before [`Renderer::info`] takes another.
@@ -164,22 +173,23 @@ impl WgpuRenderer {
         Self::default()
     }
 
-    /// A renderer already attached to a `width` x `height` offscreen image.
-    pub fn new_offscreen(width: u32, height: u32) -> Result<Self, RenderError> {
+    /// A renderer with `target` attached to a `width` x `height` offscreen
+    /// image.
+    pub fn new_offscreen(target: Entity, width: u32, height: u32) -> Result<Self, RenderError> {
         let mut renderer = Self::new();
-        renderer.attach(FrameTarget::Offscreen { width, height })?;
+        renderer.attach(target, FrameTarget::Offscreen { width, height })?;
         Ok(renderer)
     }
 
-    /// Whether a target is currently bound.
+    /// Whether any target is bound.
     pub fn is_attached(&self) -> bool {
-        self.bound.is_some()
+        !self.targets.is_empty()
     }
 
     /// Name, backend, and device type of the adapter this renderer bound
-    /// to, or `None` while detached.
+    /// to, or `None` before the first target.
     pub fn adapter_info(&self) -> Option<&wgpu::AdapterInfo> {
-        self.bound.as_ref().map(|b| &b.gpu.adapter_info)
+        self.core.as_ref().map(|c| &c.adapter_info)
     }
 
     /// Whether rendering runs on a software rasterizer (lavapipe, WARP,
@@ -191,52 +201,52 @@ impl WgpuRenderer {
             .is_some_and(|info| info.device_type == wgpu::DeviceType::Cpu)
     }
 
-    /// Pixel size of the target, or `None` while detached.
-    pub fn size(&self) -> Option<(u32, u32)> {
-        self.bound.as_ref().map(|b| b.gpu.size())
+    /// Pixel size of `target`'s frame, or `None` when it is not attached.
+    pub fn size(&self, target: Entity) -> Option<(u32, u32)> {
+        self.targets.get(&target).map(|t| t.frame.size())
     }
 
-    /// Frames rendered since construction. Unchanged across frames the
-    /// present gate skipped.
+    /// Frames rendered since construction, across every target. Unchanged
+    /// across frames the present gate skipped.
     pub fn render_count(&self) -> u64 {
         self.render_count
     }
 
-    /// What the kept layers of faded groups hold and how often they were
-    /// reused, or `None` while detached.
-    pub fn layer_stats(&self) -> Option<lumen_paint::LayerStats> {
-        self.bound.as_ref().map(|b| b.gpu.layer_stats())
+    /// What `target`'s kept layers of faded groups hold and how often they
+    /// were reused, or `None` when it is not attached.
+    pub fn layer_stats(&self, target: Entity) -> Option<lumen_paint::LayerStats> {
+        self.targets.get(&target).map(|t| t.layers.stats())
     }
 
-    /// The last rendered frame as tightly packed RGBA8.
-    pub fn read_rgba8(&self) -> Result<Vec<u8>, RenderError> {
-        let bound = self.bound.as_ref().ok_or(RenderError::Detached)?;
-        bound.gpu.read_rgba8().map_err(RenderError::Present)
+    /// `target`'s last rendered frame as tightly packed RGBA8.
+    pub fn read_rgba8(&self, target: Entity) -> Result<Vec<u8>, RenderError> {
+        let (Some(core), Some(t)) = (self.core.as_ref(), self.targets.get(&target)) else {
+            return Err(RenderError::Detached);
+        };
+        core.read_rgba8(&t.frame).map_err(RenderError::Present)
     }
 }
 
 impl Renderer for WgpuRenderer {
     fn info(&mut self) -> RendererInfo {
-        let Some(bound) = self.bound.as_ref() else {
+        let Some(core) = self.core.as_ref() else {
             return RendererInfo {
                 backend: capability::NAME,
                 ..RendererInfo::default()
             };
         };
-        let adapter = &bound.gpu.adapter_info;
+        let adapter = &core.adapter_info;
         let now = std::time::Instant::now();
         let memory = match self.memory {
             Some((at, memory)) if now.duration_since(at) < MEMORY_REPORT_INTERVAL => memory,
             _ => {
-                let memory =
-                    bound
-                        .gpu
-                        .device
-                        .generate_allocator_report()
-                        .map(|report| DeviceMemory {
-                            allocated: report.total_allocated_bytes,
-                            reserved: report.total_reserved_bytes,
-                        });
+                let memory = core
+                    .device
+                    .generate_allocator_report()
+                    .map(|report| DeviceMemory {
+                        allocated: report.total_allocated_bytes,
+                        reserved: report.total_reserved_bytes,
+                    });
                 self.memory = Some((now, memory));
                 memory
             }
@@ -254,73 +264,100 @@ impl Renderer for WgpuRenderer {
             device_id: adapter.device,
             api: format!("{:?}", adapter.backend),
             driver,
-            max_texture_side: bound.gpu.device.limits().max_texture_dimension_2d,
+            max_texture_side: core.device.limits().max_texture_dimension_2d,
             memory,
         }
     }
 
-    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
-        // Drop any previous binding first so an old surface releases its
-        // window before a new one claims it.
-        self.bound = None;
-        let (window, size) = match &target {
-            FrameTarget::Window(window) => (Some(window), window.physical_size()),
+    fn attach(&mut self, target: Entity, frame: FrameTarget) -> Result<(), RenderError> {
+        // Drop any previous binding of this target first so an old surface
+        // releases its window before a new one claims it.
+        self.targets.remove(&target);
+        let (window, size) = match &frame {
+            FrameTarget::Window(window) => (Some(window.clone()), window.physical_size()),
             FrameTarget::Offscreen { width, height } => (None, (*width, *height)),
         };
-        let (gpu, surface) =
-            GpuCore::bring_up(window, size.0, size.1).map_err(RenderError::Init)?;
-        let window = match (target, surface) {
-            (FrameTarget::Window(window), Some(surface)) => {
-                Some(SurfaceFront::new(&gpu, surface, window)?)
+        let surface = match self.core.as_ref() {
+            // A later target: a surface on the instance the device came from.
+            Some(core) => window
+                .as_ref()
+                .map(|w| core.instance.create_surface(w.clone()))
+                .transpose()
+                .map_err(|e| RenderError::Init(format!("create_surface: {e:?}")))?,
+            // The first target brings the device up.
+            None => {
+                let (core, surface) =
+                    GpuCore::bring_up(window.as_ref()).map_err(RenderError::Init)?;
+                self.core = Some(core);
+                surface
             }
+        };
+        let core = self.core.as_ref().expect("brought up above");
+        let frame_texture = FrameTexture::new(&core.device, size.0, size.1);
+        let size = frame_texture.size();
+        let front = match (window, surface) {
+            (Some(window), Some(surface)) => Some(SurfaceFront::new(core, surface, window, size)?),
             _ => None,
         };
-        self.bound = Some(Bound {
-            window,
-            gpu,
-            holds_frame: false,
-        });
+        self.targets.insert(
+            target,
+            Target {
+                window: front,
+                frame: frame_texture,
+                layers: LayerCache::default(),
+                holds_frame: false,
+            },
+        );
         Ok(())
     }
 
-    fn resize(&mut self, width: u32, height: u32) -> bool {
-        let Some(bound) = self.bound.as_mut() else {
+    fn resize(&mut self, target: Entity, width: u32, height: u32) -> bool {
+        let (Some(core), Some(t)) = (self.core.as_ref(), self.targets.get_mut(&target)) else {
             return false;
         };
-        if !bound.gpu.resize(width, height) {
+        if (width.max(1), height.max(1)) == t.frame.size() {
             return false;
         }
-        if let Some(window) = bound.window.as_mut() {
-            window.resize(&bound.gpu);
+        t.frame = FrameTexture::new(&core.device, width, height);
+        let size = t.frame.size();
+        if let Some(window) = t.window.as_mut() {
+            window.resize(core, size);
         }
-        bound.holds_frame = false;
+        t.holds_frame = false;
         true
     }
 
-    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool {
-        self.bound
-            .as_ref()
-            .is_some_and(|b| lumen_paint::wants_frame(render_world, request, b.holds_frame))
+    fn wants_present(
+        &mut self,
+        target: Entity,
+        render_world: &mut World,
+        request: FrameRequest,
+    ) -> bool {
+        self.targets
+            .get(&target)
+            .is_some_and(|t| lumen_paint::wants_frame(render_world, target, request, t.holds_frame))
     }
 
-    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
-        let bound = self.bound.as_mut().ok_or(RenderError::Detached)?;
+    fn present(&mut self, target: Entity, render_world: &mut World) -> Result<(), RenderError> {
+        let (Some(core), Some(t)) = (self.core.as_mut(), self.targets.get_mut(&target)) else {
+            return Err(RenderError::Detached);
+        };
         // What a drawing read back as pixels is rasterized with: this
         // device, published once it draws.
         if !render_world.contains_resource::<lumen_paint::Rasterizer>() {
-            render_world.insert_resource(lumen_paint::Rasterizer::new(bound.gpu.rasterizer()));
+            render_world.insert_resource(lumen_paint::Rasterizer::new(core.rasterizer()));
         }
-        bound
-            .gpu
-            .render(render_world)
+        core.render(target, &t.frame, &mut t.layers, render_world)
             .map_err(RenderError::Present)?;
-        bound.holds_frame = true;
+        t.holds_frame = true;
         self.render_count += 1;
         // Read back before the blit: the frame texture holds exactly what
         // the window is about to show.
-        lumen_paint::answer_capture(render_world, bound.gpu.size(), || bound.gpu.read_rgba8());
-        if let Some(window) = bound.window.as_mut()
-            && window.present(&bound.gpu)?
+        lumen_paint::answer_capture(render_world, target, t.frame.size(), || {
+            core.read_rgba8(&t.frame)
+        });
+        if let Some(window) = t.window.as_mut()
+            && window.present(core, &t.frame)?
         {
             gpu::stamp(
                 render_world,
@@ -330,8 +367,40 @@ impl Renderer for WgpuRenderer {
         Ok(())
     }
 
-    fn detach(&mut self) {
-        self.bound = None;
+    fn set_present_mode(&mut self, target: Entity, mode: PresentMode) {
+        if let (Some(core), Some(window)) = (
+            self.core.as_ref(),
+            self.targets
+                .get_mut(&target)
+                .and_then(|t| t.window.as_mut()),
+        ) {
+            window.set_present_mode(core, mode);
+        }
+    }
+
+    fn targets(&self) -> Vec<Entity> {
+        let mut targets: Vec<Entity> = self.targets.keys().copied().collect();
+        targets.sort();
+        targets
+    }
+
+    fn detach(&mut self, target: Entity) {
+        if let Some(core) = self.core.as_ref() {
+            // The last frame may still be in flight on this target.
+            core.drain();
+        }
+        self.targets.remove(&target);
+    }
+
+    fn detach_all(&mut self) {
+        // Drain first, so the queue drops idle: wgpu-core's `Queue::drop`
+        // waits on the last submission with a fixed timeout and panics when
+        // it expires, and a panic inside drop aborts the process.
+        if let Some(core) = self.core.as_ref() {
+            core.drain();
+        }
+        self.targets.clear();
+        self.core = None;
     }
 }
 
@@ -400,8 +469,12 @@ impl Plugin for WgpuRendererPlugin {
     fn build(self, app: &mut App) {
         let renderer = match self.renderer {
             Some(r) => r,
-            None => WgpuRenderer::new_offscreen(self.width, self.height)
-                .expect("WgpuRenderer offscreen init"),
+            None => {
+                let primary =
+                    lumen_core::window::primary_window(&mut app.world).expect("a primary window");
+                WgpuRenderer::new_offscreen(primary, self.width, self.height)
+                    .expect("WgpuRenderer offscreen init")
+            }
         };
         if let Some(shaper) = self.text_shaper {
             app.render_world
@@ -479,25 +552,32 @@ mod tests {
     #[test]
     fn a_detached_renderer_has_nothing_to_present() {
         let mut renderer = WgpuRenderer::new();
+        let target = Entity::PLACEHOLDER;
         assert!(!renderer.is_attached());
-        assert_eq!(renderer.size(), None);
+        assert_eq!(renderer.size(target), None);
         assert!(renderer.adapter_info().is_none());
         assert!(!renderer.is_software_adapter());
-        assert!(!renderer.resize(800, 600));
-        assert!(matches!(renderer.read_rgba8(), Err(RenderError::Detached)));
+        assert!(!renderer.resize(target, 800, 600));
+        assert!(renderer.layer_stats(target).is_none());
+        assert!(renderer.targets().is_empty());
+        assert!(matches!(
+            renderer.read_rgba8(target),
+            Err(RenderError::Detached)
+        ));
         let mut world = World::new();
-        world.insert_resource(Viewport::default());
         let request = FrameRequest {
             dirty: true,
             force_full: true,
         };
-        assert!(!renderer.wants_present(&mut world, request));
+        assert!(!renderer.wants_present(target, &mut world, request));
         assert!(matches!(
-            renderer.present(&mut world),
+            renderer.present(target, &mut world),
             Err(RenderError::Detached)
         ));
+        renderer.set_present_mode(target, PresentMode::NoWait);
         // Detaching an unattached renderer is a no-op, not an error.
-        renderer.detach();
+        renderer.detach(target);
+        renderer.detach_all();
         assert!(!renderer.is_attached());
     }
 }

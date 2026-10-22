@@ -450,7 +450,7 @@ impl App {
     /// # fn demo() -> lumenui::Result<()> {
     /// let frame = lumenui::App::from_markup("<root/>")
     ///     .window_size(320, 240)
-    ///     .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })?;
+    ///     .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3), ..Default::default() })?;
     /// frame.save_png("shot.png")?;
     /// # Ok(()) }
     /// ```
@@ -495,6 +495,7 @@ impl App {
         self.run_headless_rendered(HeadlessOptions {
             dpr: handoff.dpr.unwrap_or(1.0),
             ticks: handoff.ticks,
+            ..HeadlessOptions::default()
         })
     }
 

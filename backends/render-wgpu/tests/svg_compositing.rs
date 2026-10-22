@@ -69,8 +69,8 @@ fn red_at(body: &str, at: &[(u32, u32)]) -> Vec<u8> {
     app.add_plugin(WgpuRendererPlugin::new(W, H));
     app.add_extract_fn(extract_drawings);
     app.register_native_painter(EXTENSION, SvgPainter);
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -89,7 +89,7 @@ fn red_at(body: &str, at: &[(u32, u32)]) -> Vec<u8> {
         .render_world
         .get_non_send::<WgpuRenderer>()
         .expect("renderer")
-        .read_rgba8()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("readback");
     at.iter()
         .map(|&(x, y)| pixels[((y * W + x) * 4) as usize])

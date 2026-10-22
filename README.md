@@ -84,7 +84,8 @@ the app runs and the window updates.
 
 ## Limitations
 
-Lumen is in alpha, and APIs can change between releases. An app has one window.
+Lumen is in alpha, and APIs can change between releases. Markup and scripts
+work in one window; opening more takes a Rust plugin.
 There is no iOS or Android target. The CSS is a subset of the web's,
 aimed at application UI. Scripts in different languages share signals and
 nothing else.

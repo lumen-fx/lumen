@@ -12,8 +12,10 @@
 
 use crate::app::App;
 use crate::backends::{BackendEntry, Backends};
-use crate::render_world::{RenderStage, Viewport, install_extract_pipeline};
-use crate::traits::{FrameRequest, Renderer};
+use crate::render_world::{RenderStage, RenderWindow, install_extract_pipeline};
+use crate::traits::{FrameRequest, FrameTarget, Renderer};
+use crate::window::WindowViewport;
+use bevy_ecs::entity::Entity;
 use bevy_ecs::world::World;
 
 /// One render backend: its name, its rank under `auto`, and how to make its
@@ -115,27 +117,21 @@ pub fn publish_renderer_info(world: &mut World, info: RendererInfo) {
     }
 }
 
-/// Put `renderer`, already attached to a
-/// [`crate::traits::FrameTarget::Offscreen`] image, into `app`.
+/// Put `renderer` into `app` to draw every window offscreen.
 ///
 /// The renderer becomes a non-send render-world resource of type `R`, and a
 /// system in [`RenderStage::Render`] drives it through [`Renderer`] each
-/// frame the tick renders: it resizes the image to the viewport's physical
-/// size and presents when the renderer says the frame changed. Also installs
-/// the extract pipeline the renderer reads the retained scene from.
+/// frame the tick renders: it attaches an offscreen image for each window
+/// the renderer has no target for yet (a renderer the launch attached to the
+/// primary window already keeps that one), sizes each image to its window's
+/// viewport in physical pixels, presents each shown window when the renderer
+/// says its frame changed, and releases the image of a window that closed.
+/// Also installs the extract pipeline the renderer reads the retained scene
+/// from.
 pub fn install_offscreen<R: Renderer>(app: &mut App, renderer: R) {
     install_extract_pipeline(app);
     app.render_world.insert_non_send(renderer);
     app.add_render_systems(RenderStage::Render, present_offscreen::<R>);
-}
-
-/// The viewport's size in physical pixels, at least one each way.
-fn physical_size(viewport: &Viewport) -> (u32, u32) {
-    let dpr = viewport.scale_factor.max(0.01);
-    (
-        (viewport.size.x * dpr).max(1.0) as u32,
-        (viewport.size.y * dpr).max(1.0) as u32,
-    )
 }
 
 /// Render-world system driving the offscreen renderer installed as `R`.
@@ -146,21 +142,46 @@ fn present_offscreen<R: Renderer>(world: &mut World) {
     let Some(mut renderer) = world.remove_non_send::<R>() else {
         return;
     };
-    let (width, height) = world
-        .get_resource::<Viewport>()
-        .map(physical_size)
-        .unwrap_or((1, 1));
-    let resized = renderer.resize(width, height);
-    // The tick runs the render schedule only when its frame is dirty, so the
-    // request always is; a fresh image holds no frame and repaints in full.
-    let request = FrameRequest {
-        dirty: true,
-        force_full: resized,
+    let windows: Vec<(Entity, (u32, u32), bool)> = {
+        let mut q = world.query::<(&RenderWindow, &WindowViewport)>();
+        let mut windows: Vec<_> = q
+            .iter(world)
+            .map(|(w, v)| (w.window, v.physical_size(), w.visible))
+            .collect();
+        windows.sort_by_key(|(w, ..)| *w);
+        windows
     };
-    if renderer.wants_present(world, request) {
-        if let Err(e) = renderer.present(world) {
-            eprintln!("lumen: offscreen render failed: {e}");
+    for target in renderer.targets() {
+        if !windows.iter().any(|(w, ..)| *w == target) {
+            renderer.detach(target);
         }
+    }
+    let attached = renderer.targets();
+    let mut presented = false;
+    for (target, (width, height), visible) in windows {
+        if !visible {
+            continue;
+        }
+        let fresh = !attached.contains(&target);
+        if fresh && let Err(e) = renderer.attach(target, FrameTarget::Offscreen { width, height }) {
+            eprintln!("lumen: offscreen target for a window failed: {e}");
+            continue;
+        }
+        let resized = renderer.resize(target, width, height);
+        // The tick runs the render schedule only when its frame is dirty, so the
+        // request always is; a fresh image holds no frame and repaints in full.
+        let request = FrameRequest {
+            dirty: true,
+            force_full: resized || fresh,
+        };
+        if renderer.wants_present(target, world, request) {
+            if let Err(e) = renderer.present(target, world) {
+                eprintln!("lumen: offscreen render failed: {e}");
+            }
+            presented = true;
+        }
+    }
+    if presented {
         publish_renderer_info(world, renderer.info());
     }
     world.insert_non_send(renderer);
@@ -170,37 +191,45 @@ fn present_offscreen<R: Renderer>(world: &mut World) {
 mod tests {
     use super::*;
     use crate::traits::{FrameTarget, RenderError};
+    use crate::window::{Window, primary_viewport_mut};
     use bevy_ecs::world::World;
+    use std::collections::BTreeMap;
 
     /// A renderer that records what it was asked and answers `true` to
     /// every present gate, so the offscreen driver can be watched.
     #[derive(Default)]
     struct Recorder {
-        attached: Option<(u32, u32)>,
-        requests: Vec<FrameRequest>,
+        attached: BTreeMap<Entity, (u32, u32)>,
+        requests: Vec<(Entity, FrameRequest)>,
         presents: usize,
     }
 
+    impl Recorder {
+        fn size(&self, target: Entity) -> Option<(u32, u32)> {
+            self.attached.get(&target).copied()
+        }
+    }
+
     impl Renderer for Recorder {
-        fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
-            match target {
+        fn attach(&mut self, target: Entity, frame: FrameTarget) -> Result<(), RenderError> {
+            match frame {
                 FrameTarget::Offscreen { width, height } => {
-                    self.attached = Some((width, height));
+                    self.attached.insert(target, (width, height));
                     Ok(())
                 }
                 FrameTarget::Window(_) => Err(RenderError::Init("no windows here".into())),
             }
         }
-        fn resize(&mut self, width: u32, height: u32) -> bool {
-            let changed = self.attached != Some((width, height));
-            self.attached = Some((width, height));
+        fn resize(&mut self, target: Entity, width: u32, height: u32) -> bool {
+            let changed = self.attached.get(&target) != Some(&(width, height));
+            self.attached.insert(target, (width, height));
             changed
         }
-        fn wants_present(&mut self, _: &mut World, request: FrameRequest) -> bool {
-            self.requests.push(request);
+        fn wants_present(&mut self, target: Entity, _: &mut World, request: FrameRequest) -> bool {
+            self.requests.push((target, request));
             true
         }
-        fn present(&mut self, world: &mut World) -> Result<(), RenderError> {
+        fn present(&mut self, _: Entity, world: &mut World) -> Result<(), RenderError> {
             self.presents += 1;
             let mut stamps = world.resource_mut::<crate::tick::RenderTimestamps>();
             stamps.mark_encoded();
@@ -214,9 +243,19 @@ mod tests {
                 ..RendererInfo::default()
             }
         }
-        fn detach(&mut self) {
-            self.attached = None;
+        fn targets(&self) -> Vec<Entity> {
+            self.attached.keys().copied().collect()
         }
+        fn detach(&mut self, target: Entity) {
+            self.attached.remove(&target);
+        }
+        fn detach_all(&mut self) {
+            self.attached.clear();
+        }
+    }
+
+    fn target() -> Entity {
+        Entity::from_raw_u32(7).expect("an entity id")
     }
 
     fn renderer() -> Box<dyn Renderer> {
@@ -242,14 +281,20 @@ mod tests {
 
         let mut renderer = (test.renderer)();
         renderer
-            .attach(FrameTarget::Offscreen {
-                width: 8,
-                height: 8,
-            })
+            .attach(
+                target(),
+                FrameTarget::Offscreen {
+                    width: 8,
+                    height: 8,
+                },
+            )
             .expect("offscreen binds");
-        assert!(!renderer.resize(8, 8));
-        assert!(renderer.resize(9, 8));
-        renderer.detach();
+        assert!(!renderer.resize(target(), 8, 8));
+        assert!(renderer.resize(target(), 9, 8));
+        assert_eq!(renderer.targets(), vec![target()]);
+        renderer.detach(target());
+        assert!(renderer.targets().is_empty());
+        renderer.detach_all();
     }
 
     /// A render backend the app names and the build lacks is reported as a
@@ -271,34 +316,85 @@ mod tests {
     #[test]
     fn the_offscreen_driver_follows_the_viewport() {
         let mut app = App::new();
+        let primary = crate::window::primary_window(&mut app.world).expect("a window");
         let mut recorder = Recorder::default();
         recorder
-            .attach(FrameTarget::Offscreen {
-                width: 20,
-                height: 10,
-            })
+            .attach(
+                primary,
+                FrameTarget::Offscreen {
+                    width: 20,
+                    height: 10,
+                },
+            )
             .expect("binds");
         install_offscreen(&mut app, recorder);
-        for world in [&mut app.world, &mut app.render_world] {
-            let mut viewport = world.resource_mut::<Viewport>();
+        {
+            let mut viewport = primary_viewport_mut(&mut app.world);
             viewport.size = glam::Vec2::new(10.0, 5.0);
             viewport.scale_factor = 2.0;
         }
 
         app.tick();
         let recorder = app.render_world.non_send::<Recorder>();
-        assert_eq!(recorder.attached, Some((20, 10)));
+        assert_eq!(recorder.size(primary), Some((20, 10)));
         assert_eq!(recorder.presents, 1);
-        assert!(recorder.requests[0].dirty);
-        assert!(!recorder.requests[0].force_full, "the size did not change");
+        assert!(recorder.requests[0].1.dirty);
+        assert!(
+            !recorder.requests[0].1.force_full,
+            "the size did not change"
+        );
 
-        for world in [&mut app.world, &mut app.render_world] {
-            world.resource_mut::<Viewport>().size = glam::Vec2::new(12.0, 5.0);
-        }
+        primary_viewport_mut(&mut app.world).size = glam::Vec2::new(12.0, 5.0);
         app.tick();
         let recorder = app.render_world.non_send::<Recorder>();
-        assert_eq!(recorder.attached, Some((24, 10)));
-        assert!(recorder.requests[1].force_full, "a resize repaints in full");
+        assert_eq!(recorder.size(primary), Some((24, 10)));
+        assert!(
+            recorder.requests[1].1.force_full,
+            "a resize repaints in full"
+        );
+    }
+
+    /// A second window gets an image of its own on the same renderer, sized
+    /// to its own viewport and painted in full first; a hidden one is left
+    /// alone, and a closed one's image is released.
+    #[test]
+    fn the_offscreen_driver_draws_every_window() {
+        let mut app = App::new();
+        let primary = crate::window::primary_window(&mut app.world).expect("a window");
+        install_offscreen(&mut app, Recorder::default());
+        let second = app
+            .world
+            .spawn(Window::new("Second", glam::Vec2::new(30.0, 20.0)))
+            .id();
+        app.world.get_mut::<WindowViewport>(second).unwrap().size = glam::Vec2::new(30.0, 20.0);
+        let hidden = app
+            .world
+            .spawn(Window {
+                visible: false,
+                ..Window::default()
+            })
+            .id();
+        app.tick();
+        let recorder = app.render_world.non_send::<Recorder>();
+        assert_eq!(recorder.size(second), Some((30, 20)));
+        assert!(recorder.size(primary).is_some());
+        assert_eq!(recorder.size(hidden), None, "a hidden window draws nothing");
+        assert!(
+            recorder
+                .requests
+                .iter()
+                .any(|(t, r)| *t == second && r.force_full),
+            "a fresh image repaints in full"
+        );
+
+        app.world.entity_mut(second).despawn();
+        app.world
+            .resource_mut::<crate::render_world::FrameDirty>()
+            .dirty = true;
+        app.tick();
+        let recorder = app.render_world.non_send::<Recorder>();
+        assert_eq!(recorder.size(second), None, "a closed window's image goes");
+        assert!(recorder.size(primary).is_some());
     }
 
     /// #527: a tick records when each of its phases ended, the renderer's
