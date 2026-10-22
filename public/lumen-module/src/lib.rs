@@ -98,12 +98,23 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub use lumen_assets::{AssetServer, SourceReader};
 pub use lumen_core;
 pub use lumen_core::app::{App, Plugin};
+/// The input layer: hit testing, focus, clicks and keys. A module orders a
+/// system that reads the hover or the focus after
+/// [`lumen_input::hit_test`], and one that reacts to a click after
+/// [`lumen_input::dispatch_clicks`], which runs in
+/// [`lumen_core::input::ClickSet::Producers`].
+pub use lumen_input;
 /// Export a [`Plugin`] as a runtime module. See the crate docs for the
 /// authoring shape, and `lumen-module-macros` for what the expansion holds.
 pub use lumen_module_macros::lumen_module;
 /// Where a linked-in module leaves itself for the loader. Named by the
 /// generated constructor; a module author has no reason to reach it.
 pub use lumen_module_registry as registry;
+/// The built-in widgets a module composes rather than rebuilds, with the
+/// system sets each runs in: `<split>` ([`lumen_primitives::Split`], its
+/// sizes, its resize-end message and [`lumen_primitives::SplitSet`]), press
+/// and drag state, and the rest of the widget set.
+pub use lumen_primitives;
 /// The scene the app's tree lives in. A module that runs a script language
 /// installs the per-host half of the script wiring through
 /// [`lumen_scene::script_host::install`] once its host is in place, and

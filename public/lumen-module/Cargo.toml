@@ -37,6 +37,11 @@ lumen-script = { workspace = true }
 # The scene, for a module that runs a script language: the per-host half of
 # the script wiring it installs once its host is in place.
 lumen-scene = { workspace = true }
+# The input layer and the built-in widgets, re-exported so a module that
+# composes a `<split>` or `<tabs>`, or reacts to clicks and keys, names their
+# components and orders its systems against theirs.
+lumen-input = { workspace = true }
+lumen-primitives = { workspace = true }
 # The markup-tag registry. A module that brings an element registers its tag
 # from `Plugin::build`, which is what makes a run accept the markup; the
 # `tags` key in `lumen.toml` is the same claim for a compile, where nothing is
