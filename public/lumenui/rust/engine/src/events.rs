@@ -34,6 +34,7 @@ use lumen_core::input::{
 use lumen_core::tick::{AppSet, TickStage};
 use lumen_primitives::{SliderChanged, ToggleChanged};
 use lumen_scene::spawn::ForMarker;
+use lumen_script::CustomEventDelivered;
 use lumen_script::node_query::NodeRef;
 
 use crate::dom::Node;
@@ -62,6 +63,11 @@ pub enum EventKind {
     /// A `<menuitem>` was chosen. The id is the item's own; a menu item is
     /// not in the element tree, so there is no target and no row.
     Menu,
+    /// A custom event a module raised under this name
+    /// ([`lumen_script::CustomEvent`]), such as a dock's `layoutchange`.
+    /// [`Event::detail`] is what it carries and
+    /// [`Event::default_prevented`] whether a DOM handler cancelled it.
+    Custom(&'static str),
 }
 
 /// What happened, handed to a handler beside the [`Ui`].
@@ -75,6 +81,8 @@ pub struct Event {
     button: Option<PointerButton>,
     checked: Option<bool>,
     value: Option<f64>,
+    detail: Option<HashMap<String, lumen_script::ScriptValue>>,
+    default_prevented: bool,
     modifiers: Modifiers,
 }
 
@@ -124,6 +132,17 @@ impl Event {
     /// The new value of a slider.
     pub fn value(&self) -> Option<f64> {
         self.value
+    }
+
+    /// What a custom event carries; `None` for the other kinds.
+    pub fn detail(&self) -> Option<&HashMap<String, lumen_script::ScriptValue>> {
+        self.detail.as_ref()
+    }
+
+    /// Whether a DOM handler called `prevent_default` on a cancelable custom
+    /// event before this handler ran. Always `false` for the other kinds.
+    pub fn default_prevented(&self) -> bool {
+        self.default_prevented
     }
 
     /// The modifier keys held when the event was handled.
@@ -186,6 +205,15 @@ impl Handlers {
     fn has(&self, kind: EventKind, id: &str) -> bool {
         self.by_id.contains_key(&(kind, Some(id.to_string())))
     }
+
+    /// The [`EventKind::Custom`] some handler was registered for under
+    /// `name`.
+    fn custom_kind(&self, name: &str) -> Option<EventKind> {
+        self.by_id.keys().find_map(|(kind, _)| match kind {
+            EventKind::Custom(n) if *n == name => Some(*kind),
+            _ => None,
+        })
+    }
 }
 
 /// An element event waiting for dispatch, before its handler is chosen.
@@ -198,6 +226,8 @@ pub(crate) struct Pending {
     button: Option<PointerButton>,
     checked: Option<bool>,
     value: Option<f64>,
+    detail: Option<HashMap<String, lumen_script::ScriptValue>>,
+    default_prevented: bool,
 }
 
 impl Pending {
@@ -210,6 +240,8 @@ impl Pending {
             button: None,
             checked: None,
             value: None,
+            detail: None,
+            default_prevented: false,
         }
     }
 }
@@ -232,7 +264,9 @@ pub(crate) fn collect_ui_events(
     mut toggles: MessageReader<ToggleChanged>,
     mut sliders: MessageReader<SliderChanged>,
     mut items: MessageReader<MenuClicked>,
+    mut customs: MessageReader<CustomEventDelivered>,
     mut queue: ResMut<PendingEvents>,
+    handlers: Res<Handlers>,
 ) {
     let doubled: Vec<Entity> = doubles.read().map(|d| d.entity).collect();
     let double_set: HashSet<Entity> = doubled.iter().copied().collect();
@@ -277,6 +311,18 @@ pub(crate) fn collect_ui_events(
     for item in items.read() {
         let mut ev = Pending::on(EventKind::Menu, None);
         ev.menu_id = Some(item.id.clone());
+        queue.0.push(ev);
+    }
+    for delivered in customs.read() {
+        // A kind names its event with a `&'static str`; the one a handler
+        // was registered with is the one the event takes, so an event no
+        // handler names is dropped here.
+        let Some(kind) = handlers.custom_kind(&delivered.event.name) else {
+            continue;
+        };
+        let mut ev = Pending::on(kind, Some(delivered.event.target));
+        ev.detail = Some(delivered.event.detail.clone());
+        ev.default_prevented = delivered.default_prevented;
         queue.0.push(ev);
     }
 }
@@ -375,6 +421,8 @@ pub(crate) fn dispatch_handlers(world: &mut World) {
             button: p.button,
             checked: p.checked,
             value: p.value,
+            detail: p.detail,
+            default_prevented: p.default_prevented,
             modifiers,
         };
         if let Some(list) = handlers.by_id.get_mut(&(p.kind, slot_id)) {
@@ -429,6 +477,7 @@ pub(crate) fn install_handlers(
     ensure_message::<ToggleChanged>(app);
     ensure_message::<SliderChanged>(app);
     ensure_message::<MenuClicked>(app);
+    ensure_message::<CustomEventDelivered>(app);
     app.add_systems(
         TickStage::Systems,
         (collect_ui_events, dispatch_handlers)
@@ -499,6 +548,40 @@ mod tests {
         let icon = app.world.spawn(ChildOf(button)).id();
         click(&mut app, icon);
         assert_eq!(hit(&app).as_deref(), Some("pen"));
+    }
+
+    /// A module's custom event reaches the handler registered for its name
+    /// on the nearest id, with what it carries and whether a DOM handler
+    /// cancelled it; an event no handler names runs nothing.
+    #[test]
+    fn a_custom_event_runs_its_handler() {
+        let mut app = app_with(vec![(
+            EventKind::Custom("layoutchange"),
+            Some("editor".into()),
+            Box::new(|ui, ev| {
+                assert_eq!(ev.kind(), EventKind::Custom("layoutchange"));
+                assert_eq!(ev.id(), Some("editor"));
+                assert!(ev.default_prevented());
+                let reason = match ev.detail().and_then(|d| d.get("reason")) {
+                    Some(lumen_script::ScriptValue::Str(s)) => s.clone(),
+                    other => panic!("no reason: {other:?}"),
+                };
+                ui.set("hit", reason);
+            }),
+        )]);
+        let dock = app.world.spawn(LumenId("editor".into())).id();
+        let panel = app.world.spawn(ChildOf(dock)).id();
+        let raise = |app: &mut lumen_core::app::App, name: &str| {
+            app.world.write_message(CustomEventDelivered {
+                event: lumen_script::CustomEvent::new(panel, name).with("reason", "user"),
+                default_prevented: true,
+            });
+            app.tick();
+        };
+        raise(&mut app, "panelmove");
+        assert_eq!(hit(&app), None, "nothing handles `panelmove`");
+        raise(&mut app, "layoutchange");
+        assert_eq!(hit(&app).as_deref(), Some("user"));
     }
 
     /// With no handler on the way up, the `on_any_*` handler runs with the

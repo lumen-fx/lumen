@@ -406,6 +406,9 @@ impl UserData for LuaEvent {
         methods.add_method("event_type", |_, _this, ()| Ok(ev::event_type()));
         methods.add_method("key", |_, _this, ()| Ok(ev::event_key()));
         methods.add_method("value", |_, _this, ()| Ok(ev::event_value()));
+        methods.add_method("detail", |lua, _this, ()| {
+            script_value_to_lua(lua, &ScriptValue::Map(ev::event_detail()))
+        });
         methods.add_method("button", |_, _this, ()| Ok(ev::event_button()));
         methods.add_method("x", |_, _this, ()| Ok(ev::event_position_local().0));
         methods.add_method("y", |_, _this, ()| Ok(ev::event_position_local().1));

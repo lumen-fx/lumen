@@ -49,6 +49,11 @@
 //!   secondary-button press (a release on Windows), the ContextMenu key or
 //!   Shift+F10, or an assistive technology's request.
 //!
+//! - A custom event is one a module raises on an element with a
+//!   [`CustomEvent`] message: a name of its own and a detail map. It
+//!   travels the same capture -> target -> bubble path, so `n.on(name, ..)`
+//!   in any host and a native handler hear it like a built-in one.
+//!
 //! Default actions: `click` (link navigation via `<a href>`), `contextmenu`
 //! (the browser's own menu, on a page) and `submit` (form submission) have
 //! one. `prevent_default` on a `click` or a `contextmenu` records the target
@@ -110,6 +115,91 @@ fn key_string(key: &Key) -> String {
     }
 }
 
+/// An element event a module raises: the DOM's `CustomEvent`.
+///
+/// Write it as a message and it is delivered in [`ScriptSet::DomState`]
+/// (`crate::ScriptSet`) to every handler bound with `n.on(name, ..)`, in
+/// every script host, the C ABI and the SDKs, along the target's capture ->
+/// target -> bubble path. A handler reads [`detail`](Self::detail) with
+/// `ev.detail()`. After delivery a [`CustomEventDelivered`] reports whether a
+/// handler called `prevent_default`, which is what a [`cancelable`]
+/// (Self::cancelable) event asks: a module that asks "may this panel close?"
+/// raises a cancelable event and acts on the answer.
+///
+/// The built-in event names (`click`, `input`, and the rest of the set this
+/// module's documentation lists) belong to the input layer; a custom event
+/// named after one is refused with a warning.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct CustomEvent {
+    /// The element it fires on.
+    pub target: Entity,
+    /// The event type a handler binds: `n.on(name, ..)`.
+    pub name: String,
+    /// What it carries, read with `ev.detail()`.
+    pub detail: std::collections::HashMap<String, crate::ScriptValue>,
+    /// Whether it bubbles to the target's ancestors after the target.
+    pub bubbles: bool,
+    /// Whether a handler's `prevent_default` means something to whoever
+    /// raised it.
+    pub cancelable: bool,
+}
+
+impl CustomEvent {
+    /// A bubbling, not cancelable event `name` on `target`, carrying
+    /// nothing.
+    pub fn new(target: Entity, name: impl Into<String>) -> Self {
+        Self {
+            target,
+            name: name.into(),
+            detail: std::collections::HashMap::new(),
+            bubbles: true,
+            cancelable: false,
+        }
+    }
+
+    /// The same event carrying `value` under `key` in its detail.
+    pub fn with(mut self, key: impl Into<String>, value: impl Into<crate::ScriptValue>) -> Self {
+        self.detail.insert(key.into(), value.into());
+        self
+    }
+}
+
+/// A [`CustomEvent`] that reached its handlers, and whether one of them
+/// called `prevent_default`.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct CustomEventDelivered {
+    /// The event as it was raised.
+    pub event: CustomEvent,
+    /// Whether a handler called `prevent_default` (always `false` for an
+    /// event that is not [`cancelable`](CustomEvent::cancelable)).
+    pub default_prevented: bool,
+}
+
+/// The names the built-in DOM events use, which a [`CustomEvent`] may not
+/// take.
+pub const BUILT_IN_EVENTS: &[&str] = &[
+    "click",
+    "dblclick",
+    "contextmenu",
+    "pointerdown",
+    "pointerup",
+    "pointermove",
+    "pointercancel",
+    "pointerenter",
+    "pointerleave",
+    "gotpointercapture",
+    "lostpointercapture",
+    "wheel",
+    "keydown",
+    "keyup",
+    "input",
+    "change",
+    "focus",
+    "blur",
+    "submit",
+    "scroll",
+];
+
 /// The DOM events read from this tick's input, waiting for delivery.
 ///
 /// Reading the input and delivering it are two steps because a handler can
@@ -121,6 +211,7 @@ fn key_string(key: &Key) -> String {
 pub struct PendingDomEvents {
     input: Vec<QueuedInput>,
     state: Vec<(EventData, Entity)>,
+    custom: Vec<CustomEvent>,
 }
 
 /// One input event waiting for delivery.
@@ -237,6 +328,50 @@ pub fn deliver_state_events(world: &mut World) {
     }
 }
 
+/// Read this tick's [`CustomEvent`]s for delivery.
+pub fn queue_custom_events(
+    mut raised: MessageReader<CustomEvent>,
+    mut pending: ResMut<PendingDomEvents>,
+) {
+    for event in raised.read() {
+        if event.name.is_empty() || BUILT_IN_EVENTS.contains(&event.name.as_str()) {
+            lumen_core::warn_line!(
+                "custom event `{}` refused: the name is empty or a built-in event's",
+                event.name
+            );
+            continue;
+        }
+        pending.custom.push(event.clone());
+    }
+}
+
+/// Deliver the custom events queued this tick, and report each one with a
+/// [`CustomEventDelivered`].
+pub fn deliver_custom_events(world: &mut World) {
+    let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
+        return;
+    };
+    let events = std::mem::take(&mut pending.custom);
+    if events.is_empty() {
+        return;
+    }
+    let hosts = world
+        .get_resource::<EventHosts>()
+        .cloned()
+        .unwrap_or_default();
+    for event in events {
+        let mut data = base(event.target, &event.name);
+        data.detail = event.detail.clone();
+        let prevented = world.get_entity(event.target).is_ok()
+            && dispatch(world, &hosts, data, event.target, event.bubbles)
+                .is_some_and(|result| result.default_prevented);
+        world.write_message(CustomEventDelivered {
+            default_prevented: prevented && event.cancelable,
+            event,
+        });
+    }
+}
+
 /// The live entity a packed node handle names, if it still exists.
 fn live_entity(world: &World, node: u64) -> Option<Entity> {
     let handle = lumen_core::node::NodeHandle::unpack(node)?;
@@ -346,13 +481,30 @@ fn capture_event(cause: &EventData, entity: Entity, event_type: &str) -> EventDa
 /// directly, host closures through whichever host owns the token), forward
 /// queued commands, and record a default-prevented click.
 fn deliver(world: &mut World, hosts: &EventHosts, data: EventData, target_entity: Entity) {
-    if !event::has_bindings_for(&data.event_type) {
-        return;
-    }
-    let ancestors = ancestors_root_first(target_entity);
     let bubbles = event::event_bubbles(&data.event_type);
     let etype = data.event_type.clone();
     let target_handle = data.target;
+    if let Some(result) = dispatch(world, hosts, data, target_entity, bubbles)
+        && result.default_prevented
+        && event::has_default_action(&etype)
+    {
+        event::mark_default_prevented(&etype, target_handle);
+    }
+}
+
+/// Run one event's propagation through every host and forward the commands
+/// its handlers queued. `None` when nothing is bound to the event's type.
+fn dispatch(
+    world: &mut World,
+    hosts: &EventHosts,
+    data: EventData,
+    target_entity: Entity,
+    bubbles: bool,
+) -> Option<EventData> {
+    if !event::has_bindings_for(&data.event_type) {
+        return None;
+    }
+    let ancestors = ancestors_root_first(target_entity);
     let result = event::dispatch(data, &ancestors, bubbles, |token| {
         for host in &hosts.0 {
             if (host.dispatch)(world, token) {
@@ -363,9 +515,7 @@ fn deliver(world: &mut World, hosts: &EventHosts, data: EventData, target_entity
     for host in &hosts.0 {
         (host.drain)(world);
     }
-    if result.default_prevented && event::has_default_action(&etype) {
-        event::mark_default_prevented(&etype, target_handle);
-    }
+    Some(result)
 }
 
 /// What a field holds, read by [`field_text`].
@@ -454,6 +604,11 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<lumen_core::text_events::TextEditApplied>(world);
     register::<TextInputCommitted>(world);
     register::<ControlInput>(world);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        register::<CustomEvent>(world);
+        register::<CustomEventDelivered>(world);
+    }
 }
 
 /// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so
@@ -1489,6 +1644,98 @@ pub(crate) mod text_event_tests {
         assert!(
             !event::is_default_prevented("click", target),
             "a cancel is recorded for its own event type only",
+        );
+        event::clear_all_bindings();
+        publish_dom_index(DomIndex::default());
+    }
+
+    /// A module's custom event bubbles from its target to a handler on an
+    /// ancestor with its detail, a handler's `prevent_default` is reported
+    /// for a cancelable event only, a non-bubbling one stops at its target,
+    /// and a built-in event's name is refused.
+    #[test]
+    fn custom_events_travel_like_dom_events() {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::node::{DomIndex, DomRecord, publish_dom_index};
+
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        world.init_resource::<PendingDomEvents>();
+        let dock = world.spawn_empty().id();
+        let panel = world.spawn_empty().id();
+        let record = |entity: Entity, parent: Option<Entity>, children: Vec<Entity>| DomRecord {
+            entity,
+            generation: entity.generation().to_bits(),
+            tag: String::new(),
+            id: None,
+            classes: Vec::new(),
+            parent,
+            children,
+            child_index: 0,
+            sibling_count: 0,
+            doc_order: 0,
+        };
+        publish_dom_index(DomIndex::build(vec![
+            record(dock, None, vec![panel]),
+            record(panel, Some(dock), Vec::new()),
+        ]));
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        for name in ["panelclose", "panelshow", "click"] {
+            let sink = Arc::clone(&seen);
+            event::register_native_binding(
+                lumen_core::node::NodeHandle::new(dock).pack(),
+                name.to_string(),
+                false,
+                Arc::new(move || {
+                    let detail = event::event_detail();
+                    sink.lock().unwrap().push(format!(
+                        "{} reason={:?}",
+                        event::event_type(),
+                        detail.get("reason"),
+                    ));
+                    event::event_prevent_default();
+                }),
+            );
+        }
+
+        let mut close = CustomEvent::new(panel, "panelclose").with("reason", "user");
+        close.cancelable = true;
+        world.write_message(close.clone());
+        world.write_message(CustomEvent::new(panel, "panelshow"));
+        let mut quiet = CustomEvent::new(panel, "panelshow");
+        quiet.bubbles = false;
+        world.write_message(quiet);
+        world.write_message(CustomEvent::new(panel, "click"));
+        world
+            .run_system_once(queue_custom_events)
+            .expect("system ran");
+        deliver_custom_events(&mut world);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "panelclose reason=Some(Str(\"user\"))".to_string(),
+                "panelshow reason=None".to_string(),
+            ],
+            "the cancelable and the bubbling event reach the dock; the one \
+             that does not bubble and the one with a built-in name do not"
+        );
+        let delivered: Vec<(String, bool)> = world
+            .resource_mut::<Messages<CustomEventDelivered>>()
+            .drain()
+            .map(|d| (d.event.name, d.default_prevented))
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![
+                ("panelclose".to_string(), true),
+                ("panelshow".to_string(), false),
+                ("panelshow".to_string(), false),
+            ],
+            "a cancel counts only on a cancelable event"
         );
         event::clear_all_bindings();
         publish_dom_index(DomIndex::default());

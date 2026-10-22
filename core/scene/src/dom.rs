@@ -55,6 +55,8 @@ use lumen_script::{
     EventHosts, PendingDomEvents, ScriptCommand, ScriptSet, deliver_input_events,
     deliver_state_events, queue_pointer_and_key_events, queue_state_events,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lumen_script::{deliver_custom_events, queue_custom_events};
 
 use crate::fragments::{
     FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args, instance_body,
@@ -175,6 +177,18 @@ fn install_dom_events(app: &mut App) {
             // tick, in one fixed order. Inert when no text plugin is
             // installed (empty set).
             .after(lumen_core::text_events::TextEditSet::Apply),
+    );
+    // A module's own events, after the state events so a handler hears a
+    // control's `change` before the custom event the control's owner raised
+    // about it. A page runs no Rust module to raise one; its add-ons answer
+    // through plugin events instead, so a browser build carries none of this.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(
+        TickStage::Systems,
+        (queue_custom_events, deliver_custom_events)
+            .chain()
+            .in_set(ScriptSet::DomState)
+            .after(deliver_state_events),
     );
 }
 

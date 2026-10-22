@@ -787,6 +787,9 @@ fn register_dom_events(
     });
     engine.register_fn("key", |_e: &mut Event| -> String { ev::event_key() });
     engine.register_fn("value", |_e: &mut Event| -> String { ev::event_value() });
+    engine.register_fn("detail", |_e: &mut Event| -> rhai::Dynamic {
+        script_value_to_dynamic(&ScriptValue::Map(ev::event_detail()))
+    });
     engine.register_fn("button", |_e: &mut Event| -> i64 { ev::event_button() });
     engine.register_fn("x", |_e: &mut Event| -> f64 {
         ev::event_position_local().0

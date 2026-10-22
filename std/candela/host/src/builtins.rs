@@ -1747,6 +1747,15 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Text value for `input` / `change` / `submit`.",
     },
     BuiltinFn {
+        name: "event_detail",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "any",
+        doc: "What a module's custom event carries, as a map; empty for a built-in event.",
+    },
+    BuiltinFn {
         name: "event_button",
         params: &[BuiltinParam {
             name: "ev",

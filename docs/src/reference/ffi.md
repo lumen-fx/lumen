@@ -647,6 +647,11 @@ for an `on_any_*` handler, the nearest id at or above the target), `target()`
 (the innermost element, as a `Node`), `row()` (the `<for>` row the target is
 in), `position()`, `button()`, `checked()`, `value()` and `modifiers()`.
 
+A module's own events are a kind too: `on(EventKind::Custom("layoutchange"),
+"editor", f)` runs when the module raises `layoutchange` on `editor` or
+anything inside it. `detail()` is what the event carries, and
+`default_prevented()` whether a script or native handler cancelled it first.
+
 `Ui` is everything a handler works with:
 
 - Signals: `get::<T>(name)` (the type's default when unset), `try_get`,
