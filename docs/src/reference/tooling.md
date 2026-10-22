@@ -333,6 +333,10 @@ also take `pointer`, an object with the web `PointerEvent` fields
 `height`, each optional; without it the event is the mouse's. One request is
 drained per tick, in order.
 
+Input aimed at a window a modal blocks is dropped, as the platform drops it:
+a pointer kind lands in the window it names (else the primary one), a key kind
+in the window of the focused element.
+
 `click` and `key` press and release on the same tick. To hold a button or a key
 across ticks, send the halves separately: `pointer_down` leaves the button held
 until `pointer_up`, which with `pointer_move` in between drives a drag, and
