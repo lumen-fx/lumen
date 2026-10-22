@@ -20,6 +20,12 @@ public/lumenc/completions/* text eol=lf
 # output, and the compiler embeds the file via include_str!; a CRLF checkout
 # on Windows breaks both. Keep candela sources at LF everywhere.
 *.cdl text eol=lf
+# The generated C++ and Python module wrappers are byte-compared against the
+# generator's output by the module_bindings test, so a CRLF checkout on
+# Windows fails the comparison. Keep them, and the Python package beside
+# them, at LF.
+public/lumenui/cpp/include/lumen_*.hpp text eol=lf
+public/lumenui/python/lumen/*.py text eol=lf
 # The server spec golden file is byte-compared against what a build writes,
 # so a CRLF checkout on Windows fails the comparison. Keep it at LF.
 web/tests/fixtures/lumen.site.json text eol=lf

@@ -47,6 +47,46 @@ from .errors import LumenInvalidHandleError, status_to_exception
 __all__ = ["App", "get_library"]
 
 
+def take_value(value: "_ffi.LumenValue") -> object:
+    """Copy a value Lumen wrote into plain Python, then release Lumen's."""
+
+    try:
+        return _ffi.from_lumen_value(value)
+    finally:
+        get_library().lumen_value_free(ctypes.byref(value))
+
+
+def call(ns: str, name: str, *args: object) -> object:
+    """Call the app's script function ``name`` in namespace ``ns``.
+
+    Every function a module registers is reachable this way
+    (``lumen.call("canvas", "fill_rect", "art", 0, 0, 10, 10)``), as are the
+    portable builtins (``ns`` of ``""`` or ``"lumen"``) and the app's own
+    exposed functions (``"native"``). Arguments are plain Python values,
+    checked against the function's signature; the result comes back as one.
+    Raises :class:`~lumen.errors.LumenBadArgError` for an unknown function or
+    arguments that do not fit, and :class:`~lumen.errors.LumenScriptError`
+    when the function fails. Callable once the app is running, from any
+    thread, including from a handler.
+    """
+
+    lib = get_library()
+    keepalive: list = []
+    argv = (_ffi.LumenValue * max(len(args), 1))(
+        *[_ffi.to_lumen_value(a, keepalive) for a in args]
+    )
+    out = _ffi.LumenValue()
+    status = lib.lumen_call(
+        ns.encode("utf-8"),
+        name.encode("utf-8"),
+        len(args),
+        ctypes.cast(argv, ctypes.POINTER(_ffi.LumenValue)),
+        ctypes.byref(out),
+    )
+    _raise_for_status(lib, status, "lumen.call")
+    return take_value(out)
+
+
 def _positional_arity(func: Callable[..., object]) -> int | None:
     """Number of positional parameters ``func`` accepts, or ``None`` when
     it takes a variable number (``*args``) or its signature can't be

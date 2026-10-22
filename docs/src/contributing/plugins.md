@@ -792,7 +792,9 @@ and list them, with their detail fields, in the plugin's documentation.
 
 A plugin can give the app's script functions of its own. One description covers
 every language: describe the function once and a Rhai, Lua, or candela script
-calls it.
+calls it. C, C++ and Python reach the same functions through the C ABI's
+`lumen_call`; the C++ and Python SDKs carry a typed wrapper per first-party
+module, which `lumenc::bindings` generates from the registered signatures.
 
 The short form takes a plain Rust closure and reads the signature off its
 types:

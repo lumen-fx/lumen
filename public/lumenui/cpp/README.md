@@ -111,7 +111,7 @@ cargo build -p lumen --release  # release -> target/release/liblumen.{so,a}
 
 The C ABI header lives at `include/lumen.h`, with the
 cbindgen-generated `lumen_simple.h` beside it. Both are committed, so there is
-no generation step to consume them. This SDK targets ABI 0.14. The
+no generation step to consume them. This SDK targets ABI 0.17. The
 compatibility check, `abi_compatible()`, compares the cbindgen-generated
 `LUMEN_ABI_VERSION` (the constant `lumen_abi_version()` itself returns)
 against the loaded library, so it tracks the library exactly rather than the
@@ -198,11 +198,12 @@ FFI frames is undefined behavior.
 | ABI | `abi_compatible()`, `header_abi_version()`, `runtime_abi_version()` | `LUMEN_API_VERSION`, `lumen_abi_version` |
 | Lifecycle | `lumen::App` - ctor `Options`, `title`, `size`, `expose`, `on_click`, `on_close`, `run`, `run_checked`, `run_headless` | `lumen_app_new/set_title/set_size/expose/on_click/on_close/run/run_headless/free` |
 | Signals | `lumen::Signal<T>` - ctor, `get`/`set`, `operator= * += -=`, `watch` | `lumen_signal_set_str/_int64/_float64/_bool/_color`, the matching getters, `lumen_signal_watch` |
-| Dynamic DOM | `lumen::dom` - `spawn`, `get_by_id`, `query`, `Node`, `Event`, `Listener` | `lumen_node_*`, `lumen_dom_*` |
+| Dynamic DOM | `lumen::dom` - `spawn`, `get_by_id`, `query`, `Node`, `Event` (`detail()` for a module's event), `Listener` | `lumen_node_*`, `lumen_dom_*`, `lumen_event_detail` |
 | Colors | `lumen::Color` - `from_hex`, `to_hex` | RGBA bytes |
 | Navigation | `lumen::navigate`, `navigate_back`, `navigate_forward`, `current_page` | `lumen_navigate*`, `lumen_current_page` |
 | Window | `lumen::window` - `title`, `set_title`, `size`, `set_size`, `dpr`, `close`; `lumen::App::quit` | `lumen_window_*`, `lumen_app_quit` |
 | Values | `lumen::Value` (nil/bool/int/float/string/array/map), `lumen::Args` | `LumenValue`, `LumenFn` |
+| Script functions | `lumen::call(ns, name, args)`; one generated header per first-party module, `<lumen_canvas.hpp>` and the rest | `lumen_call`, `lumen_value_free` |
 | Errors | `lumen::Error`, `last_error()`, `status_message()` | `lumen_last_error`, `lumen_status_message` |
 
 ## Appendix - the raw layer (`lumen::raw`)

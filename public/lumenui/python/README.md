@@ -53,6 +53,7 @@ binding names; override with `Field(name="other")`.
 | To react to a change | `signal.watch(fn)` |
 | To query / mutate the live element tree | `lumen.dom` |
 | To retitle, resize, or close the window, or quit | `lumen.window`, `App.quit` |
+| To call a module's functions, such as a canvas's | `lumen.canvas` and the other module wrappers, or `lumen.call` |
 | A raw `lumen_signal_*` C call | `lumen.raw` (appendix) |
 
 ### Dynamic DOM (`lumen.dom`)
@@ -88,6 +89,21 @@ from lumen import window
 @app.on_click("done")
 def done():
     window.close()
+```
+
+### Modules (`lumen.canvas`, `lumen.fs`, ...)
+
+Each first-party module has a wrapper module named after it, generated from
+the functions the module declares, with their types. Each function calls
+`lumen.call`, which reaches any script function by namespace and name, so it
+works while the app that declares the module runs:
+
+```python
+import lumen.canvas
+
+@app.on_click("clear")
+def clear():
+    lumen.canvas.clear("art")
 ```
 
 ### `Model` / `Field`

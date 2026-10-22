@@ -718,6 +718,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     for hook in app_hooks {
         hook(&mut app);
     }
+    // Every module and the embedder have registered their script functions
+    // by now; publish them for callers outside a script (the C ABI).
+    if let Some(registry) = app.world.get_resource::<lumen_script::ScriptFnRegistry>() {
+        lumen_script::publish_script_fns(registry);
+    }
     Ok((app, window))
 }
 
