@@ -380,11 +380,15 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
         ("UnbindEvent", ScriptCommand::UnbindEvent { token: 4 }),
         (
             "WindowSetTitle",
-            ScriptCommand::WindowSetTitle { title: s("t") },
+            ScriptCommand::WindowSetTitle {
+                window: 7,
+                title: s("t"),
+            },
         ),
         (
             "WindowSetSize",
             ScriptCommand::WindowSetSize {
+                window: 0,
                 width: 640.0,
                 height: 480.0,
             },
@@ -408,7 +412,7 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
         ),
         ("RequestFrame", ScriptCommand::RequestFrame),
         ("SetLocale", ScriptCommand::SetLocale { tag: s("de-DE") }),
-        ("WindowClose", ScriptCommand::WindowClose),
+        ("WindowClose", ScriptCommand::WindowClose { window: 9 }),
         ("AppQuit", ScriptCommand::AppQuit),
     ]
 }
@@ -547,8 +551,11 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
         "3000000001000000000000000500000000000000636c69636b010400000000000000",
     ),
     ("UnbindEvent", "310000000400000000000000"),
-    ("WindowSetTitle", "32000000010000000000000074"),
-    ("WindowSetSize", "33000000000020440000f043"),
+    (
+        "WindowSetTitle",
+        "320000000700000000000000010000000000000074",
+    ),
+    ("WindowSetSize", "330000000000000000000000000020440000f043"),
     (
         "AddRecentFile",
         "3400000009000000000000006e6f7465732e74787405000000000000004e6f746573",
@@ -559,7 +566,7 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
     ("QueryAutostart", "38000000010000000000000067"),
     ("RequestFrame", "39000000"),
     ("SetLocale", "3a000000050000000000000064652d4445"),
-    ("WindowClose", "3b000000"),
+    ("WindowClose", "3b0000000900000000000000"),
     ("AppQuit", "3c000000"),
 ];
 
@@ -608,7 +615,7 @@ const EVENT_GOLDEN: &[(&str, &str)] = &[
 
 #[test]
 fn wire_version_is_pinned() {
-    assert_eq!(SCRIPT_WIRE_VERSION, 4);
+    assert_eq!(SCRIPT_WIRE_VERSION, 5);
 }
 
 #[test]

@@ -410,9 +410,11 @@ fn window_setters_apply_headlessly() {
     // the app's window, which a run with no display applies at once: the
     // viewport takes the size, and the getters read what the window has.
     push_external_dom_command(ScriptCommand::WindowSetTitle {
+        window: 0,
         title: "Docs".into(),
     });
     push_external_dom_command(ScriptCommand::WindowSetSize {
+        window: 0,
         width: 640.0,
         height: 480.0,
     });
@@ -420,9 +422,8 @@ fn window_setters_apply_headlessly() {
     assert_eq!(lumen_core::window_state::title(), "Docs");
     assert_eq!(lumen_core::window_state::size(), (640.0, 480.0));
     assert_eq!(
-        h.app
-            .world
-            .resource::<lumen_core::render_world::Viewport>()
+        lumen_core::window::primary_viewport(&h.app.world)
+            .expect("a primary window")
             .size,
         glam::Vec2::new(640.0, 480.0),
         "layout runs at the size the window took"
@@ -430,6 +431,7 @@ fn window_setters_apply_headlessly() {
 
     // A size no window can have is dropped.
     push_external_dom_command(ScriptCommand::WindowSetSize {
+        window: 0,
         width: 0.0,
         height: 480.0,
     });
@@ -478,12 +480,13 @@ fn run_with_close(cmd: ScriptCommand, veto: bool, ticks: u32) -> CloseLog {
                     let asked: Vec<_> = cursor
                         .read(&msgs)
                         .filter(|m| !m.vetoed)
-                        .map(|m| m.reason)
+                        .map(|m| (m.window, m.reason))
                         .collect();
-                    for reason in asked {
+                    for (window, reason) in asked {
                         log.reasons.push(reason);
                         if veto {
                             msgs.write(CloseRequest {
+                                window,
                                 reason,
                                 vetoed: true,
                             });
@@ -512,7 +515,7 @@ fn a_quit_ends_a_headless_run() {
 /// `window.close()` asks the hook first, and a veto keeps the run going.
 #[test]
 fn a_vetoed_window_close_keeps_the_run_going() {
-    let log = run_with_close(ScriptCommand::WindowClose, true, 20);
+    let log = run_with_close(ScriptCommand::WindowClose { window: 0 }, true, 20);
     assert_eq!(log.reasons, [lumen_core::input::CloseReason::WindowClose]);
     assert_eq!(log.ticks, 21, "every tick ran, plus the veto tick");
 }

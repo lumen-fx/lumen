@@ -346,9 +346,7 @@ fn main() {}
 fn window_size_reads_two_floats() {
     // The getter reads what the window has: the viewport an app runs at.
     let mut app = lumen_core::app::App::new();
-    app.world
-        .resource_mut::<lumen_core::render_world::Viewport>()
-        .size = [1024.0, 768.0].into();
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = [1024.0, 768.0].into();
     app.tick();
     let mut host = load(
         r#"

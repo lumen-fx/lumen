@@ -21,8 +21,8 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::components::Style;
 use lumen_core::prelude::*;
-use lumen_core::render_world::Viewport;
 use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
+use lumen_core::window::Viewports;
 
 use crate::tabs::DropdownButton;
 
@@ -205,18 +205,18 @@ fn press_hits_popup(
 /// The placement is held in [`StyleOverrides`] while the panel is open, so
 /// a restyle meanwhile keeps it, and let go of on close.
 pub fn flip_open_dropdown_panels(
-    viewport: Option<Res<Viewport>>,
+    viewports: Viewports,
     store: Res<PropertyStore>,
     headers: Query<(&DropdownButton, &Transform, Option<&PopupGap>)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     mut panels: Query<(Entity, &PopupPanel, &mut Style, &mut StyleOverrides)>,
 ) {
-    let Some(viewport) = viewport else {
-        return;
-    };
-    let vp = viewport.size;
     for (panel_e, panel, mut style, mut overrides) in &mut panels {
+        // The panel clamps to the window it shows in.
+        let Some(vp) = viewports.of(panel_e).map(|v| v.size) else {
+            continue;
+        };
         let open = store.get_global_bool(&panel.open_signal) == Some(true);
         let placed = overrides.held_by::<PopupPanel>().is_some();
         if !open {
@@ -332,20 +332,22 @@ fn menu_point(store: &PropertyStore, menu_id: &str) -> Option<Vec2> {
 /// which places it against the layout this one produces, and the placement
 /// settles in the tick that finds nothing to move.
 pub fn place_menus_at_points(
-    viewport: Option<Res<Viewport>>,
+    viewports: Viewports,
     anim: Option<Res<lumen_core::render_world::AnimationsActive>>,
     store: Res<PropertyStore>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     mut panels: Query<(Entity, &PopupPanel, &mut Style, &mut StyleOverrides)>,
 ) {
-    let vp = viewport
-        .map(|v| v.size)
-        .unwrap_or(Vec2::splat(f32::INFINITY));
     for (panel_e, panel, mut style, mut overrides) in &mut panels {
         let Some(menu_id) = panel.open_signal.strip_prefix(MENU_OPEN_PREFIX) else {
             continue;
         };
+        // The menu clamps to the window it shows in.
+        let vp = viewports
+            .of(panel_e)
+            .map(|v| v.size)
+            .unwrap_or(Vec2::splat(f32::INFINITY));
         let placed = overrides.held_by::<PopupPanel>().is_some();
         let point = (store.get_global_bool(&panel.open_signal) == Some(true))
             .then(|| menu_point(&store, menu_id))
@@ -560,10 +562,13 @@ mod tests {
     /// prove a CSS-supplied gap changes the panel's anchored position.
     fn run_flip_with_gap(header_y: f32, gap: Option<f32>) -> f32 {
         let mut world = World::new();
-        world.insert_resource(Viewport {
-            size: Vec2::new(500.0, 500.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            lumen_core::window::WindowViewport {
+                size: Vec2::new(500.0, 500.0),
+                ..lumen_core::window::WindowViewport::default()
+            },
+        );
         world.insert_resource(PropertyStore::default());
         world
             .resource_mut::<PropertyStore>()
@@ -641,10 +646,13 @@ mod tests {
     /// the panel.
     fn menu_at_world(point: &str) -> (World, Entity) {
         let mut world = World::new();
-        world.insert_resource(Viewport {
-            size: Vec2::new(500.0, 500.0),
-            ..Viewport::default()
-        });
+        lumen_core::window::spawn_primary_window(
+            &mut world,
+            lumen_core::window::WindowViewport {
+                size: Vec2::new(500.0, 500.0),
+                ..lumen_core::window::WindowViewport::default()
+            },
+        );
         world.insert_resource(PropertyStore::default());
         {
             let mut store = world.resource_mut::<PropertyStore>();

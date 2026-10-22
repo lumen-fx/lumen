@@ -783,7 +783,9 @@ appends the result under `parent`, and returns the new handle.
 
 Each is its own host namespace, declared by the same prelude import.
 
-The window setters ask for a change, which the window takes after the tick:
+The window functions act on the current window: the window of the event
+being handled, else the app's main window. The window setters ask for a
+change, which the window takes after the tick:
 the getters report what the window has, so a new title or size reads back on a
 later tick. The window manager may refuse or adjust a size; a tiling window
 manager sizes windows itself. A maximized window is restored to take a new
@@ -799,7 +801,7 @@ size.
 | `window::dpr()` | `float` | Device pixel ratio. |
 | `window::size()` | `float[]` | `[width, height]` the window has, in logical pixels. |
 | `window::set_size(width: float, height: float)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
-| `window::close()` | | Close the window. `on_close` runs first and can keep it open; closing the only window ends the app. |
+| `window::close()` | | Close the window. `on_close` runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
 | `window::location_path()` | `string` | The current page path. |
 | `window::location_query()` | `string` | The query string of the request the document is being rendered for, without the leading `?`. |
 | `window::location_hash()` | `string` | The fragment of the request the document is being rendered for, without the leading `#`. |

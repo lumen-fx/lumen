@@ -62,6 +62,7 @@ fn main() {
     .screenshot(HeadlessOptions {
         dpr: 1.0,
         ticks: Some(8),
+        ..HeadlessOptions::default()
     });
     let frame = match frame {
         Ok(frame) => frame,

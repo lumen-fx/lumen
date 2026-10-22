@@ -20,7 +20,6 @@ use bevy_ecs::message::Messages;
 use glam::Vec2;
 use lumen_core::components::{LumenId, Transform};
 use lumen_core::input::{DragEndEvent, DragStartEvent};
-use lumen_core::render_world::Viewport;
 use lumen_core::signals::ArraySignals;
 use lumen_os_dnd::DragSource;
 use lumenc::{RunOptions, build_headless_app};
@@ -74,7 +73,7 @@ fn dragging_a_card_onto_another_lane_moves_it() {
     let (mut app, _window) = build_headless_app(opts).expect("build headless kanban");
 
     // Give layout a real viewport so drop targets get non-zero bounds.
-    app.world.resource_mut::<Viewport>().size = Vec2::new(1040.0, 720.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(1040.0, 720.0);
 
     // Settle: on_start seeds `cards`, refresh_board fans them into the
     // per-lane view arrays, the `<for>` reconciler spawns card rows, and

@@ -139,10 +139,18 @@ fn native_leaves(app: &App) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// The primary window's retained tree.
+fn primary_scene(app: &App) -> Option<Arc<Node>> {
+    let primary = lumen_core::window::primary_entity(&app.world)?;
+    lumen_core::render_world::render_window(&app.render_world, primary)?
+        .scene
+        .clone()
+}
+
 fn native_nodes(app: &App) -> Vec<Arc<Node>> {
     let mut found = Vec::new();
-    if let Some(root) = app.render_world.resource::<RetainedScene>().root.as_ref() {
-        collect(root, &mut found);
+    if let Some(root) = primary_scene(app) {
+        collect(&root, &mut found);
     }
     found
 }
@@ -392,9 +400,11 @@ fn registering_a_painter_mid_run_forces_the_next_frame() {
     ));
     app.tick();
     clear_dirty(&mut app);
-    app.render_world
-        .resource_mut::<lumen_core::node_ir::PreviousScene>()
-        .root = app.render_world.resource::<RetainedScene>().root.clone();
+    let primary = lumen_core::window::primary_entity(&app.world).expect("a primary window");
+    let painted = primary_scene(&app);
+    lumen_core::render_world::render_window_mut(&mut app.render_world, primary)
+        .expect("a render window")
+        .previous = painted;
 
     app.register_native_painter(SPARKLINE, SparklinePainter);
 
@@ -403,9 +413,9 @@ fn registering_a_painter_mid_run_forces_the_next_frame() {
         "registration marks the frame dirty",
     );
     assert!(
-        app.render_world
-            .resource::<lumen_core::node_ir::PreviousScene>()
-            .root
+        lumen_core::render_world::render_window(&app.render_world, primary)
+            .expect("a render window")
+            .previous
             .is_none(),
         "and drops the last painted tree so the damage gate cannot skip the frame",
     );
@@ -455,7 +465,9 @@ fn a_leaf_entirely_off_screen_is_culled() {
     let mut app = App::new();
     install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
-    let viewport = app.render_world.resource::<Viewport>().size;
+    let viewport = lumen_core::window::primary_viewport(&app.world)
+        .unwrap()
+        .size;
     app.world.spawn((
         Transform {
             absolute: glam::Vec2::new(viewport.x + 50.0, 10.0),

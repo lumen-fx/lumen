@@ -30,7 +30,8 @@ for example `lumenc run --help`. A bare `help` is not a subcommand flag, so
 
 ```
 lumenc run <dir> [--profile chrome|tracy|stderr]
-                 [--headless [--size WxH] [--dpr N] [--ticks N]]
+                 [--headless [--size WxH] [--dpr N] [--ticks N]
+                             [--monitors LIST] [--positioning=on|off]]
                  [--artifact <file>] [--assets <file.lpak>] [--no-hooks]
                  [--offline]
 ```
@@ -45,16 +46,18 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 | `--size` | `WxH` | `[window] size`, else `960x720` | Logical viewport size. Requires `--headless`. Zero dimensions are rejected. |
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
+| `--monitors` | comma-separated `WxH[@SCALE]` | one 1920x1080 monitor at `--dpr` | The virtual desktop the app's windows open on, monitors laid out left to right; `@SCALE` defaults to 1. A window takes the scale of the monitor it lands on, and the primary window opens on the first, so `--dpr` is ignored. Requires `--headless`. |
+| `--positioning` | `on`, `off` | `on` | `off` ignores the positions windows ask for and places every window itself, the way Wayland does. Requires `--headless`. |
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
 | `--assets` | path to a `.lpak` | none | Reads images, icons, sounds, and the font files `@font-face` names from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
 | `--offline` | - | off | Resolves the app's registry packages from what is already downloaded and never reaches the network. A package that has not been downloaded exits 1. |
 
 Both `--flag value` and `--flag=value` are accepted for `--profile`,
-`--size`, `--dpr`, `--ticks`, `--artifact`, and `--assets`.
+`--size`, `--dpr`, `--ticks`, `--monitors`, `--artifact`, and `--assets`.
 
-Without `--headless`, passing `--size`, `--dpr`, or `--ticks` is a usage
-error.
+Without `--headless`, passing `--size`, `--dpr`, `--ticks`, `--monitors`, or
+`--positioning` is a usage error.
 
 `run` executes the app's `[[hooks]]` entries: every `prebuild` hook, then
 every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).
@@ -876,10 +879,13 @@ previous tick when omitted.
 
 ```
 lumenc screenshot [out.png] [--highlight id1,id2,...] [--lint]
-                  [--bounds map.json] [--port P] [--app <dir>]
+                  [--bounds map.json] [--window W] [--port P] [--app <dir>]
 ```
 
-Captures the app to a PNG, defaulting to `lumen-screenshot.png`.
+Captures one of the app's windows to a PNG, defaulting to
+`lumen-screenshot.png`. `--window` picks the window: `primary` (the default),
+its position in the MCP `lumen_windows` list, its name, or its id from that
+list.
 `--highlight` outlines the listed entity ids; `--lint` outlines every lint
 finding. `--bounds` also writes the entity bounds map as JSON. Prints the
 output path and pixel size. A non-integer in `--highlight` exits 2; an

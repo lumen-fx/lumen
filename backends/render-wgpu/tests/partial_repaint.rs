@@ -52,7 +52,7 @@ fn empty_damage_skips_encode_localized_change_repaints() {
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(W, H));
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(0.05, 0.05, 0.07);
     }
@@ -148,11 +148,9 @@ fn a_resize_with_an_unchanged_tree_repaints() {
     let mut app = App::new();
     app.add_plugin(WgpuRendererPlugin::new(W, H));
     let set_size = |app: &mut App, w: u32, h: u32| {
-        for world in [&mut app.world, &mut app.render_world] {
-            let mut vp = world.resource_mut::<Viewport>();
-            vp.size = glam::Vec2::new(w as f32, h as f32);
-            vp.clear = Color::rgb(0.05, 0.05, 0.07);
-        }
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
+        vp.size = glam::Vec2::new(w as f32, h as f32);
+        vp.clear = Color::rgb(0.05, 0.05, 0.07);
     };
     set_size(&mut app, W, H);
     spawn_grid(&mut app);
@@ -188,7 +186,7 @@ fn readback(app: &App) -> Vec<u8> {
     app.render_world
         .get_non_send::<WgpuRenderer>()
         .expect("offscreen renderer present")
-        .read_rgba8()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
         .expect("framebuffer readback")
 }
 

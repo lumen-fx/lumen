@@ -186,9 +186,13 @@ The text shaper is one of these. It lives in `ShaperService`, and a plugin that
 brings its own shaper installs it with `insert_non_send`. Layout measures text
 through whatever is installed, so the swap covers sizing as well as drawing.
 
-`Viewport` exists in both worlds. If your plugin resizes or reconfigures the
+Each window's `WindowViewport` is a component on its window entity, and it
+exists in both worlds. If your plugin resizes or reconfigures a window's
 surface, write both copies; layout reads the main-world one and the renderer
-reads the render-world one.
+reads the render-world one. `primary_viewport(&world)` reads the primary
+window's. A system that needs the viewport an element lays out in takes the
+`Viewports` system parameter, whose `of(entity)` answers with the viewport of
+the window the element shows in.
 
 `RunMode` says whether this run has an interactive session, and is in the
 world before the first plugin is installed. Read it with `app.is_headless()`
@@ -206,12 +210,55 @@ An embedder that assembles its own `App` may never insert the resource, so
 absence reads as an interactive run; that is the safe default for whatever is
 being suppressed.
 
+## Opening windows
+
+A window is an entity with a `Window` component, and an app's elements all
+live in one document. To show part of the document in a window of its own,
+spawn the window and put `WindowOf` on the element that should show there:
+
+```rust
+use lumen_core::prelude::*;
+use glam::Vec2;
+use lumen_core::window::{Window, WindowName, WindowOf};
+
+fn pop_out(mut commands: Commands, panel: Entity) {
+    let window = commands
+        .spawn((
+            Window::new("Inspector", Vec2::new(900.0, 700.0)),
+            WindowName("inspector".into()),
+        ))
+        .id();
+    commands.entity(panel).insert(WindowOf(window));
+}
+```
+
+The element stays where it is in the tree: its styles, signals, selectors,
+and event listeners are unchanged, and its events bubble to its ancestors in
+the other window. It lays out against the new window and paints there.
+Removing `WindowOf` puts it back. `WindowName` gives the window the name the
+MCP tools and `lumenc screenshot --window` accept.
+
+When the user closes the window, `WindowClosing { window }` arrives a tick
+before it despawns. Remove `WindowOf` from your content then to keep it;
+anything still in the window is despawned with it. Closing the primary window
+quits the app, subject to `[app] quit`. Set `Window::owner` and `Window::kind`
+for a tool window that stays above its owner, `Window::position` (physical
+desktop pixels, see the `Monitors` resource) to place it, and `InputBlocked`
+on a window a modal blocks. The devtools pop-out (`lumen-devtools`) is a
+complete example.
+
 ## Render-world plugins
 
 A render backend implements one trait, `lumen_core::traits::Renderer`, for
-both kinds of target: `attach` binds it to a window or to an offscreen image
-(`FrameTarget`), `wants_present` answers whether the frame changed, and
-`present` paints and puts it up. A window backend drives it directly. For an
+both kinds of target. One renderer serves every window of an app on one
+device, and every call names its target by the main-world window entity:
+`attach(window, target)` binds that window to a platform window or to an
+offscreen image (`FrameTarget`), `resize` follows its size, `wants_present`
+answers whether its frame changed, `present` paints it and puts it up, and
+`detach` drops it when the window closes. `set_present_mode` says whether a
+window's present waits for the display (`PresentMode::Vsync`, the focused
+window) or not (`PresentMode::NoWait`, the others). A window backend drives it
+directly. For an
 offscreen image, `lumen_core::render_backend::install_offscreen` puts an
 attached renderer into `app.render_world`, registers the system in
 `RenderStage::Render` that drives it each frame, and calls
@@ -227,8 +274,8 @@ backend's adds an optional text shaper alongside. The extract install is a
 no-op when another backend already made it, so a test that builds a bare
 `App` and reads the render world makes the same call itself.
 
-A renderer builds its frame from the shared pieces in `lumen_paint`:
-`wants_frame` is the gate (a dirty tick whose retained tree differs from the
+A renderer builds each window's frame from the shared pieces in
+`lumen_paint`, passing the window it is painting: `wants_frame` is the gate (a dirty tick whose retained tree differs from the
 last painted one, a fresh or resized target, or a pending screenshot),
 `paint_frame` walks the retained tree into the backend's own `Painter` and
 records it as the tree the next frame diffs against, and `answer_capture`
@@ -259,6 +306,12 @@ app's state is meant to change there.
 
 Adding a new drawable primitive is three pieces: an extracted component, an
 extract function that produces it, and a render system that consumes it.
+Every window's drawables are extracted together. After the chain runs, a
+drawable the built-in extracts or `upsert_native_leaves` made for an element in
+a secondary window carries `ExtractedWindow(window)`; anything without it
+paints in the primary window, so a primitive of your own that lives outside
+those paths tags itself when its element is in another window
+(`WindowPartitions::window_of` answers which).
 Replacing an existing entry in the chain, rather than appending, is how a
 plugin changes what every primitive sees.
 

@@ -8,7 +8,6 @@ use lumen_core::app::App;
 use lumen_core::components::{
     Border, Color, Edges, Fill, Opacity, ShadowSpec, TextContent, TextStyle, Transform, Visuals,
 };
-use lumen_core::render_world::Viewport;
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_text::ShaperService;
 use lumen_text_cosmic::CosmicShaper;
@@ -36,8 +35,8 @@ fn solid(r: f32, g: f32, b: f32) -> Visuals {
 fn render(opacity: f32) -> Vec<u8> {
     let mut app = App::new();
     app.add_plugin(CpuRendererPlugin::new(W, H));
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(1.0, 1.0, 1.0);
     }
@@ -55,7 +54,9 @@ fn render(opacity: f32) -> Vec<u8> {
         ChildOf(tile),
     ));
     app.tick();
-    app.render_world.non_send::<CpuRenderer>().read_rgba8()
+    app.render_world
+        .non_send::<CpuRenderer>()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
 }
 
 fn pixel(pixels: &[u8], x: u32, y: u32) -> (u8, u8, u8) {
@@ -103,8 +104,8 @@ struct Cards {
 fn cards(width: u32, height: u32) -> Cards {
     let mut app = App::new();
     app.add_plugin(CpuRendererPlugin::new(width, height));
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(width as f32, height as f32);
         vp.clear = Color::rgb(1.0, 1.0, 1.0);
     }
@@ -167,7 +168,9 @@ impl Cards {
             .expect("the ticker")
             .fill = Some(Fill::Solid(Color::rgb(shade, 1.0, 0.0)));
         self.app.tick();
-        self.renderer().read_rgba8()
+        self.renderer().read_rgba8(
+            lumen_core::window::primary_entity(&self.app.world).expect("a primary window"),
+        )
     }
 
     fn renderer(&self) -> &CpuRenderer {
@@ -175,7 +178,11 @@ impl Cards {
     }
 
     fn stats(&self) -> lumen_paint::LayerStats {
-        self.renderer().layer_stats()
+        self.renderer()
+            .layer_stats(
+                lumen_core::window::primary_entity(&self.app.world).expect("a primary window"),
+            )
+            .expect("attached")
     }
 }
 
@@ -298,8 +305,9 @@ fn a_resize_forgets_the_layers() {
     scene.frame(0);
     scene.frame(1);
     assert_eq!(scene.stats().layers, 3);
-    for world in [&mut scene.app.world, &mut scene.app.render_world] {
-        world.resource_mut::<Viewport>().size = glam::Vec2::new(W as f32, 70.0);
+    {
+        lumen_core::window::primary_viewport_mut(&mut scene.app.world).size =
+            glam::Vec2::new(W as f32, 70.0);
     }
     let resized = scene.frame(2);
     assert_eq!(scene.stats().layers, 0);
@@ -317,8 +325,8 @@ fn label(opacity: f32, faded: bool) -> (Vec<Vec<u8>>, lumen_paint::LayerStats) {
     app.add_plugin(CpuRendererPlugin::new(W, H));
     app.render_world
         .insert_non_send(ShaperService::new(CosmicShaper::new()));
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(1.0, 1.0, 1.0);
     }
@@ -356,10 +364,16 @@ fn label(opacity: f32, faded: bool) -> (Vec<Vec<u8>>, lumen_paint::LayerStats) {
                 .expect("the ticker")
                 .fill = Some(Fill::Solid(Color::rgb(n as f32 / 3.0, 1.0, 0.0)));
             app.tick();
-            app.render_world.non_send::<CpuRenderer>().read_rgba8()
+            app.render_world.non_send::<CpuRenderer>().read_rgba8(
+                lumen_core::window::primary_entity(&app.world).expect("a primary window"),
+            )
         })
         .collect();
-    let stats = app.render_world.non_send::<CpuRenderer>().layer_stats();
+    let stats = app
+        .render_world
+        .non_send::<CpuRenderer>()
+        .layer_stats(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
+        .expect("attached");
     (frames, stats)
 }
 

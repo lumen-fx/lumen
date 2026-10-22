@@ -141,7 +141,8 @@ fn tools_list_result() -> Value {
                 "properties": {
                     "max_lines": { "type": "integer", "minimum": 1 },
                     "cursor": { "type": "integer", "minimum": 0 },
-                    "omit_invisible": { "type": "boolean" }
+                    "omit_invisible": { "type": "boolean" },
+                    "window": { "type": ["integer", "string"], "description": "A window id from lumen_windows, \"primary\", its position in that list, or its name. Default: every window." }
                 },
                 "additionalProperties": false
             }),
@@ -153,7 +154,8 @@ fn tools_list_result() -> Value {
                 "type": "object",
                 "properties": {
                     "max_nodes": { "type": "integer", "minimum": 1 },
-                    "omit_invisible": { "type": "boolean" }
+                    "omit_invisible": { "type": "boolean" },
+                    "window": { "type": ["integer", "string"], "description": "A window id from lumen_windows, \"primary\", its position in that list, or its name. Its surface roots become the roots. Default: every window." }
                 },
                 "additionalProperties": false
             }),
@@ -204,7 +206,8 @@ fn tools_list_result() -> Value {
                 "type": "object",
                 "properties": {
                     "x": { "type": "number" },
-                    "y": { "type": "number" }
+                    "y": { "type": "number" },
+                    "window": { "type": ["integer", "string"], "description": "A window id from lumen_windows, \"primary\", its position in that list, or its name. Default: the primary window." }
                 },
                 "required": ["x", "y"],
                 "additionalProperties": false
@@ -267,14 +270,20 @@ fn tools_list_result() -> Value {
             }),
         ),
         tool_descriptor(
+            "lumen_windows",
+            "List the app's windows, the primary one first: id, title, size, scale, whether shown and focused, position and monitor.",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool_descriptor(
             "lumen_screenshot",
-            "PNG screenshot of the surface (optional highlight overlays).",
+            "PNG screenshot of one window's surface (optional highlight overlays).",
             json!({
                 "type": "object",
                 "properties": {
                     "highlight_ids": { "type": "array", "items": { "type": "integer" } },
                     "highlight_lint": { "type": "boolean" },
-                    "include_bounds_map": { "type": "boolean" }
+                    "include_bounds_map": { "type": "boolean" },
+                    "window": { "type": ["integer", "string"], "description": "A window id from lumen_windows, \"primary\", its position in that list, or its name. Default: the primary window." }
                 },
                 "additionalProperties": false
             }),
@@ -285,7 +294,8 @@ fn tools_list_result() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "kind": { "type": "string" }
+                    "kind": { "type": "string" },
+                    "window": { "type": ["integer", "string"], "description": "A window id from lumen_windows, \"primary\", its position in that list, or its name. Pointer positions are in its coordinates. Default: the primary window." }
                 },
                 "required": ["kind"],
                 "additionalProperties": true

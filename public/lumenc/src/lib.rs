@@ -100,8 +100,11 @@ pub use layout_ir::{
     Edges, Element, LayoutIR, LengthSpec, LintFinding, LintKind, LintSeverity, ParseError,
 };
 #[cfg(feature = "dev-run")]
+pub use lumen_core::window::MonitorInfo;
+#[cfg(feature = "dev-run")]
 pub use lumen_runtime::{
     AppHook, CheckReport, HeadlessOptions, RunError, RunOptions, SourceParser, WindowSetup,
+    parse_monitors,
 };
 pub use parse::css::{CssWarning, Stylesheet, apply_css, parse_css};
 #[cfg(feature = "runtime-parse")]

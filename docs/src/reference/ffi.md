@@ -288,7 +288,7 @@ window is restored to take a new size.
 | `lumen_window_set_size(LumenWindow window, float width, float height)` | Ask for a new window size, in logical pixels. A side that is not positive returns `LUMEN_ERR_BAD_ARG`. |
 | `lumen_window_size(LumenWindow window, float *width, float *height)` | The size the window has, in logical pixels. |
 | `lumen_window_dpr(LumenWindow window, float *out)` | The window's device pixel ratio. |
-| `lumen_window_close(LumenWindow window)` | Close the window. The close hook runs first and can keep it open; closing the only window ends the app. |
+| `lumen_window_close(LumenWindow window)` | Close the window. The close hook runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
 
 ## Query and traverse
 
@@ -648,12 +648,14 @@ like any other.
 rendering on the app's `[render] backend` into an offscreen target, scripts,
 and the introspection server when `[mcp] simulate` is on. It is the mode
 `lumenc run --headless` runs a markup app in. `HeadlessOptions` sets the
-target's device pixel ratio and an optional tick bound; without one the run
-lasts until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
+target's device pixel ratio, an optional tick bound, and the virtual desktop
+the app's windows open on (`monitors`, `positioning`, as `lumenc run
+--monitors` and `--positioning` set them); without a tick bound the run lasts
+until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
 is the cheaper mode that ticks the app and paints nothing.
 
 `App::screenshot` runs the same way and returns the frame the closing tick
-painted, as a `Frame` of straight-alpha RGBA8 pixels. `save_png` and
+painted in the primary window, as a `Frame` of straight-alpha RGBA8 pixels. `save_png` and
 `open_png` read and write PNG files, and two frames compare equal when every
 pixel does, so an app can screenshot itself or check a view against a golden
 image in its own tests:
@@ -664,7 +666,7 @@ use lumenui::prelude::*;
 #[test]
 fn the_main_view_matches_its_golden() {
     let frame = app::app()
-        .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })
+        .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3), ..Default::default() })
         .unwrap();
     assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
 }

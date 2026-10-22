@@ -25,8 +25,8 @@
 //! costs one composite and a fade costs no repaint.
 //!
 //! The frame logic around the walk is shared too: [`wants_frame`] decides
-//! whether a frame is worth painting, [`paint_frame`] walks the render
-//! world's retained scene into a sink, and [`answer_capture`] hands a
+//! whether a window's frame is worth painting, [`paint_frame`] walks the
+//! window's retained tree into a sink, and [`answer_capture`] hands a
 //! pending screenshot the result, so every renderer gates, paints, and
 //! captures the same way on every kind of target.
 //!
@@ -60,9 +60,7 @@ pub use peniko::kurbo;
 pub use pixels::PixelImage;
 pub use rasterize::{Rasterize, Rasterizer};
 pub use recording::Recording;
-pub use walker::{
-    ClipStack, WalkContext, diff_retained_scenes, scene_has_damage, walk_node, walk_retained_scene,
-};
+pub use walker::{ClipStack, WalkContext, diff_retained_scenes, scene_has_damage, walk_node};
 
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};

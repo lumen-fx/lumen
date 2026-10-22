@@ -12,7 +12,6 @@ use lumen_core::app::App;
 use lumen_core::components::{
     Color, Length, LumenId, LumenTag, Opacity, Style, Transform, Visible,
 };
-use lumen_core::prelude::Viewport;
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 
@@ -51,7 +50,7 @@ fn app(backend: Backend) -> App {
         Backend::Cpu => app.add_plugin(CpuRendererPlugin::new(W, H)),
     };
     app.add_plugin(CanvasPlugin::default());
-    let mut vp = app.render_world.resource_mut::<Viewport>();
+    let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
     vp.size = glam::Vec2::new(W as f32, H as f32);
     vp.clear = Color::rgb(0.0, 0.0, 0.0);
     app
@@ -88,12 +87,14 @@ fn fill_green(id: &str, x: f64, y: f64, w: f64, h: f64) {
 
 fn read_back(app: &App) -> Vec<u8> {
     match app.render_world.get_non_send::<WgpuRenderer>() {
-        Some(gpu) => gpu.read_rgba8().expect("readback"),
+        Some(gpu) => gpu
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
+            .expect("readback"),
         None => app
             .render_world
             .get_non_send::<CpuRenderer>()
             .expect("a renderer")
-            .read_rgba8(),
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window")),
     }
 }
 

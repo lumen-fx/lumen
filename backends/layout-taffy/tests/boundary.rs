@@ -22,10 +22,7 @@ fn app_with_viewport(w: f32, h: f32) -> App {
         let mut layout = app.world.get_non_send_mut::<LayoutResource>().unwrap();
         layout.set_viewport(w, h);
     }
-    app.world.insert_resource(Viewport {
-        size: glam::Vec2::new(w, h),
-        ..Viewport::default()
-    });
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = glam::Vec2::new(w, h);
     app
 }
 

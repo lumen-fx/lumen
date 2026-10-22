@@ -39,8 +39,9 @@ use lumen_core::components::{
 };
 use lumen_core::input::{ControlInput, FocusedKey};
 use lumen_core::prelude::*;
-use lumen_core::render_world::{AnimationsActive, Viewport};
+use lumen_core::render_world::AnimationsActive;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
+use lumen_core::window::Viewports;
 
 use crate::popup::{PopupSide, anchored_popup_origin};
 
@@ -562,7 +563,7 @@ type PartWrite = (
 /// so a tick that moves one asks for another to place it against the
 /// layout this one produces.
 pub fn sync_color_parts(
-    viewport: Option<Res<Viewport>>,
+    viewports: Viewports,
     anim: Option<Res<AnimationsActive>>,
     fields: Query<(Entity, &ColorInput)>,
     parents: Query<&ChildOf>,
@@ -573,11 +574,13 @@ pub fn sync_color_parts(
     if fields.is_empty() {
         return;
     }
-    let vp = viewport
-        .map(|v| v.size)
-        .unwrap_or(Vec2::splat(f32::INFINITY));
     let mut moved = false;
     for (entity, part, mut overrides, mut style, mut visuals, text) in &mut parts {
+        // A panel clamps to the window the field shows in.
+        let vp = viewports
+            .of(entity)
+            .map(|v| v.size)
+            .unwrap_or(Vec2::splat(f32::INFINITY));
         let Some(field_e) = field_of(entity, &parents, |x| fields.contains(x)) else {
             continue;
         };

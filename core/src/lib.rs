@@ -51,14 +51,14 @@ pub mod prelude {
     pub use crate::components::OsTheme;
     pub use crate::components::{
         A11yAnnouncement, A11yAnnouncementQueue, A11yContextMenuRequests, A11yDescription,
-        A11yLabel, A11yLevel, A11yLive, A11yRelations, A11yRole, A11yRootLabel,
-        A11yScrollIntoViewRequests, A11ySetSize, A11yState, A11yValue, AlignContent, BindChecked,
-        BindDisabled, BindParentChecked, BindParentText, BindParentValue, BindSelfChecked,
-        BindSelfText, BindSelfValue, BindText, BindTextLabels, BindValue, Border, BoxSizing,
-        CaretBlink, Color, ColorScheme, DefaultLayoutDirection, DirtyA11y, DirtyLayout, Disabled,
-        DocumentOrder, DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection, FlexJustify,
-        FlexWrap, FocusBoundary, ImageBlob, ImageComponent, ImageFit, ImeState, Lang,
-        LayoutDirection, Length, LumenClasses, LumenId, LumenTag, MemoryBudget, Opacity, Overflow,
+        A11yLabel, A11yLevel, A11yLive, A11yRelations, A11yRole, A11yScrollIntoViewRequests,
+        A11ySetSize, A11yState, A11yValue, AlignContent, BindChecked, BindDisabled,
+        BindParentChecked, BindParentText, BindParentValue, BindSelfChecked, BindSelfText,
+        BindSelfValue, BindText, BindTextLabels, BindValue, Border, BoxSizing, CaretBlink, Color,
+        ColorScheme, DefaultLayoutDirection, DirtyA11y, DirtyLayout, Disabled, DocumentOrder,
+        DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection, FlexJustify, FlexWrap,
+        FocusBoundary, ImageBlob, ImageComponent, ImageFit, ImeState, Lang, LayoutDirection,
+        Length, LumenClasses, LumenId, LumenTag, MemoryBudget, Opacity, Overflow,
         PendingA11yUpdate, Position, RelayoutBoundary, ResolvedDirection, RootWindowEntity,
         Selected, ShadowSpec, SliderValue, Style, StyleManager, StyleVersion, SvgPayload, TabIndex,
         TextAlign, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, TextWrap,
@@ -89,10 +89,7 @@ pub mod prelude {
         DomIndex, DomRecord, NodeHandle, NodeHandles, dom_index_snapshot, intern_node,
         publish_dom_index, resolve_node,
     };
-    pub use crate::node_ir::{
-        Affine2, ClipShape, DrawEntry, Node, PreviousScene, RetainedScene,
-        transform_extracted_to_nodes,
-    };
+    pub use crate::node_ir::{Affine2, ClipShape, DrawEntry, Node, transform_extracted_to_nodes};
     pub use crate::palette::Palette;
     pub use crate::property_store::{
         BindingId, ListenerId, Property, PropertyCell, PropertyKey, PropertyStore, PropertyValue,
@@ -101,8 +98,9 @@ pub mod prelude {
     pub use crate::render_world::{
         AnimationsActive, Brush, ExtractFn, ExtractSchedule, ExtractSet, ExtractedClipBox,
         ExtractedImage, ExtractedMaskGroup, ExtractedOpacityGroup, ExtractedOutline, ExtractedRect,
-        ExtractedScrollbar, ExtractedShadow, ExtractedText, FrameDirty, Rect, Render, RenderStage,
-        ScrollbarDrawRect, SurfaceCapture, SurfaceFrame, Viewport, install_extract_pipeline,
+        ExtractedScrollbar, ExtractedShadow, ExtractedText, ExtractedWindow, FrameDirty, Rect,
+        Render, RenderStage, RenderWindow, ScrollbarDrawRect, SurfaceCapture, SurfaceFrame,
+        install_extract_pipeline,
     };
     #[allow(deprecated)]
     pub use crate::signals::Signals;
@@ -124,6 +122,10 @@ pub mod prelude {
     pub use crate::traits::{
         A11yBackend, A11yBridgeFactory, Bindable, FrameRequest, FrameTarget, LayoutEngine,
         RenderError, RenderTarget, Renderer, Spawn, Timer, WindowBackend, WindowError,
+    };
+    pub use crate::window::{
+        PrimaryWindow, Viewports, Window, WindowOf, WindowPartitions, WindowRuntime,
+        WindowViewport, primary_viewport, primary_viewport_mut,
     };
 
     // Re-export the bevy_ecs hierarchy components used across the crate.

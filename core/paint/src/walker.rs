@@ -7,8 +7,8 @@
 //!
 //! ## Frame diff
 //!
-//! [`diff_retained_scenes`] compares the prior frame's tree (via `lumen_core::node_ir::PreviousScene`)
-//! against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The answer gates
+//! [`diff_retained_scenes`] compares the tree last painted into a window
+//! (`lumen_core::render_world::RenderWindow::previous`) against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The answer gates
 //! whether a backend repaints at all.
 
 use crate::cache::FragmentCache;
@@ -20,9 +20,9 @@ use crate::layers::{LayerCache, Plan};
 use crate::{PaintTarget, Shape};
 use bevy_ecs::world::World;
 use lumen_core::native::{NativePaintCtx, NativePainters};
-use lumen_core::node_ir::{Affine2, ClipShape, Node, PreviousScene, RetainedScene};
+use lumen_core::node_ir::{Affine2, ClipShape, Node};
 use lumen_core::render_world::{
-    ExtractedOutline, ExtractedRect, ExtractedShadow, Rect as LumenRect, Viewport,
+    ExtractedOutline, ExtractedRect, ExtractedShadow, Rect as LumenRect,
 };
 use peniko::Fill;
 use peniko::kurbo::{Affine, Rect, RoundedRect};
@@ -92,7 +92,7 @@ pub struct WalkContext<'a> {
 impl<'a> WalkContext<'a> {
     /// Builds a context with identity transform + full opacity + empty clip stack.
     ///
-    /// Walker coordinates are LOGICAL pixels (matching `Viewport.size` /
+    /// Walker coordinates are LOGICAL pixels (matching `WindowViewport.size` /
     /// `Transform.absolute` from layout-taffy). For drawing into a
     /// physical-pixel-sized target, callers should use
     /// [`Self::new_with_dpr`] instead so logical coords scale to physical
@@ -683,15 +683,6 @@ pub(crate) fn subtree_changed(prev: &Arc<Node>, curr: &Arc<Node>) -> bool {
     diff_node(prev, curr, GROUP_EXTENT, Affine::IDENTITY)
 }
 
-/// Walks the [`RetainedScene`] root into the context's painter.
-///
-/// Convenience entry point - equivalent to `walk_node(&ctx, &scene.root)` once the root is known to exist.
-pub fn walk_retained_scene(ctx: &mut WalkContext<'_>, scene: &RetainedScene) {
-    if let Some(root) = scene.root.as_ref() {
-        walk_node(ctx, root);
-    }
-}
-
 /// Whether `curr` paints differently from `prev`: the frame gate every renderer applies before
 /// repainting.
 ///
@@ -1177,20 +1168,17 @@ fn has_area(r: LumenRect) -> bool {
     r.size.x > 0.0 && r.size.y > 0.0
 }
 
-/// Whether the retained Node IR differs visually from the last painted frame.
+/// Whether `target`'s retained tree differs visually from the last frame painted into it.
 ///
-/// Diffs `PreviousScene` (the last painted tree) against `RetainedScene` (this tick's freshly built
-/// tree). Conservative: the diff assumes-changed for any leaf it cannot compare (an image or SVG
-/// payload of a type it does not know), so it never misses a change, and a render world missing the scene resources (a non-standard embed)
-/// always reports one.
-pub fn scene_has_damage(render_world: &World) -> bool {
-    let previous = render_world.get_resource::<PreviousScene>();
-    let retained = render_world.get_resource::<RetainedScene>();
-    let (Some(previous), Some(retained)) = (previous, retained) else {
+/// Diffs the window's previous tree (the last painted one) against its tree for this tick.
+/// Conservative: the diff assumes-changed for any leaf it cannot compare (an image or SVG payload
+/// of a type it does not know), so it never misses a change, and a target the render world has no
+/// window for (a non-standard embed) always reports one.
+pub fn scene_has_damage(render_world: &World, target: bevy_ecs::entity::Entity) -> bool {
+    let Some(window) = lumen_core::render_world::render_window(render_world, target) else {
         return true;
     };
-    let size = render_world
-        .get_resource::<Viewport>()
+    let size = lumen_core::render_world::render_viewport(render_world, target)
         .map(|v| v.size)
         .unwrap_or_default();
     let viewport_rect = LumenRect {
@@ -1198,8 +1186,8 @@ pub fn scene_has_damage(render_world: &World) -> bool {
         size,
     };
     diff_retained_scenes(
-        previous.root.as_ref(),
-        retained.root.as_ref(),
+        window.previous.as_ref(),
+        window.scene.as_ref(),
         viewport_rect,
     )
 }

@@ -17,7 +17,7 @@ fn render_one_rect_and_read_back() {
     app.add_plugin(WgpuRendererPlugin::new(64, 64));
 
     {
-        let mut vp = app.render_world.resource_mut::<Viewport>();
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(64.0, 64.0);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -39,7 +39,9 @@ fn render_one_rect_and_read_back() {
     app.tick();
 
     let renderer = app.render_world.get_non_send::<WgpuRenderer>().unwrap();
-    let pixels = renderer.read_rgba8().expect("readback");
+    let pixels = renderer
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
+        .expect("readback");
     assert_eq!(pixels.len(), 64 * 64 * 4);
 
     let i = (32 * 64 + 32) * 4;

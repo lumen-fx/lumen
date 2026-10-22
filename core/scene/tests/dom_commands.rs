@@ -166,6 +166,28 @@ fn a_tree_edit_restyles_the_subtree_it_changed() {
     assert_eq!(*world.resource::<StyleVersion>(), StyleVersion::default());
 }
 
+/// A page's window: the app has its primary window, but no window driver
+/// applies titles, so the title reads back at once.
+#[test]
+fn an_undriven_window_reports_its_new_title_at_once() {
+    use lumen_core::window::{PrimaryWindow, Window};
+
+    let mut world = world();
+    let window = world.spawn((Window::default(), PrimaryWindow)).id();
+    apply(
+        &mut world,
+        vec![ScriptCommand::WindowSetTitle {
+            window: 0,
+            title: "Paged".into(),
+        }],
+    );
+    assert_eq!(world.get::<Window>(window).unwrap().title, "Paged");
+    assert_eq!(
+        lumen_core::window_state::title_of(window.to_bits()),
+        "Paged"
+    );
+}
+
 /// A world nothing drives a window for (a browser page, a bare app) still
 /// answers `window.set_title` through the getter, and drops a close or quit
 /// with no one to obey it instead of queueing a request nobody reads.
@@ -178,13 +200,14 @@ fn window_commands_without_a_window_keep_to_the_getter() {
         &mut world,
         vec![
             ScriptCommand::WindowSetTitle {
+                window: 0,
                 title: "Unwindowed".into(),
             },
-            ScriptCommand::WindowClose,
+            ScriptCommand::WindowClose { window: 0 },
             ScriptCommand::AppQuit,
         ],
     );
-    assert_eq!(lumen_core::window_state::title(), "Unwindowed");
+    assert_eq!(lumen_core::window_state::title_of(0), "Unwindowed");
     assert!(!world.contains_resource::<Messages<WindowRequest>>());
     assert!(!world.contains_resource::<Messages<QuitRequest>>());
 }

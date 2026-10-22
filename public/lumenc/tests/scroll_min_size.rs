@@ -14,7 +14,6 @@
 use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenId, Transform};
-use lumen_core::prelude::Viewport;
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
@@ -31,7 +30,7 @@ fn build(markup: &str) -> App {
     opts.hot_reload = false;
     let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     // The issue's 400x300 window. Layout follows the `Viewport` resource.
-    app.world.resource_mut::<Viewport>().size = Vec2::new(400.0, 300.0);
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = Vec2::new(400.0, 300.0);
     for _ in 0..4 {
         app.tick();
     }

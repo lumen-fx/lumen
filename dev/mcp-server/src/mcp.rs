@@ -158,7 +158,8 @@ fn tools_list_result() -> Value {
                     "type": "object",
                     "properties": {
                         "x": { "type": "number" },
-                        "y": { "type": "number" }
+                        "y": { "type": "number" },
+                        "window": { "type": ["integer", "string"], "description": "The window the point is in: an id from lumen_windows, \"primary\", a position in that list, or a name. Default: the primary window." }
                     },
                     "required": ["x", "y"],
                     "additionalProperties": false
@@ -193,7 +194,8 @@ fn tools_list_result() -> Value {
                     "properties": {
                         "max_lines": { "type": "integer", "description": "Cap on output rows. Default 200, max 2000." },
                         "cursor": { "type": "integer", "description": "next_cursor from a prior call to paginate." },
-                        "omit_invisible": { "type": "boolean", "description": "Skip entities with no transform or zero size. Default true." }
+                        "omit_invisible": { "type": "boolean", "description": "Skip entities with no transform or zero size. Default true." },
+                        "window": { "type": ["integer", "string"], "description": "Only this window's entities: an id from lumen_windows, \"primary\", a position in that list, or a name. Default: every window." }
                     },
                     "additionalProperties": false
                 }
@@ -205,7 +207,8 @@ fn tools_list_result() -> Value {
                     "type": "object",
                     "properties": {
                         "max_nodes": { "type": "integer", "description": "Node budget. Default 2000, max 10000; response sets truncated:true when hit." },
-                        "omit_invisible": { "type": "boolean", "description": "Skip zero-size / transform-less nodes. Default false." }
+                        "omit_invisible": { "type": "boolean", "description": "Skip zero-size / transform-less nodes. Default false." },
+                        "window": { "type": ["integer", "string"], "description": "Only this window's subtrees, rooted at its surface roots: an id from lumen_windows, \"primary\", a position in that list, or a name. Default: every window." }
                     },
                     "additionalProperties": false
                 }
@@ -252,7 +255,12 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_resources",
-                "description": "Current Viewport, PointerState, Modifiers, FocusTracker.",
+                "description": "The primary window's viewport, every window, PointerState, Modifiers, FocusTracker.",
+                "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+            },
+            {
+                "name": "lumen_windows",
+                "description": "List the app's windows, the primary one first: {id, index, name?, title, size, scale, primary, visible, focused, position?, monitor?}. The id, index, or name is what the window argument of lumen_screenshot, lumen_snapshot_text, lumen_element_at and lumen_simulate takes.",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             },
             {
@@ -309,7 +317,8 @@ fn tools_list_result() -> Value {
                             "additionalProperties": false
                         },
                         "text": { "type": "string", "description": "Used by kind=type." },
-                        "wait_for": { "type": "string", "description": "Optional ring name to poll after dispatch (e.g. ClickEvent, KeyPressed)." }
+                        "wait_for": { "type": "string", "description": "Optional ring name to poll after dispatch (e.g. ClickEvent, KeyPressed)." },
+                        "window": { "type": ["integer", "string"], "description": "The window the pointer event happens in; x and y are in its coordinates. An id from lumen_windows, \"primary\", a position in that list, or a name. Default: the primary window." }
                     },
                     "required": ["kind"],
                     "additionalProperties": false
@@ -333,7 +342,8 @@ fn tools_list_result() -> Value {
                         "include_bounds_map": {
                             "type": "boolean",
                             "description": "Return bounds_map: [{id,x,y,w,h,role,label}] alongside the PNG."
-                        }
+                        },
+                        "window": { "type": ["integer", "string"], "description": "The window to capture: an id from lumen_windows, \"primary\", a position in that list, or a name. Default: the primary window." }
                     },
                     "additionalProperties": false
                 }
@@ -370,6 +380,7 @@ async fn tools_call(
         "lumen_inspect_entity" => "lumen.inspect_entity",
         "lumen_list_extracted" => "lumen.list_extracted",
         "lumen_resources" => "lumen.resources",
+        "lumen_windows" => "lumen.windows",
         "lumen_recent_messages" => "lumen.recent_messages",
         "lumen_screenshot" => "lumen.screenshot",
         "lumen_simulate" => "lumen.simulate",

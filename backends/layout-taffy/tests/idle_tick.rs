@@ -59,9 +59,7 @@ fn build_app() -> (App, Entity) {
 
     // A definite viewport so `sync_viewport` settles after the first tick
     // instead of re-dirtying every frame.
-    if let Some(mut vp) = app.world.get_resource_mut::<Viewport>() {
-        vp.size = glam::Vec2::new(1280.0, 800.0);
-    }
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = glam::Vec2::new(1280.0, 800.0);
 
     // Representative tree: a classed root, `ROWS` flex containers, and a
     // mix of plain + signal-bound leaves under each.

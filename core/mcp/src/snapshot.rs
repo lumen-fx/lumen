@@ -160,6 +160,10 @@ pub struct EntityInspect {
     /// Markup `class="a b c"` list from [`lumen_core::components::LumenClasses`].
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub classes: Vec<String>,
+    /// The window the entity shows in, when the app has more than one
+    /// window and it is not the primary one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<u64>,
 }
 
 /// [`lumen_primitives::Interaction`] view: hover-tint + press-tint + focus-outline.
@@ -339,13 +343,46 @@ pub struct ExtractedTextView {
     pub fill: ColorView,
 }
 
-/// Viewport resource view.
+/// The primary window's viewport.
 #[derive(Serialize, Clone, Copy, Debug, Default)]
 pub struct ViewportView {
     /// Logical pixel size.
     pub size: V2,
     /// Clear color.
     pub clear: ColorView,
+}
+
+/// One window of the app, as `lumen_windows` lists it.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct WindowView {
+    /// The window entity's bits: what the `window` argument of
+    /// `lumen_screenshot`, `lumen_snapshot_text`, `lumen_snapshot_tree`,
+    /// `lumen_element_at` and `lumen_simulate` takes.
+    pub id: u64,
+    /// Position in the list: `0` is the primary window, the others follow in
+    /// the order they opened.
+    pub index: usize,
+    /// The window's name, when something named it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Window title.
+    pub title: String,
+    /// Inner size in logical pixels.
+    pub size: V2,
+    /// Logical to physical scale factor.
+    pub scale: f32,
+    /// Whether this is the primary window.
+    pub primary: bool,
+    /// Whether the window is shown.
+    pub visible: bool,
+    /// Whether the window has keyboard focus.
+    pub focused: bool,
+    /// Outer top-left corner in physical desktop pixels, where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<[i32; 2]>,
+    /// The monitor the window is on, where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<String>,
 }
 
 /// Pointer-state view.
@@ -540,8 +577,10 @@ pub struct Snapshot {
     pub rects: Vec<ExtractedRectView>,
     /// Most recent extracted text (render-world).
     pub texts: Vec<ExtractedTextView>,
-    /// Main-world resources.
+    /// Main-world resources: the primary window's viewport.
     pub viewport: ViewportView,
+    /// Every window, the primary one first.
+    pub windows: Vec<WindowView>,
     /// Pointer state.
     pub pointer: PointerStateView,
     /// Modifier state.

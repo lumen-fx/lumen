@@ -79,7 +79,9 @@ see [tooling](reference/tooling.md).
 Lumen is in alpha. APIs can change between releases, so pin a version for
 anything you depend on.
 
-- An app has one window. Dialogs, popups, and overlays are drawn inside it.
+- Markup and scripts work in one window; a Rust plugin can open more and show
+  part of the document in each. Dialogs, popups, and overlays are drawn inside
+  the window they belong to.
 - Desktop only. There is no web, iOS, or Android target.
 - The CSS is a subset. There are no pseudo-elements, and animation is limited
   to transitions between property values.

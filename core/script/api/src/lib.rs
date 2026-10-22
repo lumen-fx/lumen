@@ -701,14 +701,20 @@ pub enum ScriptCommand {
     },
 
     // -- window / document (section 4.8) -------------------------------
-    /// Set the OS window title (`window.set_title`).
+    /// Set a window's title (`window.set_title`).
     WindowSetTitle {
+        /// The window, as packed entity bits: the window of the event the
+        /// call was made from (`lumen_core::window_state::current`). `0`
+        /// names the primary window.
+        window: u64,
         /// New title string.
         title: String,
     },
-    /// Resize the OS window to `width` x `height` logical pixels
+    /// Resize a window to `width` x `height` logical pixels
     /// (`window.set_size`).
     WindowSetSize {
+        /// The window, as for [`Self::WindowSetTitle`].
+        window: u64,
         /// Logical width.
         width: f32,
         /// Logical height.
@@ -764,9 +770,13 @@ pub enum ScriptCommand {
         /// BCP-47 tag, such as `"de-DE"`.
         tag: String,
     },
-    /// Close the window (`window.close()`), through the same veto path the
+    /// Close a window (`window.close()`), through the same veto path the
     /// window's close button takes: `on_close` runs and can keep it open.
-    WindowClose,
+    /// Closing the primary window ends the app.
+    WindowClose {
+        /// The window, as for [`Self::WindowSetTitle`].
+        window: u64,
+    },
     /// Quit the app (`app.quit()`): every window is asked to close, and a
     /// veto from any `on_close` cancels the quit.
     AppQuit,
@@ -798,7 +808,7 @@ impl ScriptCommand {
                 | ScriptCommand::UnbindEvent { .. }
                 | ScriptCommand::WindowSetTitle { .. }
                 | ScriptCommand::WindowSetSize { .. }
-                | ScriptCommand::WindowClose
+                | ScriptCommand::WindowClose { .. }
                 | ScriptCommand::AppQuit
         )
     }

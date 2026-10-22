@@ -27,18 +27,33 @@ const READ_TIMEOUT_MS: u64 = 5_000;
 const SCREENSHOT_USAGE: &str = "lumenc screenshot - capture the running app to a PNG
 
 USAGE:
-    lumenc screenshot [out.png] [--highlight id1,id2,...] [--lint]
+    lumenc screenshot [out.png] [--window W] [--highlight id1,id2,...] [--lint]
                       [--bounds map.json] [--port P] [--app D]
 
 Writes the PNG to disk (default lumen-screenshot.png) so the bytes never
 enter an agent's context window.
 
+    --window W        Which window to capture: primary (the default), its
+                      position among the app's windows (0 is the primary),
+                      its name, or its id from the MCP lumen_windows tool.
     --highlight IDS   Draw neon-magenta outlines around these entity ids.
     --lint            Outline every lint finding instead.
     --bounds FILE     Also write the entity bounds_map as JSON.
     --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
                       lumen.toml [mcp] port (with --app), then 7878.
     --app DIR         App directory to read [mcp] port from.";
+
+/// The MCP `window` argument `--window value` names: a window id when the
+/// value is a number too large to be a position in a window list (window
+/// ids are packed entity bits, far past any window count), else the string
+/// itself (`primary`, a position, or a name).
+fn window_arg(value: &str) -> Value {
+    const POSITIONS: u64 = 1_000_000;
+    match value.parse::<u64>() {
+        Ok(id) if id >= POSITIONS => json!(id),
+        _ => json!(value),
+    }
+}
 
 /// `lumenc screenshot [out.png] [--highlight ids] [--lint] [--bounds map.json]`:
 /// capture a PNG, optionally with a neon-marker overlay around the listed
@@ -51,6 +66,7 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
     let mut highlight_lint = false;
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
+    let mut window: Option<String> = None;
     let mut positional_seen = false;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
@@ -59,6 +75,14 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
                 outln!("{SCREENSHOT_USAGE}");
                 return ExitCode::SUCCESS;
             }
+            "--window" => match args.next() {
+                Some(w) => window = Some(w),
+                None => {
+                    return usage_err(
+                        "lumenc screenshot: --window needs primary, a position, a name or an id",
+                    );
+                }
+            },
             "--highlight" => match args.next() {
                 Some(list) => {
                     for tok in list.split(',') {
@@ -96,6 +120,9 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
     }
 
     let mut params = serde_json::Map::new();
+    if let Some(window) = window {
+        params.insert("window".into(), window_arg(&window));
+    }
     if !highlight_ids.is_empty() {
         params.insert("highlight_ids".into(), json!(highlight_ids));
     }

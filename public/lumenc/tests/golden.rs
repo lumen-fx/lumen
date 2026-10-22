@@ -34,7 +34,7 @@ use image::RgbaImage;
 use lumen_core::prelude::{
     App, Color, ColorScheme, Key, KeyPressed, KeyReleased, LumenId, Modifiers, MouseWheel,
     NamedKey, PointerButton, PointerMoved, PointerPressed, PointerState, PropertyStore,
-    StyleManager, Transform, Viewport,
+    StyleManager, Transform,
 };
 use lumen_render_cpu::{CpuRenderer, CpuRendererPlugin};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
@@ -119,10 +119,11 @@ fn gpu_blocker() -> Option<&'static str> {
     static PROBE: OnceLock<Option<String>> = OnceLock::new();
     PROBE
         .get_or_init(|| {
-            let renderer = match WgpuRenderer::new_offscreen(4, 4) {
-                Ok(renderer) => renderer,
-                Err(e) => return Some(format!("no wgpu adapter available ({e})")),
-            };
+            let renderer =
+                match WgpuRenderer::new_offscreen(bevy_ecs::entity::Entity::PLACEHOLDER, 4, 4) {
+                    Ok(renderer) => renderer,
+                    Err(e) => return Some(format!("no wgpu adapter available ({e})")),
+                };
             let info = renderer.adapter_info().expect("an attached renderer");
             if !renderer.is_software_adapter()
                 || info.backend == lumen_render_wgpu::vello::wgpu::Backend::Vulkan
@@ -240,10 +241,8 @@ fn capture_once(
     // forced color scheme so the OS light/dark preference can't leak
     // into `@media (prefers-color-scheme)` rules.
     let clear = Color::rgb(0.07, 0.07, 0.09);
-    for vp in [
-        &mut *app.world.resource_mut::<Viewport>(),
-        &mut *app.render_world.resource_mut::<Viewport>(),
-    ] {
+    {
+        let vp = &mut *lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = Vec2::new(VIEW_W as f32, VIEW_H as f32);
         vp.scale_factor = 1.0;
         vp.clear = clear;
@@ -261,13 +260,13 @@ fn capture_once(
             .render_world
             .get_non_send::<WgpuRenderer>()
             .expect("offscreen renderer present")
-            .read_rgba8()
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"))
             .expect("framebuffer readback"),
         Backend::Cpu => app
             .render_world
             .get_non_send::<CpuRenderer>()
             .expect("offscreen renderer present")
-            .read_rgba8(),
+            .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window")),
     };
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);

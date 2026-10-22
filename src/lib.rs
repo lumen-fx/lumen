@@ -1239,17 +1239,23 @@ fn build_run_options(app: LumenApp) -> RunOptions {
                     let requests: Vec<_> = cursor
                         .read(&msgs)
                         .filter(|ev| !ev.vetoed)
-                        .map(|ev| ev.reason)
+                        .map(|ev| (ev.window, ev.reason))
                         .collect();
-                    let mut veto = None;
-                    for reason in requests {
+                    let mut vetoes = Vec::new();
+                    for (window, reason) in requests {
+                        // The hook runs once per window asked to close; the
+                        // `lumen_window_*` calls it makes with
+                        // `LUMEN_WINDOW_CURRENT` answer for that window.
+                        lumen_core::window_state::set_current(Some(window));
                         let allow = unsafe { close_cb(close_ud.as_ptr()) };
                         if allow == 0 {
-                            veto = Some(reason);
+                            vetoes.push((window, reason));
                         }
                     }
-                    if let Some(reason) = veto {
+                    lumen_core::window_state::set_current(None);
+                    for (window, reason) in vetoes {
                         msgs.write(CloseRequest {
+                            window,
                             reason,
                             vetoed: true,
                         });
@@ -3433,15 +3439,18 @@ pub type LumenWindow = u64;
 /// primary window.
 pub const LUMEN_WINDOW_CURRENT: LumenWindow = 0;
 
-/// Check that `window` names a window this app has: [`LUMEN_WINDOW_CURRENT`]
-/// or the primary window's handle.
-fn ffi_window(window: LumenWindow, ctx: &str) -> Result<(), LumenStatus> {
-    if window == LUMEN_WINDOW_CURRENT || window == lumen_core::window_state::primary_handle() {
-        Ok(())
-    } else {
-        set_last_error(format!("{ctx}: no window with handle {window}"));
-        Err(LumenStatus::ErrInvalidHandle)
+/// Resolve `window` to the window a call applies to: [`LUMEN_WINDOW_CURRENT`]
+/// is the window of the event being handled, else the primary window (`0`
+/// before the app has one); any other handle must name a window that is
+/// open.
+fn ffi_window(window: LumenWindow, ctx: &str) -> Result<u64, LumenStatus> {
+    if window == LUMEN_WINDOW_CURRENT {
+        return Ok(lumen_core::window_state::current());
     }
+    lumen_core::window_state::resolve(window).ok_or_else(|| {
+        set_last_error(format!("{ctx}: no window with handle {window}"));
+        LumenStatus::ErrInvalidHandle
+    })
 }
 
 /// `window.set_title`: ask for a new title. The window backend applies it
@@ -3453,14 +3462,15 @@ pub unsafe extern "C" fn lumen_window_set_title(
     title: *const c_char,
 ) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_set_title") {
-            return status;
-        }
+        let window = match ffi_window(window, "lumen_window_set_title") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
         let title = match ffi_selector(title, "lumen_window_set_title") {
             Ok(s) => s,
             Err(status) => return status,
         };
-        push_dom(lumen_script::ScriptCommand::WindowSetTitle { title })
+        push_dom(lumen_script::ScriptCommand::WindowSetTitle { window, title })
     })
 }
 
@@ -3477,10 +3487,16 @@ pub unsafe extern "C" fn lumen_window_title(
     out_len: *mut usize,
 ) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_title") {
-            return status;
-        }
-        write_string_out(&lumen_core::window_state::title(), buf, buf_len, out_len)
+        let window = match ffi_window(window, "lumen_window_title") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
+        write_string_out(
+            &lumen_core::window_state::title_of(window),
+            buf,
+            buf_len,
+            out_len,
+        )
     })
 }
 
@@ -3495,16 +3511,21 @@ pub unsafe extern "C" fn lumen_window_set_size(
     height: f32,
 ) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_set_size") {
-            return status;
-        }
+        let window = match ffi_window(window, "lumen_window_set_size") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
         if !lumen_core::window_backend::is_window_size(width, height) {
             set_last_error(format!(
                 "lumen_window_set_size: {width} x {height} is not a window size"
             ));
             return LumenStatus::ErrBadArg;
         }
-        push_dom(lumen_script::ScriptCommand::WindowSetSize { width, height })
+        push_dom(lumen_script::ScriptCommand::WindowSetSize {
+            window,
+            width,
+            height,
+        })
     })
 }
 
@@ -3517,14 +3538,15 @@ pub unsafe extern "C" fn lumen_window_size(
     height: *mut f32,
 ) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_size") {
-            return status;
-        }
+        let window = match ffi_window(window, "lumen_window_size") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
         if width.is_null() || height.is_null() {
             set_last_error("lumen_window_size: null out");
             return LumenStatus::ErrBadArg;
         }
-        let (w, h) = lumen_core::window_state::size();
+        let (w, h) = lumen_core::window_state::size_of(window);
         unsafe {
             *width = w;
             *height = h;
@@ -3538,28 +3560,30 @@ pub unsafe extern "C" fn lumen_window_size(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_window_dpr(window: LumenWindow, out: *mut f32) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_dpr") {
-            return status;
-        }
+        let window = match ffi_window(window, "lumen_window_dpr") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
         if out.is_null() {
             set_last_error("lumen_window_dpr: null out");
             return LumenStatus::ErrBadArg;
         }
-        unsafe { *out = lumen_core::window_state::dpr() };
+        unsafe { *out = lumen_core::window_state::dpr_of(window) };
         LumenStatus::Ok
     })
 }
 
 /// `window.close`: close the window through the same veto path its close
 /// button takes, so a [`lumen_app_on_close`] hook (or a script's `on_close`)
-/// can keep it open. Closing the only window ends the app. Thread-safe.
+/// can keep it open. Closing the primary window ends the app. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_window_close(window: LumenWindow) -> LumenStatus {
     catch(|| {
-        if let Err(status) = ffi_window(window, "lumen_window_close") {
-            return status;
-        }
-        push_dom(lumen_script::ScriptCommand::WindowClose)
+        let window = match ffi_window(window, "lumen_window_close") {
+            Ok(w) => w,
+            Err(status) => return status,
+        };
+        push_dom(lumen_script::ScriptCommand::WindowClose { window })
     })
 }
 

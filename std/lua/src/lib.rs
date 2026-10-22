@@ -1936,7 +1936,10 @@ fn build_lua(
             "set_title",
             lua.create_function(|_, title: String| {
                 lumen_script::node_query::push_external_dom_command(
-                    ScriptCommand::WindowSetTitle { title },
+                    ScriptCommand::WindowSetTitle {
+                        window: lumen_core::window_state::current(),
+                        title,
+                    },
                 );
                 Ok(())
             })?,
@@ -1955,6 +1958,7 @@ fn build_lua(
             "set_size",
             lua.create_function(|_, (w, h): (f32, f32)| {
                 lumen_script::node_query::push_external_dom_command(ScriptCommand::WindowSetSize {
+                    window: lumen_core::window_state::current(),
                     width: w,
                     height: h,
                 });
@@ -1969,7 +1973,9 @@ fn build_lua(
         window.set(
             "close",
             lua.create_function(|_, ()| {
-                lumen_script::node_query::push_external_dom_command(ScriptCommand::WindowClose);
+                lumen_script::node_query::push_external_dom_command(ScriptCommand::WindowClose {
+                    window: lumen_core::window_state::current(),
+                });
                 Ok(())
             })?,
         )?;
@@ -2565,7 +2571,7 @@ mod window_tests {
         let queued = lumen_script::node_query::drain_external_dom_commands();
         let close = queued
             .iter()
-            .any(|c| matches!(c, ScriptCommand::WindowClose));
+            .any(|c| matches!(c, ScriptCommand::WindowClose { .. }));
         let quit = queued.iter().any(|c| matches!(c, ScriptCommand::AppQuit));
         assert!(close && quit, "unexpected commands: {queued:?}");
     }

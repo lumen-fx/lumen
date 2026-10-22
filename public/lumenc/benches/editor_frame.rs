@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use bevy_ecs::prelude::*;
 use lumen_canvas::{CanvasSet, CompositeOperation, Context2d, PixelBuffer};
 use lumen_core::app::App;
-use lumen_core::prelude::{FrameDirty, FrameTiming, TickStage, Viewport};
+use lumen_core::prelude::{FrameDirty, FrameTiming, TickStage};
 use lumen_core::render_backend::install_offscreen;
 use lumen_render_cpu::CpuRenderer;
 use lumen_render_wgpu::{WgpuRenderer, gpu_unavailable_reason};
@@ -218,7 +218,12 @@ enum Backend {
 
 fn read_back(app: &App) {
     if let Some(gpu) = app.render_world.get_non_send::<WgpuRenderer>() {
-        std::hint::black_box(gpu.read_rgba8().expect("readback"));
+        std::hint::black_box(
+            gpu.read_rgba8(
+                lumen_core::window::primary_entity(&app.world).expect("a primary window"),
+            )
+            .expect("readback"),
+        );
     }
 }
 
@@ -304,19 +309,22 @@ fn run(backend: Backend, buffers: usize, side: u32, rows: usize, frames: usize) 
         .with_markup(markup(rows))
         .with_css(CSS);
     let (mut app, mut window) = build_headless_app(opts).expect("the app builds");
+    let primary = lumen_core::window::primary_entity(&app.world).expect("a primary window");
     match backend {
         Backend::Gpu => install_offscreen(
             &mut app,
-            WgpuRenderer::new_offscreen(WIDTH, HEIGHT).expect("a GPU"),
+            WgpuRenderer::new_offscreen(primary, WIDTH, HEIGHT).expect("a GPU"),
         ),
-        Backend::Cpu => install_offscreen(&mut app, CpuRenderer::new_offscreen(WIDTH, HEIGHT)),
+        Backend::Cpu => {
+            install_offscreen(&mut app, CpuRenderer::new_offscreen(primary, WIDTH, HEIGHT))
+        }
     }
     if let Some(shaper) = window.text_shaper.take() {
         app.render_world
             .insert_non_send(ShaperService::from(shaper));
     }
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(WIDTH as f32, HEIGHT as f32);
         vp.scale_factor = 1.0;
     }

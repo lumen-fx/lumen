@@ -82,8 +82,8 @@ fn a_native_painter_draws_on_the_cpu_and_cannot_unbalance_the_frame() {
     app.add_plugin(CpuRendererPlugin::new(W, H));
     app.add_extract_fn(extract_solids);
     app.register_native_painter(EXTENSION, GreenThenStray);
-    for world in [&mut app.world, &mut app.render_world] {
-        let mut vp = world.resource_mut::<Viewport>();
+    {
+        let mut vp = lumen_core::window::primary_viewport_mut(&mut app.world);
         vp.size = glam::Vec2::new(W as f32, H as f32);
         vp.clear = Color::rgb(0.0, 0.0, 0.0);
     }
@@ -102,7 +102,10 @@ fn a_native_painter_draws_on_the_cpu_and_cannot_unbalance_the_frame() {
     ));
     app.tick();
 
-    let pixels = app.render_world.non_send::<CpuRenderer>().read_rgba8();
+    let pixels = app
+        .render_world
+        .non_send::<CpuRenderer>()
+        .read_rgba8(lumen_core::window::primary_entity(&app.world).expect("a primary window"));
     let pixel = |x: u32, y: u32| {
         let i = ((y * W + x) * 4) as usize;
         (pixels[i], pixels[i + 1], pixels[i + 2])

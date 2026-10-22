@@ -64,5 +64,5 @@ pub use snapshot::{
     RecordedFocusedKey, RecordedKeyPressed, RecordedKeyReleased, RecordedMouseWheel,
     RecordedPointerMoved, RecordedPointerPressed, RecordedPointerReleased, ShadowView, SignalView,
     SliderValueView, Snapshot, SnapshotHandle, StyleView, TextStyleView, TransformView, V2,
-    ViewportView, VisualsView,
+    ViewportView, VisualsView, WindowView,
 };

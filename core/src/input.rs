@@ -932,10 +932,15 @@ pub struct DragEndEvent {
 /// Aggregated pointer state refreshed each tick by the window backend.
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct PointerState {
-    /// Current cursor position in window coords; `None` when the pointer is outside the window.
+    /// Current cursor position in the logical coordinates of [`Self::window`];
+    /// `None` when the pointer is over none of the app's windows.
     pub position: Option<Vec2>,
     /// `true` when the primary button is currently held.
     pub primary_down: bool,
+    /// The window the pointer is over, or holds captured mid-press. `None`
+    /// means the primary window. Hit testing considers only the elements
+    /// that show in it.
+    pub window: Option<Entity>,
 }
 
 /// Marker on the one entity under the primary pointer, the hit target:
@@ -1536,36 +1541,44 @@ pub struct ContextMenuEvent {
     pub local: Option<Vec2>,
 }
 
-/// Emitted by window backends when the OS reports the window gained or
-/// lost keyboard focus. Backends also pause the redraw scheduler while
-/// `focused = false` so unfocused windows stop polling at vsync.
+/// Emitted by window backends when the OS reports a window gained or
+/// lost keyboard focus. Focus leaving a window remembers the element that
+/// had it ([`crate::window::LastFocus`]); focus returning restores it.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct WindowFocused {
+    /// The window whose focus changed.
+    pub window: Entity,
     /// `true` on focus-in, `false` on focus-out.
     pub focused: bool,
 }
 
-/// Emitted by window backends when the OS reports the window was
+/// Emitted by window backends when the OS reports a window was
 /// occluded (covered by another window or moved off-screen) or revealed.
-/// Backends pause the redraw scheduler while `occluded = true` to avoid
-/// spending GPU on invisible frames.
+/// An occluded window presents nothing.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct WindowOccluded {
+    /// The window whose visibility changed.
+    pub window: Entity,
     /// `true` when the window is fully occluded, `false` when visible.
     pub occluded: bool,
 }
 
-/// Emitted by window backends when the window is about to close: the OS
-/// asked (the close button, a signal), or the app did (`window.close()`,
-/// `app.quit()`). Apps that want to veto the close (e.g. to show a "save
-/// before quit?" dialog) write a fresh `CloseRequest { vetoed: true, .. }`
-/// in a system reading this message during the same tick; if no system
-/// vetoes, the backend closes the window and the app exits.
+/// Emitted when a window is about to close: the OS asked (the close
+/// button, a signal), or the app did (`window.close()`, `app.quit()`). Apps
+/// that want to veto the close (e.g. to show a "save before quit?" dialog)
+/// write a fresh `CloseRequest { vetoed: true, .. }` in a system reading
+/// this message during the same tick; if no system vetoes, the window
+/// closes. Closing the primary window ends the app (see
+/// [`crate::window::QuitPolicy`]); a quit asks every window at once, and a
+/// veto on any of them cancels it.
 ///
 /// Vetoing here mirrors `QCloseEvent::ignore()` and GTK4's
 /// `close-request -> TRUE`.
-#[derive(Message, Clone, Copy, Debug, Default)]
+#[derive(Message, Clone, Copy, Debug)]
 pub struct CloseRequest {
+    /// The window asked to close. A veto carries the window of the request
+    /// it answers.
+    pub window: Entity,
     /// What asked for the close. A veto carries the reason of the request
     /// it answers.
     pub reason: CloseReason,

@@ -74,7 +74,7 @@ or compare with a PNG it keeps:
 
 ```rust
 let frame = app::app()
-    .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3) })
+    .screenshot(HeadlessOptions { dpr: 1.0, ticks: Some(3), ..Default::default() })
     .unwrap();
 assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
 ```

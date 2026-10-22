@@ -1840,6 +1840,7 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     mut doubles: MessageReader<DoubleClickEvent>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
+    partitions: Option<Res<lumen_core::window::WindowPartitions>>,
 ) {
     // Ordered, deduped list in first-seen message order. Iterating a
     // `HashSet` directly gives a nondeterministic dispatch order when two
@@ -1847,15 +1848,19 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     // deterministic-dispatch invariant (the click path below is already
     // message-ordered).
     let double_order: Vec<Entity> = collect_ordered_unique(doubles.read().map(|ev| ev.entity));
+    // A handler's `window.*` calls apply to the window the click was in.
+    let window_of = |e: Entity| partitions.as_ref().and_then(|p| p.window_of(e));
 
     for click in clicks.read() {
         let id_str = ids.get(click.entity).map(|i| i.0.as_str()).unwrap_or("");
+        lumen_core::window_state::set_current(window_of(click.entity));
         if let Err(e) = route_event(&mut *host, "click", "on_click", id_str, &mut out) {
             warn_line!("{}: on_click failed: {e}", prefix(host.lang()));
         }
     }
     for entity in double_order {
         let id_str = ids.get(entity).map(|i| i.0.as_str()).unwrap_or("");
+        lumen_core::window_state::set_current(window_of(entity));
         if let Err(e) = route_event(
             &mut *host,
             "double_click",
@@ -1866,6 +1871,7 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
             warn_line!("{}: on_double_click failed: {e}", prefix(host.lang()));
         }
     }
+    lumen_core::window_state::set_current(None);
 }
 
 /// Forward the window backend's [`lumen_core::input::CloseRequest`] to
@@ -1892,14 +1898,17 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     let requests: Vec<_> = cursor
         .read(&msgs)
         .filter(|ev| !ev.vetoed)
-        .map(|ev| ev.reason)
+        .map(|ev| (ev.window, ev.reason))
         .collect();
-    let mut veto = None;
-    for reason in requests {
+    let mut vetoes = Vec::new();
+    for (window, reason) in requests {
+        // `on_close` runs once per window asked to close; `window.title()`
+        // and friends inside it answer for that window.
+        lumen_core::window_state::set_current(Some(window));
         match host.call("on_close", &[]) {
             Ok(outcome) => {
                 if matches!(&outcome.ret, Some(ScriptValue::Bool(false))) {
-                    veto = Some(reason);
+                    vetoes.push((window, reason));
                 }
                 forward_outcome(outcome, &mut out);
             }
@@ -1911,8 +1920,10 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
             }
         }
     }
-    if let Some(reason) = veto {
+    lumen_core::window_state::set_current(None);
+    for (window, reason) in vetoes {
         msgs.write(lumen_core::input::CloseRequest {
+            window,
             reason,
             vetoed: true,
         });

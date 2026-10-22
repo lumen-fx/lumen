@@ -776,7 +776,8 @@ pub mod window {
         lumen_core::nav::navigate(lumen_core::nav::current());
     }
 
-    /// The window title.
+    /// The title of the window the event being handled happened in (the
+    /// primary window outside a handler).
     pub fn title() -> String {
         lumen_core::window_state::title()
     }
@@ -784,6 +785,7 @@ pub mod window {
     /// Set the window title.
     pub fn set_title(title: &str) {
         nq::push_external_dom_command(ScriptCommand::WindowSetTitle {
+            window: lumen_core::window_state::current(),
             title: title.to_string(),
         });
     }
@@ -796,7 +798,11 @@ pub mod window {
     /// Resize the window (logical pixels). The window manager may refuse or
     /// adjust the size; [`size`] reports what the window has.
     pub fn set_size(width: f32, height: f32) {
-        nq::push_external_dom_command(ScriptCommand::WindowSetSize { width, height });
+        nq::push_external_dom_command(ScriptCommand::WindowSetSize {
+            window: lumen_core::window_state::current(),
+            width,
+            height,
+        });
     }
 
     /// The device-pixel ratio.
@@ -804,10 +810,13 @@ pub mod window {
         lumen_core::window_state::dpr()
     }
 
-    /// Close the window, through the same veto path its close button takes:
-    /// a close hook can keep it open. Closing the only window ends the app.
+    /// Close the window the event being handled happened in, through the
+    /// same veto path its close button takes: a close hook can keep it open.
+    /// Closing the primary window ends the app.
     pub fn close() {
-        nq::push_external_dom_command(ScriptCommand::WindowClose);
+        nq::push_external_dom_command(ScriptCommand::WindowClose {
+            window: lumen_core::window_state::current(),
+        });
     }
 }
 

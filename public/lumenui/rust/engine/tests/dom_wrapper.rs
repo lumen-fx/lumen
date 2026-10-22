@@ -135,16 +135,20 @@ fn window_document_history_namespaces() {
 
     // Close and quit reach the window driver as requests, which a driver
     // reads after the tick that made them.
-    use lumenui::lumen_core::input::CloseReason;
-    use lumenui::lumen_core::window_backend::CloseRequests;
+    use lumenui::lumen_core::window::primary_window;
+    use lumenui::lumen_core::window_backend::{CloseAsk, CloseRequests};
     let mut requests = CloseRequests::default();
     let _ = requests.take(&app.world);
     dom::window::close();
     app.tick();
-    assert_eq!(requests.take(&app.world), Some(CloseReason::WindowClose));
+    let primary = primary_window(&mut app.world).expect("a primary window");
+    assert_eq!(
+        requests.take(&app.world),
+        Some(CloseAsk::Windows(vec![primary]))
+    );
     dom::app::quit();
     app.tick();
-    assert_eq!(requests.take(&app.world), Some(CloseReason::AppQuit));
+    assert_eq!(requests.take(&app.world), Some(CloseAsk::Quit));
 
     // document.root() reaches the tree; navigation + history never panic.
     assert!(dom::document::root().is_some());

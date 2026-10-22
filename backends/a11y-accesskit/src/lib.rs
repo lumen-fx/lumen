@@ -14,9 +14,9 @@ use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
     A11yAnnouncement, A11yDescription, A11yLabel, A11yLevel, A11yLive, A11yRelations, A11yRole,
-    A11yRootLabel, A11ySetSize, A11yState, A11yValue, DirtyA11y, Disabled, LumenClasses, LumenId,
-    LumenTag, PendingA11yUpdate, RootWindowEntity, Selected, TabIndex, TextContent, TextInput,
-    Toggleable, Visible,
+    A11ySetSize, A11yState, A11yValue, DirtyA11y, Disabled, LumenClasses, LumenId, LumenTag,
+    PendingA11yUpdate, RootWindowEntity, Selected, TabIndex, TextContent, TextInput, Toggleable,
+    Visible,
 };
 use lumen_core::input::{FocusTracker, Scroll};
 use lumen_core::prelude::*;
@@ -315,6 +315,8 @@ type A11yChangeFilter = Or<(
         bevy_ecs::query::Changed<LumenClasses>,
     )>,
     Or<(
+        bevy_ecs::query::Changed<lumen_core::window::WindowOf>,
+        bevy_ecs::query::Changed<lumen_core::window::Window>,
         bevy_ecs::query::Changed<A11yRole>,
         bevy_ecs::query::Changed<A11yLabel>,
         bevy_ecs::query::Changed<A11yDescription>,
@@ -342,7 +344,10 @@ type A11yRemovals<'w, 's> = (
     RemovedComponents<'w, 's, TextInput>,
     RemovedComponents<'w, 's, A11yRole>,
     RemovedComponents<'w, 's, A11yLabel>,
-    RemovedComponents<'w, 's, A11yState>,
+    (
+        RemovedComponents<'w, 's, A11yState>,
+        RemovedComponents<'w, 's, lumen_core::window::WindowOf>,
+    ),
 );
 
 /// Raise [`A11yChanged`] when this tick touched anything the accessibility
@@ -368,7 +373,8 @@ pub fn flag_a11y_changes(
         removed.8.read().count(),
         removed.9.read().count(),
         removed.10.read().count(),
-        removed.11.read().count(),
+        removed.11.0.read().count(),
+        removed.11.1.read().count(),
     ]
     .iter()
     .any(|n| *n > 0);
@@ -387,10 +393,46 @@ pub fn flag_a11y_changes(
 pub struct A11yTreeCache {
     /// Last-emitted content hash per [`NodeId`]. Stale entries for despawned entities are pruned each tick.
     pub hashes: HashMap<NodeId, u64>,
-    /// Last focus pointer emitted to the adapter. `None` = root.
+    /// Last focus pointer emitted to the primary window's adapter. `None` = root.
     pub last_focus: Option<NodeId>,
-    /// Window root [`NodeId`]. Initialised lazily from the root entity on first run.
+    /// Primary window root [`NodeId`]. Initialised lazily from the root entity on first run.
     pub root: Option<NodeId>,
+    /// Last focus pointer emitted to each other window's adapter, by window.
+    pub window_focus: HashMap<Entity, NodeId>,
+}
+
+/// The tree updates [`sync_a11y_tree`] built this tick, one per window,
+/// stored type-erased in [`PendingA11yUpdate`] until each window's bridge
+/// takes its own.
+#[derive(Default)]
+struct WindowTreeUpdates(HashMap<Entity, TreeUpdate>);
+
+/// The key the primary window's update is stored under: its entity, or a
+/// placeholder in a world that has no window entity.
+fn primary_key(world: &World) -> Entity {
+    world
+        .get_resource::<lumen_core::window::WindowPartitions>()
+        .and_then(|p| p.primary())
+        .unwrap_or(Entity::PLACEHOLDER)
+}
+
+/// Store `update` as `window`'s pending tree update.
+fn stash_update(world: &mut World, window: Entity, update: TreeUpdate) {
+    let mut pending = world.resource_mut::<PendingA11yUpdate>();
+    if pending
+        .boxed
+        .as_ref()
+        .is_none_or(|b| !b.is::<WindowTreeUpdates>())
+    {
+        pending.boxed = Some(Box::new(WindowTreeUpdates::default()));
+    }
+    if let Some(updates) = pending
+        .boxed
+        .as_mut()
+        .and_then(|b| b.downcast_mut::<WindowTreeUpdates>())
+    {
+        updates.0.insert(window, update);
+    }
 }
 
 /// Builds an [`accesskit::TreeUpdate`] from current ECS state and stores it
@@ -409,6 +451,12 @@ pub struct A11yTreeCache {
 /// - Uses the real root window entity instead of `NodeId(u64::MAX)` when
 ///   a `RootWindowEntity` resource is present; otherwise falls back to
 ///   the legacy synthetic root for compatibility.
+/// - With more than one window, builds one tree per window: the primary
+///   window's tree as above, minus the subtrees shown in other windows, and
+///   for each other window a tree rooted at a node for the window itself
+///   (its entity's id, labelled with its title) whose children are the
+///   window's surface roots. A node that moves between windows is published
+///   again in the tree it moved to.
 pub fn sync_a11y_tree(world: &mut World) {
     world.init_resource::<A11yTreeCache>();
     world.init_resource::<PendingA11yUpdate>();
@@ -426,6 +474,18 @@ pub fn sync_a11y_tree(world: &mut World) {
     } || world.resource::<A11yChanged>().0;
 
     let focus_entity = world.resource::<FocusTracker>().0;
+    // With several windows, every element belongs to one window's tree.
+    let partitions = world
+        .get_resource::<lumen_core::window::WindowPartitions>()
+        .filter(|p| !p.is_single())
+        .cloned();
+    let primary = primary_key(world);
+    let window_of = |e: Entity| -> Entity {
+        partitions
+            .as_ref()
+            .and_then(|p| p.window_of(e))
+            .unwrap_or(primary)
+    };
 
     // Resolve the root node id. Priority:
     //   1. [`RootWindowEntity`] resource if the backend set it.
@@ -451,8 +511,33 @@ pub fn sync_a11y_tree(world: &mut World) {
     };
 
     let cached_focus = world.resource::<A11yTreeCache>().last_focus;
-    let new_focus = focus_entity.map(entity_to_node).unwrap_or(root_id);
-    let focus_moved = cached_focus != Some(new_focus);
+    let new_focus = focus_entity
+        .filter(|e| window_of(*e) == primary)
+        .map(entity_to_node)
+        .unwrap_or(root_id);
+    // Each other window's tree focuses the focused element when it is in
+    // that window, else the window's own node.
+    let secondary: Vec<Entity> = partitions
+        .as_ref()
+        .map(|p| {
+            let mut ws: Vec<Entity> = p.surface_roots().iter().map(|(_, w)| *w).collect();
+            ws.sort();
+            ws.dedup();
+            ws
+        })
+        .unwrap_or_default();
+    let window_focus: HashMap<Entity, NodeId> = secondary
+        .iter()
+        .map(|&w| {
+            let f = focus_entity
+                .filter(|e| window_of(*e) == w)
+                .map(entity_to_node)
+                .unwrap_or(entity_to_node(w));
+            (w, f)
+        })
+        .collect();
+    let focus_moved = cached_focus != Some(new_focus)
+        || window_focus != world.resource::<A11yTreeCache>().window_focus;
 
     if !any_dirty_a11y && !focus_moved && world.resource::<A11yTreeCache>().root == Some(root_id) {
         // Nothing to do - no entity announced an a11y-relevant change and focus
@@ -463,6 +548,7 @@ pub fn sync_a11y_tree(world: &mut World) {
         return;
     }
     world.resource_mut::<A11yChanged>().0 = false;
+    world.resource_mut::<PendingA11yUpdate>().boxed = None;
 
     // `<dropdown>` expansion. The compiler desugars a dropdown into a
     // `.dropdown` column holding a `.dropdown-button` header plus an
@@ -487,6 +573,10 @@ pub fn sync_a11y_tree(world: &mut World) {
 
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut roots: Vec<NodeId> = Vec::new();
+    // Which window each emitted node belongs to, and each other window's
+    // surface roots: empty with one window.
+    let mut node_window: HashMap<NodeId, Entity> = HashMap::new();
+    let mut window_roots: HashMap<Entity, Vec<NodeId>> = HashMap::new();
     let mut new_hashes: HashMap<NodeId, u64> = HashMap::new();
     let mut seen: HashSet<NodeId> = HashSet::new();
     seen.insert(root_id);
@@ -527,10 +617,12 @@ pub fn sync_a11y_tree(world: &mut World) {
         Option<&'a A11yRelations>,
     );
     // Bevy 0.19 stores resources as entities, and every field above is
-    // optional, so an unfiltered walk would publish a node per resource.
-    let mut q = world.query_filtered::<(CoreData<'_>, PrimData<'_>, A11yData<'_>), Without<
-        bevy_ecs::resource::IsResource,
-    >>();
+    // optional, so an unfiltered walk would publish a node per resource. A
+    // window entity is no element either: it stands for its own tree.
+    let mut q = world.query_filtered::<(CoreData<'_>, PrimData<'_>, A11yData<'_>), (
+        Without<bevy_ecs::resource::IsResource>,
+        Without<lumen_core::window::Window>,
+    )>();
 
     for (
         (entity, transform, text, tab, input, scroll, id, children, parent),
@@ -578,8 +670,15 @@ pub fn sync_a11y_tree(world: &mut World) {
             Role::GenericContainer
         };
 
+        // A child shown in another window belongs to that window's tree.
+        let own_window = window_of(entity);
         let child_ids: Vec<NodeId> = children
-            .map(|c| c.iter().map(entity_to_node).collect())
+            .map(|c| {
+                c.iter()
+                    .filter(|k| partitions.is_none() || window_of(*k) == own_window)
+                    .map(entity_to_node)
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Label: explicit A11yLabel wins, then the element's own text. Text
@@ -666,7 +765,7 @@ pub fn sync_a11y_tree(world: &mut World) {
             .map(|r| r.owns.iter().copied().map(entity_to_node).collect())
             .unwrap_or_default();
 
-        let hash = hash_node_full(
+        let mut hash = hash_node_full(
             transform,
             role,
             label_str,
@@ -685,7 +784,19 @@ pub fn sync_a11y_tree(world: &mut World) {
             &owns_ids,
         );
 
-        if parent.is_none() && node_id != root_id {
+        if partitions.is_some() {
+            // A node that changes windows is published again in its new tree.
+            hash = hash.rotate_left(17) ^ own_window.to_bits();
+            node_window.insert(node_id, own_window);
+            if own_window != primary
+                && partitions
+                    .as_ref()
+                    .is_some_and(|p| p.surface_roots().iter().any(|(r, _)| *r == entity))
+            {
+                window_roots.entry(own_window).or_default().push(node_id);
+            }
+        }
+        if parent.is_none() && node_id != root_id && own_window == primary {
             roots.push(node_id);
         }
 
@@ -845,21 +956,59 @@ pub fn sync_a11y_tree(world: &mut World) {
     let root_hash = hash_root_inputs(&roots);
     if prior_hashes.get(&root_id) != Some(&root_hash) {
         let mut root = Node::new(Role::Window);
-        if let Some(title) = world.get_resource::<A11yRootLabel>() {
-            root.set_label(title.0.as_str());
-        } else {
-            root.set_label("Lumen app");
-        }
+        let title = world
+            .get::<lumen_core::window::Window>(primary)
+            .map(|w| w.title.clone())
+            .filter(|t| !t.is_empty());
+        root.set_label(title.as_deref().unwrap_or("Lumen app"));
         root.set_children(roots);
         nodes.push((root_id, root));
     }
     new_hashes.insert(root_id, root_hash);
+
+    // Every other window's root: a node for the window itself, labelled with
+    // its title, holding its surface roots.
+    let mut window_nodes: HashMap<Entity, Vec<(NodeId, Node)>> = HashMap::new();
+    for &window in &secondary {
+        let id = entity_to_node(window);
+        let kids = window_roots.remove(&window).unwrap_or_default();
+        let title = world
+            .get::<lumen_core::window::Window>(window)
+            .map(|w| w.title.clone())
+            .unwrap_or_default();
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            hash_root_inputs(&kids).hash(&mut h);
+            title.hash(&mut h);
+            h.finish()
+        };
+        if prior_hashes.get(&id) != Some(&hash) {
+            let mut node = Node::new(Role::Window);
+            node.set_label(title);
+            node.set_children(kids);
+            window_nodes.entry(window).or_default().push((id, node));
+        }
+        new_hashes.insert(id, hash);
+    }
+    if partitions.is_some() {
+        // Sort the emitted nodes into their windows' updates.
+        let mut primary_nodes = Vec::new();
+        for (id, node) in nodes.drain(..) {
+            match node_window.get(&id).copied() {
+                Some(w) if w != primary => window_nodes.entry(w).or_default().push((id, node)),
+                _ => primary_nodes.push((id, node)),
+            }
+        }
+        nodes = primary_nodes;
+    }
 
     {
         let mut cache = world.resource_mut::<A11yTreeCache>();
         cache.hashes = new_hashes;
         cache.last_focus = Some(new_focus);
         cache.root = Some(root_id);
+        cache.window_focus = window_focus.clone();
     }
 
     // Clear the DirtyA11y marker on every entity that carried it. Re-acquiring
@@ -884,6 +1033,29 @@ pub fn sync_a11y_tree(world: &mut World) {
         }
     }
 
+    // Each other window's update: its own tree, focused on its own node or
+    // on the focused element when that is in the window.
+    for &window in &secondary {
+        let window_nodes = window_nodes.remove(&window).unwrap_or_default();
+        let focus = window_focus
+            .get(&window)
+            .copied()
+            .unwrap_or(entity_to_node(window));
+        if window_nodes.is_empty() && !focus_moved {
+            continue;
+        }
+        stash_update(
+            world,
+            window,
+            TreeUpdate {
+                nodes: window_nodes,
+                tree: Some(Tree::new(entity_to_node(window))),
+                tree_id: TreeId::ROOT,
+                focus,
+            },
+        );
+    }
+
     // check_dirty step (audit P1: a11y "rebuilt every frame"):
     // skip pushing a payload to AccessKit when nothing about the tree
     // changed - no nodes re-emitted AND the focus pointer is identical
@@ -892,7 +1064,6 @@ pub fn sync_a11y_tree(world: &mut World) {
     // for each `update_if_active` call, so a real skip matters for
     // idle CPU + a11y wakeups.
     if nodes.is_empty() && !focus_moved {
-        world.resource_mut::<PendingA11yUpdate>().boxed = None;
         return;
     }
 
@@ -902,7 +1073,7 @@ pub fn sync_a11y_tree(world: &mut World) {
         tree_id: TreeId::ROOT,
         focus: new_focus,
     };
-    world.resource_mut::<PendingA11yUpdate>().boxed = Some(Box::new(update));
+    stash_update(world, primary, update);
 }
 
 /// Drive a full initial-tree build outside the regular schedule. Used by
@@ -921,6 +1092,7 @@ pub fn sync_a11y_tree_initial(world: &mut World) {
         cache.hashes.clear();
         cache.last_focus = None;
         cache.root = None;
+        cache.window_focus.clear();
     }
     // Force the sync to run by inserting a transient DirtyA11y on a
     // synthetic entity. `sync_a11y_tree` removes every DirtyA11y at the
@@ -934,14 +1106,26 @@ pub fn sync_a11y_tree_initial(world: &mut World) {
     }
 }
 
-/// Take the latest [`accesskit::TreeUpdate`] out of [`PendingA11yUpdate`].
-/// Window backends call this from `RedrawRequested` and pass the result
-/// to `Adapter::update_if_active(...)`. Returns `None` when no update
-/// was produced this tick (no a11y-relevant changes).
+/// Take the primary window's latest [`accesskit::TreeUpdate`] out of
+/// [`PendingA11yUpdate`]. Returns `None` when no update was produced for it
+/// this tick (no a11y-relevant changes).
 pub fn take_pending_tree_update(world: &mut World) -> Option<TreeUpdate> {
-    let pending = world.get_resource_mut::<PendingA11yUpdate>()?;
-    let boxed = pending.into_inner().boxed.take()?;
-    boxed.downcast::<TreeUpdate>().ok().map(|b| *b)
+    let primary = primary_key(world);
+    take_window_tree_update(world, primary)
+}
+
+/// Take `window`'s latest [`accesskit::TreeUpdate`] out of
+/// [`PendingA11yUpdate`]. A window backend calls this from `RedrawRequested`
+/// for each window's bridge and passes the result to
+/// `Adapter::update_if_active(...)`.
+pub fn take_window_tree_update(world: &mut World, window: Entity) -> Option<TreeUpdate> {
+    let mut pending = world.get_resource_mut::<PendingA11yUpdate>()?;
+    pending
+        .boxed
+        .as_mut()?
+        .downcast_mut::<WindowTreeUpdates>()?
+        .0
+        .remove(&window)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1564,5 +1748,73 @@ mod tests {
         assert_eq!(node.role(), Role::TextInput);
         assert_eq!(node.value(), Some("Berlin"));
         assert_eq!(node.label(), Some("city"));
+    }
+
+    /// Content popped out into a second window leaves the primary window's
+    /// tree and forms that window's own, rooted at a window node named by
+    /// its title.
+    #[test]
+    fn each_window_publishes_its_own_tree() {
+        use lumen_core::window::{Window, WindowOf};
+
+        let (mut app, root) = app_with_root();
+        let popout = app
+            .world
+            .spawn(Window::new("Inspector", glam::Vec2::new(200.0, 100.0)))
+            .id();
+        let docked = app
+            .world
+            .spawn((
+                transform(50.0, 20.0),
+                LumenTag("button".into()),
+                A11yLabel("Docked".into()),
+                ChildOf(root),
+            ))
+            .id();
+        let panel = app
+            .world
+            .spawn((
+                transform(200.0, 100.0),
+                LumenTag("column".into()),
+                ChildOf(root),
+                WindowOf(popout),
+            ))
+            .id();
+        let inside = app
+            .world
+            .spawn((
+                transform(50.0, 20.0),
+                LumenTag("button".into()),
+                A11yLabel("Inside".into()),
+                ChildOf(panel),
+            ))
+            .id();
+        drive_full_tick(&mut app);
+
+        let primary = take_pending_tree_update(&mut app.world).expect("the primary tree");
+        let ids: Vec<NodeId> = primary.nodes.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&entity_to_node(docked)));
+        assert!(!ids.contains(&entity_to_node(panel)), "the panel left it");
+        assert!(!ids.contains(&entity_to_node(inside)));
+
+        let tree = take_window_tree_update(&mut app.world, popout).expect("the pop-out's tree");
+        assert_eq!(tree.tree.as_ref().unwrap().root, entity_to_node(popout));
+        let window_node = node_for(&tree, popout);
+        assert_eq!(window_node.role(), Role::Window);
+        assert_eq!(window_node.label(), Some("Inspector"));
+        assert_eq!(window_node.children(), [entity_to_node(panel)]);
+        assert_eq!(node_for(&tree, inside).label(), Some("Inside"));
+        assert_eq!(tree.focus, entity_to_node(popout), "nothing focused in it");
+
+        // Nothing changed: neither window publishes again.
+        drive_full_tick(&mut app);
+        assert!(take_window_tree_update(&mut app.world, popout).is_none());
+
+        // A new title reaches the window node.
+        app.world.get_mut::<Window>(popout).unwrap().title = "Renamed".into();
+        app.world.entity_mut(panel).insert(DirtyA11y);
+        drive_full_tick(&mut app);
+        let tree = take_window_tree_update(&mut app.world, popout).expect("a retitled tree");
+        assert_eq!(node_for(&tree, popout).label(), Some("Renamed"));
     }
 }

@@ -92,7 +92,9 @@ them after every edit.
 `on_close()` runs before the window closes, whatever asked: its close button,
 an interrupt signal, or the app itself through `window::close()` or
 `app::quit()`. Return `false` to keep the window open, for a "save changes?"
-prompt; any other return lets it close. A Quit menu item is one call:
+prompt; any other return lets it close. When several windows close at once, as
+on a quit, it runs once for each, and the `window::` functions answer for the
+window being asked about. A Quit menu item is one call:
 
 ```rust
 fn on_menu(id: string) {

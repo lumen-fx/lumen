@@ -505,6 +505,11 @@ fn dispatch(
         return None;
     }
     let ancestors = ancestors_root_first(target_entity);
+    // A handler's `window.*` calls apply to the window the event happened in.
+    let window = world
+        .get_resource::<lumen_core::window::WindowPartitions>()
+        .and_then(|p| p.window_of(target_entity));
+    lumen_core::window_state::set_current(window);
     let result = event::dispatch(data, &ancestors, bubbles, |token| {
         for host in &hosts.0 {
             if (host.dispatch)(world, token) {
@@ -512,6 +517,7 @@ fn dispatch(
             }
         }
     });
+    lumen_core::window_state::set_current(None);
     for host in &hosts.0 {
         (host.drain)(world);
     }

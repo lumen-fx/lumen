@@ -15,7 +15,7 @@
 //! event loop, so a screen reader clicking a button paints the result
 //! immediately instead of waiting for unrelated input.
 
-use crate::{entity_click_point, node_to_entity, sync_a11y_tree_initial, take_pending_tree_update};
+use crate::{entity_click_point, node_to_entity, sync_a11y_tree_initial, take_window_tree_update};
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler,
     TreeUpdate,
@@ -93,17 +93,22 @@ impl DeactivationHandler for Inbox {
     fn deactivate_accessibility(&mut self) {}
 }
 
-/// An AccessKit adapter bound to one winit window.
+/// An AccessKit adapter bound to one winit window: the tree of the window
+/// entity it was built for.
 pub struct WinitA11yBridge {
     adapter: Adapter,
     window: Arc<Window>,
+    /// The main-world window entity whose tree this bridge publishes.
+    entity: Entity,
     inbox: Inbox,
 }
 
 /// The bridge factory the winit window backend accepts, spelled the way
 /// `lumen-window-winit` spells it (`WinitA11yFactory`) so the backend
 /// recovers it from the opaque [`A11yBridgeFactory`] a launch hands over.
-type WinitFactory = Box<dyn Fn(&ActiveEventLoop, Arc<Window>, WakeFn) -> Box<dyn A11yBackend>>;
+/// Called once per window, with the window's entity.
+type WinitFactory =
+    Box<dyn Fn(&ActiveEventLoop, Arc<Window>, Entity, WakeFn) -> Box<dyn A11yBackend>>;
 
 /// The accessibility bridge for an app run in the winit window backend,
 /// in the form a launch hands to [`lumen_core::traits::WindowBackend::run`].
@@ -111,13 +116,15 @@ pub fn bridge_factory() -> A11yBridgeFactory {
     A11yBridgeFactory::new(Box::new(winit_bridge) as WinitFactory)
 }
 
-/// Bind AccessKit to a live winit window.
+/// Bind AccessKit to a live winit window showing the window entity
+/// `entity`.
 ///
 /// `wake` is called whenever an assistive technology queues a request, so
 /// a parked event loop wakes up and pumps it.
 fn winit_bridge(
     event_loop: &ActiveEventLoop,
     window: Arc<Window>,
+    entity: Entity,
     wake: WakeFn,
 ) -> Box<dyn A11yBackend> {
     let inbox = Inbox {
@@ -134,6 +141,7 @@ fn winit_bridge(
     Box::new(WinitA11yBridge {
         adapter,
         window,
+        entity,
         inbox,
     })
 }
@@ -146,28 +154,29 @@ impl A11yBackend for WinitA11yBridge {
     }
 
     fn pump(&mut self, world: &mut World) {
-        for update in apply_requests(world, self.inbox.drain()) {
+        for update in apply_requests(world, self.entity, self.inbox.drain()) {
             self.adapter.update_if_active(|| update);
         }
     }
 
     fn publish(&mut self, world: &mut World) {
         // The tree is built in `TickStage::A11ySync`; this only forwards
-        // it. `None` means nothing accessibility-relevant changed, so the
-        // AT-SPI / UIA / NSAccessibility wake-up is skipped.
-        if let Some(update) = take_pending_tree_update(world) {
+        // this window's part of it. `None` means nothing
+        // accessibility-relevant changed here, so the AT-SPI / UIA /
+        // NSAccessibility wake-up is skipped.
+        if let Some(update) = take_window_tree_update(world, self.entity) {
             self.adapter.update_if_active(|| update);
         }
     }
 }
 
-/// Apply queued requests to the world, returning the tree updates the
-/// platform must be told about afterwards.
+/// Apply the requests queued for `window`'s bridge to the world, returning
+/// the tree updates the platform must be told about afterwards.
 ///
 /// Split from [`WinitA11yBridge::pump`] so the world-side half runs, and
 /// is tested, without a window: everything above this line is the platform
 /// adapter, everything below is ECS state.
-fn apply_requests(world: &mut World, pending: Vec<Pending>) -> Vec<TreeUpdate> {
+fn apply_requests(world: &mut World, window: Entity, pending: Vec<Pending>) -> Vec<TreeUpdate> {
     let mut updates = Vec::new();
     for request in pending {
         match request {
@@ -180,11 +189,20 @@ fn apply_requests(world: &mut World, pending: Vec<Pending>) -> Vec<TreeUpdate> {
                 // Platform adapters hold a placeholder tree until this
                 // lands, so it has to be a full one.
                 sync_a11y_tree_initial(world);
-                if let Some(update) = take_pending_tree_update(world) {
+                if let Some(update) = take_window_tree_update(world, window) {
                     updates.push(update);
                 }
             }
-            Pending::Action(request) => handle_action(world, &request),
+            Pending::Action(request) => {
+                // A window blocked by a modal one takes no action from an
+                // assistive technology either.
+                if world
+                    .get::<lumen_core::window::InputBlocked>(window)
+                    .is_none()
+                {
+                    handle_action(world, &request);
+                }
+            }
         }
     }
     updates
@@ -647,6 +665,7 @@ mod tests {
 
         let updates = apply_requests(
             &mut world,
+            Entity::PLACEHOLDER,
             vec![
                 Pending::Action(request(entity, Action::Focus)),
                 Pending::InitialTree,
@@ -677,7 +696,8 @@ mod tests {
         ));
 
         sync_a11y_tree_initial(&mut world);
-        let update = take_pending_tree_update(&mut world).expect("handshake publishes a tree");
+        let update =
+            crate::take_pending_tree_update(&mut world).expect("handshake publishes a tree");
         assert!(
             !update.nodes.is_empty(),
             "the published tree must carry nodes, not just a focus pointer",

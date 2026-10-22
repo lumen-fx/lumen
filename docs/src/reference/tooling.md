@@ -9,7 +9,7 @@ running app.
 A panel docked to the right edge of the window, showing the live element
 tree, signal values, and captured network requests. While it is open the
 app reflows into the remaining width, like a browser's docked devtools; it
-never covers the app.
+never covers the app. The panel can also pop out into a window of its own.
 
 ### Availability
 
@@ -294,22 +294,30 @@ HTTP request line comes back as a `-32700` parse error.
 | Tool | Parameters | Returns |
 |------|------------|---------|
 | `lumen_tick` | none | Current frame number, and `last_tick_micros`: the last tick's wall-clock duration, covering the whole main schedule plus extract and scene encode on ticks that rendered. |
-| `lumen_snapshot_text` | `max_lines` (default 200, capped at 2000), `cursor`, `omit_invisible` (default true) | Indented one-line-per-entity text tree, with a resume cursor when truncated. |
-| `lumen_snapshot_tree` | `max_nodes` (default 2000, capped at 10000), `omit_invisible` (default false) | The same tree as nested JSON nodes carrying tag, id, classes, role, label, text, rect, and flags. |
-| `lumen_find` | `by_text`, `by_role`, `by_id`, `limit` (default 50, capped at 500) | Matching entities with id, role, label, bounds, and state. |
-| `lumen_element_at` | `x`, `y` (required) | The smallest entity containing the point, scroll-corrected, or a miss. |
+| `lumen_snapshot_text` | `max_lines` (default 200, capped at 2000), `cursor`, `omit_invisible` (default true), `window` | Indented one-line-per-entity text tree, with a resume cursor when truncated. |
+| `lumen_snapshot_tree` | `max_nodes` (default 2000, capped at 10000), `omit_invisible` (default false), `window` | The same tree as nested JSON nodes carrying tag, id, classes, role, label, text, rect, and flags. With `window`, only that window's content, rooted at its surface roots. |
+| `lumen_find` | `by_text`, `by_role`, `by_id`, `limit` (default 50, capped at 500) | Matching entities with id, role, label, bounds, and state; in an app with more than one window, also the window each is in. |
+| `lumen_element_at` | `x`, `y` (required), `window` | The smallest entity containing the point in that window, scroll-corrected, or a miss. |
 | `lumen_inspect_entity` | `id` (required) | Every component on that entity. |
 | `lumen_list_entities` | none | Every entity id with its component type names. |
 | `lumen_list_extracted` | none | The rects and text runs queued for drawing. |
-| `lumen_resources` | none | Viewport, pointer position, modifier state, and focus. |
+| `lumen_resources` | none | The primary window's viewport, every window, pointer position, modifier state, and focus. |
+| `lumen_windows` | none | Every window, the primary one first: id, index, name, title, size, scale, and whether it is primary, visible, and focused, plus its position and monitor where known. |
 | `lumen_signals` | `filter`, `max` (default 500, capped at 5000) | Signal names with value, kind, generation, and last changed frame. |
 | `lumen_set_signal` | `name`, `value` | Writes a signal and waits briefly to confirm the app observed it. |
-| `lumen_simulate` | `kind` plus that kind's fields, `wait_for` | Injects input. Requires `[mcp] simulate = true`. |
+| `lumen_simulate` | `kind` plus that kind's fields, `wait_for`, `window` | Injects input. Requires `[mcp] simulate = true`. |
 | `lumen_recent_messages` | `type`, `max` (default 32) | The last N entries of one message ring. |
 | `lumen_diff_since` | `tick` | Entity ids added, removed, and changed since that tick. |
 | `lumen_lint` | none | UI findings with category, severity, fix hint, and entity. |
-| `lumen_screenshot` | `highlight_ids`, `highlight_lint`, `include_bounds_map` | A base64 PNG, its size, and optionally an entity bounds map. |
+| `lumen_screenshot` | `highlight_ids`, `highlight_lint`, `include_bounds_map`, `window` | A base64 PNG of that window, its size, and optionally a bounds map of the entities in it. |
 | `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. Requires `[mcp] issues = true`. |
+
+`window` picks a window for the tools that take it: a window id from
+`lumen_windows`, `"primary"`, the window's position in that list as a string
+(`"0"` is the primary window), or the name a window was given. Without it,
+`lumen_screenshot`, `lumen_element_at`, and `lumen_simulate` act on the primary
+window, and the snapshot tools cover every window. Coordinates are always in
+the named window's logical pixels.
 
 Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`, `pointer_cancel`,
 `click`, `key`, `key_down`, `key_up`, `type`, and `scroll`. Point kinds take

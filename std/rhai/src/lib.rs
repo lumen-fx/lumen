@@ -647,6 +647,7 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
             "set_title",
             move |_w: &mut Window, title: rhai::ImmutableString| {
                 s.lock().push(ScriptCommand::WindowSetTitle {
+                    window: lumen_core::window_state::current(),
                     title: title.to_string(),
                 });
             },
@@ -658,6 +659,7 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
             "set_size",
             move |_w: &mut Window, width: f64, height: f64| {
                 s.lock().push(ScriptCommand::WindowSetSize {
+                    window: lumen_core::window_state::current(),
                     width: width as f32,
                     height: height as f32,
                 });
@@ -669,7 +671,9 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
     {
         let s = sink.clone();
         engine.register_fn("close", move |_w: &mut Window| {
-            s.lock().push(ScriptCommand::WindowClose);
+            s.lock().push(ScriptCommand::WindowClose {
+                window: lumen_core::window_state::current(),
+            });
         });
     }
     {
@@ -3007,7 +3011,7 @@ mod error_drain_tests {
         let out = ScriptHost::call(&mut host, "bye", &[]).expect("bye runs");
         assert!(matches!(
             &out.commands[..],
-            [ScriptCommand::WindowClose, ScriptCommand::AppQuit]
+            [ScriptCommand::WindowClose { .. }, ScriptCommand::AppQuit]
         ));
     }
 

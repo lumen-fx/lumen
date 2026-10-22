@@ -192,7 +192,10 @@ pub fn sync_progress_fill(
     bars: Query<(&ProgressBar, &Transform, Option<&ProgressChunk>)>,
     mut fills: Query<(Entity, &ChildOf, &mut Style, &mut StyleOverrides), With<ProgressFill>>,
     parents: Query<&ChildOf>,
-    visibles: Query<&Visible>,
+    (visibles, surfaces): (
+        Query<&Visible>,
+        Query<(), With<lumen_core::window::WindowOf>>,
+    ),
     // `Without<ProgressFill>` keeps this read disjoint from the `&mut
     // Style` above (B0001); the hidden walk only ever inspects the
     // track and its ancestors, never a fill child.
@@ -243,7 +246,7 @@ pub fn sync_progress_fill(
                 // Shared section 17.4 walk over a `Without<ProgressFill>`-filtered
                 // Style query (inferred `F`) so it coexists with the
                 // fill-mutating `styles` view in this same system.
-                if hidden_via_ancestors(parent, &parents, &visibles, &styles) {
+                if hidden_via_ancestors(parent, &parents, &visibles, &styles, &surfaces) {
                     continue;
                 }
                 any_indeterminate_visible = true;

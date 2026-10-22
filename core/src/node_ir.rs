@@ -38,8 +38,9 @@
 //!
 //! ## Producer and consumer
 //!
-//! `transform_extracted_to_nodes` walks the extract output and produces a [`RetainedScene`] each frame; the
-//! walker in `lumen-paint` consumes it for every renderer and every kind of target. Overflow clipping rides the
+//! `transform_extracted_to_nodes` walks the extract output and produces one tree per window each frame,
+//! stored on the window's [`RenderWindow`]; the walker in `lumen-paint` consumes it for every renderer and
+//! every kind of target. Overflow clipping rides the
 //! [`Node::Clip`] variant - see the [`Clip`] doc-comment.
 
 use crate::components::{Color, ImageBlob, SvgPayload};
@@ -47,12 +48,14 @@ use crate::native::ExtractedNative;
 use crate::render_world::{
     BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedMaskGroup,
     ExtractedOpacityGroup, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
-    ExtractedText, PaintOrder, Rect,
+    ExtractedText, ExtractedWindow, PaintOrder, Rect, RenderWindow,
 };
+use crate::window::PrimaryWindow;
 use bevy_ecs::entity::Entity;
-use bevy_ecs::prelude::Resource;
+use bevy_ecs::query::Has;
 use glam::Vec2;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A 2D affine transform stored as `[a, b, c, d, e, f]` in column-major order - same convention as
@@ -526,42 +529,6 @@ pub enum DrawEntry {
     PopClip,
 }
 
-/// The retained scene-graph root for the current frame.
-///
-/// Holds the root [`Node`] (always a [`Node::Container`]) plus an opportunistic content-sharing pool keyed
-/// by appearance - wave 2 only wires this loosely; later waves add proper cache lookup on the producer side.
-#[derive(Resource, Default)]
-pub struct RetainedScene {
-    /// Root container - `None` until the first [`transform_extracted_to_nodes`] tick.
-    pub root: Option<Arc<Node>>,
-}
-
-impl std::fmt::Debug for RetainedScene {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RetainedScene")
-            .field("has_root", &self.root.is_some())
-            .finish()
-    }
-}
-
-/// Snapshot of the previous tick's [`RetainedScene`]. Stored on the render world so the renderer can diff
-/// corresponding subtrees (short-circuiting on `Arc::ptr_eq`) and skip a frame whose tree did not change.
-///
-/// Wave 2 stores the root only; the depth-first diff lives in the back-end walker.
-#[derive(Resource, Default)]
-pub struct PreviousScene {
-    /// Root of the prior tick's tree. `None` for the first frame.
-    pub root: Option<Arc<Node>>,
-}
-
-impl std::fmt::Debug for PreviousScene {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreviousScene")
-            .field("has_root", &self.root.is_some())
-            .finish()
-    }
-}
-
 /// Wraps a background image leaf in the clip of the box it fills, so it takes
 /// the element's corner radii the way the element's colour does.
 fn background_clip(clip: BackgroundClip, leaf: Node) -> Arc<Node> {
@@ -629,98 +596,101 @@ impl Bracket {
     }
 }
 
-/// Builds a [`RetainedScene`] from the flat `Extracted*` components in the render world.
-///
-/// Walks every `ExtractedRect`/`Shadow`/`Outline`/`Text`/`Image`/`Svg`/`Native`/`ClipBox` once, sorts the leaves by
-/// [`PaintOrder`], folds the clip pairs around the leaves they enclose, and produces an `Arc<Node::Container>`
-/// containing the painter-ordered children. The previous frame's root is moved into [`PreviousScene`] so the
-/// walker can diff against it.
-///
-/// Runs in [`crate::render_world::RenderStage::Prepare`] (registered by `App::new`).
-#[allow(clippy::too_many_arguments)]
-pub fn transform_extracted_to_nodes(
-    mut retained: bevy_ecs::system::ResMut<RetainedScene>,
-    mut previous: bevy_ecs::system::ResMut<PreviousScene>,
-    rects: bevy_ecs::system::Query<&ExtractedRect>,
-    borders: bevy_ecs::system::Query<&ExtractedBorder>,
-    shadows: bevy_ecs::system::Query<&ExtractedShadow>,
-    outlines: bevy_ecs::system::Query<&ExtractedOutline>,
-    texts: bevy_ecs::system::Query<&ExtractedText>,
-    images: bevy_ecs::system::Query<(&ExtractedImage, Option<&ImageBlob>)>,
-    svgs: bevy_ecs::system::Query<&SvgPayload>,
-    natives: bevy_ecs::system::Query<(bevy_ecs::entity::Entity, &ExtractedNative)>,
-    clips: bevy_ecs::system::Query<&ExtractedClipBox>,
-    groups: bevy_ecs::system::Query<&ExtractedOpacityGroup>,
-    masks: bevy_ecs::system::Query<&ExtractedMaskGroup>,
-    scrollbars: bevy_ecs::system::Query<&ExtractedScrollbar>,
-) {
-    // Park the prior frame's root in PreviousScene so the walker / damage diff can compare ptr-equal subtrees.
-    previous.root = retained.root.take();
+/// The leaves and brackets of one window's tree, before assembly.
+#[derive(Default)]
+struct WindowParts {
+    entries: Vec<(EntryOrder, Arc<Node>)>,
+    ranges: Vec<(EntryOrder, EntryOrder, Bracket)>,
+}
 
-    // Collect leaves sorted by PaintOrder. Each leaf is wrapped in an Arc<Node>.
-    let mut entries: Vec<(EntryOrder, Arc<Node>)> = Vec::with_capacity(
-        rects.iter().len()
-            + borders.iter().len()
-            + shadows.iter().len()
-            + outlines.iter().len()
-            + texts.iter().len()
-            + images.iter().len()
-            + svgs.iter().len()
-            + natives.iter().len(),
-    );
-    for r in &rects {
-        entries.push((leaf_key(r.order), Arc::new(Node::from(r))));
+/// Builds one retained tree per window from the flat `Extracted*` components in the render world.
+///
+/// Walks every `ExtractedRect`/`Shadow`/`Outline`/`Text`/`Image`/`Svg`/`Native`/`ClipBox` once, groups
+/// them by the window they paint into ([`ExtractedWindow`]; none means the primary window), sorts each
+/// window's leaves by [`PaintOrder`], folds the clip pairs around the leaves they enclose, and stores an
+/// `Arc<Node::Container>` of the painter-ordered children as the window's [`RenderWindow::scene`]. The
+/// window's previous tree moves to [`RenderWindow::previous`] so the walker can diff against it; a
+/// window nothing paints into gets an empty tree.
+///
+/// Runs in [`crate::render_world::RenderStage::Prepare`] (registered by
+/// [`crate::render_world::install_extract_pipeline`]).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn transform_extracted_to_nodes(
+    mut windows: bevy_ecs::system::Query<(&mut RenderWindow, Has<PrimaryWindow>)>,
+    rects: bevy_ecs::system::Query<(&ExtractedRect, Option<&ExtractedWindow>)>,
+    borders: bevy_ecs::system::Query<(&ExtractedBorder, Option<&ExtractedWindow>)>,
+    shadows: bevy_ecs::system::Query<(&ExtractedShadow, Option<&ExtractedWindow>)>,
+    outlines: bevy_ecs::system::Query<(&ExtractedOutline, Option<&ExtractedWindow>)>,
+    texts: bevy_ecs::system::Query<(&ExtractedText, Option<&ExtractedWindow>)>,
+    images: bevy_ecs::system::Query<(
+        &ExtractedImage,
+        Option<&ImageBlob>,
+        Option<&ExtractedWindow>,
+    )>,
+    svgs: bevy_ecs::system::Query<(&SvgPayload, Option<&ExtractedWindow>)>,
+    natives: bevy_ecs::system::Query<(Entity, &ExtractedNative, Option<&ExtractedWindow>)>,
+    clips: bevy_ecs::system::Query<(&ExtractedClipBox, Option<&ExtractedWindow>)>,
+    groups: bevy_ecs::system::Query<(&ExtractedOpacityGroup, Option<&ExtractedWindow>)>,
+    masks: bevy_ecs::system::Query<(&ExtractedMaskGroup, Option<&ExtractedWindow>)>,
+    scrollbars: bevy_ecs::system::Query<(&ExtractedScrollbar, Option<&ExtractedWindow>)>,
+) {
+    // `None` is the primary window: everything a one-window app extracts.
+    let mut parts: HashMap<Option<Entity>, WindowParts> = HashMap::new();
+    let key = |w: Option<&ExtractedWindow>| w.map(|w| w.0);
+    let mut leaf = |w: Option<&ExtractedWindow>, order: EntryOrder, node: Arc<Node>| {
+        parts.entry(key(w)).or_default().entries.push((order, node));
+    };
+    for (r, w) in &rects {
+        leaf(w, leaf_key(r.order), Arc::new(Node::from(r)));
     }
     // Background images (`bg: url(...)`) share the entity's order key too.
     // Pushed after the fills and before the borders, they paint over the
     // element's colour and under its border, clipped to its rounded box.
-    for (i, maybe_blob) in &images {
+    for (i, maybe_blob, w) in &images {
         if let Some(clip) = i.background {
-            let leaf = match maybe_blob {
+            let node = match maybe_blob {
                 Some(blob) => Node::from((i, blob)),
                 None => Node::from(i),
             };
-            entries.push((leaf_key(i.order), background_clip(clip, leaf)));
+            leaf(w, leaf_key(i.order), background_clip(clip, node));
         }
     }
-    for s in &svgs {
+    for (s, w) in &svgs {
         if let Some(clip) = s.background {
-            entries.push((leaf_key(s.order), background_clip(clip, Node::from(s))));
+            leaf(w, leaf_key(s.order), background_clip(clip, Node::from(s)));
         }
     }
     // An inset shadow shares the entity's order key too, and sits between
     // the background and the border, as CSS paints it.
-    for s in shadows.iter().filter(|s| s.inner) {
-        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
+    for (s, w) in shadows.iter().filter(|(s, _)| s.inner) {
+        leaf(w, leaf_key(s.order), Arc::new(Node::from(s)));
     }
     // Borders share the entity's own order key with its background rect;
     // pushing them after rects keeps `background -> border` paint order
     // through the stable sort below.
-    for b in &borders {
-        entries.push((leaf_key(b.order), Arc::new(Node::from(b))));
+    for (b, w) in &borders {
+        leaf(w, leaf_key(b.order), Arc::new(Node::from(b)));
     }
-    for s in shadows.iter().filter(|s| !s.inner) {
-        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
+    for (s, w) in shadows.iter().filter(|(s, _)| !s.inner) {
+        leaf(w, leaf_key(s.order), Arc::new(Node::from(s)));
     }
-    for o in &outlines {
-        entries.push((leaf_key(o.order), Arc::new(Node::from(o))));
+    for (o, w) in &outlines {
+        leaf(w, leaf_key(o.order), Arc::new(Node::from(o)));
     }
-    for t in &texts {
-        entries.push((leaf_key(t.order), Arc::new(Node::from(t))));
+    for (t, w) in &texts {
+        leaf(w, leaf_key(t.order), Arc::new(Node::from(t)));
     }
-    for (i, maybe_blob) in images.iter().filter(|(i, _)| i.background.is_none()) {
+    for (i, maybe_blob, w) in images.iter().filter(|(i, ..)| i.background.is_none()) {
         // Splice the type-erased blob payload (set by lumen-assets in its extract pass) directly
-        // into Node::Image.blob - the renderer walker downcasts it back. Closes the loop from the
-        // round-4 W36 / W39 deferral note: the on-screen path previously spliced blobs via a
-        // window-winit auxiliary loop because lumen-core couldn't see lumen-assets' blob type.
+        // into Node::Image.blob - the renderer walker downcasts it back.
         let node = match maybe_blob {
             Some(blob) => Node::from((i, blob)),
             None => Node::from(i),
         };
-        entries.push((leaf_key(i.order), Arc::new(node)));
+        leaf(w, leaf_key(i.order), Arc::new(node));
     }
-    for s in svgs.iter().filter(|s| s.background.is_none()) {
-        entries.push((leaf_key(s.order), Arc::new(Node::from(s))));
+    for (s, w) in svgs.iter().filter(|(s, _)| s.background.is_none()) {
+        leaf(w, leaf_key(s.order), Arc::new(Node::from(s)));
     }
     // Plugin-painted leaves. Query iteration follows archetype order, which
     // shifts as plugins add and drop components, so sort on a key that is
@@ -728,22 +698,24 @@ pub fn transform_extracted_to_nodes(
     // carries the leaf. The entity is stable across frames (the extract
     // helper reuses it), so one extension's several leaves at a shared order
     // also keep their relative order from frame to frame.
-    let mut native_leaves: Vec<(Entity, &ExtractedNative)> = natives.iter().collect();
-    native_leaves.sort_by(|(ae, a), (be, b)| {
+    let mut native_leaves: Vec<(Entity, &ExtractedNative, Option<&ExtractedWindow>)> =
+        natives.iter().collect();
+    native_leaves.sort_by(|(ae, a, _), (be, b, _)| {
         a.order
             .cmp(&b.order)
             .then_with(|| a.extension_id.cmp(&b.extension_id))
             .then_with(|| ae.cmp(be))
     });
-    for (_, n) in native_leaves {
-        entries.push((leaf_key(n.order), Arc::new(Node::from(n))));
+    for (_, n, w) in native_leaves {
+        leaf(w, leaf_key(n.order), Arc::new(Node::from(n)));
     }
     // Overlay scrollbars, keyed by `scrollbar_key` under the leaves that
     // share their paint order; the stable sort keeps `draws` order
     // (track -> thumb) within the bar.
-    for sb in &scrollbars {
+    for (sb, w) in &scrollbars {
         for d in &sb.draws {
-            entries.push((
+            leaf(
+                w,
                 scrollbar_key(sb.order),
                 Arc::new(Node::Rect {
                     bounds: Rect::new(d.origin, d.size),
@@ -751,40 +723,53 @@ pub fn transform_extracted_to_nodes(
                     corner: d.radius,
                     corners: None,
                 }),
-            ));
+            );
         }
     }
-    entries.sort_by_key(|(k, _)| *k);
 
-    // Collect the clip and opacity-group ranges sorted by where they open, so the assembly loop can
-    // bracket leaves with the right push/pop sequence. A range wraps every leaf whose key is in
-    // `[start, end]`. An opacity group opens at the drop-shadow slot under its element and a clip at
-    // the element itself, so an element that does both fades its clipped content; ranges that open
-    // together nest the longer one outside.
-    let mut ranges: Vec<(EntryOrder, EntryOrder, Bracket)> = clips
-        .iter()
-        .map(|c| {
-            (
-                leaf_key(c.start_order),
-                leaf_key(c.end_order),
-                Bracket::Clip(ClipShape::from(c)),
-            )
-        })
-        .chain(groups.iter().map(|g| {
-            (
-                leaf_key(g.start_order),
-                leaf_key(g.end_order),
-                Bracket::Opacity(g.alpha, g.key),
-            )
-        }))
-        .chain(masks.iter().map(|m| {
-            (
-                leaf_key(m.start_order),
-                leaf_key(m.end_order),
-                Bracket::Mask(m.region, m.mask.clone()),
-            )
-        }))
-        .collect();
+    // The clip and opacity-group ranges. A range wraps every leaf whose key is in `[start, end]`. An
+    // opacity group opens at the drop-shadow slot under its element and a clip at the element itself,
+    // so an element that does both fades its clipped content.
+    for (c, w) in &clips {
+        parts.entry(key(w)).or_default().ranges.push((
+            leaf_key(c.start_order),
+            leaf_key(c.end_order),
+            Bracket::Clip(ClipShape::from(c)),
+        ));
+    }
+    for (g, w) in &groups {
+        parts.entry(key(w)).or_default().ranges.push((
+            leaf_key(g.start_order),
+            leaf_key(g.end_order),
+            Bracket::Opacity(g.alpha, g.key),
+        ));
+    }
+    for (m, w) in &masks {
+        parts.entry(key(w)).or_default().ranges.push((
+            leaf_key(m.start_order),
+            leaf_key(m.end_order),
+            Bracket::Mask(m.region, m.mask.clone()),
+        ));
+    }
+
+    for (mut window, primary) in &mut windows {
+        let key = if primary { None } else { Some(window.window) };
+        let tree = assemble_tree(parts.remove(&key).unwrap_or_default());
+        // Park the prior frame's tree so the walker / damage diff can compare ptr-equal subtrees.
+        window.previous = window.scene.take();
+        window.scene = Some(tree);
+    }
+}
+
+/// Sort one window's leaves by [`PaintOrder`], fold its ranges around the leaves they bracket, and
+/// return the window's root container.
+fn assemble_tree(parts: WindowParts) -> Arc<Node> {
+    let WindowParts {
+        mut entries,
+        mut ranges,
+    } = parts;
+    entries.sort_by_key(|(k, _)| *k);
+    // Ranges sorted by where they open; ranges that open together nest the longer one outside.
     ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
 
     // Single pass: at each leaf, close any open ranges whose end has passed, then open any ranges whose
@@ -847,7 +832,7 @@ pub fn transform_extracted_to_nodes(
         }
     }
 
-    retained.root = Some(Arc::new(Node::Container { children: roots }));
+    Arc::new(Node::Container { children: roots })
 }
 
 #[cfg(test)]
@@ -886,8 +871,6 @@ mod tests {
     /// both come before higher-order (descendant) leaves.
     #[test]
     fn border_assembles_after_rect_at_same_order() {
-        let mut retained = RetainedScene::default();
-        let mut previous = PreviousScene::default();
         let mut world = bevy_ecs::world::World::new();
         world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(10.0, 10.0)));
         world.spawn(ExtractedBorder {
@@ -902,14 +885,7 @@ mod tests {
         });
         world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(4.0, 4.0)));
 
-        let mut schedule = bevy_ecs::schedule::Schedule::default();
-        schedule.add_systems(transform_extracted_to_nodes);
-        world.insert_resource(std::mem::take(&mut retained));
-        world.insert_resource(std::mem::take(&mut previous));
-        schedule.run(&mut world);
-
-        let retained = world.resource::<RetainedScene>();
-        let root = retained.root.as_ref().expect("root");
+        let root = assemble(&mut world);
         let Node::Container { children } = root.as_ref() else {
             panic!("root is a container");
         };
@@ -950,17 +926,7 @@ mod tests {
         world.spawn(shadow(4, true));
         world.spawn(shadow(3, false));
         world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(10.0, 10.0)));
-        world.insert_resource(RetainedScene::default());
-        world.insert_resource(PreviousScene::default());
-        let mut schedule = bevy_ecs::schedule::Schedule::default();
-        schedule.add_systems(transform_extracted_to_nodes);
-        schedule.run(&mut world);
-
-        let root = world
-            .resource::<RetainedScene>()
-            .root
-            .clone()
-            .expect("root");
+        let root = assemble(&mut world);
         let Node::Container { children } = root.as_ref() else {
             panic!("root is a container");
         };
@@ -1062,18 +1028,22 @@ mod tests {
         }
     }
 
+    /// The primary window's tree once the extracted entities in `world` are
+    /// assembled.
     fn assemble(world: &mut bevy_ecs::world::World) -> Arc<Node> {
-        world.insert_resource(RetainedScene::default());
-        world.insert_resource(PreviousScene::default());
+        let window = Entity::from_raw_u32(1).expect("an entity id");
+        crate::render_world::spawn_render_window(
+            world,
+            window,
+            crate::window::WindowViewport::default(),
+            true,
+        );
         let mut schedule = bevy_ecs::schedule::Schedule::default();
         schedule.add_systems(transform_extracted_to_nodes);
         schedule.run(world);
-        world
-            .resource::<RetainedScene>()
-            .root
-            .as_ref()
+        crate::render_world::render_window(world, window)
+            .and_then(|w| w.scene.clone())
             .expect("root")
-            .clone()
     }
 
     fn children_of(node: &Arc<Node>) -> Vec<Arc<Node>> {

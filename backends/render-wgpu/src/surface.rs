@@ -8,7 +8,8 @@
 //! present are the only parts of a frame that exist for a window; everything
 //! before them is the shared [`GpuCore`].
 
-use crate::gpu::GpuCore;
+use crate::gpu::{FrameTexture, GpuCore};
+use lumen_core::traits::PresentMode;
 use lumen_core::traits::RenderError;
 use std::sync::Arc;
 use vello::wgpu;
@@ -22,6 +23,8 @@ pub(crate) struct SurfaceFront {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     blitter: TextureBlitter,
+    /// The present modes the surface offers.
+    present_modes: Vec<wgpu::PresentMode>,
     /// The window this surface belongs to. Held so the window outlives
     /// every GPU object bound to it.
     #[allow(dead_code, reason = "held to pin the window's lifetime, not read")]
@@ -29,11 +32,12 @@ pub(crate) struct SurfaceFront {
 }
 
 impl SurfaceFront {
-    /// Configure `surface` for `gpu`'s device at the frame texture's size.
+    /// Configure `surface` for `gpu`'s device at `size`.
     pub(crate) fn new(
         gpu: &GpuCore,
         surface: wgpu::Surface<'static>,
         window: Arc<dyn lumen_core::traits::RenderTarget>,
+        size: (u32, u32),
     ) -> Result<Self, RenderError> {
         let caps = surface.get_capabilities(&gpu.adapter);
         // The frame is blitted through an `Rgba8UnormSrgb` view, so an sRGB
@@ -48,7 +52,7 @@ impl SurfaceFront {
         .find(|f| caps.formats.contains(f))
         .or_else(|| caps.formats.first().copied())
         .ok_or_else(|| RenderError::Init("no surface formats".to_string()))?;
-        let (width, height) = gpu.size();
+        let (width, height) = size;
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -67,24 +71,48 @@ impl SurfaceFront {
         };
         surface.configure(&gpu.device, &config);
         let blitter = TextureBlitter::new(&gpu.device, format);
+        let present_modes = caps.present_modes;
         Ok(Self {
             surface,
             config,
             blitter,
+            present_modes,
             window,
         })
     }
 
-    /// Reconfigure the swap chain to the frame texture's size.
-    pub(crate) fn resize(&mut self, gpu: &GpuCore) {
-        (self.config.width, self.config.height) = gpu.size();
+    /// Reconfigure the swap chain to `size`.
+    pub(crate) fn resize(&mut self, gpu: &GpuCore, size: (u32, u32)) {
+        (self.config.width, self.config.height) = size;
         self.surface.configure(&gpu.device, &self.config);
     }
 
-    /// Put the frame texture on screen: acquire the next swap-chain
-    /// texture, blit, present. Returns whether the frame went up; a skipped
-    /// acquire is not an error.
-    pub(crate) fn present(&mut self, gpu: &GpuCore) -> Result<bool, RenderError> {
+    /// Present with `mode` from the next frame on: vsync for the window that
+    /// sets the pace, no waiting for the others where the surface offers it
+    /// (mailbox first, immediate after), so one display's refresh does not
+    /// hold up a window on another.
+    pub(crate) fn set_present_mode(&mut self, gpu: &GpuCore, mode: PresentMode) {
+        let want = match mode {
+            PresentMode::Vsync => wgpu::PresentMode::AutoVsync,
+            PresentMode::NoWait => [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+                .into_iter()
+                .find(|m| self.present_modes.contains(m))
+                .unwrap_or(wgpu::PresentMode::AutoVsync),
+        };
+        if self.config.present_mode != want {
+            self.config.present_mode = want;
+            self.surface.configure(&gpu.device, &self.config);
+        }
+    }
+
+    /// Put `frame` on screen: acquire the next swap-chain texture, blit,
+    /// present. Returns whether the frame went up; a skipped acquire is not
+    /// an error.
+    pub(crate) fn present(
+        &mut self,
+        gpu: &GpuCore,
+        frame_texture: &FrameTexture,
+    ) -> Result<bool, RenderError> {
         // wgpu 29 reports each non-success acquire outcome with what to do:
         //   - Suboptimal: a usable texture, but the swap chain no longer
         //     matches the surface (resize race, Wayland scale change).
@@ -138,8 +166,12 @@ impl SurfaceFront {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("lumen blit encoder"),
             });
-        self.blitter
-            .copy(&gpu.device, &mut encoder, gpu.srgb_view(), &surface_view);
+        self.blitter.copy(
+            &gpu.device,
+            &mut encoder,
+            frame_texture.srgb_view(),
+            &surface_view,
+        );
         gpu.queue.submit(Some(encoder.finish()));
         frame.present();
         Ok(true)

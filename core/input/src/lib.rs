@@ -620,15 +620,32 @@ fn read_clipboard(res: Option<&mut ClipboardHost>) -> String {
 pub fn dispatch_file_drops(
     mut drops: ResMut<PendingFileDrops>,
     candidates: Query<(Entity, &Transform), With<DropTarget>>,
-    parents: Query<&ChildOf>,
+    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
     scrolls: Query<&ScrollOffset>,
     pointer_events: Query<&lumen_core::input::PointerEvents>,
+    (pointer, partitions): (
+        Option<Res<PointerState>>,
+        Option<Res<lumen_core::window::WindowPartitions>>,
+    ),
     mut out: MessageWriter<FileDropped>,
 ) {
+    if drops.drops.is_empty() {
+        return;
+    }
+    // A drop lands in the window the pointer is over.
+    let window = partitions
+        .as_ref()
+        .filter(|p| !p.is_single())
+        .and_then(|p| pointer.as_ref().and_then(|ptr| ptr.window).or(p.primary()));
     let queue: Vec<(std::path::PathBuf, Vec2)> = std::mem::take(&mut drops.drops);
     for (path, pos) in queue {
         let mut best: Option<(u32, Entity)> = None;
         for (e, t) in &candidates {
+            if let (Some(parts), Some(window)) = (partitions.as_ref(), window)
+                && !parts.in_window(e, window)
+            {
+                continue;
+            }
             let off = ancestor_scroll(e, &parents, &scrolls);
             let origin = t.absolute - off;
             if !(pos.x >= origin.x
@@ -890,9 +907,13 @@ pub fn update_ime_request(
 /// [`ScrollOffset`] (excluding the entity's own offset). Used by both
 /// hit-test and the scroll-aware extracts so visual + logical positions
 /// agree.
-pub fn ancestor_scroll(
+///
+/// Pass a `parents` query filtered `Without<WindowOf>` to stop at a surface
+/// root: a subtree shown in a window of its own does not move with its
+/// ancestors' scrolling.
+pub fn ancestor_scroll<F: bevy_ecs::query::QueryFilter>(
     entity: Entity,
-    parents: &Query<&ChildOf>,
+    parents: &Query<&ChildOf, F>,
     scrolls: &Query<&ScrollOffset>,
 ) -> Vec2 {
     let mut total = Vec2::ZERO;
@@ -1140,12 +1161,18 @@ pub fn hit_test(
         )>,
     >,
     parents: Query<&ChildOf>,
-    scrolls: Query<&ScrollOffset>,
+    (scrolls, local_parents): (
+        Query<&ScrollOffset>,
+        Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    ),
     (currently_hovered, chain): (
         Query<Entity, With<Hovered>>,
         Query<Entity, With<lumen_core::input::HoverWithin>>,
     ),
-    visibles: Query<&lumen_core::components::Visible>,
+    (visibles, surfaces): (
+        Query<&lumen_core::components::Visible>,
+        Query<(), With<lumen_core::window::WindowOf>>,
+    ),
     styles: Query<&lumen_core::components::Style>,
     (disableds, pointer_events): (
         Query<(), With<lumen_core::components::Disabled>>,
@@ -1153,7 +1180,10 @@ pub fn hit_test(
     ),
     pressed_entities: Query<Entity, With<Pressed>>,
     transforms: Query<&Transform>,
-    scrollbar_ix: Option<Res<lumen_core::input::ScrollbarInteraction>>,
+    (scrollbar_ix, partitions): (
+        Option<Res<lumen_core::input::ScrollbarInteraction>>,
+        Option<Res<lumen_core::window::WindowPartitions>>,
+    ),
     overlay_roots: Query<Entity, With<lumen_core::render_world::OverlayLayer>>,
     overlay_order: Option<Res<lumen_core::render_world::OverlayOpenOrder>>,
     mut others: Option<OtherPointers>,
@@ -1182,6 +1212,12 @@ pub fn hit_test(
             .map(|d| d.entity)
             .or_else(|| ix.hover.map(|(e, ..)| e))
     });
+    // With several windows, only the elements that show in the window the
+    // pointer is over can be under it.
+    let partitions = partitions.filter(|p| !p.is_single());
+    let pointer_window = partitions
+        .as_ref()
+        .and_then(|p| pointer.window.or(p.primary()));
     // The topmost hittable entity at `p`.
     let topmost = |p: Vec2| -> Option<Entity> {
         {
@@ -1189,7 +1225,12 @@ pub fn hit_test(
             // higher wins - the painter's order restated for hit-testing.
             let mut best: Option<((u32, u64, u32, u64), Entity)> = None;
             for (e, t) in &candidates {
-                let off = ancestor_scroll(e, &parents, &scrolls);
+                if let (Some(parts), Some(window)) = (partitions.as_ref(), pointer_window)
+                    && !parts.in_window(e, window)
+                {
+                    continue;
+                }
+                let off = ancestor_scroll(e, &local_parents, &scrolls);
                 let origin = t.absolute - off;
                 if !(p.x >= origin.x
                     && p.y >= origin.y
@@ -1198,7 +1239,7 @@ pub fn hit_test(
                 {
                     continue;
                 }
-                if hidden_via_ancestors(e, &parents, &visibles, &styles) {
+                if hidden_via_ancestors(e, &parents, &visibles, &styles, &surfaces) {
                     continue;
                 }
                 if disabled_via_ancestors(e, &parents, &disableds) {
@@ -1207,7 +1248,8 @@ pub fn hit_test(
                 if passes_pointer_through(e, &parents, &pointer_events) {
                     continue;
                 }
-                if point_clipped_by_ancestors(p, e, &parents, &styles, &transforms, &scrolls) {
+                if point_clipped_by_ancestors(p, e, &local_parents, &styles, &transforms, &scrolls)
+                {
                     continue;
                 }
                 // Depth: count ChildOf hops up to a root. Along the way,
@@ -1347,9 +1389,9 @@ pub fn disabled_via_ancestors(
 
 /// Whether the pointer passes through `entity`: its CSS `pointer-events`, the
 /// one it declares or else the nearest one an ancestor declares, is `none`.
-pub fn passes_pointer_through(
+pub fn passes_pointer_through<F: bevy_ecs::query::QueryFilter>(
     entity: Entity,
-    parents: &Query<&ChildOf>,
+    parents: &Query<&ChildOf, F>,
     pointer_events: &Query<&lumen_core::input::PointerEvents>,
 ) -> bool {
     std::iter::once(entity)
@@ -1406,10 +1448,13 @@ pub fn cancel_press_on_escape(
 /// not hit. Mirroring the renderer's rule keeps "hittable" identical
 /// to "painted": rows escaping a fixed-height `<scroll>` used to
 /// hit-shadow the button laid out below the clip box.
-pub fn point_clipped_by_ancestors(
+///
+/// Pass a `parents` query filtered `Without<WindowOf>` to stop at a surface
+/// root, which escapes its ancestors' clips.
+pub fn point_clipped_by_ancestors<F: bevy_ecs::query::QueryFilter>(
     p: Vec2,
     entity: Entity,
-    parents: &Query<&ChildOf>,
+    parents: &Query<&ChildOf, F>,
     styles: &Query<&lumen_core::components::Style>,
     transforms: &Query<&Transform>,
     scrolls: &Query<&ScrollOffset>,
@@ -1564,15 +1609,39 @@ pub fn cycle_focus_on_tab(
         (Entity, Option<&lumen_core::components::Visible>),
         bevy_ecs::prelude::With<lumen_core::components::FocusBoundary>,
     >,
-    visibles: Query<&lumen_core::components::Visible>,
+    (visibles, surfaces): (
+        Query<&lumen_core::components::Visible>,
+        Query<(), With<lumen_core::window::WindowOf>>,
+    ),
     styles: Query<&lumen_core::components::Style>,
     mut select_inputs: Query<(&TextContent, &mut TextInput, Option<&mut TextCursor>)>,
+    (partitions, runtimes): (
+        Option<Res<lumen_core::window::WindowPartitions>>,
+        Query<(Entity, &lumen_core::window::WindowRuntime)>,
+    ),
 ) {
+    // Tab walks the focused window's elements only: the window of the
+    // focused element, else the window with keyboard focus. With one window
+    // there is nothing to leave out.
+    let partitions = partitions.filter(|p| !p.is_single());
+    let tab_window = partitions.as_ref().and_then(|p| {
+        tracker
+            .0
+            .and_then(|e| p.window_of(e))
+            .or_else(|| runtimes.iter().find(|(_, r)| r.focused).map(|(w, _)| w))
+            .or(p.primary())
+    });
+    let in_window = |e: Entity| match (partitions.as_ref(), tab_window) {
+        (Some(p), Some(w)) => p.in_window(e, w),
+        _ => true,
+    };
     let trap_roots: Vec<Entity> = boundaries
         .iter()
         .filter(|(_, vis)| vis.map(|v| v.0).unwrap_or(true))
         .map(|(e, _)| e)
         .collect();
+    // A dialog traps Tab in its own window only.
+    let trap_roots: Vec<Entity> = trap_roots.into_iter().filter(|e| in_window(*e)).collect();
     let in_trap = |e: Entity| -> bool {
         if trap_roots.is_empty() {
             return true;
@@ -1596,10 +1665,11 @@ pub fn cycle_focus_on_tab(
             .iter()
             .filter(|(e, t, _)| {
                 t.0 >= 0
+                    && in_window(*e)
                     && in_trap(*e)
                     // section 17.4: hidden widgets leave the tab chain - same
                     // hidden test the pointer path uses.
-                    && !hidden_via_ancestors(*e, &parents, &visibles, &styles)
+                    && !hidden_via_ancestors(*e, &parents, &visibles, &styles, &surfaces)
             })
             .map(|(e, t, doc)| (e, t.0, doc.map(|d| d.0).unwrap_or(u32::MAX)))
             .collect();
@@ -2052,7 +2122,7 @@ pub fn text_pointer_to_caret(
         ),
         With<TextEditable>,
     >,
-    parents: Query<&ChildOf>,
+    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
     scrolls: Query<&ScrollOffset>,
     mut last: ResMut<LastTextClick>,
 ) {
@@ -2178,7 +2248,7 @@ pub fn text_pointer_drag_select(
         Option<&EchoMode>,
         Option<&TextBlockOrigin>,
     )>,
-    parents: Query<&ChildOf>,
+    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
     scrolls: Query<&ScrollOffset>,
     mut requests: MessageWriter<TextEditRequest>,
 ) {
@@ -2263,6 +2333,7 @@ mod hidden_hit_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(x, y)),
             primary_down: false,
+            window: None,
         });
         world
     }
@@ -2415,6 +2486,7 @@ mod clip_hit_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(x, y)),
             primary_down: false,
+            window: None,
         });
         world
     }
@@ -3088,6 +3160,7 @@ mod press_capture_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(x, y)),
             primary_down: down,
+            window: None,
         });
     }
 
@@ -3183,6 +3256,7 @@ mod hover_chain_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(x, y)),
             primary_down: down,
+            window: None,
         });
     }
 
@@ -3333,6 +3407,7 @@ mod disabled_hit_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(10.0, 10.0)),
             primary_down: false,
+            window: None,
         });
         let e = world
             .spawn((
@@ -3354,6 +3429,7 @@ mod disabled_hit_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(10.0, 10.0)),
             primary_down: false,
+            window: None,
         });
         let parent = world
             .spawn((
@@ -3381,6 +3457,7 @@ mod disabled_hit_tests {
         world.insert_resource(PointerState {
             position: Some(Vec2::new(10.0, 10.0)),
             primary_down: false,
+            window: None,
         });
         let under = world
             .spawn((

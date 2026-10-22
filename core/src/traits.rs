@@ -9,6 +9,7 @@ use crate::app::App;
 use crate::property_store::PropertyValue;
 use crate::window::WindowOptions;
 use bevy_ecs::component::Component;
+use bevy_ecs::entity::Entity;
 use bevy_ecs::world::World;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::any::Any;
@@ -87,41 +88,76 @@ pub struct FrameRequest {
     pub force_full: bool,
 }
 
+/// How a window's frames reach the screen, which decides how a present waits
+/// for the display.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PresentMode {
+    /// Wait for the display's refresh: no tearing, and the present paces the
+    /// loop. What the window with keyboard focus uses.
+    #[default]
+    Vsync,
+    /// Present without waiting on the refresh where the platform allows it
+    /// (mailbox, or immediate as a fallback), so a window that does not set
+    /// the pace cannot hold up the others. What the other windows use.
+    NoWait,
+}
+
 /// A render backend's renderer: everything between the retained scene and
-/// the pixels.
+/// the pixels, for every window of the app.
 ///
 /// The renderer owns scene assembly, encoding caches, damage tracking, and
-/// whatever its target needs (a swap chain, a window buffer, an offscreen
+/// whatever its targets need (a swap chain, a window buffer, an offscreen
 /// image). No graphics-API type crosses the boundary, so a caller compiles
 /// without naming one. Frames are driven from the render world, which
-/// already holds the retained scene, the viewport, the text shaper, and the
+/// already holds each window's retained tree and viewport
+/// ([`crate::render_world::RenderWindow`]), the text shaper, and the
 /// screenshot channel.
 ///
-/// Construction does no work. [`Self::attach`] binds the renderer to a
-/// [`FrameTarget`]: a window backend attaches a window once it exists, and
-/// a headless launch attaches an offscreen image and hands the renderer to
-/// [`crate::render_backend::install_offscreen`], whose render-world system
-/// drives it each frame. A pending [`crate::render_world::SurfaceCapture`]
-/// request is answered from the frame [`Self::present`] puts up, on either
-/// kind of target.
+/// One renderer serves every window, keyed by the window's main-world entity
+/// (the *target*). The first [`Self::attach`] brings the device up; later
+/// ones add a surface or an image for another window on the same device, so
+/// images, glyph outlines and caches are shared between windows and a panel
+/// moving between them draws its resident images without uploading them
+/// again.
+///
+/// Construction does no work. A window backend attaches each window once it
+/// exists, and a headless launch attaches an offscreen image per window and
+/// hands the renderer to [`crate::render_backend::install_offscreen`], whose
+/// render-world system drives it each frame. A pending
+/// [`crate::render_world::SurfaceCapture`] request is answered from the frame
+/// [`Self::present`] puts up for the window it names, on either kind of
+/// target.
 pub trait Renderer: Send + 'static {
-    /// Bind to `target`. Calling it again rebinds the renderer. A
-    /// [`RenderError::Init`] failure is what lets a launch try the next
-    /// backend.
-    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError>;
+    /// Bind `target` to `frame`. Calling it again for the same target
+    /// rebinds that target. A [`RenderError::Init`] failure on the first
+    /// target is what lets a launch try the next backend.
+    fn attach(&mut self, target: Entity, frame: FrameTarget) -> Result<(), RenderError>;
 
-    /// Reconfigure for a new physical size. Returns `true` when the size
-    /// actually changed, so callers can drop the relayout and repaint a
+    /// Reconfigure `target` for a new physical size. Returns `true` when the
+    /// size changed, so callers can drop the relayout and repaint a
     /// duplicate resize event would otherwise force.
-    fn resize(&mut self, width: u32, height: u32) -> bool;
+    fn resize(&mut self, target: Entity, width: u32, height: u32) -> bool;
 
-    /// Whether [`Self::present`] would put anything new up. The renderer
-    /// answers, because only it knows what its buffers still hold and how
-    /// precisely it can compare this scene against the last one it painted.
-    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool;
+    /// Whether [`Self::present`] would put anything new up for `target`. The
+    /// renderer answers, because only it knows what its buffers still hold
+    /// and how precisely it can compare this scene against the last one it
+    /// painted there.
+    fn wants_present(
+        &mut self,
+        target: Entity,
+        render_world: &mut World,
+        request: FrameRequest,
+    ) -> bool;
 
-    /// Paint, submit, and present one frame from the render world.
-    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError>;
+    /// Paint, submit, and present one frame of `target` from the render
+    /// world.
+    fn present(&mut self, target: Entity, render_world: &mut World) -> Result<(), RenderError>;
+
+    /// How `target`'s frames wait for the display. A renderer that has no
+    /// choice (an offscreen image, a CPU buffer) ignores it.
+    fn set_present_mode(&mut self, target: Entity, mode: PresentMode) {
+        let _ = (target, mode);
+    }
 
     /// Which backend this is and what it draws on, for
     /// [`crate::render_backend::RendererInfo`]. Asked after each frame it
@@ -132,38 +168,62 @@ pub trait Renderer: Send + 'static {
         crate::render_backend::RendererInfo::default()
     }
 
-    /// Release the target and everything behind it. A window backend calls
-    /// this while the platform connection is still alive, because tearing a
-    /// surface down after the display connection closes crashes some
-    /// drivers.
-    fn detach(&mut self);
+    /// The targets currently attached.
+    fn targets(&self) -> Vec<Entity>;
+
+    /// Release `target` and everything only it used. The device and the
+    /// shared caches stay for the other targets.
+    fn detach(&mut self, target: Entity);
+
+    /// Release every target and the device behind them. A window backend
+    /// calls this while the platform connection is still alive, because
+    /// tearing a surface down after the display connection closes crashes
+    /// some drivers.
+    fn detach_all(&mut self);
 }
 
 /// A boxed renderer is a renderer, so a launch can hand the one the
 /// registry built to anything generic over [`Renderer`].
 impl<R: Renderer + ?Sized> Renderer for Box<R> {
-    fn attach(&mut self, target: FrameTarget) -> Result<(), RenderError> {
-        (**self).attach(target)
+    fn attach(&mut self, target: Entity, frame: FrameTarget) -> Result<(), RenderError> {
+        (**self).attach(target, frame)
     }
 
-    fn resize(&mut self, width: u32, height: u32) -> bool {
-        (**self).resize(width, height)
+    fn resize(&mut self, target: Entity, width: u32, height: u32) -> bool {
+        (**self).resize(target, width, height)
     }
 
-    fn wants_present(&mut self, render_world: &mut World, request: FrameRequest) -> bool {
-        (**self).wants_present(render_world, request)
+    fn wants_present(
+        &mut self,
+        target: Entity,
+        render_world: &mut World,
+        request: FrameRequest,
+    ) -> bool {
+        (**self).wants_present(target, render_world, request)
     }
 
-    fn present(&mut self, render_world: &mut World) -> Result<(), RenderError> {
-        (**self).present(render_world)
+    fn present(&mut self, target: Entity, render_world: &mut World) -> Result<(), RenderError> {
+        (**self).present(target, render_world)
+    }
+
+    fn set_present_mode(&mut self, target: Entity, mode: PresentMode) {
+        (**self).set_present_mode(target, mode);
     }
 
     fn info(&mut self) -> crate::render_backend::RendererInfo {
         (**self).info()
     }
 
-    fn detach(&mut self) {
-        (**self).detach();
+    fn targets(&self) -> Vec<Entity> {
+        (**self).targets()
+    }
+
+    fn detach(&mut self, target: Entity) {
+        (**self).detach(target);
+    }
+
+    fn detach_all(&mut self) {
+        (**self).detach_all();
     }
 }
 
@@ -202,15 +262,17 @@ pub enum WindowError {
 /// A window backend: the OS window, the event loop, and the translation of
 /// platform events into the app's messages.
 ///
-/// [`Self::run`] takes the built app and drives it until the window closes:
-/// it opens the window from [`WindowOptions`], attaches the first of
-/// `renderers` that binds to it, ticks the app on input and on the redraw
-/// requests in [`crate::window_backend::RedrawScheduler`], and presents
+/// [`Self::run`] takes the built app and drives it until the app ends: it
+/// opens the primary window from [`WindowOptions`], attaches the first of
+/// `renderers` that binds to it, opens a platform window for every other
+/// [`crate::window::Window`] entity the app spawns and closes it when the
+/// entity goes, ticks the app on input and on the redraw requests in
+/// [`crate::window_backend::RedrawScheduler`], and presents each window
 /// through [`Renderer`]. The launch dispatches through this trait once, for
 /// the whole run, so nothing per event goes through a vtable it would not
 /// otherwise.
 pub trait WindowBackend: 'static {
-    /// Run `app` in a window. Blocks until the window closes.
+    /// Run `app` in its windows. Blocks until the app ends.
     ///
     /// `renderers` are tried in order; one that fails to bind with
     /// [`RenderError::Init`] gives way to the next. `a11y` builds the
@@ -225,7 +287,9 @@ pub trait WindowBackend: 'static {
     ) -> Result<(), WindowError>;
 }
 
-/// Builds the accessibility bridge for a window once the window exists.
+/// Builds the accessibility bridge for a window once the window exists. A
+/// window backend calls it once per window, after the window is created and
+/// before it is first shown.
 ///
 /// What a bridge needs from the window differs between window backends
 /// (a platform window handle, an event-loop handle, a way to wake the loop),
@@ -253,12 +317,14 @@ impl std::fmt::Debug for A11yBridgeFactory {
     }
 }
 
-/// The bridge between the ECS world and the platform accessibility API.
+/// The bridge between the ECS world and the platform accessibility API for
+/// one window.
 ///
 /// The world-side half (walking the tree, translating roles and states)
-/// runs as a system in [`crate::tick::TickStage::A11ySync`] and leaves a
-/// pending update behind; the three methods here are what a window
-/// backend calls to keep the platform in step with it. Assistive
+/// runs as a system in [`crate::tick::TickStage::A11ySync`] and leaves one
+/// pending update per window behind; the three methods here are what a
+/// window backend calls to keep the platform in step with it, on the bridge
+/// of the window concerned. Assistive
 /// technologies deliver their requests on their own threads, so an
 /// implementation queues them and applies the queue in [`Self::pump`], on
 /// the main thread, before the tick that reacts to them.
@@ -272,8 +338,8 @@ pub trait A11yBackend: 'static {
     /// changes, scroll-into-view) to the world.
     fn pump(&mut self, world: &mut World);
 
-    /// Publish the tree update the A11ySync stage built, if one is
-    /// pending and an assistive technology is listening.
+    /// Publish the tree update the A11ySync stage built for this bridge's
+    /// window, if one is pending and an assistive technology is listening.
     fn publish(&mut self, world: &mut World);
 }
 
