@@ -143,8 +143,9 @@ progress { width: 100%; height: 6; }
 :where(.date-picker, .time-picker) { width: 180; }
 /* The popup a `<tooltip>` opens is a `tooltip` element classed `tooltip`
    under the root, so a skin's or an app's `.tooltip` rule restyles it.
-   This is the look a skinless app's tooltip has. */
-:where(.tooltip) { bg: #1a1f29f2; text-color: #f0f2f7; radius: 6; padding: 8; font-size: 13; }
+   This is the look a skinless app's tooltip has. The pointer passes
+   through it, as through a browser's `title` tooltip. */
+:where(.tooltip) { bg: #1a1f29f2; text-color: #f0f2f7; radius: 6; padding: 8; font-size: 13; pointer-events: none; }
 /* A separator is a rule line, not a gap: it keeps its pixel rather than
    taking the grow `spacer` gives the tag it is spelled with. */
 .menu-separator { grow: 0; }

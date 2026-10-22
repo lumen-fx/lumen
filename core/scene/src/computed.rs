@@ -15,9 +15,9 @@ use lumen_core::components::{
     CaretWidth, Color, Fill, ImageFit, ImageRendering, Length, Opacity, PasswordCharacter,
     ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
 };
-use lumen_core::input::{Cursor, CursorImageRef, CursorKeyword, ScrollbarStyle};
+use lumen_core::input::{Cursor, CursorImageRef, CursorKeyword, PointerEvents, ScrollbarStyle};
 use lumen_core::style_overrides::{StyleOverrides, StyleValues};
-use lumen_ir::layout_ir::{Attributes, CursorSpec, WidgetPart};
+use lumen_ir::layout_ir::{Attributes, CursorSpec, PointerEventsSpec, WidgetPart};
 use lumen_primitives::{
     BackgroundTransition, BorderColorTransition, Interaction, OpacityTransition, StatePatch,
     StateVisuals, TextColorTransition, TransitionProperty, TransitionSpec, TransitionSpecs,
@@ -123,6 +123,8 @@ pub struct ComputedStyle {
     pub image_rendering: Option<ImageRendering>,
     /// `cursor`, carried where the element declares one.
     pub cursor: Option<Cursor>,
+    /// `pointer-events`, carried where the element declares one.
+    pub pointer_events: Option<PointerEvents>,
     /// Caret and selected-glyph paint of a text field.
     pub input_paint: Option<TextInputPaint>,
     /// Caret width of a text field.
@@ -303,6 +305,10 @@ impl ComputedStyle {
                 .map(ImageRendering::from)
                 .filter(|r| *r != ImageRendering::Auto),
             cursor: attrs.cursor.as_ref().map(cursor_of),
+            pointer_events: attrs.pointer_events.map(|p| match p {
+                PointerEventsSpec::Auto => PointerEvents::Auto,
+                PointerEventsSpec::None => PointerEvents::None,
+            }),
             // Caret / selected-glyph paint rides its own component so
             // non-input text never carries the extra row; absent, the
             // renderer falls back (caret = text fill, selected glyphs keep
@@ -438,6 +444,7 @@ impl ComputedStyle {
         insert_some(ent, self.image_fit);
         insert_some(ent, self.image_rendering);
         insert_some(ent, self.cursor);
+        insert_some(ent, self.pointer_events);
         insert_some(ent, self.input_paint);
         insert_some(ent, self.caret_width);
         insert_some(ent, self.password_character);
@@ -645,6 +652,7 @@ impl ComputedStyle {
         put(ent, self.image_fit);
         put(ent, self.image_rendering);
         put(ent, self.cursor);
+        put(ent, self.pointer_events);
         put(ent, self.input_paint);
         put(ent, self.caret_width);
         put(ent, self.password_character);

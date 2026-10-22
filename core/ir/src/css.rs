@@ -1856,6 +1856,9 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.cursor.is_some() {
         target.cursor = inline.cursor.clone();
     }
+    if inline.pointer_events.is_some() {
+        target.pointer_events = inline.pointer_events;
+    }
     if inline.radius.is_some() {
         target.radius = inline.radius;
     }
@@ -2671,6 +2674,7 @@ pub fn computed_property(attrs: &Attributes, name: &str) -> Option<String> {
         "radius" => attrs.radius.map(|v| format!("{v}px")),
         "image-rendering" => attrs.image_rendering.map(|r| r.keyword().to_string()),
         "cursor" => attrs.cursor.as_ref().map(CursorSpec::to_css),
+        "pointer-events" => attrs.pointer_events.map(|p| p.keyword().to_string()),
         _ => None,
     }
 }
@@ -2695,6 +2699,7 @@ pub const COMPUTED_STYLE_PROPERTIES: &[&str] = &[
     "radius",
     "image-rendering",
     "cursor",
+    "pointer-events",
 ];
 
 /// Every resolved property in [`COMPUTED_STYLE_PROPERTIES`] that the
@@ -3356,6 +3361,7 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "bg-fit",
     "image-rendering",
     "cursor",
+    "pointer-events",
     "mask-image",
     "mask-size",
     "mask-repeat",
@@ -4082,6 +4088,9 @@ fn apply_declaration(
             attrs.image_rendering = Some(crate::values::parse_image_rendering(ctx, name, value)?)
         }
         "cursor" => attrs.cursor = Some(crate::values::parse_cursor(ctx, name, value)?),
+        "pointer-events" => {
+            attrs.pointer_events = Some(crate::values::parse_pointer_events(ctx, name, value)?)
+        }
         "mask-image" => attrs.mask_image = Some(crate::values::parse_mask_image(ctx, name, value)?),
         "mask-size" => attrs.mask_size = Some(crate::values::parse_mask_size(ctx, name, value)?),
         "mask-repeat" => {

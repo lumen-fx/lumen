@@ -181,7 +181,7 @@ you name that state yourself.
 These properties inherit from parent to child: `text-color` (`color`),
 `selection-color`, `selection-text-color`, `caret-color`, `font-size`,
 `font-family`, `font-weight`, `line-height`, `text-align`, `wrap`,
-`max-lines`, `image-rendering`, and `cursor`. Custom properties inherit
+`max-lines`, `image-rendering`, `cursor`, and `pointer-events`. Custom properties inherit
 through their own scope. Every other property applies only where it matches.
 
 An inherited value acts as a zero-specificity base, so any matching rule
@@ -761,11 +761,12 @@ scrollbar.
 | `inertia` | number | `0.4` |
 | `tab-index` | integer | from the tag |
 
-### Pointer cursor
+### Pointer cursor and hit testing
 
 | Property | Values | Default |
 | --- | --- | --- |
 | `cursor` | a keyword, or `url(<image>) [<x> <y>]` entries each followed by a comma, then a keyword | `auto` |
+| `pointer-events` | `auto`, `none` | `auto` |
 
 The keywords are the standard set: `auto`, `default`, `none`,
 `context-menu`, `help`, `pointer`, `progress`, `wait`, `cell`, `crosshair`,
@@ -795,6 +796,16 @@ The user-agent sheet gives `<input>` and `<textarea>` `cursor: text`, `<a>`
 arrow until a stylesheet says otherwise. The thumb of a scrollbar or a `<slider>`
 shows `grab` under the pointer and `grabbing` while dragged; no selector
 reaches those parts.
+
+`pointer-events: none` lets the pointer pass through an element to whatever
+lies beneath it: the element takes no hover, press, click, wheel or file
+drop, and neither does anything inside it unless a descendant sets
+`pointer-events: auto`, which takes the pointer again. It inherits the same
+way `cursor` does. Use it for a drop preview, a highlight or a badge drawn
+over content the user still works with. The element still paints, and it
+stays in the Tab order: the property governs the pointer, not the keyboard.
+The user-agent sheet gives a `<tooltip>`'s popup `pointer-events: none`, so
+moving onto the popup leaves its trigger hovered.
 
 ## Web target mapping
 

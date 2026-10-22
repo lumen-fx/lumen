@@ -876,3 +876,61 @@ fn menu_key_and_shift_f10_ask_for_a_context_menu_on_the_focused_element() {
         assert_eq!(menus[0].button, PointerButton::Primary);
     }
 }
+
+/// CSS `pointer-events: none` lets the pointer through an element and its
+/// subtree to what lies beneath, and a descendant that declares `auto` takes
+/// the pointer again, as the value inherits in a browser.
+#[test]
+fn pointer_events_none_passes_the_pointer_through_until_auto() {
+    use lumen_core::input::PointerEvents;
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let under = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(0.0, 0.0),
+        glam::Vec2::splat(100.0),
+    );
+    let cover = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(0.0, 0.0),
+        glam::Vec2::splat(100.0),
+    );
+    app.world
+        .entity_mut(cover)
+        .insert((ChildOf(under), PointerEvents::None));
+    let inner = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(0.0, 0.0),
+        glam::Vec2::new(50.0, 100.0),
+    );
+    app.world.entity_mut(inner).insert(ChildOf(cover));
+    let hovered = |app: &mut App| -> Vec<Entity> {
+        let mut q = app.world.query_filtered::<Entity, With<Hovered>>();
+        q.iter(&app.world).collect()
+    };
+
+    write_pointer_moved(&mut app.world, glam::Vec2::new(25.0, 50.0));
+    app.tick();
+    assert_eq!(
+        hovered(&mut app),
+        vec![under],
+        "the cover and the child inheriting its `none` let the pointer through"
+    );
+
+    app.world.entity_mut(inner).insert(PointerEvents::Auto);
+    write_pointer_moved(&mut app.world, glam::Vec2::new(26.0, 50.0));
+    app.tick();
+    assert_eq!(
+        hovered(&mut app),
+        vec![inner],
+        "`auto` takes the pointer again"
+    );
+
+    write_pointer_moved(&mut app.world, glam::Vec2::new(75.0, 50.0));
+    app.tick();
+    assert_eq!(
+        hovered(&mut app),
+        vec![under],
+        "beside the child the cover still lets the pointer through"
+    );
+}

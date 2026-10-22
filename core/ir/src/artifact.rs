@@ -152,11 +152,14 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `alpha`, whether a color field picks alpha too; and `mask_image`,
 /// `mask_size`, `mask_repeat` and `mask_position`, an element's CSS mask.
 ///
+/// `21`: [`crate::layout_ir::Attributes`] gains `pointer_events`, an
+/// element's CSS `pointer-events`.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 20;
+pub const FORMAT_VERSION: u16 = 21;
 
 /// The navigable page set of a compiled multi-page app.
 ///
