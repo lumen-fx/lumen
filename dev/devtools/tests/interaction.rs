@@ -152,6 +152,7 @@ fn tabs_and_rows_style_by_state() {
         tab: Tab::Signals,
         selected: Some(7),
         picking: true,
+        ..DevtoolsState::default()
     });
     // A palette distinct from `OverlayPalette::default()` in every field
     // these systems read - proves `style_tabs`/`style_rows` paint from the
@@ -405,4 +406,101 @@ fn color_palette_round_trips_through_bytes() {
     // runtime pair once so the conversions stay honest.
     let c = Color::from_rgba8([0x5d, 0xb0, 0xd7, 0xff]);
     assert_eq!(c.to_rgba8(), [0x5d, 0xb0, 0xd7, 0xff]);
+}
+
+/// The pop-out button moves the panel into a window of its own and back;
+/// closing that window docks the panel before the window goes.
+#[test]
+fn the_panel_pops_out_into_its_own_window_and_docks_back() {
+    use lumen_core::components::{Length, Style};
+    use lumen_core::window::{Window, WindowClosing, WindowName, WindowOf};
+    use lumen_devtools::{POPOUT_ID, sync_devtools_window};
+
+    let mut world = click_world();
+    world.init_resource::<Messages<WindowClosing>>();
+    let popout = button(&mut world, POPOUT_ID);
+    world
+        .entity_mut(popout)
+        .insert(TextContent("Pop out".into()));
+    let root = world.spawn(DevtoolsRoot).id();
+    let panel = world
+        .spawn((LumenId(PANEL_ID.into()), Style::default()))
+        .id();
+
+    click(&mut world, popout);
+    run!(&mut world, handle_clicks);
+    assert!(world.resource::<DevtoolsState>().popped);
+    run!(&mut world, sync_devtools_window);
+    let window = world
+        .get::<WindowOf>(root)
+        .expect("the panel's root shows in a window")
+        .window();
+    assert_eq!(world.resource::<DevtoolsState>().window, Some(window));
+    assert_eq!(world.get::<Window>(window).unwrap().title, "Lumen devtools");
+    assert_eq!(
+        world.get::<WindowName>(window).map(|n| n.0.as_str()),
+        Some("devtools")
+    );
+    assert_eq!(
+        world.get::<Style>(panel).unwrap().width,
+        Length::Percent(100.0)
+    );
+    assert!(world.get::<DirtyLayout>(root).is_some());
+    run!(&mut world, sync_devtools_window);
+    assert_eq!(world.get::<TextContent>(popout).unwrap().0, "Dock");
+
+    // Dock again from the button: the window goes, the panel comes back.
+    click(&mut world, popout);
+    run!(&mut world, handle_clicks);
+    run!(&mut world, sync_devtools_window);
+    assert!(world.get::<WindowOf>(root).is_none());
+    assert!(
+        world.get_entity(window).is_err(),
+        "the devtools window closed"
+    );
+    assert!(matches!(
+        world.get::<Style>(panel).unwrap().width,
+        Length::Px(_)
+    ));
+    run!(&mut world, sync_devtools_window);
+    assert_eq!(world.get::<TextContent>(popout).unwrap().0, "Pop out");
+
+    // Pop out, then the user closes the window: the panel docks.
+    click(&mut world, popout);
+    run!(&mut world, handle_clicks);
+    run!(&mut world, sync_devtools_window);
+    let window = world.get::<WindowOf>(root).unwrap().window();
+    world
+        .resource_mut::<Messages<WindowClosing>>()
+        .write(WindowClosing { window });
+    run!(&mut world, sync_devtools_window);
+    assert!(world.get::<WindowOf>(root).is_none());
+    let state = *world.resource::<DevtoolsState>();
+    assert!(!state.popped);
+    assert_eq!(state.window, None);
+}
+
+/// While popped out the panel takes no width from the app's window.
+#[test]
+fn a_popped_out_panel_reserves_no_dock_inset() {
+    let mut world = World::new();
+    world.insert_resource(DevtoolsState {
+        visible: true,
+        popped: true,
+        ..Default::default()
+    });
+    world.insert_resource(DockInsets::default());
+    world.spawn((
+        LumenId(PANEL_ID.into()),
+        Transform {
+            absolute: Vec2::ZERO,
+            size: Vec2::new(470.0, 600.0),
+            baseline_y: None,
+        },
+    ));
+    run!(&mut world, sync_dock_inset);
+    assert_eq!(world.resource::<DockInsets>().right, 0.0);
+    world.resource_mut::<DevtoolsState>().popped = false;
+    run!(&mut world, sync_dock_inset);
+    assert_eq!(world.resource::<DockInsets>().right, 470.0);
 }

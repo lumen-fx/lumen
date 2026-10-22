@@ -250,7 +250,8 @@ jobs:
       # the on_close veto) only shows on a platform window. The Linux and
       # Windows legs start the window-control fixture, read its title and
       # client size back from the platform while it runs, and wait for the
-      # app to close itself.
+      # app to close itself. On Linux the devtools panel starts popped out,
+      # so a second window opens beside it and closes with the app.
       - name: Drive a real window
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         shell: bash
@@ -262,7 +263,7 @@ jobs:
           log="$RUNNER_TEMP/window-control"
           mkdir -p "$log"
           timeout 300 xvfb-run -a -s "-screen 0 1280x1024x24" bash -c '
-            target/debug/lumenc run fixtures/window-control > "$0/out.txt" 2>&1 &
+            LUMEN_DEVTOOLS_OPEN=popout target/debug/lumenc run fixtures/window-control > "$0/out.txt" 2>&1 &
             pid=$!
             for _ in $(seq 1 600); do
               xwininfo -name lumen-window-check > /dev/null 2>&1 && break
@@ -270,10 +271,12 @@ jobs:
             done
             sleep 2
             xwininfo -name lumen-window-check > "$0/xwininfo.txt" 2>&1
+            xwininfo -name "Lumen devtools" > "$0/devtools.txt" 2>&1
             wait "$pid"
             echo "exit $?" >> "$0/out.txt"
           ' "$log" || true
-          cat "$log/out.txt" "$log/xwininfo.txt"
+          cat "$log/out.txt" "$log/xwininfo.txt" "$log/devtools.txt"
+          grep -q "Width: 900" "$log/devtools.txt"
           grep -q "Width: 640" "$log/xwininfo.txt"
           grep -q "Height: 480" "$log/xwininfo.txt"
           grep -q "window-check title=lumen-window-check size=640.0x480.0" "$log/out.txt"

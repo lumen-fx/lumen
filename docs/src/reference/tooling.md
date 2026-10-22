@@ -24,7 +24,8 @@ contain it.
 | Trigger | Effect |
 |---------|--------|
 | `F12` | Toggles the overlay. |
-| `LUMEN_DEVTOOLS_OPEN` | Any value other than empty or `0` opens the overlay at startup. |
+| `LUMEN_DEVTOOLS_OPEN` | Any value other than empty or `0` opens the overlay at startup; `popout` opens it in its own window. |
+| Pop out button | Moves the panel into a window titled "Lumen devtools", and the app takes back the full width of its window. The button then reads Dock and moves the panel back. Closing the devtools window docks the panel too. |
 
 There is no config key and no CLI flag.
 
