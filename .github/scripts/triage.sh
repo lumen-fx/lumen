@@ -47,7 +47,7 @@ area_for() {
     core/text/*) echo A-Text ;;
     core/input/*) echo A-Input ;;
     core/ir/*|web/html/*) echo A-Markup ;;
-    core/widget/*|core/widget/macros/*|core/primitives/*) echo A-Widgets ;;
+    core/widget/*|core/primitives/*) echo A-Widgets ;;
     core/i18n/*) echo A-I18n ;;
     core/assets/*) echo A-Assets ;;
     core/paint/*) echo A-Rendering ;;
@@ -83,7 +83,7 @@ area_for() {
     backends/http-ureq/*|capabilities/http-fetch/*) echo A-Runtime ;;
     # Crash handling has no area label of its own; it runs at app startup.
     os/crash/*|capabilities/os-crash/*) echo A-Runtime ;;
-    public/lumenc/*|public/lumenc/plugin/*) echo A-CLI ;;
+    public/lumenc/*) echo A-CLI ;;
     tools/release/*|bucket/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
     tools/vscode-lumen/*|tools/jetbrains-lumen/*|tools/zed-lumen/*|tools/tree-sitter-lumen/*) echo A-Editor-Plugin ;;
     apps/*) echo C-Examples ;;
