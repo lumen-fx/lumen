@@ -1169,10 +1169,7 @@ pub fn hit_test(
         Query<Entity, With<Hovered>>,
         Query<Entity, With<lumen_core::input::HoverWithin>>,
     ),
-    (visibles, surfaces): (
-        Query<&lumen_core::components::Visible>,
-        Query<(), With<lumen_core::window::WindowOf>>,
-    ),
+    visibles: Query<&lumen_core::components::Visible>,
     styles: Query<&lumen_core::components::Style>,
     (disableds, pointer_events): (
         Query<(), With<lumen_core::components::Disabled>>,
@@ -1239,7 +1236,7 @@ pub fn hit_test(
                 {
                     continue;
                 }
-                if hidden_via_ancestors(e, &parents, &visibles, &styles, &surfaces) {
+                if hidden_via_ancestors(e, &parents, &visibles, &styles, partitions.as_deref()) {
                     continue;
                 }
                 if disabled_via_ancestors(e, &parents, &disableds) {
@@ -1609,10 +1606,7 @@ pub fn cycle_focus_on_tab(
         (Entity, Option<&lumen_core::components::Visible>),
         bevy_ecs::prelude::With<lumen_core::components::FocusBoundary>,
     >,
-    (visibles, surfaces): (
-        Query<&lumen_core::components::Visible>,
-        Query<(), With<lumen_core::window::WindowOf>>,
-    ),
+    visibles: Query<&lumen_core::components::Visible>,
     styles: Query<&lumen_core::components::Style>,
     mut select_inputs: Query<(&TextContent, &mut TextInput, Option<&mut TextCursor>)>,
     (partitions, runtimes): (
@@ -1669,7 +1663,7 @@ pub fn cycle_focus_on_tab(
                     && in_trap(*e)
                     // section 17.4: hidden widgets leave the tab chain - same
                     // hidden test the pointer path uses.
-                    && !hidden_via_ancestors(*e, &parents, &visibles, &styles, &surfaces)
+                    && !hidden_via_ancestors(*e, &parents, &visibles, &styles, partitions.as_deref())
             })
             .map(|(e, t, doc)| (e, t.0, doc.map(|d| d.0).unwrap_or(u32::MAX)))
             .collect();

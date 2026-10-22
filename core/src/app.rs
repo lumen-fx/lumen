@@ -303,10 +303,13 @@ impl App {
         world.insert_resource(crate::tick::Tick::default());
         // The last tick's phase instants, filled in by `App::tick`.
         world.insert_resource(crate::tick::FrameTiming::default());
-        // The primary window: every app has one to lay out against, whether
-        // or not a backend ever shows it. A window backend applies it to the
-        // platform window it opens; the extract step mirrors its viewport
-        // into the render world.
+        // The primary window: every desktop app has one to lay out against,
+        // whether or not a backend ever shows it. A window backend applies it
+        // to the platform window it opens; the extract step mirrors its
+        // viewport into the render world. A page in the browser has the
+        // browser's window and none of Lumen's, so the browser build carries
+        // no window machinery at all.
+        #[cfg(not(target_arch = "wasm32"))]
         crate::window::spawn_primary_window(&mut world, crate::window::WindowViewport::default());
         // Insert `FrameDirty`; defaults to dirty so the first frame paints. The window backend reads and clears it per presented frame.
         world.insert_resource(FrameDirty::default());
@@ -388,7 +391,6 @@ impl App {
 
         // Build the render world.
         let mut render_world = World::new();
-        render_world.insert_resource(crate::render_world::RenderWindows::default());
         // What the renderer reports about the frame it draws; copied into the
         // main world's `FrameTiming` after the render schedule.
         render_world.insert_resource(crate::tick::RenderTimestamps::default());
@@ -432,24 +434,16 @@ impl App {
             crate::render_world::reset_animations_active,
         );
         s.add_systems(TickStage::Input, crate::tick::reset_wake_deadline);
-        // Which window each element shows in: at the start of the tick for
-        // input routing, and again before layout so a surface root a system
-        // added this tick lays out in its window on the same tick.
-        s.add_systems(
-            TickStage::Input,
-            crate::window::sync_window_partitions.after(bevy_ecs::message::message_update_system),
-        );
-        s.add_systems(
-            TickStage::LayoutSync,
-            crate::window::sync_window_partitions.before(crate::layout_backend::LayoutSolve),
-        );
         // `window.size()` / `window.dpr()` read a process-wide cache that
         // scripts reach without a world; keep it on the live viewports. At
         // the start of the tick for a backend's write between ticks, and at
         // the end for a write inside one (a headless window applying its
         // size).
-        s.add_systems(TickStage::Input, crate::window_state::publish_windows);
-        s.add_systems(TickStage::A11ySync, crate::window_state::publish_windows);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            s.add_systems(TickStage::Input, crate::window_state::publish_windows);
+            s.add_systems(TickStage::A11ySync, crate::window_state::publish_windows);
+        }
         // Wave-D dirty-queue lifecycle. `clear_signal_dirty` keeps the legacy
         // `Signals::dirty` set tidy for embedders that still hold a `Res<Signals>`
         // reference; `clear_property_store_dirty` runs against the canonical
@@ -746,10 +740,13 @@ impl App {
         }
 
         clear_extracted(&mut self.render_world);
-        let pipeline = self.render_world.contains_resource::<ExtractPipeline>();
-        if pipeline {
+        let pipeline = self
+            .render_world
+            .get_resource::<ExtractPipeline>()
+            .map(|p| (p.before, p.after));
+        if let Some((before, _)) = pipeline {
             // The windows this frame paints, before anything extracts into them.
-            crate::render_world::sync_render_windows(&mut self.world, &mut self.render_world);
+            before(&mut self.world, &mut self.render_world);
         }
         // Open the extract phase so the hierarchy-derived maps
         // ([`build_parent_map`] & friends) are computed once by the first
@@ -769,10 +766,10 @@ impl App {
         for f in fns {
             f(&mut self.world, &mut self.render_world);
         }
-        if pipeline {
+        if let Some((_, after)) = pipeline {
             // After every extract fn, plugin ones included: which window each
             // extracted entity paints into.
-            crate::render_world::tag_extracted_windows(&mut self.world, &mut self.render_world);
+            after(&mut self.world, &mut self.render_world);
         }
         if let Some(mut c) = self
             .world

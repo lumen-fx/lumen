@@ -493,7 +493,7 @@ sized from the frame (see lumen-render-cpu above).
 ## Windows
 
 An app has one or more windows, and each is an entity in the main world.
-`App::new` spawns the primary one, marked `PrimaryWindow`; spawning another
+On desktop, `App::new` spawns the primary one, marked `PrimaryWindow`; spawning another
 entity with a `Window` component opens a window, and despawning it closes the
 window. `Window` is what the app wants: title, size, kind, visibility,
 decorations, position, size limits, and an owner window. `WindowViewport` is
@@ -513,9 +513,11 @@ inherited styles, and event bubbling see it under its parent as before. It
 leaves its parent's layout and paint instead: layout solves it as a root
 against its window's viewport, and it paints in that window, outside every
 ancestor's clip, scroll offset, opacity group, and visibility. The
-`WindowPartitions` resource answers which window an element is in. It is
-rebuilt only when `WindowOf` or the hierarchy changes, and an app with no
-surface roots skips it entirely.
+`WindowPartitions` resource answers which window an element is in. The
+window core keeps it, with the rest of the per-window bookkeeping, in one
+system that runs before layout and only while a surface root exists or one
+was just added or removed, so an app with one window never runs it. The
+browser runtime does not install the window core at all.
 
 Input follows the same split. Hit testing considers only the elements in the
 window under the pointer (`PointerState::window`), but the hover chain that
@@ -526,8 +528,11 @@ viewport. One element has focus app-wide; each window remembers the element it
 last had in `LastFocus` and gets it back when it regains focus, focusing an
 element in a window that lacks focus raises that window, and Tab cycles within
 the focused window. A window carrying `InputBlocked` ignores input and refuses
-accessibility actions. Popups, tooltips, and menus position against the
-viewport of their anchor's window and parent under its surface root.
+accessibility actions, simulated MCP input included. Dropdown panels, menus,
+and the color picker are in the tree under the element that opens them, so
+they show in its window and clamp to its viewport. A tooltip, which is
+spawned at the top of the tree, gets `WindowOf` from its trigger's window and
+opens there.
 
 Closing goes through one path. The platform close button,
 `WindowRequest::Close(window)`, and `QuitRequest` all run a `CloseRequest`

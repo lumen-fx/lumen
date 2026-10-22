@@ -1516,7 +1516,7 @@ pub fn hidden_via_ancestors<F: bevy_ecs::query::QueryFilter>(
     parents: &Query<&bevy_ecs::hierarchy::ChildOf>,
     visibles: &Query<&Visible>,
     styles: &Query<&Style, F>,
-    surfaces: &Query<(), With<crate::window::WindowOf>>,
+    partitions: Option<&crate::window::WindowPartitions>,
 ) -> bool {
     let mut cur = entity;
     loop {
@@ -1529,7 +1529,7 @@ pub fn hidden_via_ancestors<F: bevy_ecs::query::QueryFilter>(
         {
             return true;
         }
-        if surfaces.contains(cur) {
+        if partitions.is_some_and(|p| p.is_surface_root(cur)) {
             return false;
         }
         match parents.get(cur) {

@@ -38,9 +38,28 @@ use std::sync::{Arc, Mutex};
 pub type ExtractFn = fn(&mut World, &mut World);
 
 /// Marks a render world whose extract pipeline is installed, so a second
-/// backend asking for it finds it already there.
-#[derive(Resource, Default, Debug)]
-pub struct ExtractPipeline;
+/// backend asking for it finds it already there, and carries the window
+/// steps that bracket the extract chain: `before` gives every window its
+/// render-world stand-in ([`sync_render_windows`]), `after` tags each
+/// extracted entity with the window it paints into
+/// ([`tag_extracted_windows`]). `App::tick` calls them through here, so an
+/// app with no render backend links neither.
+#[derive(Resource, Debug)]
+pub struct ExtractPipeline {
+    /// Runs before the first extract fn.
+    pub before: ExtractFn,
+    /// Runs after the last extract fn, plugin ones included.
+    pub after: ExtractFn,
+}
+
+impl Default for ExtractPipeline {
+    fn default() -> Self {
+        Self {
+            before: sync_render_windows,
+            after: tag_extracted_windows,
+        }
+    }
+}
 
 /// Install the pipeline that turns the main world into a paintable scene: the
 /// built-in extractors, the dirty roll-up that decides whether a tick extracts
@@ -60,7 +79,8 @@ pub fn install_extract_pipeline(app: &mut App) {
     if app.render_world.contains_resource::<ExtractPipeline>() {
         return;
     }
-    app.render_world.insert_resource(ExtractPipeline);
+    app.render_world.insert_resource(ExtractPipeline::default());
+    app.render_world.init_resource::<RenderWindows>();
     let chain: [ExtractFn; 8] = [
         // Runs first so it primes the shared hierarchy memos and so
         // `HiddenExtracts` is fresh for the `cull_hidden` guard.
