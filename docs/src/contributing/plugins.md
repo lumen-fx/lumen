@@ -481,6 +481,42 @@ overrides it with an ordinary rule. Only defaults that CSS cannot express, such
 as one that applies conditionally on another property being unset, stay in
 Rust.
 
+## Default styles and messages
+
+A plugin that brings elements ships their default look as a stylesheet of its
+own and their text as Fluent messages of its own, so neither the skins nor the
+app's catalogue has to name the plugin:
+
+```rust
+impl Plugin for DockPlugin {
+    fn build(self, app: &mut App) {
+        app.add_ua_stylesheet("lumen-dock", include_str!("../dock.css"));
+        app.add_default_messages("en-US", include_str!("../locale/en-US.ftl"));
+        app.add_default_messages("de", include_str!("../locale/de.ftl"));
+    }
+}
+```
+
+The stylesheet sits at user-agent origin, below the built-in user-agent sheet
+and the skins: a skin, the app's CSS and a markup attribute all override it,
+and so does a built-in user-agent rule of the same weight. Write it against
+the skins' tokens with a token of the plugin's own as the override point,
+`bg: var(--lumen-dock-tab-bg, var(--lumen-surface-2))`, so a skin or an app
+restyles the plugin by setting `--lumen-dock-*` rather than by matching its
+selectors. The text is parsed with the app's CSS parser when the app is built
+and again on a hot reload; a sheet that does not parse is reported and left
+out, and a runtime built without the parser applies none.
+
+The messages go under the app's catalogue for the same locale, message by
+message: an app rewords or translates a plugin's string by writing the same
+message id in its own `.ftl` file, and a locale only the plugin ships is
+reached through the app's fallback chain like any other. Look them up the way
+the app does, with `lumen_core::i18n::try_translate`, or through a
+`translatable` key on an element the plugin builds. Prefix every message id
+with the plugin's name, since two plugins sharing an id resolve to whichever
+shipped it first. The messages added while plugins build are in place before
+the app's tree spawns; ones added later arrive on the next tick.
+
 ## Holding a style value
 
 An element's style components are rebuilt from the cascade whenever it

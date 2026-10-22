@@ -335,6 +335,10 @@ pub(crate) fn hot_reload(world: &mut World) {
         }
     };
 
+    // The stylesheets plugins added go under the edited ones again; the
+    // respawned tree restyles against them below.
+    let module_styles = super::loading::merge_module_stylesheets(&mut ir, world, Some(&*parser));
+
     // Re-read the translation catalogues before the respawn below, so
     // `translatable="key"` resolves against the edited strings.
     reload_catalogues(world, &dir);
@@ -365,6 +369,9 @@ pub(crate) fn hot_reload(world: &mut World) {
     let menubar = super::menubar::mount_in_window_menubar(&mut ir, native);
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
+    if module_styles {
+        lumen_core::components::StyleVersion::bump(world);
+    }
     super::menubar::finish_in_window_menubar(world, new_root, menubar);
     crate::run::restyle::install_root_class_list(world, new_root);
     // As at startup: the `<if>` / `<for>` bodies the live signals open are

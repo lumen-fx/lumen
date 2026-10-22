@@ -88,6 +88,44 @@ impl StyleVersion {
     }
 }
 
+/// User-agent stylesheets plugins add: the default look of the elements a
+/// module brings (a dock's tabs, a canvas's frame), as CSS text.
+///
+/// A plugin adds one with [`crate::app::App::add_ua_stylesheet`]. The host
+/// that owns the cascade puts every one at user-agent origin, below the
+/// built-in user-agent sheet and the skins, so a skin, an app stylesheet and
+/// a markup attribute all override it, and a module themes itself through
+/// the skins' tokens (`var(--lumen-dock-tab-bg, var(--lumen-surface-2))`)
+/// rather than by naming itself in a skin.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct UaStylesheets(pub Vec<UaStylesheet>);
+
+/// One plugin's user-agent stylesheet: see [`UaStylesheets`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UaStylesheet {
+    /// Who added it, for a message about a sheet that does not parse.
+    pub name: String,
+    /// The CSS text.
+    pub css: String,
+}
+
+impl crate::app::App {
+    /// Add `css` as user-agent CSS: the default look of what this plugin
+    /// brings, which skins and the app's stylesheet override. `name` names
+    /// the plugin in a message about CSS that does not parse. See
+    /// [`UaStylesheets`].
+    pub fn add_ua_stylesheet(&mut self, name: &str, css: &str) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(UaStylesheets::default)
+            .0
+            .push(UaStylesheet {
+                name: name.to_string(),
+                css: css.to_string(),
+            });
+        self
+    }
+}
+
 /// Framework-internal style record. Smaller and renderer-agnostic compared with `taffy::Style`; the layout impl crate translates it into its backend type.
 /// New fields require a corresponding `dirty_mask` bit allocation in `lumen/src/style_mask.rs`.
 ///

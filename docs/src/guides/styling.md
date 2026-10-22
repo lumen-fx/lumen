@@ -187,6 +187,12 @@ skin's tokens is usually enough:
 :root { --lumen-accent: #7aa2f7; }
 ```
 
+A module that brings elements of its own brings their default look too, as a
+user-agent stylesheet beneath the skins. A skin and your CSS both override
+it, and most modules take their colors from the skin's tokens with a token of
+their own in front, so `:root { --lumen-dock-tab-bg: #222; }` restyles one
+part without touching the rest.
+
 ## Responding to the environment
 
 `@media` gates a block of rules on the environment:
