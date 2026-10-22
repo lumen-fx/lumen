@@ -870,7 +870,7 @@ mod tests {
         // One system for the whole gesture, so its drag state lasts from the
         // press to the release.
         let drag = world.register_system(drag_split_gutters);
-        world.write_message(press.clone());
+        world.write_message(press);
         world.write_message(PointerMoved {
             position: Vec2::new(233.0, 50.0),
             local: None,
@@ -878,7 +878,7 @@ mod tests {
         });
         world.run_system(drag).unwrap();
         assert!(resized(&world).is_empty(), "nothing ends while dragging");
-        world.write_message(release.clone());
+        world.write_message(release);
         world.run_system(drag).unwrap();
         assert_eq!(
             resized(&world),

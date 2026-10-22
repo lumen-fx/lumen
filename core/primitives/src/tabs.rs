@@ -1,30 +1,152 @@
-//! `<tabs>` strip-button runtime.
+//! `<tabs>`: one `<tab>` shown at a time, picked from a strip of buttons.
 //!
-//! The markup-level `<tabs bind-value="active"> <tab name="general"
-//! label="General">...</tab> ... </tabs>` parser pass synthesises one
-//! `<button class="tab-btn">` per tab and tags each with a
-//! [`TabStripButton`] component. This plugin's tiny dispatcher
-//! watches `ClickEvent`s, looks up the matching button, and writes
-//! `Signals[signal_name] = tab_value` - no author-side script
-//! required for the basic "switch active tab" flow.
+//! A `<tabs>` holds a `.tab-strip` row ([`TabStrip`]) and then its `<tab>`
+//! children ([`Tab`]). The strip holds one `.tab-btn` button
+//! ([`TabStripButton`]) per tab, in the tabs' order, captioned with each
+//! tab's `label` (its `name` when it has none). The parser writes the strip
+//! for markup; the scene keeps it in step with the tabs however they were
+//! added, so a `<tabs>` a script or a module builds, or one whose tabs move,
+//! has the same strip.
+//!
+//! Which tab shows is a name. With `bind-value` the bound signal holds it;
+//! without, the `<tabs>` element's own `value` attribute does, which a
+//! script reads and writes like any other attribute. A click
+//! or a key on a strip button writes it and raises the DOM `change` event
+//! on the `<tabs>`, with the name as its value. A module picks a tab with a
+//! [`SelectTab`] message. [`sync_tabs`] shows the named tab, hides the rest
+//! (`display: none` held over their styles, so they keep their state), and
+//! marks the shown tab's button [`Selected`]; a name that matches no tab
+//! shows the first tab that is not disabled. To reorder the tabs, move the
+//! `<tab>` elements: the strip follows. Every tab system runs in
+//! [`TabsSet`].
 
-use bevy_ecs::message::{MessageReader, MessageWriter};
+use bevy_ecs::message::{Message, MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
-use lumen_core::input::{ClickEvent, FocusTracker, Key, KeyPressed, MenuClicked, NamedKey};
+use bevy_ecs::system::SystemParam;
+use lumen_core::components::{Disabled, Display, LumenAttributes, Style};
+use lumen_core::input::{
+    ClickEvent, ControlInput, FocusTracker, Key, KeyPressed, MenuClicked, NamedKey,
+};
 use lumen_core::prelude::*;
-use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
 
 use crate::held::hold_fill;
 
-/// Strip-button marker. `(signal_name, tab_value)` - clicking writes
-/// `Signals[signal_name] = tab_value`. Authored only by the
-/// `<tabs>` parser pass; not exposed to markup directly.
-#[derive(Component, Clone, Debug)]
+/// On a `<tabs>`: the tab set.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct Tabs {
+    /// The signal `bind-value` names, which holds the shown tab's name.
+    /// `None` keeps the name in the element's `value` attribute.
+    pub bind: Option<String>,
+    /// The `<tab>` showing, as [`sync_tabs`] last left it.
+    pub shown: Option<Entity>,
+}
+
+/// On a `<tab>`: one tab of a `<tabs>`. Its `name` attribute is what picks
+/// it and its `label` attribute what its strip button says. A hidden tab
+/// holds `display: none` over its styles.
+#[derive(Component, Clone, Copy, Debug, Default)]
+#[require(StyleOverrides)]
+pub struct Tab;
+
+impl StyleOwner for Tab {
+    const RANK: u8 = 20;
+}
+
+/// On a `<tabs>`' `.tab-strip`: the row its buttons sit in.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct TabStrip;
+
+/// On a `.tab-btn` in a tab strip: the `<tab>` it shows.
+#[derive(Component, Clone, Copy, Debug)]
 pub struct TabStripButton {
-    /// Signal name the `<tabs bind-value>` attribute pointed at.
-    pub signal_name: String,
-    /// `name=` of the `<tab>` this button represents.
-    pub value: String,
+    /// The tab. [`Entity::PLACEHOLDER`] until the scene pairs a button the
+    /// parser wrote with its tab.
+    pub tab: Entity,
+}
+
+/// Show `tab` in its `<tabs>`, as a script writing the bound signal or the
+/// `value` attribute would. Raises no DOM event: only a pick the user makes
+/// does.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectTab {
+    /// The `<tab>` to show.
+    pub tab: Entity,
+}
+
+/// The system set every `<tabs>` system runs in. Order a system that reads
+/// [`Tabs::shown`] or a tab's visibility after it, and one that writes a
+/// [`SelectTab`] the set should apply this tick before it.
+#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct TabsSet;
+
+/// A tab's name: its `name` attribute.
+pub fn tab_name(attrs: Option<&LumenAttributes>) -> Option<&str> {
+    attrs?.get("name").filter(|n| !n.is_empty())
+}
+
+/// What a tab's strip button says: its `label` attribute, else its name.
+pub fn tab_label(attrs: Option<&LumenAttributes>) -> &str {
+    attrs
+        .and_then(|a| a.get("label").filter(|l| !l.is_empty()))
+        .or_else(|| tab_name(attrs))
+        .unwrap_or("")
+}
+
+/// What picking a tab writes: the bound signal, or the `<tabs>`' `value`
+/// attribute.
+#[derive(SystemParam)]
+pub struct TabPicks<'w, 's> {
+    parents: Query<'w, 's, &'static ChildOf>,
+    sets: Query<'w, 's, (&'static Tabs, Option<&'static mut LumenAttributes>), Without<Tab>>,
+    tabs: Query<'w, 's, Option<&'static LumenAttributes>, With<Tab>>,
+    store: ResMut<'w, PropertyStore>,
+    commands: Commands<'w, 's>,
+}
+
+impl TabPicks<'_, '_> {
+    /// Make `tab` the one its `<tabs>` shows. Returns the `<tabs>` and the
+    /// tab's name when the choice changed.
+    pub fn pick(&mut self, tab: Entity) -> Option<(Entity, String)> {
+        let name = tab_name(self.tabs.get(tab).ok()?)?.to_string();
+        let set = self.parents.get(tab).ok()?.parent();
+        let (tabs, attrs) = self.sets.get_mut(set).ok()?;
+        let changed = match &tabs.bind {
+            Some(signal) => {
+                let before = self.store.get_global_str(signal);
+                self.store.set_global_str(signal, name.as_str());
+                before.as_deref() != Some(name.as_str())
+            }
+            None => match attrs {
+                Some(mut attrs) => {
+                    let changed = attrs.get("value") != Some(name.as_str());
+                    if changed {
+                        attrs.set("value", name.clone());
+                    }
+                    changed
+                }
+                None => {
+                    let mut attrs = LumenAttributes::default();
+                    attrs.set("value", name.clone());
+                    self.commands.entity(set).insert(attrs);
+                    true
+                }
+            },
+        };
+        changed.then_some((set, name))
+    }
+}
+
+/// A pick the user made: write it, and raise the DOM `change` event on the
+/// `<tabs>` when it changed which tab shows.
+fn user_pick(picks: &mut TabPicks, changes: &mut MessageWriter<ControlInput>, tab: Entity) {
+    if let Some((set, name)) = picks.pick(tab) {
+        changes.write(ControlInput {
+            entity: set,
+            value: name,
+            committed: true,
+        });
+    }
 }
 
 /// Default fill for a `.tab-btn:selected` when no author / skin
@@ -69,24 +191,23 @@ pub struct TabsPlugin;
 
 impl Plugin for TabsPlugin {
     fn build(self, app: &mut App) {
+        app.add_message::<SelectTab>();
+        // A pick from a click, a key or a module, then the shown tab, its
+        // button's `Selected` marker and, the same tick the marker moves,
+        // the button's fill, so a click doesn't show a one-frame stale
+        // highlight on the old tab. Whether the pick came from a click,
+        // keyboard nav, or a script write, the marker follows it.
         app.add_systems(
             TickStage::Systems,
-            dispatch_tab_clicks.after(lumen_input::dispatch_clicks),
-        );
-        // Mirror the bound signal onto the `Selected` marker so the
-        // active tab button is queryable / stylable regardless of
-        // whether the activation came from a click, keyboard nav, or a
-        // script write.
-        app.add_systems(
-            TickStage::Systems,
-            sync_tab_selected.after(dispatch_tab_clicks),
-        );
-        // Paint the marker: swap the button's fill the same tick
-        // `Selected` moves, so a click doesn't show a one-frame stale
-        // highlight on the old tab.
-        app.add_systems(
-            TickStage::Systems,
-            sync_tab_button_visuals.after(sync_tab_selected),
+            (
+                dispatch_tab_clicks.after(lumen_input::dispatch_clicks),
+                apply_select_tab,
+                sync_tabs,
+                sync_tab_button_visuals,
+            )
+                .chain()
+                .in_set(TabsSet)
+                .run_if(any_with_component::<Tabs>),
         );
         app.add_systems(
             TickStage::Systems,
@@ -124,7 +245,13 @@ impl Plugin for TabsPlugin {
         // preserves keys, so reading either bus works; the global bus
         // is the simpler hookup because it doesn't require us to also
         // be a TextInput.
-        app.add_systems(TickStage::Systems, dispatch_tab_keys);
+        app.add_systems(
+            TickStage::Systems,
+            dispatch_tab_keys
+                .before(apply_select_tab)
+                .in_set(TabsSet)
+                .run_if(any_with_component::<Tabs>),
+        );
         // Popup keyboard nav (Wave 4 Qt polish): closed-combobox value
         // stepping + type-ahead, open-popup highlight movement, hover <->
         // keyboard highlight unification, and open/close focus
@@ -180,54 +307,145 @@ impl Plugin for TabsPlugin {
 ///
 /// The `ClickEvent` path is kept for keyboard-synthesized clicks
 /// (Enter via `activate_focused_on_enter`) and stays idempotent - a
-/// release on the already-switched tab re-writes the same value, which
-/// `PropertyStore::set` drops as a no-op.
-fn dispatch_tab_clicks(
+/// release on the already-switched tab picks it again, which changes
+/// nothing and raises no `change`.
+pub fn dispatch_tab_clicks(
     mut clicks: MessageReader<ClickEvent>,
     buttons: Query<&TabStripButton>,
     newly_pressed: Query<Entity, Added<Pressed>>,
-    parents: Query<&ChildOf>,
-    mut store: ResMut<PropertyStore>,
+    mut picks: TabPicks,
+    mut changes: MessageWriter<ControlInput>,
 ) {
     // Hit-shadowing (W5): the press / click can land on a hit-testable
     // CHILD of the tab button (its text child) rather than the button
     // entity itself - resolve up the ancestor chain like
     // `controls::resolve_control` does for the slider thumb.
-    for pressed in &newly_pressed {
+    let targets: Vec<Entity> = newly_pressed
+        .iter()
+        .chain(clicks.read().map(|ev| ev.entity))
+        .collect();
+    for start in targets {
         if let Some(target) =
-            crate::controls::resolve_control(pressed, &parents, |e| buttons.contains(e))
+            crate::controls::resolve_control(start, &picks.parents, |e| buttons.contains(e))
             && let Ok(btn) = buttons.get(target)
         {
-            store.set_global_str(&btn.signal_name, btn.value.as_str());
-        }
-    }
-    for ev in clicks.read() {
-        if let Some(target) =
-            crate::controls::resolve_control(ev.entity, &parents, |e| buttons.contains(e))
-            && let Ok(btn) = buttons.get(target)
-        {
-            store.set_global_str(&btn.signal_name, btn.value.as_str());
+            user_pick(&mut picks, &mut changes, btn.tab);
         }
     }
 }
 
-/// Maintain the [`Selected`] marker across every tab strip: the button
-/// whose `value` matches its bound signal's current value carries it;
-/// all its siblings shed it. Idempotent per tick - insert / remove only
-/// fire on actual transitions, so archetypes stay put on idle frames.
-pub fn sync_tab_selected(
+/// Apply each [`SelectTab`]: make its tab the one its `<tabs>` shows.
+pub fn apply_select_tab(mut requests: MessageReader<SelectTab>, mut picks: TabPicks) {
+    for request in requests.read() {
+        picks.pick(request.tab);
+    }
+}
+
+/// Show the tab each `<tabs>` names and hide the rest, and mark the shown
+/// tab's strip button [`Selected`].
+///
+/// The name comes from the bound signal or the `value` attribute. A name no
+/// tab has shows the first tab that is not disabled; when the signal holds
+/// nothing yet it is seeded with that tab's name, and the `value` attribute
+/// always follows what shows. Every write happens on a change only, so an
+/// idle tick touches nothing.
+#[allow(clippy::type_complexity)]
+pub fn sync_tabs(
+    mut sets: Query<
+        (
+            Entity,
+            &mut Tabs,
+            Option<&mut LumenAttributes>,
+            Option<&Children>,
+        ),
+        Without<Tab>,
+    >,
+    tabs: Query<(Option<&LumenAttributes>, Has<Disabled>, Option<&Visible>), With<Tab>>,
+    mut tab_styles: Query<(&mut Style, &mut StyleOverrides), With<Tab>>,
+    buttons: Query<(Entity, &TabStripButton, Has<Selected>)>,
+    mut store: ResMut<PropertyStore>,
     mut commands: Commands,
-    store: Res<PropertyStore>,
-    buttons: Query<(Entity, &TabStripButton, Option<&Selected>)>,
 ) {
-    for (entity, btn, selected) in &buttons {
-        let active = store.get_global_str(&btn.signal_name).as_deref() == Some(btn.value.as_str());
-        match (active, selected.is_some()) {
+    let mut shown_tabs: Vec<Entity> = Vec::new();
+    for (set, mut state, attrs, children) in &mut sets {
+        let kids: Vec<Entity> = children
+            .map(|c| c.iter().filter(|e| tabs.contains(*e)).collect())
+            .unwrap_or_default();
+        let name_of = |e: Entity| tabs.get(e).ok().and_then(|(a, ..)| tab_name(a));
+        let wanted: Option<String> = match &state.bind {
+            Some(signal) => store.get_global_str(signal).map(|v| v.to_string()),
+            None => attrs
+                .as_ref()
+                .and_then(|a| a.get("value"))
+                .map(str::to_string),
+        };
+        let shown = wanted
+            .as_deref()
+            .and_then(|w| kids.iter().copied().find(|&e| name_of(e) == Some(w)))
+            .or_else(|| {
+                kids.iter()
+                    .copied()
+                    .find(|&e| tabs.get(e).is_ok_and(|(_, disabled, _)| !disabled))
+            })
+            .or_else(|| kids.first().copied());
+        if let Some(name) = shown.and_then(name_of) {
+            match &state.bind {
+                Some(signal) if wanted.is_none() => {
+                    store.set_global_str(signal, name);
+                }
+                Some(_) => {}
+                None => match attrs {
+                    Some(mut attrs) if attrs.get("value") != Some(name) => {
+                        attrs.set("value", name.to_string());
+                    }
+                    Some(_) => {}
+                    None => {
+                        let mut attrs = LumenAttributes::default();
+                        attrs.set("value", name.to_string());
+                        commands.entity(set).insert(attrs);
+                    }
+                },
+            }
+        }
+        for &kid in &kids {
+            let visible = Some(kid) == shown;
+            let Ok((_, _, current)) = tabs.get(kid) else {
+                continue;
+            };
+            if current.map(|v| v.0) == Some(visible) {
+                continue;
+            }
+            commands.entity(kid).insert(Visible(visible));
+            if let Ok((mut style, mut overrides)) = tab_styles.get_mut(kid) {
+                let out = if visible {
+                    overrides.release::<Tab>()
+                } else {
+                    overrides.hold::<Tab>(
+                        StyleValues {
+                            display: Some(Display::None),
+                            ..StyleValues::default()
+                        },
+                        &Live {
+                            style: Some(&style),
+                            ..Live::default()
+                        },
+                    )
+                };
+                out.write_style(&mut style);
+            }
+        }
+        if state.shown != shown {
+            state.shown = shown;
+        }
+        shown_tabs.extend(shown);
+    }
+    for (button, btn, selected) in &buttons {
+        match (shown_tabs.contains(&btn.tab), selected) {
             (true, false) => {
-                commands.entity(entity).insert(Selected);
+                commands.entity(button).insert(Selected);
             }
             (false, true) => {
-                commands.entity(entity).remove::<Selected>();
+                commands.entity(button).remove::<Selected>();
             }
             _ => {}
         }
@@ -403,96 +621,61 @@ pub fn dispatch_menu_item_clicks(
     }
 }
 
-/// Keyboard navigation for tab strips, scoped to children of a tab
-/// list (i.e. siblings of the focused [`TabStripButton`]). Matches the
-/// `QTabBar` keyboard contract:
+/// Keyboard navigation for tab strips, scoped to the strip the focused
+/// [`TabStripButton`] sits in. Matches the `QTabBar` keyboard contract:
 ///
 /// - `ArrowRight` / `ArrowLeft`: move focus to the next / previous
-///   *enabled* sibling tab button - **and select it immediately**
+///   *enabled* button in the strip - **and select its tab immediately**
 ///   (Qt select-on-arrow; `QTabBar::keyPressEvent` calls
 ///   `setCurrentIndex` as focus moves). No wrap-around: at either end
 ///   the arrow is a no-op, exactly like Qt.
 /// - `Home` / `End`: jump to (and select) the first / last enabled
-///   sibling.
-/// - `Enter` / `Space`: activate the focused tab - the same effect as
-///   clicking it, i.e. writes `Signals[signal_name] = value`.
-/// - Disabled tabs are skipped by every movement, mirroring
+///   button.
+/// - `Enter` / `Space`: show the focused button's tab - the same effect
+///   as clicking it.
+/// - Disabled buttons are skipped by every movement, mirroring
 ///   `QTabBar`'s enabled-only traversal.
 ///
-/// Siblings are identified as all [`TabStripButton`] entities that
-/// share the focused tab's parent (the synthesised `tab-strip` row)
-/// and bind to the same `signal_name`. This keeps the nav strictly
-/// inside one tab strip even when several strips coexist in the same
-/// app, and never bleeds into non-tab focusables like inputs or
+/// The buttons are taken in the strip's own order, which follows the
+/// tabs'. Keeping to one strip means nav never bleeds into a nested or a
+/// neighbouring `<tabs>`, nor into non-tab focusables like inputs or
 /// buttons sitting alongside the strip.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_tab_keys(
     mut commands: Commands,
     mut keys: MessageReader<KeyPressed>,
     mut tracker: ResMut<FocusTracker>,
-    mut store: ResMut<PropertyStore>,
-    buttons: Query<(Entity, &TabStripButton)>,
-    disableds: Query<(), With<lumen_core::components::Disabled>>,
-    orders: Query<&lumen_core::components::DocumentOrder>,
-    parents: Query<&ChildOf>,
+    buttons: Query<&TabStripButton>,
+    disableds: Query<(), With<Disabled>>,
+    strips: Query<&Children, With<TabStrip>>,
+    mut picks: TabPicks,
+    mut changes: MessageWriter<ControlInput>,
 ) {
-    let Some(current) = tracker.0 else {
-        keys.read().for_each(drop);
-        return;
-    };
     // Confirm the focused entity is a tab button before we touch any
     // keys - otherwise the nav must stay silent so non-tab focusables
     // (text inputs, generic buttons) don't have their ArrowLeft /
     // ArrowRight stolen.
-    let Ok((_, current_btn)) = buttons.get(current) else {
+    let Some(current) = tracker.0.filter(|e| buttons.contains(*e)) else {
         keys.read().for_each(drop);
         return;
     };
-    let signal_name = current_btn.signal_name.clone();
-    let current_value = current_btn.value.clone();
-    let Ok(child_of_current) = parents.get(current) else {
-        keys.read().for_each(drop);
-        return;
-    };
-    let parent_id = child_of_current.parent();
-    // Sibling set: every tab button whose parent matches the focused
-    // tab's parent AND whose `signal_name` matches. Filtering on the
-    // signal scopes nav to one strip even when several strips share a
-    // common ancestor (nested tabs). Disabled siblings stay in the
-    // list (so the focused tab's own index resolves) but are skipped
-    // by every movement below.
-    let mut siblings: Vec<(u32, Entity, String, bool)> = buttons
-        .iter()
-        .filter_map(|(e, btn)| {
-            let Ok(co) = parents.get(e) else {
-                return None;
-            };
-            if co.parent() != parent_id || btn.signal_name != signal_name {
-                return None;
-            }
-            Some((
-                orders.get(e).map(|d| d.0).unwrap_or(u32::MAX),
-                e,
-                btn.value.clone(),
-                disableds.contains(e),
-            ))
+    let Some(siblings) = picks
+        .parents
+        .get(current)
+        .ok()
+        .and_then(|co| strips.get(co.parent()).ok())
+        .map(|kids| -> Vec<(Entity, Entity, bool)> {
+            kids.iter()
+                .filter_map(|e| {
+                    let btn = buttons.get(e).ok()?;
+                    Some((e, btn.tab, disableds.contains(e)))
+                })
+                .collect()
         })
-        .collect();
-    // Markup order: `DocumentOrder` is the spawner's monotonic
-    // walk-order counter, so it always matches the on-screen strip
-    // order. `Entity` is only the deterministic fallback for
-    // hand-built worlds - bevy_ecs 0.19's `Entity: Ord` compares a
-    // niche-optimized row index and does not track spawn order (the
-    // same trap `cycle_focus_on_tab` documents).
-    siblings.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    let siblings: Vec<(Entity, String, bool)> = siblings
-        .into_iter()
-        .map(|(_, e, value, disabled)| (e, value, disabled))
-        .collect();
-    if siblings.is_empty() {
+    else {
         keys.read().for_each(drop);
         return;
-    }
+    };
     let Some(current_index) = siblings.iter().position(|(e, ..)| *e == current) else {
         keys.read().for_each(drop);
         return;
@@ -540,25 +723,25 @@ pub fn dispatch_tab_keys(
     }
 
     if should_activate {
-        // Activate the currently focused tab - same effect as a click.
-        store.set_global_str(&signal_name, current_value.as_str());
+        // Show the focused button's tab - same effect as a click.
+        user_pick(&mut picks, &mut changes, siblings[current_index].1);
     }
     if let Some(idx) = focus_target
         && siblings[idx].0 != current
     {
-        let (next_entity, next_value, _) = &siblings[idx];
+        let (next_entity, next_tab, _) = siblings[idx];
         commands
             .entity(current)
             .remove::<(Focused, lumen_core::input::FocusVisible)>();
         // Roving-tabindex arrows are keyboard navigation - mark the new
         // holder for `:focus-visible` styling.
         commands
-            .entity(*next_entity)
+            .entity(next_entity)
             .insert((Focused, lumen_core::input::FocusVisible));
-        tracker.0 = Some(*next_entity);
+        tracker.0 = Some(next_entity);
         // Qt select-on-arrow: moving tab focus with the keyboard also
         // switches to that tab immediately.
-        store.set_global_str(&signal_name, next_value.as_str());
+        user_pick(&mut picks, &mut changes, next_tab);
     }
 }
 
@@ -588,40 +771,174 @@ mod tests {
     use bevy_ecs::schedule::Schedule;
     use bevy_ecs::world::World;
 
-    #[test]
-    fn selected_marker_follows_active_tab_signal() {
+    use bevy_ecs::message::Messages;
+    use bevy_ecs::system::RunSystemOnce;
+
+    /// A `<tabs>` bound to `bind` (or keeping its own choice when `None`)
+    /// with a strip and one tab per name; the third tab is disabled.
+    /// Returns (world, tabs, [tab...], [button...]).
+    pub(super) fn tab_world(
+        bind: Option<&str>,
+        names: &[&str],
+    ) -> (World, Entity, Vec<Entity>, Vec<Entity>) {
         let mut world = World::new();
         world.insert_resource(PropertyStore::default());
-        let strip = |value: &str| TabStripButton {
-            signal_name: "active".to_string(),
-            value: value.to_string(),
-        };
-        let general = world.spawn(strip("general")).id();
-        let advanced = world.spawn(strip("advanced")).id();
+        world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<KeyPressed>>();
+        world.init_resource::<Messages<ControlInput>>();
+        world.init_resource::<Messages<SelectTab>>();
+        let set = world
+            .spawn(Tabs {
+                bind: bind.map(str::to_string),
+                shown: None,
+            })
+            .id();
+        let strip = world.spawn((TabStrip, ChildOf(set))).id();
+        let mut tabs = Vec::new();
+        let mut buttons = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let mut attrs = LumenAttributes::default();
+            attrs.set("name", name.to_string());
+            let tab = world
+                .spawn((Tab, attrs, Style::default(), ChildOf(set)))
+                .id();
+            let button = world.spawn((TabStripButton { tab }, ChildOf(strip))).id();
+            if i == 2 {
+                world.entity_mut(tab).insert(Disabled);
+                world.entity_mut(button).insert(Disabled);
+            }
+            tabs.push(tab);
+            buttons.push(button);
+        }
+        (world, set, tabs, buttons)
+    }
 
-        let mut schedule = Schedule::default();
-        schedule.add_systems(sync_tab_selected);
+    fn shown(world: &World, tabs: &[Entity]) -> Vec<bool> {
+        tabs.iter()
+            .map(|t| world.get::<Visible>(*t).is_none_or(|v| v.0))
+            .collect()
+    }
+
+    fn selected(world: &World, buttons: &[Entity]) -> Vec<bool> {
+        buttons
+            .iter()
+            .map(|b| world.get::<Selected>(*b).is_some())
+            .collect()
+    }
+
+    fn changes(world: &mut World) -> Vec<(Entity, String)> {
+        world
+            .resource_mut::<Messages<ControlInput>>()
+            .drain()
+            .map(|c| (c.entity, c.value))
+            .collect()
+    }
+
+    /// A bound `<tabs>` with nothing in its signal seeds it with its first
+    /// tab and shows that one; writing the signal moves what shows, the
+    /// hidden tabs hold `display: none`, and the shown tab's button carries
+    /// `Selected`.
+    #[test]
+    fn the_bound_signal_picks_the_tab_that_shows() {
+        let (mut world, set, tabs, buttons) = tab_world(Some("active"), &["a", "b", "c"]);
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(
+            world
+                .resource::<PropertyStore>()
+                .get_global_str("active")
+                .as_deref(),
+            Some("a"),
+            "an empty signal is seeded with the first tab"
+        );
+        assert_eq!(shown(&world, &tabs), [true, false, false]);
+        assert_eq!(selected(&world, &buttons), [true, false, false]);
+        assert_eq!(world.get::<Tabs>(set).unwrap().shown, Some(tabs[0]));
+        assert_eq!(world.get::<Style>(tabs[1]).unwrap().display, Display::None);
 
         world
             .resource_mut::<PropertyStore>()
-            .set_global_str("active", "general");
-        schedule.run(&mut world);
-        assert!(world.get::<Selected>(general).is_some(), "general active");
-        assert!(world.get::<Selected>(advanced).is_none());
+            .set_global_str("active", "b");
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(shown(&world, &tabs), [false, true, false]);
+        assert_eq!(selected(&world, &buttons), [false, true, false]);
+        assert_ne!(world.get::<Style>(tabs[1]).unwrap().display, Display::None);
 
-        // Activation moves - the marker must move with it.
         world
             .resource_mut::<PropertyStore>()
-            .set_global_str("active", "advanced");
-        schedule.run(&mut world);
-        assert!(
-            world.get::<Selected>(general).is_none(),
-            "previous tab sheds the marker"
+            .set_global_str("active", "nope");
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(
+            shown(&world, &tabs),
+            [true, false, false],
+            "a name no tab has shows the first"
         );
-        assert!(
-            world.get::<Selected>(advanced).is_some(),
-            "new tab gains it"
+        assert_eq!(
+            world
+                .resource::<PropertyStore>()
+                .get_global_str("active")
+                .as_deref(),
+            Some("nope"),
+            "a value the app wrote is left alone"
         );
+    }
+
+    /// Without `bind-value` the `<tabs>` keeps its choice in its `value`
+    /// attribute; a module's [`SelectTab`] moves it and raises no `change`.
+    #[test]
+    fn an_unbound_tabs_keeps_its_choice_in_its_value_attribute() {
+        let (mut world, set, tabs, _buttons) = tab_world(None, &["a", "b"]);
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(
+            world.get::<LumenAttributes>(set).unwrap().get("value"),
+            Some("a")
+        );
+        world.write_message(SelectTab { tab: tabs[1] });
+        world.run_system_once(apply_select_tab).unwrap();
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(
+            world.get::<LumenAttributes>(set).unwrap().get("value"),
+            Some("b")
+        );
+        assert_eq!(shown(&world, &tabs), [false, true]);
+        assert!(
+            changes(&mut world).is_empty(),
+            "only a user pick is a change"
+        );
+
+        world
+            .get_mut::<LumenAttributes>(set)
+            .unwrap()
+            .set("value", "a");
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(shown(&world, &tabs), [true, false], "a script's write");
+    }
+
+    /// A click on a strip button picks its tab and raises one `change` on
+    /// the `<tabs>`; clicking the tab that already shows raises none.
+    #[test]
+    fn a_click_picks_the_tab_and_raises_change() {
+        let (mut world, set, tabs, buttons) = tab_world(Some("active"), &["a", "b"]);
+        world.run_system_once(sync_tabs).unwrap();
+        world.write_message(ClickEvent {
+            entity: buttons[1],
+            position: glam::Vec2::ZERO,
+            button: lumen_core::input::PointerButton::Primary,
+            local: None,
+        });
+        world.run_system_once(dispatch_tab_clicks).unwrap();
+        assert_eq!(changes(&mut world), [(set, "b".to_string())]);
+        world.run_system_once(sync_tabs).unwrap();
+        assert_eq!(shown(&world, &tabs), [false, true]);
+
+        world.resource_mut::<Messages<ClickEvent>>().clear();
+        world.write_message(ClickEvent {
+            entity: buttons[1],
+            position: glam::Vec2::ZERO,
+            button: lumen_core::input::PointerButton::Primary,
+            local: None,
+        });
+        world.run_system_once(dispatch_tab_clicks).unwrap();
+        assert!(changes(&mut world).is_empty());
     }
 
     #[test]
@@ -632,11 +949,10 @@ mod tests {
             selected_bg: Color::rgb(1.0, 0.0, 0.0),
             unselected_bg: Color::rgb(0.0, 0.0, 1.0),
         };
-        let strip = |value: &str| {
+        let strip = |_: &str| {
             (
                 TabStripButton {
-                    signal_name: "active".to_string(),
-                    value: value.to_string(),
+                    tab: Entity::PLACEHOLDER,
                 },
                 style,
                 Visuals {
@@ -652,7 +968,7 @@ mod tests {
         let advanced = world.spawn(strip("advanced")).id();
 
         let mut schedule = Schedule::default();
-        schedule.add_systems((sync_tab_selected, sync_tab_button_visuals).chain());
+        schedule.add_systems(sync_tab_button_visuals);
 
         let fill_of = |world: &World, e: Entity| -> Color {
             world
@@ -669,9 +985,7 @@ mod tests {
 
         // `general` becomes active: its fill swaps to the selected color;
         // `advanced` stays unselected.
-        world
-            .resource_mut::<PropertyStore>()
-            .set_global_str("active", "general");
+        world.entity_mut(general).insert(Selected);
         schedule.run(&mut world);
         assert_eq!(
             fill_of(&world, general),
@@ -698,9 +1012,8 @@ mod tests {
         );
 
         // Activation moves to `advanced`: `general` must revert.
-        world
-            .resource_mut::<PropertyStore>()
-            .set_global_str("active", "advanced");
+        world.entity_mut(general).remove::<Selected>();
+        world.entity_mut(advanced).insert(Selected);
         schedule.run(&mut world);
         assert_eq!(
             fill_of(&world, general),
@@ -714,40 +1027,19 @@ mod tests {
         //! Qt keyboard/press contract for tab strips: switch on press,
         //! select-on-arrow, no wrap, disabled tabs skipped.
         use super::*;
-        use bevy_ecs::message::Messages;
-        use bevy_ecs::system::RunSystemOnce;
-        use lumen_core::components::Disabled;
         use lumen_core::input::{FocusTracker, Modifiers};
 
-        /// Strip with four tabs (c disabled), parent row, `a` focused.
-        /// Returns (world, [a, b, c, d]).
+        /// Strip with four tabs (c disabled), `a` shown and its button
+        /// focused. Returns (world, [button a, b, c, d]).
         fn strip_world() -> (World, [Entity; 4]) {
-            let mut world = World::new();
-            world.init_resource::<Messages<KeyPressed>>();
-            world.init_resource::<Messages<ClickEvent>>();
-            world.insert_resource(PropertyStore::default());
-            let parent = world.spawn_empty().id();
-            let mut tabs = [Entity::PLACEHOLDER; 4];
-            for (i, value) in ["a", "b", "c", "d"].iter().enumerate() {
-                let mut e = world.spawn((
-                    TabStripButton {
-                        signal_name: "active".to_string(),
-                        value: value.to_string(),
-                    },
-                    lumen_core::components::DocumentOrder(i as u32),
-                    bevy_ecs::hierarchy::ChildOf(parent),
-                ));
-                if i == 2 {
-                    e.insert(Disabled);
-                }
-                tabs[i] = e.id();
-            }
-            world.insert_resource(FocusTracker(Some(tabs[0])));
-            world.entity_mut(tabs[0]).insert(Focused);
+            let (mut world, _set, _tabs, buttons) =
+                super::tab_world(Some("active"), &["a", "b", "c", "d"]);
             world
                 .resource_mut::<PropertyStore>()
                 .set_global_str("active", "a");
-            (world, tabs)
+            world.insert_resource(FocusTracker(Some(buttons[0])));
+            world.entity_mut(buttons[0]).insert(Focused);
+            (world, [buttons[0], buttons[1], buttons[2], buttons[3]])
         }
 
         fn press_key(world: &mut World, key: NamedKey) {
@@ -1002,16 +1294,9 @@ mod hit_shadowing_tests {
 
     #[test]
     fn click_on_tab_text_child_switches_tab() {
-        let mut world = World::new();
-        world.insert_resource(PropertyStore::default());
-        world.init_resource::<Messages<ClickEvent>>();
-        let tab = world
-            .spawn(TabStripButton {
-                signal_name: "active".to_string(),
-                value: "settings".to_string(),
-            })
-            .id();
-        let text_child = world.spawn(ChildOf(tab)).id();
+        let (mut world, _set, _tabs, buttons) =
+            super::tests::tab_world(Some("active"), &["a", "b"]);
+        let text_child = world.spawn(ChildOf(buttons[1])).id();
         click(&mut world, text_child);
         world.run_system_once(dispatch_tab_clicks).unwrap();
         assert_eq!(
@@ -1019,7 +1304,7 @@ mod hit_shadowing_tests {
                 .resource::<PropertyStore>()
                 .get_global_str("active")
                 .as_deref(),
-            Some("settings")
+            Some("b")
         );
     }
 }

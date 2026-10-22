@@ -81,7 +81,7 @@ impl<'a> StyleContext<'a> {
             static_disabled: attrs.disabled && attrs.bind_disabled.is_none(),
             bind_disabled: attrs.bind_disabled.is_some(),
             part: attrs.part,
-            tab_strip: attrs.tab_strip.is_some(),
+            tab_strip: attrs.part == Some(WidgetPart::TabButton),
             dropdown_button: attrs.dropdown_button.is_some(),
             radio: tag == "radio" && attrs.radio_group.is_some() && attrs.radio_value.is_some(),
             page_gate: tag == "if"

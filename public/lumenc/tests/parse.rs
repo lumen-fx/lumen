@@ -1639,6 +1639,76 @@ fn slider_step_attribute_parses_into_slider_value() {
     );
 }
 
+/// `<tabs>` stays an element holding its `<tab>`s, with a strip of one
+/// button per tab, in order, put in front of them; `bind-value` is optional,
+/// and the parts carry the classes the skins style.
+#[test]
+fn tabs_keep_their_tabs_behind_a_strip() {
+    use lumenc::layout_ir::{TabSpec, WidgetPart};
+    let ir = parse_html(
+        r##"<root>
+            <tabs id="t" bind-value="$active">
+                <tab name="one" label="One" class="pane"><label text="1"/></tab>
+                <tab name="two" disabled="true"><label text="2"/></tab>
+            </tabs>
+            <tabs><tab name="solo"/></tabs>
+        </root>"##,
+    )
+    .expect("parse");
+    let tabs = &ir.root.children[0];
+    assert_eq!(tabs.tag, "tabs");
+    assert_eq!(tabs.attrs.id.as_deref(), Some("t"));
+    assert_eq!(tabs.attrs.active_signal.as_deref(), Some("active"));
+    let strip = &tabs.children[0];
+    assert_eq!(strip.attrs.part, Some(WidgetPart::TabStrip));
+    assert_eq!(strip.attrs.classes, ["tab-strip"]);
+    let buttons: Vec<(Option<String>, Option<TabSpec>, bool)> = strip
+        .children
+        .iter()
+        .map(|b| (b.attrs.text.clone(), b.attrs.tab.clone(), b.attrs.disabled))
+        .collect();
+    assert_eq!(
+        buttons,
+        [
+            (
+                Some("One".into()),
+                Some(TabSpec::new("one", Some("One".into()))),
+                false
+            ),
+            (Some("two".into()), Some(TabSpec::new("two", None)), true),
+        ]
+    );
+    assert!(
+        strip
+            .children
+            .iter()
+            .all(|b| b.attrs.part == Some(WidgetPart::TabButton)
+                && b.attrs.classes == ["tab-btn"]
+                && b.attrs.tab_index == Some(0))
+    );
+    let first = &tabs.children[1];
+    assert_eq!(first.tag, "tab");
+    assert_eq!(first.attrs.classes, ["pane"]);
+    assert_eq!(first.children.len(), 1, "a tab keeps its content");
+    assert!(tabs.children[2].attrs.disabled);
+    assert_eq!(ir.root.children[1].attrs.active_signal, None);
+}
+
+#[test]
+fn tabs_refuse_what_is_not_a_tab() {
+    let err = parse_html(r##"<root><tabs><label text="x"/></tabs></root>"##)
+        .expect_err("a label is not a tab");
+    assert!(err.to_string().contains("only <tab> children"), "{err}");
+    let err = parse_html(r##"<root><tabs><tab label="x"/></tabs></root>"##)
+        .expect_err("a tab needs a name");
+    assert!(err.to_string().contains("requires a name"), "{err}");
+    let err = parse_html(r##"<root><tab name="x"/></root>"##).expect_err("a stray tab");
+    assert!(
+        err.to_string().contains("only appear inside <tabs>"),
+        "{err}"
+    );
+}
+
 /// End-to-end: a `.tab-btn:selected { bg }` rule applied ahead of spawn
 /// must land on every synthesised tab-strip button's `TabButtonStyle`,
 /// and each button must carry a paintable `Visuals` for
@@ -2354,11 +2424,9 @@ fn dropdown_inside_tab_opens_and_commits_on_clicks() {
     world.init_resource::<bevy_ecs::message::Messages<ClickEvent>>();
     ir.spawn_into(&mut world);
 
-    // Tick 1: the tab gate (seeded to the first tab) mounts its body,
-    // which contains the dropdown header + panel gate.
-    world
-        .run_system_once(lumenc::spawn::reconcile_if_blocks)
-        .unwrap();
+    // Settling the tree shows the first tab, which mounts its content:
+    // the dropdown header + panel gate.
+    lumenc::spawn::settle_tree(&mut world);
     let header = world
         .query::<(Entity, &lumen_primitives::DropdownButton)>()
         .iter(&world)
@@ -3458,7 +3526,6 @@ fn a_desugared_widget_says_what_it_was() {
 
     let ir = parse_html(
         r##"<root>
-                <tabs bind-value="active"><tab name="one" label="One"/></tabs>
                 <dropdown bind-value="pick"><option value="a" label="A"/></dropdown>
                 <menu id="ctx" bind-open="menu_open"><menuitem id="cut" label="Cut"/></menu>
                 <date-picker bind-value="due"/>
@@ -3476,7 +3543,6 @@ fn a_desugared_widget_says_what_it_was() {
     assert_eq!(
         roles,
         vec![
-            Some(WidgetRole::Tabs),
             Some(WidgetRole::Dropdown),
             Some(WidgetRole::Menu),
             Some(WidgetRole::DatePicker),

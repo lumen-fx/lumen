@@ -701,14 +701,19 @@ settled by load order rather than by anything an author wrote.
 
 ## Composing the built-in widgets
 
-A plugin that builds a workspace out of panes reuses `<split>` rather than
-drawing its own splitters, so its gutters drag, step on the keyboard and
-announce themselves like every other split. Build the split the way the
-parser would, with `lumen_scene::spawn::spawn_subtree` and a
-`lumen_ir::layout_ir::Element` for the split and for each pane, or through
-the DOM commands a script issues. The scene puts a gutter between every two
-panes however they arrived and keeps them in step when panes come and go, so
-reparenting a pane into another split, or removing one, needs nothing more.
+A plugin that builds a workspace out of panes and tabs reuses `<split>` and
+`<tabs>` rather than drawing its own splitters and tab strips, so its
+gutters and tab buttons drag, step on the keyboard and announce themselves
+like every other split and tab set. Build them the way the parser would,
+with `lumen_scene::spawn::spawn_subtree` and a `lumen_ir::layout_ir::Element`
+for the widget and for each pane or `<tab>`, or through the DOM commands a
+script issues. The scene puts a gutter between every two panes of a split,
+and a strip with one button per tab in front of a `<tabs>`, however the
+children arrived, and keeps both in step when children come, go or move, so
+reparenting a pane into another split or a tab into another tab set needs
+nothing more.
+
+### Split sizes
 
 The sizes are data on the split, in `lumen_primitives` (re-exported by
 `lumen-module`):
@@ -729,6 +734,25 @@ fn remember_sizes(mut resized: MessageReader<SplitResized>, mut saved: ResMut<Sa
 
 app.add_systems(TickStage::Systems, remember_sizes.after(SplitSet));
 ```
+
+### Tabs
+
+A `<tab>` element is a tab: its `name` attribute picks it and its `label`
+attribute captions its button (a `TabSpec` on the element's
+`Attributes::tab` sets both when you spawn from an `Element`). Order the tabs
+by ordering the `<tab>` children; the strip follows, so a drag that reorders
+tabs moves the `<tab>` entity and is done.
+
+| Item | What it is |
+| --- | --- |
+| `Tabs { bind, shown }` | On the `<tabs>`. `bind` is the signal `bind-value` names; `shown` is the `<tab>` showing now. Without `bind` the element's `value` attribute holds the shown tab's name. |
+| `Tab` | On each `<tab>`. A hidden tab holds `display: none` and `Visible(false)`. |
+| `TabStrip`, `TabStripButton { tab }` | The strip, and each button with the tab it shows. Decorate a button by adding children to it; the strip keeps them. |
+| `SelectTab { tab }` | A message that shows `tab`, as a script writing the signal or the `value` attribute would. It raises no DOM `change`; a pick the user makes does. |
+| `TabsSet` | The system set every tab system runs in. Read `Tabs::shown` after it; write `SelectTab` before it to apply on the same tick. |
+
+A pick the user makes is also a `ControlInput` message on the `<tabs>`, with
+the tab's name as its value, for a system that wants it without a script.
 
 ## Exposing functions to scripts
 

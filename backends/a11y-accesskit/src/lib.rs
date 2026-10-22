@@ -164,20 +164,20 @@ fn role_for_tag(tag: &str) -> Option<Role> {
         "separator" => Role::Splitter,
         "title-bar" => Role::TitleBar,
         "tooltip" => Role::Tooltip,
+        "tabs" => Role::Group,
+        "tab" => Role::TabPanel,
         _ => return None,
     })
 }
 
-/// Role for a composite widget the markup compiler desugars away.
+/// Role for a part of a composite widget.
 ///
-/// `<tabs>`, `<tab>` and `<dropdown>` never reach the ECS as tags: the
-/// compiler lowers each into plain containers and buttons and marks the
-/// parts with a reserved class. Those classes are what identifies a tab
-/// strip, a tab, a combo box, its list and its options.
+/// A composite widget's parts are plain containers and buttons marked with a
+/// reserved class. Those classes are what identifies a tab strip, a tab's
+/// button, a combo box, its list and its options.
 fn role_for_classes(classes: &LumenClasses) -> Option<Role> {
     for class in classes.0.iter() {
         let role = match &**class {
-            "tabs" => Role::Group,
             "tab-strip" => Role::TabList,
             "tab-btn" => Role::Tab,
             "dropdown" => Role::Group,

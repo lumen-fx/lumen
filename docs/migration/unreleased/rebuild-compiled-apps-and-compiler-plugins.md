@@ -1,8 +1,8 @@
 # Rebuild every `.lmna` artifact and every compiler plugin
 
 The compiled-app format moved on: an element carries its CSS
-`pointer-events`. The runtime refuses an artifact written by an earlier
-toolchain.
+`pointer-events`, and a `<tabs>` keeps its `<tab>` elements. The runtime
+refuses an artifact written by an earlier toolchain.
 
 This affects you if you load a precompiled app (`lumenc run --artifact`, a
 `.lmna` written by `lumenc build`, or `lumen_app_new_from_lmna` from the C ABI

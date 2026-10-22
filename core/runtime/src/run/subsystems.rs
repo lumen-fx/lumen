@@ -243,7 +243,8 @@ pub(crate) fn register_reactive(app: &mut App) {
         TickStage::Systems,
         crate::spawn::reconcile_if_blocks.before(lumen_assets::spawn_pending_decodes),
     );
-    // A `<split>`'s gutters, however its children got there.
+    // A `<split>`'s gutters and a `<tabs>`' strip, however their children
+    // got there, and a tab's content once it shows.
     lumen_scene::widgets::install(app);
     // A mounted subtree takes its place in the document, not at the end
     // of it: `DocumentOrder` is restated from the hierarchy once the
@@ -451,6 +452,7 @@ pub(crate) fn register_styles(
             .after(crate::spawn::reconcile_if_blocks)
             .after(crate::spawn::reconcile_for_blocks)
             .after(lumen_scene::widgets::keep_widget_parts)
+            .after(lumen_scene::widgets::mount_shown_tabs)
             .before(lumen_assets::spawn_pending_decodes),
     );
 }

@@ -233,10 +233,10 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<title-bar drag=\"true\">`** - Custom title-bar region for `<root frameless=\"true\">`. With `drag=\"true\"` pressing the bar requests a native window drag via the platform backend."
         }
         "tabs" => {
-            "**`<tabs bind-value=\"signal\">`** - Tabbed container. `bind-value` is required and holds the active tab name; children must be `<tab>`. Expands to a button strip plus one hidden-when-inactive body per tab, so focus and scroll state survive switching. The first `<tab>` seeds the signal."
+            "**`<tabs bind-value=\"signal\">`** - Tabbed container; children must be `<tab>`. A strip of one button per tab goes in front of them, and one tab shows at a time; hidden tabs keep their focus and scroll state. `bind-value` is optional: the signal holds the shown tab's name, and without it the `value` attribute does. A click or an arrow key raises `change` on the `<tabs>`. Opens on the first tab."
         }
         "tab" => {
-            "**`<tab name=\"x\" label=\"X\">`** - One tab inside `<tabs>`. `name` is required and is the value written when the tab is picked; `label` defaults to `name`. `disabled` makes the strip button unclickable and skips it in arrow navigation. Only valid inside `<tabs>`."
+            "**`<tab name=\"x\" label=\"X\">`** - One tab inside `<tabs>`. `name` is required and is the value written when the tab is picked; `label` is its strip button's text and defaults to `name`. `disabled` disables the tab and its button, which arrow navigation skips. Its content mounts the first time it shows. Only valid inside `<tabs>`."
         }
         "dropdown" => {
             "**`<dropdown bind-value=\"signal\">`** - Combobox. `bind-value` is required and holds the selected value; children must be `<option>`. Expands to a header button plus a floating options panel that dismisses on an outside click. Without `placeholder`, the first `<option>` seeds the signal. Up/Down step the value, Alt+Down / Space / Enter open, and type-ahead jumps."

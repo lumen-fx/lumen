@@ -1053,17 +1053,17 @@ fn set_built_styles(attrs: &mut Attributes, decls: &[(&str, &str)]) {
 }
 
 /// Collapse an authoring tag that stands for a composed widget - `<tooltip>`,
-/// `<tabs>`, `<dropdown>`, `<menu>`, `<date-picker>`, `<time-picker>` - into
-/// the primitive subtree it means, and reject the child tags that are only
-/// legal inside one of them. `None` means the tag spawns as itself and the
-/// caller builds it directly.
+/// `<dropdown>`, `<menu>`, `<date-picker>`, `<time-picker>` - into the
+/// primitive subtree it means, and reject the child tags that are only legal
+/// inside one of them. `None` means the tag spawns as itself and the caller
+/// builds it directly, as a `<tabs>` and its `<tab>`s do.
 ///
 /// Separate from [`build_element`], and each widget in its own function,
-/// because the parser recurses once per level of markup and `<tooltip>` and
-/// `<tabs>` recurse from inside their builders. An unoptimized build gives
-/// every local in a function its own stack slot whether or not the branch
-/// that uses it runs, so a builder holding the whole widget catalog would put
-/// all of it on the stack at every depth those two are nested.
+/// because the parser recurses once per level of markup and `<tooltip>`
+/// recurses from inside its builder. An unoptimized build gives every local
+/// in a function its own stack slot whether or not the branch that uses it
+/// runs, so a builder holding the whole widget catalog would put all of it on
+/// the stack at every depth a `<tooltip>` is nested.
 #[allow(clippy::too_many_arguments)]
 fn build_composed_widget(
     node: roxmltree::Node,
@@ -1088,24 +1088,15 @@ fn build_composed_widget(
             depth,
         )
         .map(Some),
-        "tabs" => build_tabs(
-            node,
-            script_buf,
-            external_scripts,
-            src,
-            lint_findings,
-            frag,
-            in_for_body,
-            depth,
-        )
-        .map(Some),
         // `<tab>` outside of `<tabs>` is meaningless - collapsing it to
         // its first child would be silently surprising. Reject so authors
-        // get a clear error.
-        "tab" => Err(ParseError::Xml(format!(
-            "<tab> at byte {} may only appear inside <tabs>",
-            node.range().start
-        ))),
+        // get a clear error. Inside one it is an element like any other.
+        "tab" if node.parent_element().map(|p| p.tag_name().name()) != Some("tabs") => {
+            Err(ParseError::Xml(format!(
+                "<tab> at byte {} may only appear inside <tabs>",
+                node.range().start
+            )))
+        }
         "dropdown" => build_dropdown(node, tag, src, lint_findings, frag, in_for_body).map(Some),
         // `<option>` outside of `<dropdown>` is meaningless - same
         // rejection rule as `<tab>` outside of `<tabs>`.
@@ -1191,134 +1182,6 @@ fn build_tooltip(
     });
     elem.attrs.widget = Some(WidgetRole::Tooltip);
     Ok(elem)
-}
-
-/// `<tabs bind-value="active_tab">` collapses into a column with a
-/// tab strip on top + one `<if eq>` body per `<tab>`. The strip
-/// buttons each carry a `tab_strip_button = (signal, value)` so
-/// the runtime click->signal system can flip the active tab
-/// without an author-side script.
-#[allow(clippy::too_many_arguments)]
-fn build_tabs(
-    node: roxmltree::Node,
-    script_buf: &mut InlineScripts,
-    external_scripts: &mut Vec<String>,
-    src: &str,
-    lint_findings: &mut Vec<LintFinding>,
-    frag: &FragCtx<'_>,
-    in_for_body: bool,
-    depth: u32,
-) -> Result<Element, ParseError> {
-    let signal_name = node
-        .attribute("bind-value")
-        .map(signal_attr_name)
-        .ok_or_else(|| {
-            ParseError::Xml(format!(
-                "<tabs> at byte {} requires bind-value=\"signal-name\"",
-                node.range().start
-            ))
-        })?;
-    let mut tab_buttons: Vec<Element> = Vec::new();
-    let mut tab_bodies: Vec<Element> = Vec::new();
-    let mut first_name: Option<String> = None;
-    for child in node
-        .children()
-        .filter(|c| c.is_element() && c.tag_name().name() != "script")
-    {
-        if child.tag_name().name() != "tab" {
-            return Err(ParseError::Xml(format!(
-                "<tabs> child at byte {} must be <tab>, got <{}>",
-                child.range().start,
-                child.tag_name().name()
-            )));
-        }
-        let tab_name = child
-            .attribute("name")
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<tab> at byte {} requires a name=\"...\" attribute",
-                    child.range().start
-                ))
-            })?;
-        let tab_label = child
-            .attribute("label")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| tab_name.clone());
-        if first_name.is_none() {
-            first_name = Some(tab_name.clone());
-        }
-        // Strip button - `<button>` with TabStripButton attrs so
-        // the runtime knows to write `signal_name = tab_name` on
-        // click.
-        let mut btn = Element {
-            tag: "button".to_string(),
-            ..Default::default()
-        };
-        btn.attrs.tab_index = Some(0);
-        // Its height, padding and share of the strip are theme
-        // metrics on `.tab-btn` in the user-agent sheet.
-        btn.attrs.text = Some(tab_label);
-        btn.attrs.classes = vec!["tab-btn".to_string()];
-        btn.attrs.tab_strip = Some((signal_name.clone(), tab_name.clone()));
-        // `disabled="true"` on a `<tab>`: the strip button is
-        // unclickable, skipped by arrow nav, `:disabled`-styled.
-        // The body `<if>` still mounts if the tab is somehow
-        // activated by a script write - parity with QTabBar, where
-        // disabling a tab doesn't unmount its page.
-        btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
-        tab_buttons.push(btn);
-        // Body - wrap children in `<if signal=... mode="hide" eq=tab_name>...</if>`
-        let mut body_children: Vec<Element> = Vec::new();
-        for body_child in child
-            .children()
-            .filter(|c| c.is_element() && c.tag_name().name() != "script")
-        {
-            body_children.push(build_element(
-                body_child,
-                script_buf,
-                external_scripts,
-                src,
-                lint_findings,
-                frag,
-                in_for_body,
-                depth + 1,
-            )?);
-        }
-        let mut if_block = Element {
-            tag: "if".to_string(),
-            attrs: Box::default(),
-            children: body_children,
-            ..Default::default()
-        };
-        if_block.attrs.if_signal = Some(signal_name.clone());
-        if_block.attrs.if_eq = Some(tab_name);
-        if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
-        tab_bodies.push(if_block);
-    }
-    // Seed the default active tab so the first body mounts at
-    // startup. Stored on the synthetic strip via a marker the
-    // spawn pass converts into a Signals seed. The strip and the
-    // column take their direction from their tags, as written ones do,
-    // and their width and spacing from `.tab-strip` / `.tabs` in the
-    // user-agent sheet.
-    let mut strip = Element {
-        tag: "row".to_string(),
-        children: tab_buttons,
-        ..Default::default()
-    };
-    strip.attrs.classes = vec!["tab-strip".to_string()];
-    let mut column = Element {
-        tag: "column".to_string(),
-        children: std::iter::once(strip).chain(tab_bodies).collect(),
-        ..Default::default()
-    };
-    column.attrs.classes = vec!["tabs".to_string()];
-    if let Some(default) = first_name {
-        column.attrs.signal_seed = Some((signal_name, default));
-    }
-    column.attrs.widget = Some(WidgetRole::Tabs);
-    Ok(column)
 }
 
 /// `<dropdown bind-value="signal">` + `<option value="x"
@@ -1894,6 +1757,34 @@ fn synthesize_widget_parts(
             Vec::new(),
         );
         children.splice(0..0, [swatch, panel]);
+    }
+
+    // `<tabs>`: the children stay the tabs, and a `.tab-strip` row of
+    // `.tab-btn` buttons, one per tab in order, goes in front of them. The
+    // runtime keeps the strip in step when tabs come, go or move, shows one
+    // tab at a time, and builds the same strip for a `<tabs>` a script
+    // assembles.
+    if tag == "tabs" {
+        use crate::layout_ir::{tab_button, tab_strip};
+        let mut strip = tab_strip();
+        for child in children.iter() {
+            if child.tag != "tab" {
+                return Err(ParseError::Xml(format!(
+                    "<tabs> at byte {} may hold only <tab> children, got <{}>",
+                    node.range().start,
+                    child.tag
+                )));
+            }
+            let spec = child.attrs.tab.clone().unwrap_or_default();
+            strip.children.push(tab_button(&spec, child.attrs.disabled));
+        }
+        children.insert(0, strip);
+    }
+    if tag == "tab" && attrs.tab.as_ref().is_none_or(|t| t.name.is_empty()) {
+        return Err(ParseError::Xml(format!(
+            "<tab> at byte {} requires a name=\"...\" attribute",
+            node.range().start
+        )));
     }
 
     // `<split>`: the children stay the panes, each marked `.split-pane`,
@@ -2565,6 +2456,22 @@ fn apply_attribute(
     }
     let mut recognised = true;
     match name {
+        // `<tabs bind-value>` names the signal holding the shown tab's
+        // name; without it the element keeps the choice itself.
+        "bind-value" if tag == "tabs" => {
+            attrs.active_signal = Some(signal_attr_name(value));
+        }
+        // `<tab name label>`: what picks the tab and what its strip button
+        // says.
+        "name" if tag == "tab" => {
+            let label = attrs.tab.take().map(|t| t.label).filter(|l| !l.is_empty());
+            attrs.tab = Some(crate::layout_ir::TabSpec::new(value, label));
+        }
+        "label" if tag == "tab" => {
+            let mut spec = attrs.tab.take().unwrap_or_default();
+            spec.label = value.to_string();
+            attrs.tab = Some(spec);
+        }
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
         "height" => attrs.height = Some(parse_length(tag, name, value)?),
         "bg" => attrs.bg = Some(parse_bg(tag, name, value)?),
@@ -3436,17 +3343,22 @@ mod depth_tests {
     const PARSER_STACK_BUDGET: usize = 512 * 1024;
 
     /// A document nested `levels` deep below `<root>`, cycling through the
-    /// tags that recurse through their own builder (a `<tooltip>` trigger and
-    /// a `<tabs>` body) as well as a plain `<column>`, with a `<checkbox>` at
-    /// the bottom so the deepest frame also synthesizes widget parts.
+    /// tags with builders of their own (a `<tooltip>` trigger, and a `<tabs>`
+    /// with its `<tab>`, which synthesizes a strip) as well as a plain
+    /// `<column>`, with a `<checkbox>` at the bottom so the deepest frame also
+    /// synthesizes widget parts.
     fn nested(levels: u32) -> String {
         let mut open = String::new();
         let mut close = String::new();
-        for level in 1..levels {
+        let mut level = 1;
+        while level < levels {
             match level % 3 {
-                0 => {
+                // A `<tabs>` and its `<tab>` are two levels of the tree.
+                0 if level + 1 < levels => {
                     open.push_str(&format!(r#"<tabs bind-value="tab{level}"><tab name="a">"#));
                     close.insert_str(0, "</tab></tabs>");
+                    level += 2;
+                    continue;
                 }
                 1 => {
                     open.push_str(r#"<tooltip text="tip">"#);
@@ -3457,6 +3369,7 @@ mod depth_tests {
                     close.insert_str(0, "</column>");
                 }
             }
+            level += 1;
         }
         format!(r#"<root>{open}<checkbox text="leaf"/>{close}</root>"#)
     }

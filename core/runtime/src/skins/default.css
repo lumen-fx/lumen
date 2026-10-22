@@ -424,13 +424,14 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
 
 
 /* === Tabs ===
- * `<tabs bind-value>` desugars to:
- *   .tabs (column)
+ * A `<tabs>` holds its strip ahead of its `<tab>` children:
+ *   tabs (column)
  *     .tab-strip (row)
  *       .tab-btn (tag=button, one per <tab>)
+ *     tab ...
  *
- * The active tab carries the `Selected` marker (kept in sync from the
- * bound signal by lumen_primitives::tabs::sync_tab_selected);
+ * The shown tab's button carries the `Selected` marker (kept in sync by
+ * lumen_primitives::tabs::sync_tabs);
  * lumen_primitives::tabs::sync_tab_button_visuals paints the `:selected`
  * bg rule below as the marker moves between siblings (see file header).
  */

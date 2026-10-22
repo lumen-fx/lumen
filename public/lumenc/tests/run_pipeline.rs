@@ -855,18 +855,22 @@ mod pipeline_integration_tests {
     }
     /// A document nested `MAX_DEPTH` levels below `<root>` (the parser's
     /// cap), with a `<checkbox>` at the bottom. `composed` cycles through the
-    /// widgets that recurse from inside their own builders (`<tooltip>`,
-    /// `<tabs>`) and `<column>`; otherwise every level is a `<column>`, which
+    /// widgets with builders of their own (`<tooltip>`, and `<tabs>` with its
+    /// `<tab>`) and `<column>`; otherwise every level is a `<column>`, which
     /// is the deepest single spawn.
     fn deepest_document(composed: bool) -> String {
         const MAX_DEPTH: u32 = 32;
         let mut open = String::new();
         let mut close = String::new();
-        for level in 1..MAX_DEPTH {
+        let mut level = 1;
+        while level < MAX_DEPTH {
             match if composed { level % 3 } else { 2 } {
-                0 => {
+                // A `<tabs>` and its `<tab>` are two levels of the tree.
+                0 if level + 1 < MAX_DEPTH => {
                     open.push_str(&format!(r#"<tabs bind-value="tab{level}"><tab name="a">"#));
                     close.insert_str(0, "</tab></tabs>");
+                    level += 2;
+                    continue;
                 }
                 1 => {
                     open.push_str(r#"<tooltip text="tip">"#);
@@ -877,6 +881,7 @@ mod pipeline_integration_tests {
                     close.insert_str(0, "</column>");
                 }
             }
+            level += 1;
         }
         format!(r#"<root>{open}<checkbox text="leaf"/>{close}</root>"#)
     }

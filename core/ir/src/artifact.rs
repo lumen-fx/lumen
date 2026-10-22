@@ -153,7 +153,10 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `mask_size`, `mask_repeat` and `mask_position`, an element's CSS mask.
 ///
 /// `21`: [`crate::layout_ir::Attributes`] gains `pointer_events`, an
-/// element's CSS `pointer-events`.
+/// element's CSS `pointer-events`; and `tab` and `active_signal`, which
+/// replace `tab_strip` now that a `<tabs>` keeps its `<tab>` elements.
+/// [`crate::layout_ir::WidgetPart`] gains the tab strip and its buttons, and
+/// [`crate::layout_ir::WidgetRole`] loses `Tabs`.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

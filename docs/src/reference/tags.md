@@ -722,23 +722,49 @@ Space, or Enter to open, and type-ahead.
 
 ### `<tabs>` and `<tab>`
 
-A tabbed container. The parser expands it into a button strip plus one
-body per tab; bodies are mounted once and shown or hidden, so focus and
-scroll state survive switching.
+A tabbed container: one `<tab>` shows at a time, picked from a strip of
+buttons. Every child of a `<tabs>` must be a `<tab>`.
 
-`<tabs>` requires `bind-value`. Its children must all be `<tab>`.
+```html
+<tabs bind-value="section">
+  <tab name="general" label="General">...</tab>
+  <tab name="advanced" label="Advanced">...</tab>
+</tabs>
+```
 
 | Tag | Attribute | Effect |
 | --- | --- | --- |
-| `<tabs>` | `bind-value` | Required. Signal holding the active tab name. |
-| `<tab>` | `name` | Required. The value written when the tab is picked. |
+| `<tabs>` | `bind-value` | Optional. Signal holding the name of the tab that shows. |
+| `<tab>` | `name` | Required. What picks the tab: the value its button writes. |
 | `<tab>` | `label` | Strip button text. Defaults to `name`. |
-| `<tab>` | `disabled` | The strip button is unclickable and skipped by arrow navigation; the body still mounts if a script activates the tab. |
+| `<tab>` | `disabled` | Disables the tab and its button, which a click cannot pick and arrow navigation skips. A script can still show the tab. |
 
-The first `<tab>` seeds the signal, so it is active at startup. The
-generated elements carry the classes `tabs`, `tab-strip`, and `tab-btn`.
+Which tab shows is a name. With `bind-value` the signal holds it; without,
+the `<tabs>` element's own `value` attribute does, so a script reads it with
+`get_attr("value")` and switches tabs with `set_attr("value", name)`. A
+`<tabs>` opens on the tab the name picks, or on its first enabled tab when
+the name picks none, and an empty signal is set to that tab's name.
 
-`<tab>` outside `<tabs>` is an error.
+A click on a strip button, or an arrow key, Home, End, Enter or Space on a
+focused one, shows that button's tab and raises a `change` event on the
+`<tabs>` whose `value` is the tab's name. Arrow keys move along the strip
+and pick as they go, and stop at either end. A tab the script or a binding
+shows raises no `change`.
+
+The strip goes in front of the tabs: the `<tabs>` holds a `.tab-strip` row
+of `.tab-btn` buttons, one per tab in the tabs' order, then the tabs. The
+shown tab's button is `:selected`. A hidden tab keeps its content, so focus,
+scroll and text survive switching. A tab's content mounts the first time the
+tab shows, so an element inside a tab nobody opened is not in the document
+yet. Style the container as `tabs` and each panel as `tab`.
+
+A `<tabs>` a script builds, with `<tab>` elements carrying `name` and
+`label` attributes, gets the same strip, and the strip follows the tabs:
+appending, removing or moving a `<tab>` adds, removes or moves its button,
+and changing a tab's `label` relabels it.
+
+`<tab>` outside `<tabs>` is an error. On the web the tab set is the
+browser's tabs pattern: a `tablist` of `tab` buttons over `tabpanel`s.
 
 ### `<date-picker>` and `<time-picker>`
 

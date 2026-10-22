@@ -835,6 +835,14 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             lumen_ir::layout_ir::WidgetPart::SplitGutter => {
                 entity.insert(lumen_primitives::SplitGutter);
             }
+            lumen_ir::layout_ir::WidgetPart::TabStrip => {
+                entity.insert(lumen_primitives::TabStrip);
+            }
+            lumen_ir::layout_ir::WidgetPart::TabButton => {
+                entity.insert(lumen_primitives::TabStripButton {
+                    tab: Entity::PLACEHOLDER,
+                });
+            }
             lumen_ir::layout_ir::WidgetPart::ColorHex => {
                 entity.insert((
                     lumen_primitives::ColorPart::Hex,
@@ -919,11 +927,22 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             offset: spec.offset.unwrap_or(defaults.offset),
         });
     }
-    if let Some((signal_name, value)) = &el.attrs.tab_strip {
-        entity.insert(lumen_primitives::TabStripButton {
-            signal_name: signal_name.clone(),
-            value: value.clone(),
+    // `<tabs>` and its parts. A tab's name and label are attributes, as a
+    // script that builds one sets them; a strip button's tab is paired by
+    // the scene once the tabs are all in place.
+    if el.tag == "tabs" {
+        entity.insert(lumen_primitives::Tabs {
+            bind: el.attrs.active_signal.clone(),
+            shown: None,
         });
+    }
+    if el.tag == "tab" {
+        let mut attrs = lumen_core::components::LumenAttributes::default();
+        if let Some(spec) = &el.attrs.tab {
+            attrs.set("name", spec.name.clone());
+            attrs.set("label", spec.label.clone());
+        }
+        entity.insert((lumen_primitives::Tab, attrs));
     }
     if let Some(spec) = &el.attrs.dropdown_button {
         entity.insert(lumen_primitives::DropdownButton {
@@ -1294,6 +1313,12 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             cascaded_body: None,
             row_items: Vec::new(),
         });
+    } else if el.tag == "tab" && !el.children.is_empty() {
+        // A tab's content mounts the first time the tab shows, as an
+        // `<if mode="hide">` body does: a tab nobody opens costs nothing.
+        world
+            .entity_mut(id)
+            .insert(crate::widgets::PendingTabBody(el.children.clone()));
     } else if (el.tag == "if" || el.tag == "dialog")
         && let Some(name) = &el.attrs.if_signal
     {
@@ -1331,7 +1356,8 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
 /// there attaches. Writes queued on the external buses (a host's typed
 /// signal builtins, an embedder writing before the run) are taken in first.
 ///
-/// One pass: an `<if>` inside a body mounted here mounts on the first tick.
+/// One pass: an `<if>` inside a body mounted here mounts on the first tick,
+/// as does a `<tabs>` inside a tab mounted here.
 pub fn settle_tree(world: &mut bevy_ecs::world::World) {
     use bevy_ecs::system::RunSystemOnce;
     // A world missing what a pass reads (a bare test app) skips that pass;
@@ -1340,6 +1366,10 @@ pub fn settle_tree(world: &mut bevy_ecs::world::World) {
     let _ = world.run_system_once(lumen_core::signals::drain_external_signals);
     let _ = world.run_system_once(reconcile_for_blocks);
     let _ = world.run_system_once(reconcile_if_blocks);
+    // The tab each `<tabs>` opens on, with its content mounted.
+    let _ = world.run_system_once(crate::widgets::keep_widget_parts);
+    let _ = world.run_system_once(lumen_primitives::sync_tabs);
+    let _ = world.run_system_once(crate::widgets::mount_shown_tabs);
 }
 
 /// Reconcile every `<if>` block against the current [`PropertyStore`]
@@ -2702,7 +2732,7 @@ fn warn_missing_row_field_once(parent_id: Entity, field: &str) {
 /// so despawns queued before this in the same reconcile pass still land
 /// first, and `parent` (spawned earlier in the queue, or pre-existing)
 /// is alive by the time the closure runs.
-fn spawn_body_child(
+pub(crate) fn spawn_body_child(
     commands: &mut bevy_ecs::system::Commands,
     el: &Element,
     parent: Entity,
@@ -2751,7 +2781,7 @@ fn spawn_body_child(
 }
 
 /// What a body element [`spawn_body_child`] mounts is.
-enum BodyChild {
+pub(crate) enum BodyChild {
     /// The body of an `<if>` that just opened.
     Gated,
     /// A `<for>` row, which its template's cascade already styled.
