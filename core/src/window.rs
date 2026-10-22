@@ -378,14 +378,16 @@ pub fn spawn_primary_window(world: &mut World, viewport: WindowViewport) -> Enti
 /// With one window, which is every app that never opens a second, the map is
 /// empty and every question answers "the primary window" without a lookup.
 ///
-/// Refreshed by [`sync_window_partitions`] at the start of the tick and again
-/// before layout, so a reparent made by a system this tick is laid out in the
-/// right window.
+/// Refreshed by the window core's bookkeeping before layout, so a reparent
+/// made by a system this tick is laid out in the right window; input on the
+/// next tick routes by the same partitions the frame it sees was laid out
+/// with.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct WindowPartitions {
     primary: Option<Entity>,
     map: HashMap<Entity, Entity>,
     roots: Vec<(Entity, Entity)>,
+    stale: bool,
 }
 
 impl WindowPartitions {
@@ -395,6 +397,7 @@ impl WindowPartitions {
             primary: Some(primary),
             map: HashMap::new(),
             roots: Vec::new(),
+            stale: false,
         }
     }
 
@@ -430,6 +433,14 @@ impl WindowPartitions {
         &self.roots
     }
 
+    /// Whether `element` is a surface root: the top of what shows in a
+    /// window other than the primary one.
+    pub fn is_surface_root(&self, element: Entity) -> bool {
+        self.roots
+            .binary_search_by_key(&element, |(root, _)| *root)
+            .is_ok()
+    }
+
     /// The surface roots that show in `window`.
     pub fn roots_of(&self, window: Entity) -> impl Iterator<Item = Entity> + '_ {
         self.roots
@@ -439,61 +450,76 @@ impl WindowPartitions {
     }
 }
 
-/// Refresh [`WindowPartitions`] from the surface roots in the world.
-///
-/// With no surface root this checks one empty query and returns, writing
-/// nothing. Otherwise, when a surface root or the hierarchy changed since the
-/// last run, it walks each surface root's subtree, stopping at the surface
-/// roots nested inside it, which own their own subtrees.
-pub fn sync_window_partitions(
-    partitions: ResMut<WindowPartitions>,
-    roots: Query<(Entity, &WindowOf)>,
-    children: Query<&Children>,
-    primary: Query<Entity, With<PrimaryWindow>>,
-    (moved_roots, moved_kids): (Query<(), Changed<WindowOf>>, Query<(), Changed<Children>>),
-    (mut gone_roots, mut gone_kids): (RemovedComponents<WindowOf>, RemovedComponents<Children>),
-) {
-    let primary = primary.iter().next();
-    // Removals are read every run so a later run does not see stale ones.
-    let removed = gone_roots.read().count() + gone_kids.read().count() > 0;
-    if roots.is_empty() {
-        if !partitions.roots.is_empty() || partitions.primary != primary {
-            let parts = partitions.into_inner();
-            parts.map.clear();
-            parts.roots.clear();
-            parts.primary = primary;
+/// What [`WindowPartitions::refresh`] reads: the surface roots, the
+/// hierarchy under them, the primary window, and what changed in them.
+#[derive(SystemParam)]
+pub struct PartitionTree<'w, 's> {
+    roots: Query<'w, 's, (Entity, &'static WindowOf)>,
+    children: Query<'w, 's, &'static Children>,
+    primary: Query<'w, 's, Entity, With<PrimaryWindow>>,
+    moved_roots: Query<'w, 's, (), Changed<WindowOf>>,
+    moved_kids: Query<'w, 's, (), Changed<Children>>,
+    gone_roots: RemovedComponents<'w, 's, WindowOf>,
+    gone_kids: RemovedComponents<'w, 's, Children>,
+}
+
+impl WindowPartitions {
+    /// Whether the partitions may be out of date: a surface root appeared or
+    /// went since they were last refreshed, or some element shows in a
+    /// window other than the primary one and the tree may have moved under
+    /// it. An app with one window answers `false` every tick and skips the
+    /// window bookkeeping entirely.
+    pub fn in_play(&self) -> bool {
+        self.stale || !self.roots.is_empty()
+    }
+
+    /// Refresh the partitions from the surface roots in `tree`, when a
+    /// surface root or the hierarchy changed since the last refresh: walk
+    /// each surface root's subtree, stopping at the surface roots nested
+    /// inside it, which own their own subtrees.
+    pub fn refresh(&mut self, tree: &mut PartitionTree) {
+        let primary = tree.primary.iter().next();
+        // Removals are read every run so a later run does not see stale ones.
+        let removed = tree.gone_roots.read().count() + tree.gone_kids.read().count() > 0;
+        let stale = std::mem::take(&mut self.stale);
+        self.primary = primary;
+        if tree.roots.is_empty() {
+            self.map.clear();
+            self.roots.clear();
+            return;
         }
-        return;
-    }
-    let unchanged = !removed
-        && moved_roots.is_empty()
-        && moved_kids.is_empty()
-        && partitions.primary == primary;
-    if unchanged && !partitions.roots.is_empty() {
-        return;
-    }
-    let mut found: Vec<(Entity, Entity)> = roots.iter().map(|(e, w)| (e, w.window())).collect();
-    found.sort_by_key(|(e, _)| *e);
-    let mut map = HashMap::new();
-    for &(root, window) in &found {
-        let mut stack = vec![root];
-        while let Some(e) = stack.pop() {
-            if e != root && roots.contains(e) {
-                // A nested surface root fills its own subtree.
-                continue;
-            }
-            map.insert(e, window);
-            if let Ok(kids) = children.get(e) {
-                stack.extend(kids.iter());
+        let unchanged =
+            !stale && !removed && tree.moved_roots.is_empty() && tree.moved_kids.is_empty();
+        if unchanged && !self.roots.is_empty() {
+            return;
+        }
+        let mut found: Vec<(Entity, Entity)> =
+            tree.roots.iter().map(|(e, w)| (e, w.window())).collect();
+        found.sort_by_key(|(e, _)| *e);
+        let mut map = HashMap::new();
+        for &(root, window) in &found {
+            let mut stack = vec![root];
+            while let Some(e) = stack.pop() {
+                if e != root && tree.roots.contains(e) {
+                    // A nested surface root fills its own subtree.
+                    continue;
+                }
+                map.insert(e, window);
+                if let Ok(kids) = tree.children.get(e) {
+                    stack.extend(kids.iter());
+                }
             }
         }
+        self.map = map;
+        self.roots = found;
     }
-    if partitions.map != map || partitions.roots != found || partitions.primary != primary {
-        let parts = partitions.into_inner();
-        parts.map = map;
-        parts.roots = found;
-        parts.primary = primary;
-    }
+}
+
+/// Mark the partitions out of date when a surface root is added or removed,
+/// so the window bookkeeping runs on the next tick. Installed by the window
+/// core as observers; costs nothing on a tick that adds or removes none.
+pub fn mark_partitions_stale(mut partitions: ResMut<WindowPartitions>) {
+    partitions.stale = true;
 }
 
 /// The window viewports, looked up by window or by the element that shows in
@@ -682,9 +708,14 @@ mod tests {
     use bevy_ecs::hierarchy::ChildOf;
     use bevy_ecs::schedule::Schedule;
 
+    fn refresh(mut partitions: ResMut<WindowPartitions>, mut tree: PartitionTree) {
+        partitions.refresh(&mut tree);
+    }
+
     fn partitions(world: &mut World) -> WindowPartitions {
+        world.resource_mut::<WindowPartitions>().stale = true;
         let mut schedule = Schedule::default();
-        schedule.add_systems(sync_window_partitions);
+        schedule.add_systems(refresh);
         schedule.run(world);
         world.resource::<WindowPartitions>().clone()
     }
@@ -730,7 +761,8 @@ mod tests {
         let mut world = World::new();
         let primary = spawn_primary_window(&mut world, WindowViewport::default());
         let mut schedule = Schedule::default();
-        schedule.add_systems(sync_window_partitions);
+        schedule.add_systems(refresh);
+        world.resource_mut::<WindowPartitions>().stale = true;
         let root = world.spawn_empty().id();
         let popout = world.spawn(Window::default()).id();
         let surface = world.spawn((ChildOf(root), WindowOf(popout))).id();

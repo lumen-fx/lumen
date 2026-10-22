@@ -112,6 +112,7 @@ fn tab(world: &mut World) {
 
 fn app() -> App {
     let mut app = App::new();
+    app.add_plugin(lumen_core::window_backend::WindowCorePlugin);
     app.add_plugin(InputPlugin::default());
     app
 }

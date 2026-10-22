@@ -671,15 +671,21 @@ pub fn sync_a11y_tree(world: &mut World) {
         };
 
         // A child shown in another window belongs to that window's tree.
-        let own_window = window_of(entity);
-        let child_ids: Vec<NodeId> = children
-            .map(|c| {
-                c.iter()
-                    .filter(|k| partitions.is_none() || window_of(*k) == own_window)
-                    .map(entity_to_node)
-                    .collect()
-            })
-            .unwrap_or_default();
+        // With one window there is nothing to leave out.
+        let own_window = if partitions.is_some() {
+            window_of(entity)
+        } else {
+            primary
+        };
+        let child_ids: Vec<NodeId> = match (children, partitions.is_some()) {
+            (Some(c), false) => c.iter().map(entity_to_node).collect(),
+            (Some(c), true) => c
+                .iter()
+                .filter(|k| window_of(*k) == own_window)
+                .map(entity_to_node)
+                .collect(),
+            (None, _) => Vec::new(),
+        };
 
         // Label: explicit A11yLabel wins, then the element's own text. Text
         // inputs are the exception - their text is the value, and naming a
@@ -1758,6 +1764,7 @@ mod tests {
         use lumen_core::window::{Window, WindowOf};
 
         let (mut app, root) = app_with_root();
+        app.add_plugin(lumen_core::window_backend::WindowCorePlugin);
         let popout = app
             .world
             .spawn(Window::new("Inspector", glam::Vec2::new(200.0, 100.0)))

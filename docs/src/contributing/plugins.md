@@ -235,7 +235,10 @@ fn pop_out(mut commands: Commands, panel: Entity) {
 The element stays where it is in the tree: its styles, signals, selectors,
 and event listeners are unchanged, and its events bubble to its ancestors in
 the other window. It lays out against the new window and paints there.
-Removing `WindowOf` puts it back. `WindowName` gives the window the name the
+Removing `WindowOf` puts it back. The window core
+(`lumen_core::window_backend::WindowCorePlugin`) does the bookkeeping; every
+window backend and the headless runner install it, and an `App` you assemble
+yourself adds it. `WindowName` gives the window the name the
 MCP tools and `lumenc screenshot --window` accept.
 
 When the user closes the window, `WindowClosing { window }` arrives a tick

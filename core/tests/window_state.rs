@@ -548,12 +548,15 @@ fn the_explicit_quit_policy_hides_instead_of_quitting() {
 }
 
 /// Focus leaving a window remembers the element it was on; coming back
-/// restores it.
+/// restores it. With one window nothing takes focus from the app's own
+/// element, so this is bookkeeping for apps that show content in several.
 #[test]
 fn a_window_gets_its_focus_back() {
     let _guard = serial();
     let mut app = headless_app();
     let primary = primary_window(&mut app.world).unwrap();
+    let popout = app.world.spawn(Window::default()).id();
+    app.world.spawn(WindowOf(popout));
     let field = app.world.spawn(Focused).id();
     app.world.resource_mut::<FocusTracker>().0 = Some(field);
     app.tick();

@@ -18,7 +18,6 @@
 //! change the [`Window`] component; the window backend applies the change
 //! and the mirror follows what the platform settled on.
 
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use bevy_ecs::prelude::*;
@@ -46,8 +45,9 @@ impl Default for Entry {
 
 #[derive(Debug, Default)]
 struct State {
-    /// What each open window has, by packed entity bits.
-    windows: HashMap<u64, Entry>,
+    /// What each open window has, by packed entity bits. An app has a
+    /// handful of windows at most, so a list beats a map.
+    windows: Vec<(u64, Entry)>,
     /// The primary window's bits, `0` when the app has none.
     primary: u64,
     /// The window of the event being handled, `0` outside a handler.
@@ -66,8 +66,32 @@ fn with<T>(f: impl FnOnce(&mut State) -> T) -> Option<T> {
     cell().lock().ok().map(|mut s| f(&mut s))
 }
 
+impl State {
+    fn get(&self, window: u64) -> Option<&Entry> {
+        self.windows
+            .iter()
+            .find(|(w, _)| *w == window)
+            .map(|(_, e)| e)
+    }
+
+    fn has(&self, window: u64) -> bool {
+        self.get(window).is_some()
+    }
+
+    fn entry(&mut self, window: u64) -> &mut Entry {
+        let at = match self.windows.iter().position(|(w, _)| *w == window) {
+            Some(at) => at,
+            None => {
+                self.windows.push((window, Entry::default()));
+                self.windows.len() - 1
+            }
+        };
+        &mut self.windows[at].1
+    }
+}
+
 fn current_in(s: &State) -> u64 {
-    if s.current != 0 && s.windows.contains_key(&s.current) {
+    if s.current != 0 && s.has(s.current) {
         s.current
     } else {
         s.primary
@@ -103,7 +127,7 @@ pub fn resolve(handle: u64) -> Option<u64> {
         if handle == 0 {
             Some(current_in(s)).filter(|bits| *bits != 0)
         } else {
-            s.windows.contains_key(&handle).then_some(handle)
+            s.has(handle).then_some(handle)
         }
     })
     .flatten()
@@ -123,8 +147,7 @@ pub fn title() -> String {
 /// window, which reports the title it was given.
 pub fn title_of(window: u64) -> String {
     with(|s| {
-        s.windows
-            .get(&window)
+        s.get(window)
             .map(|e| e.title.clone())
             .unwrap_or_else(|| s.windowless_title.clone())
     })
@@ -139,8 +162,7 @@ pub fn size() -> (f32, f32) {
 /// `window`'s size in logical pixels.
 pub fn size_of(window: u64) -> (f32, f32) {
     with(|s| {
-        s.windows
-            .get(&window)
+        s.get(window)
             .map(|e| (e.width, e.height))
             .unwrap_or((0.0, 0.0))
     })
@@ -154,7 +176,7 @@ pub fn dpr() -> f32 {
 
 /// `window`'s device-pixel ratio.
 pub fn dpr_of(window: u64) -> f32 {
-    with(|s| s.windows.get(&window).map(|e| e.dpr).unwrap_or(1.0)).unwrap_or(1.0)
+    with(|s| s.get(window).map(|e| e.dpr).unwrap_or(1.0)).unwrap_or(1.0)
 }
 
 /// Record the title `window` has. Called by whatever applies titles: the
@@ -164,7 +186,7 @@ pub fn dpr_of(window: u64) -> f32 {
 pub fn publish_title(window: Option<Entity>, title: &str) {
     with(|s| match window {
         Some(window) => {
-            let entry = s.windows.entry(window.to_bits()).or_default();
+            let entry = s.entry(window.to_bits());
             if entry.title != title {
                 entry.title = title.to_string();
             }
@@ -180,7 +202,7 @@ pub fn publish_title(window: Option<Entity>, title: &str) {
 /// getters read after it.
 pub fn publish_windows(
     changed: Query<(Entity, &WindowViewport), Changed<WindowViewport>>,
-    windows: Query<(Entity, Has<PrimaryWindow>), With<Window>>,
+    primary: Query<Entity, With<PrimaryWindow>>,
     mut removed: RemovedComponents<Window>,
 ) {
     let gone: Vec<Entity> = removed.read().collect();
@@ -189,17 +211,14 @@ pub fn publish_windows(
     }
     with(|s| {
         for (window, viewport) in &changed {
-            let entry = s.windows.entry(window.to_bits()).or_default();
+            let entry = s.entry(window.to_bits());
             entry.width = viewport.size.x;
             entry.height = viewport.size.y;
             entry.dpr = viewport.scale_factor;
         }
         for window in gone {
-            s.windows.remove(&window.to_bits());
+            s.windows.retain(|(w, _)| *w != window.to_bits());
         }
-        s.primary = windows
-            .iter()
-            .find(|(_, primary)| *primary)
-            .map_or(0, |(e, _)| e.to_bits());
+        s.primary = primary.iter().next().map_or(0, Entity::to_bits);
     });
 }

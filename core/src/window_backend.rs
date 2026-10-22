@@ -201,40 +201,116 @@ impl Plugin for WindowCorePlugin {
         app.world.insert_resource(RedrawScheduler::default());
         app.world.init_resource::<Monitors>();
         app.world.init_resource::<QuitPolicy>();
-        // With one window none of these has anything to do, so they are not
-        // dispatched at all.
-        app.add_systems(
-            crate::tick::TickStage::Input,
-            remember_focus_per_window.run_if(on_message::<WindowFocused>),
+        // The window bookkeeping: one system, run only while a surface root
+        // exists or one was just added or removed, so an app with one window
+        // never dispatches it. The observers flag a surface root coming or
+        // going.
+        app.world.add_observer(
+            |_: On<Add, crate::window::WindowOf>, partitions: ResMut<WindowPartitions>| {
+                crate::window::mark_partitions_stale(partitions)
+            },
+        );
+        app.world.add_observer(
+            |_: On<Remove, crate::window::WindowOf>, partitions: ResMut<WindowPartitions>| {
+                crate::window::mark_partitions_stale(partitions)
+            },
         );
         app.add_systems(
-            crate::tick::TickStage::A11ySync,
-            (raise_window_of_focus, clear_with_surface_background).run_if(several_windows),
+            crate::tick::TickStage::LayoutSync,
+            sync_windows
+                .before(crate::layout_backend::LayoutSolve)
+                .run_if(windows_in_play),
         );
     }
 }
 
-/// Run condition: some element shows in a window other than the primary
-/// one.
-pub fn several_windows(partitions: Option<Res<WindowPartitions>>) -> bool {
-    partitions.is_some_and(|p| !p.is_single())
+/// Run condition for [`sync_windows`]: some element shows in a window other
+/// than the primary one, or a surface root was just added or removed.
+pub fn windows_in_play(partitions: Option<Res<WindowPartitions>>) -> bool {
+    partitions.is_some_and(|p| p.in_play())
 }
 
-/// A window other than the primary one clears its frame to its surface
-/// root's background colour, so the area the root leaves uncovered (while
-/// it is laid out, or past its own size) matches it. With one window this
-/// reads one resource and returns.
-pub fn clear_with_surface_background(
-    partitions: Res<WindowPartitions>,
-    roots: Query<&crate::components::Visuals>,
-    mut viewports: Query<&mut WindowViewport>,
+/// What [`sync_windows`] needs for focus: the focus events of each window,
+/// the focused element, each window's remembered element, and the requests
+/// it makes of the window backend.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct WindowFocusBook<'w, 's> {
+    commands: Commands<'w, 's>,
+    events: MessageReader<'w, 's, WindowFocused>,
+    tracker: ResMut<'w, FocusTracker>,
+    last: Query<'w, 's, &'static LastFocus>,
+    alive: Query<'w, 's, (), Without<bevy_ecs::resource::IsResource>>,
+    runtimes: Query<'w, 's, &'static WindowRuntime>,
+    requests: MessageWriter<'w, WindowRequest>,
+    raised_for: Local<'s, Option<Entity>>,
+}
+
+/// The window bookkeeping of an app showing content in more than one
+/// window, in one system so an app with one window pays for none of it:
+///
+/// - refreshes [`WindowPartitions`], which window each element shows in;
+/// - focus leaving a window records the element it was on as the window's
+///   [`LastFocus`], and focus coming back puts it on that element again when
+///   the element still exists and still shows in that window;
+/// - focusing an element in a window that does not have keyboard focus,
+///   while another of the app's windows does, asks the window backend to
+///   raise the element's window (`focus()` on an element in another window);
+/// - a window other than the primary one clears its frame to its surface
+///   root's background colour, so the area the root leaves uncovered matches
+///   it.
+///
+/// Runs before layout, so a surface root a system added this tick lays out
+/// in its window on the same tick.
+pub fn sync_windows(
+    mut partitions: ResMut<WindowPartitions>,
+    mut tree: crate::window::PartitionTree,
+    mut focus: WindowFocusBook,
+    (visuals, mut viewports): (
+        Query<&crate::components::Visuals>,
+        Query<&mut WindowViewport>,
+    ),
 ) {
-    if partitions.is_single() {
-        return;
+    partitions.refresh(&mut tree);
+    let partitions = &*partitions;
+    let focus = &mut focus;
+    for event in focus.events.read() {
+        let in_window = |e: Entity| partitions.in_window(e, event.window);
+        if !event.focused {
+            if let Some(focused) = focus.tracker.0.filter(|e| in_window(*e))
+                && let Ok(mut window) = focus.commands.get_entity(event.window)
+            {
+                window.insert(LastFocus(Some(focused)));
+            }
+            continue;
+        }
+        let Some(restore) = focus.last.get(event.window).ok().and_then(|l| l.0) else {
+            continue;
+        };
+        if focus.tracker.0 == Some(restore) || !focus.alive.contains(restore) || !in_window(restore)
+        {
+            continue;
+        }
+        if let Some(prev) = focus.tracker.0
+            && let Ok(mut e) = focus.commands.get_entity(prev)
+        {
+            e.remove::<(Focused, FocusVisible)>();
+        }
+        focus.commands.entity(restore).insert(Focused);
+        focus.tracker.0 = Some(restore);
+    }
+    if *focus.raised_for != focus.tracker.0 {
+        *focus.raised_for = focus.tracker.0;
+        if let Some(window) = focus.tracker.0.and_then(|e| partitions.window_of(e)) {
+            let window_focused = focus.runtimes.get(window).is_ok_and(|r| r.focused);
+            let app_focused = focus.runtimes.iter().any(|r| r.focused);
+            if app_focused && !window_focused {
+                focus.requests.write(WindowRequest::Focus(window));
+            }
+        }
     }
     for &(root, window) in partitions.surface_roots() {
         let Some(crate::components::Fill::Solid(color)) =
-            roots.get(root).ok().and_then(|v| v.fill.as_ref())
+            visuals.get(root).ok().and_then(|v| v.fill.as_ref())
         else {
             continue;
         };
@@ -243,69 +319,6 @@ pub fn clear_with_surface_background(
         {
             viewport.clear = *color;
         }
-    }
-}
-
-/// Focus leaving a window records the element it was on as the window's
-/// [`LastFocus`]; focus coming back to a window puts it on that element again
-/// when the element still exists and still shows in that window.
-pub fn remember_focus_per_window(
-    mut commands: Commands,
-    mut events: MessageReader<WindowFocused>,
-    mut tracker: ResMut<FocusTracker>,
-    partitions: Res<WindowPartitions>,
-    last: Query<&LastFocus>,
-    alive: Query<(), Without<bevy_ecs::resource::IsResource>>,
-) {
-    for event in events.read() {
-        let in_window = |e: Entity| partitions.in_window(e, event.window);
-        if !event.focused {
-            if let Some(focused) = tracker.0.filter(|e| in_window(*e))
-                && let Ok(mut window) = commands.get_entity(event.window)
-            {
-                window.insert(LastFocus(Some(focused)));
-            }
-            continue;
-        }
-        let Some(restore) = last.get(event.window).ok().and_then(|l| l.0) else {
-            continue;
-        };
-        if tracker.0 == Some(restore) || !alive.contains(restore) || !in_window(restore) {
-            continue;
-        }
-        if let Some(prev) = tracker.0
-            && let Ok(mut e) = commands.get_entity(prev)
-        {
-            e.remove::<(Focused, FocusVisible)>();
-        }
-        commands.entity(restore).insert(Focused);
-        tracker.0 = Some(restore);
-    }
-}
-
-/// Focusing an element in a window that does not have keyboard focus, while
-/// another of the app's windows does, asks the window backend to raise the
-/// element's window (`focus()` on an element in another window). Free with
-/// one window.
-pub fn raise_window_of_focus(
-    tracker: Res<FocusTracker>,
-    partitions: Res<WindowPartitions>,
-    runtimes: Query<&WindowRuntime>,
-    mut requests: MessageWriter<WindowRequest>,
-    mut last: Local<Option<Entity>>,
-) {
-    if partitions.is_single() || *last == tracker.0 {
-        *last = tracker.0;
-        return;
-    }
-    *last = tracker.0;
-    let Some(window) = tracker.0.and_then(|e| partitions.window_of(e)) else {
-        return;
-    };
-    let window_focused = runtimes.get(window).is_ok_and(|r| r.focused);
-    let app_focused = runtimes.iter().any(|r| r.focused);
-    if app_focused && !window_focused {
-        requests.write(WindowRequest::Focus(window));
     }
 }
 

@@ -27,9 +27,10 @@ fn place(viewport: Res<Viewport>) { let w = viewport.size.x; }
 fn place(viewports: Viewports) { let w = viewports.primary().map_or(0.0, |v| v.size.x); }
 ```
 
-`App::new` now spawns the primary window itself, so a bare `App` always has
-one; `seed_primary_window(world, title, size)` became
+`App::new` now spawns the primary window itself on desktop, so a bare `App`
+always has one there (the browser build has none); `seed_primary_window(world, title, size)` became
 `seed_window(world, window, title, size)`. The `A11yRootLabel` resource is
 gone: the accessibility root takes each window's title from its `Window`.
-`hidden_via_ancestors` gained a query of surface roots
-(`Query<(), With<WindowOf>>`), where the walk up stops.
+`hidden_via_ancestors` takes the window partitions as a last argument
+(`Option<&WindowPartitions>`, from an `Option<Res<WindowPartitions>>`
+parameter); the walk up stops at a surface root.
