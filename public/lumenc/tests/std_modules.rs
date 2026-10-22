@@ -27,22 +27,37 @@ fn repo() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every crate under `std/`, by package name, with its root.
-fn modules() -> Vec<(String, PathBuf)> {
-    let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(repo().join("std"))
-        .expect("std/ is readable")
+/// The directories directly under `dir`.
+fn subdirs(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .expect("the directory is readable")
         .map(|entry| entry.expect("a readable directory entry").path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// Every module under `std/`, by package name, with its root: each crate
+/// that depends on `lumen-module`, the ones nested in another module's
+/// directory (`std/candela/dev`) included.
+fn modules() -> Vec<(String, PathBuf)> {
+    let mut found: Vec<(String, PathBuf)> = subdirs(&repo().join("std"))
+        .into_iter()
+        .flat_map(|dir| {
+            let nested = subdirs(&dir);
+            std::iter::once(dir).chain(nested)
+        })
         .filter(|path| path.join("Cargo.toml").is_file())
-        .map(|path| {
+        .filter_map(|path| {
             let manifest: toml::Table = toml::from_str(
                 &std::fs::read_to_string(path.join("Cargo.toml")).expect("Cargo.toml reads"),
             )
             .expect("Cargo.toml parses");
+            manifest.get("dependencies")?.get("lumen-module")?;
             let name = manifest["package"]["name"]
                 .as_str()
                 .expect("a package name")
                 .to_string();
-            (name, path)
+            Some((name, path))
         })
         .collect();
     found.sort();

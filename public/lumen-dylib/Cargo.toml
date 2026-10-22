@@ -93,7 +93,7 @@ lumen-script = { path = "../../core/script/api", default-features = false, featu
     "markdown",
 ] }
 lumen-widget = { path = "../../core/widget" }
-lumen-widget-macros = { path = "../../core/widget-macros" }
+lumen-widget-macros = { path = "../../core/widget/macros" }
 # The file dialogs and the clipboard, which the Rust SDK gives a typed API.
 # Already in the engine through the runtime; named here so the SDK reaches
 # this copy.

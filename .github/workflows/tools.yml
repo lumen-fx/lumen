@@ -96,11 +96,11 @@ jobs:
             "^tools/release/|^bucket/|^tools/setup-lumen/|^tools/fetch-templates\.sh$|^\.github/scripts/|^\.githooks/|$self"
           # the SDK version has to equal the workspace version, and the test
           # that checks it reads the root manifest
-          area python sdk/python \
-            "^sdk/python/|^Cargo\.toml$|$self"
+          area python public/lumenui/python \
+            "^public/lumenui/python/|^Cargo\.toml$|$self"
           # include/ is the C ABI header the C++ SDK wraps
-          area cpp sdk/cpp \
-            "^sdk/cpp/|^include/|$self"
+          area cpp public/lumenui/cpp \
+            "^public/lumenui/cpp/|^include/|$self"
 
   vscode:
     name: vscode extension
@@ -294,7 +294,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: sdk/python
+        working-directory: public/lumenui/python
     steps:
       - uses: actions/checkout@v4
         with:
@@ -317,7 +317,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: sdk/python
+        working-directory: public/lumenui/python
     steps:
       - uses: actions/checkout@v4
         with:
@@ -347,10 +347,10 @@ jobs:
       - name: compile examples
         run: |
           set -euo pipefail
-          for example in sdk/cpp/examples/*.cpp; do
+          for example in public/lumenui/cpp/examples/*.cpp; do
             echo "$example"
-            g++ -std=c++17 -fsyntax-only -Isdk/cpp/include -Iinclude \
+            g++ -std=c++17 -fsyntax-only -Ipublic/lumenui/cpp/include -Iinclude \
                 -DLUMEN_APP_DIR='"."' "$example"
           done
 
-      - run: cmake -S sdk/cpp -B "$RUNNER_TEMP/cpp-build"
+      - run: cmake -S public/lumenui/cpp -B "$RUNNER_TEMP/cpp-build"

@@ -11,7 +11,10 @@
 # Every step that has to enumerate the modules reads this instead of listing
 # them: the release workflow building them beside the engine, the one packaging
 # `lumen-modules-<target>.tar.gz`, and the one naming the modules a link kit
-# carries. A crate added under std/ then reaches every release step untouched.
+# carries. A module is a crate under std/ that depends on `lumen-module`,
+# nested ones like std/candela/dev included; the libraries beside them (the
+# script hosts' `host/` crates) are not. A module added under std/ then reaches
+# every release step untouched.
 #
 # With `--linked`, only the modules an app links in: the ones the static
 # launcher compiles in and a link kit carries. A module's manifest says where it
@@ -47,7 +50,8 @@ cargo metadata --format-version 1 --no-deps |
     # the shell reads as separators, so the path is normalized first.
     .packages[]
     | .manifest_path |= gsub("\\\\"; "/")
-    | select(.manifest_path | test("/std/[^/]+/Cargo.toml$"))
+    | select(.manifest_path | test("/std/"))
+    | select(any(.dependencies[]; .name == "lumen-module" and .kind == null))
     | select($linked == "" or ((.metadata.lumen.link // "app") == "app"))
     | [.name, .manifest_path, ([.targets[] | select(.kind | index("lib")) | .name] | first)]
     | @tsv

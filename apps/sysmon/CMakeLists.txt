@@ -8,7 +8,7 @@
 # CMake drives `cargo build -p lumen`; the resulting cdylib lives
 # under the workspace's cargo target dir (queried via `cargo metadata`
 # so a custom `CARGO_TARGET_DIR` works). Headers come from the C++ SDK
-# interface target `lumen::cpp` (sdk/cpp), which carries both
+# interface target `lumen::cpp` (public/lumenui/cpp), which carries both
 # <lumen.hpp> and the C ABI <lumen.h> include paths.
 
 cmake_minimum_required(VERSION 3.20)
@@ -48,7 +48,7 @@ add_custom_target(lumen DEPENDS ${LUMEN_LIB})
 
 # Pull in the header-only C++ SDK (provides the lumen::cpp interface
 # target with the <lumen.hpp> + <lumen.h> include paths and C++17).
-add_subdirectory(${LUMEN_REPO}/sdk/cpp ${CMAKE_BINARY_DIR}/lumen_cpp)
+add_subdirectory(${LUMEN_REPO}/public/lumenui/cpp ${CMAKE_BINARY_DIR}/lumen_cpp)
 
 add_executable(sysmon src/main.cpp)
 add_dependencies(sysmon lumen)

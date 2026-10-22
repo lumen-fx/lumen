@@ -382,8 +382,9 @@ fn cpp_specs(dir: &Path, mode: Mode) -> Vec<CommandSpec> {
 
 /// Python: `python3 <entry.py>` for Run; nothing to compile for Build.
 /// `LUMEN_LIBRARY_PATH` is seeded from `CARGO_TARGET_DIR` when set so the
-/// ctypes loader (`sdk/python/lumen/_ffi.py`) finds `liblumen`; absent
-/// that, the loader's own search (cwd `target/`, workspace walk) still applies.
+/// ctypes loader (`public/lumenui/python/lumen/_ffi.py`) finds `liblumen`;
+/// absent that, the loader's own search (cwd `target/`, workspace walk) still
+/// applies.
 fn python_specs(dir: &Path, mode: Mode) -> Result<Vec<CommandSpec>, String> {
     match mode {
         Mode::Build => Ok(Vec::new()),

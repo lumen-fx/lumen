@@ -52,19 +52,19 @@ kit it is published on every platform, `install.sh` never fetches it, and
 `lumenc` downloads it the first time a package needs it.
 
 `lumenui-engine-<target>.tar.zst` carries the prebuilt engine the published
-`lumenui` crate links: the compiled crates of `lumenui-engine` (sdk/rust) for
-that target, the runtime modules the `lumenui-<name>` crates re-export
-(`lumen-canvas`), the proc-macro libraries they use, and any native library
-they link without carrying, collected by `tools/release/lumenui-engine.py`.
-`lumenui-engine-<target>.json` is its manifest (the rustc that built it, the
-target, the Lumen version, every file with its checksum), published on its own
-so an app's build checks the compiler before downloading the archive.
-`lumenui`'s build script fetches both from the release tagged with its own
-version; `install.sh` never does. Each set is proven before it uploads: an app
-depending on `lumenui` alone is built from it, with a check that no engine
-crate compiled, and run headless, and so is each module's smoke app, on
-`lumenui` and that module's generated crate (the canvas one renders a pixel
-buffer and checks the frame).
+`lumenui` crate links: the compiled crates of `lumenui-engine`
+(public/lumenui/rust/engine) for that target, the runtime modules the
+`lumenui-<name>` crates re-export (`lumen-canvas`), the proc-macro libraries
+they use, and any native library they link without carrying, collected by
+`tools/release/lumenui-engine.py`. `lumenui-engine-<target>.json` is its
+manifest (the rustc that built it, the target, the Lumen version, every file
+with its checksum), published on its own so an app's build checks the compiler
+before downloading the archive. `lumenui`'s build script fetches both from the
+release tagged with its own version; `install.sh` never does. Each set is
+proven before it uploads: an app depending on `lumenui` alone is built from it,
+with a check that no engine crate compiled, and run headless, and so is each
+module's smoke app, on `lumenui` and that module's generated crate (the canvas
+one renders a pixel buffer and checks the frame).
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches
@@ -513,9 +513,9 @@ started by hand from the Actions tab, where it defaults to a dry run.
 | `lumenui-canvas` | crates.io | the Rust SDK's canvas module |
 | `lumenc`  | crates.io | the CLI, for `cargo install` |
 
-The Python distribution is pure Python and ships no binary, so one wheel
-covers every platform; it finds `liblumen` from an installed toolchain or a
-checkout at run time (`sdk/python/README.md` documents the search order).
+The Python distribution is pure Python and ships no binary, so one wheel covers
+every platform; it finds `liblumen` from an installed toolchain or a checkout
+at run time (`public/lumenui/python/README.md` documents the search order).
 
 That table is the whole list. Every other crate in the workspace is
 `publish = false`, because the engine does not travel through crates.io as
@@ -525,16 +525,16 @@ the launcher beside the installed binary.
 
 ### The Rust SDK
 
-`lumenui` (sdk/lumenui) names no engine crate. Its build script downloads, for
-its own version and the build's target, the release's
+`lumenui` (public/lumenui/rust) names no engine crate. Its build script
+downloads, for its own version and the build's target, the release's
 `lumenui-engine-<target>` assets, so it sits outside the workspace and depends
 on nothing in it. `lumenui-canvas`, and every other `lumenui-<name>` module
 crate, is not in the tree: `tools/release/lumenui-engine.py wrappers --out DIR`
-generates one per entry in its `MODULES`, at the version of `sdk/lumenui`,
-depending on `lumenui` alone. `tools/release/bump-version.py` moves that
-version with the workspace's, so every SDK crate publishes at the release's
-version, and `lumenc new` writes the same version into a Rust app's `lumenui`
-requirement.
+generates one per entry in its `MODULES`, at the version of
+`public/lumenui/rust`, depending on `lumenui` alone.
+`tools/release/bump-version.py` moves that version with the workspace's, so
+every SDK crate publishes at the release's version, and `lumenc new` writes the
+same version into a Rust app's `lumenui` requirement.
 
 The `lumenui on crates.io` job in `publish.yml` publishes them, `lumenui`
 first, then each module crate. It runs after the release upload, because a

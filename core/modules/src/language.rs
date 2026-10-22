@@ -436,6 +436,21 @@ fn search_roots(lib_dir: Option<&Path>) -> Vec<PathBuf> {
 /// keyed by package name. A release build's tree is gone by the time anyone
 /// runs it, so there this finds nothing.
 fn checkout_descriptors() -> Vec<(String, String)> {
+    checkout_std_crates()
+        .into_iter()
+        .filter_map(|(package, dir)| {
+            let text = std::fs::read_to_string(dir.join(DESCRIPTOR)).ok()?;
+            Some((package, text))
+        })
+        .collect()
+}
+
+/// The crates under `std/` of the checkout this crate was compiled in, as
+/// (package name, directory), sorted by directory. A module's own parts nest
+/// inside its directory (`std/candela/dev`), so the crates one level down are
+/// read too. A release build's tree is gone by the time anyone runs it, so
+/// there this finds nothing.
+pub fn checkout_std_crates() -> Vec<(String, PathBuf)> {
     let Some(std_dir) = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .map(|dir| dir.join("std"))
@@ -443,16 +458,27 @@ fn checkout_descriptors() -> Vec<(String, String)> {
     else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(&std_dir) else {
-        return Vec::new();
+    let subdirs = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default()
     };
-    let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    let mut dirs: Vec<PathBuf> = subdirs(&std_dir)
+        .into_iter()
+        .flat_map(|dir| {
+            let nested = subdirs(&dir);
+            std::iter::once(dir).chain(nested)
+        })
+        .collect();
     dirs.sort();
     dirs.into_iter()
-        .filter_map(|dir| {
-            let text = std::fs::read_to_string(dir.join(DESCRIPTOR)).ok()?;
-            Some((package_name(&dir)?, text))
-        })
+        .filter_map(|dir| Some((package_name(&dir)?, dir)))
         .collect()
 }
 

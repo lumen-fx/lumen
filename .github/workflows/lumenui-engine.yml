@@ -3,23 +3,23 @@ name: lumenui-engine
 # The prebuilt engine the published `lumenui` crate links, and the proof that
 # an app builds from it.
 #
-# `lumenui` (sdk/lumenui) holds no engine code: its build script downloads,
-# for its own version and the app's target, the compiled crates of
-# `lumenui-engine` (sdk/rust) and points rustc at them. Each leg here makes
-# that set for one target with tools/release/lumenui-engine.py (`build`, then
-# `collect`), producing lumenui-engine-<target>.tar.zst and its manifest
-# lumenui-engine-<target>.json, and then proves it the way a user would meet
-# it: an app outside the checkout (sdk/lumenui/smoke), depending on `lumenui`
-# alone, is built against the set through LUMEN_ENGINE_ARTIFACTS, its
-# `cargo build -v` log is checked for any engine crate compiling
-# (lumenui-engine.py `check`), and it runs headless. The module wrapper
-# crates (`lumenui-canvas` and the rest of MODULES in lumenui-engine.py) are
-# not in the checkout: lumenui-engine.py `wrappers` generates them here, and
-# each one's smoke app, on `lumenui` and that crate alone, gets the same
-# proof. The Linux x86_64 leg also packages and verifies every crate
-# publish.yml uploads, against its set, without uploading. Last, the `rust`
-# template `lumenc new` scaffolds gets the proof too, plus its own `cargo
-# test`: the template is a repository of its own, and its `lumenui`
+# `lumenui` (public/lumenui/rust) holds no engine code: its build script
+# downloads, for its own version and the app's target, the compiled crates of
+# `lumenui-engine` (public/lumenui/rust/engine) and points rustc at them. Each
+# leg here makes that set for one target with tools/release/lumenui-engine.py
+# (`build`, then `collect`), producing lumenui-engine-<target>.tar.zst and its
+# manifest lumenui-engine-<target>.json, and then proves it the way a user
+# would meet it: an app outside the checkout (public/lumenui/rust/smoke),
+# depending on `lumenui` alone, is built against the set through
+# LUMEN_ENGINE_ARTIFACTS, its `cargo build -v` log is checked for any engine
+# crate compiling (lumenui-engine.py `check`), and it runs headless. The module
+# wrapper crates (`lumenui-canvas` and the rest of MODULES in
+# lumenui-engine.py) are not in the checkout: lumenui-engine.py `wrappers`
+# generates them here, and each one's smoke app, on `lumenui` and that crate
+# alone, gets the same proof. The Linux x86_64 leg also packages and verifies
+# every crate publish.yml uploads, against its set, without uploading. Last,
+# the `rust` template `lumenc new` scaffolds gets the proof too, plus its own
+# `cargo test`: the template is a repository of its own, and its `lumenui`
 # requirement names a version crates.io does not have until the release
 # publishes it, so this is the one place it builds before a user meets it.
 #
@@ -48,14 +48,12 @@ on:
         default: false
   pull_request:
     paths:
-      - sdk/rust/**
-      - sdk/lumenui/**
-      - sdk/lumenui-build/**
+      - public/lumenui/rust/**
       # What a Rust app's build script runs to compile its UI.
       - public/lumenc/src/cli/build.rs
       # The modules in lumenui-engine.py's MODULES, which the set compiles.
       - std/canvas/**
-      - core/widget-macros/**
+      - core/widget/macros/**
       # The crash helper the set carries and lumenui's build script places.
       - os/crash/helper/**
       - os/crash/report/**
@@ -196,12 +194,12 @@ jobs:
           LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path sdk/lumenui/Cargo.toml -- --check
-          cargo fmt --manifest-path sdk/lumenui-build/Cargo.toml -- --check
-          cargo fmt --manifest-path sdk/lumenui/smoke/Cargo.toml -- --check
-          cargo clippy --manifest-path sdk/lumenui/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path sdk/lumenui-build/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path sdk/lumenui-build/Cargo.toml
+          cargo fmt --manifest-path public/lumenui/rust/Cargo.toml -- --check
+          cargo fmt --manifest-path public/lumenui/rust/build/Cargo.toml -- --check
+          cargo fmt --manifest-path public/lumenui/rust/smoke/Cargo.toml -- --check
+          cargo clippy --manifest-path public/lumenui/rust/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path public/lumenui/rust/build/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path public/lumenui/rust/build/Cargo.toml
           # Globbed relative to the directory: a Windows runner's temp path has
           # backslashes, which a glob reads as escapes.
           cd "$RUNNER_TEMP/lumenui-sdk"
@@ -213,10 +211,10 @@ jobs:
             cargo clippy --manifest-path "${crate}Cargo.toml" --all-targets -- -D warnings
           done
 
-      # The app a user writes, outside the checkout so nothing of the
-      # workspace (its config, its lockfile, its target directory) reaches it.
-      # It names the release's compiler the way `lumenc new` makes an app do,
-      # and finds `lumenui` and `lumenui-build` at this checkout's sdk/.
+      # The app a user writes, outside the checkout so nothing of the workspace
+      # (its config, its lockfile, its target directory) reaches it. It names
+      # the release's compiler the way `lumenc new` makes an app do, and finds
+      # `lumenui` and `lumenui-build` at this checkout's public/lumenui/rust.
       - name: Build an app against the set
         env:
           LUMEN_ENGINE_ARTIFACTS: ${{ runner.temp }}/lumenui-engine/lumenui-engine-${{ matrix.target }}
@@ -224,16 +222,16 @@ jobs:
           set -euo pipefail
           app="$RUNNER_TEMP/smoke"
           rm -rf "$app"
-          cp -R sdk/lumenui/smoke "$app"
+          cp -R public/lumenui/rust/smoke "$app"
           python - "$app" "$GITHUB_WORKSPACE" <<'PY'
           import pathlib, re, sys
           app, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
           manifest = app / "Cargo.toml"
-          lumenui = (repo / "sdk" / "lumenui").as_posix()
-          build = (repo / "sdk" / "lumenui-build").as_posix()
+          lumenui = (repo / "public" / "lumenui" / "rust").as_posix()
+          build = (repo / "public" / "lumenui" / "rust" / "build").as_posix()
           manifest.write_text(
               manifest.read_text()
-              .replace('path = "../../lumenui-build"', f'path = "{build}"')
+              .replace('path = "../build"', f'path = "{build}"')
               .replace('path = ".."', f'path = "{lumenui}"')
           )
           channel = re.search(
@@ -336,8 +334,8 @@ jobs:
           if "lumenui" not in deps:
               sys.exit(f"{manifest} does not depend on lumenui")
           patch = {
-              "lumenui": repo / "sdk" / "lumenui",
-              "lumenui-build": repo / "sdk" / "lumenui-build",
+              "lumenui": repo / "public" / "lumenui" / "rust",
+              "lumenui-build": repo / "public" / "lumenui" / "rust" / "build",
           }
           for name in deps:
               if name.startswith("lumenui-"):

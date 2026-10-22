@@ -27,6 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use lumen_modules::addon::{AddonPackage, read_web_half, web_half};
+use lumen_modules::language::checkout_std_crates;
 use lumen_modules::{DepCfg, DependenciesCfg, ModuleSource, ResolvedModules, Target};
 use lumen_runtime::CompileDeps;
 use lumen_runtime::app_kind::{self, AppKind};
@@ -297,30 +298,9 @@ pub fn bundled_module(name: &str, lib_dir: Option<&Path>) -> Option<PathBuf> {
 /// directory is what answers; a checkout's build finds the modules it was
 /// built beside, edits included.
 fn source_tree_module(name: &str) -> Option<PathBuf> {
-    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .map(|dir| dir.join("std"))
-        .find(|dir| dir.is_dir())?;
-    let mut crates: Vec<PathBuf> = std::fs::read_dir(&std_dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
-    crates.sort();
-    crates
+    checkout_std_crates()
         .into_iter()
-        .find(|root| package_name(root).as_deref() == Some(name))
-}
-
-/// The package name in the `Cargo.toml` at `root`.
-fn package_name(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
-    let manifest: toml::Table = toml::from_str(&text).ok()?;
-    manifest
-        .get("package")?
-        .get("name")?
-        .as_str()
-        .map(str::to_string)
+        .find_map(|(package, root)| (package == name).then_some(root))
 }
 
 /// The bundled modules a Rust app links through its `Cargo.toml`, as the

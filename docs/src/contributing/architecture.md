@@ -43,10 +43,10 @@ capabilities/      the registration marks a static link selects
 dev/               tools that never ship inside an app
 web/               the web target: emitter, browser runtime, SSR, prerender,
                    the web-only backends
-public/            author-facing crates: lumenc, the plugin and module SDKs
+public/            author-facing crates: lumenc, the plugin and module SDKs,
+                   and the app SDKs (lumenui: Rust, C++, Python)
 std/               first-party runtime modules: each a crate for the desktop
                    and, where it has one, a web/ half for pages
-sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
 tools/             the release plumbing and the editor plugins
@@ -259,11 +259,11 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   one says how a request is performed, the other who performs it.
 - The hosts are runtime modules under `std/`, and the engine names none of
   them: **lumen-candela** (`std/candela`), **lumen-candela-dev**
-  (`std/candela-dev`), and the deprecated **lumen-rhai** (`std/rhai`) and
+  (`std/candela/dev`), and the deprecated **lumen-rhai** (`std/rhai`) and
   **lumen-lua** (`std/lua`). Each implements `ScriptHost` and registers a
   `ScriptLanguage` when it installs. The two candela modules are thin module
   entries over library crates, **lumen-candela-host** (`std/candela/host`) and
-  **lumen-candela-dev-host** (`std/candela-dev/host`), so a build script can
+  **lumen-candela-dev-host** (`std/candela/dev/host`), so a build script can
   compile a fixture to bytecode without building a module: cargo writes a
   module's library under one file name, and a build-time copy beside the
   regular one would overwrite it.
@@ -404,40 +404,42 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   produced the static launcher and the files it read can be kept and replayed
   later. Build tooling: no archive carries it. See
   [Building Lumen](building-lumen.md) for what the kit it feeds is for.
-- **lumenui-engine** (in `sdk/rust`, library `lumenui_engine`): the Rust SDK's
-  code. The `App`, the handlers on ids and the `Ui` they get (dispatched by
-  one exclusive system in `lumen_core::tick::AppSet`, which resolves the
-  nearest id and the `<for>` row), typed signals, safe node handles, and
-  event-condition helpers. It reaches every other crate through the engine's `sdk` re-export
-  module rather than depending on them again; a second path to `lumen-core` or
-  `bevy_ecs` would put a second copy of those types in an app, and two copies
-  do not share a signal store. Not published: each release compiles it once per
-  desktop target (`tools/release/lumenui-engine.py`, run by
+- **lumenui-engine** (in `public/lumenui/rust/engine`, library
+  `lumenui_engine`): the Rust SDK's code. The `App`, the handlers on ids and
+  the `Ui` they get (dispatched by one exclusive system in
+  `lumen_core::tick::AppSet`, which resolves the nearest id and the `<for>`
+  row), typed signals, safe node handles, and event-condition helpers. It
+  reaches every other crate through the engine's `sdk` re-export module rather
+  than depending on them again; a second path to `lumen-core` or `bevy_ecs`
+  would put a second copy of those types in an app, and two copies do not share
+  a signal store. Not published: each release compiles it once per desktop
+  target (`tools/release/lumenui-engine.py`, run by
   `.github/workflows/lumenui-engine.yml`) and ships the compiled crates as
   `lumenui-engine-<target>.tar.zst`.
-- **lumenui** (in `sdk/lumenui`): the Rust SDK as an app depends on it, and the
-  crate to publish on crates.io. It holds no code beyond `pub use lumenui_engine::*`; its
-  build script (`lumenui_build::link_engine`) downloads the compiled set for its own version and target,
-  checks the manifest's rustc against the one building, and points rustc at the
-  set with `-L`, so an app compiles none of the engine. Outside the workspace,
-  with its own `[workspace]` table, because its manifest names no engine crate;
+- **lumenui** (in `public/lumenui/rust`): the Rust SDK as an app depends on it,
+  and the crate to publish on crates.io. It holds no code beyond `pub use
+  lumenui_engine::*`; its build script (`lumenui_build::link_engine`) downloads
+  the compiled set for its own version and target, checks the manifest's rustc
+  against the one building, and points rustc at the set with `-L`, so an app
+  compiles none of the engine. Outside the workspace, with its own
+  `[workspace]` table, because its manifest names no engine crate;
   `LUMEN_ENGINE_ARTIFACTS` points it at a set built from a checkout.
-- **lumenui-build** (in `sdk/lumenui-build`): the build-script crate, published
-  beside `lumenui` and outside the workspace the same way. An app's `build.rs`
-  calls `compile()`, which runs `lumenc build --ui` of the same version (from
-  `LUMEN_LUMENC`, `PATH`, or the release's toolchain archive) into `OUT_DIR`
-  and hands the path to `lumenui::ui!()` as `LUMENUI_UI`; `lumenui`'s own
-  build script calls `link_engine()`. Every download from a release, the
-  engine set and the toolchain archive alike, goes through its `fetch`
-  module.
+- **lumenui-build** (in `public/lumenui/rust/build`): the build-script crate,
+  published beside `lumenui` and outside the workspace the same way. An app's
+  `build.rs` calls `compile()`, which runs `lumenc build --ui` of the same
+  version (from `LUMEN_LUMENC`, `PATH`, or the release's toolchain archive)
+  into `OUT_DIR` and hands the path to `lumenui::ui!()` as `LUMENUI_UI`;
+  `lumenui`'s own build script calls `link_engine()`. Every download from a
+  release, the engine set and the toolchain archive alike, goes through its
+  `fetch` module.
 - **lumenui-canvas** and the other `lumenui-<name>` module crates: a runtime
   module for a Rust SDK app, published the same way, and generated rather than
   kept in the tree. `MODULES` in `tools/release/lumenui-engine.py` lists the
   modules; the engine set compiles each in the same build as the engine, and
   the script's `wrappers` command writes each one's crate (a manifest from the
-  module's and `sdk/lumenui`'s, and `pub use lumen_<name>::*`) outside the
-  checkout, for CI to lint and build and a publish to upload. The search path
-  `lumenui`'s build script sets reaches the crate because it depends on
+  module's and `public/lumenui/rust`'s, and `pub use lumen_<name>::*`) outside
+  the checkout, for CI to lint and build and a publish to upload. The search
+  path `lumenui`'s build script sets reaches the crate because it depends on
   `lumenui`. A module directory's `sdk/examples/` and `sdk/smoke/` (the canvas
   module's are in `std/canvas/sdk`) become the crate's examples and the smoke
   app CI builds against the set and runs. The engine crate names no module: a

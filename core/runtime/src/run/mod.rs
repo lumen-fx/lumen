@@ -53,9 +53,9 @@ use lumen_ir::layout_ir::{Attributes, Element};
 /// add systems ordered against the default stack's public systems (for
 /// example `.before(lumen_core::signals::apply_text_bindings)`).
 ///
-/// The Rust SDK (`sdk/rust`, crate `lumenui`) uses it to wire Rust-closure
-/// event handlers and whole `bevy_ecs` systems into the tick without lumenc
-/// knowing about them.
+/// The Rust SDK (`public/lumenui/rust/engine`, crate `lumenui`) uses it to
+/// wire Rust-closure event handlers and whole `bevy_ecs` systems into the tick
+/// without lumenc knowing about them.
 ///
 /// Not `Send`: hooks are drained and invoked in [`build_app`] on the calling
 /// thread (see the loop near the end of that fn), never moved across threads.
