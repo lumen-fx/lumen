@@ -180,3 +180,45 @@ fn the_pointer_passes_through_an_open_tooltip() {
         "the trigger keeps the hit"
     );
 }
+
+/// A trigger shown in a second window opens its tooltip in that window: the
+/// popup is a surface root of the window and sits at the pointer in the
+/// window's own coordinates.
+#[test]
+fn a_tooltip_opens_in_the_window_of_its_trigger() {
+    use lumen_core::window::{Window, WindowOf, WindowPartitions};
+
+    let mut app = build(MARKUP, "");
+    let popout = app
+        .world
+        .spawn(Window::new("Popout", Vec2::new(300.0, 200.0)))
+        .id();
+    let bar = entity(&mut app, "bar");
+    app.world.entity_mut(bar).insert(WindowOf(popout));
+    for _ in 0..4 {
+        app.tick();
+    }
+    let save = rect(&mut app, "save");
+    let at = save.absolute + save.size / 2.0;
+    app.world.resource_mut::<PointerState>().window = Some(popout);
+    let popup = hover_until_open(&mut app, "save");
+    assert_eq!(
+        app.world.get::<WindowOf>(popup).map(WindowOf::window),
+        Some(popout),
+        "the popup opens in the trigger's window"
+    );
+    for _ in 0..3 {
+        app.tick();
+    }
+    assert!(
+        app.world
+            .resource::<WindowPartitions>()
+            .in_window(popup, popout)
+    );
+    let t = *app.world.get::<Transform>(popup).unwrap();
+    assert!(
+        t.absolute.x >= at.x && t.absolute.y >= at.y && t.absolute.x < 300.0,
+        "the popup sits at the pointer in the window's coordinates: {:?} for {at:?}",
+        t.absolute
+    );
+}

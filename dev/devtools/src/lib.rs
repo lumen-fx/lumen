@@ -58,7 +58,7 @@ use lumen_core::components::{
 use lumen_core::input::{ClickEvent, HoverWithin, Hovered, Key, KeyPressed, ScrollOffset};
 use lumen_core::render_world::{DockInsets, OverlayLayer};
 use lumen_core::tick::TickStage;
-use lumen_core::window::{Window, WindowClosing, WindowName, WindowOf};
+use lumen_core::window::{Window, WindowClosing, WindowName, WindowOf, WindowPartitions};
 use lumen_mcp::SnapshotHandle;
 
 pub mod format;
@@ -366,9 +366,7 @@ impl Plugin for DevtoolsPlugin {
         app.add_systems(TickStage::Systems, sync_dock_inset);
         app.add_systems(
             TickStage::Systems,
-            sync_devtools_window
-                .after(handle_clicks)
-                .run_if(resource_changed::<DevtoolsState>.or_eager(on_message::<WindowClosing>)),
+            sync_devtools_window.after(handle_clicks),
         );
         app.add_systems(TickStage::Systems, update_highlight);
         app.add_systems(TickStage::A11ySync, refresh_panes);
@@ -738,6 +736,11 @@ pub fn sync_devtools_window(
     mut labels: Query<(&LumenId, &mut TextContent)>,
     windows: Query<(), With<Window>>,
 ) {
+    // Nothing to do on a tick that neither changed the panel's state nor
+    // closed a window: one check, so a hidden panel costs next to nothing.
+    if !state.is_changed() && closing.is_empty() {
+        return;
+    }
     // The button says what pressing it does.
     let label = if state.popped { "Dock" } else { "Pop out" };
     for (id, mut text) in &mut labels {
@@ -802,13 +805,20 @@ pub fn update_highlight(
     hovered_rows: Query<&RowTarget, With<HoverWithin>>,
     hovered_app: Query<Entity, (With<Hovered>, Without<DevtoolsMarker>)>,
     transforms: Query<&Transform, (Without<HighlightBox>, Without<HighlightTip>)>,
-    parents: Query<&ChildOf>,
+    // The scroll walk stays inside the target's window: a surface root's
+    // ancestors scroll another window.
+    parents: Query<&ChildOf, Without<WindowOf>>,
     scrolls: Query<&ScrollOffset>,
     mut boxes: Query<(&mut Transform, &mut Visible), (With<HighlightBox>, Without<HighlightTip>)>,
     mut tips: Query<
         (&mut Transform, &mut Visible, &mut TextContent),
         (With<HighlightTip>, Without<HighlightBox>),
     >,
+    (mut commands, partitions, overlays): (
+        Commands,
+        Option<Res<WindowPartitions>>,
+        Query<(Entity, Option<&WindowOf>), Or<(With<HighlightBox>, With<HighlightTip>)>>,
+    ),
 ) {
     let target: Option<Entity> = if !state.visible {
         None
@@ -838,6 +848,27 @@ pub fn update_highlight(
         }
         Some((origin, t.size))
     });
+
+    // The box and its chip open in the target's window: a surface root of
+    // that window when it is not the primary one.
+    let window = target.and_then(|e| {
+        partitions
+            .as_ref()
+            .filter(|p| p.is_secondary(e))
+            .and_then(|p| p.window_of(e))
+    });
+    for (overlay, of) in &overlays {
+        match (window, of.map(WindowOf::window)) {
+            (Some(w), Some(have)) if w == have => {}
+            (Some(w), _) => {
+                commands.entity(overlay).insert(WindowOf(w));
+            }
+            (None, Some(_)) => {
+                commands.entity(overlay).remove::<WindowOf>();
+            }
+            (None, None) => {}
+        }
+    }
 
     for (mut transform, mut visible) in &mut boxes {
         match rect {

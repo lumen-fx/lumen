@@ -36,7 +36,7 @@ use lumen_core::prelude::*;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
 use lumen_core::tick::WakeDeadline;
 use lumen_core::time::{Duration, Instant};
-use lumen_core::window::{Viewports, WindowOf};
+use lumen_core::window::{Viewports, WindowOf, WindowPartitions};
 use lumen_widget_macros::Widget;
 
 /// Authored on the trigger via `<tooltip text="..." delay="...">`. The
@@ -215,7 +215,7 @@ fn spawn_tooltip_popups(
     existing: Query<&TooltipPopup>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
-    (viewports, surfaces): (Viewports, Query<(), With<WindowOf>>),
+    (viewports, partitions): (Viewports, Option<Res<WindowPartitions>>),
     pointer: Option<Res<lumen_core::input::PointerState>>,
     wake: Option<Res<WakeDeadline>>,
 ) {
@@ -246,17 +246,20 @@ fn spawn_tooltip_popups(
             .map(|v| v.size)
             .unwrap_or(Vec2::new(f32::INFINITY, f32::INFINITY));
         let origin = cursor_tooltip_origin(anchor, est, viewport_size, src.offset);
-        // Its root is the root of the trigger's window: the nearest surface
-        // root above the trigger, else the top of the tree.
-        let root = std::iter::once(trigger)
-            .chain(parents.iter_ancestors(trigger))
-            .find(|e| surfaces.contains(*e))
-            .or_else(|| parents.iter_ancestors(trigger).last());
+        // It hangs off the top of the trigger's tree. A trigger shown in a
+        // window other than the primary one opens it in that window: the
+        // popup is a surface root of the window, positioned against it.
+        let root = parents.iter_ancestors(trigger).last();
+        let window = partitions
+            .as_ref()
+            .filter(|p| p.is_secondary(trigger))
+            .and_then(|p| p.window_of(trigger));
         // The inset resolves against the root, the popup's containing
-        // block; a trigger with no tree above it leaves the popup a root of
-        // its own, whose inset resolves against the window.
+        // block; a popup with no tree above it, or one that is a window's
+        // surface root, resolves it against the window.
         let local = origin
             - root
+                .filter(|_| window.is_none())
                 .and_then(|r| transforms.get(r).ok())
                 .map_or(Vec2::ZERO, |r| r.absolute);
         let placement = StyleValues {
@@ -300,6 +303,9 @@ fn spawn_tooltip_popups(
         ));
         if let Some(root) = root {
             popup.insert(ChildOf(root));
+        }
+        if let Some(window) = window {
+            popup.insert(WindowOf(window));
         }
     }
 }
