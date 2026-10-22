@@ -342,8 +342,9 @@ children covers nothing, because that parent measures zero. See
 
 Panes the user resizes. Each child is a pane, and a gutter goes between
 every two of them; dragging a gutter with the pointer moves the boundary
-between the two panes beside it. A split a script builds, or adds panes to,
-gets its gutters the same way.
+between the two panes beside it. A split a script or a plugin builds, or
+adds panes to, gets its gutters the same way, and loses the gutter beside a
+pane it takes out.
 
 ```html
 <split class="workspace">
@@ -373,7 +374,9 @@ say. The first resize holds every pane at the size it has, and later ones
 move size from one neighbour to the other, so the panes' total stays the
 same. The panes keep their own `grow` and `shrink`, so when the split
 itself changes size they share the difference as their styles say. The
-sizes are not saved or bound to a signal.
+sizes are not saved or bound to a signal; a plugin reads and sets them, and
+hears when the user ends a resize (see
+[Composing the built-in widgets](../contributing/plugins.md#composing-the-built-in-widgets)).
 
 The panes carry the class `split-pane` and the gutters `split-gutter`, and
 every skin styles the gutters by that class, `:hover` and `:focus`

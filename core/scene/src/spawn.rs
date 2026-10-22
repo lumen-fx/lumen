@@ -680,12 +680,6 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     );
     let knob_geometry = computed.knob_geometry.unwrap_or_default();
     let knob_fill = computed.knob_fill;
-    // A child of a `<split>` that is not one of its gutters is a pane,
-    // whose `flex-basis` a resize holds.
-    let split_pane = el.attrs.part != Some(lumen_ir::layout_ir::WidgetPart::SplitGutter)
-        && parent
-            .and_then(|p| world.get::<lumen_core::components::LumenTag>(p))
-            .is_some_and(|t| &*t.0 == "split");
     let doc_order = next_document_order(world);
     let mut entity = world.spawn((
         DirtyLayout,
@@ -851,9 +845,6 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     }
     if el.tag == "split" {
         entity.insert(lumen_primitives::Split::default());
-    }
-    if split_pane {
-        entity.insert(lumen_primitives::SplitPane);
     }
     let number_field =
         el.tag == "input" && el.attrs.input_type == Some(lumen_ir::layout_ir::InputType::Number);

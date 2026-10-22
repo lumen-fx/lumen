@@ -1,8 +1,9 @@
 //! `<split>`: panes side by side with a draggable gutter between each pair.
 //!
 //! A `.split-gutter` goes between every two children of a `<split>`: the
-//! parser puts them in for markup, and the DOM applier keeps them in step
-//! when a script adds or removes panes. A gutter is a focusable separator,
+//! parser puts them in for markup, and the scene keeps them in step with the
+//! split's children however those were added, by a script, by a module's
+//! systems or by the parser. A gutter is a focusable separator,
 //! as the web's window splitter pattern describes one: dragging it with the
 //! primary button, or the arrow keys while it is focused, moves the boundary
 //! between the two panes beside it, and Home and End give the pane before it
@@ -24,6 +25,11 @@
 //! backend reads it off the browser's boxes. Everything else here runs the
 //! same on both.
 //!
+//! A module or an app's Rust reads the pane sizes off [`Split::sizes`] and
+//! sets them with a [`SetSplitSizes`] message; a resize the user makes ends
+//! with a [`SplitResized`] message, once a gutter drag is released and after
+//! each key that moved a gutter. Every split system runs in [`SplitSet`].
+//!
 //! Each gutter carries the separator's value the way the web pattern gives
 //! it: `aria-valuenow` is the share of its two panes the one before it
 //! takes, in percent, between `aria-valuemin` and `aria-valuemax`, the
@@ -33,7 +39,7 @@
 //! `split-gutter-column` in one laid out as a column, which is what the
 //! user-agent sheet keys its `col-resize` and `row-resize` cursors on.
 
-use bevy_ecs::message::MessageReader;
+use bevy_ecs::message::{Message, MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
 use lumen_core::components::{
@@ -124,6 +130,12 @@ pub struct Split {
 }
 
 impl Split {
+    /// Each pane's outer size along the axis, in document order, as last
+    /// measured. Empty until the split has been laid out once.
+    pub fn sizes(&self) -> Vec<f32> {
+        self.panes.iter().map(|p| p.size).collect()
+    }
+
     /// Which gutter `gutter` is, counted from the first.
     pub fn gutter_index(&self, gutter: Entity) -> Option<usize> {
         self.gutters.iter().position(|g| *g == gutter)
@@ -184,9 +196,41 @@ impl StyleOwner for SplitPane {
     const RANK: u8 = 20;
 }
 
-/// On a `.split-gutter`, the separator the parser put between two panes.
+/// On a `.split-gutter`, the separator between two panes.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct SplitGutter;
+
+/// The system set every `<split>` system runs in. Order a system that reads
+/// a [`SplitResized`] after it, and one that writes a [`SetSplitSizes`] the
+/// split should apply this tick before it.
+#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct SplitSet;
+
+/// Hold the panes of `split` at `sizes`: each pane's outer size along the
+/// axis, in document order, in logical pixels. A pane's own `min-width` and
+/// `max-width` (`min-height` and `max-height` in a column) still bound it,
+/// and a size missing from the end of the list keeps the pane's measured
+/// size. A request for a split that has not been laid out yet waits until it
+/// has; one for an entity that is not a split is dropped.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct SetSplitSizes {
+    /// The `<split>`.
+    pub split: Entity,
+    /// The size to hold each pane at.
+    pub sizes: Vec<f32>,
+}
+
+/// A resize the user made has ended: a gutter drag was released after it
+/// moved the gutter, or a key moved a focused gutter. `sizes` are the pane
+/// sizes it left, as in [`Split::sizes`]. Not written for a
+/// [`SetSplitSizes`] request, nor when the split itself changes size.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct SplitResized {
+    /// The `<split>`.
+    pub split: Entity,
+    /// Each pane's outer size along the axis, in document order.
+    pub sizes: Vec<f32>,
+}
 
 /// What a gutter move asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -330,18 +374,22 @@ fn split_of(
 }
 
 /// A gutter drag in flight: the split, the gutter, where the pointer went
-/// down along the axis, and the pane sizes it started from.
+/// down along the axis, the pane sizes it started from, and the sizes its
+/// last move held, if it has moved.
 #[derive(Clone, Debug)]
 pub struct GutterDrag {
     split: Entity,
     index: usize,
     origin: f32,
     sizes: Vec<f32>,
+    held: Option<Vec<f32>>,
 }
 
 /// Drag gutters with the primary button: a press on a gutter takes it, and
 /// every move until the release moves it to follow the pointer, wherever
-/// the pointer goes.
+/// the pointer goes. A release after the gutter moved writes a
+/// [`SplitResized`].
+#[allow(clippy::too_many_arguments)]
 pub fn drag_split_gutters(
     (mut presses, mut moves, mut releases): (
         MessageReader<PointerPressed>,
@@ -353,6 +401,7 @@ pub fn drag_split_gutters(
     splits: Query<&Split>,
     marks: Query<(), With<SplitGutter>>,
     mut writes: SplitWrites,
+    mut resized: MessageWriter<SplitResized>,
     mut drag: Local<Option<GutterDrag>>,
 ) {
     for press in presses.read() {
@@ -369,7 +418,8 @@ pub fn drag_split_gutters(
                     split,
                     index,
                     origin: s.axis.along(press.position),
-                    sizes: s.panes.iter().map(|p| p.size).collect(),
+                    sizes: s.sizes(),
+                    held: None,
                 })
             });
     }
@@ -378,28 +428,37 @@ pub fn drag_split_gutters(
         .filter(|m| m.pointer.is_primary)
         .last()
         .map(|m| m.position);
-    if let (Some(d), Some(at)) = (drag.as_ref(), last)
+    if let (Some(d), Some(at)) = (drag.as_mut(), last)
         && let Ok(split) = splits.get(d.split)
         && split.panes.len() == d.sizes.len()
     {
         let by = split.axis.along(at) - d.origin;
         let sizes = moved_sizes(split, &d.sizes, d.index, GutterMove::By(by));
         hold_sizes(split, &sizes, &mut writes);
+        d.held = Some(sizes);
     }
-    if releases.read().any(|r| r.is_primary()) {
-        *drag = None;
+    if releases.read().any(|r| r.is_primary())
+        && let Some(d) = drag.take()
+        && let Some(sizes) = d.held.filter(|held| *held != d.sizes)
+    {
+        resized.write(SplitResized {
+            split: d.split,
+            sizes,
+        });
     }
 }
 
 /// The arrow keys along the split's axis move a focused gutter by
 /// [`SPLIT_KEY_STEP_PX`], and Home and End give the pane before it its
-/// smallest and largest size.
+/// smallest and largest size. Each key that moves the gutter writes a
+/// [`SplitResized`].
 pub fn step_split_on_keys(
     mut keys: MessageReader<FocusedKey>,
     parents: Query<&ChildOf>,
     splits: Query<&Split>,
     marks: Query<(), With<SplitGutter>>,
     mut writes: SplitWrites,
+    mut resized: MessageWriter<SplitResized>,
 ) {
     for key in keys.read() {
         if !marks.contains(key.entity) {
@@ -426,25 +485,66 @@ pub fn step_split_on_keys(
         };
         // A key press since the last solve starts from what the last one
         // held, so presses in one tick add up.
-        let sizes: Vec<f32> = split
-            .panes
-            .iter()
-            .map(|p| {
-                writes
-                    .panes
-                    .get(p.entity)
-                    .ok()
-                    .and_then(|(_, ov)| ov.held_by::<SplitPane>()?.basis)
-                    .and_then(|b| match b {
-                        Length::Px(v) => Some(v + p.frame),
-                        _ => None,
-                    })
-                    .unwrap_or(p.size)
-            })
-            .collect();
+        let sizes = held_sizes(split, &writes);
         let next = moved_sizes(split, &sizes, index, how);
-        hold_sizes(split, &next, &mut writes);
+        if next != sizes {
+            hold_sizes(split, &next, &mut writes);
+            resized.write(SplitResized {
+                split: split_e,
+                sizes: next,
+            });
+        }
     }
+}
+
+/// The size each pane of `split` is held at, or its measured size where
+/// nothing holds it.
+fn held_sizes(split: &Split, writes: &SplitWrites) -> Vec<f32> {
+    split
+        .panes
+        .iter()
+        .map(|p| {
+            writes
+                .panes
+                .get(p.entity)
+                .ok()
+                .and_then(|(_, ov)| ov.held_by::<SplitPane>()?.basis)
+                .and_then(|b| match b {
+                    Length::Px(v) => Some(v + p.frame),
+                    _ => None,
+                })
+                .unwrap_or(p.size)
+        })
+        .collect()
+}
+
+/// Apply each [`SetSplitSizes`]: hold the panes at the sizes it asks for. A
+/// request waits for a split that has not been laid out yet, and goes when
+/// its entity is not a split.
+pub fn apply_split_sizes(
+    mut requests: MessageReader<SetSplitSizes>,
+    splits: Query<&Split>,
+    mut writes: SplitWrites,
+    mut waiting: Local<Vec<SetSplitSizes>>,
+) {
+    waiting.extend(requests.read().cloned());
+    if waiting.is_empty() {
+        return;
+    }
+    waiting.retain(|request| {
+        let Ok(split) = splits.get(request.split) else {
+            return false;
+        };
+        if split.panes.is_empty() {
+            return true;
+        }
+        let mut sizes = split.sizes();
+        for (size, want) in sizes.iter_mut().zip(&request.sizes) {
+            *size = want.max(0.0);
+        }
+        hold_sizes(split, &sizes, &mut writes);
+        false
+    });
 }
 
 /// Keep each gutter's separator value in step with its split's measured
@@ -555,15 +655,19 @@ pub struct SplitPlugin;
 
 impl Plugin for SplitPlugin {
     fn build(self, app: &mut App) {
+        app.add_message::<SetSplitSizes>();
+        app.add_message::<SplitResized>();
         app.add_systems(
             TickStage::Systems,
             (
                 drag_split_gutters.after(lumen_input::hit_test),
                 step_split_on_keys.after(lumen_input::dispatch_focused_keys),
+                apply_split_sizes,
                 sync_split_gutters,
                 mark_split_gutter_axes,
             )
                 .chain()
+                .in_set(SplitSet)
                 .run_if(any_with_component::<Split>),
         );
     }
@@ -645,6 +749,8 @@ mod tests {
         world.init_resource::<Messages<PointerMoved>>();
         world.init_resource::<Messages<PointerReleased>>();
         world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<Messages<SplitResized>>();
+        world.init_resource::<Messages<SetSplitSizes>>();
         let split = world.spawn_empty().id();
         let a = world
             .spawn((SplitPane, Style::default(), ChildOf(split)))
@@ -735,6 +841,96 @@ mod tests {
         assert_eq!(world.get::<A11yValue>(gutter).unwrap().now, 50.0);
     }
 
+    fn resized(world: &World) -> Vec<SplitResized> {
+        world
+            .resource::<Messages<SplitResized>>()
+            .iter_current_update_messages()
+            .cloned()
+            .collect()
+    }
+
+    /// A drag reports the sizes it left once, when the pointer is released,
+    /// and a press and release that never moved the gutter reports nothing.
+    #[test]
+    fn a_released_drag_reports_the_sizes_it_left() {
+        let (mut world, split, [a, _b], gutter) = split_world();
+        world.entity_mut(gutter).insert(Hovered);
+        let press = PointerPressed {
+            position: Vec2::new(203.0, 50.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: Default::default(),
+        };
+        let release = PointerReleased {
+            position: Vec2::new(233.0, 50.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: Default::default(),
+        };
+        // One system for the whole gesture, so its drag state lasts from the
+        // press to the release.
+        let drag = world.register_system(drag_split_gutters);
+        world.write_message(press.clone());
+        world.write_message(PointerMoved {
+            position: Vec2::new(233.0, 50.0),
+            local: None,
+            pointer: Default::default(),
+        });
+        world.run_system(drag).unwrap();
+        assert!(resized(&world).is_empty(), "nothing ends while dragging");
+        world.write_message(release.clone());
+        world.run_system(drag).unwrap();
+        assert_eq!(
+            resized(&world),
+            vec![SplitResized {
+                split,
+                sizes: vec![230.0, 270.0]
+            }]
+        );
+        assert_eq!(basis(&world, a), Length::Px(230.0));
+
+        world.resource_mut::<Messages<SplitResized>>().clear();
+        world.write_message(press);
+        world.run_system(drag).unwrap();
+        world.write_message(release);
+        world.run_system(drag).unwrap();
+        assert!(
+            resized(&world).is_empty(),
+            "a click on a gutter resizes nothing"
+        );
+    }
+
+    /// A size request holds every pane it names and keeps the measured size
+    /// of the rest; one for a split not laid out yet waits for the layout.
+    #[test]
+    fn a_size_request_holds_the_panes_once_measured() {
+        let (mut world, split, [a, b], _gutter) = split_world();
+        let panes = std::mem::take(&mut world.get_mut::<Split>(split).unwrap().panes);
+        world.write_message(SetSplitSizes {
+            split,
+            sizes: vec![120.0],
+        });
+        world.run_system_once(apply_split_sizes).unwrap();
+        assert_eq!(basis(&world, a), Length::Auto, "not laid out, so it waits");
+
+        world.get_mut::<Split>(split).unwrap().panes = panes;
+        world.resource_mut::<Messages<SetSplitSizes>>().clear();
+        // `run_system_once` builds a fresh system with nothing waiting, so
+        // the request is sent again, as the running system would still hold
+        // it on the next tick.
+        world.write_message(SetSplitSizes {
+            split,
+            sizes: vec![120.0],
+        });
+        world.run_system_once(apply_split_sizes).unwrap();
+        assert_eq!(basis(&world, a), Length::Px(120.0));
+        assert_eq!(basis(&world, b), Length::Px(300.0), "the rest keep theirs");
+        assert_eq!(
+            world.get::<Split>(split).unwrap().sizes(),
+            vec![200.0, 300.0]
+        );
+    }
+
     /// Arrow keys step a focused gutter and Home takes the pane before it to
     /// its min-width; keys on anything else do nothing.
     #[test]
@@ -755,6 +951,12 @@ mod tests {
         world.run_system_once(step_split_on_keys).unwrap();
         assert_eq!(basis(&world, a), Length::Px(220.0));
         assert_eq!(basis(&world, b), Length::Px(280.0));
+        let ends: Vec<Vec<f32>> = resized(&world).into_iter().map(|r| r.sizes).collect();
+        assert_eq!(
+            ends,
+            vec![vec![210.0, 290.0], vec![220.0, 280.0]],
+            "each key that moves the gutter ends a resize"
+        );
         world.resource_mut::<Messages<FocusedKey>>().clear();
         world.write_message(FocusedKey {
             entity: gutter,
