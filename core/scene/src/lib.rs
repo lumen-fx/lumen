@@ -14,7 +14,8 @@
 //! their internal order is not the host's to choose:
 //! [`routing::install_routing`], whose resolver has to run before the
 //! reconciler it drives, and [`dom::install_dom`], whose applier has to run
-//! after the collector that fills it.
+//! after the collector that fills it. [`widgets::install`] keeps a composed
+//! widget's parts in step with its children wherever they came from.
 
 #![warn(missing_docs)]
 
@@ -28,3 +29,4 @@ pub mod script_commands;
 pub mod script_host;
 pub mod source_parser;
 pub mod spawn;
+pub mod widgets;

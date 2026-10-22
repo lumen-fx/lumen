@@ -80,9 +80,9 @@ pub use reserve::{ReservedEdge, reserve_parent_edges};
 pub use scroll::{ScrollPlugin, accumulate_wheel};
 pub use scrollbar::update_scrollbars;
 pub use split::{
-    GutterMove, SPLIT_KEY_STEP_PX, Split, SplitAxis, SplitGutter, SplitPane, SplitPaneGeometry,
-    SplitPlugin, drag_split_gutters, mark_split_gutter_axes, measure_splits, moved_sizes,
-    step_split_on_keys, sync_split_gutters,
+    GutterMove, SPLIT_KEY_STEP_PX, SetSplitSizes, Split, SplitAxis, SplitGutter, SplitPane,
+    SplitPaneGeometry, SplitPlugin, SplitResized, SplitSet, apply_split_sizes, drag_split_gutters,
+    mark_split_gutter_axes, measure_splits, moved_sizes, step_split_on_keys, sync_split_gutters,
 };
 pub use state_style::{
     StatePatch, StateStylePlugin, StateVisuals, apply_state_visuals, eject_interaction_on_disable,

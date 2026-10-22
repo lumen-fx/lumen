@@ -12,7 +12,7 @@ use lumen_core::components::{LumenAttributes, LumenId, Transform};
 use lumen_core::input::{CursorKeyword, CursorRequest, FocusTracker, PointerMoved, PointerState};
 use lumen_core::prelude::Viewport;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
-use lumen_primitives::SplitGutter;
+use lumen_primitives::{SetSplitSizes, Split, SplitGutter, SplitResized, SplitSet};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
@@ -117,6 +117,7 @@ fn gutters_resize_the_panes() {
     row_split();
     column_split();
     script_split();
+    rust_split();
 }
 
 /// What the split `s` holds, in order: a pane's id, or `|` for a gutter.
@@ -335,4 +336,113 @@ fn column_split() {
     );
     assert_eq!(rect(&mut app, "top").size.y, 110.0);
     assert_eq!(rect(&mut app, "bottom").size.y, 190.0);
+}
+
+/// The resize-end messages a test app saw, in order.
+#[derive(bevy_ecs::resource::Resource, Default)]
+struct Resizes(Vec<SplitResized>);
+
+fn record_resizes(
+    mut seen: bevy_ecs::message::MessageReader<SplitResized>,
+    mut out: bevy_ecs::system::ResMut<Resizes>,
+) {
+    out.0.extend(seen.read().cloned());
+}
+
+/// A split a module's Rust builds element by element, with no parser and no
+/// script, gets its gutters too; its sizes are read off the split, set with
+/// a message, and a drag the user makes ends with one.
+fn rust_split() {
+    use bevy_ecs::schedule::IntoScheduleConfigs;
+    use lumen_core::prelude::TickStage;
+    use lumen_ir::layout_ir::Element;
+    use lumen_scene::spawn::{Placeholders, spawn_subtree};
+
+    let mut app = build(r#"<root><column id="host"/></root>"#, "");
+    app.world.init_resource::<Resizes>();
+    app.add_systems(TickStage::Systems, record_resizes.after(SplitSet));
+    let host = {
+        let mut q = app.world.query::<(bevy_ecs::entity::Entity, &LumenId)>();
+        q.iter(&app.world)
+            .find(|(_, id)| id.0 == "host")
+            .map(|(e, _)| e)
+            .expect("the host")
+    };
+    let element = |tag: &str, id: &str, style: &[(&str, &str)]| {
+        let mut el = Element {
+            tag: tag.to_string(),
+            ..Element::default()
+        };
+        el.attrs.id = Some(id.to_string());
+        for (name, value) in style {
+            lumen_ir::css::apply_markup_declaration(name, value, &mut el.attrs)
+                .expect("a valid declaration");
+        }
+        el
+    };
+    let split = spawn_subtree(
+        &mut app.world,
+        &element("split", "s", &[("width", "402"), ("height", "100")]),
+        Some(host),
+        Placeholders::Resolved,
+    );
+    for id in ["a", "b", "c"] {
+        spawn_subtree(
+            &mut app.world,
+            &element("column", id, &[("grow", "1")]),
+            Some(split),
+            Placeholders::Resolved,
+        );
+    }
+    for _ in 0..4 {
+        app.tick();
+    }
+    assert_eq!(split_children(&mut app), ["a", "|", "b", "|", "c"]);
+    let sizes = app.world.get::<Split>(split).unwrap().sizes();
+    assert_eq!(sizes, vec![130.0, 130.0, 130.0]);
+
+    app.world.write_message(SetSplitSizes {
+        split,
+        sizes: vec![200.0, 100.0, 90.0],
+    });
+    for _ in 0..4 {
+        app.tick();
+    }
+    assert_eq!(rect(&mut app, "a").size.x, 200.0);
+    assert_eq!(rect(&mut app, "b").size.x, 100.0);
+    assert_eq!(rect(&mut app, "c").size.x, 90.0);
+    assert!(
+        app.world.resource::<Resizes>().0.is_empty(),
+        "a size the app set is not a resize the user made"
+    );
+
+    let first = app.world.get::<Split>(split).unwrap().gutters[0];
+    let g = *app.world.get::<Transform>(first).unwrap();
+    let at = g.absolute + g.size / 2.0;
+    run(
+        &mut app,
+        vec![
+            SimulateKind::PointerDown {
+                x: at.x,
+                y: at.y,
+                button: None,
+                pointer: Default::default(),
+            },
+            SimulateKind::PointerMove {
+                x: at.x - 50.0,
+                y: at.y,
+                pointer: Default::default(),
+            },
+            SimulateKind::PointerUp {
+                x: at.x - 50.0,
+                y: at.y,
+                button: None,
+                pointer: Default::default(),
+            },
+        ],
+    );
+    let resizes = &app.world.resource::<Resizes>().0;
+    assert_eq!(resizes.len(), 1, "one drag, one resize end");
+    assert_eq!(resizes[0].split, split);
+    assert_eq!(resizes[0].sizes, vec![150.0, 150.0, 90.0]);
 }

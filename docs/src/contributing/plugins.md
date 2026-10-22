@@ -699,6 +699,37 @@ documentation says to write it. A tag the language already owns is refused
 where it is declared, because a module reinterpreting `<button>` would be
 settled by load order rather than by anything an author wrote.
 
+## Composing the built-in widgets
+
+A plugin that builds a workspace out of panes reuses `<split>` rather than
+drawing its own splitters, so its gutters drag, step on the keyboard and
+announce themselves like every other split. Build the split the way the
+parser would, with `lumen_scene::spawn::spawn_subtree` and a
+`lumen_ir::layout_ir::Element` for the split and for each pane, or through
+the DOM commands a script issues. The scene puts a gutter between every two
+panes however they arrived and keeps them in step when panes come and go, so
+reparenting a pane into another split, or removing one, needs nothing more.
+
+The sizes are data on the split, in `lumen_primitives` (re-exported by
+`lumen-module`):
+
+| Item | What it is |
+| --- | --- |
+| `Split::sizes()` | Each pane's outer size along the axis, in document order, as last laid out. Empty before the first layout. |
+| `SetSplitSizes { split, sizes }` | A message that holds the panes at those sizes. The panes' own `min-width` and `max-width` still bound them; a size missing from the end keeps that pane's size. A request for a split not laid out yet waits for the layout. |
+| `SplitResized { split, sizes }` | A message written when the user ends a resize: a gutter drag is released after it moved, or a key moved a focused gutter. A `SetSplitSizes` request and a change of the split's own size write none. |
+| `SplitSet` | The system set every split system runs in. Read `SplitResized` in a system ordered after it; write `SetSplitSizes` before it to apply on the same tick. |
+
+```rust
+fn remember_sizes(mut resized: MessageReader<SplitResized>, mut saved: ResMut<Saved>) {
+    for r in resized.read() {
+        saved.0.insert(r.split, r.sizes.clone());
+    }
+}
+
+app.add_systems(TickStage::Systems, remember_sizes.after(SplitSet));
+```
+
 ## Exposing functions to scripts
 
 A plugin can give the app's script functions of its own. One description covers

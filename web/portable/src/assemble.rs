@@ -167,6 +167,8 @@ fn install_reconcilers(app: &mut App) {
         TickStage::Systems,
         (spawn::reconcile_for_blocks, spawn::reconcile_if_blocks),
     );
+    // A `<split>`'s gutters, however its children got there.
+    lumen_scene::widgets::install(app);
     app.add_systems(
         TickStage::Input,
         spawn::close_dialogs_on_escape.after(lumen_input::cancel_press_on_escape),
