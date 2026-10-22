@@ -278,6 +278,40 @@ struct SimulateProgress {
     deferred_wheel: Option<(u64, MouseWheel)>,
 }
 
+/// Which windows take input: the windows a modal blocks
+/// ([`InputBlocked`](lumen_core::window::InputBlocked)), and what a simulated
+/// event lands in.
+#[derive(bevy_ecs::system::SystemParam)]
+struct InputGate<'w, 's> {
+    blocked: Query<'w, 's, (), With<lumen_core::window::InputBlocked>>,
+    primary: Query<'w, 's, Entity, With<lumen_core::window::PrimaryWindow>>,
+    partitions: Option<Res<'w, lumen_core::window::WindowPartitions>>,
+    focus: Option<Res<'w, lumen_core::input::FocusTracker>>,
+}
+
+impl InputGate<'_, '_> {
+    /// The blocked window a simulated event would land in, if it would land
+    /// in one. A pointer event lands in the window it names, else the
+    /// primary one; a key event in the window of the focused element, else
+    /// the primary one.
+    fn blocked(&self, pointer: bool, named: Option<Entity>) -> Option<Entity> {
+        if self.blocked.is_empty() {
+            return None;
+        }
+        let primary = self.primary.iter().next();
+        let window = if pointer {
+            named.or(primary)
+        } else {
+            self.focus
+                .as_ref()
+                .and_then(|f| f.0)
+                .and_then(|e| self.partitions.as_ref()?.window_of(e))
+                .or(primary)
+        }?;
+        self.blocked.contains(window).then_some(window)
+    }
+}
+
 /// Pop exactly ONE pending [`SimulateRequest`] (FIFO) and convert it into
 /// the same `MessageWriter<...>` events the winit backend would emit. Runs
 /// in `TickStage::Input` BEFORE the real input dispatch so the events are
@@ -311,6 +345,7 @@ fn drain_simulate_queue(
     mut key_pressed: MessageWriter<KeyPressed>,
     mut key_released: MessageWriter<KeyReleased>,
     mut modifiers_state: ResMut<ModifiersState>,
+    gate: InputGate,
 ) {
     // A wheel deferred last tick takes this tick, the way a real wheel
     // arrives on a tick after the move that put the pointer there.
@@ -332,18 +367,25 @@ fn drain_simulate_queue(
             | SimulateKind::KeyUp { .. }
             | SimulateKind::Type { .. }
     );
-    if is_pointer {
-        let window = req.window.and_then(Entity::try_from_bits);
-        if pointer.window != window {
-            pointer.window = window;
-        }
-    }
+    let named = req.window.and_then(Entity::try_from_bits);
     let prior_seq = progress.drained_seq;
     progress.drained_seq = seq;
     if remaining {
         // Schedule the follow-up tick for the next queued request now -
         // the push-time wake was already consumed by this tick.
         queue.wake();
+    }
+    // A window a modal blocks takes no input, simulated or not: the event
+    // is dropped as the window backend drops a real one.
+    if let Some(window) = gate.blocked(is_pointer, named) {
+        lumen_core::warn_line!(
+            "lumen-mcp: simulated input to window {} dropped: the window is blocked by a modal",
+            window.to_bits()
+        );
+        return;
+    }
+    if is_pointer && pointer.window != named {
+        pointer.window = named;
     }
     {
         match req.kind {
@@ -1772,6 +1814,57 @@ mod simulate_tests {
         );
         app.add_systems(TickStage::A11ySync, publish_simulate_completion);
         app
+    }
+
+    /// Input to a window a modal blocks is dropped, pointer and key alike;
+    /// the other windows still take theirs.
+    #[test]
+    fn simulated_input_to_a_blocked_window_is_dropped() {
+        use lumen_core::window::{InputBlocked, Window, primary_entity};
+
+        let queue = SimulateQueue::default();
+        let mut app = simulate_test_app(&queue);
+        let primary = primary_entity(&app.world).unwrap();
+        let dialog = app.world.spawn(Window::default()).id();
+        app.world
+            .entity_mut(primary)
+            .insert(InputBlocked { by: dialog });
+        let at = |window: Option<Entity>| SimulateRequest {
+            kind: SimulateKind::PointerMove {
+                x: 5.0,
+                y: 6.0,
+                pointer: None,
+            },
+            wait_for: None,
+            window: window.map(Entity::to_bits),
+        };
+        queue.push(at(None));
+        app.tick();
+        assert_eq!(app.world.resource::<PointerState>().position, None);
+
+        queue.push(SimulateRequest {
+            kind: SimulateKind::Key {
+                key: "a".into(),
+                modifiers: Default::default(),
+            },
+            wait_for: None,
+            window: None,
+        });
+        app.tick();
+        assert_eq!(
+            app.world
+                .resource::<Messages<KeyPressed>>()
+                .iter_current_update_messages()
+                .count(),
+            0,
+            "a key goes to the focused window, here the blocked primary one"
+        );
+
+        queue.push(at(Some(dialog)));
+        app.tick();
+        let state = app.world.resource::<PointerState>();
+        assert_eq!(state.position, Some(glam::Vec2::new(5.0, 6.0)));
+        assert_eq!(state.window, Some(dialog));
     }
 
     #[test]
