@@ -12,7 +12,7 @@ use lumen_core::components::{LumenAttributes, LumenId, Transform};
 use lumen_core::input::{CursorKeyword, CursorRequest, FocusTracker, PointerMoved, PointerState};
 use lumen_core::prelude::Viewport;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
-use lumen_primitives::{SetSplitSizes, Split, SplitGutter, SplitResized, SplitSet};
+use lumen_primitives::{Split, SplitGutter, SplitResized, SplitSet, SplitSizes};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
@@ -350,10 +350,11 @@ fn record_resizes(
 }
 
 /// A split a module's Rust builds element by element, with no parser and no
-/// script, gets its gutters too; its sizes are read off the split, set with
-/// a message, and a drag the user makes ends with one.
+/// script, gets its gutters too; its sizes are read off the split and set
+/// through `SplitSizes`, and a drag the user makes ends with a message.
 fn rust_split() {
     use bevy_ecs::schedule::IntoScheduleConfigs;
+    use bevy_ecs::system::RunSystemOnce;
     use lumen_core::prelude::TickStage;
     use lumen_ir::layout_ir::Element;
     use lumen_scene::spawn::{Placeholders, spawn_subtree};
@@ -401,10 +402,11 @@ fn rust_split() {
     let sizes = app.world.get::<Split>(split).unwrap().sizes();
     assert_eq!(sizes, vec![130.0, 130.0, 130.0]);
 
-    app.world.write_message(SetSplitSizes {
-        split,
-        sizes: vec![200.0, 100.0, 90.0],
-    });
+    let set = app
+        .world
+        .run_system_once(move |mut sizes: SplitSizes| sizes.set(split, &[200.0, 100.0, 90.0]))
+        .expect("the system runs");
+    assert!(set, "a laid-out split takes sizes");
     for _ in 0..4 {
         app.tick();
     }

@@ -11,13 +11,14 @@
 use bevy_ecs::entity::Entity;
 use bevy_ecs::hierarchy::Children;
 use bevy_ecs::query::With;
+use bevy_ecs::system::RunSystemOnce;
 use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenId, TextContent, Transform, Visible};
 use lumen_core::prelude::Viewport;
 use lumen_core::property_store::PropertyStore;
 use lumen_mcp::{SimulateKind, SimulateQueue, SimulateRequest};
-use lumen_primitives::{SelectTab, TabStrip, TabStripButton, Tabs};
+use lumen_primitives::{TabPicks, TabStrip, TabStripButton, Tabs};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
@@ -140,7 +141,7 @@ fn tabs_show_one_tab_however_they_were_built() {
 /// the signal and raises `change` on the `<tabs>`. An unbound one keeps its
 /// choice in its `value` attribute, which a script sets. A `<tabs>` a
 /// script builds gets its strip, which follows its tabs when they move, and
-/// a module picks a tab with a message.
+/// a module picks a tab through `TabPicks`.
 fn markup_tabs() {
     let mut app = build(
         r#"<root>
@@ -239,7 +240,11 @@ fn markup_tabs() {
 
     // A module picks a tab.
     let two = entity(&mut app, "s-two");
-    app.world.write_message(SelectTab { tab: two });
+    app.world
+        .run_system_once(move |mut picks: TabPicks| {
+            picks.pick(two);
+        })
+        .expect("the system runs");
     tick(&mut app, 3);
     assert!(shows(&mut app, "s-two"));
     assert!(!shows(&mut app, "s-one"));

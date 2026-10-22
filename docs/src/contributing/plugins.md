@@ -720,10 +720,9 @@ The sizes are data on the split, in `lumen_primitives` (re-exported by
 
 | Item | What it is |
 | --- | --- |
-| `Split::sizes()` | Each pane's outer size along the axis, in document order, as last laid out. Empty before the first layout. |
-| `SetSplitSizes { split, sizes }` | A message that holds the panes at those sizes. The panes' own `min-width` and `max-width` still bound them; a size missing from the end keeps that pane's size. A request for a split not laid out yet waits for the layout. |
-| `SplitResized { split, sizes }` | A message written when the user ends a resize: a gutter drag is released after it moved, or a key moved a focused gutter. A `SetSplitSizes` request and a change of the split's own size write none. |
-| `SplitSet` | The system set every split system runs in. Read `SplitResized` in a system ordered after it; write `SetSplitSizes` before it to apply on the same tick. |
+| `SplitSizes` | A system param. `get(split)` gives each pane's outer size along the axis, in document order, as last laid out, empty before the first layout. `set(split, &sizes)` holds the panes at those sizes; the panes' own `min-width` and `max-width` still bound them, a size missing from the end keeps that pane's size, and a split not laid out yet takes none and answers `false`. `Split::sizes()` reads the same off the component. |
+| `SplitResized { split, sizes }` | A message written when the user ends a resize: a gutter drag is released after it moved, or a key moved a focused gutter. Sizes set through `SplitSizes` and a change of the split's own size write none. |
+| `SplitSet` | The system set every split system runs in. Read `SplitResized` in a system ordered after it. |
 
 ```rust
 fn remember_sizes(mut resized: MessageReader<SplitResized>, mut saved: ResMut<Saved>) {
@@ -748,8 +747,8 @@ tabs moves the `<tab>` entity and is done.
 | `Tabs { bind, shown }` | On the `<tabs>`. `bind` is the signal `bind-value` names; `shown` is the `<tab>` showing now. Without `bind` the element's `value` attribute holds the shown tab's name. |
 | `Tab` | On each `<tab>`. A hidden tab holds `display: none` and `Visible(false)`. |
 | `TabStrip`, `TabStripButton { tab }` | The strip, and each button with the tab it shows. Decorate a button by adding children to it; the strip keeps them. |
-| `SelectTab { tab }` | A message that shows `tab`, as a script writing the signal or the `value` attribute would. It raises no DOM `change`; a pick the user makes does. |
-| `TabsSet` | The system set every tab system runs in. Read `Tabs::shown` after it; write `SelectTab` before it to apply on the same tick. |
+| `TabPicks` | A system param. `pick(tab)` shows `tab`, as a script writing the signal or the `value` attribute would. It raises no DOM `change`; a pick the user makes does. |
+| `TabsSet` | The system set every tab system runs in. Read `Tabs::shown` after it; pick before it to show the tab on the same tick. |
 
 A pick the user makes is also a `ControlInput` message on the `<tabs>`, with
 the tab's name as its value, for a system that wants it without a script.

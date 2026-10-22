@@ -111,9 +111,10 @@ pub use lumen_module_macros::lumen_module;
 /// generated constructor; a module author has no reason to reach it.
 pub use lumen_module_registry as registry;
 /// The built-in widgets a module composes rather than rebuilds, with the
-/// system sets each runs in: `<split>` ([`lumen_primitives::Split`], its
-/// sizes, its resize-end message and [`lumen_primitives::SplitSet`]),
-/// `<tabs>` ([`lumen_primitives::Tabs`], [`lumen_primitives::SelectTab`]
+/// system sets each runs in: `<split>` ([`lumen_primitives::Split`],
+/// [`lumen_primitives::SplitSizes`], its resize-end message and
+/// [`lumen_primitives::SplitSet`]),
+/// `<tabs>` ([`lumen_primitives::Tabs`], [`lumen_primitives::TabPicks`]
 /// and [`lumen_primitives::TabsSet`]), press and drag state, and the rest
 /// of the widget set.
 pub use lumen_primitives;

@@ -1853,14 +1853,23 @@ pub const SPLIT_PANE_CLASS: &str = "split-pane";
 /// every two children it reads, and the runtime one between every two a
 /// script adds, so a split is the same widget however it was built.
 pub fn split_gutter() -> Element {
+    let mut gutter = part_element("div", WidgetPart::SplitGutter);
+    gutter.attrs.tab_index = Some(0);
+    gutter
+}
+
+/// An element `tag` that is the widget part `part`, carrying the part's
+/// class. The one place the runtime's part builders make an attribute bag:
+/// [`Attributes`] is large, and each struct literal of it is code of its own
+/// in a page's runtime.
+#[inline(never)]
+fn part_element(tag: &str, part: WidgetPart) -> Element {
+    let mut attrs = Box::<Attributes>::default();
+    attrs.part = Some(part);
+    attrs.classes = vec![part.class().to_string()];
     Element {
-        tag: "div".to_string(),
-        attrs: Box::new(Attributes {
-            part: Some(WidgetPart::SplitGutter),
-            tab_index: Some(0),
-            classes: vec![WidgetPart::SplitGutter.class().to_string()],
-            ..Attributes::default()
-        }),
+        tag: tag.to_string(),
+        attrs,
         ..Default::default()
     }
 }
@@ -1889,33 +1898,18 @@ impl TabSpec {
 /// The parser puts it first in every `<tabs>` it reads, and the runtime in
 /// every one a script or a module builds.
 pub fn tab_strip() -> Element {
-    Element {
-        tag: "row".to_string(),
-        attrs: Box::new(Attributes {
-            part: Some(WidgetPart::TabStrip),
-            classes: vec![WidgetPart::TabStrip.class().to_string()],
-            ..Attributes::default()
-        }),
-        ..Default::default()
-    }
+    part_element("row", WidgetPart::TabStrip)
 }
 
 /// The strip button that shows the tab `spec` describes: a focusable
 /// button captioned with the tab's label, its [`WidgetPart::TabButton`].
 pub fn tab_button(spec: &TabSpec, disabled: bool) -> Element {
-    Element {
-        tag: "button".to_string(),
-        attrs: Box::new(Attributes {
-            part: Some(WidgetPart::TabButton),
-            tab_index: Some(0),
-            text: Some(spec.label.clone()),
-            classes: vec![WidgetPart::TabButton.class().to_string()],
-            tab: Some(spec.clone()),
-            disabled,
-            ..Attributes::default()
-        }),
-        ..Default::default()
-    }
+    let mut button = part_element("button", WidgetPart::TabButton);
+    button.attrs.tab_index = Some(0);
+    button.attrs.text = Some(spec.label.clone());
+    button.attrs.tab = Some(spec.clone());
+    button.attrs.disabled = disabled;
+    button
 }
 
 /// A widget tag that the parser replaces with plain boxes - see

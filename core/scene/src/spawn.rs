@@ -942,7 +942,8 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             attrs.set("name", spec.name.clone());
             attrs.set("label", spec.label.clone());
         }
-        entity.insert((lumen_primitives::Tab, attrs));
+        entity.insert(lumen_primitives::Tab);
+        entity.insert(attrs);
     }
     if let Some(spec) = &el.attrs.dropdown_button {
         entity.insert(lumen_primitives::DropdownButton {
