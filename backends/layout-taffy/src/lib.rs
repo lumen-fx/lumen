@@ -69,6 +69,22 @@ use memo::{Geometry, compute_layout_memoised};
 /// in a window of their own.
 type DocumentRoots = (With<Style>, Without<ChildOf>, Without<WindowOf>);
 
+/// The document's roots and the surface roots, each laid out against its
+/// own window.
+type LayoutRoots<'w, 's> = (
+    Query<'w, 's, Entity, DocumentRoots>,
+    Query<'w, 's, (Entity, &'static WindowOf), With<Style>>,
+);
+
+/// Surface roots that joined or left a window this tick, with what it takes
+/// to dirty them and the parents they leave.
+type SurfaceMoves<'w, 's> = (
+    Query<'w, 's, (Entity, Option<&'static ChildOf>), Changed<WindowOf>>,
+    RemovedComponents<'w, 's, WindowOf>,
+    Query<'w, 's, &'static ChildOf>,
+    Query<'w, 's, (), With<Style>>,
+);
+
 /// Where dirtiness stops climbing: a relayout boundary, or a surface root,
 /// which lays out against its own window.
 type LayoutBoundary = Or<(With<RelayoutBoundary>, With<WindowOf>)>;
@@ -95,12 +111,6 @@ impl Plugin for TaffyLayoutPlugin {
         app.add_systems(
             TickStage::LayoutSync,
             react_to_style_changes.after(sync_viewport),
-        );
-        app.add_systems(
-            TickStage::LayoutSync,
-            react_to_window_changes
-                .after(sync_viewport)
-                .before(propagate_dirty_layout),
         );
         app.add_systems(
             TickStage::LayoutSync,
@@ -518,15 +528,31 @@ impl Default for LayoutResource {
 /// [`LayoutResource`]. When the primary window changes size, every root of
 /// the document (an entity with no [`ChildOf`]) gets [`DirtyLayout`] so its
 /// subtree re-lays out with the new available space; when another window
-/// changes size, its surface roots ([`WindowOf`]) do.
+/// changes size, its surface roots ([`WindowOf`]) do. A surface root that
+/// joined or left a window lays out again where it now is, and so does the
+/// parent it used to be laid out in.
 pub fn sync_viewport(
     mut commands: Commands,
     viewports: Viewports,
     insets: Option<Res<lumen_core::render_world::DockInsets>>,
     mut layout: NonSendMut<LayoutResource>,
-    roots_q: Query<Entity, DocumentRoots>,
-    surfaces: Query<(Entity, &WindowOf), With<Style>>,
+    (roots_q, surfaces): LayoutRoots,
+    (moved, mut gone, parents, alive): SurfaceMoves,
 ) {
+    for (e, parent) in &moved {
+        commands.entity(e).insert(DirtyLayout);
+        if let Some(p) = parent {
+            commands.entity(p.parent()).insert(DirtyLayout);
+        }
+    }
+    for e in gone.read() {
+        if alive.contains(e) {
+            commands.entity(e).insert(DirtyLayout);
+            if let Ok(p) = parents.get(e) {
+                commands.entity(p.parent()).insert(DirtyLayout);
+            }
+        }
+    }
     let want = viewports
         .primary()
         .map(|v| (v.size.x, v.size.y))
@@ -562,31 +588,6 @@ pub fn sync_viewport(
     }
     if layout.windows != seen {
         layout.windows = seen;
-    }
-}
-
-/// A surface root that joined or left a window lays out again where it now
-/// is, and so does the parent it used to be laid out in.
-pub fn react_to_window_changes(
-    mut commands: Commands,
-    changed: Query<(Entity, Option<&ChildOf>), Changed<WindowOf>>,
-    mut removed: RemovedComponents<WindowOf>,
-    parents: Query<&ChildOf>,
-    alive: Query<(), With<Style>>,
-) {
-    for (e, parent) in &changed {
-        commands.entity(e).insert(DirtyLayout);
-        if let Some(p) = parent {
-            commands.entity(p.parent()).insert(DirtyLayout);
-        }
-    }
-    for e in removed.read() {
-        if alive.contains(e) {
-            commands.entity(e).insert(DirtyLayout);
-            if let Ok(p) = parents.get(e) {
-                commands.entity(p.parent()).insert(DirtyLayout);
-            }
-        }
     }
 }
 
@@ -2341,8 +2342,7 @@ mod tests {
 
         let mut schedule = bevy_ecs::schedule::Schedule::default();
         schedule.add_systems(sync_viewport);
-        schedule.add_systems(react_to_window_changes.after(sync_viewport));
-        schedule.add_systems(propagate_dirty_layout.after(react_to_window_changes));
+        schedule.add_systems(propagate_dirty_layout.after(sync_viewport));
         schedule.add_systems(resolve_layout_direction.before(sync_layout));
         schedule.add_systems(sync_layout.after(propagate_dirty_layout));
         schedule.run(&mut world);

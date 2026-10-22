@@ -442,15 +442,20 @@ impl WindowPartitions {
 /// Refresh [`WindowPartitions`] from the surface roots in the world.
 ///
 /// With no surface root this checks one empty query and returns, writing
-/// nothing; otherwise it walks each surface root's subtree, stopping at the
-/// surface roots nested inside it, which own their own subtrees.
+/// nothing. Otherwise, when a surface root or the hierarchy changed since the
+/// last run, it walks each surface root's subtree, stopping at the surface
+/// roots nested inside it, which own their own subtrees.
 pub fn sync_window_partitions(
     partitions: ResMut<WindowPartitions>,
     roots: Query<(Entity, &WindowOf)>,
     children: Query<&Children>,
     primary: Query<Entity, With<PrimaryWindow>>,
+    (moved_roots, moved_kids): (Query<(), Changed<WindowOf>>, Query<(), Changed<Children>>),
+    (mut gone_roots, mut gone_kids): (RemovedComponents<WindowOf>, RemovedComponents<Children>),
 ) {
     let primary = primary.iter().next();
+    // Removals are read every run so a later run does not see stale ones.
+    let removed = gone_roots.read().count() + gone_kids.read().count() > 0;
     if roots.is_empty() {
         if !partitions.roots.is_empty() || partitions.primary != primary {
             let parts = partitions.into_inner();
@@ -458,6 +463,13 @@ pub fn sync_window_partitions(
             parts.roots.clear();
             parts.primary = primary;
         }
+        return;
+    }
+    let unchanged = !removed
+        && moved_roots.is_empty()
+        && moved_kids.is_empty()
+        && partitions.primary == primary;
+    if unchanged && !partitions.roots.is_empty() {
         return;
     }
     let mut found: Vec<(Entity, Entity)> = roots.iter().map(|(e, w)| (e, w.window())).collect();
@@ -708,6 +720,44 @@ mod tests {
             world.get::<WindowRuntime>(second),
             Some(&WindowRuntime::default())
         );
+    }
+
+    /// Between runs that change nothing the partitions stay as they were; an
+    /// element added under a surface root, moved out of it, or a surface
+    /// root dropped are each seen on the next run.
+    #[test]
+    fn the_partitions_follow_the_tree_as_it_changes() {
+        let mut world = World::new();
+        let primary = spawn_primary_window(&mut world, WindowViewport::default());
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_window_partitions);
+        let root = world.spawn_empty().id();
+        let popout = world.spawn(Window::default()).id();
+        let surface = world.spawn((ChildOf(root), WindowOf(popout))).id();
+        schedule.run(&mut world);
+        world.clear_trackers();
+        schedule.run(&mut world);
+        assert_eq!(
+            world.resource::<WindowPartitions>().window_of(surface),
+            Some(popout)
+        );
+
+        let late = world.spawn(ChildOf(surface)).id();
+        schedule.run(&mut world);
+        world.clear_trackers();
+        assert!(world.resource::<WindowPartitions>().in_window(late, popout));
+
+        world.entity_mut(late).insert(ChildOf(root));
+        schedule.run(&mut world);
+        world.clear_trackers();
+        assert_eq!(
+            world.resource::<WindowPartitions>().window_of(late),
+            Some(primary)
+        );
+
+        world.entity_mut(surface).remove::<WindowOf>();
+        schedule.run(&mut world);
+        assert!(world.resource::<WindowPartitions>().is_single());
     }
 
     /// With no surface root every element is in the primary window and the
