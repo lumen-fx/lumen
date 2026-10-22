@@ -123,7 +123,9 @@ Two modes decide what happens on the falsy side:
 
 Use `render` for large branches that are rarely shown, `hide` for panels the
 user flips between. `<dialog open="$show">` is the hide form with a
-full-viewport backdrop already applied, and `<tabs>` uses it for tab bodies.
+full-viewport backdrop already applied, and a `<tabs>` treats its tabs the
+same way: a tab mounts the first time it shows and keeps its state while
+hidden.
 
 ## Derived values
 

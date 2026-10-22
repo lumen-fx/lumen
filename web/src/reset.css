@@ -45,7 +45,7 @@
   flex-direction: row;
 }
 
-:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for, .lm-dropdown) {
+:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for, .lm-dropdown, .lm-tabs) {
   flex-direction: column;
 }
 

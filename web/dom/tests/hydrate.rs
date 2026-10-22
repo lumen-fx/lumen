@@ -1388,6 +1388,7 @@ fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(lumen_primitives::ControlsPlugin);
     app.add_plugin(lumen_primitives::TabsPlugin);
+    lumen_scene::widgets::install(&mut app);
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     app.add_systems(
         TickStage::Input,
@@ -1424,19 +1425,26 @@ fn focus(element: &Element) {
         .unwrap();
 }
 
-/// A strip of three tab buttons over the `active` signal.
+/// A `<tabs>` of three tabs over the `active` signal, its strip of three
+/// buttons first.
 fn tab_strip_tree() -> LayoutIR {
-    let button = |value: &str| {
-        let mut button = element("button", Some(value), Vec::new());
-        button.attrs.tab_strip = Some(("active".to_string(), value.to_string()));
-        button
-    };
-    LayoutIR {
-        root: element(
-            "row",
+    use lumen_ir::layout_ir::{TabSpec, tab_button, tab_strip};
+    let specs = ["one", "two", "three"].map(|name| TabSpec::new(name, None));
+    let mut strip = tab_strip();
+    strip.children = specs.iter().map(|t| tab_button(t, false)).collect();
+    let mut tabs = element("tabs", None, vec![strip]);
+    tabs.attrs.active_signal = Some("active".to_string());
+    for spec in &specs {
+        let mut tab = element(
+            "tab",
             None,
-            vec![button("one"), button("two"), button("three")],
-        ),
+            vec![element("label", Some(&spec.name), vec![])],
+        );
+        tab.attrs.tab = Some(spec.clone());
+        tabs.children.push(tab);
+    }
+    LayoutIR {
+        root: element("root", None, vec![tabs]),
         ..LayoutIR::default()
     }
 }

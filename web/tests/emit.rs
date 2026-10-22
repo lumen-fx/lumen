@@ -701,24 +701,41 @@ fn a_dialog_is_open_when_the_signal_it_names_is_true() {
     assert!(!shown.contains("data-lm-hidden"));
 }
 
+/// A `<tabs>` bound to `active`, with tabs `one` and `two`.
+fn tab_set(bind: Option<&str>) -> Element {
+    use lumen_ir::layout_ir::{TabSpec, tab_button, tab_strip};
+    let specs = [TabSpec::new("one", None), TabSpec::new("two", None)];
+    let mut strip = tab_strip();
+    strip.children = specs.iter().map(|t| tab_button(t, false)).collect();
+    let mut children = vec![strip];
+    for spec in &specs {
+        children.push(element(
+            "tab",
+            Attributes {
+                tab: Some(spec.clone()),
+                ..Attributes::default()
+            },
+            vec![element("label", labelled(&spec.name), Vec::new())],
+        ));
+    }
+    element(
+        "tabs",
+        Attributes {
+            active_signal: bind.map(str::to_string),
+            ..Attributes::default()
+        },
+        children,
+    )
+}
+
 #[test]
 fn the_current_tab_is_marked_in_the_page() {
-    let button = |value: &str| {
-        element(
-            "button",
-            Attributes {
-                tab_strip: Some(("active".into(), value.into())),
-                ..labelled(value)
-            },
-            Vec::new(),
-        )
-    };
     let page = PageSpec::new(
         "index",
         ir(element(
             "root",
             Attributes::default(),
-            vec![button("one"), button("two")],
+            vec![tab_set(Some("active"))],
         )),
     );
     let mut spec = site(vec![page]);
@@ -726,7 +743,7 @@ fn the_current_tab_is_marked_in_the_page() {
 
     let html = page_html(&spec, "index.html");
     assert!(
-        html.contains(r#"data-lm="0.1" data-lm-selected="""#),
+        html.contains(r#"data-lm="0.0.0.1" data-lm-selected="""#),
         "the strip button the signal names carries the mark: {html}"
     );
     assert_eq!(
@@ -734,6 +751,36 @@ fn the_current_tab_is_marked_in_the_page() {
         1,
         "and no other button does: {html}"
     );
+    assert!(
+        html.contains(r#"role="tabpanel" data-lm="0.0.1" data-lm-hidden="""#),
+        "the tab the signal does not name is in the page, hidden: {html}"
+    );
+    assert!(
+        html.contains(r#"role="tabpanel" data-lm="0.0.2">"#),
+        "the one it names shows: {html}"
+    );
+    assert!(html.contains(r#"role="tablist""#), "{html}");
+}
+
+/// A `<tabs>` with no signal, or one the state holds nothing for, opens on
+/// its first tab, as the runtime does.
+#[test]
+fn a_tab_set_without_a_value_shows_its_first_tab() {
+    for bind in [None, Some("active")] {
+        let page = PageSpec::new(
+            "index",
+            ir(element("root", Attributes::default(), vec![tab_set(bind)])),
+        );
+        let html = page_html(&site(vec![page]), "index.html");
+        assert!(
+            html.contains(r#"data-lm="0.0.0.0" data-lm-selected="""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"data-lm="0.0.2" data-lm-hidden="""#),
+            "{html}"
+        );
+    }
 }
 
 #[test]

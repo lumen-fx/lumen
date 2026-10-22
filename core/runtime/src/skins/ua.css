@@ -30,7 +30,7 @@
    `scroll="x"` attribute turns it horizontal and lays its children out in
    a row. The web target keeps its own copy of these in
    web/src/reset.css. */
-column, scroll, root, overlay, for, dialog, dropdown { flex-direction: column; }
+column, scroll, root, overlay, for, dialog, dropdown, tabs { flex-direction: column; }
 row, title-bar, checkbox, radio, progress, split { flex-direction: row; }
 scroll    { scroll: y; }
 spacer    { grow: 1; }
@@ -91,10 +91,11 @@ progress { width: 100%; height: 6; }
 .dropdown-button, .dropdown-option { width: 100%; padding: 0 12; }
 .dropdown-option { min-height: 32; }
 
-/* The metrics of the parts `<tabs>`, `<menu>` and the pickers expand into.
+/* The metrics of `<tabs>`, its strip, and the parts `<menu>` and the
+   pickers expand into.
    Each is wrapped in :where() so it weighs nothing: any rule a skin or an
    app writes for the part, a plain `button { padding }` included, wins. */
-:where(.tabs, .tab-strip) { width: 100%; }
+:where(tabs, .tab-strip) { width: 100%; }
 :where(.tab-strip) { gap: 4; }
 :where(.tab-btn) { height: 36; grow: 1; padding: 0 12; }
 :where(.menu-panel) { min-width: 160; }

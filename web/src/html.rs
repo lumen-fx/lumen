@@ -113,6 +113,8 @@ struct Walk<'a> {
     foreign_depth: u32,
     /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
+    /// The name of the tab the innermost `<tabs>` being written shows.
+    shown_tab: Option<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -169,6 +171,7 @@ pub fn emit_tree(
         foreign: &spec.web.foreign,
         foreign_depth: 0,
         warnings,
+        shown_tab: None,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
     Ok((out, walk.seeded))
@@ -295,8 +298,21 @@ fn emit_element(
                 .is_none_or(|_| branch_taken(element, walk.signals));
         }
         "for" => children_are_content = false,
+        // The tabs a `<tabs>` does not show stay in the document, hidden,
+        // so the runtime has them to show.
+        "tab" => {
+            hidden = element.attrs.tab.as_ref().map(|t| &t.name) != walk.shown_tab.as_ref();
+        }
         _ => {}
     }
+    // Inside a `<tabs>` the tab it shows is the one its signal names, or its
+    // first tab, which is the tab the runtime opens on.
+    let outer_tab = if ir_tag == "tabs" {
+        let shown = shown_tab(element, walk.signals);
+        std::mem::replace(&mut walk.shown_tab, shown)
+    } else {
+        walk.shown_tab.clone()
+    };
 
     out.push('<');
     out.push_str(tag_name);
@@ -349,12 +365,12 @@ fn emit_element(
     if open {
         write_attr(out, DIALOG_OPEN, "");
     }
-    // Which tab is current is a signal, and the strip button that matches it
-    // is the one Lumen calls `:selected`. The runtime maintains this mark; the
-    // page needs it too, or the current tab is unmarked until the runtime
-    // loads and unmarked forever without it.
-    if let Some((signal, value)) = &attrs.tab_strip
-        && walk.signals.global(signal) == Some(value.as_str())
+    // The strip button of the tab that shows is the one Lumen calls
+    // `:selected`. The runtime maintains this mark; the page needs it too, or
+    // the current tab is unmarked until the runtime loads and unmarked
+    // forever without it.
+    if attrs.part == Some(lumen_ir::layout_ir::WidgetPart::TabButton)
+        && attrs.tab.as_ref().map(|t| &t.name) == walk.shown_tab.as_ref()
     {
         write_attr(out, DATA_LM_SELECTED, "");
     }
@@ -406,7 +422,29 @@ fn emit_element(
     out.push_str("</");
     out.push_str(tag_name);
     out.push('>');
+    walk.shown_tab = outer_tab;
     Ok(())
+}
+
+/// The name of the tab a `<tabs>` shows: the one its bound signal names,
+/// else its first tab that is not disabled, else its first tab.
+fn shown_tab(element: &Element, signals: &SignalEnv) -> Option<String> {
+    let tabs: Vec<(&str, bool)> = element
+        .children
+        .iter()
+        .filter(|c| c.tag == "tab")
+        .filter_map(|c| Some((c.attrs.tab.as_ref()?.name.as_str(), c.attrs.disabled)))
+        .collect();
+    let named = element
+        .attrs
+        .active_signal
+        .as_ref()
+        .and_then(|signal| signals.global(signal))
+        .and_then(|value| tabs.iter().find(|(name, _)| *name == value));
+    named
+        .or_else(|| tabs.iter().find(|(_, disabled)| !disabled))
+        .or_else(|| tabs.first())
+        .map(|(name, _)| name.to_string())
 }
 
 /// What this `<img>` carries beyond its source.

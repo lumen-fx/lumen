@@ -98,6 +98,19 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if attrs.part == Some(lumen_ir::layout_ir::WidgetPart::SplitGutter) {
         out.push(("role", "separator".to_string()));
     }
+    // A tab set is the web's tabs pattern: a `tablist` of `tab`s over one
+    // `tabpanel` per tab. Which tab is selected follows the app, which
+    // marks it.
+    match (ir_tag, attrs.part) {
+        (_, Some(lumen_ir::layout_ir::WidgetPart::TabStrip)) => {
+            out.push(("role", "tablist".to_string()));
+        }
+        (_, Some(lumen_ir::layout_ir::WidgetPart::TabButton)) => {
+            out.push(("role", "tab".to_string()));
+        }
+        ("tab", _) => out.push(("role", "tabpanel".to_string())),
+        _ => {}
+    }
     // An `<input>` that holds something other than text is the browser's
     // own control of that type.
     let typed_input = attrs.input_type.filter(|_| name == "input");

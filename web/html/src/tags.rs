@@ -103,6 +103,8 @@ pub fn part_from_class(class: &str) -> Option<WidgetPart> {
         WidgetPart::ColorAlphaFill,
         WidgetPart::ColorAlphaThumb,
         WidgetPart::SplitGutter,
+        WidgetPart::TabStrip,
+        WidgetPart::TabButton,
     ]
     .into_iter()
     .find(|part| part.class() == class)
@@ -144,8 +146,8 @@ pub const VOID_ELEMENTS: &[&str] = &[
 /// Every IR tag [`html_tag_for`] answers for.
 ///
 /// The tags a Lumen author writes that are not here are the ones the parser
-/// resolves before the IR exists: a `<tabs>` is already a column of buttons
-/// and branches by then.
+/// resolves before the IR exists: a `<menu>` is already a panel of buttons
+/// behind a branch by then.
 pub const MAPPED_TAGS: &[&str] = &[
     "root",
     "column",
@@ -174,6 +176,8 @@ pub const MAPPED_TAGS: &[&str] = &[
     "slider",
     "dropdown",
     "split",
+    "tabs",
+    "tab",
 ];
 
 /// Prefix of the class an element carries for its tag.
@@ -282,6 +286,9 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
         // A split is a flex box like a row; its gutters are elements of
         // their own between its panes, and the page's app drags them.
         "split" => HtmlTag::plain("div"),
+        // A tab set is boxes too: its strip of buttons, then the tabs, all
+        // of them in the document, the hidden ones marked hidden.
+        "tabs" | "tab" => HtmlTag::plain("div"),
         _ => return None,
     };
     Some(tag)
@@ -361,7 +368,7 @@ mod tests {
 
     #[test]
     fn a_tag_the_parser_resolves_away_has_no_mapping() {
-        for tag in ["tabs", "menu", "date-picker", "tooltip"] {
+        for tag in ["menu", "date-picker", "tooltip"] {
             assert_eq!(html_tag_for(tag), None);
         }
     }

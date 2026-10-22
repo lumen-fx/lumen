@@ -112,8 +112,10 @@ pub use lumen_module_macros::lumen_module;
 pub use lumen_module_registry as registry;
 /// The built-in widgets a module composes rather than rebuilds, with the
 /// system sets each runs in: `<split>` ([`lumen_primitives::Split`], its
-/// sizes, its resize-end message and [`lumen_primitives::SplitSet`]), press
-/// and drag state, and the rest of the widget set.
+/// sizes, its resize-end message and [`lumen_primitives::SplitSet`]),
+/// `<tabs>` ([`lumen_primitives::Tabs`], [`lumen_primitives::SelectTab`]
+/// and [`lumen_primitives::TabsSet`]), press and drag state, and the rest
+/// of the widget set.
 pub use lumen_primitives;
 /// The scene the app's tree lives in. A module that runs a script language
 /// installs the per-host half of the script wiring through
