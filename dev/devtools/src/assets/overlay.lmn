@@ -4,6 +4,7 @@
   this with the normal parser, spawns it as a second root, and lifts the
   root into the top paint band (OverlayLayer) so it docks over the window's
   right edge while the app reflows into the remaining width (DockInsets).
+  Pop out moves the root into a window of its own.
 
   Static chrome only: the element rows, the tab/row interaction states, the
   highlight box, and its tooltip are driven per tick by the crate's systems,
@@ -18,6 +19,7 @@
       <button class="dt-tab" id="dt-tab-signals" text="Signals" />
       <button class="dt-tab" id="dt-tab-network" text="Network" />
       <spacer />
+      <button class="dt-tab" id="dt-popout" text="Pop out" />
       <label class="dt-hint" text="F12" />
     </row>
     <scroll class="dt-body-scroll" width="100%" height="0" grow="1">

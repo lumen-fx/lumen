@@ -2,8 +2,11 @@
 //!
 //! Chrome-devtools-style tabbed panel (Elements / Signals + Performance /
 //! Network) docked to the window's right edge, toggled with **F12**. While
-//! open it writes [`lumen_core::render_world::DockInsets`], so the app
-//! reflows into the remaining width instead of being covered. The static
+//! open and docked it writes [`lumen_core::render_world::DockInsets`], so the
+//! app reflows into the remaining width instead of being covered. The
+//! toolbar's Pop out button moves the panel into a window of its own (a
+//! [`lumen_core::window::Window`] entity, with [`WindowOf`] on the panel's
+//! root) and Dock moves it back; closing that window docks it too. The static
 //! chrome is authored in Lumen's own `.lmn` + `.css` pipeline (shipped as
 //! embedded assets) and mounted as a second root lifted into the top paint
 //! band ([`lumen_core::render_world::OverlayLayer`]) by the lumenc
@@ -55,6 +58,7 @@ use lumen_core::components::{
 use lumen_core::input::{ClickEvent, HoverWithin, Hovered, Key, KeyPressed, ScrollOffset};
 use lumen_core::render_world::{DockInsets, OverlayLayer};
 use lumen_core::tick::TickStage;
+use lumen_core::window::{Window, WindowClosing, WindowName, WindowOf};
 use lumen_mcp::SnapshotHandle;
 
 pub mod format;
@@ -83,11 +87,21 @@ pub const PICK_ID: &str = "dt-pick";
 /// `LumenId` of the inspect pane's text-content edit input.
 pub const EDIT_ID: &str = "dt-edit";
 
+/// `LumenId` of the toolbar button that pops the panel out or docks it.
+pub const POPOUT_ID: &str = "dt-popout";
+
 /// Environment variable that opens the overlay at startup (instead of the
 /// default hidden-until-F12). Useful for headless / automated verification
 /// where there is no keyboard to press F12. Any non-empty, non-`0` value
-/// enables it.
+/// enables it; `popout` opens it in its own window.
 pub const OPEN_ENV: &str = "LUMEN_DEVTOOLS_OPEN";
+
+/// The title of the devtools window when the panel is popped out.
+pub const WINDOW_TITLE: &str = "Lumen devtools";
+
+/// Width of the docked panel, in logical pixels: what `.dt-panel` is laid
+/// out at beside the app. A popped-out panel fills its window instead.
+const DOCKED_WIDTH: f32 = 470.0;
 
 /// Dynamic-state colors for the entities the overlay spawns after the
 /// mount: element-row syntax colors, tab/row interaction states, and the
@@ -172,6 +186,11 @@ pub fn env_open() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether [`OPEN_ENV`] requests the overlay open in its own window.
+pub fn env_popout() -> bool {
+    std::env::var(OPEN_ENV).is_ok_and(|v| v == "popout")
+}
+
 /// Marker on the overlay root entity. Used by the F12 toggle to flip the
 /// whole subtree's [`Visible`] state.
 #[derive(Component, Clone, Copy, Debug, Default)]
@@ -223,6 +242,11 @@ pub struct DevtoolsState {
     /// Pick mode: hovering the app outlines the hovered element, clicking
     /// selects it (and disarms the mode).
     pub picking: bool,
+    /// The panel shows in a window of its own instead of docked beside the
+    /// app.
+    pub popped: bool,
+    /// The devtools window while the panel is popped out.
+    pub window: Option<Entity>,
 }
 
 impl Default for DevtoolsState {
@@ -233,6 +257,8 @@ impl Default for DevtoolsState {
             tab: Tab::Elements,
             selected: None,
             picking: false,
+            popped: false,
+            window: None,
         }
     }
 }
@@ -256,7 +282,18 @@ impl Plugin for DevtoolsPlugin {
         app.world.init_resource::<DockInsets>();
         // Honour the open-at-startup env override (no keyboard in headless).
         if env_open() {
-            app.world.resource_mut::<DevtoolsState>().visible = true;
+            let mut state = app.world.resource_mut::<DevtoolsState>();
+            state.visible = true;
+            state.popped = env_popout();
+        }
+        // Closing the devtools window docks the panel back; the message is
+        // registered by the window plugin, and here too for an app that has
+        // none.
+        if !app
+            .world
+            .contains_resource::<bevy_ecs::message::Messages<WindowClosing>>()
+        {
+            app.add_message::<WindowClosing>();
         }
 
         let palette = *app.world.resource::<OverlayPalette>();
@@ -327,6 +364,10 @@ impl Plugin for DevtoolsPlugin {
         app.add_systems(TickStage::Systems, style_tabs);
         app.add_systems(TickStage::Systems, style_rows);
         app.add_systems(TickStage::Systems, sync_dock_inset);
+        app.add_systems(
+            TickStage::Systems,
+            sync_devtools_window.after(handle_clicks),
+        );
         app.add_systems(TickStage::Systems, update_highlight);
         app.add_systems(TickStage::A11ySync, refresh_panes);
     }
@@ -392,6 +433,10 @@ pub fn handle_clicks(
                 PICK_ID => {
                     state.picking = !state.picking;
                     state.tab = Tab::Elements;
+                    continue;
+                }
+                POPOUT_ID => {
+                    state.popped = !state.popped;
                     continue;
                 }
                 "dt-act-hide" => {
@@ -583,6 +628,7 @@ pub fn style_tabs(
             "dt-tab-signals" => state.tab == Tab::Signals,
             "dt-tab-network" => state.tab == Tab::Network,
             PICK_ID => state.picking,
+            POPOUT_ID => state.popped,
             _ => continue,
         };
         // Chrome-style flat tabs: no fill at rest, subtle fill on hover, and
@@ -666,10 +712,82 @@ pub fn sync_dock_inset(
         .find(|(id, _)| id.0 == PANEL_ID)
         .map(|(_, t)| t.size.x)
         .unwrap_or(0.0);
-    let want = if state.visible { width } else { 0.0 };
+    let want = if state.visible && !state.popped {
+        width
+    } else {
+        0.0
+    };
     if insets.right != want {
         insets.right = want;
     }
+}
+
+/// System: keep the panel where [`DevtoolsState::popped`] says. Popping out
+/// spawns the devtools window and makes the panel's root a surface root of
+/// it, filling the window; docking takes the root back into the app's window
+/// at its docked width and closes the devtools window. A devtools window the
+/// user closes ([`WindowClosing`]) docks the panel before it goes.
+pub fn sync_devtools_window(
+    mut commands: Commands,
+    mut state: ResMut<DevtoolsState>,
+    mut closing: MessageReader<WindowClosing>,
+    roots: Query<(Entity, Option<&WindowOf>), With<DevtoolsRoot>>,
+    mut panels: Query<(&LumenId, &mut Style)>,
+    mut labels: Query<(&LumenId, &mut TextContent)>,
+    windows: Query<(), With<Window>>,
+) {
+    // The button says what pressing it does.
+    let label = if state.popped { "Dock" } else { "Pop out" };
+    for (id, mut text) in &mut labels {
+        if id.0 == POPOUT_ID && text.0 != label {
+            text.0 = label.to_string();
+        }
+    }
+    for event in closing.read() {
+        if state.window == Some(event.window) {
+            state.popped = false;
+            state.window = None;
+            // The root leaves the window before it despawns.
+            for (root, of) in &roots {
+                if of.is_some() {
+                    commands.entity(root).remove::<WindowOf>();
+                }
+            }
+        }
+    }
+    let want = state.visible && state.popped;
+    let Some((root, of)) = roots.iter().next() else {
+        return;
+    };
+    let width = match (want, of) {
+        (true, None) => {
+            let window = commands
+                .spawn((
+                    Window::new(WINDOW_TITLE, glam::Vec2::new(900.0, 700.0)),
+                    WindowName("devtools".into()),
+                ))
+                .id();
+            commands.entity(root).insert(WindowOf(window));
+            state.window = Some(window);
+            Length::Percent(100.0)
+        }
+        (false, Some(of)) => {
+            commands.entity(root).remove::<WindowOf>();
+            let window = of.window();
+            if windows.contains(window) {
+                commands.entity(window).despawn();
+            }
+            state.window = None;
+            Length::Px(DOCKED_WIDTH)
+        }
+        _ => return,
+    };
+    for (id, mut style) in &mut panels {
+        if id.0 == PANEL_ID && style.width != width {
+            style.width = width;
+        }
+    }
+    commands.entity(root).insert(DirtyLayout);
 }
 
 /// System: position the highlight box over the current inspect target -
