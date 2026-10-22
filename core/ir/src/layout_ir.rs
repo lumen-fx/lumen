@@ -1097,6 +1097,10 @@ pub struct Attributes {
     /// the cascade: the pointer resolves it from the hovered element up its
     /// ancestors, so only the element that names a cursor carries it.
     pub cursor: Option<CursorSpec>,
+    /// CSS `pointer-events` as the element declares it. Like `cursor` it
+    /// inherits at the pointer rather than through the cascade: the hit test
+    /// takes the value the element or its nearest ancestor declares.
+    pub pointer_events: Option<PointerEventsSpec>,
     /// CSS `scrollbar-color: <thumb> [<track>]` (Scrollbars Styling
     /// Level 1) - overlay-bar thumb + optional track fills for `<scroll>`
     /// containers. `None` = the runtime's `ScrollbarStyle` default.
@@ -1617,6 +1621,25 @@ impl ImageRenderingSpec {
             Self::Smooth => "smooth",
             Self::Pixelated => "pixelated",
             Self::CrispEdges => "crisp-edges",
+        }
+    }
+}
+
+/// CSS `pointer-events`: whether the pointer can land on an element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PointerEventsSpec {
+    /// The initial value: the element takes the pointer as usual.
+    Auto,
+    /// The pointer passes through the element to whatever lies beneath it.
+    None,
+}
+
+impl PointerEventsSpec {
+    /// The CSS keyword for this value.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
         }
     }
 }

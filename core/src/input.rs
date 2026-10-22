@@ -994,13 +994,21 @@ pub fn reconcile_hover_chain(
     }
 }
 
-/// Marker: the pointer passes through this entity and everything under it in
-/// the tree, to whatever lies beneath, as with CSS `pointer-events: none`. The
-/// hit test never picks it, so it takes no hover, press or click. A
-/// `<tooltip>` popup carries it, so moving onto the popup leaves the trigger
-/// hovered.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct PointerTransparent;
+/// CSS `pointer-events` on an element that declares it. The value inherits
+/// at the pointer: an element without the component takes the value of its
+/// nearest ancestor that has one, and `auto` where none does. Under `none`
+/// the hit test never picks the element, so it takes no hover, press or
+/// click and the pointer reaches whatever lies beneath; a descendant that
+/// declares `auto` takes the pointer again. A `<tooltip>` popup is `none`,
+/// so moving onto the popup leaves the trigger hovered.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointerEvents {
+    /// The element takes the pointer.
+    #[default]
+    Auto,
+    /// The pointer passes through the element.
+    None,
+}
 
 /// Marker indicating an active primary-button press on the entity.
 /// Inserted on `PointerPressed`; removed on `PointerReleased` and `PointerLeft`.

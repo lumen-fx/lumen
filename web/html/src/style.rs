@@ -160,6 +160,7 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("fit", "object-fit", Value::AsIs),
     ("image-rendering", "image-rendering", Value::AsIs),
     ("cursor", "cursor", Value::AsIs),
+    ("pointer-events", "pointer-events", Value::AsIs),
     ("mask-image", "mask-image", Value::AsIs),
     ("mask-size", "mask-size", Value::Length),
     ("mask-repeat", "mask-repeat", Value::AsIs),
@@ -719,6 +720,7 @@ mod tests {
             "url(\"pen.png\") 2 14, crosshair",
             "cursor: url(\"pen.png\") 2 14, crosshair",
         ),
+        ("pointer-events", "none", "pointer-events: none"),
         (
             "mask-image",
             "url(\"icons/pen.svg\")",

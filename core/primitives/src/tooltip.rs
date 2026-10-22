@@ -31,7 +31,7 @@ use glam::Vec2;
 use lumen_core::components::{
     DomHidden, Edges, LumenClasses, LumenTag, Position, Style, StyleDirty, TextContent, Transform,
 };
-use lumen_core::input::{HoverWithin, PointerTransparent};
+use lumen_core::input::{HoverWithin, PointerEvents};
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
 use lumen_core::style_overrides::{Live, StyleOverrides, StyleOwner, StyleValues};
@@ -279,8 +279,10 @@ fn spawn_tooltip_popups(
             lumen_core::render_world::OverlayLayer,
             // The pointer passes through the popup, as through a browser's
             // `title` tooltip: moving onto it leaves the trigger hovered
-            // rather than unhovering it and closing the popup.
-            PointerTransparent,
+            // rather than unhovering it and closing the popup. The
+            // user-agent sheet's `tooltip` rule says the same, so the value
+            // holds when the popup restyles.
+            PointerEvents::None,
             LumenTag("tooltip".into()),
             LumenClasses(vec!["tooltip".into()]),
             DomHidden,

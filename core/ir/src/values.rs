@@ -411,6 +411,27 @@ pub fn parse_mask_position(
     }
 }
 
+/// CSS `pointer-events`: `auto` or `none`.
+pub fn parse_pointer_events(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::PointerEventsSpec, ParseError> {
+    use crate::layout_ir::PointerEventsSpec;
+    Ok(match value.trim() {
+        "auto" => PointerEventsSpec::Auto,
+        "none" => PointerEventsSpec::None,
+        other => {
+            return Err(bad(
+                ctx,
+                name,
+                value,
+                format!("unknown pointer-events '{other}' (supported: auto, none)"),
+            ));
+        }
+    })
+}
+
 /// CSS `image-rendering`: `auto`, `smooth`, `pixelated`, or `crisp-edges`.
 pub fn parse_image_rendering(
     ctx: &str,

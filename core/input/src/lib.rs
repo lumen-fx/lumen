@@ -613,14 +613,16 @@ fn read_clipboard(res: Option<&mut ClipboardHost>) -> String {
 /// Drain [`PendingFileDrops`] populated by the window backend, hit-test
 /// each `(path, position)` against every entity carrying both
 /// [`Transform`] and [`DropTarget`], and emit a [`FileDropped`] message
-/// at the deepest match (scroll-aware via [`ancestor_scroll`]). Drops
-/// outside any DropTarget are discarded silently - apps that want a
-/// fallback can read [`FileHovered`] / [`FileHoverCancelled`] directly.
+/// at the deepest match (scroll-aware via [`ancestor_scroll`]). A target
+/// under CSS `pointer-events: none` takes no drop. Drops outside any
+/// DropTarget are discarded silently - apps that want a fallback can read
+/// [`FileHovered`] / [`FileHoverCancelled`] directly.
 pub fn dispatch_file_drops(
     mut drops: ResMut<PendingFileDrops>,
     candidates: Query<(Entity, &Transform), With<DropTarget>>,
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,
+    pointer_events: Query<&lumen_core::input::PointerEvents>,
     mut out: MessageWriter<FileDropped>,
 ) {
     let queue: Vec<(std::path::PathBuf, Vec2)> = std::mem::take(&mut drops.drops);
@@ -634,6 +636,9 @@ pub fn dispatch_file_drops(
                 && pos.x < origin.x + t.size.x
                 && pos.y < origin.y + t.size.y)
             {
+                continue;
+            }
+            if passes_pointer_through(e, &parents, &pointer_events) {
                 continue;
             }
             let mut depth = 0u32;
@@ -1142,9 +1147,9 @@ pub fn hit_test(
     ),
     visibles: Query<&lumen_core::components::Visible>,
     styles: Query<&lumen_core::components::Style>,
-    (disableds, transparents): (
+    (disableds, pointer_events): (
         Query<(), With<lumen_core::components::Disabled>>,
-        Query<(), With<lumen_core::input::PointerTransparent>>,
+        Query<&lumen_core::input::PointerEvents>,
     ),
     pressed_entities: Query<Entity, With<Pressed>>,
     transforms: Query<&Transform>,
@@ -1199,7 +1204,7 @@ pub fn hit_test(
                 if disabled_via_ancestors(e, &parents, &disableds) {
                     continue;
                 }
-                if transparent_via_ancestors(e, &parents, &transparents) {
+                if passes_pointer_through(e, &parents, &pointer_events) {
                     continue;
                 }
                 if point_clipped_by_ancestors(p, e, &parents, &styles, &transforms, &scrolls) {
@@ -1340,17 +1345,17 @@ pub fn disabled_via_ancestors(
     }
 }
 
-/// Whether `entity` or an ancestor carries
-/// [`PointerTransparent`](lumen_core::input::PointerTransparent), so the
-/// pointer passes through it.
-fn transparent_via_ancestors(
+/// Whether the pointer passes through `entity`: its CSS `pointer-events`, the
+/// one it declares or else the nearest one an ancestor declares, is `none`.
+pub fn passes_pointer_through(
     entity: Entity,
     parents: &Query<&ChildOf>,
-    transparents: &Query<(), With<lumen_core::input::PointerTransparent>>,
+    pointer_events: &Query<&lumen_core::input::PointerEvents>,
 ) -> bool {
     std::iter::once(entity)
         .chain(parents.iter_ancestors(entity))
-        .any(|e| transparents.contains(e))
+        .find_map(|e| pointer_events.get(e).ok())
+        .is_some_and(|p| *p == lumen_core::input::PointerEvents::None)
 }
 
 /// Escape cancels an in-flight press (spec section 0): every entity carrying
