@@ -21,20 +21,34 @@ fn root() -> PathBuf {
         .expect("the workspace root is readable")
 }
 
-/// The crate identifier each directory under `std/` builds as, which is the
-/// spelling an anchor uses.
-fn first_party_modules(root: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(root.join("std"))
-        .expect("std/ is readable")
+/// The directories directly under `dir`.
+fn subdirs(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .expect("the directory is readable")
         .map(|entry| entry.expect("a readable directory entry").path())
-        .filter(|path| path.join("Cargo.toml").is_file())
-        .map(|path| {
-            let dir = path
-                .file_name()
-                .expect("a named directory")
-                .to_string_lossy()
-                .to_string();
-            format!("lumen_{}", dir.replace('-', "_"))
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// The crate identifier each module under `std/` builds as, which is the
+/// spelling an anchor uses. A module is a crate that depends on
+/// `lumen-module`; one nested in another module's directory
+/// (`std/candela/dev`) counts too.
+fn first_party_modules(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = subdirs(&root.join("std"))
+        .into_iter()
+        .flat_map(|dir| {
+            let nested = subdirs(&dir);
+            std::iter::once(dir).chain(nested)
+        })
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(path.join("Cargo.toml")).ok()?;
+            let manifest: toml::Table = toml::from_str(&text).expect("Cargo.toml parses");
+            manifest.get("dependencies")?.get("lumen-module")?;
+            let package = manifest["package"]["name"]
+                .as_str()
+                .expect("a package name");
+            Some(package.replace('-', "_"))
         })
         .collect();
     names.sort();

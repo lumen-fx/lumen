@@ -57,9 +57,9 @@ apps/*/lib/
 # the first one by hand.
 /public/lumen-dylib/Cargo.lock
 # The published Rust SDK crates and the smoke app are workspaces of their own.
-/sdk/lumenui/target
-/sdk/lumenui/Cargo.lock
-/sdk/lumenui-build/target
-/sdk/lumenui-build/Cargo.lock
-/sdk/lumenui/smoke/target
-/sdk/lumenui/smoke/Cargo.lock
+/public/lumenui/rust/target
+/public/lumenui/rust/Cargo.lock
+/public/lumenui/rust/build/target
+/public/lumenui/rust/build/Cargo.lock
+/public/lumenui/rust/smoke/target
+/public/lumenui/rust/smoke/Cargo.lock

@@ -37,7 +37,7 @@ package_name() {
 }
 
 halves=0
-for web in std/*/web; do
+for web in std/*/web std/*/*/web; do
   [ -f "$web/lumen-addon.toml" ] || continue
   crate="$(dirname "$web")"
   name="$(package_name "$crate")"
@@ -51,7 +51,7 @@ if [ "$halves" -eq 0 ]; then
 fi
 
 languages=0
-for descriptor in std/*/lumen-language.toml; do
+for descriptor in std/*/lumen-language.toml std/*/*/lumen-language.toml; do
   [ -f "$descriptor" ] || continue
   crate="$(dirname "$descriptor")"
   name="$(package_name "$crate")"

@@ -47,8 +47,8 @@ name: publish
 # crates.io gets two jobs, because the two sets have nothing in common and one
 # of them cannot publish yet:
 #
-#   - The Rust SDK. `lumenui` (sdk/lumenui) names no engine crate: its build
-#     script downloads, by its own version, the prebuilt engine set the
+#   - The Rust SDK. `lumenui` (public/lumenui/rust) names no engine crate: its
+#     build script downloads, by its own version, the prebuilt engine set the
 #     release carries for each target. The module crates are generated from
 #     the module list in tools/release/lumenui-engine.py and depend on
 #     `lumenui` alone. So the set publishes once the release with those sets
@@ -201,7 +201,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build the sdist and the wheel
-        working-directory: sdk/python
+        working-directory: public/lumenui/python
         run: |
           python -m pip install --upgrade build twine
           python -m build
@@ -231,7 +231,7 @@ jobs:
           steps.pypi_state.outputs.published == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: sdk/python/dist
+          packages-dir: public/lumenui/python/dist
 
   # The Rust SDK: `lumenui` and the `lumenui-<name>` module crates, in
   # dependency order. tools/release/publish-crates.py `--sdk` generates the

@@ -71,7 +71,7 @@ jobs:
             # docs/src/ is in the list because the suite compiles the
             # complete programs the documentation shows, so a page can turn
             # the test job red on its own.
-            pattern='^(src/|core/|backends/|os/|dev/|capabilities/|web/|sdk/rust/|include/|tests/|apps/|fixtures/|docs/src/|Cargo|rust-toolchain|\.cargo/|tools/fetch-templates\.sh|\.github/(workflows/ci\.yml|scripts/))'
+            pattern='^(src/|core/|backends/|os/|dev/|capabilities/|web/|public/lumenui/rust/engine/|include/|tests/|apps/|fixtures/|docs/src/|Cargo|rust-toolchain|\.cargo/|tools/fetch-templates\.sh|\.github/(workflows/ci\.yml|scripts/))'
             if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
               rust=false
             fi

@@ -4,9 +4,9 @@
 # seam in `core/script/api`), `web/` (the browser and SSR targets),
 # `backends/`, `os/`, `dev/`, and `capabilities/`, each grouped by the role it
 # plays; the author-facing crates external code depends on (the compiler, the
-# plugin and module SDKs, the engine carrier) sit under `public/`; first-party
-# runtime modules, the script hosts among them, under `std/`; app SDKs under
-# `sdk/`.
+# plugin and module SDKs, the engine carrier, the app SDKs) sit under
+# `public/`; first-party runtime modules, the script hosts among them, under
+# `std/`.
 [package]
 name = "lumen"
 version.workspace = true
@@ -18,9 +18,9 @@ rust-version.workspace = true
 description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
 # The engine ships as a shared library through the toolchain installer, not as
 # a crates.io package: the `lumen` name there belongs to an unrelated project.
-# The Rust-facing package is `lumenui` (sdk/lumenui), which re-exports the
-# SDK crate in sdk/rust from the release's prebuilt copy of it; the C-facing
-# one is the installed liblumen.
+# The Rust-facing package is `lumenui` (public/lumenui/rust), which re-exports
+# the SDK crate in public/lumenui/rust/engine from the release's prebuilt copy
+# of it; the C-facing one is the installed liblumen.
 publish = false
 
 [lib]
@@ -142,7 +142,7 @@ members = [
     "core",
     "core/assets",
     "core/capability",
-    "core/capability-macros",
+    "core/capability/macros",
     "core/i18n",
     "core/input",
     "core/ir",
@@ -158,7 +158,7 @@ members = [
     "core/script/api",
     "core/text",
     "core/widget",
-    "core/widget-macros",
+    "core/widget/macros",
     "web",
     "web/dom",
     "web/html",
@@ -174,20 +174,21 @@ members = [
     "os/crash/helper",
     "os/crash/report",
     "std/*",
+    "std/candela/dev",
     # The script hosts' libraries, apart from the module entries above them so
     # a build script can depend on them without building a module.
     "std/candela/host",
-    "std/candela-dev/host",
-    "sdk/rust",
+    "std/candela/dev/host",
+    "public/lumenui/rust/engine",
     "public/lumen-module",
-    "public/lumen-module-macros",
+    "public/lumen-module/macros",
     "public/lumen-module/fixture",
     "public/lumen-module/fixture-host",
     "public/lumen-plugin",
     "public/lumen-plugin/fixture",
     "public/lumenc",
-    "public/lumenc-plugin",
-    "public/lumenc-plugin/fixture",
+    "public/lumenc/plugin",
+    "public/lumenc/plugin/fixture",
     "tools/devsetup",
     "tools/link-recorder",
 ]
@@ -244,8 +245,8 @@ lumen-async-tokio = { path = "backends/async-tokio" }
 lumen-audio = { path = "std/audio", default-features = false }
 lumen-browser = { path = "std/browser", default-features = false }
 lumen-candela = { path = "std/candela", default-features = false }
-lumen-candela-dev = { path = "std/candela-dev", default-features = false }
-lumen-candela-dev-host = { path = "std/candela-dev/host" }
+lumen-candela-dev = { path = "std/candela/dev", default-features = false }
+lumen-candela-dev-host = { path = "std/candela/dev/host" }
 lumen-candela-host = { path = "std/candela/host" }
 lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-cookie = { path = "std/cookie", default-features = false }
@@ -269,7 +270,7 @@ lumen-mcp = { path = "core/mcp" }
 # The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
 # feature here, so dropping that feature drops the shared engine with it.
 lumen-module = { path = "public/lumen-module", default-features = false }
-lumen-module-macros = { path = "public/lumen-module-macros" }
+lumen-module-macros = { path = "public/lumen-module/macros" }
 lumen-capability = { path = "core/capability" }
 lumen-os-hotkey-capability = { path = "capabilities/os-hotkey" }
 lumen-os-filedialog-capability = { path = "capabilities/os-filedialog" }
@@ -287,7 +288,7 @@ lumen-render-gpu-capability = { path = "capabilities/render-gpu" }
 lumen-render-cpu-capability = { path = "capabilities/render-cpu" }
 lumen-layout-taffy-capability = { path = "capabilities/layout-taffy" }
 lumen-window-winit-capability = { path = "capabilities/window-winit" }
-lumen-capability-macros = { path = "core/capability-macros" }
+lumen-capability-macros = { path = "core/capability/macros" }
 lumen-module-registry = { path = "core/module-registry" }
 lumen-modules = { path = "core/modules" }
 lumen-os-clipboard = { path = "os/clipboard" }
@@ -334,7 +335,7 @@ lumen-web-dom = { path = "web/dom" }
 lumen-web-http = { path = "web/http" }
 lumen-websocket = { path = "std/websocket", default-features = false }
 lumen-widget = { path = "core/widget" }
-lumen-widget-macros = { path = "core/widget-macros" }
+lumen-widget-macros = { path = "core/widget/macros" }
 lumen-window-winit = { path = "backends/window-winit" }
 # A default lumenc links the whole runtime. The launcher stub and the LSP each
 # take one feature of it instead, so defaults are off here and the engine, which
@@ -343,7 +344,7 @@ lumenc = { path = "public/lumenc", default-features = false }
 
 # Compiler-plugin SDK and loader. Defaults off: plugin authors take the trait
 # and macro only; lumenc/lumen-runtime ask for the `host` loader feature.
-lumenc-plugin = { path = "public/lumenc-plugin", default-features = false }
+lumenc-plugin = { path = "public/lumenc/plugin", default-features = false }
 
 # Core
 # Bevy 0.18 merged bevy_hierarchy into bevy_ecs::hierarchy, and 0.19 keeps it

@@ -47,13 +47,13 @@ area_for() {
     core/text/*) echo A-Text ;;
     core/input/*) echo A-Input ;;
     core/ir/*|web/html/*) echo A-Markup ;;
-    core/widget/*|core/widget-macros/*|core/primitives/*) echo A-Widgets ;;
+    core/widget/*|core/widget/macros/*|core/primitives/*) echo A-Widgets ;;
     core/i18n/*) echo A-I18n ;;
     core/assets/*) echo A-Assets ;;
     core/paint/*) echo A-Rendering ;;
     core/runtime/*|core/launcher/*|src/*) echo A-Runtime ;;
     core/mcp/*|dev/mcp-server/*|capabilities/mcp/*) echo A-MCP ;;
-    core/plugin-abi/*|sdk/*|public/lumen-dylib/*) echo A-FFI ;;
+    core/plugin-abi/*|public/lumenui/*|public/lumen-dylib/*) echo A-FFI ;;
     core/*) echo A-Core ;;
     dev/lsp/*) echo A-LSP ;;
     dev/devtools/*|capabilities/devtools/*) echo A-Devtools ;;
@@ -83,7 +83,7 @@ area_for() {
     backends/http-ureq/*|capabilities/http-fetch/*) echo A-Runtime ;;
     # Crash handling has no area label of its own; it runs at app startup.
     os/crash/*|capabilities/os-crash/*) echo A-Runtime ;;
-    public/lumenc/*|public/lumenc-plugin/*) echo A-CLI ;;
+    public/lumenc/*|public/lumenc/plugin/*) echo A-CLI ;;
     tools/release/*|bucket/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
     tools/vscode-lumen/*|tools/jetbrains-lumen/*|tools/zed-lumen/*|tools/tree-sitter-lumen/*) echo A-Editor-Plugin ;;
     apps/*) echo C-Examples ;;
@@ -141,7 +141,7 @@ cla=$(state_of cla)
 
 # Docs ride with the change: code touched and no doc touched is the one
 # thing a reviewer sends back most.
-code_touched=$(grep -cE '^(core|backends|os|dev|capabilities|web|public|std|sdk|src|tools)/' <<<"$files" || true)
+code_touched=$(grep -cE '^(core|backends|os|dev|capabilities|web|public|std|src|tools)/' <<<"$files" || true)
 docs_touched=$(grep -cE '^docs/|\.md$' <<<"$files" || true)
 
 # S- transition, only between the labels this script owns.

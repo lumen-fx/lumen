@@ -87,7 +87,7 @@ fi
 
 # So do the web halves of the first-party modules, every one the tree has,
 # each where `lumenc web` looks for the web half of a `bundled = true` module.
-for web in "$(dirname "$0")"/../../std/*/web; do
+for web in "$(dirname "$0")"/../../std/*/web "$(dirname "$0")"/../../std/*/*/web; do
   [ -f "$web/lumen-addon.toml" ] || continue
   name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$(dirname "$web")/Cargo.toml" | head -1)"
   if [ ! -f "$dest/bin/modules/$name/web/lumen-addon.toml" ]; then
@@ -98,7 +98,8 @@ done
 
 # And their language descriptors, which is how lumenc learns which module runs
 # a script language: without them no script finds a host.
-for descriptor in "$(dirname "$0")"/../../std/*/lumen-language.toml; do
+for descriptor in "$(dirname "$0")"/../../std/*/lumen-language.toml \
+  "$(dirname "$0")"/../../std/*/*/lumen-language.toml; do
   [ -f "$descriptor" ] || continue
   name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$(dirname "$descriptor")/Cargo.toml" | head -1)"
   if [ ! -f "$dest/bin/modules/$name/lumen-language.toml" ]; then

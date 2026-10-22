@@ -13,13 +13,13 @@ can be re-run to pick up where it stopped.
 
 It publishes one of two sets, chosen on the command line:
 
-  - The Rust SDK (`--sdk`): `lumenui` (sdk/lumenui) and the `lumenui-<name>`
-    module crates `tools/release/lumenui-engine.py wrappers` generates, which
-    the script writes into a temporary directory outside the checkout for the
-    run. None of them is a workspace member and none names an engine crate:
-    `lumenui`'s build script downloads the prebuilt engine set from the
-    release tagged with its version, so these publish after that release
-    exists, and the script checks that it does.
+  - The Rust SDK (`--sdk`): `lumenui` (public/lumenui/rust) and the
+    `lumenui-<name>` module crates `tools/release/lumenui-engine.py wrappers`
+    generates, which the script writes into a temporary directory outside the
+    checkout for the run. None of them is a workspace member and none names
+    an engine crate: `lumenui`'s build script downloads the prebuilt engine
+    set from the release tagged with its version, so these publish after
+    that release exists, and the script checks that it does.
   - The workspace crates reachable from the roots (default `lumenc`,
     `lumen-launcher`), the `cargo install lumenc` path. These depend on
     crates that are `publish = false`, so this set refuses to start today.
@@ -97,8 +97,8 @@ DEFAULT_ROOTS = ("lumenc", "lumen-launcher")
 # The Rust SDK crates in the tree: the build-script crate, which `lumenui`'s
 # own build script and every app's depend on, and `lumenui`. The module
 # crates beside them are generated.
-SDK_BUILD_MANIFEST = REPO / "sdk" / "lumenui-build" / "Cargo.toml"
-SDK_MANIFEST = REPO / "sdk" / "lumenui" / "Cargo.toml"
+SDK_BUILD_MANIFEST = REPO / "public" / "lumenui" / "rust" / "build" / "Cargo.toml"
+SDK_MANIFEST = REPO / "public" / "lumenui" / "rust" / "Cargo.toml"
 DEFAULT_GH_REPO = "lumen-fx/lumen"
 
 # crates.io meters publishing with a leaky bucket: an account may create a

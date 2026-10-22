@@ -371,7 +371,7 @@ and the cross-file id features do not depend on it.
 
 **`lumen-runtime`** defaults to every subsystem on: `mcp`, `async`,
 `http-fetch`, `runtime-parse`, `modules`. It carries no script host: each
-language is a runtime module (`std/candela`, `std/candela-dev`, `std/rhai`,
+language is a runtime module (`std/candela`, `std/candela/dev`, `std/rhai`,
 `std/lua`) that registers itself with the app through
 `lumen_script::ScriptLanguage`, and the runtime loads the one each script
 needs, picked by the `lumen-language.toml` descriptor beside the module. A
@@ -465,7 +465,7 @@ never be committed (`.gitignore` covers it).
 
 The candela hosts depend on `candela-vm` and `candela-lang` as git
 dependencies pinned to one `candela` tag in `std/candela/host/Cargo.toml` and
-`std/candela-dev/host/Cargo.toml`, so a push to that repository changes
+`std/candela/dev/host/Cargo.toml`, so a push to that repository changes
 nothing here until the pin moves. Both sides of the check resolve that same
 pin, which is what keeps them agreeing. Moving to a new `candela` release is
 one edit per crate: set the `tag` and the `version` on each dependency line, then run
@@ -488,8 +488,8 @@ crates.io does not have yet, and the crate links a prebuilt engine the suite
 does not build. `.github/workflows/lumenui-engine.yml` builds that engine on
 each operating system and proves the template against it: the checkout's
 `lumenc new` scaffolds it, `[patch.crates-io]` points `lumenui` at
-`sdk/lumenui`, and the app builds without compiling any engine crate, passes
-its own `cargo test`, and runs headless.
+`public/lumenui/rust`, and the app builds without compiling any engine crate,
+passes its own `cargo test`, and runs headless.
 
 Three families of test skip themselves rather than fail when the machine cannot
 support them, printing the reason:

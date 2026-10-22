@@ -366,8 +366,8 @@ Event types and propagation match the script hosts; see
 
 ## C++ SDK
 
-Header-only C++17 bindings over the C ABI, in `sdk/cpp`. One include,
-`<lumen.hpp>`, and no third-party dependencies.
+Header-only C++17 bindings over the C ABI, in `public/lumenui/cpp`. One
+include, `<lumen.hpp>`, and no third-party dependencies.
 
 The surface is `lumen::App` for lifecycle and callbacks, `lumen::Signal<T>` for
 typed reactive handles (`int64_t`, `double`, `bool`, `std::string`,
@@ -397,16 +397,17 @@ int main() {
 }
 ```
 
-Link with CMake (`add_subdirectory(sdk/cpp)` provides the `lumen::cpp`
-interface target), with `find_package(lumen-cpp CONFIG REQUIRED)`, or with
-pkg-config. `liblumen` must be findable at run time. Runnable examples
-covering the whole surface live in `sdk/cpp/examples`; see `sdk/cpp/README.md`.
+Link with CMake (`add_subdirectory(public/lumenui/cpp)` provides the
+`lumen::cpp` interface target), with `find_package(lumen-cpp CONFIG REQUIRED)`,
+or with pkg-config. `liblumen` must be findable at run time. Runnable examples
+covering the whole surface live in `public/lumenui/cpp/examples`; see
+`public/lumenui/cpp/README.md`.
 
 ## Python SDK
 
-Stdlib-only `ctypes` bindings, in `sdk/python`, distributed as `lumenui` and
-imported as `lumen`. No compiled extension and no build step of its own; the
-Rust library is the only thing to build.
+Stdlib-only `ctypes` bindings, in `public/lumenui/python`, distributed as
+`lumenui` and imported as `lumen`. No compiled extension and no build step of
+its own; the Rust library is the only thing to build.
 
 The surface is `lumen.Model` and `lumen.Field` for declarative reactive state,
 `lumen.Signal[T]` for a single typed signal, `lumen.computed` for derived
@@ -434,23 +435,23 @@ def bump():
 app.run()
 ```
 
-Install with `pip install -e sdk/python`, which registers the package but does
-not build the library. The distribution is named `lumenui` and is pure Python,
-so it carries no runtime of its own and loads whichever one the machine has.
-`load_library()` looks for `liblumen` under `LUMEN_LIBRARY_PATH` (a file or a
-directory), then `LUMEN_LIB_DIR`, then, in a packaged app, the directory
-holding the executable, then `target/debug` and `target/release` relative to
-the working directory and to the workspace root, then an installed toolchain
-(the directory holding the `lumenc` on `PATH`, then `$LUMEN_PREFIX/bin`,
-default `~/.lumen/bin`), then the system loader's own paths. Examples run
-straight from a checkout:
+Install with `pip install -e public/lumenui/python`, which registers the
+package but does not build the library. The distribution is named `lumenui` and
+is pure Python, so it carries no runtime of its own and loads whichever one the
+machine has. `load_library()` looks for `liblumen` under `LUMEN_LIBRARY_PATH`
+(a file or a directory), then `LUMEN_LIB_DIR`, then, in a packaged app, the
+directory holding the executable, then `target/debug` and `target/release`
+relative to the working directory and to the workspace root, then an installed
+toolchain (the directory holding the `lumenc` on `PATH`, then
+`$LUMEN_PREFIX/bin`, default `~/.lumen/bin`), then the system loader's own
+paths. Examples run straight from a checkout:
 
-```sh
-cargo build -p lumen
-LUMEN_LIBRARY_PATH=target/debug python sdk/python/examples/counter.py
+```sh cargo build -p lumen LUMEN_LIBRARY_PATH=target/debug python
+public/lumenui/python/examples/counter.py
 ```
 
-Handlers and watches fire on Lumen's tick thread. See `sdk/python/README.md`.
+Handlers and watches fire on Lumen's tick thread. See
+`public/lumenui/python/README.md`.
 
 ## Rust SDK
 
@@ -556,10 +557,10 @@ the executable's directory when that holds a `lumen.toml`, else from the
 directory it was built in when that is still there, else the working
 directory.
 
-In a Lumen checkout the SDK's code is the `lumenui-engine` crate in `sdk/rust`,
-which an app can depend on by path under the name `lumenui`
-(`lumenui = { package = "lumenui-engine", path = "..." }`); that compiles the
-engine from source and links it in the same way.
+In a Lumen checkout the SDK's code is the `lumenui-engine` crate in
+`public/lumenui/rust/engine`, which an app can depend on by path under the name
+`lumenui` (`lumenui = { package = "lumenui-engine", path = "..." }`); that
+compiles the engine from source and links it in the same way.
 
 Because the engine is inside the executable, a Rust app cannot load a
 [runtime module](lumen-toml.md#dependencies), which loads only into the shared
@@ -890,8 +891,9 @@ fn paste(clipboard: Clipboard) {
 }
 ```
 
-Runnable examples live in `sdk/rust/examples`, and `sdk/lumenui/smoke` is a
-whole app in the shape above (`lumen.toml`, `build.rs`, `src/`).
+Runnable examples live in `public/lumenui/rust/engine/examples`, and
+`public/lumenui/rust/smoke` is a whole app in the shape above (`lumen.toml`,
+`build.rs`, `src/`).
 
 ### Frame timing and the renderer
 

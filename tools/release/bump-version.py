@@ -56,13 +56,13 @@ REQUIRED = {
     "public/lumen-dylib/Cargo.toml": "the linkable engine's version",
     # The published Rust SDK: outside the workspace, so it spells the version
     # out, and the version is the release whose prebuilt engine it downloads.
-    "sdk/lumenui/Cargo.toml": "the Rust SDK's version",
+    "public/lumenui/rust/Cargo.toml": "the Rust SDK's version",
     # The Rust SDK's build-script crate: outside the workspace for the same
     # reason, and the version is the release whose `lumenc` it compiles with.
-    "sdk/lumenui-build/Cargo.toml": "the Rust SDK build crate's version",
+    "public/lumenui/rust/build/Cargo.toml": "the Rust SDK build crate's version",
     # The Python SDK ships at the version of the ABI it binds, and
-    # sdk/python/tests/test_version.py fails when the two disagree.
-    "sdk/python/lumen/_version.py": "the Python SDK's version",
+    # public/lumenui/python/tests/test_version.py fails when the two disagree.
+    "public/lumenui/python/lumen/_version.py": "the Python SDK's version",
     # Every crate this repository builds is recorded here by version.
     "Cargo.lock": "the resolved versions",
 }
@@ -72,7 +72,7 @@ REQUIRED = {
 # workspace builds them: `lumenui` and `lumenui-build` depend on no crate here,
 # and the release is what they pair with. Their version is the tree's all the
 # same.
-OUTSIDE_LOCK = {"sdk/lumenui/Cargo.toml", "sdk/lumenui-build/Cargo.toml"}
+OUTSIDE_LOCK = {"public/lumenui/rust/Cargo.toml", "public/lumenui/rust/build/Cargo.toml"}
 
 
 class Edit(NamedTuple):
@@ -275,7 +275,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     lock = ROOT / "Cargo.lock"
-    python_sdk = ROOT / "sdk/python/lumen/_version.py"
+    python_sdk = ROOT / "public/lumenui/python/lumen/_version.py"
     local = {
         name
         for name, is_local, _ in lock_blocks(lock.read_text(encoding="utf-8").split("\n"))

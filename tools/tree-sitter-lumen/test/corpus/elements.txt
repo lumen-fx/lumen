@@ -12,7 +12,7 @@ Empty root (fixtures/blank-no-css/main.lmn)
       (tag_name))))
 
 ================================================================================
-Root with a class and a nested label (sdk/cpp/examples/apps/hello/main.lmn)
+Root with a class and a nested label (public/lumenui/cpp/examples/apps/hello/main.lmn)
 ================================================================================
 
 <root class="app">

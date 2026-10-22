@@ -97,7 +97,7 @@ own `Cargo.lock` is read, never written.
 
 The candela hosts depend on `candela-lang` and `candela-vm` at one pinned
 `candela` tag, named in `std/candela/host/Cargo.toml` and
-`std/candela-dev/host/Cargo.toml`, so a push to that repository moves neither
+`std/candela/dev/host/Cargo.toml`, so a push to that repository moves neither
 side until the pin does. Both sides read the same pin, and moving it is an
 ordinary edit here: the new `tag` and `version` on each dependency line, then
 `cargo update -p candela-lang -p candela-vm`.
