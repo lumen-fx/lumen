@@ -131,8 +131,14 @@ impl std::str::FromStr for Lang {
 /// resource can be read from parallel bevy_ecs systems.
 #[derive(Resource)]
 pub struct I18n {
-    /// One [`FluentBundle`] per loaded locale.
+    /// One [`FluentBundle`] per loaded locale: the app's catalogue, then the
+    /// default messages plugins shipped for that locale under it.
     pub bundles: HashMap<LanguageIdentifier, FluentBundle<Arc<FluentResource>>>,
+    /// The app's own catalogue per locale, as last loaded.
+    catalogues: HashMap<LanguageIdentifier, Arc<FluentResource>>,
+    /// The default messages plugins shipped per locale, in the order they
+    /// arrived.
+    defaults: HashMap<LanguageIdentifier, Vec<Arc<FluentResource>>>,
     /// Active locale used by [`I18n::t`].
     pub current: LanguageIdentifier,
     /// Fallback search order applied when `current` does not resolve a key.
@@ -146,9 +152,50 @@ impl I18n {
     pub fn new(current: LanguageIdentifier, fallback_chain: Vec<LanguageIdentifier>) -> Self {
         Self {
             bundles: HashMap::new(),
+            catalogues: HashMap::new(),
+            defaults: HashMap::new(),
             current,
             fallback_chain,
         }
+    }
+
+    /// Whether the app's own catalogue for `lang` is loaded, as opposed to
+    /// only the default messages a plugin shipped for it.
+    pub fn has_catalogue(&self, lang: &LanguageIdentifier) -> bool {
+        self.catalogues.contains_key(lang)
+    }
+
+    /// Add a plugin's default messages for `lang`, parsed from
+    /// `ftl_source`: the strings a module shows (a close button's label, an
+    /// announcement) in the languages it ships. The app's catalogue for the
+    /// same locale wins message by message, whenever it loads, so an app
+    /// retranslates or rewords a module's text by naming the message in its
+    /// own `.ftl` file. Between two plugins naming one message, the first
+    /// one added wins.
+    ///
+    /// # Errors
+    ///
+    /// The source does not parse.
+    pub fn add_defaults(
+        &mut self,
+        lang: LanguageIdentifier,
+        ftl_source: &str,
+    ) -> Result<(), I18nError> {
+        let resource = parse(ftl_source)?;
+        self.defaults
+            .entry(lang.clone())
+            .or_default()
+            .push(resource);
+        self.rebuild(lang)
+    }
+
+    /// Build `lang`'s bundle again from its catalogue and its defaults.
+    fn rebuild(&mut self, lang: LanguageIdentifier) -> Result<(), I18nError> {
+        let catalogue = self.catalogues.get(&lang).cloned();
+        let defaults = self.defaults.get(&lang).cloned().unwrap_or_default();
+        let bundle = layered_bundle(lang.clone(), catalogue, &defaults)?;
+        self.bundles.insert(lang, bundle);
+        Ok(())
     }
 
     /// Parse + register `ftl_source` for `lang`. Idempotent: a second
@@ -168,9 +215,9 @@ impl I18n {
         lang: LanguageIdentifier,
         ftl_source: &str,
     ) -> Result<(), I18nError> {
-        let bundle = bundle(lang.clone(), parse(ftl_source)?)?;
-        self.bundles.insert(lang, bundle);
-        Ok(())
+        let resource = parse(ftl_source)?;
+        self.catalogues.insert(lang.clone(), resource);
+        self.rebuild(lang)
     }
 
     /// Switch the active locale every later lookup resolves against.
@@ -297,6 +344,27 @@ fn parse(source: &str) -> Result<Arc<FluentResource>, I18nError> {
     FluentResource::try_new(source.to_string())
         .map(Arc::new)
         .map_err(|(_, errs)| I18nError::Parse(format!("{errs:?}")))
+}
+
+/// A bundle for `lang` holding the app's `catalogue`, when there is one,
+/// and under it every resource in `defaults`: a message the catalogue
+/// names is the catalogue's, and a message two defaults name is the first
+/// one's.
+fn layered_bundle(
+    lang: LanguageIdentifier,
+    catalogue: Option<Arc<FluentResource>>,
+    defaults: &[Arc<FluentResource>],
+) -> Result<FluentBundle<Arc<FluentResource>>, I18nError> {
+    let mut bundle = match catalogue {
+        Some(resource) => bundle(lang, resource)?,
+        None => FluentBundle::new_concurrent(vec![lang]),
+    };
+    for resource in defaults {
+        // A message already in the bundle is reported as an override and
+        // left as it is, which is the precedence wanted here.
+        let _ = bundle.add_resource(Arc::clone(resource));
+    }
+    Ok(bundle)
 }
 
 /// A bundle for `lang` holding `resource`.
@@ -677,6 +745,35 @@ impl I18nPlugin {
     }
 }
 
+/// Hand the default messages plugins queued with
+/// [`lumen_core::app::App::add_default_messages`] to the app's catalogue.
+///
+/// The app's catalogue overrides them message by message (see
+/// [`I18n::add_defaults`]). Run once the plugins have built and whenever
+/// more arrive; with no catalogue installed the queue is left as it is.
+/// A source that does not parse, or a locale that is not a tag, is
+/// reported and skipped.
+pub fn apply_default_messages(world: &mut bevy_ecs::world::World) {
+    let Some(shared) = world.get_resource::<SharedI18n>().cloned() else {
+        return;
+    };
+    let Some(mut queued) = world.get_resource_mut::<lumen_core::i18n::DefaultMessages>() else {
+        return;
+    };
+    let pending = queued.take();
+    if pending.is_empty() {
+        return;
+    }
+    let mut i18n = shared.write();
+    for (tag, source) in pending {
+        let added =
+            Lang::try_from(tag.as_str()).and_then(|lang| i18n.add_defaults(lang.into(), &source));
+        if let Err(e) = added {
+            lumen_core::warn_line!("default messages for `{tag}` skipped: {e}");
+        }
+    }
+}
+
 /// Read `LANG` / OS locale APIs via `sys-locale` and parse the
 /// result. Returns `None` when the OS reports nothing or the tag
 /// fails to parse.
@@ -695,6 +792,74 @@ mod tests {
 
     fn lang(s: &str) -> LanguageIdentifier {
         s.parse().expect("test lang parses")
+    }
+
+    /// A plugin's default messages resolve where the app has none, the
+    /// app's catalogue wins message by message whichever loads first, a
+    /// reload of the catalogue keeps the defaults, and a locale only a
+    /// plugin ships is reached through the fallback chain like any other.
+    #[test]
+    fn default_messages_sit_under_the_app_catalogue() {
+        let args = FluentArgs::new();
+        let mut i18n = I18n::new(lang("de"), vec![lang("en-US")]);
+        i18n.add_defaults(lang("en-US"), "dock-close = Close\ndock-hide = Hide\n")
+            .unwrap();
+        assert!(!i18n.has_catalogue(&lang("en-US")));
+        assert_eq!(i18n.t("dock-close", &args), "Close", "through the chain");
+
+        i18n.load_ftl(lang("en-US"), "dock-close = Shut\n").unwrap();
+        assert!(i18n.has_catalogue(&lang("en-US")));
+        assert_eq!(
+            i18n.t("dock-close", &args),
+            "Shut",
+            "the app's wording wins"
+        );
+        assert_eq!(i18n.t("dock-hide", &args), "Hide", "the rest stay");
+
+        i18n.add_defaults(lang("de"), "dock-close = Schliessen\n")
+            .unwrap();
+        assert_eq!(i18n.t("dock-close", &args), "Schliessen");
+        i18n.add_defaults(lang("de"), "dock-close = Zumachen\n")
+            .unwrap();
+        assert_eq!(
+            i18n.t("dock-close", &args),
+            "Schliessen",
+            "the first default wins"
+        );
+
+        i18n.load_ftl(lang("en-US"), "other = x\n").unwrap();
+        assert_eq!(
+            i18n.t_with_lang(&lang("en-US"), "dock-close", &args),
+            "Close",
+            "a reloaded catalogue that drops a message gives the default back"
+        );
+        assert!(i18n.add_defaults(lang("de"), "= broken").is_err());
+    }
+
+    /// Queued default messages reach the registry the world holds, and a
+    /// bad tag or source is skipped without losing the rest.
+    #[test]
+    fn queued_default_messages_reach_the_catalogue() {
+        let mut world = bevy_ecs::world::World::new();
+        let current = I18nPlugin::default()
+            .with_locale(lang("en-US"))
+            .install(&mut world);
+        assert_eq!(current, lang("en-US"));
+        let mut queued = lumen_core::i18n::DefaultMessages::default();
+        queued.add("en-US", "dock-close = Close\n");
+        queued.add("not a tag!", "x = y\n");
+        queued.add("en-US", "= broken");
+        world.insert_resource(queued);
+        apply_default_messages(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        assert_eq!(shared.try_t("dock-close").as_deref(), Some("Close"));
+        assert!(
+            world
+                .resource_mut::<lumen_core::i18n::DefaultMessages>()
+                .take()
+                .is_empty(),
+            "the queue is drained"
+        );
     }
 
     #[test]

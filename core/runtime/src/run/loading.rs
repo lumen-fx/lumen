@@ -38,6 +38,71 @@ pub(crate) struct LoadResult {
     pub(crate) i18n: lumen_ir::artifact::CompiledI18n,
 }
 
+/// Put the user-agent stylesheets plugins added ([`UaStylesheets`]) under
+/// `ir`'s combined stylesheet: at user-agent origin and numbered first, so
+/// the built-in user-agent sheet, a skin, the app's stylesheet and a markup
+/// attribute all win over them. Returns whether a sheet went in, in which
+/// case the tree was cascaded without it and the caller has the document
+/// restyled.
+///
+/// The text is parsed with the app's own parser. A build that carries none
+/// (an artifact run in a runtime built without the parser) cannot read the
+/// sheets, and says so once; a sheet that does not parse is reported and
+/// left out.
+///
+/// [`UaStylesheets`]: lumen_core::components::UaStylesheets
+pub(crate) fn merge_module_stylesheets(
+    ir: &mut lumen_ir::layout_ir::LayoutIR,
+    world: &World,
+    parser: Option<&dyn SourceParser>,
+) -> bool {
+    let Some(sheets) = world.get_resource::<lumen_core::components::UaStylesheets>() else {
+        return false;
+    };
+    if sheets.0.is_empty() {
+        return false;
+    }
+    let Some(parser) = parser else {
+        let names: Vec<&str> = sheets.0.iter().map(|s| s.name.as_str()).collect();
+        lumen_core::warn_line!(
+            "the stylesheets of {} were not applied: this runtime has no CSS parser",
+            names.join(", ")
+        );
+        return false;
+    };
+    let mut rules = Vec::new();
+    let mut at_rules = Vec::new();
+    for sheet in &sheets.0 {
+        match parser.parse_css(&sheet.css) {
+            Ok(parsed) => {
+                let offset = rules.len();
+                for mut rule in parsed.rules {
+                    rule.origin = lumen_ir::css::Origin::UserAgent;
+                    rule.source_order += offset;
+                    rules.push(rule);
+                }
+                at_rules.extend(parsed.at_rules);
+            }
+            Err(e) => {
+                lumen_core::warn_line!("the stylesheet of {} was not applied: {e}", sheet.name);
+            }
+        }
+    }
+    if rules.is_empty() && at_rules.is_empty() {
+        return false;
+    }
+    let combined = ir.combined_stylesheet.get_or_insert_with(Default::default);
+    let shift = rules.len();
+    for rule in &mut combined.rules {
+        rule.source_order += shift;
+    }
+    rules.append(&mut combined.rules);
+    combined.rules = rules;
+    at_rules.append(&mut combined.at_rules);
+    combined.at_rules = at_rules;
+    true
+}
+
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
 /// caller configured: a precompiled AOT artifact ([`RunOptions::artifact`])
 /// or, when the `runtime-parse` feature is on, `src/main.lmn` +

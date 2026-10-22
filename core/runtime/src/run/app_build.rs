@@ -259,6 +259,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     for install in std::mem::take(&mut opts.plugins) {
         install(&mut app);
     }
+    // The default messages the modules and plugins just shipped go under the
+    // app's catalogue before the tree spawns, so a `translatable` key one of
+    // them names resolves from the first frame.
+    lumen_i18n::apply_default_messages(&mut app.world);
 
     // Initial load runs before the window exists, so there's no real
     // OS theme / viewport yet. Apply with the best-guess default
@@ -305,6 +309,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         fragments,
         i18n: compiled_i18n,
     } = loaded;
+    // The plugins have built by now, so the stylesheets they added go under
+    // the app's; the tree was cascaded without them, so it restyles once
+    // the cascade is installed.
+    let module_styles =
+        super::loading::merge_module_stylesheets(&mut ir, &app.world, parser.as_deref());
     // The catalogues a compiled app carries fill in every locale the app
     // directory has no loose file for, before the tree spawns and before a
     // script's `on_start` calls `t()`.
@@ -460,6 +469,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // stylesheet, the theme/media re-resolver systems, and the per-cache
     // memory budget. Always-on styling plumbing.
     register_styles(&mut app, &ir, &cfg);
+    if module_styles {
+        lumen_core::components::StyleVersion::bump(&mut app.world);
+    }
 
     // Hot reload re-parses source on file change, so it exists only in
     // `runtime-parse` builds. In-memory sources (and artifact loads) have no

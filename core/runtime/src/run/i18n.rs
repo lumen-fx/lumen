@@ -106,6 +106,17 @@ pub(crate) fn register_i18n(
     // starting locale can come from the OS, so no script knows it otherwise,
     // and a language menu needs it to mark the entry it is already on.
     lumen_core::i18n::set_active_locale(&current.to_string());
+    // A plugin's default messages arrive as it builds, which is after this;
+    // the app build hands them over once every plugin is in, before the
+    // tree spawns, and this takes any that arrive later.
+    app.add_systems(
+        lumen_core::prelude::TickStage::Input,
+        lumen_i18n::apply_default_messages.run_if(
+            bevy_ecs::schedule::common_conditions::resource_exists_and_changed::<
+                lumen_core::i18n::DefaultMessages,
+            >,
+        ),
+    );
     Ok(())
 }
 
@@ -135,7 +146,7 @@ pub(crate) fn add_compiled_catalogues(
         let lang: lumen_i18n::LanguageIdentifier = lumen_i18n::Lang::try_from(tag.as_str())
             .map_err(|e| RunError::I18n(e.to_string()))?
             .into();
-        if i18n.bundles.contains_key(&lang) {
+        if i18n.has_catalogue(&lang) {
             continue;
         }
         i18n.load_ftl(lang, source)

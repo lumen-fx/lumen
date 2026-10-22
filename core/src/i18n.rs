@@ -218,6 +218,46 @@ impl AppI18n {
     }
 }
 
+/// Fluent messages plugins ship as defaults, waiting for the app's
+/// translation layer: a module's own strings (a close button's label, a
+/// live announcement) in each language it ships them in.
+///
+/// A plugin adds them with [`crate::app::App::add_default_messages`]. The
+/// translation layer the runtime installs takes them in once the plugins
+/// have built, under the app's own catalogue, so an app's `.ftl` file wins
+/// message by message and a module's strings resolve through the same
+/// `t()` and `translatable` lookups as the app's. An app with no
+/// translation layer leaves them unread.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct DefaultMessages {
+    pending: Vec<(String, String)>,
+}
+
+impl DefaultMessages {
+    /// Queue `ftl_source`, Fluent source for the locale `locale` (a BCP-47
+    /// tag such as `en-US`).
+    pub fn add(&mut self, locale: impl Into<String>, ftl_source: impl Into<String>) {
+        self.pending.push((locale.into(), ftl_source.into()));
+    }
+
+    /// Everything queued so far, as `(locale, source)`, leaving the queue
+    /// empty.
+    pub fn take(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+impl crate::app::App {
+    /// Ship `ftl_source` as this plugin's default messages for `locale`.
+    /// See [`DefaultMessages`].
+    pub fn add_default_messages(&mut self, locale: &str, ftl_source: &str) -> &mut Self {
+        self.world
+            .get_resource_or_insert_with(DefaultMessages::default)
+            .add(locale, ftl_source);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
