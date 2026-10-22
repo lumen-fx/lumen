@@ -832,6 +832,12 @@ fn event_fns() -> Vec<ScriptFn> {
             || ScriptValue::F64(event::event_position_client().1),
         ),
         accessor(
+            "event_detail",
+            "What a module's custom event carries, as a map; empty for a built-in event.",
+            T::Dynamic,
+            || ScriptValue::Map(event::event_detail()),
+        ),
+        accessor(
             "event_delta_x",
             "The horizontal scroll delta.",
             T::Float,

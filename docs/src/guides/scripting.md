@@ -201,6 +201,31 @@ reports neither pressure nor tilt; a Linux touch screen reports touches
 without pressure, and macOS reports no touches. In a web build every reading
 comes from the browser.
 
+A module raises events of its own, under names of its own: a dock raises
+`layoutchange` when its panels move and `panelclose` before a user closes one.
+Bind them like any other event and read what they carry with `detail()`, a
+map:
+
+```rust
+fn on_close(ev: int) {
+    let e = event(ev);
+    let reason = as_str(as_map(e.detail()).get("reason"));
+    if unsaved() {
+        e.prevent_default();
+    }
+}
+
+fn on_ready() {
+    get_by_id("editor").on("panelclose", "on_close");
+}
+```
+
+They travel the same capture, target and bubble path as the built-in events.
+Where a module asks a question with one, as `panelclose` asks whether the
+panel may close, `prevent_default` is the answer no; the module's
+documentation says which of its events take one. A built-in event's
+`detail()` is an empty map.
+
 A handler that raises an uncaught error stops at that line and the error is
 reported; the app keeps running. What the handler did before the error stays
 done, as it does in a browser: text it set, signals it wrote, timers it armed,

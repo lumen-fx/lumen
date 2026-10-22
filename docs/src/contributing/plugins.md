@@ -753,6 +753,41 @@ tabs moves the `<tab>` entity and is done.
 A pick the user makes is also a `ControlInput` message on the `<tabs>`, with
 the tab's name as its value, for a system that wants it without a script.
 
+## Raising element events
+
+A plugin tells the app something happened on one of its elements by raising
+an event there, the DOM's `CustomEvent`: a name of its own and a detail map.
+Write a `lumen_script::CustomEvent` message (re-exported through
+`lumen-module`) from any system:
+
+```rust
+fn report_move(mut events: MessageWriter<CustomEvent>, moved: Query<Entity, Added<Moved>>) {
+    for panel in &moved {
+        events.write(CustomEvent::new(panel, "panelmove").with("to", "float"));
+    }
+}
+```
+
+It is delivered in `ScriptSet::DomState`, along the capture, target and bubble
+path a built-in event takes, to every handler bound to the name: `n.on(name,
+..)` in each script host, `lumen_on` from C, a C++ or Python `Node::on`, and an
+`EventKind::Custom(name)` handler in the Rust SDK. A handler reads the detail
+with `ev.detail()`. Set `bubbles` to `false` for an event only its target
+hears. A page built for the web runs no Rust plugin, so the browser runtime
+leaves the delivery out.
+
+When the plugin asks a question with an event, such as whether a panel may
+close, set `cancelable` and wait for the answer: after delivery a
+`CustomEventDelivered` message carries the event back with
+`default_prevented`, which is true when a handler called `prevent_default`.
+Read it in a system ordered after `ScriptSet::DomState` and act on the same
+tick.
+
+The built-in event names (`click`, `input`, `focus` and the rest) belong to
+the input layer; an event raised under one is refused with a warning. Pick
+names a reader can tell apart from them, as the DOM's own custom events do,
+and list them, with their detail fields, in the plugin's documentation.
+
 ## Exposing functions to scripts
 
 A plugin can give the app's script functions of its own. One description covers

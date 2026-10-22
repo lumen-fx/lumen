@@ -142,6 +142,7 @@ host "lumen" {
     float event_y(int);
     float event_client_x(int);
     float event_client_y(int);
+    any event_detail(...);
     float event_delta_x(int);
     float event_delta_y(int);
     int event_pointer_id(int);

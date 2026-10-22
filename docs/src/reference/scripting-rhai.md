@@ -372,6 +372,7 @@ The handler receives an `Event`:
 | `event_type()` | `string` | Event type name. |
 | `key()` | `string` | Key name for keyboard events. |
 | `value()` | `string` | Text value for `input` / `change` / `submit`. |
+| `detail()` | `map` | What a module's custom event carries; empty for a built-in event. |
 | `button()` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `buttons()` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `pointer_id()` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -397,6 +398,12 @@ The handler receives an `Event`:
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
 `blur`, `submit`, `scroll`.
+
+A module adds event types of its own, under names it chooses (a dock's
+`layoutchange`, `panelclose`), raised on its elements and dispatched the same
+way; the module's documentation lists them and says which bubble and which a
+handler can cancel with `prevent_default`. They carry a detail map, which a
+built-in event leaves empty.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and

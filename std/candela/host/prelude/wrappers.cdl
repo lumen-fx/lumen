@@ -268,6 +268,7 @@ impl Event {
     fn event_type(self) { return lumen::event_type(self.handle); }
     fn key(self) { return lumen::event_key(self.handle); }
     fn value(self) { return lumen::event_value(self.handle); }
+    fn detail(self) { return lumen::event_detail(self.handle); }
     fn button(self) { return lumen::event_button(self.handle); }
     fn x(self) { return lumen::event_x(self.handle); }
     fn y(self) { return lumen::event_y(self.handle); }

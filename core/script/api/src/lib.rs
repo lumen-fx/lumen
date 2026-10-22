@@ -94,7 +94,8 @@ pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
 pub use dom_events::{
-    EventHosts, PendingDomEvents, deliver_input_events, deliver_state_events,
+    BUILT_IN_EVENTS, CustomEvent, CustomEventDelivered, EventHosts, PendingDomEvents,
+    deliver_custom_events, deliver_input_events, deliver_state_events, queue_custom_events,
     queue_pointer_and_key_events, queue_state_events, register_dom_event_messages,
     register_event_host,
 };

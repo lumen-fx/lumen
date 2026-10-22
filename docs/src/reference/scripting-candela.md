@@ -635,6 +635,7 @@ through the accessors below:
 | `lumen::event_type(ev: int)` | `string` | Event type name. |
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
+| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as_map`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -659,6 +660,12 @@ through the accessors below:
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
 `blur`, `submit`, `scroll`.
+
+A module adds event types of its own, under names it chooses (a dock's
+`layoutchange`, `panelclose`), raised on its elements and dispatched the same
+way; the module's documentation lists them and says which bubble and which a
+handler can cancel with `prevent_default`. They carry a detail map, which a
+built-in event leaves empty.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
@@ -757,7 +764,7 @@ the table under [Signals](#signals) lists what each type argument reads and
 writes.
 
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
-`button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`,
+`detail`, `button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`,
 `pointer_id`, `pointer_type`, `is_primary`, `buttons`, `pressure`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`, `shift`,
 `ctrl`, `alt`, `super_key`, `prevent_default`, `stop_propagation`,

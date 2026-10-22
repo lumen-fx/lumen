@@ -63,6 +63,9 @@ pub struct EventData {
     pub delta: (f64, f64),
     /// Text value for `input` / `change` events.
     pub value: String,
+    /// What a custom event carries ([`crate::dom_events::CustomEvent`]);
+    /// empty for the built-in events.
+    pub detail: std::collections::HashMap<String, crate::ScriptValue>,
     /// Set by `prevent_default`: the event's default action is cancelled.
     pub default_prevented: bool,
     /// Set by `stop_propagation`: no further nodes receive the event.
@@ -170,6 +173,14 @@ pub fn event_value() -> String {
     current_cell()
         .read()
         .map(|g| g.value.clone())
+        .unwrap_or_default()
+}
+
+/// `ev.detail()`: what a custom event carries, empty for a built-in one.
+pub fn event_detail() -> std::collections::HashMap<String, crate::ScriptValue> {
+    current_cell()
+        .read()
+        .map(|g| g.detail.clone())
         .unwrap_or_default()
 }
 
