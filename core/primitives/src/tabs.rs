@@ -12,15 +12,15 @@
 //! without, the `<tabs>` element's own `value` attribute does, which a
 //! script reads and writes like any other attribute. A click
 //! or a key on a strip button writes it and raises the DOM `change` event
-//! on the `<tabs>`, with the name as its value. A module picks a tab with a
-//! [`SelectTab`] message. [`sync_tabs`] shows the named tab, hides the rest
+//! on the `<tabs>`, with the name as its value. A module picks a tab through
+//! the [`TabPicks`] system param. [`sync_tabs`] shows the named tab, hides the rest
 //! (`display: none` held over their styles, so they keep their state), and
 //! marks the shown tab's button [`Selected`]; a name that matches no tab
 //! shows the first tab that is not disabled. To reorder the tabs, move the
 //! `<tab>` elements: the strip follows. Every tab system runs in
 //! [`TabsSet`].
 
-use bevy_ecs::message::{Message, MessageReader, MessageWriter};
+use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
 use lumen_core::components::{Disabled, Display, LumenAttributes, Style};
@@ -65,18 +65,9 @@ pub struct TabStripButton {
     pub tab: Entity,
 }
 
-/// Show `tab` in its `<tabs>`, as a script writing the bound signal or the
-/// `value` attribute would. Raises no DOM event: only a pick the user makes
-/// does.
-#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SelectTab {
-    /// The `<tab>` to show.
-    pub tab: Entity,
-}
-
 /// The system set every `<tabs>` system runs in. Order a system that reads
-/// [`Tabs::shown`] or a tab's visibility after it, and one that writes a
-/// [`SelectTab`] the set should apply this tick before it.
+/// [`Tabs::shown`] or a tab's visibility after it, and one that picks a tab
+/// through [`TabPicks`] the set should show this tick before it.
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct TabsSet;
 
@@ -93,8 +84,10 @@ pub fn tab_label(attrs: Option<&LumenAttributes>) -> &str {
         .unwrap_or("")
 }
 
-/// What picking a tab writes: the bound signal, or the `<tabs>`' `value`
-/// attribute.
+/// Picking a tab: [`TabPicks::pick`] writes the bound signal, or the
+/// `<tabs>`' `value` attribute, as a script switching tabs would, and
+/// [`sync_tabs`] shows the tab. A pick through this param raises no DOM
+/// event; only a pick the user makes does.
 #[derive(SystemParam)]
 pub struct TabPicks<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
@@ -191,8 +184,7 @@ pub struct TabsPlugin;
 
 impl Plugin for TabsPlugin {
     fn build(self, app: &mut App) {
-        app.add_message::<SelectTab>();
-        // A pick from a click, a key or a module, then the shown tab, its
+        // A pick from a click or a key, then the shown tab, its
         // button's `Selected` marker and, the same tick the marker moves,
         // the button's fill, so a click doesn't show a one-frame stale
         // highlight on the old tab. Whether the pick came from a click,
@@ -201,7 +193,6 @@ impl Plugin for TabsPlugin {
             TickStage::Systems,
             (
                 dispatch_tab_clicks.after(lumen_input::dispatch_clicks),
-                apply_select_tab,
                 sync_tabs,
                 sync_tab_button_visuals,
             )
@@ -248,7 +239,7 @@ impl Plugin for TabsPlugin {
         app.add_systems(
             TickStage::Systems,
             dispatch_tab_keys
-                .before(apply_select_tab)
+                .before(sync_tabs)
                 .in_set(TabsSet)
                 .run_if(any_with_component::<Tabs>),
         );
@@ -331,13 +322,6 @@ pub fn dispatch_tab_clicks(
         {
             user_pick(&mut picks, &mut changes, btn.tab);
         }
-    }
-}
-
-/// Apply each [`SelectTab`]: make its tab the one its `<tabs>` shows.
-pub fn apply_select_tab(mut requests: MessageReader<SelectTab>, mut picks: TabPicks) {
-    for request in requests.read() {
-        picks.pick(request.tab);
     }
 }
 
@@ -786,7 +770,6 @@ mod tests {
         world.init_resource::<Messages<ClickEvent>>();
         world.init_resource::<Messages<KeyPressed>>();
         world.init_resource::<Messages<ControlInput>>();
-        world.init_resource::<Messages<SelectTab>>();
         let set = world
             .spawn(Tabs {
                 bind: bind.map(str::to_string),
@@ -883,7 +866,7 @@ mod tests {
     }
 
     /// Without `bind-value` the `<tabs>` keeps its choice in its `value`
-    /// attribute; a module's [`SelectTab`] moves it and raises no `change`.
+    /// attribute; a module's pick moves it and raises no `change`.
     #[test]
     fn an_unbound_tabs_keeps_its_choice_in_its_value_attribute() {
         let (mut world, set, tabs, _buttons) = tab_world(None, &["a", "b"]);
@@ -892,8 +875,12 @@ mod tests {
             world.get::<LumenAttributes>(set).unwrap().get("value"),
             Some("a")
         );
-        world.write_message(SelectTab { tab: tabs[1] });
-        world.run_system_once(apply_select_tab).unwrap();
+        let tab = tabs[1];
+        world
+            .run_system_once(move |mut picks: TabPicks| {
+                picks.pick(tab);
+            })
+            .unwrap();
         world.run_system_once(sync_tabs).unwrap();
         assert_eq!(
             world.get::<LumenAttributes>(set).unwrap().get("value"),

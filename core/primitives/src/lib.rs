@@ -80,9 +80,9 @@ pub use reserve::{ReservedEdge, reserve_parent_edges};
 pub use scroll::{ScrollPlugin, accumulate_wheel};
 pub use scrollbar::update_scrollbars;
 pub use split::{
-    GutterMove, SPLIT_KEY_STEP_PX, SetSplitSizes, Split, SplitAxis, SplitGutter, SplitPane,
-    SplitPaneGeometry, SplitPlugin, SplitResized, SplitSet, apply_split_sizes, drag_split_gutters,
-    mark_split_gutter_axes, measure_splits, moved_sizes, step_split_on_keys, sync_split_gutters,
+    GutterMove, SPLIT_KEY_STEP_PX, Split, SplitAxis, SplitGutter, SplitPane, SplitPaneGeometry,
+    SplitPlugin, SplitResized, SplitSet, SplitSizes, drag_split_gutters, mark_split_gutter_axes,
+    measure_splits, moved_sizes, step_split_on_keys, sync_split_gutters,
 };
 pub use state_style::{
     StatePatch, StateStylePlugin, StateVisuals, apply_state_visuals, eject_interaction_on_disable,
@@ -92,10 +92,9 @@ pub use switch::{
     register_switch_systems, step_switch_thumb, sync_switch_visuals,
 };
 pub use tabs::{
-    DropdownButton, DropdownOptionButton, DropdownOptionSpec, MenuItemButton, SelectTab,
-    TAB_SELECTED_BG, Tab, TabButtonStyle, TabPicks, TabStrip, TabStripButton, Tabs, TabsPlugin,
-    TabsSet, apply_select_tab, dispatch_tab_clicks, sync_tab_button_visuals, sync_tabs, tab_label,
-    tab_name,
+    DropdownButton, DropdownOptionButton, DropdownOptionSpec, MenuItemButton, TAB_SELECTED_BG, Tab,
+    TabButtonStyle, TabPicks, TabStrip, TabStripButton, Tabs, TabsPlugin, TabsSet,
+    dispatch_tab_clicks, sync_tab_button_visuals, sync_tabs, tab_label, tab_name,
 };
 pub use tooltip::{
     HoverStartedAt, TooltipPlugin, TooltipPopup, TooltipSource, cursor_tooltip_origin,

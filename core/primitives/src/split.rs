@@ -25,10 +25,10 @@
 //! backend reads it off the browser's boxes. Everything else here runs the
 //! same on both.
 //!
-//! A module or an app's Rust reads the pane sizes off [`Split::sizes`] and
-//! sets them with a [`SetSplitSizes`] message; a resize the user makes ends
-//! with a [`SplitResized`] message, once a gutter drag is released and after
-//! each key that moved a gutter. Every split system runs in [`SplitSet`].
+//! A module or an app's Rust reads and sets the pane sizes through the
+//! [`SplitSizes`] system param; a resize the user makes ends with a
+//! [`SplitResized`] message, once a gutter drag is released and after each
+//! key that moved a gutter. Every split system runs in [`SplitSet`].
 //!
 //! Each gutter carries the separator's value the way the web pattern gives
 //! it: `aria-valuenow` is the share of its two panes the one before it
@@ -201,29 +201,14 @@ impl StyleOwner for SplitPane {
 pub struct SplitGutter;
 
 /// The system set every `<split>` system runs in. Order a system that reads
-/// a [`SplitResized`] after it, and one that writes a [`SetSplitSizes`] the
-/// split should apply this tick before it.
+/// a [`SplitResized`] after it.
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct SplitSet;
 
-/// Hold the panes of `split` at `sizes`: each pane's outer size along the
-/// axis, in document order, in logical pixels. A pane's own `min-width` and
-/// `max-width` (`min-height` and `max-height` in a column) still bound it,
-/// and a size missing from the end of the list keeps the pane's measured
-/// size. A request for a split that has not been laid out yet waits until it
-/// has; one for an entity that is not a split is dropped.
-#[derive(Message, Clone, Debug, PartialEq)]
-pub struct SetSplitSizes {
-    /// The `<split>`.
-    pub split: Entity,
-    /// The size to hold each pane at.
-    pub sizes: Vec<f32>,
-}
-
 /// A resize the user made has ended: a gutter drag was released after it
 /// moved the gutter, or a key moved a focused gutter. `sizes` are the pane
-/// sizes it left, as in [`Split::sizes`]. Not written for a
-/// [`SetSplitSizes`] request, nor when the split itself changes size.
+/// sizes it left, as in [`Split::sizes`]. Not written for sizes set through
+/// [`SplitSizes`], nor when the split itself changes size.
 #[derive(Message, Clone, Debug, PartialEq)]
 pub struct SplitResized {
     /// The `<split>`.
@@ -518,33 +503,42 @@ fn held_sizes(split: &Split, writes: &SplitWrites) -> Vec<f32> {
         .collect()
 }
 
-/// Apply each [`SetSplitSizes`]: hold the panes at the sizes it asks for. A
-/// request waits for a split that has not been laid out yet, and goes when
-/// its entity is not a split.
-pub fn apply_split_sizes(
-    mut requests: MessageReader<SetSplitSizes>,
-    splits: Query<&Split>,
-    mut writes: SplitWrites,
-    mut waiting: Local<Vec<SetSplitSizes>>,
-) {
-    waiting.extend(requests.read().cloned());
-    if waiting.is_empty() {
-        return;
+/// Reading and setting a split's pane sizes from a system.
+#[derive(SystemParam)]
+pub struct SplitSizes<'w, 's> {
+    splits: Query<'w, 's, &'static Split>,
+    writes: SplitWrites<'w, 's>,
+}
+
+impl SplitSizes<'_, '_> {
+    /// Each pane's outer size along the axis, in document order, as last
+    /// laid out; `None` for an entity that is not a split, and empty before
+    /// the split's first layout.
+    pub fn get(&self, split: Entity) -> Option<Vec<f32>> {
+        self.splits.get(split).ok().map(Split::sizes)
     }
-    waiting.retain(|request| {
-        let Ok(split) = splits.get(request.split) else {
+
+    /// Hold the panes of `split` at `sizes`: each pane's outer size along the
+    /// axis, in document order, in logical pixels. A pane's own `min-width`
+    /// and `max-width` (`min-height` and `max-height` in a column) still bound
+    /// it, and a size missing from the end of the list keeps the pane's
+    /// size. Returns false, and holds nothing, for an entity that is not a
+    /// split or a split not laid out yet: set the sizes once
+    /// [`get`](Self::get) reports some.
+    pub fn set(&mut self, split: Entity, sizes: &[f32]) -> bool {
+        let Ok(split) = self.splits.get(split) else {
             return false;
         };
         if split.panes.is_empty() {
-            return true;
+            return false;
         }
-        let mut sizes = split.sizes();
-        for (size, want) in sizes.iter_mut().zip(&request.sizes) {
+        let mut held = split.sizes();
+        for (size, want) in held.iter_mut().zip(sizes) {
             *size = want.max(0.0);
         }
-        hold_sizes(split, &sizes, &mut writes);
-        false
-    });
+        hold_sizes(split, &held, &mut self.writes);
+        true
+    }
 }
 
 /// Keep each gutter's separator value in step with its split's measured
@@ -655,14 +649,12 @@ pub struct SplitPlugin;
 
 impl Plugin for SplitPlugin {
     fn build(self, app: &mut App) {
-        app.add_message::<SetSplitSizes>();
         app.add_message::<SplitResized>();
         app.add_systems(
             TickStage::Systems,
             (
                 drag_split_gutters.after(lumen_input::hit_test),
                 step_split_on_keys.after(lumen_input::dispatch_focused_keys),
-                apply_split_sizes,
                 sync_split_gutters,
                 mark_split_gutter_axes,
             )
@@ -750,7 +742,6 @@ mod tests {
         world.init_resource::<Messages<PointerReleased>>();
         world.init_resource::<Messages<FocusedKey>>();
         world.init_resource::<Messages<SplitResized>>();
-        world.init_resource::<Messages<SetSplitSizes>>();
         let split = world.spawn_empty().id();
         let a = world
             .spawn((SplitPane, Style::default(), ChildOf(split)))
@@ -900,35 +891,36 @@ mod tests {
         );
     }
 
-    /// A size request holds every pane it names and keeps the measured size
-    /// of the rest; one for a split not laid out yet waits for the layout.
+    /// Setting sizes holds every pane it names and keeps the size of the
+    /// rest; a split not laid out yet takes none.
     #[test]
-    fn a_size_request_holds_the_panes_once_measured() {
+    fn set_sizes_hold_the_panes_once_measured() {
         let (mut world, split, [a, b], _gutter) = split_world();
         let panes = std::mem::take(&mut world.get_mut::<Split>(split).unwrap().panes);
-        world.write_message(SetSplitSizes {
-            split,
-            sizes: vec![120.0],
-        });
-        world.run_system_once(apply_split_sizes).unwrap();
-        assert_eq!(basis(&world, a), Length::Auto, "not laid out, so it waits");
+        let set = move |world: &mut World| {
+            world
+                .run_system_once(move |mut sizes: SplitSizes| sizes.set(split, &[120.0]))
+                .unwrap()
+        };
+        assert!(!set(&mut world), "not laid out, so nothing to hold");
+        assert_eq!(basis(&world, a), Length::Auto);
 
         world.get_mut::<Split>(split).unwrap().panes = panes;
-        world.resource_mut::<Messages<SetSplitSizes>>().clear();
-        // `run_system_once` builds a fresh system with nothing waiting, so
-        // the request is sent again, as the running system would still hold
-        // it on the next tick.
-        world.write_message(SetSplitSizes {
-            split,
-            sizes: vec![120.0],
-        });
-        world.run_system_once(apply_split_sizes).unwrap();
+        assert!(set(&mut world));
         assert_eq!(basis(&world, a), Length::Px(120.0));
         assert_eq!(basis(&world, b), Length::Px(300.0), "the rest keep theirs");
+        let read = world
+            .run_system_once(move |sizes: SplitSizes| sizes.get(split))
+            .unwrap();
         assert_eq!(
-            world.get::<Split>(split).unwrap().sizes(),
-            vec![200.0, 300.0]
+            read,
+            Some(vec![200.0, 300.0]),
+            "what the layout last measured"
         );
+        let gutter = world
+            .run_system_once(move |sizes: SplitSizes| sizes.get(_gutter))
+            .unwrap();
+        assert_eq!(gutter, None, "a gutter is not a split");
     }
 
     /// Arrow keys step a focused gutter and Home takes the pane before it to

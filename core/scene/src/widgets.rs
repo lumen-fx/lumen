@@ -73,15 +73,16 @@ pub fn keep_widget_parts(
     for split in &splits {
         commands.queue(move |world: &mut World| keep_split_gutters(world, split));
     }
-    let mut touched: Vec<Entity> = sets.iter().collect();
-    touched.extend(changed_tabs.iter().map(ChildOf::parent));
-    touched.extend(
-        enabled
-            .read()
-            .filter_map(|e| parents.get(e).ok().map(ChildOf::parent)),
-    );
-    touched.sort_unstable();
-    touched.dedup();
+    let mut touched: Vec<Entity> = Vec::new();
+    let renamed = changed_tabs.iter().map(ChildOf::parent);
+    let enabled = enabled
+        .read()
+        .filter_map(|e| parents.get(e).ok().map(ChildOf::parent));
+    for set in sets.iter().chain(renamed).chain(enabled) {
+        if !touched.contains(&set) {
+            touched.push(set);
+        }
+    }
     for set in touched {
         commands.queue(move |world: &mut World| keep_tab_strip(world, set));
     }
@@ -224,17 +225,16 @@ pub fn keep_tab_strip(world: &mut World, set: Entity) {
             e.insert(TabStripButton { tab });
         }
         if e.get::<TextContent>().map(|t| t.0.as_str()) != Some(label.as_str()) {
-            e.insert((TextContent(label), DirtyLayout));
+            e.insert(TextContent(label));
+            e.insert(DirtyLayout);
         }
-        match (disabled, e.contains::<Disabled>()) {
-            (true, false) => {
-                e.insert((Disabled, StyleDirty));
-            }
-            (false, true) => {
+        if disabled != e.contains::<Disabled>() {
+            if disabled {
+                e.insert(Disabled);
+            } else {
                 e.remove::<Disabled>();
-                e.insert(StyleDirty);
             }
-            _ => {}
+            e.insert(StyleDirty);
         }
         order.push(button);
     }
