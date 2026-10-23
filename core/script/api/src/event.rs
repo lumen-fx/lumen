@@ -832,6 +832,50 @@ mod tests {
         clear_all_bindings();
     }
 
+    /// A handler reads the physical key and the pointer's motion of the
+    /// event it runs for.
+    #[test]
+    fn a_handler_reads_the_key_code_and_the_motion() {
+        let _g = GUARD.lock().unwrap();
+        clear_all_bindings();
+        let seen = Arc::new(Mutex::new((String::new(), (0.0, 0.0))));
+        let s = seen.clone();
+        let cb: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            *s.lock().unwrap() = (event_code(), event_movement());
+        });
+        register_native_binding(11, "pointermove".into(), false, cb);
+        let pointer = lumen_core::input::PointerData {
+            movement: glam::Vec2::new(3.0, -2.0),
+            ..Default::default()
+        };
+        let data = EventData {
+            event_type: "pointermove".into(),
+            target: 11,
+            code: "KeyW".into(),
+            pointer,
+            ..Default::default()
+        };
+        dispatch(data, &[], event_bubbles("pointermove"), |_| {});
+        assert_eq!(*seen.lock().unwrap(), ("KeyW".to_string(), (3.0, -2.0)));
+        clear_all_bindings();
+    }
+
+    /// Asks for the pointer lock queue in order until the input layer takes
+    /// them, and the lock's owner reads back as it was recorded.
+    #[test]
+    fn pointer_lock_asks_queue_and_the_owner_reads_back() {
+        let _g = GUARD.lock().unwrap();
+        let _ = take_pointer_lock_asks();
+        request_pointer_lock(7);
+        exit_pointer_lock();
+        assert_eq!(take_pointer_lock_asks(), vec![Some(7), None]);
+        assert!(take_pointer_lock_asks().is_empty());
+        set_pointer_lock_element(Some(9));
+        assert_eq!(pointer_lock_element(), 9);
+        set_pointer_lock_element(None);
+        assert_eq!(pointer_lock_element(), 0);
+    }
+
     #[test]
     fn capture_then_target_then_bubble_order() {
         let _g = GUARD.lock().unwrap();

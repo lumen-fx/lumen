@@ -1475,6 +1475,62 @@ mod from_str_tests {
         assert_eq!(Key::from("\u{e9}").us_code(), KeyCode::Unidentified);
     }
 
+    /// Every named key and every printable US character, shifted or not,
+    /// lands on the key that types it.
+    #[test]
+    fn every_named_key_and_us_character_has_its_code() {
+        for (name, code) in [
+            ("Tab", KeyCode::Tab),
+            ("Enter", KeyCode::Enter),
+            ("Escape", KeyCode::Escape),
+            ("Backspace", KeyCode::Backspace),
+            ("Space", KeyCode::Space),
+            ("ArrowUp", KeyCode::ArrowUp),
+            ("ArrowDown", KeyCode::ArrowDown),
+            ("ArrowLeft", KeyCode::ArrowLeft),
+            ("ArrowRight", KeyCode::ArrowRight),
+            ("Home", KeyCode::Home),
+            ("End", KeyCode::End),
+            ("Delete", KeyCode::Delete),
+            ("Control", KeyCode::ControlLeft),
+            ("Alt", KeyCode::AltLeft),
+            ("Meta", KeyCode::MetaLeft),
+            ("Super", KeyCode::MetaLeft),
+            ("NoSuchKey", KeyCode::Unidentified),
+        ] {
+            assert_eq!(Key::from(name).us_code(), code, "{name}");
+        }
+        for (chars, code) in [
+            ("0)", KeyCode::Digit0),
+            ("1!", KeyCode::Digit1),
+            ("2@", KeyCode::Digit2),
+            ("3#", KeyCode::Digit3),
+            ("4$", KeyCode::Digit4),
+            ("5%", KeyCode::Digit5),
+            ("6^", KeyCode::Digit6),
+            ("7&", KeyCode::Digit7),
+            ("8*", KeyCode::Digit8),
+            ("9(", KeyCode::Digit9),
+            ("-_", KeyCode::Minus),
+            ("=+", KeyCode::Equal),
+            ("[{", KeyCode::BracketLeft),
+            ("]}", KeyCode::BracketRight),
+            ("\\|", KeyCode::Backslash),
+            (";:", KeyCode::Semicolon),
+            ("'\"", KeyCode::Quote),
+            (",<", KeyCode::Comma),
+            (".>", KeyCode::Period),
+            ("/?", KeyCode::Slash),
+            ("`~", KeyCode::Backquote),
+            ("aA", KeyCode::KeyA),
+            ("zZ", KeyCode::KeyZ),
+        ] {
+            for c in chars.chars() {
+                assert_eq!(Key::Character(c.to_string()).us_code(), code, "{c:?}");
+            }
+        }
+    }
+
     #[test]
     fn key_from_str_named() {
         assert_eq!(Key::from("Enter"), Key::Named(NamedKey::Enter));

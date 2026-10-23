@@ -4850,10 +4850,15 @@ mod tests {
         assert_eq!(status, LumenStatus::ErrBadArg, "no name");
     }
 
+    /// The current event is one process-wide cell; the tests that set it
+    /// take turns.
+    static CURRENT_EVENT: Mutex<()> = Mutex::new(());
+
     /// A custom event's detail reaches a callback as an owned map; a
     /// built-in event's is an empty one.
     #[test]
     fn lumen_event_detail_reads_the_current_event() {
+        let _event = CURRENT_EVENT.lock().unwrap_or_else(|e| e.into_inner());
         let mut detail = HashMap::new();
         detail.insert("reason".to_string(), ScriptValue::Str("user".into()));
         lumen_script::event::set_current_event(lumen_script::event::EventData {
@@ -4881,5 +4886,29 @@ mod tests {
             unsafe { lumen_event_detail(ptr::null_mut()) },
             LumenStatus::ErrBadArg
         );
+    }
+
+    /// A key event's physical key reads through `lumen_event_code`, and the
+    /// pointer-lock calls answer.
+    #[test]
+    fn lumen_event_code_and_the_pointer_lock_calls() {
+        let _event = CURRENT_EVENT.lock().unwrap_or_else(|e| e.into_inner());
+        lumen_script::event::set_current_event(lumen_script::event::EventData {
+            event_type: "keydown".into(),
+            code: "KeyW".into(),
+            ..Default::default()
+        });
+        let mut buf = [0 as c_char; 16];
+        let mut len = 0usize;
+        assert_eq!(
+            unsafe { lumen_event_code(buf.as_mut_ptr(), buf.len(), &mut len) },
+            LumenStatus::Ok
+        );
+        assert_eq!(len, 4);
+        assert_eq!(unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str(), Ok("KeyW"));
+        lumen_script::event::set_current_event(lumen_script::event::EventData::default());
+        assert_eq!(lumen_node_request_pointer_lock(7), LumenStatus::Ok);
+        assert_eq!(lumen_exit_pointer_lock(), LumenStatus::Ok);
+        assert_eq!(lumen_pointer_lock_element(), 0, "nothing granted a lock");
     }
 }
