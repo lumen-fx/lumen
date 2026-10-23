@@ -627,6 +627,18 @@ fn introspection_fns() -> Vec<ScriptFn> {
             },
         ),
         f(
+            "node_request_pointer_lock",
+            "Lock the pointer to the node.",
+            &[node_param()],
+            T::Unit,
+            |cx| {
+                if let Some(h) = raw(cx.int_arg(0)) {
+                    event::request_pointer_lock(h);
+                }
+                ScriptValue::Unit
+            },
+        ),
+        f(
             "node_z_index",
             "The paint order of that node.",
             &[node_param()],
@@ -795,6 +807,9 @@ fn event_fns() -> Vec<ScriptFn> {
             T::Str,
             || ScriptValue::Str(event::event_key()),
         ),
+        accessor("event_code", "The key's DOM code.", T::Str, || {
+            ScriptValue::Str(event::event_code())
+        }),
         accessor(
             "event_value",
             "The value the event carries.",
@@ -885,6 +900,15 @@ fn event_fns() -> Vec<ScriptFn> {
             T::Float,
             || ScriptValue::F64(f64::from(event::event_pointer().tangential_pressure)),
         ),
+        accessor(
+            "event_movement_x",
+            "Pointer motion across.",
+            T::Float,
+            || ScriptValue::F64(event::event_movement().0),
+        ),
+        accessor("event_movement_y", "Pointer motion down.", T::Float, || {
+            ScriptValue::F64(event::event_movement().1)
+        }),
         accessor(
             "event_tilt_x",
             "The pen's tilt toward the right, in degrees.",

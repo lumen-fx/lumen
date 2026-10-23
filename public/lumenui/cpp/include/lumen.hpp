@@ -1274,6 +1274,13 @@ public:
         return lumen_node_has_pointer_capture(handle_, pointer_id, &out) == LUMEN_OK && out != 0;
     }
 
+    // -- pointer lock -----------------------------------------------------
+
+    /// Ask for the pointer to be locked to this node (`requestPointerLock`).
+    /// Granted only to the focused node during or just after a key or button
+    /// press; a `pointerlockchange` or `pointerlockerror` event answers.
+    void request_pointer_lock() const noexcept { lumen_node_request_pointer_lock(handle_); }
+
     // -- traversal (design 4.1, 4.2) ------------------------------------
 
     /// The parent element.
@@ -1548,8 +1555,15 @@ public:
     std::string type() const { return read_str(lumen_event_type); }
     /// The key for key events.
     std::string key() const { return read_str(lumen_event_key); }
+    /// Where the key of a key event sits, by its DOM `code` name (`"KeyW"`).
+    std::string code() const { return read_str(lumen_event_code); }
     /// The value for input / change events.
     std::string value() const { return read_str(lumen_event_value); }
+    /// How far the pointer moved since its previous move `(dx, dy)`, logical
+    /// pixels; the raw device motion under a pointer lock.
+    std::pair<double, double> movement() const {
+        return ev_ ? std::make_pair(ev_->movement_x, ev_->movement_y) : std::make_pair(0.0, 0.0);
+    }
     /// What a module's custom event carries, a map; empty for a built-in
     /// event.
     Value detail() const {
@@ -1740,6 +1754,16 @@ inline std::optional<Node> get_by_id(std::string_view id) {
 inline std::optional<Node> document() {
     LumenNode out = 0;
     if (lumen_document(&out) == LUMEN_OK && out != 0) return Node(out);
+    return std::nullopt;
+}
+
+/// Release the pointer lock, whoever holds it (`exitPointerLock`).
+inline void exit_pointer_lock() noexcept { lumen_exit_pointer_lock(); }
+
+/// The node holding the pointer lock (`pointerLockElement`).
+inline std::optional<Node> pointer_lock_element() noexcept {
+    LumenNode out = lumen_pointer_lock_element();
+    if (out != 0) return Node(out);
     return std::nullopt;
 }
 

@@ -376,23 +376,32 @@ back, `4` forward, `5` pen eraser, `-1` none), the modifier flags `shift`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`,
 `buttons` (a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16`
 forward, `32` eraser), `pointer_type` (`LUMEN_POINTER_MOUSE`,
-`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), and `is_primary`. The struct is
-borrowed for the call; copy anything you keep.
+`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), `is_primary`, and `movement_x` /
+`movement_y`, how far the pointer moved since its previous move (the device's
+motion under a pointer lock). The struct is borrowed for the call; copy
+anything you keep.
 
 | Function | Behaviour |
 | --- | --- |
 | `LumenStatus lumen_node_set_pointer_capture(LumenNode node, uint64_t pointer_id)` | Send that pointer's events to `node` until its last button comes up. Does nothing while no button is held. |
 | `LumenStatus lumen_node_release_pointer_capture(LumenNode node, uint64_t pointer_id)` | Give the pointer back to hit testing, when `node` holds it. |
 | `LumenStatus lumen_node_has_pointer_capture(LumenNode node, uint64_t pointer_id, int *out)` | Whether `node` holds the pointer. |
+| `LumenStatus lumen_node_request_pointer_lock(LumenNode node)` | Ask for the pointer lock on `node`: the cursor hides and stays put, and pointer moves carry the motion. Granted only to the focused element, during or just after a key or button press; `pointerlockchange` or `pointerlockerror` on `node` answers. |
+| `LumenStatus lumen_exit_pointer_lock(void)` | End the pointer lock, whoever holds it. |
+| `LumenNode lumen_pointer_lock_element(void)` | The element holding the pointer lock, or `0`. |
 
-The C++, Python, and Rust SDKs expose the same readings on their `Event` and
-the three capture calls on their `Node`.
+The C++, Python, and Rust SDKs expose the same readings on their `Event`
+(`code()` and `movement()` included), the capture and lock calls on their
+`Node`, and `exit_pointer_lock` / `pointer_lock_element` beside their
+document functions.
 
 String fields, the detail and propagation controls are separate calls, valid
 only inside the callback:
 
-- `lumen_event_type` / `lumen_event_key` / `lumen_event_value` - string-out
-  convention
+- `lumen_event_type` / `lumen_event_key` / `lumen_event_code` /
+  `lumen_event_value` - string-out convention. `lumen_event_code` is where the
+  key of a key event sits, by the DOM `code` name (`KeyW`, `ShiftLeft`), the
+  same on every layout
 - `lumen_event_detail(LumenValue *out)` - what a module's custom event
   carries, as a map; an empty map for a built-in event. Release it with
   `lumen_value_free`

@@ -174,6 +174,7 @@ impl Harness {
             .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>();
         msgs.write(KeyPressed {
             key: Key::Character(ch.to_string()),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

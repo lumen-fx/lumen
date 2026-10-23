@@ -339,6 +339,7 @@ impl SimulatePointer {
             height: spec.height.unwrap_or(1.0),
             order: 0,
             time_stamp: lumen_core::time::Instant::now(),
+            movement: glam::Vec2::ZERO,
         }
     }
 }

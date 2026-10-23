@@ -178,9 +178,11 @@ fn pointer_of(event: &Event) -> PointerData {
         return PointerData::default();
     };
     let buttons = u32::from(mouse.buttons());
+    let movement = glam::Vec2::new(mouse.movement_x() as f32, mouse.movement_y() as f32);
     let Some(p) = event.dyn_ref::<PointerEvent>() else {
         return PointerData {
             time_stamp: event_time(event),
+            movement,
             ..PointerData::mouse(buttons)
         };
     };
@@ -199,6 +201,7 @@ fn pointer_of(event: &Event) -> PointerData {
         height: p.height() as f32,
         order: 0,
         time_stamp: event_time(event),
+        movement,
     }
 }
 

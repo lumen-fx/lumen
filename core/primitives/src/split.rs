@@ -936,6 +936,7 @@ mod tests {
             world.write_message(FocusedKey {
                 entity,
                 key: Key::Named(key),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
             });
@@ -953,6 +954,7 @@ mod tests {
         world.write_message(FocusedKey {
             entity: gutter,
             key: Key::Named(NamedKey::Home),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
         });

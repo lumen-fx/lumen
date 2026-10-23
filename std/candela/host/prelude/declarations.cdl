@@ -122,6 +122,7 @@ host "lumen" {
     node_set_pointer_capture(int, int);
     node_release_pointer_capture(int, int);
     bool node_has_pointer_capture(int, int);
+    node_request_pointer_lock(int);
     int node_z_index(int);
     {string: string} node_computed_style_all(int);
     {string: string} node_inline_style(int);
@@ -136,6 +137,7 @@ host "lumen" {
     int event_current_target(int);
     string event_type(int);
     string event_key(int);
+    string event_code(int);
     string event_value(int);
     int event_button(int);
     float event_x(int);
@@ -151,6 +153,8 @@ host "lumen" {
     int event_buttons(int);
     float event_pressure(int);
     float event_tangential_pressure(int);
+    float event_movement_x(int);
+    float event_movement_y(int);
     float event_tilt_x(int);
     float event_tilt_y(int);
     float event_twist(int);
@@ -229,6 +233,8 @@ host "document" {
     int focused();
     int hovered();
     int create(string);
+    exit_pointer_lock();
+    int pointer_lock_element();
 }
 
 host "app" {

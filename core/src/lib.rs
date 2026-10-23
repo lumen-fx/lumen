@@ -15,6 +15,7 @@ pub mod components;
 pub mod i18n;
 pub mod input;
 pub mod introspect;
+pub mod keycode;
 pub mod layout_backend;
 pub mod native;
 pub mod nav;

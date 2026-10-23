@@ -198,6 +198,8 @@ pub const BUILT_IN_EVENTS: &[&str] = &[
     "blur",
     "submit",
     "scroll",
+    "pointerlockchange",
+    "pointerlockerror",
 ];
 
 /// The DOM events read from this tick's input, waiting for delivery.
@@ -626,6 +628,8 @@ pub struct PointerReaders<'w, 's> {
     moves: MessageReader<'w, 's, PointerMoved>,
     cancels: Option<MessageReader<'w, 's, PointerCancelled>>,
     targets: Option<Res<'w, PointerTargets>>,
+    /// The element holding the pointer lock: the mouse's events aim at it.
+    lock: Option<Res<'w, lumen_core::input::PointerLockState>>,
 }
 
 /// Read this tick's pointer, click, wheel and key input as DOM events, for
@@ -698,9 +702,10 @@ pub fn queue_pointer_and_key_events(
     // inside one frame, and its moves belong between the press and the
     // release.
     let start = queue.len();
+    let locked = pointers.lock.as_ref().and_then(|l| l.owner);
     let under = |pointer: &PointerData| {
         if pointer.is_primary {
-            hovered_entity
+            locked.or(hovered_entity)
         } else {
             pointers.targets.as_ref().and_then(|t| t.get(pointer.id))
         }
@@ -788,6 +793,7 @@ pub fn queue_pointer_and_key_events(
     for k in keydowns.read() {
         let mut data = base(k.entity, "keydown");
         data.key = key_string(&k.key);
+        data.code = k.code.as_str().to_string();
         set_mods(&mut data, &k.modifiers);
         queue.push(plain(data, k.entity));
     }
@@ -803,6 +809,7 @@ pub fn queue_pointer_and_key_events(
         let Some(doc) = document() else { continue };
         let mut data = base(doc, "keydown");
         data.key = key_string(&k.key);
+        data.code = k.code.as_str().to_string();
         set_mods(&mut data, &k.modifiers);
         queue.push(plain(data, doc));
     }
@@ -813,6 +820,7 @@ pub fn queue_pointer_and_key_events(
         };
         let mut data = base(e, "keyup");
         data.key = key_string(&k.key);
+        data.code = k.code.as_str().to_string();
         set_mods(&mut data, &k.modifiers);
         queue.push(plain(data, e));
     }
@@ -834,6 +842,11 @@ pub fn queue_state_events(
     parents: Query<&ChildOf>,
     scrolled: Query<Entity, Changed<ScrollOffset>>,
     fields: Query<FieldText>,
+    // Optional: a world built without the input layer has no lock to report.
+    #[cfg(not(target_arch = "wasm32"))] (mut lock_changes, mut lock_errors): (
+        Option<MessageReader<lumen_core::input::PointerLockChanged>>,
+        Option<MessageReader<lumen_core::input::PointerLockError>>,
+    ),
 ) {
     // A binding keys on a node's packed handle (entity + generation), so a
     // despawned + recycled entity never matches a live binding; the
@@ -906,6 +919,35 @@ pub fn queue_state_events(
     // scroll (does not bubble).
     for e in scrolled.iter() {
         queue.push((base(e, "scroll"), e));
+    }
+    // pointerlockchange on the element that lost the lock, then on the one
+    // that took it; pointerlockerror on one refused it.
+    #[cfg(not(target_arch = "wasm32"))]
+    for change in lock_changes.iter_mut().flat_map(|r| r.read()) {
+        event::set_pointer_lock_element(change.owner.map(|e| NodeHandle::new(e).pack()));
+        for e in [change.previous, change.owner].into_iter().flatten() {
+            queue.push((base(e, "pointerlockchange"), e));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    for error in lock_errors.iter_mut().flat_map(|r| r.read()) {
+        queue.push((base(error.entity, "pointerlockerror"), error.entity));
+    }
+}
+
+/// Hand the pointer-lock asks scripts and the C ABI made since the last tick
+/// to the input layer.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn forward_pointer_lock_asks(mut asks: MessageWriter<lumen_core::input::PointerLockAsk>) {
+    for node in event::take_pointer_lock_asks() {
+        let entity = match node {
+            None => None,
+            Some(packed) => match NodeHandle::unpack(packed) {
+                Some(handle) => Some(handle.entity),
+                None => continue,
+            },
+        };
+        asks.write(lumen_core::input::PointerLockAsk { entity });
     }
 }
 
@@ -1228,12 +1270,14 @@ pub(crate) mod text_event_tests {
         let press = |world: &mut World, key: Key| {
             world.write_message(KeyPressed {
                 key: key.clone(),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),
             });
             world.write_message(KeyReleased {
                 key,
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 time_stamp: lumen_core::time::Instant::now(),
             });
@@ -1263,6 +1307,7 @@ pub(crate) mod text_event_tests {
         world.write_message(FocusedKey {
             entity: button,
             key: Key::Named(NamedKey::Escape),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
         });

@@ -528,6 +528,14 @@ impl Node {
         ev::set_pointer_capture(self.0, pointer_id);
     }
 
+    /// Ask for the pointer to be locked to this node (`requestPointerLock`).
+    /// Granted only to the focused node during or just after a key or button
+    /// press; a `pointerlockchange` or `pointerlockerror` event on the node
+    /// answers.
+    pub fn request_pointer_lock(self) {
+        ev::request_pointer_lock(self.0);
+    }
+
     /// Give pointer `pointer_id` back to hit testing, when this node holds it
     /// (`releasePointerCapture`).
     pub fn release_pointer_capture(self, pointer_id: u64) {
@@ -629,6 +637,18 @@ impl Event {
     /// The key for key events.
     pub fn key(&self) -> String {
         ev::event_key()
+    }
+
+    /// Where the key of a key event sits, by its DOM `code` name (`KeyW`,
+    /// `ShiftLeft`).
+    pub fn code(&self) -> String {
+        ev::event_code()
+    }
+
+    /// How far the pointer moved since its previous move `(dx, dy)`, in
+    /// logical pixels; the raw device motion under a pointer lock.
+    pub fn movement(&self) -> (f64, f64) {
+        ev::event_movement()
     }
 
     /// The value for input / change events.
@@ -751,6 +771,19 @@ pub mod document {
     /// The innermost element under the pointer, the hover target.
     pub fn hovered() -> Option<Node> {
         super::hovered_node()
+    }
+
+    /// Release the pointer lock, whoever holds it (`exitPointerLock`).
+    pub fn exit_pointer_lock() {
+        lumen_script::event::exit_pointer_lock();
+    }
+
+    /// The node holding the pointer lock (`pointerLockElement`).
+    pub fn pointer_lock_element() -> Option<Node> {
+        match lumen_script::event::pointer_lock_element() {
+            0 => None,
+            handle => Some(Node::from_handle(handle)),
+        }
     }
 }
 

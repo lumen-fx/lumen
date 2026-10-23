@@ -984,6 +984,7 @@ mod scroll_key_tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key,
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),

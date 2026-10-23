@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 17u
+#define LUMEN_API_VERSION_MINOR 18u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -421,6 +421,10 @@ typedef struct LumenEvent {
                                  8 back, 16 forward, 32 eraser */
     uint8_t pointer_type;     /* LUMEN_POINTER_MOUSE / _PEN / _TOUCH */
     uint8_t is_primary;       /* 0 / 1 */
+    /* ABI 0.18: motion since the pointer's previous move, logical pixels;
+       the raw device motion under a pointer lock. */
+    double movement_x;
+    double movement_y;
 } LumenEvent;
 
 /* LumenEvent.pointer_type values (ABI 0.15). */

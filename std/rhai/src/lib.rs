@@ -408,6 +408,9 @@ fn register_dom_mutators(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptCommand>
             }
         },
     );
+    engine.register_fn("request_pointer_lock", |n: &mut Node| {
+        lumen_script::event::request_pointer_lock(n.handle);
+    });
     engine.register_fn("has_pointer_capture", |n: &mut Node, pointer_id: i64| {
         u64::try_from(pointer_id)
             .is_ok_and(|id| lumen_script::event::has_pointer_capture(n.handle, id))
@@ -743,6 +746,18 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
     engine.register_fn("hovered", |_d: &mut Document| -> rhai::Dynamic {
         node_to_dynamic(node_query::hovered_node())
     });
+    engine.register_fn("exit_pointer_lock", |_d: &mut Document| {
+        lumen_script::event::exit_pointer_lock();
+    });
+    engine.register_fn(
+        "pointer_lock_element",
+        |_d: &mut Document| -> rhai::Dynamic {
+            node_to_dynamic(match lumen_script::event::pointer_lock_element() {
+                0 => None,
+                packed => Some(packed),
+            })
+        },
+    );
     // Create verb. Rhai's tokenizer reserves `spawn`, so a rhai script writes
     // `create` (`document.create("div")` / `create("div")`) where the other
     // hosts also accept `spawn`.
@@ -790,6 +805,13 @@ fn register_dom_events(
         ev::event_type()
     });
     engine.register_fn("key", |_e: &mut Event| -> String { ev::event_key() });
+    engine.register_fn("code", |_e: &mut Event| -> String { ev::event_code() });
+    engine.register_fn("movement_x", |_e: &mut Event| -> f64 {
+        ev::event_movement().0
+    });
+    engine.register_fn("movement_y", |_e: &mut Event| -> f64 {
+        ev::event_movement().1
+    });
     engine.register_fn("value", |_e: &mut Event| -> String { ev::event_value() });
     engine.register_fn("detail", |_e: &mut Event| -> rhai::Dynamic {
         script_value_to_dynamic(&ScriptValue::Map(ev::event_detail()))

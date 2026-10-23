@@ -747,6 +747,7 @@ mod tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key,
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers,
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),

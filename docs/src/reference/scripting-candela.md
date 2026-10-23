@@ -623,6 +623,7 @@ it to `event_off` to unbind.
 | `lumen::node_set_pointer_capture(node: int, pointer: int)` | | Send that pointer's events to `node` until its last button comes up. Does nothing while no button is held. |
 | `lumen::node_release_pointer_capture(node: int, pointer: int)` | | Give the pointer back to hit testing, when `node` holds it. |
 | `lumen::node_has_pointer_capture(node: int, pointer: int)` | `bool` | Whether `node` holds the pointer, counting a capture set in the running handler. |
+| `lumen::node_request_pointer_lock(node: int)` | | Lock the pointer to `node`: the cursor hides and stays put, and pointer moves carry the motion. Granted only to the focused element, during or just after a key or button press; `pointerlockchange` or `pointerlockerror` on `node` answers. |
 
 The handler takes one parameter, the event id, for every event type:
 `fn handle_click(ev: int)`. Annotate it the same way, and read the event
@@ -634,6 +635,7 @@ through the accessors below:
 | `lumen::event_current_target(ev: int)` | `int` | The element whose handler is running. |
 | `lumen::event_type(ev: int)` | `string` | Event type name. |
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
+| `lumen::event_code(ev: int)` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
 | `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as_map`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
@@ -648,6 +650,7 @@ through the accessors below:
 | `lumen::event_width(ev: int)` / `lumen::event_height(ev: int)` | `float` | Contact size in logical pixels; `1` for a point device. |
 | `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target. |
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
+| `lumen::event_movement_x(ev: int)` / `lumen::event_movement_y(ev: int)` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
 | `lumen::event_shift(ev: int)` / `_ctrl` / `_alt` / `_super` | `bool` | Modifier state. |
 | `lumen::event_prevent_default(ev: int)` | | Cancel the default action. |
@@ -659,7 +662,7 @@ through the accessors below:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`.
+`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
@@ -685,6 +688,18 @@ the element until its last button comes up, wherever the pointer moves;
 went down on. `pointercancel` replaces `pointerup` when the system takes a
 touch or pen over mid-gesture.
 
+`node_request_pointer_lock(node)` asks for the pointer lock, the way a 3D view
+or a game takes the mouse: the cursor hides and stays where it is, the
+mouse's events go to `node` wherever the pointer is, and `event_movement_x` /
+`event_movement_y` carry the motion. The lock is granted only to the element
+that has focus, during or just after a press of a key or a button (a click on
+the element is both). Escape always ends it, and so does the window losing
+focus or the element going away. `pointerlockchange` fires on the element
+that took the lock and on the one that lost it; `pointerlockerror` fires on
+an element that was refused. On X11 and Windows, where the platform only
+confines the pointer, the cursor is confined, hidden and put back in the
+middle after each move, which is the same to a script.
+
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.
 A color field raises `input` for every color it moves to and `change` when its
@@ -707,7 +722,8 @@ Two types have a default action: `click` (link navigation) and `contextmenu`
 In a web build the pointer events come from the browser's Pointer Events, so a
 touch or a pen raises the same `pointerdown` and `pointerup` a mouse does, with
 the browser's readings for pressure, tilt and the rest, and a capture is handed
-to the browser's own `setPointerCapture`.
+to the browser's own `setPointerCapture`. Pointer lock is not available in a
+web build yet.
 `event_x` and `event_y` are measured from the target's box as the browser
 places it when the event happens. The page scrolls under a `wheel` handler as
 it does without one. A `click` handler on a link runs before the browser
@@ -751,7 +767,8 @@ names every host uses: `exists`, `valid`, `parent`, `first_child`,
 `get_attr`, `text`, `id`, `has_class`, `style_get`, `computed_style`,
 `computed_style_all`, `is_visible`, `z_index`, `classes`, `components`,
 `outer_markup`, `inner_markup`, `on`, `on_capture`, `set_pointer_capture`,
-`release_pointer_capture`, `has_pointer_capture`. `exists()` tests the
+`release_pointer_capture`, `has_pointer_capture`, `request_pointer_lock`.
+`exists()` tests the
 handle against `0`; `valid()` tests it against the current snapshot.
 
 `ArraySignal` methods mirror the `signal_array_*` builtins with the prefix
@@ -763,8 +780,9 @@ builtin each reaches. Construct one with `signal<int>(name)` and its siblings;
 the table under [Signals](#signals) lists what each type argument reads and
 writes.
 
-`Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
-`detail`, `button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`,
+`Event` methods: `target`, `current_target`, `event_type`, `key`, `code`,
+`value`, `detail`, `button`, `x`, `y`, `client_x`, `client_y`, `movement_x`,
+`movement_y`, `delta_x`, `delta_y`,
 `pointer_id`, `pointer_type`, `is_primary`, `buttons`, `pressure`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`, `shift`,
 `ctrl`, `alt`, `super_key`, `prevent_default`, `stop_propagation`,
@@ -814,6 +832,8 @@ size.
 | `document::focused()` | `int` | The focused element, or `0`. |
 | `document::hovered()` | `int` | The innermost element under the pointer, or `0`. |
 | `document::create(tag: string)` | `int` | Create a detached element. |
+| `document::exit_pointer_lock()` | | End the pointer lock, whoever holds it. |
+| `document::pointer_lock_element()` | `int` | The element holding the pointer lock, or `0`. |
 | `app::quit()` | | Quit the app. `on_close` runs first and can cancel the quit. |
 
 ## Page navigation

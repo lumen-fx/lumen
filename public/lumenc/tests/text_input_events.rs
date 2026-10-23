@@ -96,6 +96,7 @@ fn focus_and_type(app: &mut App, target: Entity, chars: &str) {
             .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Character(ch.to_string()),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),
@@ -180,6 +181,7 @@ fn a_freshly_focused_field_shows_writes_to_its_signal() {
         .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Character("x".to_string()),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

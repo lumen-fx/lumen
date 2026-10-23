@@ -142,8 +142,16 @@
  module's custom event carries. An element-event callback bound with
  [`lumen_on`] to a custom event's name receives it like a built-in event.
  Additive, so a minor bump.
+
+ 0.18 reached physical keys and pointer lock: [`lumen_event_code`] reads a
+ key event's DOM `code`, [`LumenEvent`] gains `movement_x` / `movement_y`
+ at its end (the pointer's motion since its previous move, the raw device
+ motion under a lock), and [`lumen_node_request_pointer_lock`],
+ [`lumen_exit_pointer_lock`] and [`lumen_pointer_lock_element`] join the
+ node surface. The fields before the new ones keep their offsets; additive,
+ so a minor bump.
  */
-#define LUMEN_ABI_MINOR 17
+#define LUMEN_ABI_MINOR 18
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
@@ -955,6 +963,26 @@ extern "C" {
  LumenStatus lumen_document_spawn(const char *tag, LumenNode *out) ;
 
 /*
+ Ask for the pointer to be locked to `node` (the web's
+ `requestPointerLock`). Granted only to the focused node during or just
+ after a key or button press; the answer arrives as a `pointerlockchange`
+ or `pointerlockerror` event on the node. Thread-safe.
+ */
+ LumenStatus lumen_node_request_pointer_lock(LumenNode node) ;
+
+/*
+ Release the pointer lock, whoever holds it (the web's
+ `exitPointerLock`). Thread-safe.
+ */
+ LumenStatus lumen_exit_pointer_lock(void) ;
+
+/*
+ The node holding the pointer lock, or `0` for none (the web's
+ `pointerLockElement`). Thread-safe.
+ */
+ LumenNode lumen_pointer_lock_element(void) ;
+
+/*
  Send pointer `pointer_id`'s events to `node` until its last button comes
  up, wherever the pointer goes (the web's `setPointerCapture`). Takes
  effect at the pointer's next event, which `gotpointercapture` precedes;
@@ -994,6 +1022,13 @@ extern "C" {
  [`lumen_event_type`] for the convention. Thread-safe.
  */
  LumenStatus lumen_event_key(char *buf, size_t buf_len, size_t *out_len) ;
+
+/*
+ Copy the current event's `code` (keyboard events: where the key sits, by
+ its DOM name, such as `KeyW`) into `buf`. See [`lumen_event_type`] for the
+ convention. Thread-safe.
+ */
+ LumenStatus lumen_event_code(char *buf, size_t buf_len, size_t *out_len) ;
 
 /*
  Copy the current event's `value` (input / change events) into `buf`. See

@@ -179,6 +179,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Named(NamedKey::Tab),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
@@ -195,6 +196,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Named(NamedKey::Tab),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
@@ -208,6 +210,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Named(NamedKey::Tab),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers {
                 shift: true,
                 ..Modifiers::default()
@@ -240,6 +243,7 @@ fn tab_cycle_with_equal_tabindex_follows_document_order_not_entity_order() {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Tab),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers {
                     shift,
                     ..Modifiers::default()
@@ -311,6 +315,7 @@ fn write_key(world: &mut World, key: Key, ctrl: bool, shift: bool) {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key,
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers,
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
@@ -501,6 +506,7 @@ fn tab_cycle_skips_disabled_entities() {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Tab),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),

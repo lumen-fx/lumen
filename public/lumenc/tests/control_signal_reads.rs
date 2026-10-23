@@ -98,6 +98,7 @@ fn focus(app: &mut App, id: &str) {
 fn key(app: &mut App, ch: char) {
     app.world.write_message(KeyPressed {
         key: Key::Character(ch.to_string()),
+        code: lumen_core::input::KeyCode::Unidentified,
         modifiers: Modifiers::default(),
         repeat: false,
         time_stamp: lumen_core::time::Instant::now(),
@@ -254,6 +255,7 @@ fn enter_lets_a_submit_handler_clear_the_field_it_came_from() {
     assert_eq!(text_of(&mut app, "name"), "hello");
     app.world.write_message(KeyPressed {
         key: Key::Named(lumen_core::input::NamedKey::Enter),
+        code: lumen_core::input::KeyCode::Unidentified,
         modifiers: Modifiers::default(),
         repeat: false,
         time_stamp: lumen_core::time::Instant::now(),

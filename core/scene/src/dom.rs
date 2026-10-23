@@ -178,6 +178,14 @@ fn install_dom_events(app: &mut App) {
             // installed (empty set).
             .after(lumen_core::text_events::TextEditSet::Apply),
     );
+    // Pointer-lock asks from scripts and the C ABI reach the input layer
+    // before it decides this tick's lock. A page has no such layer.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dom_events::forward_pointer_lock_asks
+            .before(lumen_input::pointer_lock::grant_pointer_lock),
+    );
     // A module's own events, after the state events so a handler hears a
     // control's `change` before the custom event the control's owner raised
     // about it. A page runs no Rust module to raise one; its add-ons answer

@@ -1433,6 +1433,15 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "The `id` attribute.",
     },
     BuiltinFn {
+        name: "node_request_pointer_lock",
+        params: &[BuiltinParam {
+            name: "node",
+            ty: "int",
+        }],
+        ret: "()",
+        doc: "Lock the pointer to `node`.",
+    },
+    BuiltinFn {
         name: "node_set_pointer_capture",
         params: &[
             BuiltinParam {
@@ -1736,6 +1745,33 @@ pub const BUILTINS: &[BuiltinFn] = &[
         }],
         ret: "string",
         doc: "Key name for keyboard events.",
+    },
+    BuiltinFn {
+        name: "event_code",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "string",
+        doc: "Physical key, the DOM `code`.",
+    },
+    BuiltinFn {
+        name: "event_movement_x",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Pointer motion across.",
+    },
+    BuiltinFn {
+        name: "event_movement_y",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "float",
+        doc: "Pointer motion down.",
     },
     BuiltinFn {
         name: "event_value",

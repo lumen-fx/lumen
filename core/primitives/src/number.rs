@@ -364,6 +364,7 @@ mod tests {
             world.write_message(FocusedKey {
                 entity,
                 key: Key::Named(key),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
             });

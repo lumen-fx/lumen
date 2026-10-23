@@ -28,6 +28,8 @@ use lumen_os_clipboard::ClipboardHost;
 use lumen_text::{UndoStack, hit_test_text, select_line_at_byte, select_word_at_byte};
 use std::sync::Arc;
 
+pub mod pointer_lock;
+
 /// Route [`ImeEvent`]s at the currently-focused entity:
 ///
 /// * `Preedit { text, cursor }` - insert/update [`ImeState`] on the
@@ -1031,6 +1033,18 @@ impl Plugin for InputPlugin {
             request_window_drag_on_titlebar_press.after(dispatch_clicks),
         );
         app.add_systems(TickStage::Systems, focus_on_press.after(dispatch_clicks));
+        // Pointer lock follows focus, so it is granted after this tick's
+        // presses moved it.
+        pointer_lock::install(app);
+        app.add_systems(
+            TickStage::Systems,
+            (
+                pointer_lock::grant_pointer_lock,
+                pointer_lock::settle_pointer_lock,
+            )
+                .chain()
+                .after(focus_on_press),
+        );
         app.add_systems(
             TickStage::Systems,
             cycle_focus_on_tab
@@ -1752,6 +1766,7 @@ pub fn dispatch_focused_keys(
         focused_keys.write(FocusedKey {
             entity,
             key: ev.key.clone(),
+            code: ev.code,
             modifiers: ev.modifiers,
             repeat: ev.repeat,
         });
@@ -2631,6 +2646,7 @@ mod typing_tests {
             .write(FocusedKey {
                 entity,
                 key,
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers,
                 repeat: false,
             });
@@ -2949,6 +2965,7 @@ mod keyboard_activation_tests {
                 .write(FocusedKey {
                     entity,
                     key,
+                    code: lumen_core::input::KeyCode::Unidentified,
                     modifiers: Modifiers::default(),
                     repeat,
                 });
@@ -2959,6 +2976,7 @@ mod keyboard_activation_tests {
                 .resource_mut::<Messages<KeyReleased>>()
                 .write(KeyReleased {
                     key,
+                    code: lumen_core::input::KeyCode::Unidentified,
                     modifiers: Modifiers::default(),
                     time_stamp: lumen_core::time::Instant::now(),
                 });
@@ -3089,6 +3107,7 @@ mod keyboard_activation_tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Escape),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),
@@ -3524,6 +3543,7 @@ mod focus_visible_tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Tab),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),

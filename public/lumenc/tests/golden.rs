@@ -344,12 +344,14 @@ fn pointer_press(app: &mut App, pos: Vec2) {
 fn key_tap(app: &mut App, key: Key) {
     app.world.write_message(KeyPressed {
         key: key.clone(),
+        code: lumen_core::input::KeyCode::Unidentified,
         modifiers: Modifiers::default(),
         repeat: false,
         time_stamp: lumen_core::time::Instant::now(),
     });
     app.world.write_message(KeyReleased {
         key,
+        code: lumen_core::input::KeyCode::Unidentified,
         modifiers: Modifiers::default(),
         time_stamp: lumen_core::time::Instant::now(),
     });

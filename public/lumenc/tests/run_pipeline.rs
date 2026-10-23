@@ -153,6 +153,7 @@ mod pipeline_integration_tests {
                 .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
                 .write(KeyPressed {
                     key: Key::Character("m".into()),
+                    code: lumen_core::input::KeyCode::Unidentified,
                     modifiers: Modifiers::default(),
                     repeat: false,
                     time_stamp: lumen_core::time::Instant::now(),

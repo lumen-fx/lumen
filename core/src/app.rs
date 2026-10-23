@@ -334,6 +334,11 @@ impl App {
         world.insert_resource(FocusTracker::default());
         world.insert_resource(ImeRequest::default());
         world.insert_resource(PendingFileDrops::default());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            world.insert_resource(crate::input::PointerLockRequest::default());
+            world.insert_resource(crate::input::PointerLockState::default());
+        }
 
         // Register pointer, keyboard, drag, IME, file-drop, and system messages so producers and consumers can use `MessageWriter` and `MessageReader`.
         MessageRegistry::register_message::<PointerMoved>(&mut world);
@@ -360,6 +365,14 @@ impl App {
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
         MessageRegistry::register_message::<ContextMenuEvent>(&mut world);
         MessageRegistry::register_message::<crate::input::ControlInput>(&mut world);
+        // Pointer lock is a desktop seam: a page has the browser's own, which
+        // the web build leaves to the page rather than carry this machinery.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            MessageRegistry::register_message::<crate::input::PointerLockAsk>(&mut world);
+            MessageRegistry::register_message::<crate::input::PointerLockChanged>(&mut world);
+            MessageRegistry::register_message::<crate::input::PointerLockError>(&mut world);
+        }
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's
         // `on_close` dispatcher, the C-ABI `lumen_app_on_close` router,

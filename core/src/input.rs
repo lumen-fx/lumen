@@ -3,6 +3,7 @@
 //! - Window backends translate raw OS events into the typed messages defined here.
 //! - `lumen-input` reads them to drive hit-testing, focus routing, and Click/Hover dispatch.
 
+pub use crate::keycode::KeyCode;
 use crate::time::Instant;
 use bevy_ecs::message::Message;
 use bevy_ecs::prelude::*;
@@ -146,6 +147,11 @@ pub struct PointerData {
     /// [`crate::tick::FrameTiming`] of the frame that showed its effect gives
     /// the input-to-screen latency.
     pub time_stamp: Instant,
+    /// How far the pointer moved since its previous move, in logical pixels:
+    /// the web's `movementX` / `movementY`. Under pointer lock (see
+    /// [`PointerLockState`]) the position stays put and this is the raw
+    /// motion the device reported. Zero on presses and releases.
+    pub movement: Vec2,
 }
 
 /// The next [`PointerData::order`] stamp.
@@ -171,6 +177,7 @@ impl PointerData {
             height: 1.0,
             order: 0,
             time_stamp: Instant::now(),
+            movement: Vec2::ZERO,
         }
     }
 
@@ -1210,6 +1217,64 @@ pub struct CursorRequest {
     pub image: Option<CursorImage>,
 }
 
+/// Ask for the pointer to be locked to an element, or released: the DOM's
+/// `requestPointerLock` and `exitPointerLock`.
+///
+/// Anyone writes it (a script call, the C ABI, a plugin). The input layer
+/// grants a lock only the way a browser does: to the element that has
+/// keyboard focus, during or just after a press of a key or a pointer
+/// button. A granted ask becomes the [`PointerLockRequest`] the window
+/// backend applies; a refused one raises [`PointerLockError`].
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerLockAsk {
+    /// The element to lock to, or `None` to release the lock.
+    pub entity: Option<Entity>,
+}
+
+/// The pointer lock the input layer granted, for the window backend to
+/// apply. Escape, the window losing focus, and the element going away all
+/// clear it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PointerLockRequest {
+    /// The element the pointer is to be locked to.
+    pub owner: Option<Entity>,
+}
+
+/// The pointer lock in effect, as the window backend applied it.
+///
+/// While an element holds the lock the cursor is hidden and held in place,
+/// pointer moves keep their position and carry the device's raw motion in
+/// [`PointerData::movement`], and pointer events aim at the element.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PointerLockState {
+    /// The element holding the lock.
+    pub owner: Option<Entity>,
+}
+
+/// Inserted by a window backend that applies [`PointerLockRequest`] itself.
+/// Without one (a headless run), the input layer grants a request at once.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct PointerLockBackend;
+
+/// The pointer lock moved: `owner` holds it now (`None`: nothing does) and
+/// `previous` held it before. Raised as the DOM `pointerlockchange` event.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerLockChanged {
+    /// The element that holds the lock now.
+    pub owner: Option<Entity>,
+    /// The element that held it before.
+    pub previous: Option<Entity>,
+}
+
+/// A pointer lock asked for `entity` was refused: it did not have focus, no
+/// press came just before, or the platform would not lock. Raised as the
+/// DOM `pointerlockerror` event.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerLockError {
+    /// The element the lock was asked for.
+    pub entity: Entity,
+}
+
 /// Named non-printable keys recognised by Lumen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NamedKey {
@@ -1270,6 +1335,116 @@ impl From<&str> for Key {
     }
 }
 
+impl Key {
+    /// The physical key that produces this key on a US layout, for key
+    /// events a program makes up (an automation, a test) that name keys by
+    /// what they mean. A key the US layout does not have is
+    /// [`KeyCode::Unidentified`].
+    pub fn us_code(&self) -> KeyCode {
+        match self {
+            Key::Named(named) => match named {
+                NamedKey::Tab => KeyCode::Tab,
+                NamedKey::Enter => KeyCode::Enter,
+                NamedKey::Escape => KeyCode::Escape,
+                NamedKey::Backspace => KeyCode::Backspace,
+                NamedKey::Space => KeyCode::Space,
+                NamedKey::ArrowUp => KeyCode::ArrowUp,
+                NamedKey::ArrowDown => KeyCode::ArrowDown,
+                NamedKey::ArrowLeft => KeyCode::ArrowLeft,
+                NamedKey::ArrowRight => KeyCode::ArrowRight,
+                NamedKey::Home => KeyCode::Home,
+                NamedKey::End => KeyCode::End,
+                NamedKey::Delete => KeyCode::Delete,
+            },
+            Key::Character(text) => {
+                let mut chars = text.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => us_code_of(c),
+                    _ => match text.as_str() {
+                        "Shift" => KeyCode::ShiftLeft,
+                        "Control" => KeyCode::ControlLeft,
+                        "Alt" => KeyCode::AltLeft,
+                        "Meta" | "Super" => KeyCode::MetaLeft,
+                        name => name.parse().unwrap_or_default(),
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The key that types `c` on a US layout, shifted or not.
+fn us_code_of(c: char) -> KeyCode {
+    const LETTERS: [KeyCode; 26] = [
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        KeyCode::Digit0,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    match c {
+        'a'..='z' => LETTERS[c as usize - 'a' as usize],
+        'A'..='Z' => LETTERS[c as usize - 'A' as usize],
+        '0'..='9' => DIGITS[c as usize - '0' as usize],
+        ')' => KeyCode::Digit0,
+        '!' => KeyCode::Digit1,
+        '@' => KeyCode::Digit2,
+        '#' => KeyCode::Digit3,
+        '$' => KeyCode::Digit4,
+        '%' => KeyCode::Digit5,
+        '^' => KeyCode::Digit6,
+        '&' => KeyCode::Digit7,
+        '*' => KeyCode::Digit8,
+        '(' => KeyCode::Digit9,
+        '-' | '_' => KeyCode::Minus,
+        '=' | '+' => KeyCode::Equal,
+        '[' | '{' => KeyCode::BracketLeft,
+        ']' | '}' => KeyCode::BracketRight,
+        '\\' | '|' => KeyCode::Backslash,
+        ';' | ':' => KeyCode::Semicolon,
+        '\'' | '"' => KeyCode::Quote,
+        ',' | '<' => KeyCode::Comma,
+        '.' | '>' => KeyCode::Period,
+        '/' | '?' => KeyCode::Slash,
+        '`' | '~' => KeyCode::Backquote,
+        ' ' => KeyCode::Space,
+        _ => KeyCode::Unidentified,
+    }
+}
+
 impl From<&str> for PointerButton {
     /// Parses a button name case-insensitively. Recognised values: `"primary"` / `"left"`, `"secondary"` / `"right"`, `"middle"`, `"back"`, `"forward"`, `"eraser"`. Unknown names yield `Primary`.
     fn from(name: &str) -> Self {
@@ -1287,6 +1462,18 @@ impl From<&str> for PointerButton {
 #[cfg(test)]
 mod from_str_tests {
     use super::*;
+
+    /// Made-up key events find the key a US layout types them with.
+    #[test]
+    fn keys_find_their_us_codes() {
+        assert_eq!(Key::from("w").us_code(), KeyCode::KeyW);
+        assert_eq!(Key::from("W").us_code(), KeyCode::KeyW);
+        assert_eq!(Key::from("?").us_code(), KeyCode::Slash);
+        assert_eq!(Key::from("Esc").us_code(), KeyCode::Escape);
+        assert_eq!(Key::from("Shift").us_code(), KeyCode::ShiftLeft);
+        assert_eq!(Key::from("F5").us_code(), KeyCode::F5);
+        assert_eq!(Key::from("\u{e9}").us_code(), KeyCode::Unidentified);
+    }
 
     #[test]
     fn key_from_str_named() {
@@ -1330,6 +1517,9 @@ pub struct ModifiersState(pub Modifiers);
 pub struct KeyPressed {
     /// Logical key.
     pub key: Key,
+    /// Physical key: where it sits, named after the US layout (the DOM's
+    /// `code`).
+    pub code: KeyCode,
     /// Modifier state at time of press.
     pub modifiers: Modifiers,
     /// Whether this is an OS-generated key repeat (held key).
@@ -1343,6 +1533,8 @@ pub struct KeyPressed {
 pub struct KeyReleased {
     /// Logical key.
     pub key: Key,
+    /// Physical key (the DOM's `code`).
+    pub code: KeyCode,
     /// Modifier state at time of release.
     pub modifiers: Modifiers,
     /// When the event happened (see [`PointerData::time_stamp`]).
@@ -1485,6 +1677,8 @@ pub struct FocusedKey {
     pub entity: Entity,
     /// Logical key.
     pub key: Key,
+    /// Physical key (the DOM's `code`).
+    pub code: KeyCode,
     /// Modifier state.
     pub modifiers: Modifiers,
     /// OS-generated repeat.
