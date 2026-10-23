@@ -249,6 +249,9 @@ fn run(
     // tick it triggers instead of riding the next unrelated OS event.
     lumen_core::plugin_events::set_plugin_event_waker(waker.clone());
     app.world.insert_resource(waker);
+    // This backend applies pointer locks itself (see `apply_pointer_lock`).
+    app.world
+        .insert_resource(lumen_core::input::PointerLockBackend);
 
     // Install the window messages and the redraw scheduler before any
     // other system can read them - unless the app already has them. The
@@ -380,6 +383,7 @@ fn run(
         pointers: pointer::PointerTracker::default(),
         focus_requests: MessageCursor::default(),
         ticked: false,
+        lock: None,
     };
     event_loop
         .run_app(&mut handler)
@@ -495,6 +499,23 @@ struct WinitHandler {
     /// Whether the app ticked since the loop last went idle: the first
     /// window to redraw in a batch ticks, the others only present.
     ticked: bool,
+    /// The pointer lock this backend applied, if one is in effect.
+    lock: Option<AppliedLock>,
+}
+
+/// A pointer lock in effect on a platform window.
+struct AppliedLock {
+    /// The element holding it.
+    owner: Entity,
+    /// The window the pointer is locked to.
+    window: WindowId,
+    /// Whether the platform only confines the pointer (X11, Windows): the
+    /// cursor is then put back in the middle of the window after each move
+    /// so it never reaches an edge.
+    confined: bool,
+    /// Where pointer moves report the pointer while locked, in logical
+    /// pixels: where it was when the lock began.
+    position: glam::Vec2,
 }
 
 impl ApplicationHandler<UserEvent> for WinitHandler {
@@ -803,21 +824,31 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 self.present(None);
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Under a pointer lock the position stays put and moves
+                // arrive as raw device motion (`device_event`); the cursor
+                // moves the platform reports then are the recentring.
+                if self.lock.is_some() {
+                    return;
+                }
                 // winit delivers `PhysicalPosition`; convert to logical so
                 // layout, hit-test, and pointer-routed primitives all share
                 // one coordinate space with the window's viewport.
                 let scale_factor = window.scale_factor();
                 let logical = position.to_logical::<f32>(scale_factor);
                 let p = glam::Vec2::new(logical.x, logical.y);
-                {
+                let from = {
                     let mut state = self.app.world.resource_mut::<PointerState>();
+                    let from = state.position.filter(|_| state.window == Some(entity));
                     state.position = Some(p);
                     state.window = Some(entity);
-                }
+                    from
+                };
+                let mut pointer = self.pointers.mouse();
+                pointer.movement = from.map_or(glam::Vec2::ZERO, |from| p - from);
                 self.app.world.write_message(PointerMoved {
                     position: p,
                     local: None,
-                    pointer: self.pointers.mouse().stamped(),
+                    pointer: pointer.stamped(),
                 });
                 self.want_frame();
             }
@@ -850,10 +881,12 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             WindowEvent::KeyboardInput { event, .. } => {
                 let mods = self.app.world.resource::<ModifiersState>().0;
                 if let Some(key) = map_key(&event) {
+                    let code = map_code(&event);
                     match event.state {
                         ElementState::Pressed => {
                             self.app.world.write_message(KeyPressed {
                                 key,
+                                code,
                                 modifiers: mods,
                                 repeat: event.repeat,
                                 time_stamp: lumen_core::time::Instant::now(),
@@ -862,6 +895,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                         ElementState::Released => {
                             self.app.world.write_message(KeyReleased {
                                 key,
+                                code,
                                 modifiers: mods,
                                 time_stamp: lumen_core::time::Instant::now(),
                             });
@@ -1006,6 +1040,45 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             }
             _ => {}
         }
+    }
+
+    /// Raw device input. Only mouse motion under a pointer lock is used: it
+    /// becomes a pointer move that keeps its position and carries the
+    /// motion.
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let winit::event::DeviceEvent::MouseMotion { delta } = event else {
+            return;
+        };
+        let Some(lock) = self.lock.as_ref() else {
+            return;
+        };
+        let Some(os) = self.windows.get(&lock.window) else {
+            return;
+        };
+        let scale = os.window.scale_factor() as f32;
+        let mut pointer = self.pointers.mouse();
+        pointer.movement = glam::Vec2::new(delta.0 as f32, delta.1 as f32) / scale.max(0.01);
+        if lock.confined {
+            let size = os.window.inner_size();
+            let _ = os
+                .window
+                .set_cursor_position(winit::dpi::PhysicalPosition::new(
+                    f64::from(size.width) / 2.0,
+                    f64::from(size.height) / 2.0,
+                ));
+        }
+        let position = lock.position;
+        self.app.world.write_message(PointerMoved {
+            position,
+            local: None,
+            pointer: pointer.stamped(),
+        });
+        self.want_frame();
     }
 
     /// Called by winit after every batch of events and before the loop
@@ -1473,6 +1546,7 @@ impl WinitHandler {
     /// the cursor and the IME state the UI wants, on the window each one
     /// belongs to.
     fn apply_input_requests(&mut self, event_loop: &ActiveEventLoop) {
+        self.apply_pointer_lock();
         let pointer_window = self
             .app
             .world
@@ -1546,6 +1620,85 @@ impl WinitHandler {
             );
         }
         self.last_ime = (Some(id), req);
+    }
+
+    /// Bring the platform's pointer lock in line with the input layer's
+    /// [`lumen_core::input::PointerLockRequest`], and report what took
+    /// effect in [`lumen_core::input::PointerLockState`].
+    ///
+    /// The pointer is locked where the platform locks (Wayland, macOS);
+    /// where it only confines (X11, Windows) the lock is emulated: the
+    /// cursor is confined to the window and hidden, raw motion drives the
+    /// moves, and the cursor goes back to the middle of the window after
+    /// each one.
+    fn apply_pointer_lock(&mut self) {
+        use lumen_core::input::{PointerLockError, PointerLockRequest, PointerLockState};
+        use winit::window::CursorGrabMode;
+        let wanted = self.app.world.resource::<PointerLockRequest>().owner;
+        if wanted == self.lock.as_ref().map(|l| l.owner) {
+            return;
+        }
+        if let Some(old) = self.lock.take()
+            && let Some(os) = self.windows.get(&old.window)
+        {
+            let _ = os.window.set_cursor_grab(CursorGrabMode::None);
+            os.window.set_cursor_visible(true);
+            // The cursor shape goes back on with the next request.
+            self.last_cursor = None;
+        }
+        let mut owner = None;
+        if let Some(entity) = wanted {
+            let window_entity = self
+                .app
+                .world
+                .get_resource::<lumen_core::window::WindowPartitions>()
+                .and_then(|p| p.window_of(entity))
+                .or(self.primary);
+            let found = window_entity
+                .and_then(|e| self.ids.get(&e).copied())
+                .and_then(|id| self.windows.get(&id).map(|os| (id, os.window.clone())));
+            let applied = found.and_then(|(id, window)| {
+                let confined = match window.set_cursor_grab(CursorGrabMode::Locked) {
+                    Ok(()) => false,
+                    Err(_) => {
+                        window.set_cursor_grab(CursorGrabMode::Confined).ok()?;
+                        true
+                    }
+                };
+                window.set_cursor_visible(false);
+                if confined {
+                    let size = window.inner_size();
+                    let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(
+                        f64::from(size.width) / 2.0,
+                        f64::from(size.height) / 2.0,
+                    ));
+                }
+                Some((id, confined))
+            });
+            match applied {
+                Some((window, confined)) => {
+                    let position = self
+                        .app
+                        .world
+                        .resource::<PointerState>()
+                        .position
+                        .unwrap_or_default();
+                    self.lock = Some(AppliedLock {
+                        owner: entity,
+                        window,
+                        confined,
+                        position,
+                    });
+                    owner = Some(entity);
+                }
+                None => {
+                    self.app.world.write_message(PointerLockError { entity });
+                    self.app.world.resource_mut::<PointerLockRequest>().owner = None;
+                }
+            }
+        }
+        self.app.world.resource_mut::<PointerLockState>().owner = owner;
+        self.want_frame();
     }
 
     /// Write a touch or pen contact's message, from the window `entity`.
@@ -2139,6 +2292,26 @@ fn map_cursor_keyword(keyword: CursorKeyword) -> winit::window::CursorIcon {
     }
 }
 
+/// Where the key of `ev` sits, by its DOM `code` name.
+///
+/// winit names physical keys after the same W3C list the DOM does, so the
+/// name carries across, except that winit calls the Meta keys `Super` and
+/// counts function keys past F24, which the DOM has no names for.
+fn map_code(ev: &KeyEvent) -> lumen_core::input::KeyCode {
+    code_of(ev.physical_key)
+}
+
+fn code_of(physical: winit::keyboard::PhysicalKey) -> lumen_core::input::KeyCode {
+    use lumen_core::input::KeyCode;
+    use winit::keyboard::{KeyCode as WinitCode, PhysicalKey};
+    match physical {
+        PhysicalKey::Code(WinitCode::SuperLeft) => KeyCode::MetaLeft,
+        PhysicalKey::Code(WinitCode::SuperRight) => KeyCode::MetaRight,
+        PhysicalKey::Code(code) => format!("{code:?}").parse().unwrap_or_default(),
+        PhysicalKey::Unidentified(_) => KeyCode::Unidentified,
+    }
+}
+
 fn map_key(ev: &KeyEvent) -> Option<Key> {
     match &ev.logical_key {
         WinitKey::Named(named) => Some(match named {
@@ -2540,8 +2713,8 @@ fn wheel_delta(delta: MouseScrollDelta) -> glam::Vec2 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CloseRouting, PresentTarget, WindowSync, attach_first, idle_control_flow, is_input,
-        present_frame, take_platform_size, wheel_delta, window_attributes,
+        CloseRouting, PresentTarget, WindowSync, attach_first, code_of, idle_control_flow,
+        is_input, present_frame, take_platform_size, wheel_delta, window_attributes,
     };
     use bevy_ecs::entity::Entity;
     use bevy_ecs::world::World;
@@ -2553,6 +2726,31 @@ mod tests {
     use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
     use std::any::Any;
     use std::sync::Arc;
+
+    /// winit's physical keys carry their DOM `code` names across, Super
+    /// becoming Meta and the function keys the DOM does not name becoming
+    /// unidentified.
+    #[test]
+    fn physical_keys_take_their_dom_codes() {
+        use lumen_core::input::KeyCode;
+        use winit::keyboard::{KeyCode as W, NativeKeyCode, PhysicalKey as P};
+        for (winit, dom) in [
+            (W::KeyW, KeyCode::KeyW),
+            (W::ShiftLeft, KeyCode::ShiftLeft),
+            (W::Numpad1, KeyCode::Numpad1),
+            (W::Escape, KeyCode::Escape),
+            (W::SuperLeft, KeyCode::MetaLeft),
+            (W::SuperRight, KeyCode::MetaRight),
+            (W::F24, KeyCode::F24),
+            (W::F25, KeyCode::Unidentified),
+        ] {
+            assert_eq!(code_of(P::Code(winit)), dom, "{winit:?}");
+        }
+        assert_eq!(
+            code_of(P::Unidentified(NativeKeyCode::Unidentified)),
+            KeyCode::Unidentified
+        );
+    }
 
     /// A renderer that records what it was asked for and answers whatever
     /// the test tells it to, so the frame gate can be exercised with no

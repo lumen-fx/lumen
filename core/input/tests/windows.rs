@@ -104,6 +104,7 @@ fn tab(world: &mut World) {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Named(NamedKey::Tab),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

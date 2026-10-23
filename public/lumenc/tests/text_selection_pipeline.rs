@@ -223,6 +223,7 @@ fn shift_arrow_extends_the_selection() {
             .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(lumen_core::input::NamedKey::ArrowRight),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers {
                     shift: true,
                     ..Default::default()

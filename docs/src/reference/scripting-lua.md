@@ -352,6 +352,7 @@ that unbinds when called.
 | `Node:set_pointer_capture(pointer_id)` | | Send that pointer's events to this element until its last button comes up. Does nothing while no button is held. |
 | `Node:release_pointer_capture(pointer_id)` | | Give the pointer back to hit testing, when this element holds it. |
 | `Node:has_pointer_capture(pointer_id)` | boolean | Whether this element holds the pointer, counting a capture set in the running handler. |
+| `Node:request_pointer_lock()` | | Lock the pointer to this element: the cursor hides and stays put, and pointer moves carry the motion. Granted only to the focused element, during or just after a key or button press; `pointerlockchange` or `pointerlockerror` on the element answers. |
 
 ```lua
 local off = get_by_id("save"):on("click", function(e)
@@ -370,6 +371,7 @@ The handler receives an `Event`:
 | `current_target()` | `Node` | The element whose handler is running. |
 | `event_type()` | string | Event type name. |
 | `key()` | string | Key name for keyboard events. |
+| `code()` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `value()` | string | Text value for `input` / `change` / `submit`. |
 | `detail()` | table | What a module's custom event carries; empty for a built-in event. |
 | `button()` | integer | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
@@ -384,6 +386,7 @@ The handler receives an `Event`:
 | `width()` / `height()` | number | Contact size in logical pixels; `1` for a point device. |
 | `x()` / `y()` | number | Pointer position relative to the target. |
 | `client_x()` / `client_y()` | number | Pointer position in window coordinates. |
+| `movement_x()` / `movement_y()` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `delta_x()` / `delta_y()` | number | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
 | `position()` | table | `x`, `y`, `client_x`, `client_y`. |
 | `modifiers()` | table | `shift`, `ctrl`, `alt`, `super`. |
@@ -396,7 +399,7 @@ The handler receives an `Event`:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`.
+`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
@@ -421,6 +424,16 @@ the element until its last button comes up, wherever the pointer moves;
 `lostpointercapture` after the release. A touch is captured by the element it
 went down on. `pointercancel` replaces `pointerup` when the system takes a
 touch or pen over mid-gesture.
+
+`request_pointer_lock()` asks for the pointer lock, the way a 3D view or a
+game takes the mouse: the cursor hides and stays where it is, the mouse's
+events go to the element wherever the pointer is, and `movement_x()` /
+`movement_y()` carry the motion. The lock is granted only to the element that
+has focus, during or just after a press of a key or a button (a click on the
+element is both). Escape always ends it, and so does the window losing focus
+or the element going away. `pointerlockchange` fires on the element that took
+the lock and on the one that lost it; `pointerlockerror` fires on an element
+that was refused. Pointer lock is not available in a web build yet.
 
 `input` fires per keystroke: every edit that changes the text raises one,
 carrying the buffer as it stands after that edit. A caret move raises nothing.
@@ -476,6 +489,8 @@ size.
 | `document.focused()` | `Node` or `nil` | The focused element. |
 | `document.hovered()` | `Node` or `nil` | The innermost element under the pointer. |
 | `document.create(tag)` | `Node` | Create a detached element. |
+| `document.exit_pointer_lock()` | | End the pointer lock, whoever holds it. |
+| `document.pointer_lock_element()` | `Node` or `nil` | The element holding the pointer lock. |
 | `app.quit()` | | Quit the app. `on_close` runs first and can cancel the quit. |
 
 ## Page navigation

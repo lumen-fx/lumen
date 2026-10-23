@@ -101,6 +101,8 @@ pub const RESIDUAL_DECLARATIONS: &[(&str, &str)] = &[
     ("document", "int focused();"),
     ("document", "int hovered();"),
     ("document", "int create(string);"),
+    ("document", "exit_pointer_lock();"),
+    ("document", "int pointer_lock_element();"),
     ("app", "quit();"),
 ];
 
@@ -1014,6 +1016,15 @@ fn register_web_namespaces<S: HostFnSink>(engine: &mut S, r: &Registries) {
     });
     engine.register_host_fn("document", "hovered", || -> i64 {
         node_query::hovered_node().map(cd_packed_to_id).unwrap_or(0)
+    });
+    engine.register_host_fn("document", "exit_pointer_lock", || {
+        lumen_script::event::exit_pointer_lock();
+    });
+    engine.register_host_fn("document", "pointer_lock_element", || -> i64 {
+        match lumen_script::event::pointer_lock_element() {
+            0 => 0,
+            packed => cd_packed_to_id(packed),
+        }
     });
     {
         let sink = r.sink.clone();

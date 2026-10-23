@@ -405,6 +405,9 @@ impl UserData for LuaEvent {
         });
         methods.add_method("event_type", |_, _this, ()| Ok(ev::event_type()));
         methods.add_method("key", |_, _this, ()| Ok(ev::event_key()));
+        methods.add_method("code", |_, _this, ()| Ok(ev::event_code()));
+        methods.add_method("movement_x", |_, _this, ()| Ok(ev::event_movement().0));
+        methods.add_method("movement_y", |_, _this, ()| Ok(ev::event_movement().1));
         methods.add_method("value", |_, _this, ()| Ok(ev::event_value()));
         methods.add_method("detail", |lua, _this, ()| {
             script_value_to_lua(lua, &ScriptValue::Map(ev::event_detail()))
@@ -666,6 +669,10 @@ impl UserData for Node {
         methods.add_method("text", |_, this, ()| Ok(node_query::node_text(this.handle)));
         methods.add_method("has_class", |_, this, class: String| {
             Ok(node_query::node_class_contains(this.handle, &class))
+        });
+        methods.add_method("request_pointer_lock", |_, this, ()| {
+            lumen_script::event::request_pointer_lock(this.handle);
+            Ok(())
         });
         methods.add_method("set_pointer_capture", |_, this, pointer_id: u64| {
             lumen_script::event::set_pointer_capture(this.handle, pointer_id);
@@ -1885,6 +1892,22 @@ fn build_lua(
             lua.create_function(
                 |_, ()| Ok(node_query::hovered_node().map(|h| Node { handle: h })),
             )?,
+        )?;
+        document.set(
+            "exit_pointer_lock",
+            lua.create_function(|_, ()| {
+                lumen_script::event::exit_pointer_lock();
+                Ok(())
+            })?,
+        )?;
+        document.set(
+            "pointer_lock_element",
+            lua.create_function(|_, ()| {
+                Ok(match lumen_script::event::pointer_lock_element() {
+                    0 => None,
+                    handle => Some(Node { handle }),
+                })
+            })?,
         )?;
         let mt = lua.create_table()?;
         mt.set(

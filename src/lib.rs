@@ -215,7 +215,15 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// module's custom event carries. An element-event callback bound with
 /// [`lumen_on`] to a custom event's name receives it like a built-in event.
 /// Additive, so a minor bump.
-pub const LUMEN_ABI_MINOR: u32 = 17;
+///
+/// 0.18 reached physical keys and pointer lock: [`lumen_event_code`] reads a
+/// key event's DOM `code`, [`LumenEvent`] gains `movement_x` / `movement_y`
+/// at its end (the pointer's motion since its previous move, the raw device
+/// motion under a lock), and [`lumen_node_request_pointer_lock`],
+/// [`lumen_exit_pointer_lock`] and [`lumen_pointer_lock_element`] join the
+/// node surface. The fields before the new ones keep their offsets; additive,
+/// so a minor bump.
+pub const LUMEN_ABI_MINOR: u32 = 18;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -3704,6 +3712,11 @@ pub struct LumenEvent {
     pub pointer_type: u8,
     /// The primary pointer of its kind (`0` / `1`).
     pub is_primary: u8,
+    /// How far the pointer moved across since its previous move, logical
+    /// pixels; the raw device motion under a pointer lock (ABI 0.18).
+    pub movement_x: f64,
+    /// How far the pointer moved down since its previous move (ABI 0.18).
+    pub movement_y: f64,
 }
 
 /// C callback invoked when a bound event fires. `event` is borrowed for the
@@ -3762,7 +3775,38 @@ fn current_lumen_event() -> LumenEvent {
             lumen_core::input::PointerKind::Touch => 2,
         },
         is_primary: pointer.is_primary as u8,
+        movement_x: f64::from(pointer.movement.x),
+        movement_y: f64::from(pointer.movement.y),
     }
+}
+
+/// Ask for the pointer to be locked to `node` (the web's
+/// `requestPointerLock`). Granted only to the focused node during or just
+/// after a key or button press; the answer arrives as a `pointerlockchange`
+/// or `pointerlockerror` event on the node. Thread-safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_node_request_pointer_lock(node: LumenNode) -> LumenStatus {
+    catch(|| {
+        lumen_script::event::request_pointer_lock(node);
+        LumenStatus::Ok
+    })
+}
+
+/// Release the pointer lock, whoever holds it (the web's
+/// `exitPointerLock`). Thread-safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_exit_pointer_lock() -> LumenStatus {
+    catch(|| {
+        lumen_script::event::exit_pointer_lock();
+        LumenStatus::Ok
+    })
+}
+
+/// The node holding the pointer lock, or `0` for none (the web's
+/// `pointerLockElement`). Thread-safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_pointer_lock_element() -> LumenNode {
+    catch_val(0u64, lumen_script::event::pointer_lock_element)
 }
 
 /// Send pointer `pointer_id`'s events to `node` until its last button comes
@@ -3880,6 +3924,18 @@ pub unsafe extern "C" fn lumen_event_key(
     out_len: *mut usize,
 ) -> LumenStatus {
     catch(|| write_string_out(&lumen_script::event::event_key(), buf, buf_len, out_len))
+}
+
+/// Copy the current event's `code` (keyboard events: where the key sits, by
+/// its DOM name, such as `KeyW`) into `buf`. See [`lumen_event_type`] for the
+/// convention. Thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_event_code(
+    buf: *mut c_char,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> LumenStatus {
+    catch(|| write_string_out(&lumen_script::event::event_code(), buf, buf_len, out_len))
 }
 
 /// Copy the current event's `value` (input / change events) into `buf`. See

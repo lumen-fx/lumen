@@ -118,6 +118,7 @@ fn write_key_mods(app: &mut App, key: Key, modifiers: Modifiers) {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key,
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers,
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

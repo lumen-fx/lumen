@@ -895,6 +895,7 @@ mod tests {
         ecs.world.resource_mut::<FrameDirty>().dirty = false;
         ecs.world.write_message(KeyPressed {
             key: Key::Named(NamedKey::Enter),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

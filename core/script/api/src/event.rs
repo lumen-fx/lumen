@@ -45,6 +45,9 @@ pub struct EventData {
     pub client: (f64, f64),
     /// Logical key for keyboard events (`"a"`, `"Enter"`, `"ArrowLeft"`).
     pub key: String,
+    /// Physical key for keyboard events, the DOM `code` (`"KeyA"`,
+    /// `"ShiftLeft"`); empty for other events.
+    pub code: String,
     /// Shift held.
     pub shift: bool,
     /// Control held.
@@ -140,6 +143,29 @@ pub fn event_key() -> String {
     current_cell()
         .read()
         .map(|g| g.key.clone())
+        .unwrap_or_default()
+}
+
+/// `ev.code()`: the DOM `code` of a key event.
+pub fn event_code() -> String {
+    current_cell()
+        .read()
+        .map(|g| g.code.clone())
+        .unwrap_or_default()
+}
+
+/// `ev.movement_x()` / `ev.movement_y()`: how far the pointer moved since
+/// its previous move, in logical pixels; the raw motion under a pointer
+/// lock.
+pub fn event_movement() -> (f64, f64) {
+    current_cell()
+        .read()
+        .map(|g| {
+            (
+                f64::from(g.pointer.movement.x),
+                f64::from(g.pointer.movement.y),
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -549,6 +575,59 @@ pub fn dispatch(
 // ---------------------------------------------------------------------------
 // Pointer capture.
 //
+// ---------------------------------------------------------------------------
+// Pointer lock: `node.request_pointer_lock()` / `document::exit_pointer_lock()`.
+// ---------------------------------------------------------------------------
+
+static POINTER_LOCK_ASKS: std::sync::Mutex<Vec<Option<u64>>> = std::sync::Mutex::new(Vec::new());
+static POINTER_LOCK_ELEMENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `node.request_pointer_lock()`: ask for the pointer to be locked to
+/// `node`. The input layer decides on the next tick; the answer arrives as a
+/// `pointerlockchange` or `pointerlockerror` event on the node. Thread-safe.
+pub fn request_pointer_lock(node: u64) {
+    // A page has the browser's own pointer lock, which the web build does
+    // not reach; the ask is dropped there.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    POINTER_LOCK_ASKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(Some(node));
+}
+
+/// `document::exit_pointer_lock()`: release the pointer lock, whoever holds
+/// it. Thread-safe.
+pub fn exit_pointer_lock() {
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    POINTER_LOCK_ASKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(None);
+}
+
+/// The asks made since the last call, oldest first.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn take_pointer_lock_asks() -> Vec<Option<u64>> {
+    std::mem::take(&mut *POINTER_LOCK_ASKS.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// `document::pointer_lock_element()`: the node holding the pointer lock, or
+/// `0` for none.
+pub fn pointer_lock_element() -> u64 {
+    POINTER_LOCK_ELEMENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record which node holds the pointer lock, as the event layer saw it
+/// change.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn set_pointer_lock_element(node: Option<u64>) {
+    POINTER_LOCK_ELEMENT.store(node.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
 // `node.set_pointer_capture(id)` aims every later event of pointer `id` at
 // the node until the pointer's last button comes up, whatever is under the
 // pointer, the web's `setPointerCapture`. The state follows the web's two

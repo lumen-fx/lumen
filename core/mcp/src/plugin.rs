@@ -395,7 +395,7 @@ fn drain_simulate_queue(
                 pointer: spec,
             } => {
                 let at = glam::Vec2::new(x, y);
-                let data = sim_buttons.data(spec.as_ref(), None);
+                let mut data = sim_buttons.data(spec.as_ref(), None);
                 // Mirror the winit backend's `CursorMoved` handling: update
                 // `PointerState.position` as well as writing the message, so
                 // `hit_test` (which reads the resource, not the message ring)
@@ -403,6 +403,7 @@ fn drain_simulate_queue(
                 // this, a simulated move/click is invisible to hit-testing and
                 // input routes to wherever the real OS cursor last hovered.
                 if data.is_primary {
+                    data.movement = pointer.position.map_or(glam::Vec2::ZERO, |from| at - from);
                     pointer.position = Some(at);
                 }
                 moved.write(PointerMoved {
@@ -515,12 +516,14 @@ fn drain_simulate_queue(
                 let k: Key = key.as_str().into();
                 let m: Modifiers = modifiers.into();
                 key_pressed.write(KeyPressed {
+                    code: k.us_code(),
                     key: k.clone(),
                     modifiers: m,
                     repeat: false,
                     time_stamp: lumen_core::time::Instant::now(),
                 });
                 key_released.write(KeyReleased {
+                    code: k.us_code(),
                     key: k,
                     modifiers: m,
                     time_stamp: lumen_core::time::Instant::now(),
@@ -529,8 +532,10 @@ fn drain_simulate_queue(
             SimulateKind::KeyDown { key, modifiers } => {
                 let m: Modifiers = modifiers.into();
                 modifiers_state.0 = m;
+                let k: Key = key.as_str().into();
                 key_pressed.write(KeyPressed {
-                    key: key.as_str().into(),
+                    code: k.us_code(),
+                    key: k,
                     modifiers: m,
                     repeat: false,
                     time_stamp: lumen_core::time::Instant::now(),
@@ -539,8 +544,10 @@ fn drain_simulate_queue(
             SimulateKind::KeyUp { key, modifiers } => {
                 let m: Modifiers = modifiers.into();
                 modifiers_state.0 = m;
+                let k: Key = key.as_str().into();
                 key_released.write(KeyReleased {
-                    key: key.as_str().into(),
+                    code: k.us_code(),
+                    key: k,
                     modifiers: m,
                     time_stamp: lumen_core::time::Instant::now(),
                 });
@@ -550,12 +557,14 @@ fn drain_simulate_queue(
                 for ch in text.chars() {
                     let k = Key::Character(ch.to_string());
                     key_pressed.write(KeyPressed {
+                        code: k.us_code(),
                         key: k.clone(),
                         modifiers: m,
                         repeat: false,
                         time_stamp: lumen_core::time::Instant::now(),
                     });
                     key_released.write(KeyReleased {
+                        code: k.us_code(),
                         key: k,
                         modifiers: m,
                         time_stamp: lumen_core::time::Instant::now(),

@@ -3297,6 +3297,7 @@ mod escape_tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Escape),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),
@@ -3628,6 +3629,7 @@ mod dialog_contract_tests {
             .resource_mut::<Messages<KeyPressed>>()
             .write(KeyPressed {
                 key: Key::Named(NamedKey::Enter),
+                code: lumen_core::input::KeyCode::Unidentified,
                 modifiers: Modifiers::default(),
                 repeat: false,
                 time_stamp: lumen_core::time::Instant::now(),

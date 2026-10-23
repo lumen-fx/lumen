@@ -260,6 +260,11 @@ impl Node {
     fn has_pointer_capture(self, pointer_id) {
         return lumen::node_has_pointer_capture(self.handle, pointer_id);
     }
+
+    // -- pointer lock --
+    fn request_pointer_lock(self) {
+        return lumen::node_request_pointer_lock(self.handle);
+    }
 }
 
 impl Event {
@@ -267,6 +272,7 @@ impl Event {
     fn current_target(self) { return node(lumen::event_current_target(self.handle)); }
     fn event_type(self) { return lumen::event_type(self.handle); }
     fn key(self) { return lumen::event_key(self.handle); }
+    fn code(self) { return lumen::event_code(self.handle); }
     fn value(self) { return lumen::event_value(self.handle); }
     fn detail(self) { return lumen::event_detail(self.handle); }
     fn button(self) { return lumen::event_button(self.handle); }
@@ -287,6 +293,8 @@ impl Event {
     fn twist(self) { return lumen::event_twist(self.handle); }
     fn width(self) { return lumen::event_width(self.handle); }
     fn height(self) { return lumen::event_height(self.handle); }
+    fn movement_x(self) { return lumen::event_movement_x(self.handle); }
+    fn movement_y(self) { return lumen::event_movement_y(self.handle); }
     fn shift(self) { return lumen::event_shift(self.handle); }
     fn ctrl(self) { return lumen::event_ctrl(self.handle); }
     fn alt(self) { return lumen::event_alt(self.handle); }

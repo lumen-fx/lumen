@@ -391,6 +391,7 @@ fn f12_toggles_visibility_and_mirrors_the_root() {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Character("F12".into()),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

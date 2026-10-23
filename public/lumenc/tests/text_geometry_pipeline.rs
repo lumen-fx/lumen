@@ -215,6 +215,7 @@ fn typing_after_a_click_inserts_at_the_clicked_point() {
         .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Character("Z".into()),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
@@ -251,6 +252,7 @@ fn backspace_after_a_click_deletes_at_the_clicked_point() {
         .resource_mut::<bevy_ecs::message::Messages<KeyPressed>>()
         .write(KeyPressed {
             key: Key::Named(NamedKey::Backspace),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

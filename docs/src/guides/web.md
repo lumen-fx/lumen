@@ -791,6 +791,9 @@ none of them means anything without an absolute address.
   read what was dropped, are desktop only: `draggable="true"` has no effect
   in a browser, so an element cannot start a drag there in the first place,
   and a drop on the web target delivers nothing.
+- `request_pointer_lock` does nothing in a browser, so `pointerlockchange`
+  never fires there and `pointer_lock_element()` stays empty. A pointer's
+  `movement_x` and `movement_y` are the browser's own readings.
 
 ## Reference
 

@@ -165,14 +165,18 @@ receives an event it can inspect and control, with `target`, `current_target`,
 The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
 `pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
 `gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
-`input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`
+`input`, `change`, `focus`, `blur`, `submit`, `scroll`, `pointerlockchange`,
+and `pointerlockerror`. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit. `click` and `contextmenu` have a default action to prevent:
 `click` suppresses the navigation an `<a href>` would otherwise perform, and
 `contextmenu` keeps a browser from opening its own menu in a web build. Key
 events go to the focused element; with nothing focused they go to the
 document, so bind
-app-wide shortcuts on `document_node()`.
+app-wide shortcuts on `document_node()`. A key event's `key` is what the key
+means under the user's layout and its `code` is where the key sits (`KeyW`,
+`ShiftLeft`), named after the US layout; bind a game's movement keys by
+`code`, so they stay put on every layout.
 
 Pointer events come from the mouse, a pen, or a finger, and carry what the
 device reports under the web's names: `pointer_id`, `pointer_type` (`"mouse"`,
@@ -195,6 +199,28 @@ From the pointer's next event until its last button comes up, its events go to
 that element wherever the pointer moves, outside the window included, with
 `gotpointercapture` before them and `lostpointercapture` after. A finger is
 captured by the element it touched without asking.
+
+A 3D view or a game takes the mouse with a pointer lock: the cursor hides and
+stays put, and each move carries how far the mouse went in `movement_x` and
+`movement_y`.
+
+```rust
+fn on_view_click(ev: int) {
+    event(ev).current_target().request_pointer_lock();
+}
+
+fn on_view_move(ev: int) {
+    let e = event(ev);
+    orbit(e.movement_x(), e.movement_y());
+}
+```
+
+The lock goes only to the element that has focus, during or just after a
+press (the click that focused it counts), and Escape always gives the mouse
+back, as does the window losing focus. `pointerlockchange` says when the lock
+starts and ends, `pointerlockerror` when it was refused, and
+`document::exit_pointer_lock()` ends it from a script. A page does not offer
+pointer lock yet.
 
 What a pen or a touch screen reports depends on the desktop. On Windows a pen
 reports pressure, tilt, twist, its barrel button and its eraser, and a touch

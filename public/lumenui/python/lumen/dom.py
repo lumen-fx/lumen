@@ -51,6 +51,8 @@ __all__ = [
     "get_by_id",
     "document",
     "spawn",
+    "exit_pointer_lock",
+    "pointer_lock_element",
     "dump_tree",
     "signals_all",
     "pointer_state",
@@ -225,6 +227,16 @@ class Node:
         holds it (``releasePointerCapture``)."""
 
         get_library().lumen_node_release_pointer_capture(self._h, pointer_id)
+
+    # -- pointer lock --
+
+    def request_pointer_lock(self) -> None:
+        """Ask for the pointer to be locked to this node
+        (``requestPointerLock``). Granted only to the focused node during or
+        just after a key or button press; a ``pointerlockchange`` or
+        ``pointerlockerror`` event on the node answers."""
+
+        get_library().lumen_node_request_pointer_lock(self._h)
 
     def has_pointer_capture(self, pointer_id: int) -> bool:
         """Whether this node holds pointer ``pointer_id``
@@ -590,6 +602,19 @@ class Event:
 
         return _read_string_out(get_library().lumen_event_key)
 
+    def code(self) -> str:
+        """Where the key of a key event sits, by its DOM ``code`` name
+        (``"KeyW"``, ``"ShiftLeft"``)."""
+
+        return _read_string_out(get_library().lumen_event_code)
+
+    def movement(self) -> tuple[float, float]:
+        """How far the pointer moved since its previous move ``(dx, dy)``,
+        in logical pixels; the raw device motion under a pointer lock."""
+
+        ev = self._ev
+        return (ev.movement_x, ev.movement_y) if ev else (0.0, 0.0)
+
     def value(self) -> str:
         """The value for input / change events."""
 
@@ -758,6 +783,19 @@ def document() -> Optional[Node]:
     if lib.lumen_document(ctypes.byref(out)) == _OK and out.value != 0:
         return Node(out.value)
     return None
+
+
+def exit_pointer_lock() -> None:
+    """Release the pointer lock, whoever holds it (``exitPointerLock``)."""
+
+    get_library().lumen_exit_pointer_lock()
+
+
+def pointer_lock_element() -> Optional[Node]:
+    """The node holding the pointer lock, or ``None``."""
+
+    handle = get_library().lumen_pointer_lock_element()
+    return Node(handle) if handle else None
 
 
 def spawn(tag: str) -> Node:

@@ -142,6 +142,8 @@ enum PendingEvent {
         down: bool,
         /// The key, already in Lumen's spelling.
         key: Key,
+        /// `KeyboardEvent.code`: where the key sits.
+        code: lumen_core::input::KeyCode,
         /// Modifier state the browser reported on this event.
         modifiers: Modifiers,
         /// `KeyboardEvent.repeat`: the OS repeating a held key.
@@ -1210,6 +1212,7 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                     queue(PendingEvent::Key {
                         down,
                         key,
+                        code: event.code().parse().unwrap_or_default(),
                         modifiers,
                         repeat: event.repeat(),
                         time_stamp: event_time(event),
@@ -1489,6 +1492,7 @@ pub fn drain_dom_events(
             PendingEvent::Key {
                 down,
                 key,
+                code,
                 modifiers,
                 repeat,
                 time_stamp,
@@ -1497,6 +1501,7 @@ pub fn drain_dom_events(
                 if down {
                     presses.write(KeyPressed {
                         key,
+                        code,
                         modifiers,
                         repeat,
                         time_stamp,
@@ -1504,6 +1509,7 @@ pub fn drain_dom_events(
                 } else {
                     releases.write(KeyReleased {
                         key,
+                        code,
                         modifiers,
                         time_stamp,
                     });

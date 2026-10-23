@@ -130,6 +130,7 @@ fn press_key(world: &mut World, key: Key) {
         .resource_mut::<Messages<KeyPressed>>()
         .write(KeyPressed {
             key,
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers: Modifiers::default(),
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
@@ -586,6 +587,7 @@ fn a_menu_bar_shortcut_reaches_its_item_in_a_window_app() {
     app.world.spawn(ReservedEdge::Top);
     app.world.write_message(KeyPressed {
         key: Key::from("o"),
+        code: lumen_core::input::KeyCode::Unidentified,
         modifiers: Modifiers {
             ctrl: true,
             ..Modifiers::default()
