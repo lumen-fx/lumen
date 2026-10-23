@@ -116,8 +116,9 @@ engine presents the textures it renders there. See
 - Shared frames need the GPU renderer. Under the CPU renderer a surface is
   `unsupported`, and in a web build it is a placeholder.
 - Surfaces work on Linux, with Vulkan on both sides of a producer in
-  another process. On Windows a `<surface>` does not start yet, and on macOS
-  a producer in another process is refused.
+  another process. On Windows a surface has no endpoint, so only an engine
+  in your app can feed it, and on macOS a producer in another process is
+  refused.
 - The frame is shown as it is: opaque, upright and unblended. Clipping by an
   ancestor and content painted over the surface work; under an `opacity`
   below 1 or a `mask-image` the frame is not drawn, and `surfaceerror` says

@@ -232,7 +232,7 @@ fn an_in_process_producer_shows_through_the_loopback() {
     app.world.despawn(e);
     app.tick();
     assert!(
-        Surfaces.endpoint("loop").is_none(),
+        Surfaces.state("loop").is_none(),
         "a removed element's surface goes"
     );
     assert_validation_clean();

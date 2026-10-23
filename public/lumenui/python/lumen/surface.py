@@ -11,7 +11,7 @@ from .api import call
 
 
 def endpoint(id: str) -> str:
-    """The endpoint string a producer connects to the surface with: hand it to the producer, by the LUMEN_SURFACE environment variable by convention. Empty when no surface has the id."""
+    """The endpoint string a producer connects to the surface with: hand it to the producer, by the LUMEN_SURFACE environment variable by convention. Empty when no surface has the id, and on Windows, where a producer in another process cannot connect yet."""
 
     return call("surface", "endpoint", id)  # type: ignore[return-value]
 

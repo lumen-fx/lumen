@@ -552,8 +552,9 @@ with the reason `effect`.
 In a web build the element is a placeholder in the `unsupported` state, and
 `lumenc web` says so when an app uses it.
 
-Surfaces work on Linux. On Windows a `<surface>` does not start yet, and on
-macOS a producer in another process is refused.
+Surfaces work on Linux. On Windows a surface has no endpoint, so only an engine
+linked into the app can feed it, and on macOS a producer in another process is
+refused.
 
 ## Controls
 

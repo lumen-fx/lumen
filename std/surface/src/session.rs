@@ -191,7 +191,9 @@ pub struct Shared {
     /// The channel producers ask for.
     pub channel: String,
     token: [u8; 16],
-    path: std::path::PathBuf,
+    /// Where producers connect; `None` on a platform with no transport,
+    /// where only an in-process producer feeds the surface.
+    path: Option<std::path::PathBuf>,
     adapter_hint: Mutex<Option<(AdapterHint, String)>>,
     /// Where the element showed in the last frame painted, in logical
     /// pixels: `x, y, width, height`. `None` when it was not drawn.
@@ -214,21 +216,25 @@ impl Shared {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The endpoint string a producer connects with.
-    pub fn endpoint(&self) -> String {
+    /// The endpoint string a producer connects with, or `None` on a
+    /// platform with no transport for one.
+    pub fn endpoint(&self) -> Option<String> {
+        let path = self.path.clone()?;
         let hint = self
             .adapter_hint
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        Endpoint {
-            transport: Transport::Unix(self.path.clone()),
-            channel: self.channel.clone(),
-            token: self.token,
-            adapter: hint.as_ref().map(|(h, _)| *h),
-            adapter_name: hint.map(|(_, name)| name),
-        }
-        .to_string()
+        Some(
+            Endpoint {
+                transport: Transport::Unix(path),
+                channel: self.channel.clone(),
+                token: self.token,
+                adapter: hint.as_ref().map(|(h, _)| *h),
+                adapter_name: hint.map(|(_, name)| name),
+            }
+            .to_string(),
+        )
     }
 
     /// Record the GPU the consumer renders on, for the endpoint string.
@@ -510,17 +516,27 @@ pub trait Backend: Send + Sync + 'static {
 }
 
 /// Start a session for an element: bind its listener and run its thread.
+/// On a platform with no transport there is no listener and no thread, and
+/// the session serves in-process producers only.
 ///
 /// # Errors
 ///
 /// The listener could not be bound.
 pub fn start<B: Backend>(id: &str, channel: &str, backend: Arc<B>) -> std::io::Result<Arc<Shared>> {
-    let listener = Listener::bind_fresh()?;
+    let listener = match Listener::bind_fresh() {
+        Ok(listener) => Some(listener),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => None,
+        Err(e) => return Err(e),
+    };
+    let token = match &listener {
+        Some(_) => random_bytes()?,
+        None => [0; 16],
+    };
     let shared = Arc::new(Shared {
         id: id.to_string(),
         channel: channel.to_string(),
-        token: random_bytes()?,
-        path: listener.path().to_path_buf(),
+        token,
+        path: listener.as_ref().map(|l| l.path().to_path_buf()),
         adapter_hint: Mutex::new(None),
         placement: Mutex::new(None),
         refused: Mutex::new(None),
@@ -548,10 +564,12 @@ pub fn start<B: Backend>(id: &str, channel: &str, backend: Arc<B>) -> std::io::R
         }),
         waker: Mutex::new(None),
     });
-    let thread_shared = shared.clone();
-    std::thread::Builder::new()
-        .name(format!("lumen-surface {id}"))
-        .spawn(move || run(listener, thread_shared, backend))?;
+    if let Some(listener) = listener {
+        let thread_shared = shared.clone();
+        std::thread::Builder::new()
+            .name(format!("lumen-surface {id}"))
+            .spawn(move || run(listener, thread_shared, backend))?;
+    }
     Ok(shared)
 }
 

@@ -38,8 +38,9 @@ pub struct SurfaceElement {
 }
 
 impl SurfaceElement {
-    /// The endpoint string a producer connects with.
-    pub fn endpoint(&self) -> String {
+    /// The endpoint string a producer connects with; `None` on a platform
+    /// with no transport for a producer in another process.
+    pub fn endpoint(&self) -> Option<String> {
         self.shared.endpoint()
     }
 
@@ -152,8 +153,10 @@ pub struct Surfaces;
 impl Surfaces {
     /// The endpoint string for the surface with `id`: hand it to the
     /// producer, by the `LUMEN_SURFACE` environment variable by convention.
+    /// `None` when no surface has the id, or on a platform with no transport
+    /// for a producer in another process.
     pub fn endpoint(&self, id: &str) -> Option<String> {
-        find(id).map(|e| e.shared.endpoint())
+        find(id).and_then(|e| e.shared.endpoint())
     }
 
     /// Where the surface with `id` stands.
