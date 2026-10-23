@@ -6,7 +6,9 @@
 //! geometry, brushes, images, and glyphs, so it can cross into the render
 //! world and outlive the call that made it.
 
-use crate::{GlyphRun, MaskKind, Painter, PixelImage, Shape};
+use crate::{
+    BackendImage, GlyphRun, MaskKind, Painter, PixelImage, Shape, TextureId, TextureRefusal,
+};
 use lumen_text::GlyphPosition;
 use peniko::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
 use peniko::{
@@ -25,13 +27,19 @@ pub enum OwnedShape {
     Path(BezPath),
 }
 
-impl OwnedShape {
-    fn from_shape(shape: &Shape<'_>) -> Self {
+impl From<&Shape<'_>> for OwnedShape {
+    fn from(shape: &Shape<'_>) -> Self {
         match shape {
             Shape::Rect(r) => OwnedShape::Rect(*r),
             Shape::RoundedRect(r) => OwnedShape::RoundedRect(*r),
             Shape::Path(p) => OwnedShape::Path((*p).clone()),
         }
+    }
+}
+
+impl OwnedShape {
+    fn from_shape(shape: &Shape<'_>) -> Self {
+        Self::from(shape)
     }
 
     /// The borrowed form a [`Painter`] takes.
@@ -102,6 +110,16 @@ pub enum Command {
     /// the pixels it was drawn with.
     Pixels {
         image: PixelImage,
+        sampler: ImageSampler,
+        transform: Affine,
+    },
+    /// [`Painter::draw_texture`]. The fallback is a clone, like
+    /// [`Command::Pixels`]'s image.
+    Texture {
+        id: TextureId,
+        width: u32,
+        height: u32,
+        fallback: Option<PixelImage>,
         sampler: ImageSampler,
         transform: Affine,
     },
@@ -267,6 +285,28 @@ impl Recording {
                     let sampler = quality.map_or(*sampler, |q| sampler.with_quality(q));
                     painter.draw_pixels(image, sampler, transform * *t);
                 }
+                Command::Texture {
+                    id,
+                    width,
+                    height,
+                    fallback,
+                    sampler,
+                    transform: t,
+                } => {
+                    let sampler = quality.map_or(*sampler, |q| sampler.with_quality(q));
+                    // A refusal is the sink's to report; a replay has nobody
+                    // to hand it to.
+                    let _ = painter.draw_texture(
+                        &BackendImage {
+                            id: *id,
+                            width: *width,
+                            height: *height,
+                            fallback: fallback.as_ref(),
+                        },
+                        sampler,
+                        transform * *t,
+                    );
+                }
                 Command::Glyphs {
                     font,
                     font_size,
@@ -414,6 +454,25 @@ impl Painter for Recording {
             sampler,
             transform,
         });
+    }
+
+    /// Recorded as it was asked; whether the texture shows is up to the sink
+    /// the recording replays into.
+    fn draw_texture(
+        &mut self,
+        image: &BackendImage<'_>,
+        sampler: ImageSampler,
+        transform: Affine,
+    ) -> Result<(), TextureRefusal> {
+        self.commands.push(Command::Texture {
+            id: image.id,
+            width: image.width,
+            height: image.height,
+            fallback: image.fallback.cloned(),
+            sampler,
+            transform,
+        });
+        Ok(())
     }
 
     fn draw_glyphs(&mut self, run: &GlyphRun<'_>) {

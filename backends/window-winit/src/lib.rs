@@ -586,6 +586,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             event_loop.exit();
             return;
         }
+        self.renderer.publish(&mut self.app.render_world);
         let sync = WindowSync::opened(&title, logical);
         self.insert(primary, window, a11y, sync);
         self.primary = Some(primary);
@@ -1366,6 +1367,7 @@ impl WinitHandler {
         ) {
             lumen_core::warn_line!("lumen-window-winit: a window's renderer failed: {e}");
         }
+        self.renderer.publish(&mut self.app.render_world);
         // A window that does not set the pace does not wait for the
         // display's refresh.
         self.renderer.set_present_mode(entity, PresentMode::NoWait);
@@ -2639,7 +2641,10 @@ mod tests {
 
     fn app_with_frame_state(dirty: bool) -> App {
         let mut app = App::new();
-        app.world.insert_resource(FrameDirty { dirty });
+        app.world.insert_resource(FrameDirty {
+            dirty,
+            present: false,
+        });
         app.world.insert_resource(RedrawScheduler::default());
         app
     }

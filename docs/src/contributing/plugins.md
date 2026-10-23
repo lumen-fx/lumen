@@ -500,6 +500,18 @@ script's calls as they arrive, goes into a `lumen_paint::Recording`: a
 `Painter` that keeps its calls, which the native painter replays into the
 frame's target.
 
+A frame another GPU renderer drew is shown through
+`Painter::draw_texture`: the painter names a `TextureId`, and the GPU backend
+shows that texture beneath the frame without copying it into the scene.
+Present the texture first through `GpuTextures`, a render-world resource the
+GPU renderer inserts beside `GpuContext`, its device and queue. A module
+reaches both through the module SDK's off-by-default `gpu` feature, at
+`lumen_module::gpu`, which also re-exports the renderer's `wgpu`, so the
+module creates its textures with the same wgpu types the renderer samples
+them with. `draw_texture` returns the `TextureRefusal` that kept a texture
+off screen: the CPU renderer has no GPU textures, and the GPU renderer shows
+a texture only as it is, never faded, masked, blended or rotated.
+
 The paint context carries no text shaper. Draw text through a sibling text
 element, or shape it yourself before extract.
 

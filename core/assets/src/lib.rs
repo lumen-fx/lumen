@@ -2400,7 +2400,10 @@ mod tests {
         let mut server = AssetServer::default();
         server.insert_image(path.clone(), LoadedImage(make_image_data(64).into()));
         world.insert_resource(server);
-        world.insert_resource(FrameDirty { dirty: false });
+        world.insert_resource(FrameDirty {
+            dirty: false,
+            present: false,
+        });
         let e = world.spawn(ImageSource(path)).id();
 
         world.run_system_once(spawn_pending_decodes).unwrap();

@@ -429,12 +429,24 @@ impl WindowScales {
 pub struct FrameDirty {
     /// `true` when the upcoming frame needs a fresh GPU encode.
     pub dirty: bool,
+    /// `true` when nothing in the world changed but something the render
+    /// backend holds did (a texture another thread presented), so the frame
+    /// is worth putting up again from what was already extracted. A tick
+    /// that is not [`Self::dirty`] then runs the render schedule without
+    /// extracting, and the renderer decides what to redraw. [`App::tick`]
+    /// clears it.
+    ///
+    /// [`App::tick`]: crate::app::App::tick
+    pub present: bool,
 }
 
 impl Default for FrameDirty {
     fn default() -> Self {
         // Start dirty so the initial frame paints.
-        Self { dirty: true }
+        Self {
+            dirty: true,
+            present: false,
+        }
     }
 }
 

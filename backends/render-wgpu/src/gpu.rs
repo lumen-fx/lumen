@@ -404,6 +404,12 @@ pub(crate) struct GpuCore {
     /// uploaded, so a frame that uploads several reuses one allocation.
     /// Emptied at the end of the frame.
     scratch: Vec<u8>,
+    /// The pass that puts backend textures beneath a frame, made the first
+    /// time a frame shows one.
+    composer: Option<crate::compose::Composer>,
+    /// Which bring-up of the process this device is (see
+    /// [`crate::GpuContext::generation`]).
+    pub(crate) generation: u64,
 }
 
 /// One pixel image's pixels on the GPU, the image vello draws it through,
@@ -470,6 +476,12 @@ impl GpuCore {
                 resident: HashMap::new(),
                 pixel_target: None,
                 scratch: Vec::new(),
+                composer: None,
+                generation: {
+                    static BRING_UPS: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    BRING_UPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+                },
             },
             surface,
         ))
@@ -908,6 +920,43 @@ impl GpuCore {
             }
             live
         });
+    }
+
+    /// The backend textures the frame just painted shows, in paint order.
+    pub(crate) fn placements(&mut self) -> Vec<crate::sink::Placement> {
+        self.painter
+            .native()
+            .downcast_ref::<VelloPainter>()
+            .expect("the GPU renderer paints through a VelloPainter")
+            .placements()
+            .to_vec()
+    }
+
+    /// Encode `draws` beneath `frame` into `target`, a `format` view of the
+    /// frame's size.
+    pub(crate) fn compose(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        frame: &FrameTexture,
+        draws: &[crate::compose::Draw<'_>],
+    ) {
+        let device = &self.device;
+        let composer = self
+            .composer
+            .get_or_insert_with(|| crate::compose::Composer::new(device));
+        composer.encode(
+            device,
+            encoder,
+            crate::compose::Output {
+                view: target,
+                format,
+                size: frame.size(),
+            },
+            &frame.srgb,
+            draws,
+        );
     }
 
     /// Copy `frame` to the CPU as tightly packed RGBA8: exactly the bytes

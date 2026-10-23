@@ -802,6 +802,25 @@ the previous frame's, skip the frame entirely when nothing visible changed
 (leaving the last one on screen), and answer a screenshot request from the
 frame they just painted.
 
+A frame another renderer drew reaches the walker as a backend texture:
+`Painter::draw_texture` with a `TextureId`. A sink that cannot show it draws
+the fallback pixels, if any, and says why through `TextureRefusal`. The GPU
+sink shows a texture beneath the frame rather than in it: it cuts a hole
+through the frame where the texture lands, inside whatever clips are open,
+and records the placement. A compose pass then draws each placed texture
+into the window and the frame over it, so the texture is never copied into
+the vello scene and content painted over it still draws on top. The texture
+is shown as it is: inside a kept layer, under an opacity, a mask or a blend
+mode, or through a rotation or flip, the sink refuses it. When only the
+textures changed, the renderer composes again without walking the tree, and
+`FrameDirty::present` lets a plugin ask for that frame without dirtying the
+tree. The textures live in `GpuTextures`, a table keyed by `TextureId` with a
+callback per texture that fires once the GPU is done sampling the one it
+replaced; it and `GpuContext`, the renderer's device and queue, are render
+world resources the renderer inserts through `Renderer::publish` once a
+target is attached. `GpuContext::generation` changes when the device does, so
+a holder of device resources can tell its textures are gone.
+
 Which backend renders is the app's choice, `[render] backend` in `lumen.toml`.
 Each backend registers itself into the `RenderBackends` registry in
 `lumen-core` from its capability crate while the app builds, under a name and
@@ -829,8 +848,8 @@ caller, and a headless run exercises the same device bring-up, frame gate,
 walk, and encode a windowed app ships. Vello's compute pipeline pins its render
 target to a linear RGBA format, while most swap chains expose a BGRA sRGB
 surface, so the GPU renderer always draws into a texture of the required
-format; a window blits that onto the surface, an offscreen target reads it
-back. Which GPU backend is compiled is decided at the manifest level, one per
+format; a window composes that onto the surface, with any backend textures
+beneath it, and an offscreen target reads the composed image back. Which GPU backend is compiled is decided at the manifest level, one per
 operating system. The CPU renderer hands its rasterized frame to softbuffer,
 the platform's own path for showing a CPU buffer in a window.
 

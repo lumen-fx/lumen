@@ -8,6 +8,7 @@
 //! present are the only parts of a frame that exist for a window; everything
 //! before them is the shared [`GpuCore`].
 
+use crate::compose::Draw;
 use crate::gpu::{FrameTexture, GpuCore};
 use lumen_core::traits::PresentMode;
 use lumen_core::traits::RenderError;
@@ -105,13 +106,15 @@ impl SurfaceFront {
         }
     }
 
-    /// Put `frame` on screen: acquire the next swap-chain texture, blit,
+    /// Put `frame` on screen: acquire the next swap-chain texture, blit (or
+    /// compose `draws` beneath the frame when it shows backend textures),
     /// present. Returns whether the frame went up; a skipped acquire is not
     /// an error.
     pub(crate) fn present(
         &mut self,
-        gpu: &GpuCore,
+        gpu: &mut GpuCore,
         frame_texture: &FrameTexture,
+        draws: &[Draw<'_>],
     ) -> Result<bool, RenderError> {
         // wgpu 29 reports each non-success acquire outcome with what to do:
         //   - Suboptimal: a usable texture, but the swap chain no longer
@@ -166,12 +169,22 @@ impl SurfaceFront {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("lumen blit encoder"),
             });
-        self.blitter.copy(
-            &gpu.device,
-            &mut encoder,
-            frame_texture.srgb_view(),
-            &surface_view,
-        );
+        if draws.is_empty() {
+            self.blitter.copy(
+                &gpu.device,
+                &mut encoder,
+                frame_texture.srgb_view(),
+                &surface_view,
+            );
+        } else {
+            gpu.compose(
+                &mut encoder,
+                &surface_view,
+                self.config.format,
+                frame_texture,
+                draws,
+            );
+        }
         gpu.queue.submit(Some(encoder.finish()));
         frame.present();
         Ok(true)
