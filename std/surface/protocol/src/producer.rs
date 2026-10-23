@@ -23,7 +23,10 @@ use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
 /// How long [`Producer::connect`] and [`Producer::offer_buffers`] wait for
-/// the consumer's answer.
+/// the consumer's answer while the consumer says nothing at all. A consumer
+/// still preparing a ring keeps pinging a quiet producer, and every message
+/// it sends restarts the wait, so a slow GPU delays the answer without
+/// failing it.
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What a producer says about itself in its `Hello`.
@@ -240,7 +243,8 @@ impl Producer {
     }
 
     /// Hand the consumer a new ring, the buffers' OS handles in `fds` (one
-    /// per buffer, in order). Waits for the consumer to import it. The ring
+    /// per buffer, in order). Waits for the consumer to import it, for as
+    /// long as the consumer keeps talking (see [`ANSWER_TIMEOUT`]). The ring
     /// replaces the previous one for new frames; slots of older rings come
     /// back as the consumer stops showing them.
     ///
@@ -263,10 +267,8 @@ impl Producer {
             ));
         }
         self.sender.send(&Message::Buffers(buffers), fds)?;
-        let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.receiver.recv(Some(left))? {
+            match self.receiver.recv(Some(ANSWER_TIMEOUT))? {
                 Received::Message(Message::BuffersAccepted { generation: g }, _)
                     if g == generation =>
                 {

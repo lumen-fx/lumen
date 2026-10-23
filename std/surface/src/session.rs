@@ -146,6 +146,12 @@ struct Ring<T> {
     textures: Vec<T>,
 }
 
+/// An imported ring not yet accepted, waiting on its first-use work.
+type Preparing = Box<dyn FnMut() -> bool + Send>;
+
+/// How often a session checks on rings it is preparing.
+const PREPARE_POLL: Duration = Duration::from_millis(5);
+
 /// The connection to the producer, while there is one.
 struct Link {
     sender: Sender,
@@ -491,6 +497,25 @@ impl Shared {
     }
 }
 
+/// An imported ring: its textures, and whether the work that makes them
+/// usable has finished.
+pub struct Imported<T> {
+    /// One texture per buffer, in order.
+    pub textures: Vec<T>,
+    /// Polled until it answers `true`; the ring is accepted then.
+    pub ready: Box<dyn FnMut() -> bool + Send>,
+}
+
+impl<T> Imported<T> {
+    /// A ring usable as soon as it is imported.
+    pub fn now(textures: Vec<T>) -> Self {
+        Self {
+            textures,
+            ready: Box::new(|| true),
+        }
+    }
+}
+
 /// What a session imports buffers into and shows frames with.
 pub trait Backend: Send + Sync + 'static {
     /// One imported buffer.
@@ -504,11 +529,19 @@ pub trait Backend: Send + Sync + 'static {
     fn generation(&self) -> u64;
 
     /// Import a ring's buffers from their descriptors, one texture each.
+    /// The ring is accepted once [`Imported::ready`] says the first-use work
+    /// the import started has finished; until then the session keeps
+    /// serving, so a slow GPU delays the answer without stalling the
+    /// connection.
     ///
     /// # Errors
     ///
     /// The import failed; the reason goes to the producer.
-    fn import(&self, buffers: &Buffers, fds: Vec<Handle>) -> Result<Vec<Self::Texture>, String>;
+    fn import(
+        &self,
+        buffers: &Buffers,
+        fds: Vec<Handle>,
+    ) -> Result<Imported<Self::Texture>, String>;
 
     /// Show `texture` from the next frame on; `released` runs once nothing
     /// reads it any more.
@@ -723,6 +756,7 @@ fn pump<B: Backend>(
     session: u64,
 ) -> Ended {
     let mut rings: HashMap<u32, Ring<B::Texture>> = HashMap::new();
+    let mut preparing: HashMap<u32, Preparing> = HashMap::new();
     let mut device_generation = backend.generation();
     let mut last_heard = Instant::now();
     let mut pinged: Option<Instant> = None;
@@ -745,6 +779,7 @@ fn pump<B: Backend>(
             // for a new ring on the new one.
             device_generation = backend.generation();
             rings.clear();
+            preparing.clear();
             {
                 let mut inner = shared.lock();
                 inner.ring_ready = false;
@@ -753,7 +788,28 @@ fn pump<B: Backend>(
             }
             let _ = sender.send(&Message::Reset { device_generation }, &[]);
         }
-        let received = match receiver.recv(Some(POLL)) {
+        // Accept each ring whose first-use work has finished.
+        let done: Vec<u32> = preparing
+            .iter_mut()
+            .filter_map(|(generation, ready)| ready().then_some(*generation))
+            .collect();
+        for generation in done {
+            preparing.remove(&generation);
+            if sender
+                .send(&Message::BuffersAccepted { generation }, &[])
+                .is_ok()
+            {
+                let mut inner = shared.lock();
+                inner.ring_ready = true;
+                Shared::ask_locked(&mut inner);
+            }
+        }
+        let wait = if preparing.is_empty() {
+            POLL
+        } else {
+            PREPARE_POLL
+        };
+        let received = match receiver.recv(Some(wait)) {
             Ok(r) => r,
             Err(e) => {
                 return Ended {
@@ -789,23 +845,17 @@ fn pump<B: Backend>(
                         let identities = fds.iter().filter_map(identity).collect();
                         *shared.buffers.lock().unwrap_or_else(|e| e.into_inner()) = identities;
                         match backend.import(&buffers, fds) {
-                            Ok(textures) => {
+                            Ok(imported) => {
                                 rings.insert(
                                     generation,
                                     Ring {
                                         size: (buffers.width, buffers.height),
-                                        textures,
+                                        textures: imported.textures,
                                     },
                                 );
-                                if sender
-                                    .send(&Message::BuffersAccepted { generation }, &[])
-                                    .is_err()
-                                {
-                                    continue;
-                                }
-                                let mut inner = shared.lock();
-                                inner.ring_ready = true;
-                                Shared::ask_locked(&mut inner);
+                                // Accepted at the top of the loop once ready,
+                                // which for most backends is this pass.
+                                preparing.insert(generation, imported.ready);
                             }
                             Err(detail) => {
                                 let _ = sender.send(
