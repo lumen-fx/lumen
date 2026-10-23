@@ -93,6 +93,7 @@ fn echo() -> Addon {
             tag: "echo-view".to_string(),
             html: "div".to_string(),
             void: false,
+            note: None,
         }],
     }
 }

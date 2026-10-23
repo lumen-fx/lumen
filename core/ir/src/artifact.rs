@@ -502,6 +502,7 @@ mod tests {
                     tag: "echo-view".to_string(),
                     html: "div".to_string(),
                     void: false,
+                    note: None,
                 }],
             }],
             unlinked: vec![UnlinkedCapability {

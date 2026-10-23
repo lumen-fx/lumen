@@ -86,6 +86,7 @@ An unknown key is an error, and every error names the module.
 | `tag` | string | The markup tag. Lowercase letters, digits and dashes; a tag Lumen already has cannot be taken. Required. |
 | `html` | string | The HTML element it is written as, such as `div`, `canvas` or a custom element name. Required. |
 | `void` | boolean | True when that element takes no children and no end tag. Default false. |
+| `note` | string | A warning `lumenc web` prints when a page uses the element, for an element that cannot do in a browser what it does on the desktop. |
 
 ### Types
 
