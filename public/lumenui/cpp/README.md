@@ -111,7 +111,7 @@ cargo build -p lumen --release  # release -> target/release/liblumen.{so,a}
 
 The C ABI header lives at `include/lumen.h`, with the
 cbindgen-generated `lumen_simple.h` beside it. Both are committed, so there is
-no generation step to consume them. This SDK targets ABI 0.17. The
+no generation step to consume them. This SDK targets ABI 0.18. The
 compatibility check, `abi_compatible()`, compares the cbindgen-generated
 `LUMEN_ABI_VERSION` (the constant `lumen_abi_version()` itself returns)
 against the loaded library, so it tracks the library exactly rather than the
