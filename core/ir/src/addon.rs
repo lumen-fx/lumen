@@ -74,4 +74,10 @@ pub struct AddonElement {
     pub html: String,
     /// True when that element takes no children and no end tag.
     pub void: bool,
+    /// What a web build tells an author whose app uses the element, when the
+    /// web half cannot do what the desktop half does. Read from the
+    /// descriptor when an app is built for the web; not carried in a
+    /// compiled app.
+    #[serde(skip)]
+    pub note: Option<String>,
 }

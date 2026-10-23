@@ -570,6 +570,20 @@ fn build(options: &Options) -> Result<Report, String> {
         })
         .collect();
 
+    // An element whose web half cannot do what its desktop half does says so
+    // in its descriptor; an app that uses it hears it here.
+    for package in &deps.packages {
+        for element in &package.addon.elements {
+            if let Some(note) = &element.note
+                && uses_tag(&compiled.ir.root, &element.tag)
+            {
+                warnings.push(format!(
+                    "<{}> ({}): {note}",
+                    element.tag, package.addon.name
+                ));
+            }
+        }
+    }
     let scripts = script_refs(&compiled, &mut warnings);
     check_exports(dir, &compiled, &browser_filled, &mut warnings);
     let css_mode = match cfg.web.css {
@@ -1530,6 +1544,11 @@ fn write_bytecode(compiled: &CompiledApp, out: &Path) -> Result<(), String> {
 
 /// Warn about a link that names no page: it reaches the app, which answers
 /// it the way the desktop does, but nothing was emitted for it.
+/// Whether `tag` appears anywhere in the tree under `element`.
+fn uses_tag(element: &Element, tag: &str) -> bool {
+    element.tag == tag || element.children.iter().any(|c| uses_tag(c, tag))
+}
+
 fn check_links(root: &Element, keys: &[String], entry: &str, warnings: &mut Vec<String>) {
     let mut sorted: Vec<String> = keys.to_vec();
     sorted.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));

@@ -164,6 +164,8 @@ struct ElementDecl {
     html: String,
     #[serde(default)]
     void: bool,
+    #[serde(default)]
+    note: Option<String>,
 }
 
 /// Parse a descriptor's text, checking the files it names against `dir`.
@@ -303,6 +305,7 @@ fn parse_descriptor(name: &str, text: &str) -> Result<(Header, Addon), String> {
             tag: decl.tag,
             html: decl.html,
             void: decl.void,
+            note: decl.note.filter(|n| !n.trim().is_empty()),
         });
     }
 
