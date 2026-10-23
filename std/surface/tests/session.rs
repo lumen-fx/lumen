@@ -173,7 +173,8 @@ fn frames_flow_and_slots_come_back() {
         height: 200,
         scale: 1.0,
     });
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     assert_eq!(
         (producer.welcome().width, producer.welcome().height),
         (320, 200)
@@ -210,7 +211,7 @@ fn frames_flow_and_slots_come_back() {
 #[test]
 fn the_wrong_producer_is_refused() {
     let (shared, _) = start();
-    let endpoint = shared.endpoint();
+    let endpoint = shared.endpoint().expect("a transport");
     let mut forged: lumen_surface::protocol::endpoint::Endpoint = endpoint.parse().unwrap();
     forged.token[0] ^= 1;
     let reason =
@@ -243,7 +244,8 @@ fn the_wrong_producer_is_refused() {
 #[test]
 fn a_resize_brings_a_new_generation_and_retires_the_old() {
     let (shared, backend) = start();
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 3);
     one_frame(&mut producer, &shared);
     assert!(shared.set_wanted(Wanted {
@@ -290,7 +292,8 @@ fn a_resize_brings_a_new_generation_and_retires_the_old() {
 fn a_late_frame_stalls_and_the_next_resumes() {
     let (shared, _) = start();
     shared.set_stall_timeout(Duration::from_millis(100));
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 3);
     let mut seen = Vec::new();
     wait_happened(&shared, &mut seen, |h| {
@@ -308,7 +311,8 @@ fn a_late_frame_stalls_and_the_next_resumes() {
 #[test]
 fn input_and_messages_cross() {
     let (shared, _) = start();
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 3);
     let key = InputEvent::Key {
         code: 26,
@@ -363,7 +367,7 @@ fn input_and_messages_cross() {
 #[test]
 fn a_crash_is_reported_and_a_new_producer_takes_over() {
     let (shared, backend) = start();
-    let endpoint = shared.endpoint();
+    let endpoint = shared.endpoint().expect("a transport");
     let mut producer = Producer::connect(&endpoint, &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 3);
     one_frame(&mut producer, &shared);
@@ -397,7 +401,8 @@ fn a_crash_is_reported_and_a_new_producer_takes_over() {
 #[test]
 fn visibility_and_device_changes_reach_the_producer() {
     let (shared, backend) = start();
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 3);
     one_frame(&mut producer, &shared);
     shared.set_visible(false);
@@ -422,7 +427,8 @@ fn visibility_and_device_changes_reach_the_producer() {
 #[test]
 fn a_producer_that_stops_answering_is_hung() {
     let (shared, _) = start();
-    let mut producer = Producer::connect(&shared.endpoint(), &hello()).expect("welcomed");
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
     offer(&mut producer, 1, (300, 150), 2);
     // From here the producer never reads its socket.
     let mut seen = Vec::new();

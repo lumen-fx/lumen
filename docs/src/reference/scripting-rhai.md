@@ -793,7 +793,7 @@ Each names a [`<surface>`](tags.md#surface) element by its `id`.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `surface::endpoint(id)` | `string` | The endpoint string a producer connects with. Hand it to the producer, by the `LUMEN_SURFACE` environment variable by convention. Empty when no surface has the id. |
+| `surface::endpoint(id)` | `string` | The endpoint string a producer connects with. Hand it to the producer, by the `LUMEN_SURFACE` environment variable by convention. Empty when no surface has the id, and on Windows, where a producer in another process cannot connect yet. |
 | `surface::state(id)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
 | `surface::frame_info(id)` | `map` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
 | `surface::frame_meta(id)` | `array` | The producer's bytes about the frame on screen, such as the camera it drew it with. |

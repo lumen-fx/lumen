@@ -524,7 +524,7 @@ fn script_fns() -> Result<Vec<lumen_module::lumen_script::ScriptFn>, String> {
             "endpoint".into(),
             Arc::new(move |cx| {
                 Ok(ScriptValue::Str(
-                    id(cx).map(|e| e.shared.endpoint()).unwrap_or_default(),
+                    id(cx).and_then(|e| e.shared.endpoint()).unwrap_or_default(),
                 ))
             }),
         ),
