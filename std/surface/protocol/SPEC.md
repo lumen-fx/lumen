@@ -183,10 +183,40 @@ Both sides must run on the same physical device and driver, which the
 handshake checks. Each side keeps its own reference to the memory, so a
 buffer stays valid for the consumer after the producer exits.
 
-Between the processes an image is in `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`.
-The producer finishes each frame with a barrier to that layout, releasing the
-image to `VK_QUEUE_FAMILY_EXTERNAL`; before it renders into a slot that came
-back, it acquires the image from `VK_QUEUE_FAMILY_EXTERNAL` in that layout.
+#### Ownership and layout
+
+The images are `VK_SHARING_MODE_EXCLUSIVE`, so each side takes an image from
+the other with a queue family ownership transfer through
+`VK_QUEUE_FAMILY_EXTERNAL`. Between the processes an image is in
+`VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`, and a transfer never changes the
+layout: the release and the acquire both name that layout as `oldLayout` and
+`newLayout`, so neither side has to know the layout the other works in. A
+layout change is a barrier of its own, on the side's own queue family.
+
+- **P, each frame.** After drawing: a barrier into
+  `SHADER_READ_ONLY_OPTIMAL` on P's family, then the release, P's family to
+  `VK_QUEUE_FAMILY_EXTERNAL`. P waits for the GPU to finish both, then sends
+  `FrameReady`.
+- **C, on `FrameReady`.** The acquire, `VK_QUEUE_FAMILY_EXTERNAL` to C's
+  family, before anything samples the image.
+- **C, giving a slot back.** Once the GPU work that sampled the image has
+  completed: the release, C's family to `VK_QUEUE_FAMILY_EXTERNAL`. C waits
+  for the GPU to finish it, then sends `Release`. A frame replaced before it
+  was shown is acquired and released the same way.
+- **P, reusing a slot.** Before drawing into a released slot: the acquire,
+  `VK_QUEUE_FAMILY_EXTERNAL` to P's family, then a barrier from
+  `SHADER_READ_ONLY_OPTIMAL` into the layout P draws in.
+- **First use.** Between importing a ring and sending `BuffersAccepted`, C
+  may move its images out of `VK_IMAGE_LAYOUT_UNDEFINED` on its own family,
+  and waits for that to finish; a renderer that tracks layouts needs to, so
+  it never makes that transition later over a frame P drew. C touches the
+  images in no other way before the first `FrameReady` that names them. P
+  draws into each image the first time from `VK_IMAGE_LAYOUT_UNDEFINED`,
+  with no acquire: the image holds nothing to keep yet.
+
+The waits are what order the two GPUs' work: each side finishes its barriers
+before the message that hands the image over, so no semaphore crosses the
+processes.
 
 ### Frames
 

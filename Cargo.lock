@@ -4714,6 +4714,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
  "libc",
+ "log",
  "lumen-candela-dev",
  "lumen-core",
  "lumen-module",

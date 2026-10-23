@@ -31,16 +31,16 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Why the GPU cases cannot run here, if they cannot: no adapter at all.
-/// A software adapter (lavapipe) runs them: the colours they check are
-/// clears, which every rasterizer draws exactly.
-/// Why the GPU cases cannot run here, or `None` when they can.
+/// Why the GPU cases cannot run here, or `None` when they can. A software
+/// adapter (lavapipe) runs them: the colours they check are clears, which
+/// every rasterizer draws exactly.
 ///
 /// With `LUMEN_SURFACE_REQUIRE_HARDWARE` set (the manually triggered
 /// hardware job sets it), a machine with no adapter, or with only a software
 /// one, fails instead of skipping: that job exists to share frames between
 /// two processes on a hardware GPU.
 fn no_gpu() -> Option<String> {
+    watch_validation();
     let hardware = std::env::var_os("LUMEN_SURFACE_REQUIRE_HARDWARE").is_some();
     let why = match WgpuRenderer::new_offscreen(bevy_ecs::entity::Entity::PLACEHOLDER, 4, 4) {
         Ok(mut renderer) => {
@@ -57,6 +57,55 @@ fn no_gpu() -> Option<String> {
         "LUMEN_SURFACE_REQUIRE_HARDWARE is set, and {why}"
     );
     Some(why)
+}
+
+/// What the Vulkan validation layer reported, in either process.
+static VALIDATION: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Collects the messages the validation layer hands wgpu, which wgpu logs
+/// from its debug messenger. With the layer off (the default) nothing
+/// arrives. Turn it on with `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`
+/// (and `VK_LAYER_PATH` when it is not installed system-wide); the reference
+/// producer inherits the same variables and prints its reports.
+struct ValidationLog;
+
+impl log::Log for ValidationLog {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn && metadata.target() == "wgpu_hal::vulkan::instance"
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = record.args().to_string();
+        eprintln!("validation: {line}");
+        if line.starts_with("VALIDATION") {
+            VALIDATION
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn watch_validation() {
+    static LOGGER: ValidationLog = ValidationLog;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// Fail when the validation layer reported anything.
+fn assert_validation_clean() {
+    let seen = std::mem::take(&mut *VALIDATION.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(
+        seen.is_empty(),
+        "the validation layer reported:\n{}",
+        seen.join("\n")
+    );
 }
 
 fn gpu_app() -> App {
@@ -186,6 +235,7 @@ fn an_in_process_producer_shows_through_the_loopback() {
         Surfaces.endpoint("loop").is_none(),
         "a removed element's surface goes"
     );
+    assert_validation_clean();
 }
 
 /// A `size` texture on `context`'s device filled with one sRGB colour.
@@ -328,6 +378,7 @@ mod cross_process {
             let mut child = Command::new(reference_producer())
                 .env("LUMEN_SURFACE", endpoint)
                 .envs(env.iter().copied())
+                .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .expect("the reference producer starts");
@@ -338,6 +389,19 @@ mod cross_process {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     eprintln!("{line}");
                     sink.lock().unwrap().push(line);
+                }
+            });
+            // The validation layer, when on, reports to standard output.
+            let stdout = child.stdout.take().unwrap();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    eprintln!("producer: {line}");
+                    if line.contains("Validation Error") || line.contains("Validation Warning") {
+                        VALIDATION
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(format!("producer: {line}"));
+                    }
                 }
             });
             Self { child, log }
@@ -511,5 +575,6 @@ mod cross_process {
         drop(again);
         app.world.despawn(e);
         app.tick();
+        assert_validation_clean();
     }
 }

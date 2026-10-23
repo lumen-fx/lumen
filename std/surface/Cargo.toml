@@ -53,6 +53,8 @@ default = ["engine-dylib"]
 engine-dylib = ["lumen-module/engine-dylib"]
 
 [dev-dependencies]
+# Reads the Vulkan validation layer's reports, which wgpu logs.
+log = "0.4"
 lumen-core = { workspace = true }
 lumen-render-wgpu = { workspace = true }
 lumen-render-cpu = { workspace = true }
