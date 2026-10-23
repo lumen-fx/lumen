@@ -46,6 +46,7 @@ lumen-fs = { workspace = true, optional = true }
 lumen-js = { workspace = true, optional = true }
 lumen-process = { workspace = true, optional = true }
 lumen-storage = { workspace = true, optional = true }
+lumen-surface = { workspace = true, optional = true }
 lumen-svg = { workspace = true, optional = true }
 lumen-websocket = { workspace = true, optional = true }
 
@@ -66,6 +67,7 @@ static-run = [
     "dep:lumen-js",
     "dep:lumen-process",
     "dep:lumen-storage",
+    "dep:lumen-surface",
     "dep:lumen-svg",
     "dep:lumen-websocket",
 ]

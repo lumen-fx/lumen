@@ -1,0 +1,7 @@
+/* The <surface> placeholder on a page: an empty box the app's CSS sizes and
+   colors, 300 by 150 until it does, like a replaced element. */
+.lm-surface {
+  display: block;
+  width: 300px;
+  height: 150px;
+}

@@ -188,6 +188,19 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   which the core offers to any plugin and which names no cookie. The
   WebSocket client runs a thread per connection and delivers events over the
   plugin-event bus.
+- **lumen-surface** (`std/surface`): the `<surface>` element, which shows
+  frames another renderer draws on the GPU. It serves one channel per element
+  on a session thread, imports the producer's images into the GPU renderer's
+  device through `GpuContext`, presents them through `GpuTextures`, and paints
+  each element as a backend texture. The engine knows nothing about it: the
+  device reaches it through the render world, input through the ordinary
+  input messages, and the pointer lock through `PointerLockAsk`. The web half
+  is a placeholder element.
+- **lumen-surface-protocol** (`std/surface/protocol`): the surface protocol
+  for producers, under MPL-2.0: the wire format, the endpoint string, the
+  Unix-socket transport, a producer-side state machine, and a C ABI with its
+  header. `SPEC.md` beside it is the specification, and `producer/reference.c`
+  is a complete producer in C and Vulkan the test suite drives.
 - **lumen-js**, **lumen-browser**, **lumen-svg** (`std/js`, `std/browser`,
   `std/svg`): modules whose work is all in the web half. The crate is a
   desktop half built by `lumen_module::BrowserOnly` from the web half's

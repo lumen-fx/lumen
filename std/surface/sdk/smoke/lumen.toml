@@ -1,0 +1,8 @@
+# Read from the directory the smoke app runs in. The CPU renderer, so every
+# machine draws the same pixels; no introspection server, so a CI run binds
+# no port.
+[render]
+backend = "cpu"
+
+[mcp]
+port = 0

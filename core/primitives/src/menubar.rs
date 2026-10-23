@@ -143,6 +143,12 @@ impl MenuAccelerators {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Whether `key` with `modifiers` is one of the shortcuts: an element
+    /// that takes every key (a game viewport) leaves these to the menu bar.
+    pub fn matches(&self, key: &Key, modifiers: &Modifiers) -> bool {
+        self.0.iter().any(|(a, _)| a.matches(key, modifiers))
+    }
 }
 
 /// Activate the menu bar item whose shortcut was pressed, as a click on it
@@ -179,6 +185,7 @@ mod tests {
     fn press(world: &mut World, key: &str, modifiers: Modifiers) {
         world.write_message(KeyPressed {
             key: Key::from(key),
+            code: lumen_core::input::KeyCode::Unidentified,
             modifiers,
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),

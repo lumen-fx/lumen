@@ -1192,6 +1192,44 @@ an unknown buffer handle reads as an empty buffer. See
 [`<canvas>`](tags.md#canvas) for the element, its sizing, and what is not
 implemented yet.
 
+## Surfaces
+
+These functions come from the `lumen-surface` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-surface = { bundled = true }
+```
+
+They live in the `surface` namespace and name a `<surface>` element by its
+`id`. A web build answers them from the module's web half, as a surface with
+no producer would.
+
+| Function | Returns | Behaviour |
+| --- | --- | --- |
+| `surface::endpoint(id: string)` | `string` | The endpoint string a producer connects with. Hand it to the producer, by the `LUMEN_SURFACE` environment variable by convention. Empty when no surface has the id. |
+| `surface::state(id: string)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
+| `surface::frame_info(id: string)` | `{string: any}` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
+| `surface::frame_meta(id: string)` | `int[]` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::request_frame(id: string)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
+| `surface::send(id: string, message: string)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
+| `surface::disconnect(id: string)` | | End the session with the producer. The surface keeps listening for another. |
+
+```rust
+fn on_ready() {
+    let endpoint = surface::endpoint("scene");
+    process::start("./game", [], "game",
+        process::StartOptions { env: {"LUMEN_SURFACE": endpoint}, ..Default::default() });
+}
+```
+
+What the producer sends back arrives as events on the element:
+`surfacemessage` carries a message in its detail (`text`, and the raw
+`bytes`). See [`<surface>`](tags.md#surface) for the element and its events,
+and [Showing another renderer's frames](../guides/surfaces.md) for the whole
+picture.
+
 ## Filesystem
 
 These functions come from the `lumen-fs` runtime module and exist only when

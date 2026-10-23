@@ -54,8 +54,8 @@ kit it is published on every platform, `install.sh` never fetches it, and
 `lumenui-engine-<target>.tar.zst` carries the prebuilt engine the published
 `lumenui` crate links: the compiled crates of `lumenui-engine`
 (public/lumenui/rust/engine) for that target, the runtime modules the
-`lumenui-<name>` crates re-export (`lumen-canvas`), the proc-macro libraries
-they use, and any native library they link without carrying, collected by
+`lumenui-<name>` crates re-export (`lumen-canvas`, `lumen-surface`), the
+proc-macro libraries they use, and any native library they link without carrying, collected by
 `tools/release/lumenui-engine.py`. `lumenui-engine-<target>.json` is its
 manifest (the rustc that built it, the target, the Lumen version, every file
 with its checksum), published on its own so an app's build checks the compiler

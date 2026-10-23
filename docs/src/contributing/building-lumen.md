@@ -31,6 +31,8 @@ authoritative list is `.github/scripts/linux-deps.sh`, which CI runs verbatim:
   under winit.
 - `libvulkan1` for the Vulkan loader, since wgpu builds the Vulkan backend on
   Linux.
+- `libvulkan-dev` for the Vulkan headers, which the `lumen-surface` tests
+  compile the C reference producer against.
 - `mesa-vulkan-drivers` for the lavapipe software device. Without a Vulkan
   device the renderer tests skip instead of running.
 

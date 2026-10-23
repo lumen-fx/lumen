@@ -28,6 +28,7 @@ use lumen_lua as _;
 use lumen_process as _;
 use lumen_rhai as _;
 use lumen_storage as _;
+use lumen_surface as _;
 use lumen_svg as _;
 use lumen_websocket as _;
 

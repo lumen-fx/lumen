@@ -3987,6 +3987,7 @@ dependencies = [
  "lumen-js",
  "lumen-process",
  "lumen-storage",
+ "lumen-surface",
  "lumen-svg",
  "lumen-websocket",
  "lumenc",
@@ -4706,6 +4707,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-surface"
+version = "0.0.11"
+dependencies = [
+ "ash",
+ "bevy_ecs",
+ "glam 0.33.3",
+ "libc",
+ "lumen-candela-dev",
+ "lumen-core",
+ "lumen-module",
+ "lumen-render-cpu",
+ "lumen-render-wgpu",
+ "lumen-runtime",
+ "lumen-script",
+ "lumen-surface-protocol",
+ "lumen-text",
+ "lumen-text-cosmic",
+]
+
+[[package]]
+name = "lumen-surface-protocol"
+version = "0.0.11"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "lumen-svg"
 version = "0.0.11"
 dependencies = [
@@ -4925,6 +4953,7 @@ dependencies = [
  "lumen-script",
  "lumen-ssr",
  "lumen-storage",
+ "lumen-surface",
  "lumen-svg",
  "lumen-text",
  "lumen-text-cosmic",

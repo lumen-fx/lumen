@@ -779,6 +779,32 @@ an unknown buffer handle reads as an empty buffer. See
 [`<canvas>`](tags.md#canvas) for the element, its sizing, and what is not
 implemented yet.
 
+## Surfaces
+
+These functions come from the `lumen-surface` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-surface = { bundled = true }
+```
+
+Each names a [`<surface>`](tags.md#surface) element by its `id`.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `surface::endpoint(id)` | `string` | The endpoint string a producer connects with. Hand it to the producer, by the `LUMEN_SURFACE` environment variable by convention. Empty when no surface has the id. |
+| `surface::state(id)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
+| `surface::frame_info(id)` | `map` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
+| `surface::frame_meta(id)` | `array` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::request_frame(id)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
+| `surface::send(id, message)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
+| `surface::disconnect(id)` | | End the session with the producer. The surface keeps listening for another. |
+
+What the producer sends back arrives as events on the element:
+`surfacemessage` carries a message in its detail (`text`, and the raw
+`bytes`). See [Showing another renderer's frames](../guides/surfaces.md).
+
 ## Filesystem
 
 These functions come from the `lumen-fs` runtime module and exist only when
