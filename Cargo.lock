@@ -4095,6 +4095,7 @@ dependencies = [
  "lumen-modules",
  "lumen-paint",
  "lumen-primitives",
+ "lumen-render-wgpu",
  "lumen-scene",
  "lumen-script",
  "lumen-text",

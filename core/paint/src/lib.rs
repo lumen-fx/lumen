@@ -32,6 +32,10 @@
 //!
 //! A drawing wanted as pixels rather than as part of the frame goes through
 //! the [`Rasterizer`] the render backend publishes.
+//!
+//! Pixels that never reach the CPU (a frame another process renders on the
+//! GPU) are drawn by [`TextureId`] through [`Painter::draw_texture`]; the
+//! render backend resolves the id to a texture it holds.
 
 #![warn(missing_docs)]
 
@@ -44,6 +48,7 @@ pub mod pixels;
 pub mod rasterize;
 pub mod recording;
 pub mod svg;
+pub mod texture;
 pub mod walker;
 
 pub use cache::{CacheStats, FragmentCache, FragmentKey};
@@ -60,6 +65,7 @@ pub use peniko::kurbo;
 pub use pixels::PixelImage;
 pub use rasterize::{Rasterize, Rasterizer};
 pub use recording::Recording;
+pub use texture::{BackendImage, TextureId, TextureRefusal};
 pub use walker::{ClipStack, WalkContext, diff_retained_scenes, scene_has_damage, walk_node};
 
 use lumen_text::GlyphPosition;
@@ -280,6 +286,39 @@ pub trait Painter: Send + 'static {
             },
             transform,
         );
+    }
+
+    /// Show the backend texture `image` names with its top-left corner at the
+    /// origin of `transform`, one texture pixel per unit, sampled as `sampler`
+    /// says.
+    ///
+    /// A sink that holds backend textures shows the texture beneath the
+    /// frame, through a hole the draw leaves in what the frame painted so far
+    /// inside the current clips; whatever paints after it paints over it. The
+    /// texture is opaque there whatever its alpha says. A draw that would need
+    /// the texture faded, blended, masked, rotated or painted apart from the
+    /// frame is refused with the reason, and nothing is drawn.
+    ///
+    /// The default holds no textures: it draws `image.fallback` through
+    /// [`Self::draw_pixels`] at the texture's size and reports
+    /// [`TextureRefusal::Unavailable`].
+    fn draw_texture(
+        &mut self,
+        image: &BackendImage<'_>,
+        sampler: ImageSampler,
+        transform: Affine,
+    ) -> Result<(), TextureRefusal> {
+        if let Some(fallback) = image.fallback
+            && fallback.width() > 0
+            && fallback.height() > 0
+        {
+            let scale = Affine::scale_non_uniform(
+                f64::from(image.width) / f64::from(fallback.width()),
+                f64::from(image.height) / f64::from(fallback.height()),
+            );
+            self.draw_pixels(fallback, sampler, transform * scale);
+        }
+        Err(TextureRefusal::Unavailable)
     }
 
     /// Fill one run of glyphs.

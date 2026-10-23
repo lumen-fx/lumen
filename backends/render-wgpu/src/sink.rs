@@ -21,8 +21,10 @@
 //! frame of text costs a copy per glyph rather than a re-encode.
 
 use lumen_paint::glyphs::{Contours, GlyphShape, brush_transform};
+use lumen_paint::recording::OwnedShape;
 use lumen_paint::{
-    Fragment, GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, PixelImage, Shape,
+    BackendImage, Fragment, GlyphOutlines, GlyphRun, MaskKind, OffscreenLayer, Painter, PixelImage,
+    Shape, TextureId, TextureRefusal,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -79,6 +81,48 @@ pub struct VelloPainter {
     split: Option<SplitFrame>,
     /// The copies of shrunk image draws split frames keep across frames.
     copies: Copies,
+    /// The layers open in the frame itself, outermost first, as they were
+    /// opened: what a hole for a backend texture has to be cut through.
+    frame_layers: Vec<OpenLayer>,
+    /// How many masked draws are painting their content or mask right now.
+    masked: usize,
+    /// The backend textures the frame shows, in paint order.
+    placements: Vec<Placement>,
+}
+
+/// One layer open in the frame, kept so it can be closed and opened again
+/// around a hole.
+#[derive(Clone, Debug)]
+struct OpenLayer {
+    clip_style: Fill,
+    blend: BlendMode,
+    alpha: f32,
+    transform: Affine,
+    clip: OwnedShape,
+}
+
+impl OpenLayer {
+    /// Whether the layer only clips: it composites what it holds at full
+    /// alpha, source-over, so closing it early and opening it again changes
+    /// nothing.
+    fn clips_only(&self) -> bool {
+        self.alpha >= 1.0 && self.blend == BlendMode::default()
+    }
+}
+
+/// Where a frame shows a backend texture: beneath the frame, at the rect a
+/// hole was cut for it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Placement {
+    /// The texture.
+    pub(crate) id: TextureId,
+    /// Where its corners land, in target pixels: `x0, y0` is texture pixel
+    /// `0, 0`.
+    pub(crate) rect: Rect,
+    /// Its size in texture pixels.
+    pub(crate) size: (u32, u32),
+    /// Whether it samples the nearest texel rather than filtering.
+    pub(crate) nearest: bool,
 }
 
 impl Default for VelloPainter {
@@ -95,6 +139,9 @@ impl Default for VelloPainter {
             stand_ins: HashMap::new(),
             split: None,
             copies: Copies::default(),
+            frame_layers: Vec::new(),
+            masked: 0,
+            placements: Vec::new(),
         }
     }
 }
@@ -240,6 +287,14 @@ impl VelloPainter {
         self.outlines.end_frame();
         self.pixels.clear();
         self.split = None;
+        self.frame_layers.clear();
+        self.masked = 0;
+        self.placements.clear();
+    }
+
+    /// The backend textures the frame shows, in paint order.
+    pub(crate) fn placements(&self) -> &[Placement] {
+        &self.placements
     }
 
     /// Start painting the frame again, in split mode, over a target of
@@ -251,6 +306,9 @@ impl VelloPainter {
         self.recording.clear();
         self.offscreen.clear();
         self.pixels.clear();
+        self.frame_layers.clear();
+        self.masked = 0;
+        self.placements.clear();
         self.split = Some(SplitFrame::new(width, height));
     }
 
@@ -354,6 +412,112 @@ fn report_too_large(width: u32, height: u32, side: u32) {
     }
 }
 
+impl VelloPainter {
+    /// Open a layer without recording it as one of the frame's.
+    fn open_layer(
+        &mut self,
+        clip_style: Fill,
+        blend: BlendMode,
+        alpha: f32,
+        transform: Affine,
+        clip: &Shape<'_>,
+    ) {
+        if let Some(split) = self.split_frame() {
+            split.open(Opened::layer(clip_style, blend, alpha, transform, clip));
+            return;
+        }
+        let scene = self.target();
+        match clip {
+            Shape::Rect(r) => scene.push_layer(clip_style, blend, alpha, transform, r),
+            Shape::RoundedRect(r) => scene.push_layer(clip_style, blend, alpha, transform, r),
+            Shape::Path(p) => scene.push_layer(clip_style, blend, alpha, transform, *p),
+        }
+    }
+
+    /// Close the innermost layer without touching the frame's record of
+    /// them.
+    fn close_layer(&mut self) {
+        if let Some(split) = self.split_frame() {
+            split.close();
+            return;
+        }
+        self.target().pop_layer();
+    }
+
+    /// Why a texture drawn now under `transform` cannot show, if it cannot.
+    fn texture_refusal(&self, transform: Affine) -> Option<TextureRefusal> {
+        if !self.at_frame_level() {
+            return Some(TextureRefusal::Layer);
+        }
+        if self.masked > 0 {
+            return Some(TextureRefusal::Mask);
+        }
+        if let Some(layer) = self.frame_layers.iter().find(|l| !l.clips_only()) {
+            return Some(if layer.blend != BlendMode::default() {
+                TextureRefusal::Blend
+            } else {
+                TextureRefusal::Opacity
+            });
+        }
+        let [a, b, c, d, _, _] = transform.as_coeffs();
+        if b != 0.0 || c != 0.0 || a <= 0.0 || d <= 0.0 {
+            return Some(TextureRefusal::Transform);
+        }
+        None
+    }
+
+    /// Clear `rect` (under `transform`) to transparent in what the frame has
+    /// painted so far, inside every clip open in the frame.
+    ///
+    /// A layer composites what it holds over what is under it, so a clear
+    /// inside one would only clear the layer. The open layers all only clip
+    /// (anything else refuses the texture first), and closing a clip layer
+    /// early and opening it again paints the same, so they close, the clear
+    /// runs in the frame itself through the same clips, and they open again.
+    fn cut_hole(&mut self, transform: Affine, rect: Rect) {
+        let open = self.frame_layers.clone();
+        for _ in &open {
+            self.close_layer();
+        }
+        let erase = BlendMode::new(Mix::Normal, Compose::DestOut);
+        match open.split_first() {
+            Some((outer, inner)) => {
+                self.open_layer(
+                    outer.clip_style,
+                    erase,
+                    1.0,
+                    outer.transform,
+                    &outer.clip.as_shape(),
+                );
+                for layer in inner {
+                    self.open_layer(
+                        layer.clip_style,
+                        BlendMode::default(),
+                        1.0,
+                        layer.transform,
+                        &layer.clip.as_shape(),
+                    );
+                }
+            }
+            None => self.open_layer(Fill::NonZero, erase, 1.0, transform, &Shape::Rect(rect)),
+        }
+        self.target()
+            .fill(Fill::NonZero, transform, Color::BLACK, None, &rect);
+        for _ in 0..open.len().max(1) {
+            self.close_layer();
+        }
+        for layer in &open {
+            self.open_layer(
+                layer.clip_style,
+                layer.blend,
+                layer.alpha,
+                layer.transform,
+                &layer.clip.as_shape(),
+            );
+        }
+    }
+}
+
 impl Painter for VelloPainter {
     fn fill(
         &mut self,
@@ -395,24 +559,23 @@ impl Painter for VelloPainter {
         transform: Affine,
         clip: &Shape<'_>,
     ) {
-        if let Some(split) = self.split_frame() {
-            split.open(Opened::layer(clip_style, blend, alpha, transform, clip));
-            return;
+        if self.at_frame_level() {
+            self.frame_layers.push(OpenLayer {
+                clip_style,
+                blend,
+                alpha,
+                transform,
+                clip: OwnedShape::from(clip),
+            });
         }
-        let scene = self.target();
-        match clip {
-            Shape::Rect(r) => scene.push_layer(clip_style, blend, alpha, transform, r),
-            Shape::RoundedRect(r) => scene.push_layer(clip_style, blend, alpha, transform, r),
-            Shape::Path(p) => scene.push_layer(clip_style, blend, alpha, transform, *p),
-        }
+        self.open_layer(clip_style, blend, alpha, transform, clip);
     }
 
     fn pop_layer(&mut self) {
-        if let Some(split) = self.split_frame() {
-            split.close();
-            return;
+        if self.at_frame_level() {
+            self.frame_layers.pop();
         }
-        self.target().pop_layer();
+        self.close_layer();
     }
 
     /// The content paints first, in a layer of its own so the mask touches
@@ -428,6 +591,7 @@ impl Painter for VelloPainter {
         content: &mut dyn FnMut(&mut dyn Painter),
     ) {
         let outer = self.layer_depth();
+        self.masked += 1;
         self.push_layer(Fill::NonZero, BlendMode::default(), 1.0, transform, region);
         content(self);
         while self.layer_depth() > outer + 1 {
@@ -470,6 +634,7 @@ impl Painter for VelloPainter {
         while self.layer_depth() > outer {
             self.pop_layer();
         }
+        self.masked -= 1;
     }
 
     fn layer_depth(&self) -> usize {
@@ -558,6 +723,32 @@ impl Painter for VelloPainter {
             return;
         }
         self.target().draw_image(&brush, transform);
+    }
+
+    /// Shown beneath the frame through a hole cut where it goes; the
+    /// renderer composes the texture under the frame when it presents. See
+    /// [`Painter::draw_texture`] for what is refused.
+    fn draw_texture(
+        &mut self,
+        image: &BackendImage<'_>,
+        sampler: ImageSampler,
+        transform: Affine,
+    ) -> Result<(), TextureRefusal> {
+        if image.width == 0 || image.height == 0 {
+            return Ok(());
+        }
+        if let Some(refusal) = self.texture_refusal(transform) {
+            return Err(refusal);
+        }
+        let size = Rect::new(0.0, 0.0, f64::from(image.width), f64::from(image.height));
+        self.cut_hole(transform, size);
+        self.placements.push(Placement {
+            id: image.id,
+            rect: transform.transform_rect_bbox(size),
+            size: (image.width, image.height),
+            nearest: sampler.quality == ImageQuality::Low,
+        });
+        Ok(())
     }
 
     /// Outline glyphs are filled as the polygons [`GlyphOutlines`] flattens
@@ -871,6 +1062,85 @@ mod tests {
         let (drawn, _) = painter.take_pixels();
         assert_eq!(drawn.len(), 1, "the second state went flat");
         assert_eq!(drawn[0].0.version(), 0, "the texture holds the first");
+    }
+
+    /// A backend texture shows where nothing but clips encloses it, and is
+    /// refused, with the reason, inside a fade, a blend, a mask, a fragment,
+    /// or under a rotation.
+    #[test]
+    fn a_backend_texture_shows_only_where_it_can_be_shown_as_it_is() {
+        let image = BackendImage {
+            id: TextureId::new(),
+            width: 8,
+            height: 8,
+            fallback: None,
+        };
+        let sampler = ImageSampler::default();
+        let clip = |p: &mut VelloPainter, alpha: f32, blend: BlendMode| {
+            p.push_layer(Fill::NonZero, blend, alpha, Affine::IDENTITY, &square());
+        };
+
+        let mut painter = VelloPainter::new();
+        clip(&mut painter, 1.0, BlendMode::default());
+        let at = Affine::translate((2.0, 3.0)) * Affine::scale(2.0);
+        assert_eq!(painter.draw_texture(&image, sampler, at), Ok(()));
+        assert_eq!(
+            painter.layer_depth(),
+            1,
+            "the clip is open again after the hole"
+        );
+        painter.pop_layer();
+        assert_eq!(
+            painter.placements(),
+            &[Placement {
+                id: image.id,
+                rect: Rect::new(2.0, 3.0, 18.0, 19.0),
+                size: (8, 8),
+                nearest: false,
+            }]
+        );
+
+        let mut painter = VelloPainter::new();
+        clip(&mut painter, 0.5, BlendMode::default());
+        assert_eq!(
+            painter.draw_texture(&image, sampler, Affine::IDENTITY),
+            Err(TextureRefusal::Opacity)
+        );
+        let mut painter = VelloPainter::new();
+        clip(
+            &mut painter,
+            1.0,
+            BlendMode::new(Mix::Multiply, Compose::SrcOver),
+        );
+        assert_eq!(
+            painter.draw_texture(&image, sampler, Affine::IDENTITY),
+            Err(TextureRefusal::Blend)
+        );
+        let mut painter = VelloPainter::new();
+        assert_eq!(
+            painter.draw_texture(&image, sampler, Affine::rotate(0.3)),
+            Err(TextureRefusal::Transform)
+        );
+        assert_eq!(
+            painter.draw_texture(&image, sampler, Affine::scale_non_uniform(-1.0, 1.0)),
+            Err(TextureRefusal::Transform)
+        );
+        let mut refused = None;
+        painter.draw_masked(
+            MaskKind::Alpha,
+            Affine::IDENTITY,
+            &square(),
+            &mut |_| {},
+            &mut |p| refused = Some(p.draw_texture(&image, sampler, Affine::IDENTITY)),
+        );
+        assert_eq!(refused, Some(Err(TextureRefusal::Mask)));
+        assert!(painter.begin_fragment());
+        assert_eq!(
+            painter.draw_texture(&image, sampler, Affine::IDENTITY),
+            Err(TextureRefusal::Layer)
+        );
+        painter.end_fragment();
+        assert!(painter.placements().is_empty());
     }
 
     /// The escape hatch hands out the sink itself, and through it the scene

@@ -63,6 +63,11 @@ toml = { workspace = true }
 # invocation so cargo's feature unification cannot pull them apart.
 lumen-paint = { workspace = true, optional = true }
 lumen-text = { workspace = true, optional = true }
+# The GPU render backend, behind the off-by-default `gpu` feature: the device
+# it publishes and the table of textures it shows, for a module that makes or
+# imports textures. The same rule as `paint`: the backend's own crate, so the
+# resource types the module reads are the ones the backend inserted.
+lumen-render-wgpu = { workspace = true, optional = true }
 
 # The engine as a linkable dylib: depending on it is what resolves
 # `lumen-core` (and everything else the module touches) into the shared
@@ -84,6 +89,11 @@ engine-dylib = ["dep:lumen-dylib"]
 # Painting: the paint target a native painter draws into, and the text shaper
 # it shapes through. Off by default, because most modules never paint.
 paint = ["dep:lumen-paint", "dep:lumen-text"]
+
+# Textures on the GPU: the render backend's `GpuContext` and `GpuTextures`,
+# and the wgpu it draws with. Off by default; a module that only paints needs
+# `paint` alone.
+gpu = ["paint", "dep:lumen-render-wgpu"]
 
 [dev-dependencies]
 # The end-to-end harness parses cargo's JSON artifact messages to find the

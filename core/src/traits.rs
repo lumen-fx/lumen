@@ -168,6 +168,15 @@ pub trait Renderer: Send + 'static {
         crate::render_backend::RendererInfo::default()
     }
 
+    /// Put what this renderer shares with the rest of the render world into
+    /// it: a GPU backend's device, for instance, so a plugin can make or
+    /// import textures the renderer draws. Drivers call it after every
+    /// [`Self::attach`], before the next tick, so what it publishes is there
+    /// from the first frame on. The default publishes nothing.
+    fn publish(&mut self, render_world: &mut World) {
+        let _ = render_world;
+    }
+
     /// The targets currently attached.
     fn targets(&self) -> Vec<Entity>;
 
@@ -212,6 +221,10 @@ impl<R: Renderer + ?Sized> Renderer for Box<R> {
 
     fn info(&mut self) -> crate::render_backend::RendererInfo {
         (**self).info()
+    }
+
+    fn publish(&mut self, render_world: &mut World) {
+        (**self).publish(render_world);
     }
 
     fn targets(&self) -> Vec<Entity> {

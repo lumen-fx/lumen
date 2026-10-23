@@ -127,9 +127,15 @@ pub fn publish_renderer_info(world: &mut World, info: RendererInfo) {
 /// viewport in physical pixels, presents each shown window when the renderer
 /// says its frame changed, and releases the image of a window that closed.
 /// Also installs the extract pipeline the renderer reads the retained scene
-/// from.
-pub fn install_offscreen<R: Renderer>(app: &mut App, renderer: R) {
+/// from, and has the renderer [publish](Renderer::publish) into the render
+/// world after each attach.
+pub fn install_offscreen<R: Renderer>(app: &mut App, mut renderer: R) {
     install_extract_pipeline(app);
+    // A renderer the launch already attached shares what it has from the
+    // first tick on.
+    if !renderer.targets().is_empty() {
+        renderer.publish(&mut app.render_world);
+    }
     app.render_world.insert_non_send(renderer);
     app.add_render_systems(RenderStage::Render, present_offscreen::<R>);
 }
@@ -163,9 +169,12 @@ fn present_offscreen<R: Renderer>(world: &mut World) {
             continue;
         }
         let fresh = !attached.contains(&target);
-        if fresh && let Err(e) = renderer.attach(target, FrameTarget::Offscreen { width, height }) {
-            eprintln!("lumen: offscreen target for a window failed: {e}");
-            continue;
+        if fresh {
+            if let Err(e) = renderer.attach(target, FrameTarget::Offscreen { width, height }) {
+                eprintln!("lumen: offscreen target for a window failed: {e}");
+                continue;
+            }
+            renderer.publish(world);
         }
         let resized = renderer.resize(target, width, height);
         // The tick runs the render schedule only when its frame is dirty, so the

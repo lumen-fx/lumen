@@ -13,18 +13,27 @@
 //!
 //! Headless runs therefore exercise the same bring-up, gate, walk, and
 //! encode a windowed app ships.
+//!
+//! The renderer publishes its device into the render world as a
+//! [`GpuContext`], with a [`GpuTextures`] table: a plugin makes or imports a
+//! texture on that device, presents it under a [`lumen_paint::TextureId`],
+//! and paints the id; the renderer shows it beneath the frame in place (see
+//! the [`texture`] module).
 
 #![warn(missing_docs)]
 
 pub(crate) mod atlas;
 pub mod capability;
+mod compose;
 mod gpu;
 mod rasterize;
 pub mod sink;
 mod surface;
+pub mod texture;
 pub use gpu::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV};
 pub use rasterize::GpuRasterizer;
 pub use sink::{BACKEND_ID, VelloPainter};
+pub use texture::{GpuContext, GpuTextures, Sampled};
 /// The vello version this backend draws with. A painter that needs vello
 /// itself downcasts [`lumen_paint::Painter::native`] to [`VelloPainter`] and
 /// encodes into its scene; it reaches vello through this re-export rather
@@ -121,6 +130,30 @@ struct Target {
     /// size. A fresh or resized texture does not, and paints regardless of
     /// the scene diff.
     holds_frame: bool,
+    /// Whether the scene changed since the frame texture was painted, as the
+    /// last [`Renderer::wants_present`] found. A present that finds it clear
+    /// shows backend textures again over the frame it already holds.
+    scene_changed: bool,
+    /// The backend textures the frame texture shows, in paint order.
+    placements: Vec<sink::Placement>,
+    /// The stamp of each backend texture as this target last showed it.
+    shown: HashMap<lumen_paint::TextureId, u64>,
+    /// An offscreen target's frame with its backend textures beneath it, for
+    /// readback. Kept only while the frame shows some.
+    composed: Option<compose::ComposedTexture>,
+}
+
+impl Target {
+    /// Whether a backend texture this target shows has a content stamp the
+    /// target has not shown.
+    fn textures_moved(&self, textures: Option<&GpuTextures>) -> bool {
+        let Some(textures) = textures else {
+            return false;
+        };
+        self.placements
+            .iter()
+            .any(|p| textures.stamp(p.id) != self.shown.get(&p.id).copied())
+    }
 }
 
 /// WGPU + vello renderer, for any number of windows and offscreen images on
@@ -139,8 +172,11 @@ pub struct WgpuRenderer {
     core: Option<GpuCore>,
     /// Frames rendered since construction. Frames the present gate skipped
     /// do not count, so a static UI redrawn on a false-positive dirty flag
-    /// leaves it flat.
+    /// leaves it flat, and neither do frames that only showed backend
+    /// textures again.
     render_count: u64,
+    /// Presents that put backend textures beneath a frame.
+    compose_count: u64,
     /// The last memory report and when it was taken. A report walks every
     /// allocation, so [`Renderer::info`] takes one at most every
     /// [`MEMORY_REPORT_INTERVAL`].
@@ -212,18 +248,30 @@ impl WgpuRenderer {
         self.render_count
     }
 
+    /// Presents that showed backend textures beneath a frame, across every
+    /// target. A frame whose scene is unchanged but whose textures moved adds
+    /// here and not to [`Self::render_count`].
+    pub fn compose_count(&self) -> u64 {
+        self.compose_count
+    }
+
     /// What `target`'s kept layers of faded groups hold and how often they
     /// were reused, or `None` when it is not attached.
     pub fn layer_stats(&self, target: Entity) -> Option<lumen_paint::LayerStats> {
         self.targets.get(&target).map(|t| t.layers.stats())
     }
 
-    /// `target`'s last rendered frame as tightly packed RGBA8.
+    /// `target`'s last rendered frame as tightly packed RGBA8, with the
+    /// backend textures it shows beneath it.
     pub fn read_rgba8(&self, target: Entity) -> Result<Vec<u8>, RenderError> {
         let (Some(core), Some(t)) = (self.core.as_ref(), self.targets.get(&target)) else {
             return Err(RenderError::Detached);
         };
-        core.read_rgba8(&t.frame).map_err(RenderError::Present)
+        match &t.composed {
+            Some(c) => gpu::read_texture(&core.device, &core.queue, &c.texture, c.size.0, c.size.1),
+            None => core.read_rgba8(&t.frame),
+        }
+        .map_err(RenderError::Present)
     }
 }
 
@@ -306,6 +354,10 @@ impl Renderer for WgpuRenderer {
                 frame: frame_texture,
                 layers: LayerCache::default(),
                 holds_frame: false,
+                scene_changed: true,
+                placements: Vec::new(),
+                shown: HashMap::new(),
+                composed: None,
             },
         );
         Ok(())
@@ -333,9 +385,11 @@ impl Renderer for WgpuRenderer {
         render_world: &mut World,
         request: FrameRequest,
     ) -> bool {
-        self.targets
-            .get(&target)
-            .is_some_and(|t| lumen_paint::wants_frame(render_world, target, request, t.holds_frame))
+        let Some(t) = self.targets.get_mut(&target) else {
+            return false;
+        };
+        t.scene_changed = lumen_paint::wants_frame(render_world, target, request, t.holds_frame);
+        t.scene_changed || t.textures_moved(render_world.get_resource::<GpuTextures>())
     }
 
     fn present(&mut self, target: Entity, render_world: &mut World) -> Result<(), RenderError> {
@@ -347,24 +401,108 @@ impl Renderer for WgpuRenderer {
         if !render_world.contains_resource::<lumen_paint::Rasterizer>() {
             render_world.insert_resource(lumen_paint::Rasterizer::new(core.rasterizer()));
         }
-        core.render(target, &t.frame, &mut t.layers, render_world)
-            .map_err(RenderError::Present)?;
-        t.holds_frame = true;
-        self.render_count += 1;
-        // Read back before the blit: the frame texture holds exactly what
-        // the window is about to show.
-        lumen_paint::answer_capture(render_world, target, t.frame.size(), || {
-            core.read_rgba8(&t.frame)
+        // A frame whose scene is unchanged keeps what the frame texture
+        // holds; only its backend textures show again.
+        if t.scene_changed || !t.holds_frame {
+            core.render(target, &t.frame, &mut t.layers, render_world)
+                .map_err(RenderError::Present)?;
+            t.placements = core.placements();
+            t.holds_frame = true;
+            t.scene_changed = false;
+            self.render_count += 1;
+        }
+        let textures = render_world.get_resource::<GpuTextures>().cloned();
+        let resolved = match (&textures, t.placements.is_empty()) {
+            (Some(textures), false) => {
+                let ids: Vec<lumen_paint::TextureId> = t.placements.iter().map(|p| p.id).collect();
+                textures.resolve(&ids)
+            }
+            _ => HashMap::new(),
+        };
+        let draws: Vec<compose::Draw<'_>> = t
+            .placements
+            .iter()
+            .filter_map(|placement| {
+                resolved.get(&placement.id).map(|r| compose::Draw {
+                    placement,
+                    view: &r.view,
+                })
+            })
+            .collect();
+        if draws.is_empty() {
+            t.composed = None;
+        } else if t.window.is_none() || lumen_paint::capture_requested(render_world, target) {
+            // What an offscreen target shows, and what a screenshot reads,
+            // is the frame with its textures beneath it.
+            let size = t.frame.size();
+            if t.composed.as_ref().is_none_or(|c| c.size != size) {
+                t.composed = Some(compose::ComposedTexture::new(&core.device, size));
+            }
+            let composed = t.composed.as_ref().expect("made above");
+            let mut encoder = core
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lumen compose encoder"),
+                });
+            core.compose(
+                &mut encoder,
+                &composed.view,
+                compose::ComposedTexture::FORMAT,
+                &t.frame,
+                &draws,
+            );
+            core.queue.submit(Some(encoder.finish()));
+        }
+        // Read back before the blit: the texture read holds exactly what the
+        // window is about to show.
+        let composed = t.composed.as_ref();
+        lumen_paint::answer_capture(render_world, target, t.frame.size(), || match composed {
+            Some(c) => gpu::read_texture(&core.device, &core.queue, &c.texture, c.size.0, c.size.1),
+            None => core.read_rgba8(&t.frame),
         });
         if let Some(window) = t.window.as_mut()
-            && window.present(core, &t.frame)?
+            && window.present(core, &t.frame, &draws)?
         {
             gpu::stamp(
                 render_world,
                 lumen_core::tick::RenderTimestamps::mark_presented,
             );
         }
+        if let Some(textures) = &textures {
+            textures.release_retired(&core.queue);
+        }
+        t.shown = resolved.into_iter().map(|(id, r)| (id, r.stamp)).collect();
+        if !t.placements.is_empty() {
+            self.compose_count += 1;
+        }
         Ok(())
+    }
+
+    fn publish(&mut self, render_world: &mut World) {
+        let Some(core) = self.core.as_ref() else {
+            return;
+        };
+        if render_world
+            .get_resource::<GpuContext>()
+            .is_some_and(|c| c.generation == core.generation)
+        {
+            return;
+        }
+        render_world.insert_resource(GpuContext {
+            device: core.device.clone(),
+            queue: core.queue.clone(),
+            adapter: core.adapter.clone(),
+            info: core.adapter_info.clone(),
+            generation: core.generation,
+        });
+        match render_world.get_resource::<GpuTextures>() {
+            Some(textures) => textures.reset(core.generation),
+            None => {
+                let textures = GpuTextures::default();
+                textures.reset(core.generation);
+                render_world.insert_resource(textures);
+            }
+        }
     }
 
     fn set_present_mode(&mut self, target: Entity, mode: PresentMode) {

@@ -517,7 +517,10 @@ mod fsm_tests {
         world.insert_resource(AnimationsActive::default());
         world.insert_resource(PointerState::default());
         world.insert_resource(ScrollbarInteraction::default());
-        world.insert_resource(FrameDirty { dirty: false });
+        world.insert_resource(FrameDirty {
+            dirty: false,
+            present: false,
+        });
         let scroller = world
             .spawn((
                 Transform::new(glam::Vec2::ZERO, glam::Vec2::new(200.0, 400.0)),

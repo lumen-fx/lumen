@@ -155,6 +155,22 @@ pub use lumen_paint;
 #[cfg(feature = "paint")]
 pub use lumen_text;
 
+/// The GPU render backend's device and texture table, behind the `gpu`
+/// feature: [`gpu::GpuContext`] is the device every frame renders on, and a
+/// texture made on it and handed to [`gpu::GpuTextures`] under a
+/// [`lumen_paint::TextureId`] shows wherever a painter draws that id, with
+/// no copy. [`gpu::wgpu`] is the wgpu the backend draws with, the one a
+/// texture has to be made with.
+///
+/// Both resources live in the render world, and only while the GPU backend
+/// renders; a module finds them absent under the CPU backend and shows
+/// something else.
+#[cfg(feature = "gpu")]
+pub mod gpu {
+    pub use lumen_render_wgpu::vello::wgpu;
+    pub use lumen_render_wgpu::{GpuContext, GpuTextures, Sampled};
+}
+
 #[cfg(all(feature = "engine-dylib", not(windows)))]
 pub use lumen_engine as lumen_dylib;
 #[cfg(all(feature = "engine-dylib", not(windows)))]

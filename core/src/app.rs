@@ -721,8 +721,16 @@ impl App {
         let dirty = self
             .world
             .get_resource::<FrameDirty>()
-            .map(|f| f.dirty)
-            .unwrap_or(true);
+            .is_none_or(|f| f.dirty);
+        #[cfg(not(target_arch = "wasm32"))]
+        let present = self
+            .world
+            .get_resource::<FrameDirty>()
+            .is_some_and(|f| f.present);
+        #[cfg(not(target_arch = "wasm32"))]
+        if present {
+            self.world.resource_mut::<FrameDirty>().present = false;
+        }
         let (frame, start) = self
             .world
             .get_resource::<crate::tick::Tick>()
@@ -736,6 +744,14 @@ impl App {
             };
         }
         if !dirty {
+            // Only what the renderer holds changed: the render schedule puts
+            // the frame up again from the last extract. A page has no
+            // renderer of its own.
+            #[cfg(not(target_arch = "wasm32"))]
+            if present {
+                run_schedule_resilient(&mut self.render_world, Render);
+                self.record_render_reports();
+            }
             return;
         }
 
