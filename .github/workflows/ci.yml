@@ -140,6 +140,10 @@ jobs:
           key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The launcher stub builds lumenc with a single feature. A workspace run
+      # unifies features across members and hides what that build lacks, so
+      # the stub gets a run of its own, the way the release builds it.
+      - run: cargo clippy -p lumen-launcher --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})

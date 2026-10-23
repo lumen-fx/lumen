@@ -4,12 +4,15 @@
 /// `println!` for output a reader may stop consuming early (`| head -1`).
 /// `println!` panics when stdout is a closed pipe; a closed pipe here only
 /// means the reader has what it wants, so exit quietly like any filter.
+/// The MCP commands are its only callers.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 macro_rules! outln {
     ($($arg:tt)*) => {
         $crate::cli::write_stdout_line(format_args!($($arg)*))
     };
 }
 
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub(crate) fn write_stdout_line(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();

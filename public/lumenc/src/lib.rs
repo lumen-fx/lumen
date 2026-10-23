@@ -42,7 +42,9 @@ use lumen_rhai as _;
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod addons;
 /// Typed C++ and Python wrappers over a module's script functions, which
-/// call them through the C ABI's `lumen_call`.
+/// call them through the C ABI's `lumen_call`. Needs the script-function
+/// types, which only the `dev-run` build links.
+#[cfg(feature = "dev-run")]
 pub mod bindings;
 /// CLI subcommand handlers: `build`, `bundle`, `add`/`remove`/`fetch`/`update`,
 /// `i18n`, the MCP inspection commands, the static signal lint, and the
