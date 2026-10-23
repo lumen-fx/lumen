@@ -43,7 +43,9 @@ and a producer already running can be handed the endpoint any other way.
 The producer speaks the Lumen surface protocol. It allocates a small ring of
 GPU images, exports them, and hands them over once; from then on it renders
 into an image the surface has given back, waits for its own GPU to finish, and
-announces the frame. The specification is
+announces the frame. Each image changes hands with a Vulkan queue family
+ownership transfer, in one fixed layout; the specification's "Ownership and
+layout" section says which barriers each side records. The specification is
 [`std/surface/protocol/SPEC.md`](https://github.com/lumen-fx/lumen/blob/main/std/surface/protocol/SPEC.md).
 
 - A Rust engine depends on the `lumen-surface-protocol` crate, which carries

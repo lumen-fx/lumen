@@ -366,12 +366,19 @@ static void render(Gpu *g, Ring *ring, uint32_t index, float bg[4], float px, fl
     VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CHECK(vkBeginCommandBuffer(cb, &begin), "vkBeginCommandBuffer");
-    /* Take the image back from the consumer: in the shared layout, released
-     * to the external family. A fresh image has no contents to keep. */
+    /* Take the image back from the consumer, which released it to the
+     * external family in the shared layout. The acquire names the same
+     * layouts as that release, so it changes none; the move to the layout
+     * the pass draws in is a barrier of its own. A fresh image has no
+     * contents to keep and no owner to take it from. */
     if (s->used) {
         barrier(cb, s->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_QUEUE_FAMILY_EXTERNAL, g->family, 0,
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_QUEUE_FAMILY_EXTERNAL, g->family, 0, 0,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        barrier(cb, s->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_QUEUE_FAMILY_IGNORED,
+                VK_QUEUE_FAMILY_IGNORED, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     } else {
         barrier(cb, s->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -409,11 +416,16 @@ static void render(Gpu *g, Ring *ring, uint32_t index, float bg[4], float px, fl
         vkCmdClearAttachments(cb, 1, &att, 1, &rect);
     }
     vkCmdEndRenderPass(cb);
-    /* Hand it over: the shared layout, released to the external family. */
+    /* Hand it over: into the shared layout on this family first, then
+     * released to the external family with no change of layout, which is
+     * what the consumer's acquire names. */
     barrier(cb, s->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, g->family, VK_QUEUE_FAMILY_EXTERNAL,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    barrier(cb, s->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, g->family, VK_QUEUE_FAMILY_EXTERNAL, 0, 0,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     CHECK(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;

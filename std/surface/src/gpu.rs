@@ -94,12 +94,21 @@ impl Backend for GpuBackend {
     }
 
     fn present(&self, texture: wgpu::Texture, stamp: u64, released: Box<dyn FnOnce() + Send>) {
-        match current() {
-            Some(gpu) => gpu
-                .textures
-                .present(self.texture, texture, stamp, Some(released)),
-            None => released(),
-        }
+        let Some(gpu) = current() else {
+            released();
+            return;
+        };
+        // The frame's image comes over from the producer's queue family
+        // before anything samples it, and goes back once nothing does.
+        #[cfg(target_os = "linux")]
+        let released = if gpu.context.info.backend == wgpu::Backend::Vulkan {
+            vulkan::acquire(&gpu.context, &texture);
+            vulkan::release_when_done(gpu.context.clone(), texture.clone(), released)
+        } else {
+            released
+        };
+        gpu.textures
+            .present(self.texture, texture, stamp, Some(released));
     }
 }
 
@@ -320,7 +329,189 @@ mod vulkan {
             };
             textures.push(texture);
         }
+        prime(context, &textures);
         Ok(textures)
+    }
+
+    /// The images' first use on this side: the layout they are sampled in,
+    /// out of `UNDEFINED`. wgpu tracks a texture made from a raw image as
+    /// holding nothing, and would make this transition on the first frame
+    /// that samples it, after the producer had drawn into it, which may
+    /// discard what it drew. Done here instead, and waited for, before the
+    /// producer is told the ring is accepted and draws into any of it.
+    fn prime(context: &GpuContext, textures: &[wgpu::Texture]) {
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lumen surface import"),
+            });
+        encoder.transition_resources(
+            std::iter::empty(),
+            textures.iter().map(|texture| wgpu::TextureTransition {
+                texture,
+                selector: None,
+                state: wgpu::TextureUses::RESOURCE,
+            }),
+        );
+        let index = context.queue.submit([encoder.finish()]);
+        wait(context, index);
+    }
+
+    /// Block until the GPU has finished `index`, or a hung device has had
+    /// long enough.
+    fn wait(context: &GpuContext, index: wgpu::SubmissionIndex) {
+        let _ = context.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
+    }
+
+    /// Which way an image's ownership moves.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Transfer {
+        /// From the producer (`VK_QUEUE_FAMILY_EXTERNAL`) to the renderer's
+        /// queue family, before sampling.
+        Acquire,
+        /// From the renderer's queue family back to the producer, after
+        /// sampling.
+        Release,
+    }
+
+    /// Record and submit the ownership transfer of `texture`'s image. A
+    /// transfer never changes the layout: both sides name
+    /// `SHADER_READ_ONLY_OPTIMAL`, the layout an image has between the
+    /// processes, as the specification requires.
+    fn transfer(
+        context: &GpuContext,
+        texture: &wgpu::Texture,
+        way: Transfer,
+    ) -> Option<wgpu::SubmissionIndex> {
+        // SAFETY: the hal device and texture are only read here.
+        let (device, family) = {
+            let hal = unsafe { context.device.as_hal::<Vulkan>() }?;
+            (hal.raw_device().clone(), hal.queue_family_index())
+        };
+        // SAFETY: the image stays alive with `texture`, which outlives the
+        // submission (it is waited for, or held by the frame it belongs to).
+        let image = unsafe { texture.as_hal::<Vulkan>().map(|t| t.raw_handle()) }?;
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        let barrier = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image(image)
+            .subresource_range(range);
+        let (barrier, from, to) = match way {
+            Transfer::Acquire => (
+                barrier
+                    .src_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+                    .dst_queue_family_index(family)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ),
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ),
+            Transfer::Release => (
+                barrier
+                    .src_queue_family_index(family)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL),
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            ),
+        };
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lumen surface ownership"),
+            });
+        // SAFETY: the barrier is recorded into the encoder's open command
+        // buffer on the device it was made on; wgpu tracks the texture as
+        // sampled already (see `prime`), so nothing it records disagrees.
+        let recorded = unsafe {
+            encoder.as_hal_mut::<Vulkan, _, _>(|hal| {
+                hal.map(|hal| {
+                    device.cmd_pipeline_barrier(
+                        hal.raw_handle(),
+                        from,
+                        to,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[barrier],
+                    );
+                })
+            })
+        };
+        recorded?;
+        Some(context.queue.submit([encoder.finish()]))
+    }
+
+    /// Take `texture`'s image from the producer. Submitted before the frame
+    /// goes into the texture table, so every frame that samples it is
+    /// submitted after.
+    pub(super) fn acquire(context: &GpuContext, texture: &wgpu::Texture) {
+        transfer(context, texture, Transfer::Acquire);
+    }
+
+    /// A release callback for the texture table that first gives the image
+    /// back to the producer: the release transfer is submitted and waited
+    /// for, then `released` tells the producer. The table runs its
+    /// callbacks from a device poll, where nothing may submit, so the work
+    /// goes to a thread of its own.
+    pub(super) fn release_when_done(
+        context: GpuContext,
+        texture: wgpu::Texture,
+        released: Box<dyn FnOnce() + Send>,
+    ) -> Box<dyn FnOnce() + Send> {
+        Box::new(move || {
+            let job = Release {
+                context,
+                texture,
+                released,
+            };
+            if let Err(std::sync::mpsc::SendError(job)) = releaser().send(job) {
+                (job.released)();
+            }
+        })
+    }
+
+    /// One image to hand back.
+    struct Release {
+        context: GpuContext,
+        texture: wgpu::Texture,
+        released: Box<dyn FnOnce() + Send>,
+    }
+
+    /// The thread that hands images back, started on first use.
+    fn releaser() -> std::sync::mpsc::Sender<Release> {
+        static SENDER: Mutex<Option<std::sync::mpsc::Sender<Release>>> = Mutex::new(None);
+        let mut sender = SENDER.lock().unwrap_or_else(|e| e.into_inner());
+        sender
+            .get_or_insert_with(|| {
+                let (tx, rx) = std::sync::mpsc::channel::<Release>();
+                // Without the thread the receiver is gone: every send fails
+                // and each image is released at once.
+                let _ = std::thread::Builder::new()
+                    .name("lumen-surface release".into())
+                    .spawn(move || {
+                        for job in rx {
+                            // A device that went away took the image with it.
+                            let live = current()
+                                .is_some_and(|g| g.context.generation == job.context.generation);
+                            if live
+                                && let Some(index) =
+                                    transfer(&job.context, &job.texture, Transfer::Release)
+                            {
+                                wait(&job.context, index);
+                            }
+                            drop(job.texture);
+                            (job.released)();
+                        }
+                    });
+                tx
+            })
+            .clone()
     }
 }
 
