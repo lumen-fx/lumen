@@ -222,7 +222,9 @@ size_t lsp_last_error(char *buf, size_t len);
 LspProducer *lsp_connect(const char *endpoint, const LspHello *hello, LspWelcome *welcome,
                          LspStatus *status);
 
-/* Offer a ring and wait for the consumer to import it. The descriptors are
+/* Offer a ring and wait for the consumer to import it, for as long as the
+ * consumer keeps sending (it pings while its GPU prepares the images);
+ * LSP_ERR_TIMEOUT after 5 s in which it sent nothing. The descriptors are
  * duplicated; the caller keeps its own. */
 LspStatus lsp_offer_buffers(LspProducer *p, const LspBuffers *buffers);
 

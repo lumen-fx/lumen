@@ -7,7 +7,7 @@
 //! session's thread, against a clone of the device, so a slow driver never
 //! stalls a frame.
 
-use crate::session::Backend;
+use crate::session::{Backend, Imported};
 use lumen_module::gpu::{GpuContext, GpuTextures, wgpu};
 use lumen_module::lumen_paint::TextureId;
 use lumen_surface_protocol::endpoint::AdapterHint;
@@ -88,7 +88,11 @@ impl Backend for GpuBackend {
         current().map_or(0, |g| g.context.generation)
     }
 
-    fn import(&self, buffers: &Buffers, fds: Vec<Handle>) -> Result<Vec<wgpu::Texture>, String> {
+    fn import(
+        &self,
+        buffers: &Buffers,
+        fds: Vec<Handle>,
+    ) -> Result<Imported<wgpu::Texture>, String> {
         let gpu = current().ok_or("the renderer has no GPU device")?;
         import(&gpu.context, buffers, fds)
     }
@@ -134,7 +138,7 @@ fn import(
     context: &GpuContext,
     buffers: &Buffers,
     fds: Vec<Handle>,
-) -> Result<Vec<wgpu::Texture>, String> {
+) -> Result<Imported<wgpu::Texture>, String> {
     #[cfg(target_os = "linux")]
     if context.info.backend == wgpu::Backend::Vulkan {
         return vulkan::import(context, buffers, fds);
@@ -187,7 +191,7 @@ mod vulkan {
         context: &GpuContext,
         buffers: &Buffers,
         fds: Vec<Handle>,
-    ) -> Result<Vec<wgpu::Texture>, String> {
+    ) -> Result<Imported<wgpu::Texture>, String> {
         let Format::Rgba8Srgb = buffers.format;
         let usage = vk::ImageUsageFlags::from_raw(buffers.usage);
         if !usage.contains(REQUIRED_USAGE) {
@@ -329,17 +333,20 @@ mod vulkan {
             };
             textures.push(texture);
         }
-        prime(context, &textures);
-        Ok(textures)
+        let ready = prime(context, &textures);
+        Ok(Imported { textures, ready })
     }
 
     /// The images' first use on this side: the layout they are sampled in,
     /// out of `UNDEFINED`. wgpu tracks a texture made from a raw image as
     /// holding nothing, and would make this transition on the first frame
     /// that samples it, after the producer had drawn into it, which may
-    /// discard what it drew. Done here instead, and waited for, before the
-    /// producer is told the ring is accepted and draws into any of it.
-    fn prime(context: &GpuContext, textures: &[wgpu::Texture]) {
+    /// discard what it drew. Submitted here instead; the returned check says
+    /// when the GPU has finished it, and the producer is told the ring is
+    /// accepted, and draws into it, only then. The GPU runs the transition
+    /// after whatever the renderer queued before it, which on a software
+    /// rasterizer under load can take a while, so nothing waits on it.
+    fn prime(context: &GpuContext, textures: &[wgpu::Texture]) -> Box<dyn FnMut() -> bool + Send> {
         let mut encoder = context
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -353,8 +360,20 @@ mod vulkan {
                 state: wgpu::TextureUses::RESOURCE,
             }),
         );
-        let index = context.queue.submit([encoder.finish()]);
-        wait(context, index);
+        context.queue.submit([encoder.finish()]);
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = done.clone();
+        context.queue.on_submitted_work_done(move || {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let device = context.device.clone();
+        Box::new(move || {
+            if !done.load(std::sync::atomic::Ordering::Acquire) {
+                // Runs the callbacks of finished work without waiting.
+                let _ = device.poll(wgpu::PollType::Poll);
+            }
+            done.load(std::sync::atomic::Ordering::Acquire)
+        })
     }
 
     /// Block until the GPU has finished `index`, or a hung device has had

@@ -153,7 +153,12 @@ bits: 1 shift, 2 control, 4 alt, 8 meta.
 3. P allocates a ring at that size, exports it, and sends `Buffers` with
    generation 1.
 4. C imports every buffer and answers `BuffersAccepted`, or
-   `BuffersRejected` with the reason.
+   `BuffersRejected` with the reason. The answer can take a while: C first
+   finishes its first-use work on the images (see "Ownership and layout"),
+   which waits on its GPU. C keeps serving the connection meanwhile, pinging
+   a quiet producer as usual, so P waits for the answer for as long as C
+   keeps sending, and gives up only after five seconds in which C sent
+   nothing at all.
 
 The producer allocates and exports; the consumer imports.
 
@@ -208,7 +213,7 @@ layout change is a barrier of its own, on the side's own queue family.
   `SHADER_READ_ONLY_OPTIMAL` into the layout P draws in.
 - **First use.** Between importing a ring and sending `BuffersAccepted`, C
   may move its images out of `VK_IMAGE_LAYOUT_UNDEFINED` on its own family,
-  and waits for that to finish; a renderer that tracks layouts needs to, so
+  and waits for the GPU to finish that before it answers; a renderer that tracks layouts needs to, so
   it never makes that transition later over a frame P drew. C touches the
   images in no other way before the first `FrameReady` that names them. P
   draws into each image the first time from `VK_IMAGE_LAYOUT_UNDEFINED`,

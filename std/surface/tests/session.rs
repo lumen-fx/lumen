@@ -11,7 +11,7 @@ use lumen_surface::protocol::wire::{
     AdapterId, Api, BUFFER_DEDICATED, BufferDesc, Buffers, ByeReason, Format, InputEvent,
     RejectReason,
 };
-use lumen_surface::session::{self, Backend, Happened, Shared, SurfaceStateKind, Wanted};
+use lumen_surface::session::{self, Backend, Happened, Imported, Shared, SurfaceStateKind, Wanted};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,8 @@ struct Recorder {
     showing: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     imported: Mutex<Vec<(u32, usize)>>,
     generation: AtomicU64,
+    /// How long a ring's first-use work takes, as a slow GPU's would.
+    prepare: Mutex<Duration>,
 }
 
 impl Backend for Recorder {
@@ -48,15 +50,24 @@ impl Backend for Recorder {
         self.generation.load(Ordering::SeqCst)
     }
 
-    fn import(&self, buffers: &Buffers, fds: Vec<OwnedFd>) -> Result<Vec<(u32, u32)>, String> {
+    fn import(&self, buffers: &Buffers, fds: Vec<OwnedFd>) -> Result<Imported<(u32, u32)>, String> {
         assert_eq!(fds.len(), buffers.buffers.len(), "a descriptor per buffer");
         self.imported
             .lock()
             .unwrap()
             .push((buffers.generation, fds.len()));
-        Ok((0..buffers.buffers.len() as u32)
+        let textures = (0..buffers.buffers.len() as u32)
             .map(|slot| (buffers.generation, slot))
-            .collect())
+            .collect();
+        let prepare = *self.prepare.lock().unwrap();
+        if prepare.is_zero() {
+            return Ok(Imported::now(textures));
+        }
+        let until = Instant::now() + prepare;
+        Ok(Imported {
+            textures,
+            ready: Box::new(move || Instant::now() >= until),
+        })
     }
 
     fn present(&self, texture: (u32, u32), stamp: u64, released: Box<dyn FnOnce() + Send>) {
@@ -446,5 +457,29 @@ fn a_producer_that_stops_answering_is_hung() {
     }
     assert_eq!(shared.state(), SurfaceStateKind::Lost);
     drop(producer);
+    shared.close();
+}
+
+/// A ring whose first-use work outlasts the producer's answer timeout is
+/// still accepted: the consumer keeps serving while it prepares, pinging the
+/// waiting producer, and every message restarts the producer's wait. The
+/// first frame then flows as usual.
+#[test]
+fn a_ring_that_takes_long_to_prepare_is_still_accepted() {
+    let (shared, backend) = start();
+    *backend.prepare.lock().unwrap() =
+        lumen_surface::protocol::producer::ANSWER_TIMEOUT + Duration::from_secs(1);
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
+    let started = Instant::now();
+    offer(&mut producer, 1, (64, 48), 3);
+    assert!(
+        started.elapsed() > lumen_surface::protocol::producer::ANSWER_TIMEOUT,
+        "the ring was accepted before its preparation finished"
+    );
+    shared.request_frame();
+    one_frame(&mut producer, &shared);
+    assert_eq!(shared.state(), SurfaceStateKind::Live);
+    producer.close(ByeReason::Exit, "done");
     shared.close();
 }

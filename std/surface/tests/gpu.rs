@@ -21,6 +21,11 @@ use lumen_surface::{SurfaceElement, SurfaceEvent, SurfacePlugin, SurfaceStateKin
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// How long one step may take before a test gives up. A software rasterizer
+/// on a loaded CI runner compiles each shader the first time it runs, which
+/// can take seconds; a passing run takes a fraction of this.
+const PATIENCE: Duration = Duration::from_secs(60);
+
 const W: u32 = 128;
 const H: u32 = 96;
 
@@ -200,7 +205,7 @@ fn an_in_process_producer_shows_through_the_loopback() {
         .expect("the GPU renderer published its device");
     let texture = solid(&context, (64, 64), [0, 180, 0, 255]);
     producer.present(texture, b"m1").expect("presented");
-    tick_until(&mut app, "the frame", Duration::from_secs(5), |app| {
+    tick_until(&mut app, "the frame", PATIENCE, |app| {
         near(pixel(&read_back(app), 64, 32), [0, 180, 0])
     });
     let pixels = read_back(&app);
@@ -451,12 +456,9 @@ mod cross_process {
         let first = Running::start(&endpoint, &[]);
 
         // The pattern: blue, with the orange square in the middle.
-        tick_until(
-            &mut app,
-            "the first frame",
-            Duration::from_secs(15),
-            |app| near(pixel(&read_back(app), 4, 4), [0, 0, 231]),
-        );
+        tick_until(&mut app, "the first frame", PATIENCE, |app| {
+            near(pixel(&read_back(app), 4, 4), [0, 0, 231])
+        });
         let pixels = read_back(&app);
         assert!(
             near(pixel(&pixels, W / 2, H / 2), [255, 188, 0]),
@@ -490,7 +492,7 @@ mod cross_process {
         tick_until(
             &mut app,
             "the square to follow the pointer",
-            Duration::from_secs(5),
+            PATIENCE,
             |app| {
                 let p = read_back(app);
                 near(pixel(&p, 24, 24), [255, 188, 0]) && near(pixel(&p, W / 2, H / 2), [0, 0, 231])
@@ -506,21 +508,15 @@ mod cross_process {
             repeat: false,
             time_stamp: lumen_core::time::Instant::now(),
         });
-        tick_until(
-            &mut app,
-            "the key to reach the producer",
-            Duration::from_secs(5),
-            |app| near(pixel(&read_back(app), 100, 80), [0, 231, 0]),
-        );
+        tick_until(&mut app, "the key to reach the producer", PATIENCE, |app| {
+            near(pixel(&read_back(app), 100, 80), [0, 231, 0])
+        });
 
         // A smaller element brings a new ring at the new size.
         app.world.get_mut::<Transform>(e).unwrap().size = glam::Vec2::new(64.0, 48.0);
-        tick_until(
-            &mut app,
-            "the resized frame",
-            Duration::from_secs(5),
-            |app| element(app, e).frame().is_some_and(|f| f.size == (64, 48)),
-        );
+        tick_until(&mut app, "the resized frame", PATIENCE, |app| {
+            element(app, e).frame().is_some_and(|f| f.size == (64, 48))
+        });
         assert_eq!(element(&mut app, e).frame().unwrap().generation, 2);
         assert!(events(&mut app).iter().any(|ev| matches!(
             ev,
@@ -533,7 +529,7 @@ mod cross_process {
         drop(first);
 
         // The producer was killed: the surface is lost and keeps its last frame.
-        tick_until(&mut app, "the loss", Duration::from_secs(5), |app| {
+        tick_until(&mut app, "the loss", PATIENCE, |app| {
             element(app, e).state() == SurfaceStateKind::Lost
         });
         assert!(
@@ -551,7 +547,7 @@ mod cross_process {
         // over the same surface.
         let mut crashing = Running::start(&endpoint, &[("LSP_REF_CRASH_AFTER", "3")]);
         let mut connected = false;
-        tick_until(&mut app, "the crash", Duration::from_secs(10), |app| {
+        tick_until(&mut app, "the crash", PATIENCE, |app| {
             let seen = events(app);
             connected |= seen
                 .iter()
@@ -568,7 +564,7 @@ mod cross_process {
             "it exited on its own, with no goodbye"
         );
         let again = Running::start(&endpoint, &[]);
-        tick_until(&mut app, "a new producer", Duration::from_secs(10), |app| {
+        tick_until(&mut app, "a new producer", PATIENCE, |app| {
             element(app, e).state() == SurfaceStateKind::Live
                 && near(pixel(&read_back(app), 4, 4), [0, 0, 231])
         });
