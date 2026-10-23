@@ -1,0 +1,43 @@
+name: surface hardware
+
+# Shares frames between two processes on a hardware GPU: the lumen-surface GPU
+# suite, with the C reference producer rendering in its own process and the
+# consumer importing its images, on a machine whose Vulkan device is
+# hardware. The per-push suite runs the same tests on lavapipe, the software
+# device a hosted runner has; this job checks the path on a driver that
+# exports and imports device memory on the GPU itself.
+#
+# Hosted runners have no GPU, so it runs by hand on a runner that has one.
+# `runner` names it, as the JSON list of labels `runs-on` takes.
+# LUMEN_SURFACE_REQUIRE_HARDWARE turns the suite's skip into a failure when
+# the machine offers no adapter, or only a software one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Labels of a runner with a GPU, as a JSON list
+        required: true
+        default: '["self-hosted", "linux", "gpu"]'
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    name: lumen-surface on a GPU
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: 60
+    env:
+      LUMEN_SURFACE_REQUIRE_HARDWARE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - name: Show the Vulkan devices
+        run: vulkaninfo --summary || true
+      - run: cargo test -p lumen-surface --test gpu -- --nocapture

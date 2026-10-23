@@ -36,6 +36,8 @@ use lumen_process as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_storage as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_surface as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_svg as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_websocket as _;

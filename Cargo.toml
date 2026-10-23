@@ -178,6 +178,9 @@ members = [
     "os/crash/report",
     "std/*",
     "std/candela/dev",
+    # The surface module's protocol crate, which an engine depends on without
+    # the module.
+    "std/surface/protocol",
     # The script hosts' libraries, apart from the module entries above them so
     # a build script can depend on them without building a module.
     "std/candela/host",
@@ -330,6 +333,8 @@ lumen-script = { path = "core/script/api", default-features = false }
 lumen-server = { path = "web/server" }
 lumen-ssr = { path = "web/ssr" }
 lumen-storage = { path = "std/storage", default-features = false }
+lumen-surface = { path = "std/surface", default-features = false }
+lumen-surface-protocol = { path = "std/surface/protocol" }
 lumen-svg = { path = "std/svg", default-features = false }
 lumen-text = { path = "core/text" }
 lumen-text-cosmic = { path = "backends/text-cosmic" }

@@ -485,6 +485,76 @@ ratio. On the GPU renderer, `copy`, `source-in`, `source-out`,
 `destination-in` and `destination-atop` under a clip also clear a band up to
 16 pixels wide just outside the clip's edge.
 
+### `<surface>`
+
+Shows the frames another renderer draws on the GPU: a game or an engine in
+another process, an engine linked into the app, a video decoder. The frames
+are shared, not copied: the renderer shows each one in place, beneath the
+window's other content. Input on the element goes back to the producer. See
+[Showing another renderer's frames](../guides/surfaces.md) for the whole
+picture, and the `surface` namespace in [candela](scripting-candela.md#surfaces),
+[Rhai](scripting-rhai.md#surfaces) or [Lua](scripting-lua.md#surfaces) for
+the functions.
+
+The tag comes from the `lumen-surface` module:
+
+```toml
+[dependencies]
+lumen-surface = { bundled = true }
+```
+
+| Attribute | Value | Effect |
+| --- | --- | --- |
+| `id` | text | Names the surface for the `surface` functions. |
+| `channel` | text | The channel a producer connects on. Defaults to the `id`. |
+| `pacing` | `paced` or `free` | `paced` (the default): the producer renders one frame for each frame the surface shows, while it can be seen. `free`: the producer renders at its own rate and the surface shows the newest frame. |
+| `stall-timeout` | integer milliseconds | How long a frame the surface asked for may take before the surface counts as stalled. Defaults to 1000. |
+| `keyboard` | `focus` or `all` | `focus` (the default): while the surface has focus, keys go to the producer except Tab and the menu bar's shortcuts. `all`: every key goes to the producer while it has focus. |
+
+The element is a replaced element, 300 by 150 until CSS sizes it, and asks
+its producer for frames at the size of its box in device pixels, so each
+frame pixel lands on one screen pixel. `object-fit` places a frame whose size
+differs (for a frame or two during a resize, or a producer that renders at a
+fixed size); the default is `contain`. `image-rendering: pixelated` samples
+the nearest frame pixel. The background shows before the first frame and in
+the bars `contain` leaves; it defaults to the `--lumen-surface-background`
+custom property, black. The element can take focus, and a click gives it
+focus.
+
+The element's state is its `state` attribute and a matching class, so CSS
+styles each state:
+
+| State | Class | Meaning |
+| --- | --- | --- |
+| `waiting` | `surface-waiting` | No producer, or none has shown a frame yet. |
+| `live` | `surface-live` | Frames arrive. |
+| `stalled` | `surface-stalled` | A frame was asked for and has not come within `stall-timeout`. |
+| `lost` | `surface-lost` | The producer went away. The last frame stays up. |
+| `unsupported` | `surface-unsupported` | The app renders without a GPU, or in a browser, and cannot show shared frames. |
+
+Events, on the element: `surfaceconnect` (detail `engine`, `pid`),
+`surfaceresize` (`width`, `height`, the size asked of the producer),
+`surfacestall` (`waited_ms`), `surfaceresume`, `surfacedisconnect` (`reason`:
+`exit`, `crash`, `hung`, `rejected`, `device-lost` or `closed`; `detail`),
+`surfaceerror` (`reason`: `rejected`, `import`, `unsupported` or `effect`;
+`detail`) and `surfacemessage` (`text`, `bytes`).
+
+Children of a surface paint over the frame, so an app draws overlays (labels,
+selection boxes, toolbars) as ordinary elements inside it. They take the
+pointer first; `pointer-events: none` passes it through to the surface.
+
+The frame is shown as it is: opaque, upright and unblended. Clipping by an
+ancestor's `overflow: hidden` and content painted over it work. Under an
+`opacity` below 1 (the surface's own or a fading ancestor's) or a
+`mask-image`, the frame is not drawn and the element raises `surfaceerror`
+with the reason `effect`.
+
+In a web build the element is a placeholder in the `unsupported` state, and
+`lumenc web` says so when an app uses it.
+
+Surfaces work on Linux. On Windows a `<surface>` does not start yet, and on
+macOS a producer in another process is refused.
+
 ## Controls
 
 ### `<button>`

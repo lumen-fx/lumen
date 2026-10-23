@@ -1169,3 +1169,57 @@ buffer caps from the module's `config` table (see [candela's
 Canvas section](scripting-candela.md#pixel-buffers)) apply to a Rust app too,
 set with `CanvasPlugin::with_caps`; the region cap does not, since a slice
 crosses no script boundary.
+
+### Surfaces
+
+The `lumenui-surface` crate gives a Rust app the [`<surface>`](tags.md#surface)
+element: frames another renderer draws on the GPU, shown in place. Add it
+beside `lumenui`, at the same version, and install `SurfacePlugin` with
+`add_plugin`:
+
+```toml
+[dependencies]
+lumenui = "X.Y.Z"
+lumenui-surface = "X.Y.Z"
+```
+
+```rust
+use lumenui::prelude::*;
+use lumenui_surface::{SurfaceEvent, SurfaceFrame, SurfacePlugin, Surfaces};
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .add_plugin(SurfacePlugin::default())
+        .on_ready(|ui| {
+            let endpoint = Surfaces.endpoint("scene").expect("the element is mounted");
+            std::process::Command::new("./game")
+                .env("LUMEN_SURFACE", endpoint)
+                .spawn()
+                .expect("the game starts");
+        })
+        .run()
+}
+```
+
+`Surfaces` answers by element id: `endpoint` (the string a producer connects
+with), `state`, `frame`, `request_frame`, `send` (bytes for the producer's
+application) and `disconnect`. On the element's entity, `SurfaceState` says
+where it stands and `SurfaceFrame` is the frame on screen, with the producer's
+bytes about it in `meta()`. `SurfaceEvent` messages report connects,
+resizes, stalls, disconnects, errors and the producer's messages, the same
+things the element's `surface*` DOM events carry.
+
+An engine linked into the app is a producer too: `Surfaces.loopback(id)`
+hands it a `LoopbackProducer`, whose `context()` is the renderer's own GPU
+device and whose `present(texture, meta)` shows a texture made on it, with no
+socket and nothing imported. Make the texture with the `wgpu` the crate
+re-exports, `lumenui_surface::wgpu`, which is the renderer's own. `SurfacePlugin { default_pacing, stall_timeout }`
+sets what an element that does not say gets.
+
+A producer in another process speaks the Lumen surface protocol, through the
+`lumen-surface-protocol` crate or its C library; see
+[Showing another renderer's frames](../guides/surfaces.md).
+
+The C ABI, C++ and Python reach the same calls through the module's generated
+wrappers: `<lumen_surface.hpp>` (`lumen::surface::endpoint("scene")`) and
+`lumen.surface`.

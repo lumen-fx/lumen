@@ -1,0 +1,55 @@
+# The web half of the surface module. A browser has no way to show another
+# process's GPU frames, so on a page `<surface>` is its placeholder: an empty
+# element in the `unsupported` state, styled by the app's CSS like any other,
+# and every function answers as a surface with no producer would. The desktop
+# half in src/ takes its function signatures from this file, so a script sees
+# the same names on every target.
+[addon]
+namespace = "surface"
+module = "surface.js"
+styles = ["surface.css"]
+
+[[function]]
+name = "endpoint"
+params = ["id: string"]
+returns = "string"
+doc = "The endpoint string a producer connects to the surface with: hand it to the producer, by the LUMEN_SURFACE environment variable by convention. Empty when no surface has the id."
+
+[[function]]
+name = "state"
+params = ["id: string"]
+returns = "string"
+doc = "Where the surface stands: waiting, live, stalled, lost or unsupported. Empty when no surface has the id."
+
+[[function]]
+name = "frame_info"
+params = ["id: string"]
+returns = "{string: any}"
+doc = "The frame on screen: frame, width, height, generation, input_seq and meta_len. Empty before the first frame."
+
+[[function]]
+name = "frame_meta"
+params = ["id: string"]
+returns = "int[]"
+doc = "The producer's bytes about the frame on screen, such as the camera it was drawn with."
+
+[[function]]
+name = "request_frame"
+params = ["id: string"]
+doc = "Ask a paced producer for a frame now, so a still scene shows an edit."
+
+[[function]]
+name = "send"
+params = ["id: string", "message: string"]
+returns = "bool"
+doc = "Send a message to the producer's application; false when no producer is connected."
+
+[[function]]
+name = "disconnect"
+params = ["id: string"]
+doc = "End the session with the producer. The surface keeps listening for another."
+
+[[element]]
+tag = "surface"
+html = "div"
+note = "a browser cannot show another process's GPU frames, so <surface> shows its placeholder (state \"unsupported\") on the web"

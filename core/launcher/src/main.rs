@@ -50,6 +50,8 @@ use lumen_process as _;
 #[cfg(feature = "static-run")]
 use lumen_storage as _;
 #[cfg(feature = "static-run")]
+use lumen_surface as _;
+#[cfg(feature = "static-run")]
 use lumen_svg as _;
 #[cfg(feature = "static-run")]
 use lumen_websocket as _;

@@ -1,0 +1,26 @@
+# The Lumen surface protocol: the wire format, the endpoint string, the Unix
+# transport and both roles of a session that shows another process's GPU
+# frames in a Lumen `<surface>`. It names no graphics API and no Lumen crate,
+# so an engine depends on it (or links its C ABI) without taking any of
+# Lumen. The specification is SPEC.md beside this file.
+[package]
+name = "lumen-surface-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The Lumen surface protocol: show a renderer's GPU frames in a Lumen <surface> element from another process with no copy; Rust and C ABI producer and consumer roles."
+keywords = ["ui", "gpu", "ipc", "vulkan", "game-engine"]
+categories = ["graphics", "game-development"]
+publish = false
+
+[lib]
+name = "lumen_surface_protocol"
+# `staticlib` and `cdylib` are the C ABI an engine in C or C++ links
+# (include/lumen_surface_protocol.h); `lib` is the Rust crate.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

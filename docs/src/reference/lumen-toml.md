@@ -413,6 +413,7 @@ for getting them onto a machine:
 | `lumen-js` | The [`js` namespace](scripting-candela.md#javascript): the page's own JavaScript, modules loaded at run time, DOM events. Browser only: on the desktop each call raises. | `allow` |
 | `lumen-process` | The `process` script namespace: start another program, take its output a line at a time and its exit as events, and stop it. | |
 | `lumen-storage` | The [`storage` namespace](scripting-candela.md#storage): text under text keys that lasts across runs, and a set that lasts one run. Local and session storage in a page, a file in the app's data directory on the desktop. | |
+| `lumen-surface` | The [`<surface>`](tags.md#surface) element and the [`surface` namespace](scripting-candela.md#surfaces): frames another renderer draws on the GPU, shown in place with no copy, and input sent back to it. Needs the GPU renderer; a placeholder in a page. | `pacing` (`"paced"` or `"free"`), `stall_timeout` (milliseconds): what an element that does not say gets |
 | `lumen-svg` | The `<svg-view>` element and the [`svg` namespace](scripting-candela.md#svg) that draws SVG markup into it. Browser only: on the desktop the element shows its fallback content and each call raises. | |
 | `lumen-websocket` | The [`ws` namespace](scripting-candela.md#websockets): WebSocket connections named by key, text frames, events for open, message, close and error. | |
 

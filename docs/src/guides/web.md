@@ -794,6 +794,9 @@ none of them means anything without an absolute address.
 - `request_pointer_lock` does nothing in a browser, so `pointerlockchange`
   never fires there and `pointer_lock_element()` stays empty. A pointer's
   `movement_x` and `movement_y` are the browser's own readings.
+- A `<surface>` is a placeholder box in a browser, and the build warns when a
+  page uses one: shared GPU frames come from another process on the desktop,
+  which a page cannot reach.
 
 ## Reference
 
