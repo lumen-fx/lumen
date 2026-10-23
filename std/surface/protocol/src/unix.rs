@@ -46,16 +46,45 @@ fn sockaddr(path: &Path) -> io::Result<(libc::sockaddr_un, libc::socklen_t)> {
     ))
 }
 
+/// Linux opens descriptors close-on-exec atomically; macOS has no flag for
+/// it on `socket`, `accept` or `recvmsg`, so each descriptor is marked right
+/// after it is made, through [`close_on_exec`].
+#[cfg(target_os = "linux")]
+const SOCKET_CLOEXEC: libc::c_int = libc::SOCK_CLOEXEC;
+#[cfg(not(target_os = "linux"))]
+const SOCKET_CLOEXEC: libc::c_int = 0;
+#[cfg(target_os = "linux")]
+const RECV_CLOEXEC: libc::c_int = libc::MSG_CMSG_CLOEXEC;
+#[cfg(not(target_os = "linux"))]
+const RECV_CLOEXEC: libc::c_int = 0;
+
+/// Mark `fd` close-on-exec where the call that made it could not.
+#[cfg(not(target_os = "linux"))]
+fn close_on_exec(fd: RawFd) -> io::Result<()> {
+    // SAFETY: fcntl on a descriptor this process owns.
+    unsafe {
+        let flags = cvt(libc::fcntl(fd, libc::F_GETFD))?;
+        cvt(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn close_on_exec(_fd: RawFd) -> io::Result<()> {
+    Ok(())
+}
+
 fn stream_socket() -> io::Result<OwnedFd> {
     // SAFETY: plain socket(2); the descriptor is owned from here on.
-    unsafe {
-        let fd = cvt(libc::socket(
+    let fd = unsafe {
+        OwnedFd::from_raw_fd(cvt(libc::socket(
             libc::AF_UNIX,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+            libc::SOCK_STREAM | SOCKET_CLOEXEC,
             0,
-        ))?;
-        Ok(OwnedFd::from_raw_fd(fd))
-    }
+        ))?)
+    };
+    close_on_exec(fd.as_raw_fd())?;
+    Ok(fd)
 }
 
 /// Wait until `fd` is readable, for at most `timeout` (`None`: no limit).
@@ -162,15 +191,7 @@ impl Listener {
         if !wait_readable(self.fd.as_raw_fd(), timeout)? {
             return Ok(None);
         }
-        // SAFETY: accept4 on a listening socket; the result is owned.
-        let fd = unsafe {
-            OwnedFd::from_raw_fd(cvt(libc::accept4(
-                self.fd.as_raw_fd(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                libc::SOCK_CLOEXEC,
-            ))?)
-        };
+        let fd = accept(self.fd.as_raw_fd())?;
         if peer_uid(&fd).is_some_and(|uid| uid != current_uid()) {
             return Ok(None);
         }
@@ -182,6 +203,35 @@ impl Drop for Listener {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// Accept a connection on a listening socket, close-on-exec.
+#[cfg(target_os = "linux")]
+fn accept(listener: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: accept4 on a listening socket; the result is owned.
+    unsafe {
+        Ok(OwnedFd::from_raw_fd(cvt(libc::accept4(
+            listener,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            libc::SOCK_CLOEXEC,
+        ))?))
+    }
+}
+
+/// Accept a connection on a listening socket, close-on-exec.
+#[cfg(not(target_os = "linux"))]
+fn accept(listener: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: accept on a listening socket; the result is owned.
+    let fd = unsafe {
+        OwnedFd::from_raw_fd(cvt(libc::accept(
+            listener,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ))?)
+    };
+    close_on_exec(fd.as_raw_fd())?;
+    Ok(fd)
 }
 
 /// The user id of the process on the other end, where the platform says.
@@ -206,9 +256,13 @@ fn peer_uid(fd: &OwnedFd) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
+/// The user id of the process on the other end.
 #[cfg(not(target_os = "linux"))]
-fn peer_uid(_fd: &OwnedFd) -> Option<u32> {
-    None
+fn peer_uid(fd: &OwnedFd) -> Option<u32> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: getpeereid writes two ids for a connected socket.
+    let r = unsafe { libc::getpeereid(fd.as_raw_fd(), &mut uid, &mut gid) };
+    (r == 0).then_some(uid)
 }
 
 /// The writing half of a connection. Clones share the socket; each frame is
@@ -370,7 +424,7 @@ impl Receiver {
         msg.msg_controllen = space as _;
         let n = loop {
             // SAFETY: the msghdr describes valid owned buffers.
-            let n = unsafe { libc::recvmsg(self.raw, &mut msg, libc::MSG_CMSG_CLOEXEC) };
+            let n = unsafe { libc::recvmsg(self.raw, &mut msg, RECV_CLOEXEC) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == io::ErrorKind::Interrupted {
@@ -393,8 +447,11 @@ impl Receiver {
                     let bytes = (*header).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
                     let data = libc::CMSG_DATA(header).cast::<RawFd>();
                     for i in 0..bytes / std::mem::size_of::<RawFd>() {
-                        self.fds
-                            .push_back(OwnedFd::from_raw_fd(data.add(i).read_unaligned()));
+                        let fd = OwnedFd::from_raw_fd(data.add(i).read_unaligned());
+                        // Best effort: a descriptor that cannot be marked is
+                        // still the buffer the frame names.
+                        let _ = close_on_exec(fd.as_raw_fd());
+                        self.fds.push_back(fd);
                     }
                 }
                 header = libc::CMSG_NXTHDR(&msg, header);
