@@ -483,3 +483,359 @@ fn a_ring_that_takes_long_to_prepare_is_still_accepted() {
     producer.close(ByeReason::Exit, "done");
     shared.close();
 }
+
+/// The C ABI a producer in C or C++ links, driven in-process against a real
+/// session: every call the reference producer makes, the events it reads
+/// back, and the arguments it refuses.
+mod c_abi {
+    use super::*;
+    use lumen_surface::protocol::ffi::*;
+    use lumen_surface::protocol::wire::PointerInput;
+    use std::ffi::{CStr, CString};
+
+    fn last_error() -> String {
+        let mut buf = [0 as std::os::raw::c_char; 256];
+        // SAFETY: a writable buffer of the stated length.
+        unsafe { lsp_last_error(buf.as_mut_ptr(), buf.len()) };
+        // SAFETY: lsp_last_error NUL-terminates.
+        unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn hello(engine: &CStr) -> LspHello {
+        LspHello {
+            struct_size: std::mem::size_of::<LspHello>() as u32,
+            api: 1,
+            reserved0: 0,
+            caps: 0,
+            reserved1: 0,
+            device_uuid: ADAPTER.device_uuid,
+            driver_uuid: ADAPTER.driver_uuid,
+            luid: [0; 8],
+            registry_id: 0,
+            vendor: ADAPTER.vendor,
+            device: ADAPTER.device,
+            engine: engine.as_ptr(),
+        }
+    }
+
+    fn welcome() -> LspWelcome {
+        LspWelcome {
+            struct_size: 0,
+            pacing: 0,
+            ring_min: 0,
+            ring_max: 0,
+            ring_pref: 0,
+            reserved0: [0; 3],
+            width: 0,
+            height: 0,
+            scale: 0.0,
+            formats: 0,
+            reserved1: 0,
+            session: 0,
+        }
+    }
+
+    fn event() -> LspEvent {
+        // SAFETY: LspEvent is plain data; all-zero is a valid value (null
+        // pointers included).
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// Poll until an event of `kind` arrives, returning it.
+    fn poll_for(p: *mut LspProducer, kind: u32) -> LspEvent {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut e = event();
+            // SAFETY: a live producer and a writable event.
+            assert_eq!(unsafe { lsp_poll(p, &mut e) }, LSP_OK);
+            if e.kind == kind {
+                return e;
+            }
+            assert!(Instant::now() < deadline, "no event of kind {kind}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn pointer(x: f32) -> PointerInput {
+        PointerInput {
+            x,
+            y: 2.0,
+            dx: 1.0,
+            dy: -1.0,
+            buttons: 1,
+            pointer_id: 1,
+            pointer_type: 0,
+            button: 0,
+            pressure: 0.5,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            twist: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_c_producer_runs_a_whole_session() {
+        assert_eq!(lsp_version() >> 16, 1, "the major version");
+        // SAFETY: a static string the library owns.
+        let name = unsafe { CStr::from_ptr(lsp_key_code_name(0)) };
+        assert_eq!(name.to_str(), Ok("Unidentified"));
+        // SAFETY: as above; past the table the name is "Unidentified".
+        let past = unsafe { CStr::from_ptr(lsp_key_code_name(u16::MAX)) };
+        assert_eq!(past.to_str(), Ok("Unidentified"));
+
+        let (shared, backend) = start();
+        shared.set_wanted(Wanted {
+            width: 64,
+            height: 48,
+            scale: 1.0,
+        });
+        let engine = CString::new("c test producer").unwrap();
+        let mut status = LSP_OK;
+        let mut w = welcome();
+
+        // Refusals: no endpoint, an endpoint that does not parse, and the
+        // wrong token.
+        // SAFETY: the null endpoint is the case under test.
+        let none = unsafe { lsp_connect(std::ptr::null(), &hello(&engine), &mut w, &mut status) };
+        assert!(none.is_null());
+        assert_eq!(status, LSP_ERR_ARG);
+        assert!(!last_error().is_empty());
+        let bad = CString::new("v9;nonsense").unwrap();
+        // SAFETY: valid arguments; the endpoint is refused.
+        let none = unsafe { lsp_connect(bad.as_ptr(), &hello(&engine), &mut w, &mut status) };
+        assert!(none.is_null());
+        assert_eq!(status, LSP_ERR_ENDPOINT);
+        let endpoint = shared.endpoint().expect("a transport");
+        let wrong: lumen_surface::protocol::endpoint::Endpoint = endpoint.parse().unwrap();
+        let wrong = lumen_surface::protocol::endpoint::Endpoint {
+            token: [0; 16],
+            ..wrong
+        };
+        let wrong = CString::new(wrong.to_string()).unwrap();
+        // SAFETY: valid arguments; the token is refused.
+        let none = unsafe { lsp_connect(wrong.as_ptr(), &hello(&engine), &mut w, &mut status) };
+        assert!(none.is_null());
+        assert_eq!(status, LSP_ERR_REJECTED);
+        assert!(last_error().contains("token"), "{}", last_error());
+
+        // The adapter the endpoint names, once the consumer knows it.
+        let (mut device, mut driver) = ([0u8; 16], [0u8; 16]);
+        let plain = CString::new(endpoint.clone()).unwrap();
+        // SAFETY: 16 writable bytes each.
+        let st = unsafe {
+            lsp_endpoint_adapter(plain.as_ptr(), device.as_mut_ptr(), driver.as_mut_ptr())
+        };
+        assert_eq!(st, LSP_ERR_ARG, "no GPU named yet");
+        shared.set_adapter_hint(Some((
+            lumen_surface::protocol::endpoint::AdapterHint::Vulkan {
+                device_uuid: ADAPTER.device_uuid,
+                driver_uuid: ADAPTER.driver_uuid,
+            },
+            "test GPU".into(),
+        )));
+        let named = CString::new(shared.endpoint().unwrap()).unwrap();
+        // SAFETY: as above.
+        let st = unsafe {
+            lsp_endpoint_adapter(named.as_ptr(), device.as_mut_ptr(), driver.as_mut_ptr())
+        };
+        assert_eq!(st, LSP_OK);
+        assert_eq!((device, driver), (ADAPTER.device_uuid, ADAPTER.driver_uuid));
+
+        // SAFETY: valid arguments.
+        let p = unsafe { lsp_connect(named.as_ptr(), &hello(&engine), &mut w, &mut status) };
+        assert!(!p.is_null(), "{}", last_error());
+        assert_eq!((w.width, w.height), (64, 48));
+
+        // A ring of three, the descriptors open files.
+        let (buffers, files) = ring(1, (64, 48), 3);
+        let descs: Vec<LspBuffer> = buffers
+            .buffers
+            .iter()
+            .zip(&files)
+            .map(|(b, f)| LspBuffer {
+                alloc_size: b.alloc_size,
+                memory_type: 0,
+                offset: 0,
+                row_pitch: 0,
+                reserved0: 0,
+                modifier: 0,
+                fd: f.as_raw_fd(),
+                reserved1: 0,
+            })
+            .collect();
+        let offer = LspBuffers {
+            struct_size: std::mem::size_of::<LspBuffers>() as u32,
+            generation: 1,
+            width: 64,
+            height: 48,
+            format: LSP_FORMAT_RGBA8_SRGB,
+            usage: buffers.usage,
+            flags: LSP_BUFFER_DEDICATED,
+            count: descs.len() as u32,
+            buffers: descs.as_ptr(),
+        };
+        // SAFETY: a live producer and a ring of valid descriptors.
+        assert_eq!(
+            unsafe { lsp_offer_buffers(p, &offer) },
+            LSP_OK,
+            "{}",
+            last_error()
+        );
+        assert_eq!(backend.imported.lock().unwrap().as_slice(), &[(1, 3)]);
+
+        // A frame, asked for and shown, its meta handed through.
+        shared.request_frame();
+        let mut slot = LspSlot::default();
+        // SAFETY: a live producer.
+        assert_eq!(unsafe { lsp_next_slot(p, 5000, &mut slot) }, LSP_OK);
+        let meta = b"camera";
+        let frame = LspFrame {
+            struct_size: std::mem::size_of::<LspFrame>() as u32,
+            generation: slot.generation,
+            slot: slot.slot,
+            meta_len: meta.len() as u32,
+            meta: meta.as_ptr(),
+            t_sim: 0,
+            t_submit: 0,
+            t_gpu_done: 0,
+            input_seq: 0,
+        };
+        let mut number = 0u64;
+        // SAFETY: a slot this producer holds.
+        assert_eq!(unsafe { lsp_frame_ready(p, &frame, &mut number) }, LSP_OK);
+        wait_for("the C frame", || {
+            shared.frame().is_some_and(|f| f.frame == number)
+        });
+        assert_eq!(shared.frame().unwrap().meta, meta);
+
+        // A slot taken and handed back unused.
+        shared.request_frame();
+        // SAFETY: a live producer.
+        assert_eq!(unsafe { lsp_next_slot(p, 5000, &mut slot) }, LSP_OK);
+        // SAFETY: as above.
+        assert_eq!(unsafe { lsp_abandon_slot(p, slot) }, LSP_OK);
+
+        // Everything the consumer sends arrives as flattened events.
+        shared.send_input(InputEvent::PointerMove(pointer(3.0)));
+        let e = poll_for(p, LSP_EVENT_INPUT);
+        assert_eq!(
+            (e.input_kind, e.x, e.dx),
+            (LSP_INPUT_POINTER_MOVE, 3.0, 1.0)
+        );
+        shared.send_input(InputEvent::PointerDown(pointer(4.0)));
+        assert_eq!(
+            poll_for(p, LSP_EVENT_INPUT).input_kind,
+            LSP_INPUT_POINTER_DOWN
+        );
+        shared.send_input(InputEvent::PointerUp(pointer(4.0)));
+        assert_eq!(
+            poll_for(p, LSP_EVENT_INPUT).input_kind,
+            LSP_INPUT_POINTER_UP
+        );
+        shared.send_input(InputEvent::Wheel {
+            x: 1.0,
+            y: 1.0,
+            dx: 0.0,
+            dy: 3.0,
+            unit: 1,
+        });
+        let e = poll_for(p, LSP_EVENT_INPUT);
+        assert_eq!(
+            (e.input_kind, e.dy, e.wheel_unit),
+            (LSP_INPUT_WHEEL, 3.0, 1)
+        );
+        shared.send_input(InputEvent::Key {
+            code: 5,
+            pressed: true,
+            repeat: false,
+            modifiers: 1,
+            key: "w".into(),
+        });
+        let e = poll_for(p, LSP_EVENT_INPUT);
+        assert_eq!(
+            (e.input_kind, e.key_code, e.pressed, e.modifiers),
+            (LSP_INPUT_KEY, 5, 1, 1)
+        );
+        // SAFETY: text stays valid until the next call on the producer.
+        assert_eq!(unsafe { CStr::from_ptr(e.text) }.to_str(), Ok("w"));
+        shared.send_input(InputEvent::Text("hi".into()));
+        let e = poll_for(p, LSP_EVENT_INPUT);
+        assert_eq!(e.input_kind, LSP_INPUT_TEXT);
+        // SAFETY: as above.
+        assert_eq!(unsafe { CStr::from_ptr(e.text) }.to_str(), Ok("hi"));
+        for (input, kind) in [
+            (InputEvent::Focus(true), LSP_INPUT_FOCUS),
+            (InputEvent::Lock(true), LSP_INPUT_LOCK),
+            (InputEvent::Leave, LSP_INPUT_LEAVE),
+        ] {
+            shared.send_input(input);
+            assert_eq!(poll_for(p, LSP_EVENT_INPUT).input_kind, kind);
+        }
+        shared.set_visible(false);
+        assert_eq!(poll_for(p, LSP_EVENT_VISIBILITY).flag, 0);
+        shared.set_visible(true);
+        assert!(shared.send_user(b"bytes"));
+        let e = poll_for(p, LSP_EVENT_USER);
+        // SAFETY: data_len bytes stay valid until the next call.
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(e.data, e.data_len as usize) },
+            b"bytes"
+        );
+        shared.set_wanted(Wanted {
+            width: 32,
+            height: 24,
+            scale: 2.0,
+        });
+        let e = poll_for(p, LSP_EVENT_RESIZE);
+        assert_eq!((e.width, e.height, e.scale), (32, 24, 2.0));
+
+        // What the producer asks of the consumer's app.
+        // SAFETY: a live producer.
+        assert_eq!(unsafe { lsp_set_cursor(p, 2) }, LSP_OK);
+        // SAFETY: as above.
+        assert_eq!(unsafe { lsp_request_pointer_lock(p, 1) }, LSP_OK);
+        let bytes = b"to the app";
+        // SAFETY: a live producer and len readable bytes.
+        assert_eq!(
+            unsafe { lsp_send_user(p, bytes.as_ptr(), bytes.len() as u32) },
+            LSP_OK
+        );
+        let mut seen = Vec::new();
+        wait_happened(&shared, &mut seen, |seen| {
+            seen.iter().any(|h| matches!(h, Happened::Cursor(_)))
+                && seen
+                    .iter()
+                    .any(|h| matches!(h, Happened::PointerLock(true)))
+                && seen
+                    .iter()
+                    .any(|h| matches!(h, Happened::User(b) if b == bytes))
+        });
+
+        // Arguments it refuses.
+        // SAFETY: the null producer and out pointers are the cases under test.
+        unsafe {
+            assert_eq!(lsp_poll(std::ptr::null_mut(), &mut event()), LSP_ERR_ARG);
+            assert_eq!(lsp_poll(p, std::ptr::null_mut()), LSP_ERR_ARG);
+            assert_eq!(lsp_next_slot(p, 0, std::ptr::null_mut()), LSP_ERR_ARG);
+            assert_eq!(lsp_offer_buffers(p, std::ptr::null()), LSP_ERR_ARG);
+            assert_eq!(
+                lsp_frame_ready(p, std::ptr::null(), &mut number),
+                LSP_ERR_ARG
+            );
+            assert_eq!(lsp_send_user(p, std::ptr::null(), 4), LSP_ERR_ARG);
+        }
+
+        // The consumer ends the session; the producer hears it.
+        shared.disconnect();
+        let e = poll_for(p, LSP_EVENT_CLOSED);
+        assert_ne!(e.reason, 0);
+        // SAFETY: the producer is closed once and not used after.
+        unsafe { lsp_close(p) };
+        // SAFETY: closing nothing is allowed.
+        unsafe { lsp_close(std::ptr::null_mut()) };
+        drop(files);
+        shared.close();
+    }
+}

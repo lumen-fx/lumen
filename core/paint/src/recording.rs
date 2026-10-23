@@ -887,4 +887,146 @@ mod tests {
             assert_eq!(OwnedShape::from_shape(&owned.as_shape()), owned);
         }
     }
+
+    /// A painter with no backend textures of its own: everything else goes
+    /// to a recording, so the trait's own `draw_texture` runs.
+    struct NoTextures(Recording);
+
+    impl Painter for NoTextures {
+        fn fill(
+            &mut self,
+            style: Fill,
+            transform: Affine,
+            brush: BrushRef<'_>,
+            brush_transform: Option<Affine>,
+            shape: &Shape<'_>,
+        ) {
+            self.0.fill(style, transform, brush, brush_transform, shape);
+        }
+        fn stroke(
+            &mut self,
+            style: &Stroke,
+            transform: Affine,
+            brush: BrushRef<'_>,
+            brush_transform: Option<Affine>,
+            shape: &Shape<'_>,
+        ) {
+            self.0
+                .stroke(style, transform, brush, brush_transform, shape);
+        }
+        fn push_layer(
+            &mut self,
+            clip_style: Fill,
+            blend: BlendMode,
+            alpha: f32,
+            transform: Affine,
+            clip: &Shape<'_>,
+        ) {
+            self.0.push_layer(clip_style, blend, alpha, transform, clip);
+        }
+        fn pop_layer(&mut self) {
+            self.0.pop_layer();
+        }
+        fn draw_masked(
+            &mut self,
+            kind: MaskKind,
+            transform: Affine,
+            region: &Shape<'_>,
+            mask: &mut dyn FnMut(&mut dyn Painter),
+            content: &mut dyn FnMut(&mut dyn Painter),
+        ) {
+            self.0.draw_masked(kind, transform, region, mask, content);
+        }
+        fn layer_depth(&self) -> usize {
+            self.0.layer_depth()
+        }
+        fn draw_blurred_rounded_rect(
+            &mut self,
+            transform: Affine,
+            rect: Rect,
+            color: Color,
+            radius: f64,
+            std_dev: f64,
+        ) {
+            self.0
+                .draw_blurred_rounded_rect(transform, rect, color, radius, std_dev);
+        }
+        fn draw_image(&mut self, image: &ImageBrush, transform: Affine) {
+            self.0.draw_image(image, transform);
+        }
+        fn draw_pixels(&mut self, image: &PixelImage, sampler: ImageSampler, transform: Affine) {
+            self.0.draw_pixels(image, sampler, transform);
+        }
+        fn draw_glyphs(&mut self, run: &GlyphRun<'_>) {
+            self.0.draw_glyphs(run);
+        }
+        fn backend_id(&self) -> &'static str {
+            "no-textures"
+        }
+        fn native(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    /// A recorded texture replays as a texture, under the replay's
+    /// transform; a painter that cannot show textures draws the fallback
+    /// pixels in its place, scaled to the texture's size, and says so.
+    #[test]
+    fn a_texture_replays_and_falls_back_to_its_pixels() {
+        let fallback = PixelImage::new(2, 1);
+        let image = BackendImage {
+            id: TextureId::new(),
+            width: 8,
+            height: 4,
+            fallback: Some(&fallback),
+        };
+        let mut drawing = Recording::default();
+        assert_eq!(
+            drawing.draw_texture(
+                &image,
+                ImageSampler::default(),
+                Affine::translate((1.0, 0.0))
+            ),
+            Ok(())
+        );
+        let mut copy = Recording::default();
+        drawing.replay(&mut copy, Affine::translate((10.0, 0.0)));
+        let Command::Texture {
+            id,
+            width,
+            transform,
+            fallback: kept,
+            ..
+        } = &copy.commands()[0]
+        else {
+            panic!("expected a texture, got {:?}", copy.commands());
+        };
+        assert_eq!((*id, *width), (image.id, 8));
+        assert_eq!(transform.translation(), (11.0, 0.0).into());
+        assert!(kept.is_some());
+
+        let mut plain = NoTextures(Recording::default());
+        assert_eq!(
+            plain.draw_texture(&image, ImageSampler::default(), Affine::IDENTITY),
+            Err(TextureRefusal::Unavailable)
+        );
+        let Command::Pixels { transform, .. } = &plain.0.commands()[0] else {
+            panic!("expected the fallback, got {:?}", plain.0.commands());
+        };
+        assert_eq!(
+            transform.as_coeffs()[0],
+            4.0,
+            "two pixels stretched to eight"
+        );
+        let bare = BackendImage {
+            fallback: None,
+            ..image
+        };
+        drawing.replay(&mut plain, Affine::IDENTITY);
+        assert_eq!(
+            plain.draw_texture(&bare, ImageSampler::default(), Affine::IDENTITY),
+            Err(TextureRefusal::Unavailable)
+        );
+        assert_eq!(plain.0.len(), 2, "no fallback draws nothing");
+    }
 }
