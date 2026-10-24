@@ -32,8 +32,8 @@ const MARKUP: &str = r#"<root>
 
 const CANDELA: &str = r#"import "lumen.cdl";
 fn on_close(ev: int) {
-    let detail = as_map(lumen::event_detail(ev));
-    let reason = as_str(detail.get("reason"));
+    let detail = lumen::event_detail(ev) as {string: any};
+    let reason = detail["reason"] as string;
     lumen::signal_set("candela_heard", lumen::event_type(ev) + ":" + reason);
     lumen::event_prevent_default(ev);
 }

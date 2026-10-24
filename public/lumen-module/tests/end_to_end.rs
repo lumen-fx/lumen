@@ -480,8 +480,8 @@ fn both_kinds_load_side_by_side_and_the_script_reaches_both() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::print("module says " + str(native::module_double(21)));
-    lumen::print("plugin says " + str(native::fixture_echo("hi")));
+    lumen::print("module says " + string(native::module_double(21)));
+    lumen::print("plugin says " + string(native::fixture_echo("hi")));
 }
 
 fn main() {}

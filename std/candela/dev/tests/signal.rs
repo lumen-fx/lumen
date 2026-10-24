@@ -169,7 +169,7 @@ fn is_on(name) { return signal<bool>(name).get(); }
 fn seed(tag) {
     let d = 0;
     while d < 2 {
-        set_cell(tag + str(d), true);
+        set_cell(tag + string(d), true);
         d += 1;
     }
 }

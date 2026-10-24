@@ -28,4 +28,4 @@ lumen-scene = { workspace = true }
 lumen-ir = { workspace = true }
 bevy_ecs.workspace = true
 # The executor, the value marshalling, and the `.cdlb` load/call API.
-candela-vm = { git = "https://github.com/lumen-fx/candela", tag = "v0.1.5", version = "0.1.5" }
+candela-vm = { git = "https://github.com/lumen-fx/candela", rev = "f994baccd31c68cb411fbe58f951dfd01a70a5f1", version = "0.1.6" }

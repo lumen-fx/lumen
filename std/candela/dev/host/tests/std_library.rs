@@ -1,11 +1,11 @@
 //! The candela standard library resolves under the Lumen host.
 //!
 //! candela reads `import "std/..."` off disk from the library tree beside the
-//! running executable, and it loads `std/list` on its own so array methods
-//! resolve. Lumen links the compiler rather than shipping candela's binary, so
-//! the tree travels with Lumen's own build; these cover the three ways a
-//! program reaches it, and what a module the library does not carry still
-//! reports. Below the compiler, the installed C libraries have to be the ones
+//! running executable, and it carries its prelude, so array methods resolve
+//! with no import. Lumen links the compiler rather than shipping candela's
+//! binary, so the tree travels with Lumen's own build; these cover the three
+//! ways a program reaches the library, and what a module the library does not
+//! carry still reports. Below the compiler, the installed C libraries have to be the ones
 //! the build made, whole, and the `time` one has to read the wall clock.
 
 use std::env::consts::DLL_EXTENSION;
@@ -68,18 +68,18 @@ fn text_module_imports() {
 fn c_backed_module_binds_its_library() {
     let mut host = CandelaHost::new();
     host.load(
-        "import \"std/time\";\nfn go() { return now(); }\nfn main() {}\n",
+        "import \"std/time\";\nfn go() { return time::now(); }\nfn main() {}\n",
         "app.cdl",
     )
     .expect("the wall clock module imports");
 
-    let out = host.call("go", &[]).expect("now() runs");
+    let out = host.call("go", &[]).expect("time::now() runs");
     let Some(ScriptValue::I64(seconds)) = out.ret else {
-        panic!("now() returns an epoch second, got {:?}", out.ret);
+        panic!("time::now() returns an epoch second, got {:?}", out.ret);
     };
     assert!(
         seconds > AFTER_2020,
-        "now() must read the wall clock, got {seconds}"
+        "time::now() must read the wall clock, got {seconds}"
     );
 }
 
@@ -88,25 +88,25 @@ fn the_other_c_backed_modules_bind_too() {
     let mut host = CandelaHost::new();
     host.load(
         "import \"std/math\";\nimport \"std/random\";\n\
-         fn angle() { return cos(0.0); }\n\
-         fn draw() { seed(7); return random_int_range(1, 6); }\n\
+         fn angle() { return math::cos(0.0); }\n\
+         fn draw() { random::seed(7); return random::int_range(1, 6); }\n\
          fn main() {}\n",
         "app.cdl",
     )
     .expect("the math and random modules import");
 
-    let out = host.call("angle", &[]).expect("cos() runs");
+    let out = host.call("angle", &[]).expect("math::cos() runs");
     let Some(ScriptValue::F64(cosine)) = out.ret else {
-        panic!("cos() returns a float, got {:?}", out.ret);
+        panic!("math::cos() returns a float, got {:?}", out.ret);
     };
     assert!(
         (cosine - 1.0).abs() < f64::EPSILON,
         "cos(0) is 1, got {cosine}"
     );
 
-    let out = host.call("draw", &[]).expect("random_int_range() runs");
+    let out = host.call("draw", &[]).expect("random::int_range() runs");
     let Some(ScriptValue::I64(draw)) = out.ret else {
-        panic!("random_int_range() returns an int, got {:?}", out.ret);
+        panic!("random::int_range() returns an int, got {:?}", out.ret);
     };
     assert!(
         (1..=6).contains(&draw),
@@ -121,7 +121,7 @@ fn array_methods_resolve_without_an_import() {
         "fn go() { let a = [1, 2, 3]; return a.sum(); }\nfn main() {}\n",
         "app.cdl",
     )
-    .expect("the array methods come from std/list with no import");
+    .expect("the array methods come from the prelude with no import");
 
     let out = host.call("go", &[]).expect("sum() runs");
     assert!(

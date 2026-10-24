@@ -129,7 +129,7 @@ fn a_script_unpacks_into_the_app_directory() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
+    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", archive::ExtractOptions::default()));
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -189,7 +189,7 @@ fn a_per_tag_handler_wins_over_the_fallback() {
 
 fn on_start() {
     lumen::on("archive_done", "bundle", "bundle_ready");
-    archive::extract("bundle.zip", "out", "bundle", Default::default());
+    archive::extract("bundle.zip", "out", "bundle", archive::ExtractOptions::default());
 }
 
 fn bundle_ready(tag: string, dest: string, count: int) {
@@ -227,7 +227,7 @@ fn a_hostile_archive_reports_on_the_error_event() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    archive::extract("hostile.zip", "out", "hostile", Default::default());
+    archive::extract("hostile.zip", "out", "hostile", archive::ExtractOptions::default());
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -275,9 +275,9 @@ fn a_refused_job_answers_false_and_reports() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("first", archive::extract("bundle.zip", "one", "same", Default::default()));
-    lumen::signal_set_bool("again", archive::extract("bundle.zip", "two", "same", Default::default()));
-    lumen::signal_set_bool("over", archive::extract("bundle.zip", "three", "other", Default::default()));
+    lumen::signal_set_bool("first", archive::extract("bundle.zip", "one", "same", archive::ExtractOptions::default()));
+    lumen::signal_set_bool("again", archive::extract("bundle.zip", "two", "same", archive::ExtractOptions::default()));
+    lumen::signal_set_bool("over", archive::extract("bundle.zip", "three", "other", archive::ExtractOptions::default()));
 }
 
 fn on_archive_error(tag: string, message: string) {

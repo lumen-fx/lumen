@@ -677,7 +677,7 @@ fn a_windows_target_ships_an_app_using_a_candela_package() {
     write(
         &app,
         "src/main.cdl",
-        "import \"strutil\";\n\nfn main() {\n    let n = twice(3);\n}\n",
+        "import \"strutil\";\n\nfn main() {\n    let n = strutil::twice(3);\n}\n",
     );
     let package = root.join("pkg").join("strutil");
     write(

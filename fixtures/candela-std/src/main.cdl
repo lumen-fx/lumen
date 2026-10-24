@@ -7,10 +7,10 @@ import "std/time";
 import "std/math" as math;
 
 fn on_start() {
-    lumen::signal_set("clock", str(now()));
+    lumen::signal_set("clock", string(time::now()));
     let counts = [1, 2, 3];
-    lumen::signal_set("total", str(counts.sum()));
-    lumen::signal_set("root", str(math::sqrt(16.0)));
+    lumen::signal_set("total", string(counts.sum()));
+    lumen::signal_set("root", string(math::sqrt(16.0)));
 }
 
 fn main() {}

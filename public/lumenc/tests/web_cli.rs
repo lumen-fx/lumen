@@ -657,8 +657,8 @@ fn a_component_with_bare_parameters_is_one_warning() {
     let app = component_app(
         &scratch,
         "<root>\n  <Greet name=\"world\" />\n  <script src=\"main.cdl\" />\n</root>\n",
-        "import \"lumen.cdl\";\n\nfn Greet(name, count) {\n    let who = str(name) + \
-         str(count);\n    return lmn!(<label text=\"{who}\" />);\n}\n\nfn main() {}\n",
+        "import \"lumen.cdl\";\n\nfn Greet(name, count) {\n    let who = string(name) + \
+         string(count);\n    return lmn!(<label text=\"{who}\" />);\n}\n\nfn main() {}\n",
     );
 
     let (ok, stderr) = build_app(&app, &scratch, &[]);
@@ -687,7 +687,7 @@ fn a_component_inside_a_for_is_reported_once() {
         &scratch,
         "<root>\n  <for each=\"rows\" key=\"id\">\n    <Row label=\"{row.label}\" />\n  \
          </for>\n  <script src=\"main.cdl\" />\n</root>\n",
-        "import \"lumen.cdl\";\n\nfn Row(label) {\n    let t = str(label);\n    return \
+        "import \"lumen.cdl\";\n\nfn Row(label) {\n    let t = string(label);\n    return \
          lmn!(<label text=\"{t}\" />);\n}\n\nfn on_start() {\n    \
          lumen::signal_array_set(\"rows\", [{\"id\": \"a\", \"label\": \"Alpha\"}]);\n}\
          \n\nfn main() {}\n",
