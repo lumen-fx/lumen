@@ -5,8 +5,9 @@
 # release.yml and nightly.yml publish the same set of files, so both call this
 # rather than each keeping its own copy of the rules. It does three things:
 #
-#   - Fails when no build leg produced anything, so a run where every target
-#     broke publishes nothing instead of an empty release.
+#   - Fails when no desktop toolchain archive was built, so a run where every
+#     toolchain leg broke publishes nothing, even if the web runtime and the
+#     Rust engine sets built. One broken target still lets the others ship.
 #   - Writes sha256sums.txt in sha256sum's own format, covering every asset
 #     about to be uploaded. install.sh downloads that file first and refuses
 #     to install anything whose download does not match the line for it, so a
@@ -26,8 +27,9 @@ cd "$dir"
 
 shopt -s nullglob
 files=(*.tar.gz *.zip *.msi *.tar.zst lumenui-engine-*.json)
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "collect-release-assets.sh: every build leg failed, nothing to publish" >&2
+toolchains=(lumen-linux-*.tar.gz lumen-macos-*.tar.gz lumen-windows-*.zip lumen-windows-*.tar.gz)
+if [ "${#toolchains[@]}" -eq 0 ]; then
+  echo "collect-release-assets.sh: no desktop toolchain archive was built, nothing to publish" >&2
   exit 1
 fi
 
