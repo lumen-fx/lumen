@@ -564,6 +564,18 @@ pub fn apply_background_image(
     }
 }
 
+/// Point an `<image>` at the file its `src` names, resolved the way every
+/// authored asset path is: a relative path against the app directory, an
+/// absolute one as written. A `src` a `<for>` row's placeholder fills in is
+/// resolved here, once it holds the record's value, so a record can name a
+/// file anywhere. `None` takes the source away.
+pub fn set_image_source(ent: &mut bevy_ecs::world::EntityWorldMut<'_>, src: Option<&str>) {
+    match src.map(lumen_assets::resolve_source_path) {
+        Some(source) => ent.insert(lumen_assets::ImageSource(source)),
+        None => ent.remove::<lumen_assets::ImageSource>(),
+    };
+}
+
 /// Put the element's CSS mask on it as a [`MaskImage`], or take it off when
 /// its styles no longer name one. Touches the component only when the mask
 /// changed, so an unmasked element is never written.
@@ -1009,7 +1021,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
     {
-        entity.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src)));
+        set_image_source(&mut entity, Some(src));
     }
     apply_background_image(&mut entity, &el.tag, &el.attrs);
     apply_mask_image(&mut entity, &el.attrs);
@@ -2625,10 +2637,7 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
             e.insert(lumen_core::components::StyleDirty);
         }
         if changes.src && e.get::<LumenTag>().is_some_and(|t| &*t.0 == "image") {
-            match &attrs.src {
-                Some(src) => e.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src))),
-                None => e.remove::<lumen_assets::ImageSource>(),
-            };
+            set_image_source(&mut e, attrs.src.as_deref());
         }
         if changes.style_role {
             match attrs.style_role.as_deref() {

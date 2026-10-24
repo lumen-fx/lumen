@@ -343,7 +343,9 @@ fn arguments_land_in_text_id_class_and_src() {
         .world
         .get::<lumen_assets::ImageSource>(art)
         .expect("the image carries its source");
-    assert_eq!(source.0, std::path::PathBuf::from("icons/sun.png"));
+    // A relative path resolves against the app directory, as every
+    // authored asset path does.
+    assert_eq!(source.0, lumen_core::app_paths::resolve("icons/sun.png"));
 }
 
 /// Inside a body, a parameter wins over a global signal spelled the same.
