@@ -7,7 +7,8 @@
 //! The markup's relative paths are made absolute against the app directory
 //! before the rows are built, and a `src` written as `{row.thumb}` is
 //! relative as written, so a record holding an absolute path loaded
-//! `<app dir>//...`.
+//! `<app dir>//...`. And a record that changed its picture left the first
+//! one up, because the old bitmap stayed on the element.
 
 use lumen_assets::{ImageSource, LoadedImage};
 use lumen_core::components::LumenId;
@@ -131,5 +132,26 @@ fn a_row_image_loads_the_file_its_record_names() {
         outside,
         (Some(thumb), Some(6)),
         "an absolute path loads as written"
+    );
+}
+
+/// A record that names another picture shows the new one.
+#[test]
+fn a_row_image_follows_its_record_to_a_new_file() {
+    let _serial = serial();
+    let (base, dir) = app_dir("change", &[("app/art/one.png", 4), ("app/art/two.png", 8)]);
+    let opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    set_rows(&mut app, vec![row("a", "art/one.png")]);
+    let before = shows(&mut app, "pic-a", 4);
+    set_rows(&mut app, vec![row("a", "art/two.png")]);
+    let after = shows(&mut app, "pic-a", 8);
+    let _ = std::fs::remove_dir_all(&base);
+
+    assert_eq!(before.1, Some(4), "the first picture shows");
+    assert_eq!(
+        after,
+        (Some(dir.join("art/two.png")), Some(8)),
+        "the new picture replaces it"
     );
 }

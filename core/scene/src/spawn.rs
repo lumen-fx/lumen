@@ -520,8 +520,7 @@ pub fn apply_background_image(
     attrs: &Attributes,
 ) {
     use lumen_assets::{
-        AssetServer, BackgroundImage, Enqueued, ImageLoadFailed, ImageSource, LoadedImage,
-        LoadedSvg,
+        BackgroundImage, Enqueued, ImageLoadFailed, ImageSource, LoadedImage, LoadedSvg,
     };
     use lumen_ir::layout_ir::BgSpec;
     if tag == "image" {
@@ -532,17 +531,7 @@ pub fn apply_background_image(
         Some(BgSpec::Image(path)) => {
             let source = lumen_assets::resolve_source_path(path);
             if current.is_none() || ent.get::<ImageSource>().is_none_or(|s| s.0 != source) {
-                // A new source starts from nothing: the old bitmap goes, and
-                // a decode still out for the old path is made stale so it
-                // cannot land on top of the new one.
-                ent.remove::<(LoadedImage, LoadedSvg, ImageLoadFailed, Enqueued)>();
-                let id = ent.id();
-                ent.world_scope(|world| {
-                    if let Some(mut server) = world.get_resource_mut::<AssetServer>() {
-                        server.bump_request_id(id);
-                    }
-                });
-                ent.insert(ImageSource(source));
+                restart_image(ent, Some(source));
             }
             let fit = attrs.bg_fit.map(ImageFit::from).unwrap_or(ImageFit::Cover);
             if current != Some(BackgroundImage { fit }) {
@@ -568,11 +557,36 @@ pub fn apply_background_image(
 /// authored asset path is: a relative path against the app directory, an
 /// absolute one as written. A `src` a `<for>` row's placeholder fills in is
 /// resolved here, once it holds the record's value, so a record can name a
-/// file anywhere. `None` takes the source away.
+/// file anywhere. A new source starts from nothing, so the element shows
+/// the new file rather than the bitmap it had; `None` takes the source away.
 pub fn set_image_source(ent: &mut bevy_ecs::world::EntityWorldMut<'_>, src: Option<&str>) {
-    match src.map(lumen_assets::resolve_source_path) {
-        Some(source) => ent.insert(lumen_assets::ImageSource(source)),
-        None => ent.remove::<lumen_assets::ImageSource>(),
+    let source = src.map(lumen_assets::resolve_source_path);
+    if ent.get::<lumen_assets::ImageSource>().map(|s| &s.0) == source.as_ref() {
+        return;
+    }
+    restart_image(ent, source);
+}
+
+/// Point an element's image at `source` from nothing: the old bitmap goes,
+/// and a decode still out for the old path is made stale so it cannot land
+/// on top of the new one. `None` takes the source away.
+fn restart_image(
+    ent: &mut bevy_ecs::world::EntityWorldMut<'_>,
+    source: Option<std::path::PathBuf>,
+) {
+    use lumen_assets::{
+        AssetServer, Enqueued, ImageLoadFailed, ImageSource, LoadedImage, LoadedSvg,
+    };
+    ent.remove::<(LoadedImage, LoadedSvg, ImageLoadFailed, Enqueued)>();
+    let id = ent.id();
+    ent.world_scope(|world| {
+        if let Some(mut server) = world.get_resource_mut::<AssetServer>() {
+            server.bump_request_id(id);
+        }
+    });
+    match source {
+        Some(source) => ent.insert(ImageSource(source)),
+        None => ent.remove::<ImageSource>(),
     };
 }
 
