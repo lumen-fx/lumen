@@ -84,11 +84,13 @@ whenever the branch is taken.
 - Any other attribute on `<for>` styles the generated container, which defaults
   to a column.
 
-Appending rows spawns only the new ones, and dropping rows from the end
-despawns only those. A row whose key stays but whose fields change is updated
-where it stands. Either way the existing rows keep their focus and scroll
-state. Reordering the array, or inserting or removing rows in the middle of it,
-rebuilds the block.
+Rows are matched to the array by key. A row whose key is still in the array
+keeps its elements, wherever in the array the key moved to, and a row whose
+fields changed is updated where it stands. Only rows whose keys are new are
+built, and only rows whose keys are gone are removed. A kept row keeps its
+focus, hover, scroll state, and any press or drag in flight. Without `key`, a
+row is matched by its position, so a reorder rewrites the rows in place rather
+than moving them.
 
 A row is styled where it sits, like any other element, whenever it is built:
 a rule that reads a class its record gave the row (`.row.selected .name`) or
