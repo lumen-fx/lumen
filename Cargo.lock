@@ -956,12 +956,12 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.1.5"
-source = "git+https://github.com/lumen-fx/candela?tag=v0.1.5#aa23f2da23822a957b2a8ef421b52f7dbfdc4598"
+version = "0.1.6"
+source = "git+https://github.com/lumen-fx/candela?tag=v0.1.6#f1e414b96a7fa11f004d063b51fe5f9ff6924e1b"
 dependencies = [
  "ariadne",
  "candela-vm",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "lexical-core",
  "libffi",
  "libloading 0.9.0",
@@ -976,11 +976,11 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.1.5"
-source = "git+https://github.com/lumen-fx/candela?tag=v0.1.5#aa23f2da23822a957b2a8ef421b52f7dbfdc4598"
+version = "0.1.6"
+source = "git+https://github.com/lumen-fx/candela?tag=v0.1.6#f1e414b96a7fa11f004d063b51fe5f9ff6924e1b"
 dependencies = [
  "ariadne",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "indexmap",
  "js-sys",
  "lexical-core",
@@ -2198,7 +2198,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
+ "windows-link 0.1.3",
  "windows-result 0.4.1",
 ]
 
@@ -2240,11 +2240,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2254,8 +2252,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
+ "wasm-bindgen",
 ]
 
 [[package]]

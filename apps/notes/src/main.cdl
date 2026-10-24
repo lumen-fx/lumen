@@ -189,7 +189,7 @@ fn new_note(clicked_id: any) {
     let next_id = signal<int>("next_id");
     let n = next_id.get();
     next_id.set(n + 1);
-    let new_id = "n" + str(n);
+    let new_id = "n" + string(n);
     let joined = lumen::signal_get("note_ids");
     let updated = joined + "|" + new_id;
     lumen::signal_set("note_ids", updated);

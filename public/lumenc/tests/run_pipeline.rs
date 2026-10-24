@@ -184,7 +184,7 @@ mod pipeline_integration_tests {
   </for>
   <script>
     import "lumen.cdl";
-    fn greet(who: any) { return "hi, " + str(who); }
+    fn greet(who: any) { return "hi, " + string(who); }
     fn on_start() {
         lumen::signal_set("who", "world");
         lumen::derive("greeting", ["who"], "greet");
@@ -423,7 +423,7 @@ mod pipeline_integration_tests {
   </tabs>
   <script>
     import "lumen.cdl";
-    fn greet(who: any) { return "hi, " + str(who); }
+    fn greet(who: any) { return "hi, " + string(who); }
     fn on_start() {
         lumen::signal_set("who", "world");
         lumen::derive("greeting", ["who"], "greet");
@@ -543,8 +543,8 @@ mod pipeline_integration_tests {
   <label id="derived2" bind-text="click_label2" />
   <script>
     import "lumen.cdl";
-    fn count_label(n: any) { return "clicks: " + str(n); }
-    fn bang(s: any) { return str(s) + "!"; }
+    fn count_label(n: any) { return "clicks: " + string(n); }
+    fn bang(s: any) { return string(s) + "!"; }
     fn on_start() {
         lumen::signal_set_int("count", 0);
         lumen::derive("click_label", ["count"], "count_label");
@@ -631,7 +631,7 @@ mod pipeline_integration_tests {
   <label id="n" bind-text="n" />
   <script>
     import "lumen.cdl";
-    fn count_items(items: any) { return str(as_list(items).len()) + " items"; }
+    fn count_items(items: any) { return string((items as any[]).len()) + " items"; }
     fn on_start() {
         lumen::signal_array_set("items", ["a"]);
         lumen::derive("n", ["items"], "count_items");
@@ -789,7 +789,7 @@ mod pipeline_integration_tests {
   <script>
     import "lumen.cdl";
     fn dark_label(v: any) {
-        if str(v) == "true" { return "dark mode"; }
+        if string(v) == "true" { return "dark mode"; }
         return "light mode";
     }
     fn on_start() {

@@ -2,12 +2,10 @@
 //!
 //! candela reads `import "std/..."` off disk, and it looks for the modules in
 //! `libs/` next to the running executable (or wherever `CANDELA_LIB_PATH`
-//! points). The same tree backs the array methods, which the compiler pulls in
-//! from `std/list` whether or not a program imports anything. The standalone
-//! candela toolchain ships that tree next to its own binary; Lumen links the
-//! same compiler into this module, which `lumenc` loads or compiles in, so the
-//! tree has to travel with Lumen's binaries instead, or every `std` import and
-//! every `arr.map(f)` fails on a file that was never installed. A precompiled
+//! points). The standalone candela toolchain ships that tree next to its own
+//! binary; Lumen links the same compiler into this module, which `lumenc` loads
+//! or compiles in, so the tree has to travel with Lumen's binaries instead, or
+//! every `std` import fails on a file that was never installed. A precompiled
 //! image carries its imports already resolved, so a shipped app reads none of
 //! it.
 //!
@@ -59,7 +57,7 @@ fn main() {
         Ok(source) => source,
         Err(why) => {
             warn(&format!(
-                "{why}, so the candela standard library was not staged. `import \"std/...\"` and the array methods will not resolve."
+                "{why}, so the candela standard library was not staged. `import \"std/...\"` will not resolve."
             ));
             return;
         }

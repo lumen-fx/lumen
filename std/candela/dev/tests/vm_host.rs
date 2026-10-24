@@ -587,10 +587,10 @@ host "tool" {
 }
 
 fn some() -> string {
-    return tool::run("a", tool::Options { verbose: true, ..Default::default() });
+    return tool::run("a", tool::Options { verbose: true, .. });
 }
 
-fn none() -> string { return tool::run("b", Default::default()); }
+fn none() -> string { return tool::run("b", tool::Options::default()); }
 
 fn main() {}
 "#;

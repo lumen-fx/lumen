@@ -86,8 +86,8 @@ fn on_start() {{
 }}
 
 fn on_http(tag: string, response: any) {{
-    let r = as_map(response);
-    lumen::signal_set("got", tag + ":" + as_str(r.get("body")));
+    let r = response as {{string: any}};
+    lumen::signal_set("got", tag + ":" + (r["body"] as string));
 }}
 
 fn main() {{}}

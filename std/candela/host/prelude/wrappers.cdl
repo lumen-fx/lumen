@@ -96,10 +96,10 @@ impl Signal<Color> {
             return Color { r: 0, g: 0, b: 0, a: 0 };
         }
         return Color {
-            r: channels.get("r"),
-            g: channels.get("g"),
-            b: channels.get("b"),
-            a: channels.get("a"),
+            r: channels["r"],
+            g: channels["g"],
+            b: channels["b"],
+            a: channels["a"],
         };
     }
     fn set(self, hex: string) { return lumen::signal_set_color(self.name, hex); }
@@ -125,12 +125,12 @@ impl Signal<any> {
 //     let rows = signal_array("rows");
 //     let first = {"id": "a", "title": "First"};
 //     rows.push(first);
-//     let back = as_map(rows.get(0));
+//     let back = rows.get(0) as {string: any};
 //
 // Indices are zero-based. `get` and `all` return `any`; read them with the
-// `as_map` / `as_list` downcasts. `ArraySignal` takes no type argument: a
-// record is a map whose fields each carry their own type, so there is no one
-// type for a reader to hand back.
+// `as` downcast, `v as {string: any}` or `v as any[]`. `ArraySignal` takes no
+// type argument: a record is a map whose fields each carry their own type, so
+// there is no one type for a reader to hand back.
 
 struct ArraySignal { name: string }
 

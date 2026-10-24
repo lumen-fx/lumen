@@ -1,9 +1,9 @@
-//! JSON through the candela host: candela's own `json_parse` is a language
-//! builtin reachable from any `.cdl` script, and the host adds
+//! JSON through the candela host: candela's own `json::parse` comes from the
+//! `std/json` module any `.cdl` script can import, and the host adds
 //! `lumen::parse_json`, which marshals a parsed document into the same pools.
-//! Both return a value typed `any`, read back with the `as_map` / `as_list` /
-//! `as_str` / ... downcasts and `map.get(key)`, and both work on runtime
-//! strings such as a fetch body, not only compile-time literals.
+//! Both return a value typed `any`, read back with the `as` downcast and
+//! `map[key]`, and both work on runtime strings such as a fetch body, not only
+//! compile-time literals.
 
 use lumen_candela_dev::CandelaHost;
 use lumen_script::{ScriptHost, ScriptValue};
@@ -11,13 +11,14 @@ use lumen_script::{ScriptHost, ScriptValue};
 #[test]
 fn native_json_parse_is_reachable_for_nested_runtime_bodies() {
     let mut host = CandelaHost::new();
-    // No host block / no import needed: json_parse and the as_* downcasts are
-    // language builtins, not `lumen`-namespace host functions.
+    // No host block needed: `json::parse` is candela's standard library and
+    // `as` is an operator, neither a `lumen`-namespace host function.
     let src = r#"
+import "std/json";
 fn city_name(body) {
-    let root = as_map(json_parse(body));
-    let geo = as_map(root.get("geo"));
-    return as_str(geo.get("city"));
+    let root = json::parse(body) as {string: any};
+    let geo = root["geo"] as {string: any};
+    return geo["city"] as string;
 }
 fn main() {}
 "#;
@@ -42,14 +43,14 @@ fn parsed_array_survives_a_collection_while_its_map_is_live() {
     let src = r#"
 import "lumen.cdl";
 fn libs_len(body) {
-    let root = as_map(lumen::parse_json(body));
+    let root = lumen::parse_json(body) as {string: any};
     let s = "a,b,c";
     let i = 0;
     while i < 50 {
         let parts = s.split(",");
         i = i + 1;
     }
-    return as_list(root.get("libraries")).len();
+    return (root["libraries"] as any[]).len();
 }
 fn main() {}
 "#;
@@ -66,8 +67,8 @@ fn main() {}
 
 /// A downcast collection's entries are `any`, so it takes entries of any type
 /// in any order and needs no wrapper function to hold them. A parsed document
-/// mixes types, so an `as_map` that handed back an entry-less map would let the
-/// first `insert` pin the key and value types and reject the next one
+/// mixes types, so a downcast that handed back an entry-less map would let the
+/// first entry write pin the key and value types and reject the next one
 /// (candela `4668cc5`, "keep a downcast collection's entries dynamic"). If this
 /// fails, the candela pin is what moved.
 #[test]
@@ -76,13 +77,13 @@ fn downcast_map_takes_inserts_of_mixed_types() {
     let src = r#"
 import "lumen.cdl";
 fn grow_map(body) {
-    let root = as_map(lumen::parse_json(body));
-    root.insert("added", 1);
-    root.insert("note", "two");
+    let root = lumen::parse_json(body) as {string: any};
+    root["added"] = 1;
+    root["note"] = "two";
     return root.len();
 }
 fn grow_list(body) {
-    let l = as_list(lumen::parse_json(body));
+    let l = lumen::parse_json(body) as any[];
     l.push(2);
     l.push("three");
     return l.len();
@@ -102,8 +103,8 @@ fn main() {}
 }
 
 /// The boundary the rule above must not erode: an empty `{}` literal has no
-/// entry types either, but it takes them from its first insert and keeps them,
-/// so a second insert of another value type is a compile error. The assertion
+/// entry types either, but it takes them from its first write and keeps them,
+/// so a second write of another value type is an error. The assertion
 /// is on the failure alone; the wording belongs to candela's diagnostics.
 #[test]
 fn empty_map_literal_still_pins_its_entry_types() {
@@ -111,8 +112,8 @@ fn empty_map_literal_still_pins_its_entry_types() {
     let src = r#"
 fn grow(n) {
     let m = {};
-    m.insert("a", 1);
-    m.insert("b", "two");
+    m["a"] = 1;
+    m["b"] = "two";
     return m.len();
 }
 fn main() {}

@@ -249,7 +249,7 @@ pub fn expand(body: &str, index: &FnIndex) -> Result<String, LmnError> {
     let mut args = Vec::with_capacity(block.args.len() * 2);
     for name in &block.args {
         args.push(format!("\"{name}\""));
-        args.push(format!("str({name})"));
+        args.push(format!("string({name})"));
     }
     Ok(format!(
         "lumen::fragment_spawn(\"{}\", [{}], [])",
@@ -838,7 +838,7 @@ mod tests {
         assert_eq!(
             source,
             format!(
-                "lumen::fragment_spawn(\"{}\", [\"name\", str(name)], [])",
+                "lumen::fragment_spawn(\"{}\", [\"name\", string(name)], [])",
                 key_of("<label text=\"home for $name\"/>")
             )
         );
@@ -879,7 +879,7 @@ mod tests {
         assert_eq!(
             expand(body, &index).expect("expands"),
             format!(
-                "lumen::fragment_spawn(\"{}\", [\"n\", str(n)], [])",
+                "lumen::fragment_spawn(\"{}\", [\"n\", string(n)], [])",
                 key_of(body)
             )
         );

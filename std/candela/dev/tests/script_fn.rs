@@ -355,7 +355,7 @@ fn main() {}
     // that declares nothing gets the same verdict either way.
     host.add_prelude(
         "native",
-        "fn answer_twice() { return as_int(native::answer()) * 2; }\n",
+        "fn answer_twice() { return (native::answer() as int) * 2; }\n",
     );
     host.compile_check(
         "fn ask() { return answer_twice(); }\nfn main() {}\n",

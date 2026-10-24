@@ -838,7 +838,7 @@ fn a_candela_package_and_a_portable_plugin_travel_with_a_static_package() {
     .expect("write markup");
     std::fs::write(
         app.join("src").join("main.cdl"),
-        "import \"strutil\";\n\nfn main() {\n    let n = twice(3);\n}\n",
+        "import \"strutil\";\n\nfn main() {\n    let n = strutil::twice(3);\n}\n",
     )
     .expect("write script");
     std::fs::write(

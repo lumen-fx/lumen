@@ -135,8 +135,8 @@ fn tick_until(app: &mut EcsApp, secs: f64, pred: impl Fn(&EcsApp) -> bool) -> bo
 
 /// The whole surface: a program the app ships runs in the app directory, its
 /// arguments reach it, both pipes arrive as lines, and the exit comes last.
-/// `Default::default()` builds the options, and every handler takes the tag
-/// and the value the event carries.
+/// `process::StartOptions::default()` builds the options, and every handler
+/// takes the tag and the value the event carries.
 #[test]
 fn a_script_runs_a_program_the_app_ships() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -146,7 +146,7 @@ fn a_script_runs_a_program_the_app_ships() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("started", process::start("<child>", ["0", "one", "two"], "job", Default::default()));
+    lumen::signal_set_bool("started", process::start("<child>", ["0", "one", "two"], "job", process::StartOptions::default()));
 }
 
 fn on_process_stdout(tag: string, line: string) {
@@ -155,7 +155,7 @@ fn on_process_stdout(tag: string, line: string) {
 
 fn on_process_stderr(tag: string, line: string) { lumen::signal_set("err", tag + "/" + line); }
 
-fn on_process_exit(tag: string, code: int) { lumen::signal_set("exit", tag + "/" + str(code)); }
+fn on_process_exit(tag: string, code: int) { lumen::signal_set("exit", tag + "/" + string(code)); }
 
 fn main() {}
 "#,
@@ -191,7 +191,7 @@ fn the_exit_is_the_last_event_for_a_tag() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    process::start("<child>", ["4", "--lines", "40"], "flood", Default::default());
+    process::start("<child>", ["4", "--lines", "40"], "flood", process::StartOptions::default());
 }
 
 fn on_process_stdout(tag: string, line: string) {
@@ -239,12 +239,12 @@ fn a_per_tag_handler_wins_over_the_fallback() {
 
 fn on_start() {
     lumen::on("process_exit", "job", "job_ended");
-    process::start("<child>", ["7"], "job", Default::default());
+    process::start("<child>", ["7"], "job", process::StartOptions::default());
 }
 
-fn job_ended(tag: string, code: int) { lumen::signal_set("special", tag + "/" + str(code)); }
+fn job_ended(tag: string, code: int) { lumen::signal_set("special", tag + "/" + string(code)); }
 
-fn on_process_exit(tag: string, code: int) { lumen::signal_set("fallback", tag + "/" + str(code)); }
+fn on_process_exit(tag: string, code: int) { lumen::signal_set("fallback", tag + "/" + string(code)); }
 
 fn main() {}
 "#,
@@ -272,7 +272,7 @@ fn a_bare_command_is_looked_up_on_the_path() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("started", process::start("sh", ["-c", "echo found"], "sh", Default::default()));
+    lumen::signal_set_bool("started", process::start("sh", ["-c", "echo found"], "sh", process::StartOptions::default()));
 }
 
 fn on_process_stdout(tag: string, line: string) { lumen::signal_set("out", line); }
@@ -305,7 +305,7 @@ fn a_program_that_cannot_start_answers_false_and_fires_nothing() {
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", Default::default()));
+    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", process::StartOptions::default()));
 }
 
 fn on_process_stdout(tag: string, line: string) { lumen::signal_set("out", line); }
@@ -383,7 +383,7 @@ fn main() {}
 /// The options reach the child, written as the struct the module declares: a
 /// relative `cwd` is a directory inside the app, `env` is laid over the
 /// inherited environment, and the fields the script leaves out come from
-/// `..Default::default()`, so `end_at_exit` keeps its default.
+/// the bare `..` that ends the literal, so `end_at_exit` keeps its default.
 #[test]
 fn the_options_set_the_directory_and_the_environment() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -397,7 +397,7 @@ fn on_start() {
     let opts = process::StartOptions {
         cwd: "instances/a",
         env: {"LUMEN_PROCESS_INSTANCE": "a"},
-        ..Default::default()
+        ..
     };
     lumen::signal_set_bool("started", process::start(
         "<child>", ["0", "--cwd", "--env", "LUMEN_PROCESS_INSTANCE"], "job", opts));
@@ -452,7 +452,7 @@ fn a_bad_option_is_a_script_error_and_starts_nothing() {
                 r#"import "lumen.cdl";
 
 fn on_start() {{
-    let opts = process::StartOptions {{ {options}, ..Default::default() }};
+    let opts = process::StartOptions {{ {options}, .. }};
     lumen::signal_set_bool("started", process::start("<child>", ["0"], "job", opts));
 }}
 
@@ -499,7 +499,7 @@ fn stop_ends_a_running_child_and_its_exit_still_arrives() {
 
 fn on_start() {
     lumen::signal_set_bool("unknown", process::stop("sleeper"));
-    process::start("<child>", ["0", "--sleep", "60000"], "sleeper", Default::default());
+    process::start("<child>", ["0", "--sleep", "60000"], "sleeper", process::StartOptions::default());
 }
 
 fn on_process_stdout(tag: string, line: string) {
@@ -577,8 +577,8 @@ fn the_app_exit_ends_the_children_that_asked_for_it() {
 
 fn on_start() {
     process::start("<child>", ["0", "--sleep", "60000"], "helper",
-        process::StartOptions { end_at_exit: true, ..Default::default() });
-    process::start("<child>", ["0", "--sleep", "1500"], "keeper", Default::default());
+        process::StartOptions { end_at_exit: true, .. });
+    process::start("<child>", ["0", "--sleep", "1500"], "keeper", process::StartOptions::default());
 }
 
 fn on_process_stdout(tag: string, line: string) { lumen::signal_set(tag, "running"); }

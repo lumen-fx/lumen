@@ -68,9 +68,8 @@ const CRASH_HELPER_STEM: &str = "lumen-crash";
 /// Directory holding the script standard library, both where the toolchain
 /// stages it beside its own binaries and where a packaged app reads it.
 ///
-/// candela resolves `import "std/..."` - and the array methods it pulls in
-/// whether a program imports anything or not - against this directory beside
-/// the running executable. Under `lumenc run` that executable is `lumenc`, and
+/// candela resolves `import "std/..."` against this directory beside the
+/// running executable. Under `lumenc run` that executable is `lumenc`, and
 /// in a package it is the app, so the tree has to travel or every std import
 /// in a shipped app fails to compile at startup. The release archives and the
 /// Windows installer stage it under the same name for the same reason.

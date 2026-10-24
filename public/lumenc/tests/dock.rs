@@ -55,8 +55,8 @@ const MARKUP: &str = r#"<root>
 
 const CANDELA: &str = r#"import "lumen.cdl";
 fn on_move(ev: int) {
-    let detail = as_map(lumen::event_detail(ev));
-    lumen::signal_set("moved", as_str(detail.get("to")));
+    let detail = lumen::event_detail(ev) as {string: any};
+    lumen::signal_set("moved", detail["to"] as string);
 }
 fn on_ready() {
     lumen::event_on(lumen::node_get_by_id("editor"), "panelmove", "on_move");
@@ -338,12 +338,12 @@ fn a_free_panel_is_a_modal_dialog_window() {
 const SCRIPTED: &str = r#"import "lumen.cdl";
 fn on_ready() {
     dock::detach("files");
-    lumen::signal_set("files_window", str(dock::window_of("files")));
-    lumen::signal_set("shown_before", str(dock::is_shown("inspector")));
+    lumen::signal_set("files_window", string(dock::window_of("files")));
+    lumen::signal_set("shown_before", string(dock::is_shown("inspector")));
     dock::show("inspector");
     dock::move("log", "scene", "tab");
     dock::collapse("files", true);
-    lumen::signal_set("count", str(dock::panels().len()));
+    lumen::signal_set("count", string(dock::panels().len()));
 }
 fn main() {}
 "#;
@@ -590,16 +590,16 @@ fn lumen_core_focus(app: &mut App, e: Entity) {
 
 const LISTEN: &str = r#"import "lumen.cdl";
 fn on_error(ev: int) {
-    let detail = as_map(lumen::event_detail(ev));
-    lumen::signal_set("error", as_str(detail.get("reason")));
+    let detail = lumen::event_detail(ev) as {string: any};
+    lumen::signal_set("error", detail["reason"] as string);
 }
 fn on_restore(ev: int) {
-    let detail = as_map(lumen::event_detail(ev));
-    lumen::signal_set("restore", as_str(detail.get("panel")) + ":" + as_str(detail.get("kind")));
+    let detail = lumen::event_detail(ev) as {string: any};
+    lumen::signal_set("restore", (detail["panel"] as string) + ":" + (detail["kind"] as string));
 }
 fn on_change(ev: int) {
-    let detail = as_map(lumen::event_detail(ev));
-    lumen::signal_set("change", as_str(detail.get("reason")));
+    let detail = lumen::event_detail(ev) as {string: any};
+    lumen::signal_set("change", detail["reason"] as string);
 }
 fn on_ready() {
     let dock = lumen::node_get_by_id("editor");
@@ -917,7 +917,7 @@ fn on_ready() {
     lumen::event_on(lumen::node_get_by_id("game"), "windowfocus", "on_focus");
     lumen::event_on(lumen::node_get_by_id("game"), "windowblur", "on_focus");
     dock::detach("game");
-    lumen::signal_set("windows", str(dock::windows().len()));
+    lumen::signal_set("windows", string(dock::windows().len()));
 }
 fn main() {}
 "#;
@@ -989,18 +989,18 @@ const SCRIPT_LAYOUTS: &str = r#"import "lumen.cdl";
 fn on_ready() {
     let saved = dock::save();
     dock::hide("files");
-    lumen::signal_set("bad", str(dock::restore("not a layout")));
-    lumen::signal_set("good", str(dock::restore(saved)));
-    lumen::signal_set("named", str(dock::save_layout("Mine")) + str(dock::apply_layout("Focus")));
-    lumen::signal_set("deleted", str(dock::delete_layout("Mine")));
+    lumen::signal_set("bad", string(dock::restore("not a layout")));
+    lumen::signal_set("good", string(dock::restore(saved)));
+    lumen::signal_set("named", string(dock::save_layout("Mine")) + string(dock::apply_layout("Focus")));
+    lumen::signal_set("deleted", string(dock::delete_layout("Mine")));
     dock::reset();
-    lumen::signal_set("focus", str(dock::focus("game")));
-    lumen::signal_set("maxed", str(dock::maximize("game")) + str(dock::restore_maximized("editor")));
-    lumen::signal_set("toggled", str(dock::toggle("log")));
-    lumen::signal_set("closed", str(dock::close("log")));
-    lumen::signal_set("forgot", str(dock::forget("profiler")));
-    lumen::signal_set("group", str(dock::detach_group("scene")) + str(dock::attach("scene")));
-    lumen::signal_set("missing", str(dock::show("nope")));
+    lumen::signal_set("focus", string(dock::focus("game")));
+    lumen::signal_set("maxed", string(dock::maximize("game")) + string(dock::restore_maximized("editor")));
+    lumen::signal_set("toggled", string(dock::toggle("log")));
+    lumen::signal_set("closed", string(dock::close("log")));
+    lumen::signal_set("forgot", string(dock::forget("profiler")));
+    lumen::signal_set("group", string(dock::detach_group("scene")) + string(dock::attach("scene")));
+    lumen::signal_set("missing", string(dock::show("nope")));
 }
 fn main() {}
 "#;

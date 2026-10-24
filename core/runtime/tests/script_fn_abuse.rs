@@ -366,11 +366,11 @@ fn a_map_and_a_list_cross_the_boundary_in_both_directions() {
     let out = run(r#"
 fn on_start() {
     let m = {"a": "1", "b": "two"};
-    let out = as_map(native::shape_map(m));
-    native::report(as_str(out.get("tag")));
+    let out = native::shape_map(m) as {string: any};
+    native::report(out["tag"] as string);
     let xs = ["one", "two"];
-    let l = as_list(native::shape_list(xs));
-    native::report(as_str(l[0]));
+    let l = native::shape_list(xs) as any[];
+    native::report(l[0] as string);
     native::control();
 }
 

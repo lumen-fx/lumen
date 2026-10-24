@@ -103,7 +103,7 @@ fn a_threaded_event_reaches_the_fallback_handler() {
         r#"import "lumen.cdl";
 
 fn on_any(key: string, n: int) {
-    lumen::signal_set("plugin_event", key + ":" + str(n));
+    lumen::signal_set("plugin_event", key + ":" + string(n));
 }
 
 fn main() {}

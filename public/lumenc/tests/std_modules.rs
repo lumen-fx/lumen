@@ -277,7 +277,7 @@ const ROUND_TRIP: &str = r#"import "lumen.cdl";
 
 fn stored() -> string {
     storage::set_item("greeting", "kept by the module");
-    return str(storage::get_item("greeting"));
+    return string(storage::get_item("greeting"));
 }
 
 fn buffer_width() -> int {
@@ -286,7 +286,7 @@ fn buffer_width() -> int {
 
 fn on_start() {
     print("storage: " + stored());
-    print("canvas: " + str(buffer_width()));
+    print("canvas: " + string(buffer_width()));
 }
 
 fn main() {}
@@ -419,12 +419,12 @@ const NO_WEB_HALF: &str = r#"import "lumen.cdl";
 fn on_start() {
     files::write("started.txt", "written by the module");
     print("fs: " + files::read("started.txt") + " under " + files::data_dir());
-    print("download: " + str(download::to_file("http://127.0.0.1:1/none", "none.bin", "dl", "")));
-    print("archive: " + str(archive::extract("none.zip", "none", "ar", Default::default())));
-    print("download cancel: " + str(download::cancel("nothing")));
-    print("process: " + str(process::stop("nothing")));
-    let opts = process::StartOptions { ..Default::default() };
-    print("process opts: " + str(opts.end_at_exit));
+    print("download: " + string(download::to_file("http://127.0.0.1:1/none", "none.bin", "dl", "")));
+    print("archive: " + string(archive::extract("none.zip", "none", "ar", archive::ExtractOptions::default())));
+    print("download cancel: " + string(download::cancel("nothing")));
+    print("process: " + string(process::stop("nothing")));
+    let opts = process::StartOptions { .. };
+    print("process opts: " + string(opts.end_at_exit));
 }
 
 fn main() {

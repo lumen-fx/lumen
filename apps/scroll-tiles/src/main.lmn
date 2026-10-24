@@ -25,7 +25,7 @@
     // inside on_click.
     fn handle_reset_click(id: string) { signal<int>("clicks").set(0); }
 
-    fn calc_counter_label(n: any) { return "Lumen - clicks: " + str(n); }
+    fn calc_counter_label(n: any) { return "Lumen - clicks: " + string(n); }
 
     fn on_start() {
         signal<int>("clicks").set(0);

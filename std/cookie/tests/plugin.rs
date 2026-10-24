@@ -89,12 +89,12 @@ fn on_start() {{
 }}
 
 fn on_http(tag: string, response: any) {{
-    let r = as_map(response);
+    let r = response as {{string: any}};
     if tag == "login" {{
-        lumen::signal_set("read", str(cookie::get("sid")));
+        lumen::signal_set("read", string(cookie::get("sid")));
         lumen::http({{"url": "http://127.0.0.1:{port}/me", "tag": "me"}});
     }} else {{
-        lumen::signal_set("echoed", as_str(r.get("body")));
+        lumen::signal_set("echoed", r["body"] as string);
     }}
 }}
 

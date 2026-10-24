@@ -39,7 +39,7 @@ fn update_todo_count() {
     let container = get_by_id("todos-list");
     if !container.exists() { return; }
     let n = container.children().len();
-    let msg = str(n) + " rows (DOM-built)";
+    let msg = string(n) + " rows (DOM-built)";
     lumen::signal_set("todo_count", msg);
 }
 
@@ -70,7 +70,7 @@ fn calc_telemetry_status(v: any) {
 }
 
 fn calc_click_label(n: any) {
-    return "clicks: " + str(n);
+    return "clicks: " + string(n);
 }
 
 fn calc_greeting(s: string) {
@@ -188,8 +188,8 @@ fn handle_add_todo(id: any) {
     if !container.exists() { return; }
     let next = signal<int>("todo_next");
     let n = next.get();
-    let idx = str(n);
-    let label = "Row " + str(n);
+    let idx = string(n);
+    let label = "Row " + string(n);
     add_todo_row(container, idx, label, "new");
     next.set(n + 1);
     update_todo_count();
@@ -208,7 +208,7 @@ fn handle_dialog_accepted(id: any) {
     let m = accepted.get() + 1;
     accepted.set(m);
     let r = signal<int>("reject_count").get();
-    let msg = "accepted x" + str(m) + ", rejected x" + str(r);
+    let msg = "accepted x" + string(m) + ", rejected x" + string(r);
     lumen::signal_set("dialog_verdict", msg);
 }
 
@@ -217,7 +217,7 @@ fn handle_dialog_rejected(id: any) {
     let m = rejected.get() + 1;
     rejected.set(m);
     let a = signal<int>("accept_count").get();
-    let msg = "accepted x" + str(a) + ", rejected x" + str(m);
+    let msg = "accepted x" + string(a) + ", rejected x" + string(m);
     lumen::signal_set("dialog_verdict", msg);
 }
 
@@ -248,7 +248,7 @@ fn handle_hotkey_save(name: string) {
     lumen::notify("Lumen", fired);
     let count = signal<int>("hotkey_count");
     let np = count.get() + 1;
-    let status = "Ctrl+Shift+L pressed " + str(np) + "x";
+    let status = "Ctrl+Shift+L pressed " + string(np) + "x";
     lumen::signal_set("hotkey_status", status);
     count.set(np);
 }

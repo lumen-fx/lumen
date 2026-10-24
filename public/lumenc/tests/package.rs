@@ -113,9 +113,9 @@ fn write_app(dir: &Path) {
 }
 
 /// A one-page candela app whose script reads the standard library two ways:
-/// an explicit import of a C-backed module, and an array method the compiler
-/// pulls in from `std/list` with no import at all. Both resolve off disk
-/// against the running executable, which in a package is the app.
+/// an explicit import of a C-backed module, which resolves off disk against
+/// the running executable (in a package, the app), and an array method from
+/// candela's prelude, which needs no import at all.
 fn write_candela_std_app(dir: &Path) {
     std::fs::create_dir_all(dir.join("src")).expect("create src dir");
     std::fs::write(
@@ -131,7 +131,7 @@ fn write_candela_std_app(dir: &Path) {
          \n\
          fn on_start() {\n\
              let counts = [1, 2, 3];\n\
-             lumen::print(\"std reached \" + str(counts.sum()) + \" at \" + str(now()));\n\
+             lumen::print(\"std reached \" + string(counts.sum()) + \" at \" + string(time::now()));\n\
          }\n\
          \n\
          fn main() {}\n",

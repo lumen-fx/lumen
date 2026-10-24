@@ -166,7 +166,7 @@ fn on_ready() {
     let a = lumen::node_get_by_id("chips");
     let b = lumen::node_get_by_id("chips3");
     let rows = lumen::node_query(".row");
-    lumen::signal_set("seen", str(a != 0) + " " + str(b != 0) + " " + str(rows.len()));
+    lumen::signal_set("seen", string(a != 0) + " " + string(b != 0) + " " + string(rows.len()));
     let chip = create("label");
     chip.set_id("chip");
     chip.set_text("first chip");

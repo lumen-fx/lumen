@@ -137,7 +137,7 @@ fn on_start() {{
 }}
 
 fn on_download_progress(tag: string, received: int, total: int) {{
-    lumen::signal_set("progress", tag + ":" + str(received) + "/" + str(total));
+    lumen::signal_set("progress", tag + ":" + string(received) + "/" + string(total));
 }}
 
 fn on_download_done(tag: string, path: string) {{ lumen::signal_set("done", tag + ":" + path); }}
