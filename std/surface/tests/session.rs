@@ -376,6 +376,58 @@ fn input_and_messages_cross() {
     shared.close();
 }
 
+/// A frame the element asks for after one shows waits for the tick's input:
+/// the input goes first and carries the request, so a producer that starts
+/// the frame the moment it is asked has the input already. With no input
+/// the request goes out on its own.
+#[test]
+fn a_frame_asked_for_after_input_follows_it() {
+    let (shared, _) = start();
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
+    offer(&mut producer, 1, (300, 150), 3);
+    for _ in 0..2 {
+        let slot = producer
+            .next_slot(Duration::from_secs(5))
+            .expect("the session is up")
+            .expect("a slot is asked for");
+        let frame = producer
+            .frame_ready(slot, b"", FrameTimes::default())
+            .expect("announced");
+        wait_for("the frame to show", || {
+            shared.frame().is_some_and(|f| f.frame == frame)
+        });
+        shared.ask_after_input();
+        assert_eq!(
+            producer.next_slot(Duration::from_millis(50)).unwrap(),
+            None,
+            "nothing is asked for before the tick's input"
+        );
+        if frame == 1 {
+            let seq = shared
+                .send_input(InputEvent::Focus(true))
+                .expect("connected");
+            producer
+                .next_slot(Duration::from_secs(5))
+                .unwrap()
+                .map(|s| producer.abandon(s))
+                .expect("the input brings the request");
+            assert!(
+                matches!(producer.poll_event().unwrap(), Some(ProducerEvent::Input { seq: s, .. }) if s == seq),
+                "the input is there when the request is"
+            );
+        } else {
+            shared.send_asked();
+            producer
+                .next_slot(Duration::from_secs(5))
+                .unwrap()
+                .map(|s| producer.abandon(s))
+                .expect("asked for with no input");
+        }
+    }
+    shared.close();
+}
+
 /// A producer that dies without a goodbye leaves the surface lost with its
 /// last frame; a new producer on the same channel is welcomed and shows
 /// frames again.
