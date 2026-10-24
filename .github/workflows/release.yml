@@ -256,8 +256,8 @@ jobs:
             exit 1
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "lumenfx-bot[bot]"
+          git config user.email "346573052+lumenfx-bot[bot]@users.noreply.github.com"
           git commit -qam "chore(license): bring THIRD-PARTY-LICENSES up to date for v${VERSION}"
 
           key_file="$(mktemp)"
@@ -635,8 +635,8 @@ jobs:
             export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "lumenfx-bot[bot]"
+          git config user.email "346573052+lumenfx-bot[bot]@users.noreply.github.com"
 
           # Each attempt reads main, writes the change against that exact
           # commit, and pushes it as a fast-forward. A refused push means either
