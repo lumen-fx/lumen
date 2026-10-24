@@ -1459,7 +1459,7 @@ pub fn reconcile_if_blocks(
                             tmpl,
                             parent_id,
                             Placeholders::Resolved,
-                            BodyChild::Gated,
+                            BodyChild::Restyled,
                         );
                     }
                     // Entering transition on the block itself (children
@@ -1490,7 +1490,7 @@ pub fn reconcile_if_blocks(
                             tmpl,
                             parent_id,
                             Placeholders::Resolved,
-                            BodyChild::Gated,
+                            BodyChild::Restyled,
                         );
                     }
                     marker.currently_mounted = true;
@@ -2381,7 +2381,7 @@ pub fn reconcile_for_blocks(
                             &inst,
                             parent_id,
                             Placeholders::Resolved,
-                            BodyChild::Row,
+                            BodyChild::Restyled,
                         );
                     }
                 }
@@ -2421,7 +2421,7 @@ pub fn reconcile_for_blocks(
                     &inst,
                     parent_id,
                     Placeholders::Resolved,
-                    BodyChild::Row,
+                    BodyChild::Restyled,
                 );
             }
         }
@@ -2774,18 +2774,19 @@ pub(crate) fn spawn_body_child(
             // to dark, would mount in the scheme the app booted with. The
             // restyle that runs before the frame resolves it against the
             // live ones.
-            BodyChild::Gated => {
+            BodyChild::Restyled => {
                 world
                     .entity_mut(id)
                     .insert(lumen_core::components::StyleDirty);
             }
-            BodyChild::Row => {}
             // A virtualized row sits in the slot its index gives it, which
-            // the reconciler holds over whatever the row's styles say.
+            // the reconciler holds over whatever the row's styles say, and
+            // is resolved again in place as every row is.
             BodyChild::VirtualRow(slot) => {
                 let mut ent = world.entity_mut(id);
                 ent.insert(VirtualRow);
                 lumen_core::style_overrides::hold_on::<VirtualRow>(&mut ent, *slot);
+                ent.insert(lumen_core::components::StyleDirty);
             }
         }
         // Mount-direction transition (the CSS `@starting-style`
@@ -2806,11 +2807,14 @@ pub(crate) fn spawn_body_child(
 
 /// What a body element [`spawn_body_child`] mounts is.
 pub(crate) enum BodyChild {
-    /// The body of an `<if>` that just opened.
-    Gated,
-    /// A `<for>` row, which its template's cascade already styled.
-    Row,
-    /// A virtualized `<for>` row, held in the slot given.
+    /// An element the restyle that runs before the frame resolves again in
+    /// place: the body of an `<if>` that just opened, or a `<for>` row. A
+    /// row's template cascade styled it on its own, with no ancestors, so a
+    /// rule that reads an ancestor's class or id (`#list .name`,
+    /// `.row.on .name`) reaches it only once it is resolved where it sits.
+    Restyled,
+    /// A virtualized `<for>` row, held in the slot given, and resolved again
+    /// in place as [`Self::Restyled`] is.
     VirtualRow(Box<StyleValues>),
 }
 
