@@ -90,6 +90,10 @@ where it stands. Either way the existing rows keep their focus and scroll
 state. Reordering the array, or inserting or removing rows in the middle of it,
 rebuilds the block.
 
+A row is styled where it sits, like any other element, whenever it is built:
+a rule that reads a class its record gave the row (`.row.selected .name`) or
+an ancestor of the list (`#list .name`) reaches the row's parts.
+
 For a long list, add `virtualized="true"` and `row-height="56"` and only the
 rows in the visible window are built.
 

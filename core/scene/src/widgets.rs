@@ -263,7 +263,7 @@ pub fn mount_shown_tabs(
                 el,
                 tab,
                 Placeholders::Resolved,
-                BodyChild::Gated,
+                BodyChild::Restyled,
             );
         }
         commands.entity(tab).remove::<PendingTabBody>();
