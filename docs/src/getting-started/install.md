@@ -230,8 +230,8 @@ Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the rest yourself. `lumenc run`, `build`, and `check` work without the
 runtime library and the launcher; `lumenc package` needs them, and it says so
 and names the directory to put them in. A script that reaches for
-`import "std/..."` or an array method needs the `libs/` directory beside
-`lumenc`, or `CANDELA_LIB_PATH` naming one elsewhere.
+`import "std/..."` needs the `libs/` directory beside `lumenc`, or
+`CANDELA_LIB_PATH` naming one elsewhere.
 
 ## Nightly builds
 

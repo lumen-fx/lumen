@@ -88,15 +88,16 @@ records, an `http` request, a `parse_json` result. Those are declared with a
 tables below give what each one takes and returns; the prelude declares them, so
 an app calls them like any other builtin.
 
-Read an `any` result with candela's `as_map`, `as_list`, `as_str`, `as_int`,
-`as_float`, and `as_bool` downcasts, and test it with `is_map`, `is_list`,
-`is_null`, and their siblings.
+Read an `any` result with candela's `as` operator, `v as {string: any}`,
+`v as any[]`, `v as string`, `v as int`, `v as float` or `v as bool`, and test
+it with `is`, as in `v is {string: any}` or `v is int`. Compare with `null` to
+test for a missing value: `v == null`.
 
 A downcast collection keeps its entries typed `any`, which is what a parsed
-document needs: `as_map` and `as_list` hand back a collection that takes an
-`insert` or a `push` of any type, in any order, with no wrapper function in
-between. The same goes the other way, so an entry read back out is an `any` and
-needs its own downcast before you use it.
+document needs: `v as {string: any}` and `v as any[]` hand back a collection
+that takes an `m[key] = value` or a `push` of any type, in any order, with no
+wrapper function in between. The same goes the other way, so an entry read back
+out is an `any` and needs its own downcast before you use it.
 
 ### Writing arguments
 
@@ -127,14 +128,15 @@ module by name and gets the functions the candela documentation describes:
 import "std/time";
 
 fn on_start() {
-    lumen::signal_set("started", str(now()));
+    lumen::signal_set("started", string(time::now()));
 }
 
 fn main() {}
 ```
 
-The array methods (`arr.map(f)`, `arr.sum()`, and the rest) come from
-`std/list`, which the compiler loads whether or not a program imports anything.
+The methods of lists, maps and strings (`arr.map(f)`, `arr.sum()`, and the
+rest) and the `Option` and `Result` enums are candela's prelude, which every
+program has with no import.
 
 The modules are read from disk when the program compiles, out of a `libs/`
 directory beside the running executable. `lumenc package` copies that directory
@@ -385,7 +387,7 @@ fn on_start() {
     let rows = signal_array("rows");
     let first = {"id": "a", "title": "Alpha"};
     rows.push(first);
-    let back = as_map(rows.get(0));
+    let back = rows.get(0) as {string: any};
 }
 
 fn main() {}
@@ -429,7 +431,7 @@ signal's type is not fixed:
 
 ```rust
 fn calc_label(n: any) {
-    return "clicks: " + str(n);
+    return "clicks: " + string(n);
 }
 ```
 
@@ -637,7 +639,7 @@ through the accessors below:
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_code(ev: int)` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
-| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as_map`. |
+| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as {string: any}`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -979,9 +981,9 @@ The response is a map:
 
 ```rust
 fn on_http(tag: string, response: any) {
-    let r = as_map(response);
-    if as_bool(r.get("ok")) {
-        lumen::signal_set("status", as_str(r.get("body")));
+    let r = response as {string: any};
+    if r["ok"] as bool {
+        lumen::signal_set("status", r["body"] as string);
     }
 }
 ```
@@ -1012,16 +1014,16 @@ none. The three writers queue an answer that only a server render applies.
 nesting survives:
 
 ```rust
-let root = as_map(lumen::parse_json(body));
-let geo = as_map(root.get("geo"));
-let city = as_str(geo.get("city_name"));
+let root = lumen::parse_json(body) as {string: any};
+let geo = root["geo"] as {string: any};
+let city = geo["city_name"] as string;
 ```
 
-candela's own `json_parse` builtin parses JSON too, into the same values. The
-two differ on malformed input: `json_parse` raises a runtime error, which ends
-the handler unless a `try` catches it, while `lumen::parse_json` returns null.
-Text from outside the app, such as a response body, is simpler to read with
-`lumen::parse_json` and a null check.
+candela's own `json::parse`, from `import "std/json";`, parses JSON too, into
+the same values. The two differ on malformed input: `json::parse` raises a
+runtime error, which ends the handler unless a `try` catches it, while
+`lumen::parse_json` returns null. Text from outside the app, such as a response
+body, is simpler to read with `lumen::parse_json` and a null check.
 
 A `parse_markdown` block record carries `id`, `kind`, `level`, `text`, and
 `lang`. `kind` is `h`, `p`, `code`, `li`, or `hr`; `level` is the heading depth
@@ -1220,7 +1222,7 @@ no producer would.
 fn on_ready() {
     let endpoint = surface::endpoint("scene");
     process::start("./game", [], "game",
-        process::StartOptions { env: {"LUMEN_SURFACE": endpoint}, ..Default::default() });
+        process::StartOptions { env: {"LUMEN_SURFACE": endpoint}, .. });
 }
 ```
 
@@ -1388,7 +1390,7 @@ wins over the fallback, the same as any other event.
 
 ```rust
 fn on_start() {
-    archive::extract("themes.zip", "themes", "themes", Default::default());
+    archive::extract("themes.zip", "themes", "themes", archive::ExtractOptions::default());
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
@@ -1401,8 +1403,8 @@ fn on_archive_error(tag: string, message: string) {
 ```
 
 `opts` is an `archive::ExtractOptions`, a struct the module declares with a
-default for every field. Pass `Default::default()` to keep every file, or name
-the files to keep with `include`:
+default for every field. Pass `archive::ExtractOptions::default()` to keep every
+file, or name the files to keep with `include`:
 
 ```rust
 archive::extract("natives.jar", "natives", "natives",
@@ -1587,13 +1589,14 @@ ships and resolves against the app directory; a bare `cmd` is looked up on
 streams captured.
 
 `opts` is a `process::StartOptions`, a struct the module declares with a
-default for every field. Set the fields you want and take the rest from
-`..Default::default()`, or pass `Default::default()` for all of them:
+default for every field. Set the fields you want and end the literal with a
+bare `..` to take the rest from the defaults, or pass
+`process::StartOptions::default()` for all of them:
 
 ```rust
 process::start("java", ["-jar", "game.jar"], "game",
-    process::StartOptions { cwd: "instances/a", ..Default::default() });
-process::start("git", ["status"], "git", Default::default());
+    process::StartOptions { cwd: "instances/a", .. });
+process::start("git", ["status"], "git", process::StartOptions::default());
 ```
 
 | Field | Type | Default | Behaviour |
@@ -1886,7 +1889,7 @@ fn on_click(id: string) {
 // browser::post_message("opener", {"code": code}, "https://app.example.com").
 fn on_browser_message(origin: string, data: {string: any}, source: string) {
     if origin == "https://app.example.com" && source == "auth" {
-        lumen::signal_set("auth_code", str(data.get("code")));
+        lumen::signal_set("auth_code", string(data["code"]));
         browser::close_popup("auth");
     }
 }
@@ -1963,7 +1966,7 @@ plugin. Call them by namespace:
 ```rust
 fn on_start() {
     let t = native::now_ms();
-    print(as_int(t));
+    print(t as int);
 }
 ```
 
@@ -1985,8 +1988,9 @@ parameter.
 
 A function with an untyped parameter, a variadic argument list, or an optional
 trailing argument has no such spelling: it is declared `any name(...)`, takes
-any arguments, and returns `any`. Read that result with the `as_int` /
-`as_str` / `as_map` downcasts, the same way a `parse_json` result is read.
+any arguments, and returns `any`. Read that result with the `as` downcast,
+`v as int`, `v as string` or `v as {string: any}`, the same way a `parse_json`
+result is read.
 
 The name is the plugin's to choose, including one candela's own library uses: a
 namespaced call takes its type from the block that declares it.

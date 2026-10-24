@@ -113,8 +113,8 @@ behind, and so are the output folder itself and the app's `dist/` folder, where
 written.
 
 The candela standard library travels too, in a `libs/` folder beside the
-executable. Scripts read it as they compile, so `import "std/..."` and the
-array methods resolve in the folder the same way they do under `lumenc run`.
+executable. Scripts read it as they compile, so `import "std/..."` resolves
+in the folder the same way it does under `lumenc run`.
 
 `lumen-crash`, the helper that writes a [crash report](#when-the-app-crashes)
 when the app dies, travels beside the executable too.

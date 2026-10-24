@@ -216,8 +216,8 @@ saved layout carries them, so a restore can ask for the panel again:
 ```rust
 fn open_document(n: int) {
     let p = lumen::node_spawn("dock-panel");
-    lumen::node_set_attr(p, "id", "doc-" + str(n));
-    lumen::node_set_attr(p, "title", "Document " + str(n));
+    lumen::node_set_attr(p, "id", "doc-" + string(n));
+    lumen::node_set_attr(p, "title", "Document " + string(n));
     lumen::node_set_attr(p, "kind", "document");
     lumen::node_set_attr(p, "destroy-on-close", "true");
     lumen::node_append(lumen::node_get_by_id("editor"), p);

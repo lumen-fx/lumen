@@ -31,7 +31,7 @@ where to connect, which channel to feed and the secret it must present:
 fn on_ready() {
     let endpoint = surface::endpoint("scene");
     process::start("./game", [], "game",
-        process::StartOptions { env: {"LUMEN_SURFACE": endpoint}, ..Default::default() });
+        process::StartOptions { env: {"LUMEN_SURFACE": endpoint}, .. });
 }
 ```
 
