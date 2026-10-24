@@ -37,6 +37,9 @@ struct Recorder {
     generation: AtomicU64,
     /// How long a ring's first-use work takes, as a slow GPU's would.
     prepare: Mutex<Duration>,
+    /// How long the import itself blocks, as one does on a device busy
+    /// with the renderer's frame.
+    import_blocks: Mutex<Duration>,
 }
 
 impl Backend for Recorder {
@@ -52,6 +55,7 @@ impl Backend for Recorder {
 
     fn import(&self, buffers: &Buffers, fds: Vec<OwnedFd>) -> Result<Imported<(u32, u32)>, String> {
         assert_eq!(fds.len(), buffers.buffers.len(), "a descriptor per buffer");
+        std::thread::sleep(*self.import_blocks.lock().unwrap());
         self.imported
             .lock()
             .unwrap()
@@ -476,6 +480,30 @@ fn a_ring_that_takes_long_to_prepare_is_still_accepted() {
     assert!(
         started.elapsed() > lumen_surface::protocol::producer::ANSWER_TIMEOUT,
         "the ring was accepted before its preparation finished"
+    );
+    shared.request_frame();
+    one_frame(&mut producer, &shared);
+    assert_eq!(shared.state(), SurfaceStateKind::Live);
+    producer.close(ByeReason::Exit, "done");
+    shared.close();
+}
+
+/// An import that blocks for longer than the producer's answer timeout, as
+/// one does behind a renderer waiting on a slow GPU, does not silence the
+/// session: the consumer keeps pinging the waiting producer, and the ring is
+/// accepted once the import returns.
+#[test]
+fn an_import_that_blocks_does_not_silence_the_session() {
+    let (shared, backend) = start();
+    *backend.import_blocks.lock().unwrap() =
+        lumen_surface::protocol::producer::ANSWER_TIMEOUT + Duration::from_secs(1);
+    let mut producer =
+        Producer::connect(&shared.endpoint().expect("a transport"), &hello()).expect("welcomed");
+    let started = Instant::now();
+    offer(&mut producer, 1, (64, 48), 3);
+    assert!(
+        started.elapsed() > lumen_surface::protocol::producer::ANSWER_TIMEOUT,
+        "the ring was accepted before its import returned"
     );
     shared.request_frame();
     one_frame(&mut producer, &shared);

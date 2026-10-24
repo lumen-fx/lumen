@@ -512,13 +512,17 @@ mod cross_process {
             near(pixel(&read_back(app), 100, 80), [0, 231, 0])
         });
 
-        // A smaller element brings a new ring at the new size.
+        // A smaller element brings a new ring at the new size. The resize
+        // event goes out on the tick the size changes, and a message lives
+        // two ticks, so they are gathered while the new ring comes.
         app.world.get_mut::<Transform>(e).unwrap().size = glam::Vec2::new(64.0, 48.0);
+        let mut seen = Vec::new();
         tick_until(&mut app, "the resized frame", PATIENCE, |app| {
+            seen.extend(events(app));
             element(app, e).frame().is_some_and(|f| f.size == (64, 48))
         });
         assert_eq!(element(&mut app, e).frame().unwrap().generation, 2);
-        assert!(events(&mut app).iter().any(|ev| matches!(
+        assert!(seen.iter().any(|ev| matches!(
             ev,
             SurfaceEvent::Resized {
                 width: 64,
@@ -528,19 +532,21 @@ mod cross_process {
         )));
         drop(first);
 
-        // The producer was killed: the surface is lost and keeps its last frame.
+        // The producer was killed: the surface is lost, says it was a crash,
+        // and keeps its last frame. The session thread sets the state the
+        // element reads at once, and the event goes out on the next tick, so
+        // the wait gathers events until both are in.
+        let mut seen = Vec::new();
         tick_until(&mut app, "the loss", PATIENCE, |app| {
+            seen.extend(events(app));
             element(app, e).state() == SurfaceStateKind::Lost
+                && seen.iter().any(
+                    |ev| matches!(ev, SurfaceEvent::Disconnected { reason, .. } if reason == "crash"),
+                )
         });
         assert!(
             near(pixel(&read_back(&app), 10, 10), [0, 231, 0]),
             "the last frame stays"
-        );
-        assert!(
-            events(&mut app).iter().any(
-                |ev| matches!(ev, SurfaceEvent::Disconnected { reason, .. } if reason == "crash")
-            ),
-            "a killed producer is a crash"
         );
 
         // A producer that dies on its own is a crash too; the next one takes
