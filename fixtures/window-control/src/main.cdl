@@ -23,7 +23,7 @@ fn on_timer(name) {
             lumen::set_timeout("report", 250);
             return;
         }
-        print("window-check title=" + window::title() + " size=" + str(size[0]) + "x" + str(size[1]));
+        print("window-check title=" + window::title() + " size=" + string(size[0]) + "x" + string(size[1]));
         lumen::signal_set("state", "reported");
         // Long enough for a test runner to read the window back from the
         // platform before the app closes it.
@@ -35,7 +35,7 @@ fn on_timer(name) {
 
 fn on_close() {
     let size = window::size();
-    print("window-check on_close title=" + window::title() + " size=" + str(size[0]) + "x" + str(size[1]));
+    print("window-check on_close title=" + window::title() + " size=" + string(size[0]) + "x" + string(size[1]));
     let closes = signal<int>("closes");
     let seen = closes.get();
     closes.set(seen + 1);

@@ -9,7 +9,7 @@
 import "lumen.cdl";
 
 fn field(item: any, key: string) {
-    return as_str(as_map(item).get(key));
+    return (item as {any: any})[key] as string;
 }
 
 fn card_matches(item: any, ql: string) {
@@ -37,7 +37,7 @@ fn build_view(all: any[], col: string, ql: string) {
 
 fn all_cards() {
     let all = signal_array("cards").all();
-    return as_list(all);
+    return all as any[];
 }
 
 fn refresh_board() {
@@ -46,7 +46,7 @@ fn refresh_board() {
     for col in ["backlog", "doing", "done"] {
         let view = build_view(all, col, ql);
         signal_array("view_" + col).set(view);
-        let count = str(view.len());
+        let count = string(view.len());
         lumen::signal_set("count_" + col, count);
     }
 }
@@ -98,16 +98,16 @@ fn save_card(id: string) {
         let key = signal<string>("edit_id").get();
         let idx = find_index(cur, key);
         if idx >= 0 {
-            let it = as_map(cur[idx]);
-            it.insert("title", title);
-            it.insert("tag", tag);
-            it.insert("col", col);
+            let it = cur[idx] as {any: any};
+            it["title"] = title;
+            it["tag"] = tag;
+            it["col"] = col;
         }
     } else {
         let next_id = signal<int>("next_id");
         let n = next_id.get();
         next_id.set(n + 1);
-        let card = {"id": "c" + str(n), "title": title, "tag": tag, "col": col};
+        let card = {"id": "c" + string(n), "title": title, "tag": tag, "col": col};
         cur.push(card);
     }
     cards.set(cur);
@@ -131,17 +131,17 @@ fn move_card(key: string, dir: int) {
     let cur = all_cards();
     let idx = find_index(cur, key);
     if idx < 0 { return; }
-    let it = as_map(cur[idx]);
-    let ci = col_index(as_str(it.get("col"))) + dir;
+    let it = cur[idx] as {any: any};
+    let ci = col_index(it["col"] as string) + dir;
     if ci < 0 { ci = 0; }
     if ci > 2 { ci = 2; }
-    it.insert("col", cols[ci]);
+    it["col"] = cols[ci];
     cards.set(cur);
     refresh_board();
 }
 
 fn without_card(cur: any[], key: string) {
-    let kept = as_list(lumen::parse_json("[]"));
+    let kept = lumen::parse_json("[]") as any[];
     for item in cur {
         if field(item, "id") != key { kept.push(item); }
     }
@@ -173,9 +173,9 @@ fn on_drop(target_id: string, payload: string) {
     let cur = all_cards();
     let idx = find_index(cur, payload);
     if idx < 0 { return; }
-    let it = as_map(cur[idx]);
-    if as_str(it.get("col")) == col { return; }
-    it.insert("col", col);
+    let it = cur[idx] as {any: any};
+    if it["col"] as string == col { return; }
+    it["col"] = col;
     let kept = without_card(cur, payload);
     kept.push(it);
     cards.set(kept);
@@ -198,7 +198,7 @@ fn seed_cards() {
 }
 
 fn count_label(n: any) {
-    let s = str(n);
+    let s = string(n);
     if s == "1" { return "1 card"; }
     return s + " cards";
 }
@@ -206,7 +206,7 @@ fn count_label(n: any) {
 // Derived display signals. Each recompute body is referenced by function
 // name; its parameters arrive as the current values of the declared deps.
 fn calc_board_summary(b: any, d: any, dn: any) {
-    return str(b) + " queued | " + str(d) + " active | " + str(dn) + " shipped";
+    return string(b) + " queued | " + string(d) + " active | " + string(dn) + " shipped";
 }
 
 // Live search: `<input bind-text="search">` mirrors every keystroke into the
@@ -216,7 +216,7 @@ fn calc_board_summary(b: any, d: any, dn: any) {
 // derived signal itself is not read anywhere; it carries the refilter.
 fn calc_search_filter(s: any) {
     refresh_board();
-    return str(s);
+    return string(s);
 }
 
 fn on_start() {

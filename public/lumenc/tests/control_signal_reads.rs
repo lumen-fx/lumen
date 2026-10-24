@@ -114,13 +114,13 @@ const CONTROLS: &str = r##"<root padding="20" gap="10">
     import "lumen.cdl";
     fn on_start() { lumen::signal_set("name", ""); }
     fn on_toggle(id: string, checked: bool) {
-        lumen::signal_set("seen", "arg=" + str(checked) + " signal=" + str(lumen::signal_get("on")));
+        lumen::signal_set("seen", "arg=" + string(checked) + " signal=" + string(lumen::signal_get("on")));
     }
     fn on_slider(id: string, value: float) {
-        lumen::signal_set("seen", "slider=" + str(lumen::signal_get("v")));
+        lumen::signal_set("seen", "slider=" + string(lumen::signal_get("v")));
     }
     fn on_text_input(id: string, text: string) {
-        lumen::signal_set("seen", "arg=" + text + " signal=" + str(lumen::signal_get("name")));
+        lumen::signal_set("seen", "arg=" + text + " signal=" + string(lumen::signal_get("name")));
     }
     fn main() {}
   </script>
@@ -194,7 +194,7 @@ const SAVE_FORM: &str = r##"<root padding="20" gap="10">
     fn on_start() { lumen::signal_set("amt", ""); lumen::signal_set("log", ""); }
     fn on_click(id: string) {
         if id != "amt" {
-            lumen::signal_set("log", str(lumen::signal_get("log")) + "[" + str(lumen::signal_get("amt")) + "]");
+            lumen::signal_set("log", string(lumen::signal_get("log")) + "[" + string(lumen::signal_get("amt")) + "]");
         }
     }
     fn main() {}

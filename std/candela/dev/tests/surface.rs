@@ -38,7 +38,7 @@ fn minimal() {
     lumen::http({"url": "https://example.test/ping", "tag": "ping"});
 }
 fn from_json() {
-    let req = as_map(lumen::parse_json("{\"url\":\"https://example.test/j\",\"tag\":\"j\",\"timeout_ms\":900,\"headers\":{\"Accept\":\"text/plain\"}}"));
+    let req = lumen::parse_json("{\"url\":\"https://example.test/j\",\"tag\":\"j\",\"timeout_ms\":900,\"headers\":{\"Accept\":\"text/plain\"}}") as {string: any};
     lumen::http(req);
 }
 fn main() {}
@@ -141,20 +141,20 @@ fn parse_json_returns_typed_candela_values() {
         r#"
 import "lumen.cdl";
 fn status(body) {
-    let root = as_map(lumen::parse_json(body));
-    return as_int(root.get("status_code"));
+    let root = lumen::parse_json(body) as {string: any};
+    return root["status_code"] as int;
 }
 fn city(body) {
-    let root = as_map(lumen::parse_json(body));
-    let geo = as_map(root.get("geo"));
-    return as_str(geo.get("city_name"));
+    let root = lumen::parse_json(body) as {string: any};
+    let geo = root["geo"] as {string: any};
+    return geo["city_name"] as string;
 }
 fn first_tag(body) {
-    let root = as_map(lumen::parse_json(body));
-    let tags = as_list(root.get("tags"));
-    return as_str(tags[0]);
+    let root = lumen::parse_json(body) as {string: any};
+    let tags = root["tags"] as any[];
+    return tags[0] as string;
 }
-fn broken() { return is_null(lumen::parse_json("{oops")); }
+fn broken() { return lumen::parse_json("{oops") == null; }
 fn main() {}
 "#,
     );
@@ -191,14 +191,14 @@ fn parse_markdown_returns_block_records() {
     let mut host = load(
         r#"
 import "lumen.cdl";
-fn blocks(src) { return as_list(lumen::parse_markdown(src)).len(); }
+fn blocks(src) { return (lumen::parse_markdown(src) as any[]).len(); }
 fn first_kind(src) {
-    let b = as_map(as_list(lumen::parse_markdown(src))[0]);
-    return as_str(b.get("kind"));
+    let b = (lumen::parse_markdown(src) as any[])[0] as {string: any};
+    return b["kind"] as string;
 }
 fn first_level(src) {
-    let b = as_map(as_list(lumen::parse_markdown(src))[0]);
-    return as_int(b.get("level"));
+    let b = (lumen::parse_markdown(src) as any[])[0] as {string: any};
+    return b["level"] as int;
 }
 fn main() {}
 "#,
@@ -286,8 +286,8 @@ import "lumen.cdl";
 fn write_it() { lumen::signal_set_color("accent", "#ff8800"); }
 fn write_alpha() { lumen::signal_set_color("accent", "#ff880040"); }
 fn write_junk() { lumen::signal_set_color("junk", "not-a-color"); }
-fn red() { return lumen::signal_get_color("accent").get("r"); }
-fn alpha() { return lumen::signal_get_color("accent").get("a"); }
+fn red() { return lumen::signal_get_color("accent")["r"]; }
+fn alpha() { return lumen::signal_get_color("accent")["a"]; }
 fn junk_size() { return lumen::signal_get_color("junk").len(); }
 fn main() {}
 "##,
@@ -373,7 +373,7 @@ fn matched_rules_is_a_list_for_an_unknown_node() {
     let mut host = load(
         r#"
 import "lumen.cdl";
-fn count() { return as_list(lumen::matched_rules(0)).len(); }
+fn count() { return (lumen::matched_rules(0) as any[]).len(); }
 fn main() {}
 "#,
     );

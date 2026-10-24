@@ -188,8 +188,8 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
     ) {
         warn(&format!(
             "{message}, so the candela standard library is not beside lumenc. \
-             `import \"std/...\"` and the array methods will not resolve until a \
-             {SCRIPT_LIBRARY_DIR} tree is there or CANDELA_LIB_PATH names one."
+             `import \"std/...\"` will not resolve until a {SCRIPT_LIBRARY_DIR} tree \
+             is there or CANDELA_LIB_PATH names one."
         ));
     }
     Ok(())

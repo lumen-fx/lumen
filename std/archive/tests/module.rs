@@ -233,7 +233,7 @@ fn the_bundled_module_unpacks_an_archive() {
         "lumen-archive = { bundled = true }\n",
         r#"
 fn on_start() {
-    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", Default::default()));
+    lumen::signal_set_bool("taken", archive::extract("bundle.zip", "out", "bundle", archive::ExtractOptions::default()));
 }
 fn on_archive_done(tag: string, dest: string, count: int) {
     lumen::signal_set("done", tag);
@@ -268,9 +268,7 @@ fn on_archive_error(tag: string, message: string) { lumen::signal_set("failed", 
 
 /// Without the module the function does not exist: the script fails to
 /// compile with candela's ordinary undeclared-namespace error, the app
-/// survives its run, and nothing is unpacked. The options are spelled as a
-/// struct literal, because `Default::default()` would fail first on the
-/// missing struct type rather than on the missing namespace.
+/// survives its run, and nothing is unpacked.
 #[test]
 fn without_the_module_the_function_does_not_exist() {
     let f = fixtures();

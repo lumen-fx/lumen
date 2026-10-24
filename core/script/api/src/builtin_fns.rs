@@ -726,7 +726,7 @@ fn misc_fns() -> Vec<ScriptFn> {
 /// `parse_json` and `parse_markdown`: text parsed into a dynamically-shaped
 /// value, the one case where the shared table declares a return type it
 /// cannot pin down further, which it spells [`T::Dynamic`]. Every host reads
-/// the result with its own downcasts (`as_map` / `as_list` / ... on candela;
+/// the result with its own downcasts (`v as {string: any}` / `v as any[]` on candela;
 /// ordinary indexing on Rhai and Lua), so the walk itself is written once in
 /// [`crate::text_parse`] rather than once per host.
 ///

@@ -555,7 +555,7 @@ fn exposed_fn_is_callable_from_candela() {
         "main.cdl",
         "host \"native\" {\n    any native_sum(...);\n}\n\n\
          fn on_start() {\n    let a = native::native_sum(20, 22);\n    \
-         native::native_sum(as_int(a), 1);\n}\n\nfn main() {}\n",
+         native::native_sum(a as int, 1);\n}\n\nfn main() {}\n",
     );
     run_exposed(&dir, "native_sum", candela_sum);
     assert_eq!(
@@ -839,7 +839,7 @@ fn an_exposed_callback_returns_a_map_every_language_reads() {
             // candela reaches an exposed function through the `native`
             // namespace, and a map arrives as a dynamic value it downcasts.
             "host \"native\" {\n    any make(...);\n    any take(...);\n}\n\
-             fn on_start() {\n    let m = as_map(native::make(6));\n    native::take(m.get(\"n\"));\n}\n\
+             fn on_start() {\n    let m = native::make(6) as {string: any};\n    native::take(m[\"n\"]);\n}\n\
              fn main() {}\n"
                 .to_owned(),
         ),

@@ -5,7 +5,7 @@ import "lumen.cdl";
 // #playlist container is not queryable yet: node_get_by_id returns 0.
 fn on_start() {
     let n = lumen::node_get_by_id("playlist");
-    let s = str(n);
+    let s = string(n);
     lumen::signal_set("start_saw", s);
 }
 
@@ -14,13 +14,13 @@ fn on_start() {
 // initial DOM here without the set_timeout("boot", 0) workaround.
 fn on_ready() {
     let n = lumen::node_get_by_id("playlist");
-    let s = str(n);
+    let s = string(n);
     lumen::signal_set("ready_saw", s);
     // Counts dispatches: hot reload re-arms on_ready, and the runs label
     // moving from 1 to 2 is what proves the second dispatch.
     let runs = signal<int>("ready_runs");
     let seen = runs.get();
-    lumen::signal_set("ready_read", str(seen));
+    lumen::signal_set("ready_read", string(seen));
     runs.set(seen + 1);
 }
 

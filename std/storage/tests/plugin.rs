@@ -84,8 +84,8 @@ fn on_start() {
     storage::set_item("gone", "soon");
     storage::remove_item("gone");
     storage::session_set_item("visit", "first");
-    lumen::signal_set("session", str(storage::session_get_item("visit")));
-    lumen::signal_set("missing", str(storage::get_item("never")));
+    lumen::signal_set("session", string(storage::session_get_item("visit")));
+    lumen::signal_set("missing", string(storage::get_item("never")));
 }
 
 fn main() {}
@@ -105,11 +105,11 @@ fn main() {}
         r#"import "lumen.cdl";
 
 fn on_start() {
-    lumen::signal_set("local", str(storage::get_item("greeting")));
-    lumen::signal_set("keys", str(storage::keys()));
-    lumen::signal_set("session", str(storage::session_get_item("visit")));
+    lumen::signal_set("local", string(storage::get_item("greeting")));
+    lumen::signal_set("keys", string(storage::keys()));
+    lumen::signal_set("session", string(storage::session_get_item("visit")));
     storage::clear();
-    lumen::signal_set("cleared", str(storage::keys()));
+    lumen::signal_set("cleared", string(storage::keys()));
 }
 
 fn main() {}

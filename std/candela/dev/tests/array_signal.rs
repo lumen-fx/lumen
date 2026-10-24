@@ -63,11 +63,11 @@ fn seed() {
 }
 fn count() { return lumen::signal_array_len("rows"); }
 fn second_id() {
-    let row = as_map(lumen::signal_array_get("rows", 1));
-    return as_str(row.get("id"));
+    let row = lumen::signal_array_get("rows", 1) as {string: any};
+    return row["id"] as string;
 }
-fn past_end() { return is_null(lumen::signal_array_get("rows", 9)); }
-fn total() { return as_list(lumen::signal_array_all("rows")).len(); }
+fn past_end() { return lumen::signal_array_get("rows", 9) == null; }
+fn total() { return (lumen::signal_array_all("rows") as any[]).len(); }
 fn main() {}
 "#;
     host.load(src, "read.cdl")
@@ -103,16 +103,16 @@ fn records_of_mixed_field_types_round_trip() {
 import "lumen.cdl";
 
 fn seed() {
-    let row = as_map(lumen::parse_json("{\"id\": \"a\", \"n\": 7, \"done\": true}"));
+    let row = lumen::parse_json("{\"id\": \"a\", \"n\": 7, \"done\": true}") as {string: any};
     lumen::signal_array_push("rows", row);
 }
 fn number() {
-    let row = as_map(lumen::signal_array_get("rows", 0));
-    return as_int(row.get("n"));
+    let row = lumen::signal_array_get("rows", 0) as {string: any};
+    return row["n"] as int;
 }
 fn flag() {
-    let row = as_map(lumen::signal_array_get("rows", 0));
-    return as_bool(row.get("done"));
+    let row = lumen::signal_array_get("rows", 0) as {string: any};
+    return row["done"] as bool;
 }
 fn main() {}
 "#;
@@ -141,8 +141,8 @@ import "lumen.cdl";
 
 fn seed() { lumen::signal_array_push("rows", {"completion_state": "done"}); }
 fn read_it() {
-    let row = as_map(lumen::signal_array_get("rows", 0));
-    return as_str(row.get("completion_state"));
+    let row = lumen::signal_array_get("rows", 0) as {string: any};
+    return row["completion_state"] as string;
 }
 fn main() {}
 "#;
@@ -223,8 +223,8 @@ fn seed() {
 fn count() { let rows = signal_array("rows"); return rows.len(); }
 fn first_title() {
     let rows = signal_array("rows");
-    let row = as_map(rows.get(0));
-    return as_str(row.get("title"));
+    let row = rows.get(0) as {string: any};
+    return row["title"] as string;
 }
 fn drop_first() { let rows = signal_array("rows"); rows.remove(0); }
 fn wipe() { let rows = signal_array("rows"); rows.clear(); }

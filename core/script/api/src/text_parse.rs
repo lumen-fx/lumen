@@ -63,7 +63,7 @@ fn to_json_value(value: &ScriptValue) -> serde_json::Value {
 
 /// Recursive [`serde_json::Value`] -> [`ScriptValue`] projection. A JSON
 /// number lands as [`ScriptValue::I64`] when it is integral and
-/// [`ScriptValue::F64`] otherwise, so `as_int` works on `5` and `as_float` on
+/// [`ScriptValue::F64`] otherwise, so `v as int` works on `5` and `v as float` on
 /// `5.5`.
 #[cfg(feature = "json")]
 fn json_value(v: &serde_json::Value) -> ScriptValue {

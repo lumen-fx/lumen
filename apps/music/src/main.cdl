@@ -84,8 +84,8 @@ fn fmt_time(sec_f) {
     let sec = int(sec_f);
     let m = sec / 60;
     let s = sec % 60;
-    if s < 10 { return str(m) + ":0" + str(s); }
-    return str(m) + ":" + str(s);
+    if s < 10 { return string(m) + ":0" + string(s); }
+    return string(m) + ":" + string(s);
 }
 
 fn pl_class(key, mine) {
@@ -137,7 +137,7 @@ fn render_playlist() {
     for t in list {
         add_row(container, t, now_id);
     }
-    let count = str(list.len()) + " tracks";
+    let count = string(list.len()) + " tracks";
     lumen::signal_set("lib_count", count);
 }
 
@@ -235,7 +235,7 @@ fn on_start() {
     // Seed the now-playing bar with the first track (paused, not loaded).
     let list = playlist_tracks("tones");
     set_meta(list[0]);
-    let count = str(list.len()) + " tracks";
+    let count = string(list.len()) + " tracks";
     lumen::signal_set("lib_count", count);
 
     lumen::on("click", "playpause", "toggle_play");

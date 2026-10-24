@@ -417,7 +417,7 @@ fn a_candela_package_is_an_import_root() {
     .expect("markup");
     std::fs::write(
         dir.join("src").join("main.cdl"),
-        "import \"shapes\";\n\nfn main() {\n    let n = area(3, 4);\n}\n",
+        "import \"shapes\";\n\nfn main() {\n    let n = shapes::area(3, 4);\n}\n",
     )
     .expect("script");
 

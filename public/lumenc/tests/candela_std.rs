@@ -7,10 +7,10 @@
 //! Proof that an app reaches the candela standard library the toolchain ships.
 //!
 //! `fixtures/candela-std` imports `std/time` for the wall clock and `std/math`
-//! for a square root, and calls an array method the compiler loads from
-//! `std/list` on its own. All three read the library tree beside the running
-//! executable, so the bound labels stay at their markup text if the tree is
-//! missing and the script never compiled.
+//! for a square root, and calls an array method from candela's prelude. The
+//! two imports read the library tree beside the running executable, so the
+//! bound labels stay at their markup text if the tree is missing and the script
+//! never compiled.
 
 use lumenc::{RunOptions, build_headless_app};
 

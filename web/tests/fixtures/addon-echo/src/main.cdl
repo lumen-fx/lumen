@@ -22,17 +22,17 @@ fn on_ready() {
 
 // An async function's answer, with the tag the call passed.
 fn on_echo(tag: string, value: any) {
-    lumen::signal_set("async_result", tag + ": " + str(value));
+    lumen::signal_set("async_result", tag + ": " + string(value));
 }
 
 // An async function's failure, with the tag and the reason.
 fn on_echo_error(tag: string, reason: any) {
-    lumen::signal_set("failed_result", tag + ": " + str(reason));
+    lumen::signal_set("failed_result", tag + ": " + string(reason));
 }
 
 // An event the module raised on its own.
 fn on_echo_hello(key: string, what: any) {
-    lumen::signal_set("event_result", key + " " + str(what));
+    lumen::signal_set("event_result", key + " " + string(what));
 }
 
 fn main() {}

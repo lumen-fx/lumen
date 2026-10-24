@@ -236,13 +236,13 @@ fn the_bundled_module_runs_a_child_end_to_end() {
         &format!(
             r#"
 fn on_start() {{
-    lumen::signal_set_bool("started", process::start("{CHILD}", ["6", "hello"], "job", Default::default()));
+    lumen::signal_set_bool("started", process::start("{CHILD}", ["6", "hello"], "job", process::StartOptions::default()));
 }}
 fn on_process_stdout(tag: string, line: string) {{
     lumen::signal_set("out", lumen::signal_get("out") + tag + "/" + line + ";");
 }}
 fn on_process_stderr(tag: string, line: string) {{ lumen::signal_set("err", tag + "/" + line); }}
-fn on_process_exit(tag: string, code: int) {{ lumen::signal_set("exit", tag + "/" + str(code)); }}
+fn on_process_exit(tag: string, code: int) {{ lumen::signal_set("exit", tag + "/" + string(code)); }}
 "#
         ),
     );
@@ -279,7 +279,7 @@ fn a_program_that_cannot_start_reports_and_leaves_the_app_running() {
         "lumen-process = { bundled = true }\n",
         r#"
 fn on_start() {
-    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", Default::default()));
+    lumen::signal_set_bool("started", process::start("no-such-program-8f2c", [], "gone", process::StartOptions::default()));
 }
 fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code); }
 "#,
@@ -297,9 +297,7 @@ fn on_process_exit(tag: string, code: int) { lumen::signal_set_int("exit", code)
 
 /// Without the module the function does not exist: the script fails to
 /// compile with candela's ordinary undeclared-namespace error, the app
-/// survives its run, and nothing was started. The options are spelled out as
-/// a struct literal, because `Default::default()` would fail first on the
-/// missing struct type rather than on the missing namespace.
+/// survives its run, and nothing was started.
 #[test]
 fn without_the_module_the_function_does_not_exist() {
     let f = fixtures();

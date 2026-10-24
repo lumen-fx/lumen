@@ -125,7 +125,7 @@ fn on_ws_message(key, text) {{
 }}
 
 fn on_ws_close(key, code, reason, clean) {{
-    lumen::signal_set("closed", str(code) + " " + reason + " " + str(clean));
+    lumen::signal_set("closed", string(code) + " " + reason + " " + string(clean));
     lumen::signal_set("state_after", ws::state(key));
 }}
 
@@ -173,7 +173,7 @@ fn on_ws_error(key, message) {{
 }}
 
 fn on_ws_close(key, code, reason, clean) {{
-    lumen::signal_set("closed", str(code) + " " + str(clean));
+    lumen::signal_set("closed", string(code) + " " + string(clean));
 }}
 
 fn main() {{}}
