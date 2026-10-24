@@ -284,8 +284,8 @@ jobs:
           mkdir -p tap/Formula
           cp manifests/homebrew/lumen.rb tap/Formula/lumen.rb
           cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "lumenfx-bot[bot]"
+          git config user.email "346573052+lumenfx-bot[bot]@users.noreply.github.com"
           git add Formula/lumen.rb
           if git diff --cached --quiet; then
             echo "::notice::the tap already carries $VERSION"
@@ -358,8 +358,8 @@ jobs:
 
           printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
           export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "lumenfx-bot[bot]"
+          git config user.email "346573052+lumenfx-bot[bot]@users.noreply.github.com"
 
           for attempt in 1 2 3; do
             git fetch --quiet origin main

@@ -58,8 +58,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "lumenfx-bot[bot]"
+          git config user.email "346573052+lumenfx-bot[bot]@users.noreply.github.com"
           git add tools/zed-lumen/extension.toml \
                   tools/tree-sitter-lumen/editors/helix/languages.toml \
                   tools/tree-sitter-lumen/editors/nvim/lumen.lua
