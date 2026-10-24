@@ -87,6 +87,15 @@ fn stream_socket() -> io::Result<OwnedFd> {
     Ok(fd)
 }
 
+/// The `poll` timeout for `timeout`: whole milliseconds, rounded up, so a
+/// wait shorter than a millisecond sleeps instead of returning at once (a
+/// caller waiting out a deadline would spin through its last millisecond).
+fn poll_ms(timeout: Option<Duration>) -> libc::c_int {
+    timeout.map_or(-1, |t| {
+        t.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as libc::c_int
+    })
+}
+
 /// Wait until `fd` is readable, for at most `timeout` (`None`: no limit).
 /// Returns whether it is.
 fn wait_readable(fd: RawFd, timeout: Option<Duration>) -> io::Result<bool> {
@@ -95,7 +104,7 @@ fn wait_readable(fd: RawFd, timeout: Option<Duration>) -> io::Result<bool> {
         events: libc::POLLIN,
         revents: 0,
     };
-    let ms = timeout.map_or(-1, |t| t.as_millis().min(i32::MAX as u128) as libc::c_int);
+    let ms = poll_ms(timeout);
     loop {
         // SAFETY: one valid pollfd, owned on this stack frame.
         let r = unsafe { libc::poll(&mut pfd, 1, ms) };
@@ -595,6 +604,25 @@ mod tests {
         drop(client);
         drop(_cr);
         assert!(matches!(server.recv(timeout).unwrap(), Received::Closed));
+    }
+
+    /// A wait under a millisecond sleeps rather than returning at once, so
+    /// a reader waiting out a deadline does not spin through its last
+    /// millisecond; no wait is still no wait.
+    #[test]
+    fn short_waits_sleep() {
+        assert_eq!(poll_ms(None), -1);
+        assert_eq!(poll_ms(Some(Duration::ZERO)), 0);
+        assert_eq!(poll_ms(Some(Duration::from_micros(300))), 1);
+        assert_eq!(poll_ms(Some(Duration::from_millis(4))), 4);
+        assert_eq!(poll_ms(Some(Duration::from_micros(4_001))), 5);
+        let (_cs, _cr, _ss, mut server, _l) = pair();
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            server.recv(Some(Duration::from_micros(500))).unwrap(),
+            Received::Timeout
+        ));
+        assert!(start.elapsed() >= Duration::from_micros(500));
     }
 
     fn tempfile_with(bytes: &[u8]) -> std::fs::File {
