@@ -237,7 +237,7 @@ map:
 ```rust
 fn on_close(ev: int) {
     let e = event(ev);
-    let reason = as_str(as_map(e.detail()).get("reason"));
+    let reason = (e.detail() as {string: any})["reason"] as string;
     if unsaved() {
         e.prevent_default();
     }
@@ -476,11 +476,11 @@ passed:
 
 ```rust
 fn on_start() {
-    archive::extract("themes.zip", "themes", "themes", Default::default());
+    archive::extract("themes.zip", "themes", "themes", archive::ExtractOptions::default());
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
-    signal<string>("status").set("unpacked " + str(count));
+    signal<string>("status").set("unpacked " + string(count));
 }
 fn on_archive_error(tag: string, message: string) {
     signal<string>("status").set(message);

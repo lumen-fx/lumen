@@ -545,7 +545,7 @@ what the app wants it for:
 |----------|-------|------------|
 | `lumen` | `[dependencies]` | A runtime module or a portable plugin, told apart at load by the symbols it exports. A web build reads its web half from the package's `web/` directory; a package with a web half and no library is for pages alone. |
 | `lumen` | `[[plugins]]` | A compiler plugin, opened while the app compiles. |
-| `candela` | `[dependencies]` | A script library. Its `.cdl` sources become an import root under the declared name, so `import "shapes";` in the app's script reads the package. |
+| `candela` | `[dependencies]` | A script library. Its `.cdl` sources become an import root under the declared name, so `import "shapes";` in the app's script reads the package and its functions are called as `shapes::area(...)`. |
 
 A package for any other platform is an error naming both the package and the
 platform.
