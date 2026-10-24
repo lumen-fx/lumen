@@ -11,6 +11,11 @@
 //! bound yet and leaves the rest alone, so an `<if>` branch that turns on an
 //! hour later adopts the markup that was prerendered for it.
 //!
+//! A `<for>` row keeps its entity when its key moves in the array, so the
+//! walk also runs when a block's rows change order, and inside such a block
+//! a bound element follows its entity: it moves to the entity's place among
+//! its siblings and takes the path the entity is at now.
+//!
 //! Two entities of the scene stand for no element here. One is an entity
 //! with no tag at all; the other is the indicator a `<checkbox>` or a
 //! `<radio>` was desugared into, which the browser draws as the control
@@ -181,10 +186,11 @@ pub fn bind_new_nodes(
     routes: Res<Routes>,
     nodes: NodeQuery<'_, '_>,
     children: Query<&Children>,
-    rows: Query<&ForMarker>,
+    rows: Query<Option<Ref<'static, Children>>, With<ForMarker>>,
     added: Query<(), Added<LumenTag>>,
 ) {
-    if added.iter().next().is_none() {
+    let moved = |kids: Option<Ref<Children>>| kids.is_some_and(|kids| kids.is_changed());
+    if added.iter().next().is_none() && !rows.iter().any(moved) {
         return;
     }
     let root_entity = table.root_entity;
@@ -205,9 +211,9 @@ pub fn bind_new_nodes(
             routes: &routes,
             nodes: &nodes,
             foreign: foreign.as_deref(),
+            rows: &rows,
         },
         &children,
-        &rows,
     );
     if table.hydrating {
         table.hydrating = false;
@@ -282,9 +288,27 @@ struct Scene<'a, 'w, 's> {
     routes: &'a Routes,
     nodes: &'a NodeQuery<'w, 's>,
     foreign: Option<&'a ForeignElements>,
+    /// Every `<for>` block, and its rows.
+    rows: &'a Query<'w, 's, Option<Ref<'static, Children>>, With<ForMarker>>,
+}
+
+/// An element the walk has bound, and whether its subtree is in a `<for>`
+/// block whose rows changed, where a bound element may have to follow its
+/// entity.
+#[derive(Clone)]
+struct Bound {
+    element: Element,
+    moved: bool,
 }
 
 impl Scene<'_, '_, '_> {
+    /// Whether `entity` is a `<for>` block whose rows changed this tick.
+    fn rows_moved(&self, entity: Entity) -> bool {
+        self.rows
+            .get(entity)
+            .is_ok_and(|kids| kids.is_some_and(|kids| kids.is_changed()))
+    }
+
     /// The markup tag of `entity`, when an add-on answers for it.
     fn foreign_tag(&self, entity: Entity) -> Option<std::sync::Arc<str>> {
         let foreign = self.foreign?;
@@ -304,7 +328,6 @@ fn bind_tree(
     root: Element,
     scene: &Scene<'_, '_, '_>,
     children: &Query<&Children>,
-    rows: &Query<&ForMarker>,
 ) {
     let kids = |entity: Entity| -> &[Entity] {
         if scene.foreign_tag(entity).is_some() {
@@ -314,9 +337,12 @@ fn bind_tree(
     };
     walk_nodes(
         root_entity,
-        root,
+        Bound {
+            moved: scene.rows_moved(root_entity),
+            element: root,
+        },
         kids,
-        |entity| rows.get(entity).is_ok(),
+        |entity| scene.rows.contains(entity),
         |entity| stands_for_element(entity, scene.nodes),
         |visit| {
             let element = bind_one(
@@ -324,7 +350,7 @@ fn bind_tree(
                 visit.entity,
                 visit.path,
                 visit.parent,
-                visit.previous,
+                visit.previous.map(|p| &p.element),
                 scene,
             )?;
             if visit.is_for {
@@ -335,7 +361,10 @@ fn bind_tree(
                     .for_rows
                     .insert(visit.path.to_string(), visit.children as u32);
             }
-            Some(element)
+            Some(Bound {
+                element,
+                moved: visit.parent.moved || scene.rows_moved(visit.entity),
+            })
         },
     );
 }
@@ -362,13 +391,23 @@ fn bind_one(
     table: &mut NodeTable,
     entity: Entity,
     path: &NodePath,
-    parent: &Element,
+    parent: &Bound,
     previous: Option<&Element>,
     scene: &Scene<'_, '_, '_>,
 ) -> Option<Element> {
-    if let Some(element) = table.by_entity.get(&entity) {
-        return Some(element.clone());
+    let anchor = || -> Option<Node> {
+        match previous {
+            Some(previous) => previous.next_sibling(),
+            None => first_child_slot(&parent.element).map(Node::from),
+        }
+    };
+    if let Some(element) = table.by_entity.get(&entity).cloned() {
+        if parent.moved {
+            follow(table, entity, path, &element, parent, previous, anchor());
+        }
+        return Some(element);
     }
+    let parent = &parent.element;
     let text = path.to_string();
     if let Some(element) = table.unclaimed.remove(&text) {
         table.report.adopted += 1;
@@ -391,17 +430,44 @@ fn bind_one(
     // sibling element. Ahead of, not first: an element's own text is the node
     // before its children, and it stays there. The control the parent is
     // drawn by is not a child at all, so a first child goes after it.
-    let anchor: Option<Node> = match previous {
-        Some(previous) => previous.next_sibling(),
-        None => first_child_slot(parent).map(Node::from),
-    };
-    if parent.insert_before(&element, anchor.as_ref()).is_err() {
+    if parent.insert_before(&element, anchor().as_ref()).is_err() {
         return None;
     }
     table.report.created += 1;
     bind(table, entity, text, element.clone());
     mount_foreign(table, scene, entity, &element);
     Some(element)
+}
+
+/// Move a bound element to where its entity is now, among its siblings and
+/// in the path table, after the `<for>` block it is in moved its rows.
+fn follow(
+    table: &mut NodeTable,
+    entity: Entity,
+    path: &NodePath,
+    element: &Element,
+    parent: &Bound,
+    previous: Option<&Element>,
+    anchor: Option<Node>,
+) {
+    let in_place = match previous {
+        Some(previous) => previous.next_element_sibling(),
+        None => first_child_slot(&parent.element),
+    };
+    if in_place.as_ref() != Some(element) {
+        let _ = parent.element.insert_before(element, anchor.as_ref());
+    }
+    let text = path.to_string();
+    if table.by_path.get(&text) == Some(&entity) {
+        return;
+    }
+    if let Some(was) = element.get_attribute(DATA_LM)
+        && table.by_path.get(&was) == Some(&entity)
+    {
+        table.by_path.remove(&was);
+    }
+    let _ = element.set_attribute(DATA_LM, &text);
+    table.by_path.insert(text, entity);
 }
 
 /// Hand an element an add-on answers for to the add-on, once it is bound.
@@ -550,7 +616,10 @@ pub fn release_dead_nodes(
         if let (Some(tag), Some(foreign)) = (tag, foreign.as_deref()) {
             foreign.unmount(&tag, &element);
         }
-        if let Some(path) = element.get_attribute(DATA_LM) {
+        // A kept row may have taken over the path while it moved.
+        if let Some(path) = element.get_attribute(DATA_LM)
+            && table.by_path.get(&path) == Some(&entity)
+        {
             table.by_path.remove(&path);
         }
         element.remove();

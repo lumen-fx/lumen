@@ -414,7 +414,7 @@ Loads and draws an image file.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `src` | path | Image file to decode, relative to the app directory. Accepts `{...}` placeholders. |
+| `src` | path | Image file to decode: a relative path resolves against the app directory, an absolute one is used as written. Accepts `{...}` placeholders; a filled-in path resolves the same way once it holds its value, and a new value loads the new file. |
 | `alt` | text | What the image shows, for a reader who is not looking at it. Write `alt=""` for an image that carries no meaning of its own, such as a divider. `translatable` on the same element resolves it through `<key>.alt`. Carried into the compiled app; the desktop accessibility tree does not read it yet. |
 | `fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | How the image fills its box. |
 
@@ -870,7 +870,7 @@ column.
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `each` | array signal name | Required for iteration. Without it the children spawn once, unrepeated. |
-| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is kept is updated in place when its record's fields change. |
+| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is still in the array keeps its elements wherever the key moves, and is updated in place when its record's fields change; only rows whose keys came or went are built or removed. |
 | `virtualized` | `true`, `yes` | Spawn only the rows in the visible scroll window. Needs a `<scroll>` ancestor. |
 | `row-height` | number | Pixel height per virtualized row. Defaults to `32`. |
 

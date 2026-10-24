@@ -573,7 +573,9 @@ fn resolve_asset_paths_under(el: &mut Element, dir: &Path) {
         && let Some(src) = &el.attrs.src
     {
         let p = Path::new(src);
-        if p.is_relative() {
+        // A `src` a placeholder fills in is resolved once it holds its
+        // value, when the element is built: the value may be absolute.
+        if p.is_relative() && !src.contains('{') {
             let resolved = dir.join(p);
             if let Some(s) = resolved.to_str() {
                 el.attrs.src = Some(s.to_string());
@@ -645,6 +647,22 @@ mod tests {
             .join("tracker")
             .join("icons/gear.png");
         assert_eq!(el.attrs.src.as_deref(), expected.to_str());
+    }
+
+    /// A `src` a placeholder fills in is left for the element's build to
+    /// resolve: the value it will hold may be absolute.
+    #[test]
+    fn a_placeholder_src_is_left_as_written() {
+        let mut el = Element {
+            tag: "image".to_string(),
+            attrs: Box::new(Attributes {
+                src: Some("{row.thumb}".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        resolve_asset_paths(&mut el, Path::new("tracker"));
+        assert_eq!(el.attrs.src.as_deref(), Some("{row.thumb}"));
     }
 
     /// The always-on `ua.css` baseline reaches a control compiled through

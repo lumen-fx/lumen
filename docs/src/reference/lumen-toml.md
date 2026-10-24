@@ -170,7 +170,7 @@ needs `profiling-tracy`.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `paths` | array of strings | empty | Extra directories scanned for relative `src=` paths. Relative entries resolve against the app directory; absolute entries are used as given. |
+| `paths` | array of strings | empty | Extra directories scanned for relative `src=` paths written in the markup; a path a `{...}` placeholder fills in resolves against the app directory only. Relative entries resolve against the app directory; absolute entries are used as given. |
 
 ## [perf]
 

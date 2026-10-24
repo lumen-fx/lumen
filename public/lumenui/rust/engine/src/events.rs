@@ -354,11 +354,7 @@ pub(crate) fn row_of(world: &World, entity: Entity) -> Option<Row> {
             let position = children.iter().position(|c| c == child)?;
             let per_row = block.body.len().max(1);
             let slot = position / per_row;
-            let (index, key) = if block.virtualized {
-                block.win_rows.get(slot).cloned()?
-            } else {
-                (slot, block.cached_keys.get(slot).cloned()?)
-            };
+            let (index, key) = block.rows.get(slot).cloned()?;
             let fields = block.row_items.get(slot).cloned().unwrap_or_default();
             return Some(Row {
                 list: block.array_name.clone(),

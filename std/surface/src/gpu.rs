@@ -3,9 +3,9 @@
 //!
 //! The render backend publishes its device ([`GpuContext`]) and texture
 //! table ([`GpuTextures`]) in the render world; a render-world system copies
-//! them here, where session threads read them. An import runs on the
-//! session's thread, against a clone of the device, so a slow driver never
-//! stalls a frame.
+//! them here, where session threads read them. An import runs on a thread
+//! of its own, against a clone of the device, so a slow driver never stalls
+//! a frame, and a device busy with a frame never silences a session.
 
 use crate::session::{Backend, Imported};
 use lumen_module::gpu::{GpuContext, GpuTextures, wgpu};
@@ -345,7 +345,9 @@ mod vulkan {
     /// when the GPU has finished it, and the producer is told the ring is
     /// accepted, and draws into it, only then. The GPU runs the transition
     /// after whatever the renderer queued before it, which on a software
-    /// rasterizer under load can take a while, so nothing waits on it.
+    /// rasterizer under load can take a while; the import thread polls the
+    /// check rather than blocking on it, so it can stop when the session
+    /// ends.
     fn prime(context: &GpuContext, textures: &[wgpu::Texture]) -> Box<dyn FnMut() -> bool + Send> {
         let mut encoder = context
             .device

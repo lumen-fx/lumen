@@ -563,12 +563,12 @@ type PartWrite = (
 /// so a tick that moves one asks for another to place it against the
 /// layout this one produces.
 pub fn sync_color_parts(
+    mut commands: Commands,
     viewports: Viewports,
     anim: Option<Res<AnimationsActive>>,
     fields: Query<(Entity, &ColorInput)>,
     parents: Query<&ChildOf>,
-    transforms: Query<&Transform>,
-    focused: Query<(), With<Focused>>,
+    (transforms, focused): (Query<&Transform>, Query<(), With<Focused>>),
     mut parts: Query<PartWrite>,
 ) {
     if fields.is_empty() {
@@ -683,6 +683,17 @@ pub fn sync_color_parts(
             }
             ColorPart::Hue | ColorPart::Alpha => continue,
         };
+        // A part whose skin gives it no `bg` has no paint after a restyle
+        // that ran before this did (a field a script builds): it gets one
+        // here, painted with what it holds, so the color shows.
+        if visuals.is_none() && values.fill.is_some() {
+            let out = overrides.hold::<ColorPart>(values, &Live::default());
+            let mut painted = Visuals::default();
+            out.write_visuals(&mut &mut painted);
+            commands.entity(entity).insert(painted);
+            moved = true;
+            continue;
+        }
         moved |= hold_part(&mut overrides, style.as_mut(), visuals.as_mut(), values);
     }
     if moved && let Some(anim) = &anim {

@@ -153,9 +153,9 @@ bits: 1 shift, 2 control, 4 alt, 8 meta.
 3. P allocates a ring at that size, exports it, and sends `Buffers` with
    generation 1.
 4. C imports every buffer and answers `BuffersAccepted`, or
-   `BuffersRejected` with the reason. The answer can take a while: C first
-   finishes its first-use work on the images (see "Ownership and layout"),
-   which waits on its GPU. C keeps serving the connection meanwhile, pinging
+   `BuffersRejected` with the reason. The answer can take a while: the
+   import and the first-use work on the images (see "Ownership and layout")
+   both wait on C's GPU, which may be busy with C's own frames. C keeps serving the connection meanwhile, pinging
    a quiet producer as usual, so P waits for the answer for as long as C
    keeps sending, and gives up only after five seconds in which C sent
    nothing at all.
@@ -254,7 +254,8 @@ processes.
 ### Resize
 
 C sends `Resize` when the size it wants changes, at most once per frame it
-shows. P allocates a new ring at the next generation and sends `Buffers`.
+shows. An element that is hidden and has no size sends only `Visibility`; the
+size it wants stays what it was. P allocates a new ring at the next generation and sends `Buffers`.
 C keeps showing the old generation's newest frame until the first frame of
 the new one arrives. Once every slot of an older generation is back and none
 will be shown again, C sends `RetireGeneration` and P frees that ring.
