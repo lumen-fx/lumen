@@ -207,11 +207,11 @@ fn on_ready() {
 }
 
 fn on_echo(tag: string, value: any) {
-    lumen::signal_set("answer", tag + ": " + str(value));
+    lumen::signal_set("answer", tag + ": " + string(value));
 }
 
 fn on_echo_error(tag: string, reason: any) {
-    lumen::signal_set("answer", "failed: " + str(reason));
+    lumen::signal_set("answer", "failed: " + string(reason));
 }
 ```
 
@@ -284,7 +284,9 @@ visitor can read it, so it is no place for a secret.
 
 A web half that is also a candela package, with a `candela.toml` or a
 `src/main.cdl` inside `web/`, is an import root under the module's dependency name too, so
-it can ship candela wrappers over its functions:
+it can ship candela wrappers over its functions. The import binds the
+package's name, so a script calls a wrapper the same way it calls the module's
+own functions, through `echo::`:
 
 ```
 import "echo";

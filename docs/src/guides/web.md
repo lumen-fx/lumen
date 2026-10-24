@@ -249,7 +249,7 @@ left bare is taken as `any`, and the build warns once per function, naming
 every bare parameter it takes; `--strict` makes that warning a failed build.
 Annotate a parameter with the type it arrives as rather than `any` where the
 body does arithmetic on it or joins it to a string; a value typed `any` cannot
-do either, and `str(n)` is how a number joins a string in any case. A bare
+do either, and `string(n)` is how a number joins a string in any case. A bare
 parameter's body that does either does not compile as `any`, so the function
 cannot be called by name, and the build warns about that too.
 
@@ -377,7 +377,7 @@ fn on_ready() {
 }
 
 fn on_echo(tag: string, value: any) {
-    lumen::signal_set("greeting", str(value));
+    lumen::signal_set("greeting", string(value));
 }
 ```
 

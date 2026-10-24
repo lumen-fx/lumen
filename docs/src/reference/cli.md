@@ -502,8 +502,8 @@ linked into its executable, and `[capabilities]` does not change it.
 
 The candela standard library travels in a `libs/` subfolder of the package,
 whatever the kind and whatever links the engine: scripts read it off disk as
-they compile, so a package without it fails every `import "std/..."` and every
-array method at startup. It comes from wherever that package's engine came
+they compile, so a package without it fails every `import "std/..."` at
+startup. It comes from wherever that package's engine came
 from. A Rust app takes the copy its own cargo build staged beside the
 executable when there is one, and the toolchain's otherwise. Every other kind
 takes the toolchain's, from the

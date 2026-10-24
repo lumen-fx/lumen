@@ -1048,7 +1048,7 @@ the value. Each host renders the struct in its own terms:
 
 | Language | The script writes |
 | --- | --- |
-| candela | `gpio::read(21, gpio::ReadOptions { verbose: true, ..Default::default() })`, or `Default::default()` for every default |
+| candela | `gpio::read(21, gpio::ReadOptions { verbose: true, .. })`, or `gpio::ReadOptions::default()` for every default |
 | Rhai | `gpio::read(21, #{ verbose: true })` |
 | Lua | `gpio.read(21, { verbose = true })` |
 

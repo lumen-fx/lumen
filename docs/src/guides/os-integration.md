@@ -562,17 +562,17 @@ only what you change:
 
 In Rhai and Lua the options are a map, and a key you leave out takes its
 default. In candela they are the `process::StartOptions` struct; set the
-fields you want and take the rest from `..Default::default()`, or pass
-`Default::default()` for all of them:
+fields you want and end the literal with a bare `..` to take the rest from the
+defaults, or pass `process::StartOptions::default()` for all of them:
 
 ```rust
 fn launch() -> bool {
     return process::start("java", ["-jar", "game.jar"], "game",
-        process::StartOptions { cwd: "instances/a", ..Default::default() });
+        process::StartOptions { cwd: "instances/a", .. });
 }
 
 fn status() -> bool {
-    return process::start("git", ["status", "--short"], "git", Default::default());
+    return process::start("git", ["status", "--short"], "git", process::StartOptions::default());
 }
 ```
 
