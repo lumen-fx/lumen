@@ -1,0 +1,191 @@
+# lumenfx-bot's config for this repository, read from the default branch.
+
+# Who may run maintainer commands. GitHub numeric IDs are authoritative;
+# logins are for reading.
+[permissions]
+maintainers = [{ id = 126825095, login = "FizzWizZleDazzle" }]
+write_access_is_maintainer = true
+
+# Role -> label name in this repository.
+[labels.status]
+triage = "S-Needs-Triage"
+author = "S-Waiting-On-Author"
+review = "S-Needs-Review"
+info = "S-Needs-Info"
+ready = "S-Ready"
+blocked = "S-Blocked"
+# S- labels the bot never sets on its own; their presence freezes its S- handling.
+maintainer_owned = ["S-Needs-Design", "S-Blocked", "S-Duplicate", "S-Wontfix", "S-Needs-Info"]
+
+# Labels anyone may set with `@lumenfx-bot label`.
+[labels.self_service]
+allow = ["A-*", "C-*", "O-*"]
+
+# Path -> label, for each changed file the first match wins. Added only when
+# the pull request has no A- label yet.
+[autolabel]
+"core/script/**" = "A-Scripting"
+"std/**" = "A-Scripting"
+"core/text/**" = "A-Text"
+"core/input/**" = "A-Input"
+"core/ir/**" = "A-Markup"
+"web/html/**" = "A-Markup"
+"core/widget/**" = "A-Widgets"
+"core/primitives/**" = "A-Widgets"
+"core/i18n/**" = "A-I18n"
+"core/assets/**" = "A-Assets"
+"core/paint/**" = "A-Rendering"
+"core/runtime/**" = "A-Runtime"
+"core/launcher/**" = "A-Runtime"
+"src/**" = "A-Runtime"
+"core/mcp/**" = "A-MCP"
+"dev/mcp-server/**" = "A-MCP"
+"capabilities/mcp/**" = "A-MCP"
+"core/plugin-abi/**" = "A-FFI"
+"public/lumenui/**" = "A-FFI"
+"public/lumen-dylib/**" = "A-FFI"
+"core/**" = "A-Core"
+"dev/lsp/**" = "A-LSP"
+"dev/devtools/**" = "A-Devtools"
+"capabilities/devtools/**" = "A-Devtools"
+"web/**" = "O-Web"
+"os/clipboard/**" = "A-Clipboard"
+"os/dnd/**" = "A-Drag-And-Drop"
+"os/mime/**" = "A-Drag-And-Drop"
+"os/menu/**" = "A-Menus"
+"os/tray/**" = "A-Tray"
+"capabilities/os-tray/**" = "A-Tray"
+"os/filedialog/**" = "A-Dialogs"
+"capabilities/os-filedialog/**" = "A-Dialogs"
+"os/notify/**" = "A-Notifications"
+"capabilities/os-notify/**" = "A-Notifications"
+"os/hotkey/**" = "A-Hotkeys"
+"capabilities/os-hotkey/**" = "A-Hotkeys"
+"os/launcher/**" = "A-Launcher"
+"capabilities/os-launcher/**" = "A-Launcher"
+"os/power/**" = "A-Power"
+"capabilities/os-power/**" = "A-Power"
+"os/lifecycle/**" = "A-Lifecycle"
+"capabilities/os-lifecycle/**" = "A-Lifecycle"
+"backends/render-wgpu/**" = "A-Rendering"
+"backends/render-cpu/**" = "A-Rendering"
+"capabilities/render-gpu/**" = "A-Rendering"
+"capabilities/render-cpu/**" = "A-Rendering"
+"backends/window-winit/**" = "A-Windowing"
+"backends/layout-taffy/**" = "A-Layout"
+"backends/text-cosmic/**" = "A-Text"
+"backends/a11y-accesskit/**" = "A-Accessibility"
+"backends/async-tokio/**" = "A-Async"
+"capabilities/async/**" = "A-Async"
+"backends/http-ureq/**" = "A-Runtime"
+"capabilities/http-fetch/**" = "A-Runtime"
+"os/crash/**" = "A-Runtime"
+"capabilities/os-crash/**" = "A-Runtime"
+"public/lumenc/**" = "A-CLI"
+"tools/release/**" = "A-Packaging"
+"bucket/**" = "A-Packaging"
+"tools/setup-lumen/**" = "A-Packaging"
+".github/**" = "A-Packaging"
+"tools/vscode-lumen/**" = "A-Editor-Plugin"
+"tools/jetbrains-lumen/**" = "A-Editor-Plugin"
+"tools/zed-lumen/**" = "A-Editor-Plugin"
+"tools/tree-sitter-lumen/**" = "A-Editor-Plugin"
+"apps/**" = "C-Examples"
+
+# Conventional-commit type of the title -> C- label, added only when the pull
+# request has no C- label yet.
+[autolabel.title_prefix]
+fix = "C-Bug"
+feat = "C-Feature"
+docs = "C-Docs"
+test = "C-Testing"
+perf = "C-Performance"
+ci = "C-Code-Quality"
+chore = "C-Code-Quality"
+refactor = "C-Code-Quality"
+build = "C-Dependencies"
+deps = "C-Dependencies"
+
+[status_comment]
+mode = "actionable"
+contributing = "CONTRIBUTING.md"
+
+[no_merges]
+enabled = true
+
+[stale]
+author_nudge_days = 14
+issue_info_nudge_days = 14
+close_after_days = 0
+
+# The `cla` check. Contributors sign with `@lumenfx-bot sign <sentence>`.
+# Bot accounts and the maintainers above never sign; allow_ids adds more
+# exemptions. candela carries `enabled = false`: no `cla` check there.
+[cla]
+enabled = true
+store = "lumen-fx/cla-signatures"
+path = "signatures/v1/cla.json"
+document = "https://github.com/lumen-fx/lumen/blob/main/CLA.md"
+sentence = "I have read the CLA Document and I hereby sign the CLA"
+allow_ids = []
+lock_after_merge = true
+
+[migration]
+enabled = true
+label = "C-Breaking-Change"
+dir = "docs/migration/unreleased/"
+
+[ci_approval]
+enabled = false
+require = ["cla", "pullsift-pass"]
+deny_paths = [".github/**"]
+max_runs_per_author_per_day = 20
+min_account_age_days = 0
+
+[codeql]
+gate = false
+environment = "codeql-clean"
+verdict_check = "CodeQL"
+
+[tests]
+trusted_events = ["merge_group", "push", "schedule", "workflow_dispatch"]
+artifacts = "test-results-*"
+format = "junit"
+infra_patterns = ["The runner has received a shutdown signal", "HTTP 429", "HTTP 503"]
+
+[flaky]
+confirm = "same-tree"
+suspect_after_distinct_trees = 2
+window_days = 30
+issue_labels = ["C-Testing", "A-CI"]
+
+[requeue]
+enabled = false
+max_per_pr_head = 1
+max_per_day = 6
+
+[docs]
+code = ["core/**", "backends/**", "os/**", "dev/**", "capabilities/**", "web/**", "public/**", "std/**", "src/**", "tools/**"]
+docs = ["docs/**", "**/*.md"]
+quiet_classes = ["C-Testing", "C-Code-Quality", "C-Dependencies"]
+
+[sizes]
+artifact = "sizes"
+report_growth_percent = 1.0
+
+[perf]
+workflow = "perf.yml"
+benches = ["hello", "forms", "list"]
+
+[good_first_issue]
+label = "good first issue"
+areas = ["A-CLI", "A-Text", "A-Styling", "A-Widgets", "A-Editor-Plugin"]
+classes = ["C-Bug", "C-Docs", "C-Testing", "C-Examples"]
+
+[claims]
+nudge_days = 14
+release_days = 28
+
+[repins.candela]
+enabled = true
+workflow = "candela-pin.yml"

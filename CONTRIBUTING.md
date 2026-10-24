@@ -11,15 +11,19 @@ options open, every pull request needs its authors to have signed the
 write; the agreement grants the project the right to publish it under other
 terms later.
 
-A bot checks this on each pull request and comments if a signature is missing.
-Sign by replying to the pull request with a comment containing exactly:
+The `cla` check on each pull request lists who still has to sign: the author
+and committer of every commit, and every `Co-authored-by:` trailer that names a
+GitHub account. Sign by commenting this line on the pull request, exactly as
+written and on one line:
 
 ```
-I have read the CLA Document and I hereby sign the CLA
+@lumenfx-bot sign I have read the CLA Document and I hereby sign the CLA
 ```
 
 That is once per GitHub account, not once per pull request. The check turns
-green on its own; comment `recheck` if it does not.
+green on its own; comment `@lumenfx-bot recheck` if it does not. A commit
+whose author email is linked to no GitHub account fails the check until you
+add the email to your account or re-author the commit.
 
 ## Before you build
 
@@ -113,23 +117,24 @@ request why the change is needed rather than only what it does.
 
 ## After you open a pull request
 
-A workflow reads every pull request as it changes and keeps two things
+lumenfx-bot reads every pull request as it changes and keeps two things
 current without a maintainer at the keyboard:
 
-- A `triage` check on the Checks tab. Its summary lists the CLA state, each
-  required check with a link, the labels, and the one next step: sign the
-  CLA, fix a red leg, add the docs page, or wait for review. It never blocks
-  a merge; it is there so you can see what is missing before anyone reads
-  the diff.
 - The `S-` label, which is the pull request's state: `S-Needs-Triage` when
-  it opens, `S-Waiting-On-Author` while a required check is red, and
-  `S-Needs-Review` once every check is green, the CLA is signed, and the
-  pull request is not a draft. Area (`A-`) and class (`C-`) labels are set
-  from the touched paths and the title prefix when none are present.
+  it opens, `S-Waiting-On-Author` while something is yours to do (an unsigned
+  CLA, a red required check, a conflict, requested changes), and
+  `S-Needs-Review` once nothing is. Area (`A-`) and class (`C-`) labels are
+  set from the touched paths and the title prefix when none are present.
+- One status comment, posted when you have something to do and edited from
+  then on. It lists what is left: the CLA, each required check with a link,
+  a docs reminder when code changed and no doc did.
+
+Talk to the bot with a comment that starts with `@lumenfx-bot`, for example
+`@lumenfx-bot ready` once you have addressed requested changes. The full
+command list is at https://hook.lumenfx.dev/help.
 
 On a first pull request from a new account, GitHub holds the checks until a
-maintainer starts them; the summary says so. Nothing in this workflow reads
-or runs the code in the pull request.
+maintainer starts them.
 
 ## Invariants you must not break
 

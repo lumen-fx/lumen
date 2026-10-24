@@ -97,16 +97,17 @@ circumstance that would make any representation in this agreement inaccurate.
 
 ## How to sign
 
-Open a pull request. A bot comments on it with the link to this document and
-asks you to sign. Reply to the pull request with a comment containing exactly:
+Open a pull request. The `cla` check on it fails until you sign, and the
+lumenfx-bot status comment links to this document. Sign by commenting this
+line on the pull request, exactly as written and on one line:
 
 ```
-I have read the CLA Document and I hereby sign the CLA
+@lumenfx-bot sign I have read the CLA Document and I hereby sign the CLA
 ```
 
-Your GitHub username, the pull request number, and a timestamp are recorded in
-a private signature store held by the project. Signing is once per GitHub
-account, not once per pull request.
+Your GitHub username and account ID, the pull request number, and a timestamp
+are recorded in a private signature store held by the project. Signing is once
+per GitHub account, not once per pull request.
 
 This agreement is adapted from the Apache Software Foundation Individual
 Contributor License Agreement v2.0, with the addition of the relicensing terms
