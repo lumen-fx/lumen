@@ -141,7 +141,7 @@ pub fn row_fills(app: &mut App) -> RowFills {
                 fills.with_block(
                     visit.path.to_string(),
                     marker.array_name.clone(),
-                    marker.cached_keys.len(),
+                    marker.rows.len(),
                 );
                 &*marker.body
             });

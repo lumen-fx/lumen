@@ -2490,3 +2490,104 @@ fn a_radio_group_mounted_at_runtime_is_one_group() {
     }
     root.remove();
 }
+
+/// A `<for>` over `items` keyed by each record's `name`.
+fn keyed_list_tree() -> LayoutIR {
+    let mut ir = list_tree(vec![row_label("{row.name}")]);
+    ir.root.children[0].attrs.key = Some("name".to_string());
+    ir
+}
+
+/// The elements the `<for>` block holds, in page order.
+fn row_elements(root: &Element) -> Vec<Element> {
+    let block = root
+        .query_selector(".lm-for")
+        .unwrap()
+        .expect("the block is in the page");
+    let mut elements = Vec::new();
+    let mut child = block.first_element_child();
+    while let Some(element) = child {
+        child = element.next_element_sibling();
+        elements.push(element);
+    }
+    elements
+}
+
+/// Hydrate a keyed list of `names`, then set the list to `next`.
+fn rekey(names: &[&str], next: &[&str]) -> (App, Element, Vec<Element>) {
+    let signals = SignalEnv::new().with_array("items", rows(names));
+    let root = prerender_with(keyed_list_tree(), signals);
+    let mut app = hydrate_list(keyed_list_tree(), root.clone(), names);
+    let before = row_elements(&root);
+    app.world
+        .resource_mut::<ArraySignals>()
+        .set("items", rows(next));
+    app.tick();
+    (app, root, before)
+}
+
+/// Every row element names, by its path, the entity in its place.
+fn assert_rows_resolve(app: &mut App, root: &Element) {
+    let mut blocks = app
+        .world
+        .query_filtered::<&Children, With<spawn::ForMarker>>();
+    let rows: Vec<Entity> = blocks.single(&app.world).unwrap().iter().collect();
+    let table = app.world.non_send::<NodeTable>();
+    let elements = row_elements(root);
+    assert_eq!(elements.len(), rows.len());
+    for (element, row) in elements.iter().zip(rows) {
+        let path = element.get_attribute(DATA_LM).expect("a path");
+        assert_eq!(table.entity_at(&path), Some(row), "row {path}");
+        assert_eq!(table.element(row), Some(element));
+    }
+}
+
+#[wasm_bindgen_test]
+fn a_reordered_keyed_list_moves_the_elements_it_has() {
+    let (mut app, root, before) = rekey(&["one", "two", "three"], &["three", "one", "two"]);
+
+    assert_eq!(row_texts(&root), vec!["three", "one", "two"]);
+    assert_eq!(
+        row_elements(&root),
+        vec![before[2].clone(), before[0].clone(), before[1].clone()],
+        "the rows keep their elements and the page shows them in the new order"
+    );
+    assert_rows_resolve(&mut app, &root);
+}
+
+#[wasm_bindgen_test]
+fn a_key_changing_mid_list_builds_only_its_element() {
+    let (mut app, root, before) = rekey(&["one", "two", "three"], &["one", "zwei", "three"]);
+
+    assert_eq!(row_texts(&root), vec!["one", "zwei", "three"]);
+    let after = row_elements(&root);
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[2], before[2]);
+    assert_ne!(
+        after[1], before[1],
+        "the row whose key changed is built again"
+    );
+    assert!(
+        before[1].parent_node().is_none(),
+        "and the old one leaves the page"
+    );
+    assert_rows_resolve(&mut app, &root);
+}
+
+#[wasm_bindgen_test]
+fn a_row_that_moved_up_keeps_its_path_apart_from_a_new_row() {
+    let (mut app, root, before) = rekey(&["one", "two", "three"], &["one", "three"]);
+    assert_eq!(
+        row_elements(&root),
+        vec![before[0].clone(), before[2].clone()]
+    );
+    assert_rows_resolve(&mut app, &root);
+
+    app.world
+        .resource_mut::<ArraySignals>()
+        .set("items", rows(&["one", "three", "four"]));
+    app.tick();
+    assert_eq!(row_texts(&root), vec!["one", "three", "four"]);
+    assert_eq!(row_elements(&root)[1], before[2]);
+    assert_rows_resolve(&mut app, &root);
+}

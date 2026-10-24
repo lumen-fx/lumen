@@ -151,10 +151,6 @@ pub struct ForMarker {
     /// Stable-id field within each record (e.g. `"id"`). Optional; without
     /// it the reconciler keys rows by item index.
     pub key_field: Option<String>,
-    /// Cache of the keys (or item indices when `key_field` is absent)
-    /// currently materialized as children, so the reconciler can detect
-    /// no-op frames without re-walking the body template.
-    pub cached_keys: Vec<String>,
     /// `<for virtualized="true">` opt-in. When set, and when the scene policy
     /// leaves the windowing to the reconciler, it spawns only rows in the
     /// visible scroll window plus a small buffer; each row is
@@ -164,12 +160,13 @@ pub struct ForMarker {
     /// Required when `virtualized = true`. Default 32 px when authors
     /// turn on `virtualized` without specifying `row-height`.
     pub row_height: f32,
-    /// Virtualized only: the `(row_index, key)` pairs currently mounted,
-    /// in child-list order (each entry owns `body.len()` consecutive
-    /// children). Spec section 15.3 windowed reuse - a window shift keeps every
-    /// row whose `(index, key)` is unchanged instead of respawning the
-    /// whole band.
-    pub win_rows: Vec<(usize, String)>,
+    /// The `(row_index, key)` pairs currently mounted, in child-list order
+    /// (each entry owns `body.len()` consecutive children). The key is the
+    /// record's `key_field`, or its index when the block names none. Rows
+    /// are matched by key against the array on every change, so a row
+    /// whose key stays keeps its entities; a virtualized block holds only
+    /// the rows in its window here.
+    pub rows: Vec<(usize, String)>,
     /// Virtualized only: the body template with the CSS cascade already
     /// applied (cascade-once-per-template). `None` until first use and
     /// after every stylesheet change; rebuilt lazily by the reconciler.
@@ -178,7 +175,7 @@ pub struct ForMarker {
     /// matching depends on per-row substitution results.
     pub cascaded_body: Option<std::sync::Arc<Vec<Element>>>,
     /// The record each mounted row was built from, in the order of
-    /// [`Self::cached_keys`] (or of [`Self::win_rows`] when virtualized).
+    /// [`Self::rows`].
     /// A kept row whose record no longer matches its entry here has its
     /// placeholders resolved again and written onto the entities it
     /// already has.
@@ -1333,10 +1330,9 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             array_name: name.clone(),
             body: el.children.clone(),
             key_field: el.attrs.key.clone(),
-            cached_keys: Vec::new(),
             virtualized: el.attrs.virtualized,
             row_height: el.attrs.row_height.unwrap_or(32.0),
-            win_rows: Vec::new(),
+            rows: Vec::new(),
             cascaded_body: None,
             row_items: Vec::new(),
         });
@@ -1950,32 +1946,27 @@ pub fn mark_dialog_accept_on_default_click(
 /// Reconcile every `<for>` block against the current
 /// [`ArraySignals`][lumen_core::signals::ArraySignals] state.
 ///
-/// **Reconciliation policy (alpha7):**
-/// * Equal key sequence -> nothing mounts or unmounts.
-/// * In every case that keeps rows, a kept row whose record changed has
-///   its placeholders resolved again and written onto its existing
-///   entities, so it keeps focus / scroll / animation state and shows the
-///   new record. A row the template no longer lines up with (a script
-///   reshaped it, or the change reaches a nested `<for>` / `<if>` body or
-///   a component use site) cannot follow in place and the block rebuilds.
-/// * New keys are an extension of cached (cached is a prefix of new) ->
-///   spawn only the appended items. Common case: `signal_array.push(...)`
-///   adds one item, only the new row spawns; existing rows keep their
-///   focus / scroll / `Signals` state.
-/// * Cached keys are an extension of new (new is a prefix of cached) ->
-///   despawn only the trailing entities. Common case: pop / clear-tail.
-/// * Anything else (reorder, mid-insert, mid-remove) -> full rebuild.
-///   Real keyed reconciliation across arbitrary reorders requires
-///   re-anchoring `ChildOf` in bevy_ecs and lands as a follow-up.
+/// Rows are matched by key, as keyed lists are in a browser framework: the
+/// `key` field of each record, or its index when the block names none. A
+/// row whose key is still in the array keeps its entities wherever the key
+/// moved to, so it keeps focus, hover, a press or a drag in flight, and
+/// scroll and animation state. Only the rows whose keys came or went mount
+/// or despawn, and the kept rows are put back in array order.
+///
+/// A kept row whose record or index changed has its placeholders resolved
+/// again and written onto its existing entities. A row the template no
+/// longer lines up with (a script reshaped it, or the change reaches a
+/// nested `<for>` / `<if>` body or a component use site) cannot follow in
+/// place, and that row alone mounts again.
+///
+/// A virtualized block reconciles the rows in its visible window the same
+/// way: a scroll keeps every row still in the window and mounts only the
+/// ones entering it.
 #[allow(clippy::too_many_arguments)]
 pub fn reconcile_for_blocks(
     array_signals: bevy_ecs::system::Res<lumen_core::signals::ArraySignals>,
-    // Wave-D: `InterpolationSlot::Global(name)` substitutions read the
-    // canonical typed PropertyStore so `{$theme}` inside a `<for>` body
-    // resolves correctly. Pre wave-D this consulted the `Signals` resource;
-    // every internal write now lands on PropertyStore so reading either
-    // layer would yield the same result, but PropertyStore is the
-    // canonical source post wave-D.
+    // `InterpolationSlot::Global(name)` substitutions read the canonical
+    // typed PropertyStore so `{$theme}` inside a `<for>` body resolves.
     store: bevy_ecs::system::Res<PropertyStore>,
     mut markers: bevy_ecs::system::Query<(
         Entity,
@@ -2021,27 +2012,18 @@ pub fn reconcile_for_blocks(
         let items: &[ArrayItem] = array_signals
             .get(&marker.array_name)
             .unwrap_or(&[] as &[ArrayItem]);
+        let windowed = marker.virtualized && policy.virtualization == Virtualization::Enabled;
+        let row_h = marker.row_height.max(1.0);
 
-        // Virtualised branch: derive the visible row range from the nearest `<scroll>` ancestor's [`ScrollOffset`] and [`Transform`],
-        // spawning only rows in that window plus an overscan buffer above
-        // and below, and absolute-position each row at
-        // `top = row_index * row_height` so layout stays predictable
-        // regardless of which subset is mounted. Author opts in via
-        // `<for virtualized="true" row-height="N">`.
-        //
-        // Spec section 15.3 windowed reuse: a window shift keeps every row whose
-        // `(index, key)` is unchanged - only rows entering the window
-        // spawn and rows leaving it despawn. Pre-fix, every 1-row shift
-        // despawned + respawned the ENTIRE band (with a full per-row CSS
-        // cascade), which is what made 5k-row wheel scrolling lag.
-        if marker.virtualized && policy.virtualization == Virtualization::Enabled {
-            let row_h = marker.row_height.max(1.0);
-            // Walk ChildOf upward from the for-block looking for an
-            // ancestor with a `Scroll` component. Read its scroll
-            // offset + viewport height so the windowing math knows
-            // where the user is looking. No scroll ancestor = window
-            // anchored at the top with the viewport defaulting to a
-            // tall default so apps still see some rows.
+        // Virtualised: derive the visible row range from the nearest
+        // `<scroll>` ancestor's [`ScrollOffset`] and [`Transform`], mount
+        // only rows in that window plus an overscan buffer above and below,
+        // and absolute-position each row at `top = row_index * row_height`
+        // so layout stays predictable regardless of which subset is
+        // mounted. Author opts in via `<for virtualized="true" row-height="N">`.
+        let window = if windowed {
+            // No scroll ancestor = window anchored at the top with a tall
+            // default viewport, so apps still see some rows.
             let mut anc = parents.get(parent_id).ok().map(|c| c.parent());
             let mut offset_y = 0.0_f32;
             let mut viewport_h = 600.0_f32;
@@ -2086,11 +2068,10 @@ pub fn reconcile_for_blocks(
             // (without it the user can't scroll down past viewport).
             let content_h = items.len() as f32 * row_h;
             let extent = lumen_core::components::Length::Px(content_h);
-            // D4: only write when the size differs. An
-            // unconditional write every steady tick re-triggered
-            // Changed<Style> -> DirtyLayout -> relayout -> FrameDirty - a
-            // permanent per-tick relayout/repaint loop on virtualized
-            // for-blocks.
+            // Only write when the size differs. An unconditional write
+            // every steady tick re-triggered Changed<Style> -> DirtyLayout
+            // -> relayout -> FrameDirty - a permanent per-tick
+            // relayout/repaint loop on virtualized for-blocks.
             if styles
                 .get(parent_id)
                 .map(|s| s.height != extent || s.min_height != extent)
@@ -2108,326 +2089,320 @@ pub fn reconcile_for_blocks(
                     },
                 );
             }
-
-            // Desired `(index, key)` pairs for the current window. Keys
-            // are built for WINDOW rows only - never all 5 000.
-            let key_field = marker.key_field.clone();
-            let key_of = |i: usize, item: &ArrayItem| -> String {
-                key_field
-                    .as_ref()
-                    .and_then(|f| item.get(f).cloned())
-                    .unwrap_or_else(|| i.to_string())
-            };
-            let desired: Vec<(usize, String)> = items
-                .iter()
-                .enumerate()
-                .skip(first)
-                .take(last.saturating_sub(first))
-                .map(|(i, item)| (i, key_of(i, item)))
-                .collect();
-
             // Stylesheet changed (hot reload / first insert): drop the
             // cascaded-template cache so rows restyle on next spawn.
             if css_changed {
                 marker.cascaded_body = None;
             }
+            first.min(last)..last
+        } else {
+            0..items.len()
+        };
 
-            // Steady state: same window -> nothing to do. Both lists run
-            // in row-index order: `desired` is built that way and
-            // `win_rows` is re-sorted into it at the end of this branch,
-            // in step with the children list it indexes into.
-            if children.is_some() && marker.win_rows == desired && !arrays_changed {
-                continue;
-            }
-
-            let body_len = marker.body.len().max(1);
-            let kids: Vec<Entity> = children.map(|c| c.iter().collect()).unwrap_or_default();
-            // Every mounted row owns `body_len` consecutive children in
-            // spawn order. If something else despawned a child out from
-            // under us, alignment is gone - fall back to a full rebuild.
-            let aligned = kids.len() == marker.win_rows.len() * body_len;
-
-            // Rows to keep: `(index, key)` present in both the mounted
-            // set and the desired window.
-            let desired_by_idx: std::collections::HashMap<usize, &str> =
-                desired.iter().map(|(i, k)| (*i, k.as_str())).collect();
-            let mut new_win: Vec<(usize, String)> = Vec::new();
-            let mut new_items: Vec<ArrayItem> = Vec::new();
-            let mut patches: Vec<RowPatch> = Vec::new();
-            let row_template = RowTemplate {
-                body: &marker.body,
-                store: &store,
-                css: row_css,
-            };
-            if aligned {
-                for (row_i, (idx, key)) in marker.win_rows.iter().enumerate() {
-                    let slice = &kids[row_i * body_len..(row_i + 1) * body_len];
-                    let was = marker.row_items.get(row_i);
-                    // A mounted row's index points into the array it was
-                    // built from, which may since have shrunk past it. Only
-                    // a row still in the desired window reads its record,
-                    // and every desired index is in bounds.
-                    let item =
-                        (desired_by_idx.get(idx) == Some(&key.as_str())).then(|| &items[*idx]);
-                    // A kept row whose record changed follows it in place;
-                    // one that cannot is dropped and mounts again below.
-                    let kept = item.filter(|&item| {
-                        was == Some(item)
-                            || row_template.plan(
-                                slice,
-                                (was, item),
-                                *idx,
-                                &report_missing,
-                                &lookup,
-                                &mut patches,
-                            )
-                    });
-                    if let Some(item) = kept {
-                        new_win.push((*idx, key.clone()));
-                        new_items.push(item.clone());
-                    } else {
-                        for child in slice {
-                            commands.entity(*child).despawn();
-                        }
-                    }
-                }
-            } else {
-                for child in &kids {
-                    commands.entity(*child).despawn();
-                }
-            }
-            let mounted: std::collections::HashSet<usize> =
-                new_win.iter().map(|(i, _)| *i).collect();
-
-            // Cascade-once-per-template (spec section 15.3): apply the CSS
-            // cascade to the body template a single time and substitute
-            // per-row placeholders into the pre-cascaded clone. Falls
-            // back to per-row cascade when `id` / `class` attrs carry
-            // `{...}` placeholders (selector matching would then depend on
-            // the substituted values).
-            let per_row_cascade = body_has_dynamic_selector_attrs(&marker.body);
-            let template: std::sync::Arc<Vec<Element>> = match (per_row_cascade, row_css) {
-                (true, _) | (false, None) => std::sync::Arc::new(marker.body.clone()),
-                (false, Some(_)) if marker.cascaded_body.is_some() => {
-                    marker.cascaded_body.clone().expect("checked above")
-                }
-                (false, Some(sheet)) => {
-                    let cascaded: Vec<Element> = marker
-                        .body
-                        .iter()
-                        .map(|el| {
-                            let mut c = el.clone();
-                            cascade_element_tree(&mut c, sheet);
-                            c
-                        })
-                        .collect();
-                    let arc = std::sync::Arc::new(cascaded);
-                    marker.cascaded_body = Some(arc.clone());
-                    arc
-                }
-            };
-
-            for (i, key) in &desired {
-                if mounted.contains(i) {
-                    continue;
-                }
-                let item = &items[*i];
-                let scope = Scope::new(&*store)
-                    .with_row(item, *i)
-                    .reporting_to(&report_missing);
-                for tmpl in template.iter() {
-                    // Substitute placeholders; run the cascade only on
-                    // the per-row fallback path (pre-cascaded otherwise).
-                    let inst = substitute_in_element_with_css(
-                        tmpl,
-                        &scope,
-                        if per_row_cascade { row_css } else { None },
-                    );
-                    // The row lands in the absolute slot its index gives
-                    // it inside the for-block: pinned at `top = i * row_h`
-                    // and left = 0, with `width=100%` + `height=row_h`
-                    // setting its size. Setting `right` / `bottom` too
-                    // would over-constrain taffy (it expects either inset
-                    // OR size, not both on the same axis) and the row
-                    // collapses to content width.
-                    let slot = StyleValues {
-                        position: Some(lumen_core::components::Position::Absolute),
-                        inset: Some(lumen_core::components::Edges {
-                            top: *i as f32 * row_h,
-                            right: f32::NAN,
-                            bottom: f32::NAN,
-                            left: 0.0,
-                            ..lumen_core::components::Edges::default()
-                        }),
-                        height: Some(lumen_core::components::Length::Px(row_h)),
-                        width: Some(lumen_core::components::Length::Percent(100.0)),
-                        ..StyleValues::default()
-                    };
-                    spawn_body_child(
-                        &mut commands,
-                        &inst,
-                        parent_id,
-                        Placeholders::Resolved,
-                        BodyChild::VirtualRow(Box::new(slot)),
-                    );
-                }
-                new_win.push((*i, key.clone()));
-                new_items.push(item.clone());
-            }
-            if !patches.is_empty() {
-                commands.queue(move |world: &mut World| apply_row_patches(world, patches));
-            }
-            // Rows reach `Children` in mount order: a kept row holds the
-            // slot it already had and a row entering the window appends
-            // at the end, so a scroll that pulls rows in at the front
-            // leaves the hierarchy out of row order. Everything that
-            // walks the tree reads that order: `node.children()`, the
-            // document order selectors resolve against,
-            // `renumber_document_order` and the Tab order it feeds. So
-            // sort the mounted rows back by row index, and move
-            // `win_rows` with them since the keep-path above slices the
-            // children list by its positions.
-            let mut row_order: Vec<usize> = (0..new_win.len()).collect();
-            row_order.sort_unstable_by_key(|&r| new_win[r].0);
-            if row_order.iter().enumerate().any(|(slot, &r)| slot != r) {
-                new_win = row_order.iter().map(|&r| new_win[r].clone()).collect();
-                new_items = row_order.iter().map(|&r| new_items[r].clone()).collect();
-                commands.queue(move |world: &mut World| {
-                    sort_virtual_rows(world, parent_id, body_len, &row_order);
-                });
-            }
-            marker.win_rows = new_win;
-            marker.row_items = new_items;
-            continue;
-        }
-
-        // Build the new key list. If `key_field` is set, pull that field
-        // from each record; otherwise fall back to the item's index.
-        let new_keys: Vec<String> = items
+        // The `(index, key)` pairs the block should show, in row order.
+        // Keys are built for window rows only, never for the whole array.
+        let key_field = marker.key_field.as_deref();
+        let desired: Vec<(usize, String)> = items[window.clone()]
             .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                marker
-                    .key_field
-                    .as_ref()
-                    .and_then(|f| item.get(f).cloned())
-                    .unwrap_or_else(|| i.to_string())
+            .zip(window)
+            .map(|(item, i)| {
+                let key = key_field.and_then(|f| item.get(f).cloned());
+                (i, key.unwrap_or_else(|| i.to_string()))
             })
             .collect();
 
-        let same_keys = new_keys == marker.cached_keys && children.is_some();
-        if same_keys && !arrays_changed {
+        // Steady state: the same rows over the same records.
+        if children.is_some() && marker.rows == desired && !arrays_changed {
             continue;
         }
+        let marker = &mut *marker;
 
         let body_len = marker.body.len();
-        let cached = marker.cached_keys.clone();
-        let appended = cached.len() < new_keys.len() && new_keys[..cached.len()] == cached[..];
-        let trimmed = new_keys.len() < cached.len() && cached[..new_keys.len()] == new_keys[..];
         let kids: Vec<Entity> = children.map(|c| c.iter().collect()).unwrap_or_default();
-
-        // The rows both key lists share sit at the front, `body_len`
-        // children each. One whose record changed follows it in place;
-        // `None` when any of them cannot, and the block rebuilds below.
-        let kept_rows =
-            (same_keys || appended || trimmed).then(|| cached.len().min(new_keys.len()));
-        let aligned = kids.len() == cached.len() * body_len;
-        let followed = kept_rows.and_then(|kept| {
-            let row_template = RowTemplate {
-                body: &marker.body,
-                store: &store,
-                css: row_css,
-            };
-            let mut patches: Vec<RowPatch> = Vec::new();
-            let mut moved = false;
-            for (i, item) in items.iter().enumerate().take(kept) {
-                let was = marker.row_items.get(i);
-                if was == Some(item) {
-                    continue;
-                }
-                moved = true;
-                if !aligned {
-                    return None;
-                }
-                let roots = &kids[i * body_len..(i + 1) * body_len];
-                if !row_template.plan(
-                    roots,
-                    (was, item),
-                    i,
-                    &report_missing,
-                    &lookup,
-                    &mut patches,
-                ) {
-                    return None;
-                }
-            }
-            Some((patches, moved))
-        });
-
-        if let Some((patches, moved)) = followed {
-            if !patches.is_empty() {
-                commands.queue(move |world: &mut World| apply_row_patches(world, patches));
-            }
-            // Append-only: new = cached + tail. Spawn just the tail.
-            if appended {
-                for (i, item) in items.iter().enumerate().skip(cached.len()) {
-                    let scope = Scope::new(&*store)
-                        .with_row(item, i)
-                        .reporting_to(&report_missing);
-                    for tmpl in &marker.body {
-                        let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                        spawn_body_child(
-                            &mut commands,
-                            &inst,
-                            parent_id,
-                            Placeholders::Resolved,
-                            BodyChild::Restyled,
-                        );
-                    }
-                }
-            }
-            // Trim-from-tail: cached = new + tail. Despawn the tail
-            // entities (`body_len` per popped item, last-spawn-first).
-            if trimmed {
-                let drop_count = (cached.len() - new_keys.len()) * body_len;
-                for child in kids.iter().rev().take(drop_count) {
-                    commands.entity(*child).despawn();
-                }
-            }
-            if moved || !same_keys {
-                marker.row_items = items.to_vec();
-            }
-            marker.cached_keys = new_keys;
-            continue;
-        }
-
-        // Fallback: full rebuild. Despawn all children and spawn fresh.
-        // Loses focus / scroll / per-row signal state - same caveat as
-        // pre-alpha7. Triggered only when the diff isn't a clean append or
-        // trim (e.g. midstream insert, reorder, replace).
-        if let Some(kids) = children {
-            for child in kids.iter() {
-                commands.entity(child).despawn();
+        let row_template = RowTemplate {
+            body: &marker.body,
+            store: &store,
+            css: row_css,
+        };
+        let diff = diff_rows(
+            &marker.rows,
+            &marker.row_items,
+            &kids,
+            body_len,
+            &desired,
+            items,
+            &row_template,
+            &report_missing,
+            &lookup,
+        );
+        for &(slot, row) in &diff.moved {
+            let index = desired[slot].0;
+            for &root in &kids[row * body_len..(row + 1) * body_len] {
+                commands
+                    .entity(root)
+                    .queue(move |mut ent: bevy_ecs::world::EntityWorldMut<'_>| {
+                        if windowed {
+                            let slot = virtual_row_slot(index, row_h);
+                            lumen_core::style_overrides::hold_on::<VirtualRow>(&mut ent, slot);
+                        } else {
+                            // A row's place among its siblings is something a
+                            // selector can read (`:nth-child`, `+`), so a moved
+                            // row restyles. A virtualized row's siblings are
+                            // the window, which every scroll shifts, so its
+                            // place says nothing about the list.
+                            ent.insert(lumen_core::components::StyleDirty);
+                        }
+                    });
             }
         }
-        for (i, item) in items.iter().enumerate() {
+        for &child in &diff.dropped {
+            commands.entity(child).despawn();
+        }
+
+        // Cascade-once-per-template (spec section 15.3): a virtualized
+        // block applies the CSS cascade to the body template a single time
+        // and substitutes per-row placeholders into the pre-cascaded clone.
+        // Falls back to per-row cascade when `id` / `class` attrs carry
+        // `{...}` placeholders (selector matching would then depend on the
+        // substituted values).
+        let per_row_cascade = !windowed || body_has_dynamic_selector_attrs(&marker.body);
+        let cached = match (per_row_cascade, row_css) {
+            (true, _) | (false, None) => None,
+            (false, Some(sheet)) => Some(
+                marker
+                    .cascaded_body
+                    .get_or_insert_with(|| {
+                        let cascaded = marker.body.iter().map(|el| {
+                            let mut c = el.clone();
+                            cascade_element_tree(&mut c, sheet);
+                            c
+                        });
+                        std::sync::Arc::new(cascaded.collect())
+                    })
+                    .clone(),
+            ),
+        };
+        let template: &[Element] = cached.as_deref().unwrap_or(&marker.body);
+        for (slot, kept) in diff.slots.iter().enumerate() {
+            if kept.is_some() {
+                continue;
+            }
+            let i = desired[slot].0;
             let scope = Scope::new(&*store)
-                .with_row(item, i)
+                .with_row(&items[i], i)
                 .reporting_to(&report_missing);
-            for tmpl in &marker.body {
-                let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
+            for tmpl in template {
+                let inst = substitute_in_element_with_css(
+                    tmpl,
+                    &scope,
+                    if per_row_cascade { row_css } else { None },
+                );
+                let kind = if windowed {
+                    BodyChild::VirtualRow(Box::new(virtual_row_slot(i, row_h)))
+                } else {
+                    BodyChild::Restyled
+                };
                 spawn_body_child(
                     &mut commands,
                     &inst,
                     parent_id,
                     Placeholders::Resolved,
-                    BodyChild::Restyled,
+                    kind,
                 );
             }
         }
-        marker.cached_keys = new_keys;
-        marker.row_items = items.to_vec();
+        if !diff.patches.is_empty() {
+            let patches = diff.patches;
+            commands.queue(move |world: &mut World| apply_row_patches(world, patches));
+        }
+        // Once this tick's commands land, the kept rows hold the places
+        // they had, in their old order, and the new rows follow them in
+        // row order. Everything that walks the tree reads the child order:
+        // `node.children()`, the document order selectors resolve against,
+        // `renumber_document_order` and the Tab order it feeds. So put the
+        // rows back in row order.
+        if let Some(row_order) = diff.row_order {
+            commands.queue(move |world: &mut World| {
+                sort_rows(world, parent_id, body_len, &row_order);
+            });
+        }
+        marker.row_items = desired.iter().map(|(i, _)| items[*i].clone()).collect();
+        marker.rows = desired;
     }
+}
+
+/// The slot a virtualized row with index `index` sits in inside its block:
+/// pinned at `top = index * row_h` and left = 0, with `width=100%` +
+/// `height=row_h` setting its size. Setting `right` / `bottom` too would
+/// over-constrain taffy (it expects either inset OR size, not both on the
+/// same axis) and the row collapses to content width.
+fn virtual_row_slot(index: usize, row_h: f32) -> StyleValues {
+    StyleValues {
+        position: Some(lumen_core::components::Position::Absolute),
+        inset: Some(lumen_core::components::Edges {
+            top: index as f32 * row_h,
+            right: f32::NAN,
+            bottom: f32::NAN,
+            left: 0.0,
+            ..lumen_core::components::Edges::default()
+        }),
+        height: Some(lumen_core::components::Length::Px(row_h)),
+        width: Some(lumen_core::components::Length::Percent(100.0)),
+        ..StyleValues::default()
+    }
+}
+
+/// Whether a template subtree reads the row index anywhere: a `{$index}`
+/// in one of the strings a substitution resolves.
+fn reads_row_index(el: &Element) -> bool {
+    use lumen_ir::layout_ir::InterpolationSlot;
+    let names_index = |text: &String| {
+        text.split('{').skip(1).any(|token| {
+            token.split_once('}').is_some_and(|(inner, _)| {
+                InterpolationSlot::from(inner) == InterpolationSlot::RowIndex
+            })
+        })
+    };
+    let a = &el.attrs;
+    [
+        &a.text,
+        &a.id,
+        &a.src,
+        &a.style_role,
+        &a.placeholder,
+        &a.drag_payload,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(&a.classes)
+    .chain(
+        el.frag_use
+            .iter()
+            .flat_map(|u| u.args.iter().map(|(_, v)| v)),
+    )
+    .any(names_index)
+        || el.children.iter().any(reads_row_index)
+}
+
+/// How a `<for>` block's mounted rows map onto the rows it should show.
+struct RowDiff {
+    /// Per wanted row, in row order: the mounted row that stays as it, or
+    /// `None` when it mounts.
+    slots: Vec<Option<usize>>,
+    /// `(slot, mounted row)` for every kept row whose index changed.
+    moved: Vec<(usize, usize)>,
+    /// The children of the mounted rows that go.
+    dropped: Vec<Entity>,
+    /// The in-place writes the kept rows need.
+    patches: Vec<RowPatch>,
+    /// `row_order[slot]` is the position, once the kept rows have stayed
+    /// and the new ones were appended, of the row that belongs at `slot`.
+    /// `None` when that is already row order.
+    row_order: Option<Vec<usize>>,
+}
+
+/// Match a block's mounted rows (`rows`, built from `row_items`, each
+/// owning `body_len` consecutive entries of `kids`) to the rows it should
+/// show (`desired`, over `items`), by key.
+#[allow(clippy::too_many_arguments)]
+fn diff_rows(
+    rows: &[(usize, String)],
+    row_items: &[ArrayItem],
+    kids: &[Entity],
+    body_len: usize,
+    desired: &[(usize, String)],
+    items: &[ArrayItem],
+    template: &RowTemplate<'_>,
+    report_missing: &dyn Fn(&str),
+    lookup: &RowLookup<'_, '_>,
+) -> RowDiff {
+    let mut diff = RowDiff {
+        slots: Vec::with_capacity(desired.len()),
+        moved: Vec::new(),
+        dropped: Vec::new(),
+        patches: Vec::new(),
+        row_order: None,
+    };
+    // Every mounted row owns `body_len` consecutive children. If something
+    // else added or removed a child, no row can be found by position, and
+    // every row mounts again.
+    if kids.len() != rows.len() * body_len {
+        diff.dropped = kids.to_vec();
+        diff.slots.resize(desired.len(), None);
+        return diff;
+    }
+    // The first mounted row with each key, and for each row the next one
+    // with the same key, so a key that repeats matches its rows in order.
+    let mut first: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::with_capacity(rows.len());
+    let mut next = vec![usize::MAX; rows.len()];
+    for (row, (_, key)) in rows.iter().enumerate().rev() {
+        if let Some(after) = first.insert(key.as_str(), row) {
+            next[row] = after;
+        }
+    }
+    // A row whose record stayed and whose template never reads `{$index}`
+    // resolves the same at any index, so it moves with nothing to rewrite.
+    let reads_index = template.body.iter().any(reads_row_index);
+    let mut kept = vec![false; rows.len()];
+    for (slot, (index, key)) in desired.iter().enumerate() {
+        let Some(row) = first.get(key.as_str()).copied() else {
+            diff.slots.push(None);
+            continue;
+        };
+        match next[row] {
+            usize::MAX => first.remove(key.as_str()),
+            after => first.insert(key.as_str(), after),
+        };
+        let item = &items[*index];
+        let (was_index, _) = rows[row];
+        let was = row_items.get(row);
+        let follows = (was == Some(item) && (was_index == *index || !reads_index))
+            || template.plan(
+                &kids[row * body_len..(row + 1) * body_len],
+                (was, was_index),
+                (item, *index),
+                report_missing,
+                lookup,
+                &mut diff.patches,
+            );
+        if !follows {
+            diff.slots.push(None);
+            continue;
+        }
+        kept[row] = true;
+        if was_index != *index {
+            diff.moved.push((slot, row));
+        }
+        diff.slots.push(Some(row));
+    }
+    for (row, _) in kept.iter().enumerate().filter(|(_, k)| !**k) {
+        diff.dropped
+            .extend_from_slice(&kids[row * body_len..(row + 1) * body_len]);
+    }
+    // Where each kept row lands once the dropped ones are gone.
+    let mut place = vec![0; rows.len()];
+    let mut staying = 0;
+    for (row, &k) in kept.iter().enumerate() {
+        place[row] = staying;
+        staying += usize::from(k);
+    }
+    let mut appended = staying;
+    let row_order: Vec<usize> = diff
+        .slots
+        .iter()
+        .map(|kept| match kept {
+            Some(row) => place[*row],
+            None => {
+                appended += 1;
+                appended - 1
+            }
+        })
+        .collect();
+    if row_order.iter().enumerate().any(|(slot, &at)| slot != at) {
+        diff.row_order = Some(row_order);
+    }
+    diff
 }
 
 /// Which of an element's placeholder-carrying strings differ between two
@@ -2570,14 +2545,14 @@ struct RowTemplate<'a> {
 
 impl RowTemplate<'_> {
     /// Collect the writes that take a kept row, whose top-level entities
-    /// are `roots`, from the record `old` to `new`, both at `index`.
-    /// `false` when the row cannot follow in place; see
+    /// are `roots`, from the record `old` at `old_index` to `new` at
+    /// `new_index`. `false` when the row cannot follow in place; see
     /// [`plan_row_element`].
     fn plan(
         &self,
         roots: &[Entity],
-        (old, new): (Option<&ArrayItem>, &ArrayItem),
-        index: usize,
+        (old, old_index): (Option<&ArrayItem>, usize),
+        (new, new_index): (&ArrayItem, usize),
         report_missing: &dyn Fn(&str),
         lookup: &RowLookup<'_, '_>,
         out: &mut Vec<RowPatch>,
@@ -2586,9 +2561,9 @@ impl RowTemplate<'_> {
             return false;
         }
         let unknown = ArrayItem::new();
-        let old_scope = Scope::new(self.store).with_row(old.unwrap_or(&unknown), index);
+        let old_scope = Scope::new(self.store).with_row(old.unwrap_or(&unknown), old_index);
         let new_scope = Scope::new(self.store)
-            .with_row(new, index)
+            .with_row(new, new_index)
             .reporting_to(report_missing);
         roots.iter().zip(self.body).all(|(&root, tmpl)| {
             let before = substitute_in_element_with_css(tmpl, &old_scope, self.css);
@@ -2829,13 +2804,13 @@ impl StyleOwner for VirtualRow {
     const RANK: u8 = 20;
 }
 
-/// Put a virtualized `<for>` block's mounted rows back in row-index
-/// order. `row_order[slot]` is the current position of the row that
-/// belongs at `slot`, and every row owns `body_len` consecutive
-/// children. Queued as a command so this tick's row spawns and despawns
-/// have landed by the time it reads the child list, and so the write
-/// lands before [`renumber_document_order`] walks the hierarchy.
-fn sort_virtual_rows(world: &mut World, parent: Entity, body_len: usize, row_order: &[usize]) {
+/// Put a `<for>` block's mounted rows back in row order. `row_order[slot]`
+/// is the current position of the row that belongs at `slot`, and every
+/// row owns `body_len` consecutive children. Queued as a command so this
+/// tick's row spawns and despawns have landed by the time it reads the
+/// child list, and so the write lands before [`renumber_document_order`]
+/// walks the hierarchy.
+fn sort_rows(world: &mut World, parent: Entity, body_len: usize, row_order: &[usize]) {
     let Some(kids) = world
         .get::<bevy_ecs::hierarchy::Children>(parent)
         .map(|c| c.iter().collect::<Vec<Entity>>())
@@ -4047,17 +4022,16 @@ mod virtualized_for_tests {
                     array_name: "rows".into(),
                     body: vec![label],
                     key_field: Some("id".to_string()),
-                    cached_keys: Vec::new(),
                     virtualized: true,
                     row_height: 20.0,
-                    win_rows: Vec::new(),
+                    rows: Vec::new(),
                     cascaded_body: None,
                     row_items: Vec::new(),
                 },
             ))
             .id();
         world.run_system_once(reconcile_for_blocks).unwrap();
-        assert_eq!(world.get::<ForMarker>(block).unwrap().win_rows.len(), 3);
+        assert_eq!(world.get::<ForMarker>(block).unwrap().rows.len(), 3);
 
         // The filter keeps only the last row: it moves to index 0, and the
         // rows mounted at indices 1 and 2 have no record left.
@@ -4065,7 +4039,7 @@ mod virtualized_for_tests {
         world.run_system_once(reconcile_for_blocks).unwrap();
 
         assert_eq!(
-            world.get::<ForMarker>(block).unwrap().win_rows,
+            world.get::<ForMarker>(block).unwrap().rows,
             vec![(0, "2".to_string())]
         );
         let kids: Vec<Entity> = world
@@ -4077,5 +4051,212 @@ mod virtualized_for_tests {
             world.get::<TextContent>(kids[0]).map(|t| t.0.as_str()),
             Some("row 2")
         );
+    }
+}
+
+#[cfg(test)]
+mod keyed_for_tests {
+    //! A `<for>` matches its rows to the array by key: a row whose key
+    //! stays keeps its entities, wherever in the array the key went, and
+    //! only rows whose keys came or went mount or despawn.
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::signals::{ArrayItem, ArraySignals};
+
+    fn rows(keys: &[&str]) -> Vec<ArrayItem> {
+        keys.iter()
+            .map(|k| {
+                let mut m = ArrayItem::default();
+                m.insert("id".to_string(), k.to_string());
+                m.insert("label".to_string(), format!("row {k}"));
+                m
+            })
+            .collect()
+    }
+
+    /// A block over `keys` whose body is one label reading `text`.
+    fn block(
+        keys: &[&str],
+        key_field: Option<&str>,
+        virtualized: bool,
+        text: &str,
+    ) -> (World, Entity) {
+        let mut world = World::new();
+        let mut arrays = ArraySignals::default();
+        arrays.set("rows", rows(keys));
+        world.insert_resource(arrays);
+        world.insert_resource(PropertyStore::default());
+        let mut label = Element {
+            tag: "label".to_string(),
+            ..Element::default()
+        };
+        label.attrs.text = Some(text.to_string());
+        let block = world
+            .spawn((
+                lumen_core::components::Style::default(),
+                ForMarker {
+                    array_name: "rows".into(),
+                    body: vec![label],
+                    key_field: key_field.map(str::to_string),
+                    virtualized,
+                    row_height: 20.0,
+                    rows: Vec::new(),
+                    cascaded_body: None,
+                    row_items: Vec::new(),
+                },
+            ))
+            .id();
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        (world, block)
+    }
+
+    fn set(world: &mut World, keys: &[&str]) {
+        world.resource_mut::<ArraySignals>().set("rows", rows(keys));
+        world.run_system_once(reconcile_for_blocks).unwrap();
+    }
+
+    fn kids(world: &World, block: Entity) -> Vec<Entity> {
+        world
+            .get::<bevy_ecs::hierarchy::Children>(block)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn texts(world: &World, block: Entity) -> Vec<String> {
+        kids(world, block)
+            .into_iter()
+            .map(|e| {
+                world
+                    .get::<TextContent>(e)
+                    .map(|t| t.0.clone())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    fn top(world: &World, e: Entity) -> f32 {
+        world
+            .get::<lumen_core::components::Style>(e)
+            .expect("a style")
+            .inset
+            .top
+    }
+
+    #[test]
+    fn a_key_changing_mid_list_rebuilds_only_its_row() {
+        for virtualized in [false, true] {
+            let (mut world, block) = block(
+                &["a", "b", "c", "d", "e"],
+                Some("id"),
+                virtualized,
+                "{label}",
+            );
+            let before = kids(&world, block);
+            set(&mut world, &["a", "b", "x", "d", "e"]);
+            let after = kids(&world, block);
+            assert_eq!(
+                texts(&world, block),
+                ["row a", "row b", "row x", "row d", "row e"]
+            );
+            for i in [0, 1, 3, 4] {
+                assert_eq!(
+                    after[i], before[i],
+                    "row {i} keeps its entity (virtualized: {virtualized})"
+                );
+            }
+            assert_ne!(after[2], before[2]);
+            assert!(
+                world.get_entity(before[2]).is_err(),
+                "the row whose key went despawns"
+            );
+        }
+    }
+
+    #[test]
+    fn appending_keeps_every_row() {
+        for virtualized in [false, true] {
+            let (mut world, block) = block(&["a", "b"], Some("id"), virtualized, "{label}");
+            let before = kids(&world, block);
+            set(&mut world, &["a", "b", "c"]);
+            let after = kids(&world, block);
+            assert_eq!(after[..2], before[..]);
+            assert_eq!(texts(&world, block), ["row a", "row b", "row c"]);
+        }
+    }
+
+    #[test]
+    fn removing_a_middle_row_keeps_the_rest_and_moves_them_up() {
+        for virtualized in [false, true] {
+            let (mut world, block) = block(
+                &["a", "b", "c", "d"],
+                Some("id"),
+                virtualized,
+                "{label} #{$index}",
+            );
+            let before = kids(&world, block);
+            set(&mut world, &["a", "c", "d"]);
+            let after = kids(&world, block);
+            assert_eq!(after, [before[0], before[2], before[3]]);
+            assert!(world.get_entity(before[1]).is_err());
+            // The moved rows show their new index, and a virtualized row
+            // takes the slot it gives.
+            assert_eq!(texts(&world, block), ["row a #0", "row c #1", "row d #2"]);
+            if virtualized {
+                assert_eq!(top(&world, after[1]), 20.0);
+                assert_eq!(top(&world, after[2]), 40.0);
+            }
+        }
+    }
+
+    #[test]
+    fn inserting_a_middle_row_keeps_the_rest() {
+        for virtualized in [false, true] {
+            let (mut world, block) = block(&["a", "b", "c"], Some("id"), virtualized, "{label}");
+            let before = kids(&world, block);
+            set(&mut world, &["a", "n", "b", "c"]);
+            let after = kids(&world, block);
+            assert_eq!([after[0], after[2], after[3]], before[..]);
+            assert_eq!(texts(&world, block), ["row a", "row n", "row b", "row c"]);
+            if virtualized {
+                assert_eq!(top(&world, after[1]), 20.0);
+                assert_eq!(top(&world, after[3]), 60.0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_reorder_moves_the_rows_it_has() {
+        for virtualized in [false, true] {
+            let (mut world, block) = block(&["a", "b", "c"], Some("id"), virtualized, "{label}");
+            let before = kids(&world, block);
+            set(&mut world, &["c", "a", "b"]);
+            assert_eq!(kids(&world, block), [before[2], before[0], before[1]]);
+            assert_eq!(texts(&world, block), ["row c", "row a", "row b"]);
+            if virtualized {
+                assert_eq!(top(&world, before[2]), 0.0);
+                assert_eq!(top(&world, before[1]), 40.0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_repeated_key_matches_its_rows_in_order() {
+        let (mut world, block) = block(&["a", "a", "b"], Some("id"), false, "{label}");
+        let before = kids(&world, block);
+        set(&mut world, &["b", "a", "a"]);
+        assert_eq!(kids(&world, block), [before[2], before[0], before[1]]);
+    }
+
+    #[test]
+    fn without_a_key_a_row_is_its_position() {
+        let (mut world, block) = block(&["a", "b", "c"], None, false, "{label}");
+        let before = kids(&world, block);
+        set(&mut world, &["c", "a", "b"]);
+        assert_eq!(
+            kids(&world, block),
+            before,
+            "rows follow their records in place"
+        );
+        assert_eq!(texts(&world, block), ["row c", "row a", "row b"]);
     }
 }

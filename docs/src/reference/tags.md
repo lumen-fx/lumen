@@ -870,7 +870,7 @@ column.
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `each` | array signal name | Required for iteration. Without it the children spawn once, unrepeated. |
-| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is kept is updated in place when its record's fields change. |
+| `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is still in the array keeps its elements wherever the key moves, and is updated in place when its record's fields change; only rows whose keys came or went are built or removed. |
 | `virtualized` | `true`, `yes` | Spawn only the rows in the visible scroll window. Needs a `<scroll>` ancestor. |
 | `row-height` | number | Pixel height per virtualized row. Defaults to `32`. |
 
