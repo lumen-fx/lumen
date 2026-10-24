@@ -19,7 +19,8 @@ use lumen_surface_protocol::wire::{
     AdapterId, Api, Buffers, ByeReason, Format, FrameReady, InputEvent, Message, Pacing, Welcome,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -146,11 +147,19 @@ struct Ring<T> {
     textures: Vec<T>,
 }
 
-/// An imported ring not yet accepted, waiting on its first-use work.
-type Preparing = Box<dyn FnMut() -> bool + Send>;
-
-/// How often a session checks on rings it is preparing.
+/// How often a ring's import thread checks on its first-use work, and how
+/// often a session with imports in flight checks for their results.
 const PREPARE_POLL: Duration = Duration::from_millis(5);
+
+/// A ring whose import thread finished: its textures once their first-use
+/// work is done, or why the import failed.
+struct Prepared<T> {
+    generation: u32,
+    /// The device generation the import was made on.
+    device_generation: u64,
+    size: (u32, u32),
+    result: Result<Vec<T>, String>,
+}
 
 /// The connection to the producer, while there is one.
 struct Link {
@@ -529,10 +538,11 @@ pub trait Backend: Send + Sync + 'static {
     fn generation(&self) -> u64;
 
     /// Import a ring's buffers from their descriptors, one texture each.
-    /// The ring is accepted once [`Imported::ready`] says the first-use work
-    /// the import started has finished; until then the session keeps
-    /// serving, so a slow GPU delays the answer without stalling the
-    /// connection.
+    /// Runs on a thread of its own, which may block (on a GPU busy with
+    /// another frame, say), and the ring is accepted once [`Imported::ready`]
+    /// says the first-use work the import started has finished. The session
+    /// keeps serving meanwhile, so a slow GPU delays the answer without
+    /// stalling the connection.
     ///
     /// # Errors
     ///
@@ -617,7 +627,7 @@ fn run<B: Backend>(listener: Listener, shared: Arc<Shared>, backend: Arc<B>) {
                 let (shared, backend) = (shared.clone(), backend.clone());
                 let spawned = std::thread::Builder::new()
                     .name(format!("lumen-surface {} producer", shared.id))
-                    .spawn(move || serve(&shared, &*backend, sender, receiver));
+                    .spawn(move || serve(&shared, &backend, sender, receiver));
                 if spawned.is_err() {
                     std::thread::sleep(POLL);
                 }
@@ -655,7 +665,12 @@ struct Ended {
 }
 
 /// Serve one producer from its hello to its end.
-fn serve<B: Backend>(shared: &Arc<Shared>, backend: &B, sender: Sender, mut receiver: Receiver) {
+fn serve<B: Backend>(
+    shared: &Arc<Shared>,
+    backend: &Arc<B>,
+    sender: Sender,
+    mut receiver: Receiver,
+) {
     let hello = match receiver.recv(Some(HELLO_TIMEOUT)) {
         Ok(Received::Message(Message::Hello(hello), _)) => hello,
         _ => return,
@@ -747,16 +762,66 @@ fn serve<B: Backend>(shared: &Arc<Shared>, backend: &B, sender: Sender, mut rece
     shared.wake();
 }
 
+/// Sets a flag when dropped: tells a session's import threads that nobody
+/// waits for their results any more.
+struct Abandon(Arc<AtomicBool>);
+
+impl Drop for Abandon {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// Import a ring on a thread of its own and wait there for its first-use
+/// work, sending the result to `done`. An import talks to the GPU, and a
+/// device busy with the renderer's frame (a software rasterizer compiling
+/// its shaders, say) can hold every submission back for seconds; the
+/// session's own thread keeps reading and pinging meanwhile, so the waiting
+/// producer hears from it and does not give up.
+fn start_import<B: Backend>(
+    backend: &Arc<B>,
+    buffers: Buffers,
+    fds: Vec<Handle>,
+    device_generation: u64,
+    gone: &Arc<AtomicBool>,
+    done: &mpsc::Sender<Prepared<B::Texture>>,
+) -> Result<(), String> {
+    let (backend, gone, done) = (backend.clone(), gone.clone(), done.clone());
+    std::thread::Builder::new()
+        .name("lumen-surface import".into())
+        .spawn(move || {
+            let result = backend.import(&buffers, fds).and_then(|mut imported| {
+                while !(imported.ready)() {
+                    if gone.load(Ordering::Acquire) {
+                        return Err("the session ended".into());
+                    }
+                    std::thread::sleep(PREPARE_POLL);
+                }
+                Ok(imported.textures)
+            });
+            let _ = done.send(Prepared {
+                generation: buffers.generation,
+                device_generation,
+                size: (buffers.width, buffers.height),
+                result,
+            });
+        })
+        .map(drop)
+        .map_err(|e| format!("could not start importing the ring: {e}"))
+}
+
 /// Read the producer's messages until the connection ends.
 fn pump<B: Backend>(
     shared: &Arc<Shared>,
-    backend: &B,
+    backend: &Arc<B>,
     sender: &Sender,
     receiver: &mut Receiver,
     session: u64,
 ) -> Ended {
     let mut rings: HashMap<u32, Ring<B::Texture>> = HashMap::new();
-    let mut preparing: HashMap<u32, Preparing> = HashMap::new();
+    let (done, prepared) = mpsc::channel::<Prepared<B::Texture>>();
+    let abandon = Abandon(Arc::new(AtomicBool::new(false)));
+    let mut importing = 0usize;
     let mut device_generation = backend.generation();
     let mut last_heard = Instant::now();
     let mut pinged: Option<Instant> = None;
@@ -779,7 +844,6 @@ fn pump<B: Backend>(
             // for a new ring on the new one.
             device_generation = backend.generation();
             rings.clear();
-            preparing.clear();
             {
                 let mut inner = shared.lock();
                 inner.ring_ready = false;
@@ -788,27 +852,36 @@ fn pump<B: Backend>(
             }
             let _ = sender.send(&Message::Reset { device_generation }, &[]);
         }
-        // Accept each ring whose first-use work has finished.
-        let done: Vec<u32> = preparing
-            .iter_mut()
-            .filter_map(|(generation, ready)| ready().then_some(*generation))
-            .collect();
-        for generation in done {
-            preparing.remove(&generation);
-            if sender
-                .send(&Message::BuffersAccepted { generation }, &[])
-                .is_ok()
-            {
-                let mut inner = shared.lock();
-                inner.ring_ready = true;
-                Shared::ask_locked(&mut inner);
+        // Answer each ring whose import has finished. One made on a device
+        // that has gone since is dropped: the reset asked for a new ring.
+        while let Ok(ring) = prepared.try_recv() {
+            importing -= 1;
+            if ring.device_generation != device_generation {
+                continue;
+            }
+            let generation = ring.generation;
+            match ring.result {
+                Ok(textures) => {
+                    rings.insert(
+                        generation,
+                        Ring {
+                            size: ring.size,
+                            textures,
+                        },
+                    );
+                    if sender
+                        .send(&Message::BuffersAccepted { generation }, &[])
+                        .is_ok()
+                    {
+                        let mut inner = shared.lock();
+                        inner.ring_ready = true;
+                        Shared::ask_locked(&mut inner);
+                    }
+                }
+                Err(detail) => reject_ring(shared, sender, generation, detail),
             }
         }
-        let wait = if preparing.is_empty() {
-            POLL
-        } else {
-            PREPARE_POLL
-        };
+        let wait = if importing == 0 { POLL } else { PREPARE_POLL };
         let received = match receiver.recv(Some(wait)) {
             Ok(r) => r,
             Err(e) => {
@@ -844,37 +917,22 @@ fn pump<B: Backend>(
                         let generation = buffers.generation;
                         let identities = fds.iter().filter_map(identity).collect();
                         *shared.buffers.lock().unwrap_or_else(|e| e.into_inner()) = identities;
-                        match backend.import(&buffers, fds) {
-                            Ok(imported) => {
-                                rings.insert(
-                                    generation,
-                                    Ring {
-                                        size: (buffers.width, buffers.height),
-                                        textures: imported.textures,
-                                    },
-                                );
-                                // Accepted at the top of the loop once ready,
-                                // which for most backends is this pass.
-                                preparing.insert(generation, imported.ready);
-                            }
-                            Err(detail) => {
-                                let _ = sender.send(
-                                    &Message::BuffersRejected {
-                                        generation,
-                                        reason: 1,
-                                        detail: detail.clone(),
-                                    },
-                                    &[],
-                                );
-                                shared.happen(Happened::Error {
-                                    reason: "import",
-                                    detail,
-                                });
-                            }
+                        // Accepted at the top of the loop once its import
+                        // thread is done.
+                        match start_import(
+                            backend,
+                            buffers,
+                            fds,
+                            device_generation,
+                            &abandon.0,
+                            &done,
+                        ) {
+                            Ok(()) => importing += 1,
+                            Err(detail) => reject_ring(shared, sender, generation, detail),
                         }
                     }
                     Message::FrameReady(frame) => {
-                        show(shared, backend, sender, &mut rings, frame, session, now);
+                        show(shared, &**backend, sender, &mut rings, frame, session, now);
                     }
                     Message::Cursor { keyword } => shared.happen(Happened::Cursor(
                         lumen_surface_protocol::wire::cursor::keyword(keyword),
@@ -917,6 +975,22 @@ fn pump<B: Backend>(
         // Retire every older ring all of whose slots have come back.
         retire(shared, sender, &mut rings);
     }
+}
+
+/// Refuse a ring the consumer could not import.
+fn reject_ring(shared: &Shared, sender: &Sender, generation: u32, detail: String) {
+    let _ = sender.send(
+        &Message::BuffersRejected {
+            generation,
+            reason: 1,
+            detail: detail.clone(),
+        },
+        &[],
+    );
+    shared.happen(Happened::Error {
+        reason: "import",
+        detail,
+    });
 }
 
 /// Show a finished frame and record it.
