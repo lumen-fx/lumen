@@ -65,7 +65,9 @@ names it, and a producer started on another one is refused with the reason.
 The surface asks for frames at the size of its box in device pixels, so each
 frame pixel lands on one screen pixel, and asks again when the box changes;
 `surfaceresize` says when it did. Until the new frames arrive the surface
-shows the last one, placed by `object-fit`.
+shows the last one, placed by `object-fit`. A surface with no box
+(`display: none`) keeps the size it asked for last, so the producer's frames
+fit again as soon as it shows.
 
 By default the producer renders one frame for each frame the surface shows,
 and none while nobody can see the surface: a hidden element, a covered or

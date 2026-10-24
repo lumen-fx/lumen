@@ -254,7 +254,8 @@ processes.
 ### Resize
 
 C sends `Resize` when the size it wants changes, at most once per frame it
-shows. P allocates a new ring at the next generation and sends `Buffers`.
+shows. An element that is hidden and has no size sends only `Visibility`; the
+size it wants stays what it was. P allocates a new ring at the next generation and sends `Buffers`.
 C keeps showing the old generation's newest frame until the first frame of
 the new one arrives. Once every slot of an older generation is back and none
 will be shown again, C sends `RetireGeneration` and P frees that ring.
