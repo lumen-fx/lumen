@@ -21,12 +21,19 @@
 //!
 //! Threshold is configured via [`DragConfig`] (default 4 px).
 //!
+//! A drag outlives the entity it started on: when that entity despawns
+//! mid-drag (a list row rebuilt under the pointer), the release still ends
+//! the drag with a `DragEndEvent` naming it, so whatever opened a session
+//! on the drag start (an in-app drop) closes it.
+//!
 //! Reads `PointerPressed` from `lumen-input::dispatch_clicks` indirectly:
 //! we look at entities that gain [`Pressed`] (so the existing dispatch
 //! pipeline already filters to the hovered entity).
 
+use bevy_ecs::lifecycle::HookContext;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
+use bevy_ecs::world::DeferredWorld;
 use glam::Vec2;
 use lumen_core::prelude::*;
 
@@ -57,6 +64,7 @@ impl Default for DragConfig {
 
 /// Per-entity drag state. Attached on Pressed insert, removed on release.
 #[derive(Component, Clone, Copy, Debug)]
+#[component(on_despawn = orphan_active_drag)]
 pub enum DragState {
     /// Press observed; drag not yet started.
     Pending {
@@ -73,6 +81,26 @@ pub enum DragState {
     },
 }
 
+/// An active drag whose entity despawned before the release: the release
+/// still ends it, see [`release_drag_on_unpress`].
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct OrphanedDrag(pub Option<Entity>);
+
+/// `DragState`'s despawn hook: an active drag hands its entity to
+/// [`OrphanedDrag`], since the component that would have ended it goes
+/// with the entity.
+fn orphan_active_drag(mut world: DeferredWorld, ctx: HookContext) {
+    if !matches!(
+        world.get::<DragState>(ctx.entity),
+        Some(DragState::Active { .. })
+    ) {
+        return;
+    }
+    if let Some(mut orphan) = world.get_resource_mut::<OrphanedDrag>() {
+        orphan.0 = Some(ctx.entity);
+    }
+}
+
 /// Plugin: installs [`DragConfig`] and registers the three drag systems.
 #[derive(Default)]
 pub struct DragPlugin {
@@ -83,6 +111,7 @@ pub struct DragPlugin {
 impl Plugin for DragPlugin {
     fn build(self, app: &mut App) {
         app.world.insert_resource(self.config);
+        app.world.init_resource::<OrphanedDrag>();
         // attach_drag_pending must run AFTER lumen-input::dispatch_clicks
         // because that's where Pressed is inserted (via Commands; deferred).
         // The .after() pulls in an ApplyDeferred sync point so attach can
@@ -190,14 +219,27 @@ pub fn update_drag_on_move(
 }
 
 /// On Pressed -> not-Pressed: remove `DragState`; if it was `Active`, emit
-/// `DragEndEvent` with the final pointer position.
+/// `DragEndEvent` with the final pointer position. An [`OrphanedDrag`]
+/// ends on the primary pointer's release or cancel, the edges that take
+/// `Pressed` off a live entity.
 pub fn release_drag_on_unpress(
     mut commands: Commands,
     pointer: Res<PointerState>,
     released: Query<(Entity, &DragState), Without<Pressed>>,
+    mut orphan: ResMut<OrphanedDrag>,
+    mut releases: MessageReader<PointerReleased>,
+    mut cancels: MessageReader<PointerCancelled>,
     mut ends: MessageWriter<DragEndEvent>,
 ) {
     let p = pointer.position.unwrap_or(Vec2::ZERO);
+    let lifted = releases.read().any(PointerReleased::is_primary)
+        | cancels.read().any(|c| c.pointer.is_primary);
+    if lifted && let Some(entity) = orphan.0.take() {
+        ends.write(DragEndEvent {
+            entity,
+            position: p,
+        });
+    }
     for (entity, state) in &released {
         if let DragState::Active { .. } = state {
             ends.write(DragEndEvent {

@@ -605,3 +605,51 @@ fn a_menu_bar_shortcut_reaches_its_item_in_a_window_app() {
         .collect();
     assert_eq!(clicked, vec!["open"]);
 }
+
+/// A drag ends on release even when the entity it started on despawned
+/// mid-drag, as a `<for>` row rebuilt under the pointer does: whatever
+/// opened a session on the drag start (an in-app drop) is waiting for the
+/// end.
+#[test]
+fn a_drag_ends_on_release_after_its_entity_despawns() {
+    let mut app = test_app();
+    let cell = app
+        .world
+        .spawn((
+            Transform::new(glam::Vec2::ZERO, glam::Vec2::new(100.0, 40.0)),
+            Visuals::default(),
+        ))
+        .id();
+    let grab = glam::Vec2::new(20.0, 20.0);
+    move_pointer(&mut app.world, grab);
+    app.tick();
+    press(&mut app.world, grab);
+    app.tick();
+    move_pointer(&mut app.world, glam::Vec2::new(60.0, 20.0));
+    settle(&mut app);
+    assert!(
+        matches!(
+            app.world.get::<lumen_primitives::drag::DragState>(cell),
+            Some(lumen_primitives::drag::DragState::Active { .. })
+        ),
+        "precondition: the drag is under way"
+    );
+
+    app.world.despawn(cell);
+    let mut ends = app
+        .world
+        .resource::<Messages<DragEndEvent>>()
+        .get_cursor_current();
+    release(&mut app.world, glam::Vec2::new(70.0, 20.0));
+    settle(&mut app);
+
+    let ended: Vec<Entity> = ends
+        .read(app.world.resource::<Messages<DragEndEvent>>())
+        .map(|e| e.entity)
+        .collect();
+    assert_eq!(
+        ended,
+        [cell],
+        "the release ends the drag the despawned entity started"
+    );
+}
