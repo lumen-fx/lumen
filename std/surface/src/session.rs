@@ -183,6 +183,9 @@ struct Inner {
     visible: bool,
     /// When the frame request in flight was sent.
     requested_at: Option<Instant>,
+    /// A frame is wanted once this tick's input has gone (see
+    /// [`Shared::ask_after_input`]).
+    ask_after_input: bool,
     request_seq: u64,
     /// A ring was accepted on this connection, so frames may be asked for.
     ring_ready: bool,
@@ -399,7 +402,26 @@ impl Shared {
         Self::ask_locked(&mut self.lock());
     }
 
+    /// Ask for the next frame after the input of this tick has gone: the
+    /// request goes out with the next [`Self::send_input`], or at
+    /// [`Self::send_asked`] when there is none. A producer that starts a
+    /// frame the moment it is asked for then draws it with that input,
+    /// instead of showing it a frame later.
+    pub fn ask_after_input(&self) {
+        self.lock().ask_after_input = true;
+    }
+
+    /// Send the request [`Self::ask_after_input`] held back, if input did not
+    /// carry it already.
+    pub fn send_asked(&self) {
+        let mut inner = self.lock();
+        if std::mem::take(&mut inner.ask_after_input) {
+            Self::ask_locked(&mut inner);
+        }
+    }
+
     fn ask_locked(inner: &mut Inner) {
+        inner.ask_after_input = false;
         if inner.pacing != Pacing::Paced
             || !inner.visible
             || !inner.ring_ready
@@ -595,6 +617,7 @@ pub fn start<B: Backend>(id: &str, channel: &str, backend: Arc<B>) -> std::io::R
             pacing: Pacing::Paced,
             visible: true,
             requested_at: None,
+            ask_after_input: false,
             request_seq: 0,
             ring_ready: false,
             input_seq: 0,
