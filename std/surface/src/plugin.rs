@@ -361,9 +361,12 @@ fn sync_surfaces(
             shared.set_unsupported("the app renders on the CPU, which cannot show shared frames");
         }
         // The size the producer is asked for: the element's box in device
-        // pixels, so each frame texel lands on one screen pixel.
+        // pixels, so each frame texel lands on one screen pixel. A box with
+        // no area (`display: none`) keeps the size asked last: the element
+        // is hidden, which the visibility message says, and its frames come
+        // back at that size when it shows again.
         let scale = viewports.of(entity).map_or(1.0, |v| v.scale_factor);
-        if let Some(t) = transform {
+        if let Some(t) = transform.filter(|t| t.size.x > 0.0 && t.size.y > 0.0) {
             let wanted = Wanted {
                 width: (t.size.x * scale).round().max(1.0) as u32,
                 height: (t.size.y * scale).round().max(1.0) as u32,

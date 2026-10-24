@@ -315,6 +315,38 @@ fn the_cpu_renderer_leaves_a_surface_unsupported() {
     app.tick();
 }
 
+/// A surface whose box goes away (`display: none`, another tab in front)
+/// keeps asking for the size it had: hiding it is the visibility message's
+/// job, and a producer asked for one-pixel frames would reallocate twice for
+/// nothing. The size follows the box again once it has one.
+#[test]
+fn a_hidden_surface_keeps_the_size_it_wants() {
+    let _serial = serial();
+    let mut app = App::new();
+    app.add_plugin(CpuRendererPlugin::new(W, H));
+    app.add_plugin(SurfacePlugin::default());
+    let e = spawn_surface(&mut app, "hidden", (0.0, 0.0), (64.0, 48.0));
+    app.tick();
+    let producer = Surfaces.loopback("hidden").expect("registered");
+    assert_eq!(producer.wanted_size(), (64, 48));
+    app.world.get_mut::<Transform>(e).unwrap().size = glam::Vec2::ZERO;
+    app.tick();
+    assert_eq!(
+        producer.wanted_size(),
+        (64, 48),
+        "hidden, it keeps its size"
+    );
+    app.world.get_mut::<Transform>(e).unwrap().size = glam::Vec2::new(32.0, 24.0);
+    app.tick();
+    assert_eq!(
+        producer.wanted_size(),
+        (32, 24),
+        "shown, it follows its box"
+    );
+    app.world.despawn(e);
+    app.tick();
+}
+
 /// The reference producer in C, through the Unix transport and Vulkan memory
 /// export: the cross-process path this build ships on Linux.
 #[cfg(target_os = "linux")]
