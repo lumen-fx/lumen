@@ -244,7 +244,9 @@ processes.
   most one outstanding at a time, and P renders one frame per request. The
   consumer asks once per frame it shows while the surface can be seen, and
   again when input arrives or its app asks, so the producer renders at the
-  consumer's display rate and stops when nobody looks.
+  consumer's display rate and stops when nobody looks. C sends the input it
+  has before the request that follows it, so a producer that starts a frame
+  as soon as it is asked draws that input into it.
 - *Free*: P renders at its own rate into a ring of up to four; C shows the
   newest and releases the rest. No requests are sent.
 - `Visibility`: C says when nobody can see the surface (hidden, scrolled

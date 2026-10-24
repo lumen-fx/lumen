@@ -160,7 +160,8 @@ impl Plugin for SurfacePlugin {
         );
         app.add_systems(
             TickStage::Systems,
-            forward_input
+            (forward_input, ask_for_frames)
+                .chain()
                 .in_set(SurfaceSet::Input)
                 .after(SurfaceSet::Sync)
                 .after(lumen_module::lumen_input::pointer_lock::grant_pointer_lock),
@@ -407,7 +408,8 @@ fn sync_surfaces(
             if let Some(fd) = frame_dirty.as_deref_mut() {
                 fd.present = true;
             }
-            shared.request_frame();
+            // Asked for once this tick's input went out ([`ask_for_frames`]).
+            shared.ask_after_input();
         }
         for what in happened {
             report(
@@ -428,6 +430,14 @@ fn sync_surfaces(
                 fd.dirty = true;
             }
         }
+    }
+}
+
+/// Ask each producer whose frame showed this tick for its next one, now
+/// that the tick's input has gone ahead of the request.
+fn ask_for_frames(elements: Query<&SurfaceElement>) {
+    for element in &elements {
+        element.shared.send_asked();
     }
 }
 
