@@ -624,7 +624,9 @@ fn resolve_asset_paths_under(el: &mut Element, dir: &Path, extra_roots: &[PathBu
         && let Some(src) = &el.attrs.src
     {
         let p = Path::new(src);
-        if p.is_relative() {
+        // A `src` a placeholder fills in is resolved once it holds its
+        // value, when the element is built: the value may be absolute.
+        if p.is_relative() && !src.contains('{') {
             // Prefer the app dir first; fall back to extra `asset_roots`
             // from lumen.toml in declared order. We only swap to an extra
             // root if a file actually exists there - keeps the default
@@ -676,6 +678,15 @@ mod tests {
             .join("tracker")
             .join("icons/gear.png");
         assert_eq!(el.attrs.src.as_deref(), expected.to_str());
+    }
+
+    /// A `src` a placeholder fills in is left for the element's build to
+    /// resolve: the value it will hold may be absolute.
+    #[test]
+    fn a_placeholder_src_is_left_as_written() {
+        let mut el = image("{row.thumb}");
+        resolve_asset_paths(&mut el, Path::new("tracker"), &[]);
+        assert_eq!(el.attrs.src.as_deref(), Some("{row.thumb}"));
     }
 
     /// `lumenc build tracker` then `lumenc run --artifact ... tracker`: the
