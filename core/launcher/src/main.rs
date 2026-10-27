@@ -40,6 +40,8 @@ use lumen_canvas as _;
 #[cfg(feature = "static-run")]
 use lumen_cookie as _;
 #[cfg(feature = "static-run")]
+use lumen_dock as _;
+#[cfg(feature = "static-run")]
 use lumen_download as _;
 #[cfg(feature = "static-run")]
 use lumen_fs as _;

@@ -41,6 +41,7 @@ lumen-browser = { workspace = true, optional = true }
 lumen-candela = { workspace = true, optional = true }
 lumen-canvas = { workspace = true, optional = true }
 lumen-cookie = { workspace = true, optional = true }
+lumen-dock = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
 lumen-fs = { workspace = true, optional = true }
 lumen-js = { workspace = true, optional = true }
@@ -62,6 +63,7 @@ static-run = [
     "dep:lumen-candela",
     "dep:lumen-canvas",
     "dep:lumen-cookie",
+    "dep:lumen-dock",
     "dep:lumen-download",
     "dep:lumen-fs",
     "dep:lumen-js",
