@@ -9,12 +9,13 @@ use bevy_ecs::prelude::*;
 use lumen_dock_model::{Effect, Where};
 use lumen_module::ModuleConfig;
 use lumen_module::lumen_core::app::{App, Plugin};
+use lumen_module::lumen_core::components::Transform;
 use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, LumenAttributes, LumenClasses, StyleDirty,
 };
 use lumen_module::lumen_core::input::{
     ClickEvent, ContextMenuEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
-    FocusTracker, Key, KeyPressed, NamedKey, PointerButton, WindowFocused,
+    FocusTracker, Key, KeyPressed, MouseWheel, NamedKey, PointerButton, WindowFocused,
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
@@ -192,6 +193,7 @@ impl Plugin for DockPlugin {
         message::<DragStartEvent>(&mut app.world);
         message::<DragMoveEvent>(&mut app.world);
         message::<DragEndEvent>(&mut app.world);
+        message::<MouseWheel>(&mut app.world);
         message::<SurfaceDragEvent>(&mut app.world);
         message::<SurfaceDragRequest>(&mut app.world);
         install_observers(&mut app.world);
@@ -250,6 +252,7 @@ impl Plugin for DockPlugin {
                 .pipe(show_with_the_primary)
                 .pipe(save_if_due)
                 .pipe(decorate_tabs)
+                .pipe(strip_gate)
                 .pipe(focus_gate)
                 .run_if(report_due)
                 .in_set(DockSet::Report)
@@ -310,7 +313,8 @@ fn input_due(mut due: InputDue) -> bool {
         || !due.arrivals.new.is_empty()
         || !due.arrivals.gone.is_empty()
         || !due.arrivals.waiting.is_empty()
-        || (due.menu.pending.is_some() && due.nav.is_none_or(|n| n.0.is_none()))
+        || ((due.menu.pending.is_some() || due.menu.show.is_some())
+            && due.nav.is_none_or(|n| n.0.is_none()))
         || due.shared.lock().dirty
 }
 
@@ -326,6 +330,33 @@ struct ReportDue<'w, 's> {
     windows: Query<'w, 's, (), With<DockWindow>>,
     moved: Query<'w, 's, (), (With<DockWindow>, WindowMoved)>,
     primary: Query<'w, 's, (), (With<PrimaryWindow>, Changed<Window>)>,
+    strips: StripsChanged<'w, 's>,
+}
+
+/// A dock tab's strip button that moved, resized or changed its classes.
+type TabButtonChanged = (
+    With<DockTabButton>,
+    Or<(Changed<Transform>, Changed<LumenClasses>)>,
+);
+
+/// What makes a tab strip fit itself again: it or one of its tabs moved or
+/// resized, the shown tab changed, or the wheel turned.
+#[derive(bevy_ecs::system::SystemParam)]
+struct StripsChanged<'w, 's> {
+    strips: Query<'w, 's, (), (With<crate::overflow::DockStrip>, Changed<Transform>)>,
+    tabs: Query<'w, 's, (), TabButtonChanged>,
+    wheels: MessageReader<'w, 's, MouseWheel>,
+}
+
+impl StripsChanged<'_, '_> {
+    /// Whether anything changed, and the wheel turns this tick.
+    fn read(&mut self) -> (bool, Vec<MouseWheel>) {
+        let wheels: Vec<MouseWheel> = self.wheels.read().copied().collect();
+        (
+            !self.strips.is_empty() || !self.tabs.is_empty() || !wheels.is_empty(),
+            wheels,
+        )
+    }
 }
 
 fn report_due(mut due: ReportDue) -> bool {
@@ -342,6 +373,38 @@ fn report_due(mut due: ReportDue) -> bool {
         || due.focus.is_changed()
         || !due.new_tabs.is_empty()
         || (!due.windows.is_empty() && (!due.moved.is_empty() || !due.primary.is_empty()))
+        || due.strips.read().0
+}
+
+/// Queue the strips to fit themselves to their tabs when one changed, and
+/// a wheel turn over one to scroll it.
+fn strip_gate(_: In<()>, mut changed: StripsChanged, mut commands: Commands) {
+    let (due, wheels) = changed.read();
+    if !due {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        // A wheel turn over a strip scrolls it along, whichever way it
+        // turned.
+        let mut q =
+            world.query_filtered::<Entity, With<lumen_module::lumen_core::input::Hovered>>();
+        let hovered: Vec<Entity> = q.iter(world).collect();
+        let strip = hovered
+            .into_iter()
+            .find_map(|h| crate::overflow::strip_under(world, h));
+        let turn: f32 = wheels
+            .iter()
+            .map(|w| {
+                if w.delta.x.abs() > w.delta.y.abs() {
+                    w.delta.x
+                } else {
+                    w.delta.y
+                }
+            })
+            .sum();
+        let wheel = strip.filter(|_| turn != 0.0).map(|s| (s, turn));
+        crate::overflow::fit_strips(world, wheel);
+    });
 }
 
 /// Queue the elements the page added to be read.
@@ -400,12 +463,14 @@ fn drag_gate(
         .collect();
     let started = !inputs.is_empty();
     if drag.active() || started {
+        // Escape first: the press it cancels may end on the same tick, and
+        // that end must not land the drag.
+        if keys.read().any(|k| k.key == Key::Named(NamedKey::Escape)) {
+            inputs.insert(usize::from(started), DragInput::Escape);
+        }
         inputs.extend(moves.read().map(|m| DragInput::Moved(m.position)));
         inputs.extend(ends.read().map(|e| DragInput::Ended(e.position)));
         inputs.extend(seam.read().map(|e| DragInput::Seam(*e)));
-        if keys.read().any(|k| k.key == Key::Named(NamedKey::Escape)) {
-            inputs.push(DragInput::Escape);
-        }
     } else {
         moves.clear();
         ends.clear();
@@ -417,12 +482,20 @@ fn drag_gate(
     }
 }
 
-/// Queue the focus move or the panel removal the dock owes.
+/// Queue the focus move or the panel removal the dock owes, and the
+/// elements to follow a change the report itself made (a slid-out panel
+/// focus left).
 fn focus_gate(_: In<()>, shared: Res<Shared>, mut commands: Commands) {
-    let due = {
+    let (due, dirty) = {
         let core = shared.lock();
-        core.focus_request.is_some() || !core.destroy.is_empty()
+        (
+            core.focus_request.is_some() || !core.destroy.is_empty(),
+            core.dirty,
+        )
     };
+    if dirty {
+        commands.queue(realize);
+    }
     if due {
         commands.queue(crate::keys::focus_requests);
     }
@@ -450,6 +523,26 @@ fn menu_action(
             Ok(())
         }
         MenuAction::Detach => core.op_detach(panel, Reason::User),
+        MenuAction::Float => {
+            // Each new float a little below and right of the last.
+            let n = core
+                .ws
+                .docks
+                .values()
+                .map(|d| d.floats.len())
+                .sum::<usize>() as f32;
+            let rect = lumen_dock_model::Rect {
+                x: 48.0 + 24.0 * n,
+                y: 48.0 + 24.0 * n,
+                w: 360.0,
+                h: 260.0,
+            };
+            core.op_float(panel, rect, Reason::User)
+        }
+        MenuAction::Pin => {
+            let edge = crate::api::nearest_edge(&core.ws, panel);
+            core.op_pin(panel, edge, Reason::User)
+        }
         MenuAction::DetachGroup => core.op_detach_group(panel, Reason::User),
         MenuAction::Attach => core.op_attach(panel, Reason::User),
         MenuAction::Maximize => core.op_maximize(panel, Reason::User),
@@ -500,6 +593,7 @@ struct UserInput<'w, 's> {
     resized: MessageReader<'w, 's, SplitResized>,
     closing: MessageReader<'w, 's, WindowClosing>,
     delivered: MessageReader<'w, 's, CustomEventDelivered>,
+    windows: Query<'w, 's, &'static DockWindow>,
 }
 
 /// Read what the user did to the dock this tick: a tab picked, a close
@@ -516,12 +610,12 @@ fn user_input(
         Query<&DockCloseButton>,
         Query<&ChildOf>,
     ),
-    windows: Query<&DockWindow>,
     (menu_items, mut tab_menu, nav): (
         Query<&DockMenuItem>,
         ResMut<TabMenu>,
         Option<Res<ActivePopupNav>>,
     ),
+    mut frame: FrameQueries,
 ) {
     let UserInput {
         clicks,
@@ -529,8 +623,10 @@ fn user_input(
         resized,
         closing,
         delivered,
+        windows,
     } = &mut input;
     let mut core = shared.lock();
+    let menu_closed = nav.is_none_or(|n| n.0.is_none());
     // A tab the user picked becomes the stack's showing panel.
     for (stack, tabs) in &picked {
         let Some(panel) = tabs.shown.and_then(|t| dock_tabs.get(t).ok()) else {
@@ -547,17 +643,31 @@ fn user_input(
     }
     // A tab menu item does what it says once the menu has closed and handed
     // focus back to the tab it opened on: the move may rebuild that tab.
-    if nav.is_none_or(|n| n.0.is_none())
+    if menu_closed
         && let Some(action) = tab_menu.pending.take()
         && let Some(panel) = tab_menu.panel.clone()
     {
         menu_action(&mut core, &mut events, action, &panel);
+    }
+    // A tab picked from a stack's overflow list shows, once the list closed.
+    if menu_closed && let Some(panel) = tab_menu.show.take() {
+        let _ = core.op_activate(&panel, Reason::User);
+        core.focus_request = Some(panel);
     }
     // A close button, or a middle click on a tab, asks to close the panel;
     // a tab menu item waits for its menu to close.
     for click in clicks.read() {
         if let Some(action) = crate::menu::item_action(&menu_items, &parents, click.entity) {
             tab_menu.pending = Some(action);
+            continue;
+        }
+        if let Some(panel) =
+            crate::overflow::item_panel(&frame.overflow_items, &parents, click.entity)
+        {
+            tab_menu.show = Some(panel);
+            continue;
+        }
+        if frame.click(&mut core, &parents, click.entity) {
             continue;
         }
         let panel = match close_buttons.get(click.entity) {
@@ -598,10 +708,15 @@ fn user_input(
             let _ = core.op_close(&panel, Reason::User);
         }
     }
-    // A double click on a window's strip docks the window back.
+    // A double click on a window's strip docks the window back, on a
+    // float's its panels.
     for double in doubles.read() {
         let mut cur = Some(double.entity);
         while let Some(e) = cur {
+            if let Ok(f) = frame.floats.get(e) {
+                core.op_attach_float(&f.id, Reason::User);
+                break;
+            }
             if let Some(panel) = panel_of_button(e, &buttons, &dock_tabs)
                 && let Where::Window(w) = core.ws.where_is(&panel)
             {
@@ -635,6 +750,99 @@ fn user_input(
     }
 }
 
+/// A slid-out panel's element, or a pinned panel's button: where focus may
+/// go without sliding the panel back in.
+type SlideOutParts = Or<(
+    With<crate::frame::DockSlideOut>,
+    With<crate::frame::DockPinButton>,
+)>;
+
+/// The parts of the dock's frame a click can land on.
+#[derive(bevy_ecs::system::SystemParam)]
+struct FrameQueries<'w, 's> {
+    pins: Query<'w, 's, &'static crate::frame::DockPinButton>,
+    unpins: Query<'w, 's, &'static crate::frame::DockUnpinButton>,
+    slides: Query<'w, 's, &'static crate::frame::DockSlideOut>,
+    floats: Query<'w, 's, &'static crate::frame::DockFloat>,
+    overflow: Query<'w, 's, &'static crate::overflow::DockOverflowButton>,
+    overflow_items: Query<'w, 's, &'static crate::overflow::DockOverflowItem>,
+    commands: Commands<'w, 's>,
+}
+
+impl FrameQueries<'_, '_> {
+    /// Answer a click on `entity` that the frame owns: a pinned panel's
+    /// button slides it out or back in, a slid-out panel's dock button docks
+    /// it back, a stack's overflow button lists its tabs; any click outside
+    /// a slid-out panel slides it back in, and a click in a float raises it.
+    /// Returns whether the click was the frame's own.
+    fn click(
+        &mut self,
+        core: &mut crate::state::Core,
+        parents: &Query<&ChildOf>,
+        entity: Entity,
+    ) -> bool {
+        let mut inside_slide = false;
+        let mut cur = Some(entity);
+        let mut depth = 0;
+        while let Some(e) = cur {
+            if depth < 3
+                && let Ok(b) = self.pins.get(e)
+            {
+                let panel = b.panel.clone();
+                let effects = match core.ws.pinned_at(&panel) {
+                    Some((dock, _)) if core.ws.in_view(&panel) => core.ws.close_pinned(&dock),
+                    Some(_) => core.ws.open_pinned(&panel).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                core.apply(effects, Reason::User);
+                return true;
+            }
+            if depth < 3
+                && let Ok(b) = self.unpins.get(e)
+            {
+                let panel = b.panel.clone();
+                if core.op_attach(&panel, Reason::User).is_ok() {
+                    core.focus_request = Some(panel);
+                }
+                return true;
+            }
+            if depth < 3
+                && let Ok(b) = self.overflow.get(e)
+            {
+                let stack = b.stack;
+                self.commands
+                    .queue(move |world: &mut World| crate::overflow::open_list(world, stack));
+                return true;
+            }
+            if self.slides.get(e).is_ok() {
+                inside_slide = true;
+            }
+            if let Ok(f) = self.floats.get(e)
+                && core.ws.raise_float(&f.id)
+            {
+                core.dirty = true;
+                core.save_due = true;
+            }
+            depth += 1;
+            cur = parents.get(e).ok().map(ChildOf::parent);
+        }
+        if !inside_slide {
+            let open: Vec<String> = core
+                .ws
+                .docks
+                .iter()
+                .filter(|(_, d)| d.open.is_some())
+                .map(|(id, _)| id.clone())
+                .collect();
+            for dock in open {
+                let effects = core.ws.close_pinned(&dock);
+                core.apply(effects, Reason::User);
+            }
+        }
+        false
+    }
+}
+
 /// Raise the events and set the signals for what changed since the last
 /// tick that did.
 fn report(
@@ -646,7 +854,12 @@ fn report(
     ),
     mut store: ResMut<PropertyStore>,
     mut focused_window: MessageReader<WindowFocused>,
-    (panels_q, parents, windows): (Query<&DockPanel>, Query<&ChildOf>, Query<&DockWindow>),
+    (panels_q, parents, windows, slides): (
+        Query<&DockPanel>,
+        Query<&ChildOf>,
+        Query<&DockWindow>,
+        Query<(), SlideOutParts>,
+    ),
     mut last_focus: Local<Option<String>>,
 ) {
     let mut core = shared.lock();
@@ -763,6 +976,34 @@ fn report(
             store.set_global_bool(&name, shown);
         }
     }
+    // Focus leaving a slid-out panel slides it back in.
+    if focus.is_changed()
+        && let Some(f) = focus.0
+        && core.ws.docks.values().any(|d| d.open.is_some())
+    {
+        let mut cur = Some(f);
+        let mut inside = false;
+        while let Some(e) = cur {
+            if slides.contains(e) {
+                inside = true;
+                break;
+            }
+            cur = parents.get(e).ok().map(ChildOf::parent);
+        }
+        if !inside {
+            let open: Vec<String> = core
+                .ws
+                .docks
+                .iter()
+                .filter(|(_, d)| d.open.is_some())
+                .map(|(id, _)| id.clone())
+                .collect();
+            for dock in open {
+                let effects = core.ws.close_pinned(&dock);
+                core.apply(effects, Reason::User);
+            }
+        }
+    }
     // The panel holding focus: `dock.active` and `panelfocus`.
     if focus.is_changed() {
         let mut cur = focus.0;
@@ -832,7 +1073,11 @@ fn announcement(
         (Where::Dock(_), Where::Window(_)) | (Where::Window(_), Where::Window(_)) => {
             text("lumen-dock-moved-to-window", "moved to a new window")
         }
-        (Where::Window(_), Where::Dock(_)) => text("lumen-dock-docked-back", "docked back"),
+        (Where::Window(_) | Where::Float(_) | Where::Sidebar(_), Where::Dock(_)) => {
+            text("lumen-dock-docked-back", "docked back")
+        }
+        (_, Where::Float(_)) => text("lumen-dock-floated", "floating"),
+        (_, Where::Sidebar(_)) => text("lumen-dock-pinned", "pinned to the sidebar"),
         (Where::Dock(_), Where::Dock(_)) => {
             let beside = core
                 .ws
@@ -980,13 +1225,17 @@ fn decorate_tabs(
                 }
                 e.insert((cl, StyleDirty));
             }
-            // The stack's shown tab is marked from its first frame.
+            // The stack's shown tab is marked from its first frame, and its
+            // strip fitted to its tabs from then on.
             if let Some(strip) = world.get::<ChildOf>(button).map(ChildOf::parent) {
-                let shown = world
-                    .get::<ChildOf>(strip)
-                    .and_then(|stack| world.get::<Tabs>(stack.parent()))
+                let stack = world.get::<ChildOf>(strip).map(ChildOf::parent);
+                let shown = stack
+                    .and_then(|stack| world.get::<Tabs>(stack))
                     .and_then(|t| t.shown);
                 crate::realize::mark_active_tab(world, strip, shown);
+                if let Some(stack) = stack.filter(|&s| world.get::<DockStack>(s).is_some()) {
+                    crate::overflow::mark_strip(world, stack, strip);
+                }
             }
             // The title, then the close button, then the icon put first.
             let caption = spawn_part(world, button, "label", "dock-tab-label", Some(title));

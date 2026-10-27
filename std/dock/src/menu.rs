@@ -34,6 +34,10 @@ pub enum MenuAction {
     DetachGroup,
     /// Dock the panel back where it came from.
     Attach,
+    /// Float the panel over its dock.
+    Float,
+    /// Pin the panel to the edge of its dock nearest to it.
+    Pin,
     /// Fill the dock with the panel's stack.
     Maximize,
     /// Give the dock its whole layout back.
@@ -49,6 +53,8 @@ impl MenuAction {
             MenuAction::Detach => "lumen-dock-detach",
             MenuAction::DetachGroup => "lumen-dock-detach-group",
             MenuAction::Attach => "lumen-dock-attach",
+            MenuAction::Float => "lumen-dock-float",
+            MenuAction::Pin => "lumen-dock-pin",
             MenuAction::Maximize => "lumen-dock-maximize",
             MenuAction::Restore => "lumen-dock-restore",
             MenuAction::Close => "lumen-dock-close-panel",
@@ -64,6 +70,8 @@ impl MenuAction {
                 "Move group to new window",
             ),
             MenuAction::Attach => ("lumen-dock-dock-back", "Dock back"),
+            MenuAction::Float => ("lumen-dock-float", "Float"),
+            MenuAction::Pin => ("lumen-dock-pin", "Pin to sidebar"),
             MenuAction::Maximize => ("lumen-dock-maximize", "Maximize"),
             MenuAction::Restore => ("lumen-dock-restore", "Restore layout"),
             MenuAction::Close => ("lumen-dock-close", "Close"),
@@ -76,10 +84,12 @@ impl MenuAction {
         crate::plugin::text(key, fallback)
     }
 
-    const ALL: [MenuAction; 6] = [
+    const ALL: [MenuAction; 8] = [
         MenuAction::Detach,
         MenuAction::DetachGroup,
         MenuAction::Attach,
+        MenuAction::Float,
+        MenuAction::Pin,
         MenuAction::Maximize,
         MenuAction::Restore,
         MenuAction::Close,
@@ -103,6 +113,9 @@ pub struct TabMenu {
     pub root: Option<Entity>,
     /// An item picked, waiting for the menu to close.
     pub pending: Option<MenuAction>,
+    /// A tab picked from a stack's overflow list, waiting for the list to
+    /// close.
+    pub show: Option<String>,
 }
 
 /// The panel whose tab `e` is, or is inside.
@@ -144,6 +157,10 @@ pub fn actions_for(shared: &Shared, panel: &str) -> Vec<MenuAction> {
             if mates > 1 {
                 out.push(MenuAction::DetachGroup);
             }
+            if rec.attrs.floatable {
+                out.push(MenuAction::Float);
+            }
+            out.push(MenuAction::Pin);
             let maximized = core
                 .ws
                 .docks
@@ -154,6 +171,14 @@ pub fn actions_for(shared: &Shared, panel: &str) -> Vec<MenuAction> {
             } else {
                 MenuAction::Maximize
             });
+        }
+        Where::Float(_) => {
+            out.push(MenuAction::Detach);
+            if mates > 1 {
+                out.push(MenuAction::DetachGroup);
+            }
+            out.push(MenuAction::Attach);
+            out.push(MenuAction::Pin);
         }
         Where::Window(w) => {
             let alone = core
@@ -168,6 +193,7 @@ pub fn actions_for(shared: &Shared, panel: &str) -> Vec<MenuAction> {
                 out.push(MenuAction::Attach);
             }
         }
+        Where::Sidebar(_) => out.push(MenuAction::Attach),
         Where::Hidden => {}
     }
     if rec.attrs.closable {
@@ -189,6 +215,65 @@ fn subtree(world: &World, root: Entity) -> Vec<Entity> {
     out
 }
 
+/// The element a popup for `panel` opens under: its dock, or the root of
+/// its window of panels.
+pub(crate) fn popup_container(world: &World, shared: &Shared, panel: &str) -> Option<Entity> {
+    let core = shared.lock();
+    let built = world.resource::<Built>();
+    let e = match core.ws.where_is(panel) {
+        Where::Dock(d) | Where::Float(d) | Where::Sidebar(d) => {
+            core.docks.get(&d).map(|d| d.entity)
+        }
+        Where::Window(w) => built.windows.get(&w).map(|(_, surface)| *surface),
+        Where::Hidden => None,
+    };
+    e.filter(|&e| world.get_entity(e).is_ok())
+}
+
+/// Open the popup `id` with `rows` under `container` at `at`, closing the
+/// dock's popup that was open, and return its root and its items with their
+/// item ids. Only one of the dock's popups is open at a time.
+pub(crate) fn open_popup(
+    world: &mut World,
+    container: Entity,
+    id: &str,
+    rows: &[MenuRow],
+    at: Vec2,
+) -> (Entity, Vec<(Entity, String)>) {
+    if let Some(old) = world.resource_mut::<TabMenu>().root.take()
+        && let Ok(e) = world.get_entity_mut(old)
+    {
+        e.despawn();
+    }
+    let root = spawn_subtree(
+        world,
+        &popup_menu(id, rows),
+        Some(container),
+        Placeholders::Resolved,
+    );
+    world.entity_mut(root).insert(DockChrome);
+    {
+        let mut store = world.resource_mut::<PropertyStore>();
+        store.set_global_str(&format!("__menu_at:{id}"), format!("{} {}", at.x, at.y));
+        store.set_global_bool(&menu_open_signal(id), true);
+    }
+    // The popup's body mounts now rather than on the next tick, so every
+    // part of it is marked before anything indexes it.
+    {
+        use bevy_ecs::system::RunSystemOnce;
+        let _ = world.run_system_once(lumen_module::lumen_scene::spawn::reconcile_if_blocks);
+    }
+    let mut items = Vec::new();
+    for e in subtree(world, root) {
+        if let Some(b) = world.get::<MenuItemButton>(e) {
+            items.push((e, b.item_id.clone()));
+        }
+        world.entity_mut(e).insert(DomHidden);
+    }
+    world.resource_mut::<TabMenu>().root = Some(root);
+    (root, items)
+}
+
 /// Open the tab menu for `panel` at `at`, in the window coordinates of the
 /// window its tab shows in.
 pub fn open(world: &mut World, panel: String, at: Vec2) {
@@ -197,25 +282,9 @@ pub fn open(world: &mut World, panel: String, at: Vec2) {
     if actions.is_empty() {
         return;
     }
-    // The menu opens in the window the tab is in: under its dock, or under
-    // the root of its window of panels.
-    let container = {
-        let core = shared.lock();
-        let built = world.resource::<Built>();
-        match core.ws.where_is(&panel) {
-            Where::Dock(d) => core.docks.get(&d).map(|d| d.entity),
-            Where::Window(w) => built.windows.get(&w).map(|(_, surface)| *surface),
-            Where::Hidden => None,
-        }
-    };
-    let Some(container) = container.filter(|&e| world.get_entity(e).is_ok()) else {
+    let Some(container) = popup_container(world, &shared, &panel) else {
         return;
     };
-    if let Some(old) = world.resource_mut::<TabMenu>().root.take()
-        && let Ok(e) = world.get_entity_mut(old)
-    {
-        e.despawn();
-    }
     let rows: Vec<MenuRow> = actions
         .iter()
         .map(|a| MenuRow::Item {
@@ -224,40 +293,13 @@ pub fn open(world: &mut World, panel: String, at: Vec2) {
             disabled: false,
         })
         .collect();
-    let root = spawn_subtree(
-        world,
-        &popup_menu(MENU_ID, &rows),
-        Some(container),
-        Placeholders::Resolved,
-    );
-    world.entity_mut(root).insert(DockChrome);
-    {
-        let mut store = world.resource_mut::<PropertyStore>();
-        store.set_global_str(
-            &format!("__menu_at:{MENU_ID}"),
-            format!("{} {}", at.x, at.y),
-        );
-        store.set_global_bool(&menu_open_signal(MENU_ID), true);
-    }
-    // The popup's body mounts now rather than on the next tick, so every
-    // part of it is marked before anything indexes it.
-    {
-        use bevy_ecs::system::RunSystemOnce;
-        let _ = world.run_system_once(lumen_module::lumen_scene::spawn::reconcile_if_blocks);
-    }
-    for e in subtree(world, root) {
-        let action = world
-            .get::<MenuItemButton>(e)
-            .and_then(|b| MenuAction::from_item(&b.item_id));
-        let mut ent = world.entity_mut(e);
-        ent.insert(DomHidden);
-        if let Some(a) = action {
-            ent.insert(DockMenuItem(a));
+    let (_, items) = open_popup(world, container, MENU_ID, &rows, at);
+    for (e, id) in items {
+        if let Some(a) = MenuAction::from_item(&id) {
+            world.entity_mut(e).insert(DockMenuItem(a));
         }
     }
-    let mut menu = world.resource_mut::<TabMenu>();
-    menu.panel = Some(panel);
-    menu.root = Some(root);
+    world.resource_mut::<TabMenu>().panel = Some(panel);
 }
 
 /// The action of the menu item `e` is, or is inside.

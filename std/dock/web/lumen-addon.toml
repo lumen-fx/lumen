@@ -26,7 +26,7 @@ doc = "Take the panel out of view, remembering where it was so show puts it back
 name = "toggle"
 params = ["panel: string"]
 returns = "bool"
-doc = "Hide the panel if it is shown, show it if it is not: what a Window menu item calls. True when it is shown afterwards."
+doc = "Hide the panel if it is shown, show it if it is not: what a Window menu item calls. A pinned panel slides out and back in. True when it is shown afterwards."
 
 [[function]]
 name = "focus"
@@ -65,10 +65,22 @@ returns = "bool"
 doc = "Pop the whole stack holding the panel out into a window of its own."
 
 [[function]]
+name = "float"
+params = ["panel: string", "x: float", "y: float", "w: float", "h: float"]
+returns = "bool"
+doc = "Float the panel over its dock at x, y from the dock's top-left corner, w by h logical pixels, in a group of its own; a panel already alone in a float moves there. False when it does not float (floatable is false) or does not dock."
+
+[[function]]
+name = "pin"
+params = ["panel: string", "edge: string"]
+returns = "bool"
+doc = "Pin the panel to an edge of its dock (left, right, top or bottom): it leaves the layout and shows as a button along that edge, which slides it out over the dock. dock::show slides it out too, and dock::attach docks it back where it was."
+
+[[function]]
 name = "attach"
 params = ["panel: string"]
 returns = "bool"
-doc = "Dock the panel back from its window to the place it came from. False when it is not in a window, or does not dock."
+doc = "Dock the panel back to the place it came from: from its window, its float, or the edge it is pinned to. False when it is in a dock already, or does not dock."
 
 [[function]]
 name = "window_of"
@@ -108,7 +120,7 @@ doc = "Every panel id the module knows, shown or not."
 name = "is_shown"
 params = ["panel: string"]
 returns = "bool"
-doc = "Whether the panel is in view: in a dock or in a window of its own."
+doc = "Whether the panel is in view: in a dock, floating, in a window of its own, or slid out of its sidebar."
 
 [[function]]
 name = "save"
@@ -173,6 +185,11 @@ html = "div"
 [[element]]
 tag = "dock-panel"
 html = "section"
+
+[[element]]
+tag = "dock-sidebar"
+html = "div"
+note = "a page leaves a sidebar's panels out of its static layout"
 
 [[element]]
 tag = "dock-layout"

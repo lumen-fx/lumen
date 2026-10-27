@@ -76,6 +76,8 @@ pub struct Built {
     pub blocked: HashSet<Entity>,
     /// The parts a maximized panel hides.
     pub max_hidden: HashSet<Entity>,
+    /// The floats, the edge strips and the slide-outs.
+    pub frame: crate::frame::FrameParts,
 }
 
 pub(crate) fn alive(world: &World, e: Entity) -> bool {
@@ -100,7 +102,7 @@ fn put_under(world: &mut World, child: Entity, parent: Entity) {
 /// under `parent` first with an ordinary insert, which takes it off its old
 /// parent's list; `replace_children` alone would leave it there too, and
 /// the old parent's despawn would take it along.
-fn reorder(world: &mut World, parent: Entity, wanted: &[Entity]) {
+pub(crate) fn reorder(world: &mut World, parent: Entity, wanted: &[Entity]) {
     for &k in wanted {
         put_under(world, k, parent);
     }
@@ -415,7 +417,24 @@ fn build_stack(
         .into_iter()
         .filter(|&k| world.get::<TabStrip>(k).is_some())
         .collect();
-    let wanted: Vec<Entity> = strip.iter().copied().chain(tabs.iter().copied()).collect();
+    for &s in &strip {
+        crate::overflow::mark_strip(world, e, s);
+    }
+    // The strip, the overflow button over its end, then the tabs.
+    let overflow: Vec<Entity> = children_of(world, e)
+        .into_iter()
+        .filter(|&k| {
+            world
+                .get::<crate::overflow::DockOverflowButton>(k)
+                .is_some()
+        })
+        .collect();
+    let wanted: Vec<Entity> = strip
+        .iter()
+        .copied()
+        .chain(overflow)
+        .chain(tabs.iter().copied())
+        .collect();
     let current = children_of(world, e);
     if current != wanted {
         for k in current {
@@ -662,6 +681,12 @@ pub fn realize(world: &mut World) {
         max_held: Vec::new(),
     };
     let mut shown: HashSet<PanelId> = HashSet::new();
+    let titles: BTreeMap<PanelId, String> = live
+        .iter()
+        .map(|(id, p)| (id.clone(), p.title.clone()))
+        .collect();
+    let mut frame = std::mem::take(&mut built.frame);
+    let mut frame_use = crate::frame::FrameUse::default();
     // Every dock.
     for (dock_id, area) in &ws.docks {
         let Some(dock) = core
@@ -678,13 +703,49 @@ pub fn realize(world: &mut World) {
             .filter(|m| live.contains_key(*m))
             .and_then(|m| path_to(&area.root, m))
             .unwrap_or_default();
-        let Some(root) = build(world, &mut built, &mut pass, &area.root, true) else {
+        let root = build(world, &mut built, &mut pass, &area.root, true);
+        let path = std::mem::take(&mut pass.max_path);
+        let mut floats = Vec::new();
+        for f in &area.floats {
+            if let Some(node) = build(world, &mut built, &mut pass, &f.root, true) {
+                floats.push(crate::frame::build_float(
+                    world,
+                    &mut frame,
+                    &mut frame_use,
+                    dock,
+                    f,
+                    node,
+                ));
+                shown.extend(f.root.panels().into_iter().cloned());
+            }
+        }
+        pass.max_path = path;
+        let open = area.open.as_ref().filter(|p| live.contains_key(*p));
+        let open_panel = open.map(|p| live[p].entity);
+        if let Some(p) = open {
+            shown.insert(p.clone());
+            unhide(world, live[p].entity);
+        }
+        let open_size = open
+            .and_then(|p| ws.homes.get(p))
+            .and_then(|h| h.dock.as_ref())
+            .and_then(|s| s.basis);
+        crate::frame::arrange(
+            world,
+            &mut frame,
+            &mut frame_use,
+            crate::frame::Around {
+                dock: (dock_id, dock),
+                area,
+                titles: &titles,
+                root,
+                floats,
+                open_panel,
+                open_size,
+            },
+        );
+        if root.is_none() {
             continue;
-        };
-        put_under(world, root, dock);
-        let first = children_of(world, dock).first().copied();
-        if first != Some(root) {
-            world.entity_mut(dock).insert_children(0, &[root]);
         }
         set_classes(
             world,
@@ -757,6 +818,8 @@ pub fn realize(world: &mut World) {
             }
         }
     }
+    crate::frame::sweep(world, &mut frame, &frame_use);
+    built.frame = frame;
     // Maximize: the stack fills the dock, the rest is hidden in place.
     let now_hidden: HashSet<Entity> = std::mem::take(&mut pass.max_hidden).into_iter().collect();
     for &e in built.max_hidden.difference(&now_hidden) {
@@ -830,6 +893,17 @@ pub fn realize(world: &mut World) {
         {
             e.despawn();
         }
+    }
+    // Focus on a part that went (the strip button of a stack that emptied)
+    // is dropped rather than left on an entity that no longer exists.
+    let lost = world
+        .get_resource::<lumen_module::lumen_core::input::FocusTracker>()
+        .and_then(|f| f.0)
+        .filter(|&f| !alive(world, f));
+    if lost.is_some() {
+        world
+            .resource_mut::<lumen_module::lumen_core::input::FocusTracker>()
+            .0 = None;
     }
     // Modality: a modal window blocks the primary, or every other window.
     let primary = primary(world);

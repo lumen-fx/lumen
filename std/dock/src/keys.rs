@@ -420,6 +420,21 @@ pub fn dock_keys(world: &mut World, pressed: Vec<(Key, Modifiers)>) {
             }
         } else if hit(&keys.restore) {
             let mut core = shared.lock();
+            // A slid-out panel slides back in first.
+            let open: Vec<String> = core
+                .ws
+                .docks
+                .iter()
+                .filter(|(_, d)| d.open.is_some())
+                .map(|(id, _)| id.clone())
+                .collect();
+            if !open.is_empty() {
+                for dock in open {
+                    let effects = core.ws.close_pinned(&dock);
+                    core.apply(effects, Reason::User);
+                }
+                continue;
+            }
             let dock = panel
                 .as_deref()
                 .and_then(|p| match core.ws.where_is(p) {
