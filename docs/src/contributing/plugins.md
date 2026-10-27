@@ -783,7 +783,10 @@ name alone (`register_widget_tag`, or a runtime module's
 `register_widget_tag_owned`) has no `spawn`: its element is a plain element
 with that tag, which the plugin's own systems pick up by `LumenTag`. Either
 way the element carries the attributes it was written with in its
-`LumenAttributes`, which is also what a script's `get_attr` reads.
+`LumenAttributes`, which is also what a script's `get_attr` reads. That
+includes a `bind-<name>` the markup has no binding for, such as the dock's
+`bind-window-title`: it is the tag's own attribute, for its plugin to read and
+follow, where on a built-in tag it is an error.
 
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
