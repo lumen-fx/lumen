@@ -89,7 +89,7 @@
   height: var(--lumen-dock-icon-size, 16);
   flex-shrink: 0;
 }
-.dock-stack .dock-tab-label { flex-shrink: 1; min-width: 0; text-overflow: ellipsis; }
+.dock-stack .dock-tab-label { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .dock-stack .dock-tab-close {
   width: 18;
   height: 18;
