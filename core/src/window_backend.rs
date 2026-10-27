@@ -346,13 +346,38 @@ pub struct HeadlessDesktop {
     /// as a compositor would, and [`WindowRuntime::position`] stays `None`,
     /// as on Wayland.
     pub positioning: bool,
+    /// With positioning off, still let a window follow the pointer during a
+    /// drag across windows, as a Wayland compositor with the toplevel-drag
+    /// protocol does. With positioning on a window always can.
+    pub toplevel_drag: bool,
 }
 
 impl Default for HeadlessDesktop {
     fn default() -> Self {
-        Self { positioning: true }
+        Self {
+            positioning: true,
+            toplevel_drag: false,
+        }
     }
 }
+
+impl HeadlessDesktop {
+    /// Whether a window can follow the pointer during a drag.
+    pub fn can_follow(&self) -> bool {
+        self.positioning || self.toplevel_drag
+    }
+}
+
+/// Where the stand-in put each window when the desktop does not report
+/// positions: kept to itself, as a compositor keeps them, and read by the
+/// drag seam to tell which window the pointer is over.
+#[derive(Resource, Clone, Debug, Default)]
+struct HeadlessPlaces(HashMap<Entity, IVec2>);
+
+/// The stand-in's side of a drag across windows: requests taken in, the
+/// pointer tracked across its virtual desktop.
+#[derive(Resource, Clone, Debug, Default)]
+struct HeadlessDrag(crate::surface_drag::InProcessDrag);
 
 /// The monitor a headless run has when it is given none: one 1920x1080
 /// screen at `scale`.
@@ -392,9 +417,21 @@ impl Plugin for HeadlessWindowPlugin {
             app.world
                 .insert_resource(Monitors(vec![default_virtual_monitor(scale)]));
         }
+        app.world.init_resource::<HeadlessPlaces>();
+        app.world.init_resource::<HeadlessDrag>();
+        app.world
+            .insert_resource(crate::surface_drag::SurfaceDragSupport { follow: true });
+        app.add_message::<crate::surface_drag::SurfaceDragRequest>();
+        app.add_message::<crate::surface_drag::SurfaceDragEvent>();
         app.add_systems(
             crate::tick::TickStage::Systems,
             apply_windows_headless.in_set(WindowApply),
+        );
+        // After every input writer of the tick (a backend's, a simulated
+        // one's), before the systems that read the drag's events.
+        app.add_systems(
+            crate::tick::TickStage::CommandDrain,
+            headless_surface_drag.run_if(surface_drag_due),
         );
     }
 }
@@ -434,8 +471,16 @@ fn apply_windows_headless(
     monitors: Res<Monitors>,
     desktop: Res<HeadlessDesktop>,
     mut focus: MessageWriter<WindowFocused>,
-    (mut placed, mut unreported): (Local<i32>, Local<HashMap<Entity, IVec2>>),
+    (mut placed, mut places): (Local<i32>, ResMut<HeadlessPlaces>),
+    mut support: Option<ResMut<crate::surface_drag::SurfaceDragSupport>>,
 ) {
+    let unreported = &mut places.0;
+    if desktop.is_changed() {
+        let follow = desktop.can_follow();
+        if support.as_ref().is_some_and(|s| s.follow != follow) {
+            support.as_mut().expect("checked").follow = follow;
+        }
+    }
     let mut opened: Option<Entity> = None;
     if !desktop.positioning && unreported.len() > windows.iter().count() {
         unreported.retain(|e, _| windows.contains(*e));
@@ -534,6 +579,133 @@ fn apply_windows_headless(
                 });
             }
         }
+    }
+}
+
+/// Whether the stand-in has a drag across windows to carry this tick: a
+/// request came in, or one is in progress.
+fn surface_drag_due(
+    drag: Res<HeadlessDrag>,
+    requests: Res<Messages<crate::surface_drag::SurfaceDragRequest>>,
+) -> bool {
+    drag.0.is_active() || !requests.is_empty()
+}
+
+/// The stand-in's drag across windows: the windows on its virtual desktop,
+/// top-most first (the focused one, then the newest), as the seam sees them.
+fn headless_surfaces(
+    windows: &Query<(
+        Entity,
+        &mut Window,
+        &WindowViewport,
+        &mut WindowRuntime,
+        Has<PrimaryWindow>,
+    )>,
+    places: &HeadlessPlaces,
+) -> Vec<crate::surface_drag::DesktopSurface> {
+    let mut list: Vec<(bool, Entity, crate::surface_drag::DesktopSurface)> = windows
+        .iter()
+        .filter(|(_, w, _, _, _)| w.visible)
+        .filter_map(|(e, _, viewport, runtime, _)| {
+            let origin = runtime.position.or_else(|| places.0.get(&e).copied())?;
+            let (w, h) = viewport.physical_size();
+            Some((
+                runtime.focused,
+                e,
+                crate::surface_drag::DesktopSurface {
+                    window: e,
+                    origin,
+                    size: UVec2::new(w, h),
+                    scale: viewport.scale_factor,
+                },
+            ))
+        })
+        .collect();
+    list.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    list.into_iter().map(|(_, _, s)| s).collect()
+}
+
+/// Carry a drag across windows on the virtual desktop: take in the
+/// requests, turn each pointer move and the release into the seam's events,
+/// and move the window that follows the pointer.
+#[allow(clippy::type_complexity)]
+fn headless_surface_drag(
+    mut drag: ResMut<HeadlessDrag>,
+    mut requests: MessageReader<crate::surface_drag::SurfaceDragRequest>,
+    (mut moved, mut released, mut cancelled): (
+        MessageReader<crate::input::PointerMoved>,
+        MessageReader<crate::input::PointerReleased>,
+        MessageReader<crate::input::PointerCancelled>,
+    ),
+    pointer: Res<crate::input::PointerState>,
+    mut events: MessageWriter<crate::surface_drag::SurfaceDragEvent>,
+    (desktop, mut places): (Res<HeadlessDesktop>, ResMut<HeadlessPlaces>),
+    mut windows: Query<(
+        Entity,
+        &mut Window,
+        &WindowViewport,
+        &mut WindowRuntime,
+        Has<PrimaryWindow>,
+    )>,
+) {
+    for r in requests.read() {
+        let mut r = *r;
+        // A desktop that cannot move windows makes none follow.
+        if !desktop.can_follow() {
+            match &mut r {
+                crate::surface_drag::SurfaceDragRequest::Begin { follow, .. } => *follow = None,
+                crate::surface_drag::SurfaceDragRequest::Follow(w) => *w = None,
+                crate::surface_drag::SurfaceDragRequest::End => {}
+            }
+        }
+        drag.0.request(&r);
+    }
+    let in_window = pointer.window.or_else(|| {
+        windows
+            .iter()
+            .find(|(_, _, _, _, primary)| *primary)
+            .map(|(e, ..)| e)
+    });
+    let Some(window) = in_window else { return };
+    let moves: Vec<glam::Vec2> = moved
+        .read()
+        .filter(|m| m.pointer.is_primary)
+        .map(|m| m.position)
+        .collect();
+    let lifted = released
+        .read()
+        .filter(|r| r.is_primary())
+        .map(|r| r.position)
+        .last();
+    let gone = cancelled.read().any(|c| c.pointer.is_primary);
+    if !drag.0.is_active() {
+        return;
+    }
+    let surfaces = headless_surfaces(&windows, &places);
+    for at in moves {
+        let Some(step) = drag.0.moved(&surfaces, window, at) else {
+            continue;
+        };
+        events.write(step.event);
+        if let Some((follow, to)) = step.follow_to
+            && let Ok((_, mut w, _, mut runtime, _)) = windows.get_mut(follow)
+        {
+            if desktop.positioning {
+                runtime.position = Some(to);
+                // What the app asks stays where the window is, so a later
+                // change to the window does not move it back.
+                w.bypass_change_detection().position = Some(to);
+            } else {
+                places.0.insert(follow, to);
+            }
+        }
+    }
+    if let Some(at) = lifted
+        && let Some(event) = drag.0.released(&surfaces, window, at)
+    {
+        events.write(event);
+    } else if gone && let Some(event) = drag.0.cancelled() {
+        events.write(event);
     }
 }
 

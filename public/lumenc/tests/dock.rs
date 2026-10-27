@@ -1110,7 +1110,10 @@ fn wayland_places_windows_and_the_saved_position_survives() {
     let mut t = build("wayland", MARKUP, CANDELA, "");
     let app = &mut t.app;
     app.world
-        .insert_resource(lumen_core::window_backend::HeadlessDesktop { positioning: false });
+        .insert_resource(lumen_core::window_backend::HeadlessDesktop {
+            positioning: false,
+            toplevel_drag: false,
+        });
     ticks(app, 1);
     // A pop-out with no saved place opens where the desktop puts it.
     call(app, |d| d.detach("game").unwrap());

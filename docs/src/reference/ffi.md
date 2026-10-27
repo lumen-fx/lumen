@@ -658,8 +658,8 @@ rendering on the app's `[render] backend` into an offscreen target, scripts,
 and the introspection server when `[mcp] simulate` is on. It is the mode
 `lumenc run --headless` runs a markup app in. `HeadlessOptions` sets the
 target's device pixel ratio, an optional tick bound, and the virtual desktop
-the app's windows open on (`monitors`, `positioning`, as `lumenc run
---monitors` and `--positioning` set them); without a tick bound the run lasts
+the app's windows open on (`monitors`, `positioning`, `toplevel_drag`, as
+`lumenc run --monitors`, `--positioning` and `--toplevel-drag` set them); without a tick bound the run lasts
 until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
 is the cheaper mode that ticks the app and paints nothing.
 
