@@ -317,6 +317,34 @@ def run(url, chrome):
         if drawing != {"fill": "blue", "onclick": False, "scripts": 0, "urls": False}:
             fail(f"the svg-view holds {drawing}")
 
+        # The dock: its default layout as written, and its tabs switch.
+        dock = (
+            "const shown = (id) => { const e = document.getElementById(id);"
+            "  return !!e && e.offsetParent !== null; };"
+            "const split = document.querySelector('#desk .lm-dock-split');"
+            "return { column: split && getComputedStyle(split).flexDirection,"
+            "  tabs: [...document.querySelectorAll('#desk .lm-dock-tabs button')].map((b) => b.textContent),"
+            "  top: shown('desk-top'), a: shown('desk-a'), b: shown('desk-b'), spare: shown('desk-spare') };"
+        )
+        laid_out = script(dock)
+        want = {
+            "column": "column",
+            "tabs": ["Top", "Alpha", "Beta"],
+            "top": True,
+            "a": False,
+            "b": True,
+            "spare": False,
+        }
+        if laid_out != want:
+            fail(f"the dock reads {laid_out}, wanted {want}")
+        script(
+            "[...document.querySelectorAll('#desk .lm-dock-tabs button')]"
+            ".find((b) => b.textContent === 'Alpha').click();"
+        )
+        switched = script(dock)
+        if (switched["a"], switched["b"]) != (True, False):
+            fail(f"picking a tab left the dock reading {switched}")
+
         if noise:
             fail("the page logged something")
 

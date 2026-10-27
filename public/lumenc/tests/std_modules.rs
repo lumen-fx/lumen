@@ -141,6 +141,7 @@ fn a_web_build_takes_every_web_half_and_a_desktop_build_their_descriptors() {
         "lumen-browser",
         "lumen-canvas",
         "lumen-cookie",
+        "lumen-dock",
         "lumen-js",
         "lumen-storage",
         "lumen-svg",
