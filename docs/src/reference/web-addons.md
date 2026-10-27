@@ -87,6 +87,7 @@ An unknown key is an error, and every error names the module.
 | `html` | string | The HTML element it is written as, such as `div`, `canvas` or a custom element name. Required. |
 | `void` | boolean | True when that element takes no children and no end tag. Default false. |
 | `note` | string | A warning `lumenc web` prints when a page uses the element, for an element that cannot do in a browser what it does on the desktop. |
+| `not-inside` | array of strings | Tags the element may not be written inside, at any depth. `lumenc check` refuses markup that puts it there, on every target. Default empty. |
 
 ### Types
 
@@ -223,6 +224,12 @@ with the text and children a visitor should see until the web half takes it
 over. The
 page writes it as the `html` element, carrying `data-lm-foreign` with its tag,
 and puts that content inside.
+
+The element carries the attributes the markup wrote on it, as HTML
+attributes of the same names, so a web half reads `title` or `axis` off the
+element the way the desktop half reads them off its own. An attribute the page
+writes for the element itself (`id`, `class`, `style`, Lumen's own `data-lm`
+marks) keeps the page's value.
 
 From there the element is the web half's. The runtime binds it to its node, so a
 script reaches it by `id` and its classes, attributes and inline style are

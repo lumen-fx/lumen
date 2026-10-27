@@ -1048,6 +1048,109 @@ A title-bar region for frameless windows. Lays out as a row, full width,
 
 Pair it with `<root frameless="true">`.
 
+### `<dock>` and its panels
+
+A workspace of panels the user arranges: tab stacks in resizable splits,
+panels shown, hidden, collapsed, maximized, popped out into windows of their
+own and docked back. A `<dock-panel>` outside any dock is a window the app
+opens by showing it. The tags come from the `lumen-dock` module, so an app
+declares it first:
+
+```toml
+[dependencies]
+lumen-dock = { bundled = true }
+```
+
+```html
+<dock id="editor" label="Editor">
+  <dock-split axis="row">
+    <dock-stack basis="240">
+      <dock-panel id="files" title="Files">...</dock-panel>
+    </dock-stack>
+    <dock-stack center="true">
+      <dock-panel id="code" title="main.rs" closable="false">...</dock-panel>
+    </dock-stack>
+  </dock-split>
+  <dock-panel id="profiler" title="Profiler" place="right">...</dock-panel>
+  <dock-layout name="Focus">
+    <dock-stack center="true"><dock-ref panel="code"/></dock-stack>
+  </dock-layout>
+</dock>
+```
+
+The markup declares the panels and the default layout; the `dock` functions
+change it at run time (see [candela](scripting-candela.md#docks-and-windows),
+[Rhai](scripting-rhai.md#docks-and-windows) or
+[Lua](scripting-lua.md#docks-and-windows)). The `<dock-split>`,
+`<dock-stack>` and `<dock-layout>` elements describe the layout and leave the
+tree once it is read; the dock builds its stacks and splits out of
+[`<tabs>`](#tabs-and-tab) and [`<split>`](#split), so their keys, gutters and
+accessibility roles are those widgets' own. The panels are kept, and move
+wherever the layout puts them with everything inside them.
+
+| Tag | Attribute | Effect |
+| --- | --- | --- |
+| `<dock>` | `id` | Required. Names the dock to the `dock` functions and in a saved layout. |
+| | `label` | The accessible name of the workspace. |
+| `<dock-split>` | `axis` | `row` (the default) or `column`. |
+| | `basis` | Size in its parent split, in pixels. |
+| | `grow` | Share of the split's spare room. Defaults to 1 with no `basis`, 0 with one. |
+| `<dock-stack>` | `center` | Boolean. Kept when it empties, and the stack a panel with no other place goes to. |
+| | `collapsed` | Boolean. Shows only its header. |
+| | `tabs` | `auto` (the default), `always` or `never`. |
+| | `active` | The panel showing at first; the first one otherwise. |
+| | `basis`, `grow` | As on a split. |
+| `<dock-panel>` | `id` | Required. The panel's name in every call and in a saved layout. |
+| | `title` | Its tab text and accessible name. Defaults to the `id`. |
+| | `closable` | Boolean, default true. False takes away its close button and Delete. |
+| | `hidden` | Boolean. Starts hidden, with its place remembered. |
+| | `place` | Where it goes the first time it shows, when no layout places it: `center` (the default), `left`, `right`, `top`, `bottom` (a new stack along that edge of its dock), `window` (a window of its own), or `beside:<panel>` (a tab beside another panel). |
+| | `destroy-on-close` | Boolean. Closing removes the element instead of hiding it. |
+| | `kind`, `state` | The app's names for what the panel is, carried in a saved layout so a restore can ask for it again. |
+| | `dockable` | Boolean, default true. False keeps it in a window of its own that takes no other panel. |
+| | `window-kind` | `normal` (the default) or `dialog`: a dialog stays above the main window and minimizes with it. |
+| | `modal` | `none` (the default), `parent` (blocks input to the main window) or `app` (blocks every other window). |
+| | `window-size` | Inner size of its own window in pixels, `"640 480"`. Defaults to the size it has where it is. |
+| | `resizable` | Boolean, default true, for its own window. |
+| | `window-title` | Its own window's title. Defaults to `title`. |
+| `<dock-layout>` | `name` | A named layout the app can apply. Its tree uses `<dock-ref panel>` in place of panels; a panel it does not name keeps its place. |
+| `<dock-window>` | `rect` | In a `<dock-layout>`: a window of its own at `"x y width height"`, holding a stack or a split. |
+
+A `<dock-panel>` written straight under `<dock>`, outside any stack, waits
+hidden until shown. Panels are hidden, not unmounted, so a panel's content
+keeps its state while it is out of view. A `<dock>` inside another dock's
+panel is not supported; `lumenc check` refuses it.
+
+Events, each a [custom event](scripting-candela.md#element-events) with
+these fields in its detail:
+
+| Event | Raised on | When | Detail |
+| --- | --- | --- | --- |
+| `panelshow`, `panelhide` | panel | It enters or leaves view. | `reason`: `user`, `api` or `layout` |
+| `panelactivate` | panel | It becomes its stack's showing tab. | `reason` |
+| `panelfocus` | panel | Keyboard focus enters it. | |
+| `panelclose` | panel | Before the user closes it. Cancelable: `prevent_default` keeps it open. | `reason` |
+| `panelmove` | panel | It moved between a dock and a window, or into or out of view. | `from`, `to` (`dock`, `window`, `hidden`), `reason` |
+| `windowfocus`, `windowblur` | panel | Its window gains or loses focus. Does not bubble. | |
+| `layoutchange` | dock | The arrangement changed. | `reason` |
+| `layouterror` | dock | A saved layout was not used. | `reason` (`parse`, `format`, `version`, `invalid`), `detail` |
+| `panelrestore` | dock | A layout names a panel the app has not created. | `panel`, `kind`, `state` |
+
+Signals: `dock.active` holds the id of the panel holding focus,
+`dock.layout` the named layout in use, and `dock.shown.<panel>` whether a
+panel is in view.
+
+Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
+or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
+(one panel), `no-tabs` and `maximized`, `dock-tab` and `dock-tab-close` on a
+tab and its close button, and `dock-window` with `dock-window-normal` or
+`dock-window-dialog` on the root of a window of panels. The default look reads
+`--lumen-dock-*` tokens with the skin's own behind them.
+
+In a page the dock shows its default layout, with tabs that switch; the
+functions that rearrange it leave it as it is. See
+[Docks and windows](../guides/docks.md).
+
 ## Custom tags
 
 A Rust plugin can register additional tags, which then parse like

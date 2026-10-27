@@ -154,6 +154,21 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   static build compiles the same plugin in. Its web half in `std/canvas/web`
   draws the same calls with Canvas 2D; a unit test in this crate holds the web
   half's functions equal to the ones it registers.
+- **lumen-dock** (`std/dock`): docks and windows, as a self-contained module
+  the engine knows nothing about. The arrangement is a plain-data model in
+  `lumen-dock-model` (`std/dock/model`): docks of splits and tab stacks, the
+  windows panels were popped out into, where hidden panels go back to, and
+  the operations and saved-layout format over them, property tested on their
+  own. The module reads `<dock>` markup into that model and keeps the
+  elements following it: each stack is a core `<tabs>`, each split a core
+  `<split>`, each window a core window entity whose surface root (`WindowOf`)
+  sits under the dock, and every structure it builds is `DomHidden`, so the
+  app's panels keep the dock as their DOM parent. A script function body has
+  no world, so the model sits behind one lock the functions and the systems
+  share; a call changes the model and the realize system makes the elements
+  follow on the same tick. Modality goes through the core `InputBlocked`,
+  closing a window through `WindowClosing`, and the events through the
+  custom-event seam.
 - **lumen-download** (`std/download`): file downloads, as a self-contained
   module the engine knows nothing about. It registers the `download` script
   namespace through the generic registry and streams each transfer to disk on
