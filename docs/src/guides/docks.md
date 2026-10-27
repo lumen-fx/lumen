@@ -156,6 +156,39 @@ windows close with it, unless `[app] quit = "explicit"` keeps the app
 running: then the main window and the panels' windows hide, and showing the
 main window again shows them again.
 
+## Rearranging by dragging
+
+Drag a tab to move its panel. While the drag runs nothing in the layout
+moves: a ghost of the tab follows the pointer, and a highlighted region shows
+where the panel lands if you let go there.
+
+- Between two tabs of a strip: the panel joins that stack at that place, or
+  takes a new place in its own strip.
+- The middle of a stack: the panel joins it as its last tab.
+- Near an edge of a stack: the panel takes that half, in a stack of its own
+  beside it.
+- Along an edge of the whole dock: the panel takes a stack along that edge.
+
+Dragging a stack's strip, away from its tabs, moves the whole stack. Escape
+puts everything back where it was, and a screen reader hears where a panel
+went, or that the move was cancelled. A panel with `movable="false"` does not
+drag; the tab menu and the `dock` functions still move it.
+
+Pull a tab past the edge of the window and it tears off into a window of its
+own that follows the pointer; let go and the window stays there. Drag a
+window of one panel by its tab to move the whole window: over another window
+of the app that window shows where the panel would land and the window you
+are dragging gets out of the way, and letting go docks it there. Dragging one
+tab out of a window that holds several tears that tab off on its own.
+
+On Windows, macOS, X11 and the Wayland desktops that let an app drag its
+windows (KDE Plasma, GNOME), the window follows the pointer. On other Wayland
+compositors (Hyprland, sway and the rest of the wlroots family) a window
+cannot follow the pointer: tearing a tab off shows nothing until you let go,
+and the panel then opens in a window of its own where the compositor places
+it. Dragging a tab or a window's tab onto another window still docks it. The
+tab menu's Move to new window and Dock back work everywhere.
+
 ## The keyboard
 
 Every arrangement has a keyboard path:
@@ -166,7 +199,7 @@ Every arrangement has a keyboard path:
 | Ctrl+F6, Ctrl+Shift+F6 | Move focus to the next or previous window. |
 | Ctrl+PageDown, Ctrl+PageUp | Show the next or previous tab of the stack holding focus. |
 | Shift+Space on a tab | Maximize its panel to fill the dock, or give the dock its layout back. |
-| Escape | Give a maximized dock its layout back. |
+| Escape | Cancel a drag in progress, or give a maximized dock its layout back. |
 | Delete on a tab | Close its panel. |
 | Menu key, Shift+F10 on a tab | Open its tab menu: move the panel to a new window, dock it back, maximize it, close it. |
 
@@ -240,7 +273,11 @@ Set the `--lumen-dock-*` tokens in your stylesheet or skin, or style the
 classes the dock uses (`dock-stack`, `dock-tab`, `dock-tab-icon`,
 `dock-tab-label`, `dock-tab-close`, `dock-split`, `dock-window`, `center`,
 `collapsed`, `single`, `maximized` on a stack, and `active` on the shown
-tab). The dock's own rules name the stack (`.dock-stack .dock-tab`), so your
+tab, `dock-dragging` on the dock while a drag runs, `dock-drag-ghost` on the
+ghost and `dock-drop-preview` with `dock-drop-tab`, `dock-drop-center`,
+`dock-drop-<side>` or `dock-drop-root-<side>` on the highlighted region).
+`--lumen-dock-tearoff-distance` sets how far past the window's edge a tab
+goes before it tears off. The dock's own rules name the stack (`.dock-stack .dock-tab`), so your
 CSS always wins and a skin wins where its rule is as specific. A window of
 panels carries `dock-window` and `dock-window-<kind>`, so `.dock-window`
 styles every pop-out. A tab's close button shows the multiplication sign; a

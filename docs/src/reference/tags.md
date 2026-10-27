@@ -1104,6 +1104,7 @@ wherever the layout puts them with everything inside them.
 | | `title` | Its tab text and accessible name. Defaults to the `id`. A script that changes it changes the tab and the window title with it. |
 | | `icon` | An image shown in its tab before the title, as `<image src>` reads it. |
 | | `closable` | Boolean, default true. False takes away its close button and Delete. |
+| | `movable` | Boolean, default true. False keeps its tab from being dragged; the tab menu and the `dock` functions still move it. |
 | | `hidden` | Boolean. Starts hidden, with its place remembered. |
 | | `place` | Where it goes the first time it shows, when no layout places it: `center` (the default), `left`, `right`, `top`, `bottom` (a new stack along that edge of its dock), `window` (a window of its own), or `beside:<panel>` (a tab beside another panel). |
 | | `destroy-on-close` | Boolean. Closing removes the element instead of hiding it. |
@@ -1154,6 +1155,15 @@ the announcements are the module's messages (`lumen-dock-move-to-window`,
 which an app rewords or translates by writing the same ids in its own
 catalogue.
 
+Dragging a tab moves its panel: between two tabs, onto the middle of a
+stack, beside a stack on one of its edges, or along an edge of the whole
+dock; dragging a strip away from its tabs moves the whole stack. Past the
+window's edge the tab tears off into a window of its own, which follows the
+pointer where the platform lets it (not on Wayland compositors without the
+toplevel-drag protocol, where the window opens on release instead); a window
+of one panel dragged by its tab docks into another window's dock. Escape
+cancels a drag, and a screen reader hears `lumen-dock-drag-cancelled`.
+
 Signals: `dock.active` holds the id of the panel holding focus,
 `dock.layout` the named layout in use, and `dock.shown.<panel>` whether a
 panel is in view.
@@ -1162,8 +1172,12 @@ Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
 or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
 (one panel), `no-tabs` and `maximized`, `dock-tab` on a tab (with `active`
 on the shown one) with `dock-tab-icon`, `dock-tab-label` and
-`dock-tab-close` on its icon, title and close button, `dock-panel` on every panel, and `dock-window` with `dock-window-normal` or
-`dock-window-dialog` on the root of a window of panels. The default look reads
+`dock-tab-close` on its icon, title and close button, `dock-panel` on every panel, `dock-window` with `dock-window-normal` or
+`dock-window-dialog` on the root of a window of panels, and while a tab
+drags: `dock-dragging` on the dock, `dock-drag-ghost` on the ghost following
+the pointer, and `dock-drop-preview` with one of `dock-drop-tab`,
+`dock-drop-center`, `dock-drop-left`, `dock-drop-right`, `dock-drop-top`,
+`dock-drop-bottom` or `dock-drop-root-<side>` on the region a drop fills. The default look reads
 `--lumen-dock-*` tokens with the skin's own behind them:
 
 | Token | Styles |
@@ -1176,6 +1190,9 @@ on the shown one) with `dock-tab-icon`, `dock-tab-label` and
 | `--lumen-dock-icon-size` | A tab's icon. |
 | `--lumen-dock-close-bg`, `--lumen-dock-close-hover-bg` | A tab's close button. |
 | `--lumen-dock-window-bg` | The root of a window of panels. |
+| `--lumen-dock-ghost-bg`, `--lumen-dock-ghost-radius` | The ghost a dragged tab shows. |
+| `--lumen-dock-drop-bg`, `--lumen-dock-drop-border`, `--lumen-dock-drop-radius` | The region a drop fills, and the marker between two tabs. |
+| `--lumen-dock-tearoff-distance` | How far past the window's edge a dragged tab goes before it tears off. Default 24. |
 
 In a page the dock shows its default layout, with tabs that switch; the
 functions that rearrange it leave it as it is. See
