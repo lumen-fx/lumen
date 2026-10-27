@@ -13,7 +13,8 @@ use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, LumenAttributes, LumenClasses, StyleDirty,
 };
 use lumen_module::lumen_core::input::{
-    ClickEvent, ContextMenuEvent, DoubleClickEvent, FocusTracker, PointerButton, WindowFocused,
+    ClickEvent, ContextMenuEvent, DoubleClickEvent, FocusTracker, KeyPressed, PointerButton,
+    WindowFocused,
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
@@ -195,53 +196,13 @@ impl Plugin for DockPlugin {
         }
         // The module's world-wide work (reading new elements, making the
         // elements follow the model, moving focus, the keys) runs as queued
-        // commands that a cheap system adds only when there is work, so an
-        // idle tick runs no exclusive system of the module's and the
-        // schedule keeps its parallelism.
-        use bevy_ecs::schedule::common_conditions::{
-            any_match_filter, any_with_component, on_message, resource_changed,
-        };
-        use lumen_module::lumen_core::input::KeyPressed;
-        // Each system carries the condition under which it has work, so an
-        // idle tick dispatches none of them.
-        let input_due = on_message::<ClickEvent>
-            .or_eager(on_message::<DoubleClickEvent>)
-            .or_eager(on_message::<SplitResized>)
-            .or_eager(on_message::<WindowClosing>)
-            .or_eager(on_message::<CustomEventDelivered>)
-            .or_eager(any_match_filter::<(With<DockStack>, Changed<Tabs>)>);
-        app.add_systems(
-            TickStage::Systems,
-            (
-                user_input.run_if(input_due),
-                keys_gate.run_if(on_message::<KeyPressed>),
-                tab_menu_gate.run_if(on_message::<ContextMenuEvent>),
-            )
-                .chain()
-                .in_set(DockSet::Input)
-                .after(ScriptSet::DomState),
-        );
-        // A panel's attributes or its bound window title changed, by a
-        // script or the DOM commands: the elements follow on the same tick.
-        app.add_systems(
-            TickStage::Systems,
-            (
-                follow_panel_attrs
-                    .run_if(any_match_filter::<(With<DockPanel>, Changed<LumenAttributes>)>),
-                follow_title_signals.run_if(
-                    (|t: Res<TitleSignals>| !t.0.is_empty())
-                        .and_then(resource_changed::<PropertyStore>),
-                ),
-            )
-                .after(DockSet::Input)
-                .after(lumen_module::lumen_scene::dom::apply_dom_commands)
-                .before(DockSet::Realize),
-        );
-        // Elements read twice a tick: before any handler runs, so a script's
-        // `on_ready` finds the panels the markup declared, and after the DOM
-        // commands, so a panel a script appended is placed on the same tick.
-        // The work itself runs as queued commands, so a tick with none runs no
-        // exclusive system of the module's.
+        // commands, so an idle tick runs no exclusive system of the module's
+        // and the schedule keeps its parallelism. The rest is three nodes
+        // in the schedule, each behind one condition that says whether it
+        // has work: every node costs the executor time on every tick, so
+        // the module adds as few as the places its work has to sit.
+        // Elements read before any handler runs, so a script's `on_ready`
+        // finds the panels the markup declared.
         app.add_systems(
             TickStage::Systems,
             adopt_gate
@@ -251,51 +212,115 @@ impl Plugin for DockPlugin {
                 .before(ScriptSet::DomInput)
                 .before(ScriptSet::DomState),
         );
+        // What the user and the scripts did this tick, then the elements
+        // follow the model: after the DOM commands, so a panel a script
+        // appended is placed on the same tick, and before the widgets build
+        // their parts, so a stack's new tab gets its button this tick.
         app.add_systems(
             TickStage::Systems,
-            realize_gate
-                .run_if(|a: Res<Arrivals>, shared: Res<Shared>| {
-                    arrivals_pending(a) || shared.lock().dirty
-                })
+            user_input
+                .pipe(keys_gate)
+                .pipe(tab_menu_gate)
+                .pipe(follow_panel_attrs)
+                .pipe(follow_title_signals)
+                .pipe(realize_gate)
+                .run_if(input_due)
+                .in_set(DockSet::Input)
                 .in_set(DockSet::Realize)
-                .after(DockSet::Input)
+                .after(ScriptSet::DomState)
                 .after(lumen_module::lumen_scene::dom::apply_dom_commands)
                 .before(lumen_module::lumen_scene::widgets::keep_widget_parts),
         );
+        // What changed, told to the app; then the new tabs decorated and
+        // focus moved, after the tab sets show what the realization picked,
+        // so focus can land in a panel that just became its stack's
+        // showing tab.
         app.add_systems(
             TickStage::Systems,
-            (
-                report.run_if(
-                    (|shared: Res<Shared>| shared.lock().report_due)
-                        .or_eager(resource_changed::<FocusTracker>)
-                        .or_eager(on_message::<WindowFocused>),
-                ),
-                track_windows.run_if(any_with_component::<DockWindow>),
-                show_with_the_primary.run_if(any_with_component::<DockWindow>),
-                save_if_due
-                    .run_if(|p: Option<Res<Persist>>| p.is_some_and(|p| *p == Persist::Auto)),
-            )
-                .chain()
+            report
+                .pipe(track_windows)
+                .pipe(show_with_the_primary)
+                .pipe(save_if_due)
+                .pipe(decorate_tabs)
+                .pipe(focus_gate)
+                .run_if(report_due)
                 .in_set(DockSet::Report)
                 .after(DockSet::Realize)
-                .after(lumen_module::lumen_scene::widgets::keep_widget_parts),
-        );
-        // After the tab sets show what the realization picked, so focus can
-        // land in a panel that just became its stack's showing tab.
-        app.add_systems(
-            TickStage::Systems,
-            (
-                decorate_tabs.run_if(any_match_filter::<Added<TabStripButton>>),
-                focus_gate.run_if(|shared: Res<Shared>| {
-                    let core = shared.lock();
-                    core.focus_request.is_some() || !core.destroy.is_empty()
-                }),
-            )
-                .chain()
-                .after(TabsSet)
-                .after(DockSet::Report),
+                .after(lumen_module::lumen_scene::widgets::keep_widget_parts)
+                .after(TabsSet),
         );
     }
+}
+
+/// Whether the dock has input to read or elements to make follow the
+/// model this tick: one condition for the node, so an idle tick pays for one
+/// check rather than one per kind of input.
+#[derive(bevy_ecs::system::SystemParam)]
+struct InputDue<'w, 's> {
+    clicks: MessageReader<'w, 's, ClickEvent>,
+    doubles: MessageReader<'w, 's, DoubleClickEvent>,
+    resized: MessageReader<'w, 's, SplitResized>,
+    closing: MessageReader<'w, 's, WindowClosing>,
+    delivered: MessageReader<'w, 's, CustomEventDelivered>,
+    keys: MessageReader<'w, 's, KeyPressed>,
+    menus: MessageReader<'w, 's, ContextMenuEvent>,
+    picked: Query<'w, 's, (), (With<DockStack>, Changed<Tabs>)>,
+    retitled: Query<'w, 's, (), (With<DockPanel>, Changed<LumenAttributes>)>,
+    titles: Res<'w, TitleSignals>,
+    store: Res<'w, PropertyStore>,
+    arrivals: Res<'w, Arrivals>,
+    shared: Res<'w, Shared>,
+}
+
+fn input_due(mut due: InputDue) -> bool {
+    // Every reader is drained, so a message is counted on one tick only.
+    let messages = [
+        due.clicks.read().count(),
+        due.doubles.read().count(),
+        due.resized.read().count(),
+        due.closing.read().count(),
+        due.delivered.read().count(),
+        due.keys.read().count(),
+        due.menus.read().count(),
+    ];
+    messages.iter().any(|&n| n > 0)
+        || !due.picked.is_empty()
+        || !due.retitled.is_empty()
+        || (!due.titles.0.is_empty() && due.store.is_changed())
+        || !due.arrivals.new.is_empty()
+        || !due.arrivals.gone.is_empty()
+        || !due.arrivals.waiting.is_empty()
+        || due.shared.lock().dirty
+}
+
+/// Whether the dock has anything to report, decorate, track or save this
+/// tick.
+#[derive(bevy_ecs::system::SystemParam)]
+struct ReportDue<'w, 's> {
+    shared: Res<'w, Shared>,
+    persist: Option<Res<'w, Persist>>,
+    focus: Res<'w, FocusTracker>,
+    focused: MessageReader<'w, 's, WindowFocused>,
+    new_tabs: Query<'w, 's, (), Added<TabStripButton>>,
+    windows: Query<'w, 's, (), With<DockWindow>>,
+    moved: Query<'w, 's, (), (With<DockWindow>, WindowMoved)>,
+    primary: Query<'w, 's, (), (With<PrimaryWindow>, Changed<Window>)>,
+}
+
+fn report_due(mut due: ReportDue) -> bool {
+    let window_focus = due.focused.read().count() > 0;
+    let model = {
+        let core = due.shared.lock();
+        core.report_due
+            || core.focus_request.is_some()
+            || !core.destroy.is_empty()
+            || (due.persist.as_ref().is_some_and(|p| **p == Persist::Auto) && core.save_due)
+    };
+    model
+        || window_focus
+        || due.focus.is_changed()
+        || !due.new_tabs.is_empty()
+        || (!due.windows.is_empty() && (!due.moved.is_empty() || !due.primary.is_empty()))
 }
 
 /// Queue the elements the page added to be read.
@@ -305,7 +330,7 @@ fn adopt_gate(mut commands: Commands) {
 
 /// Queue the elements to follow the model, reading any the DOM commands
 /// added first, when either has work.
-fn realize_gate(arrivals: Res<Arrivals>, shared: Res<Shared>, mut commands: Commands) {
+fn realize_gate(_: In<()>, arrivals: Res<Arrivals>, shared: Res<Shared>, mut commands: Commands) {
     let arrived = arrivals_pending(arrivals);
     if arrived || shared.lock().dirty {
         commands.queue(move |world: &mut World| {
@@ -319,6 +344,7 @@ fn realize_gate(arrivals: Res<Arrivals>, shared: Res<Shared>, mut commands: Comm
 
 /// Queue the keys pressed this tick for the dock to answer, when any was.
 fn keys_gate(
+    _: In<()>,
     mut keys: MessageReader<lumen_module::lumen_core::input::KeyPressed>,
     mut commands: Commands,
 ) {
@@ -329,8 +355,14 @@ fn keys_gate(
 }
 
 /// Queue the focus move or the panel removal the dock owes.
-fn focus_gate(mut commands: Commands) {
-    commands.queue(crate::keys::focus_requests);
+fn focus_gate(_: In<()>, shared: Res<Shared>, mut commands: Commands) {
+    let due = {
+        let core = shared.lock();
+        core.focus_request.is_some() || !core.destroy.is_empty()
+    };
+    if due {
+        commands.queue(crate::keys::focus_requests);
+    }
 }
 
 /// The panel a strip button shows, through the tab it stands for.
@@ -741,6 +773,7 @@ type WindowMoved = Or<(Changed<WindowRuntime>, Changed<Window>)>;
 /// Keep each window's place in the model as the platform reports it, so a
 /// save writes where the window is.
 fn track_windows(
+    _: In<()>,
     shared: Res<Shared>,
     windows: Query<(&DockWindow, &Window, &WindowRuntime), WindowMoved>,
     monitors: Option<Res<lumen_module::lumen_core::window::Monitors>>,
@@ -802,6 +835,7 @@ fn track_windows(
 /// and an app that brings the main window back brings its panels' windows
 /// with it.
 fn show_with_the_primary(
+    _: In<()>,
     primary: Query<Ref<Window>, With<PrimaryWindow>>,
     mut windows: Query<&mut Window, (With<DockWindow>, Without<PrimaryWindow>)>,
 ) {
@@ -819,6 +853,7 @@ fn show_with_the_primary(
 /// Give each new tab of a closable panel its close button, labelled for
 /// assistive technology, and mark the strip buttons the dock's.
 fn decorate_tabs(
+    _: In<()>,
     mut commands: Commands,
     new: Query<(Entity, &TabStripButton), Added<TabStripButton>>,
     tabs: Query<&DockTab>,
@@ -936,8 +971,11 @@ fn button_of(world: &mut World, panel: &str) -> Option<Entity> {
 }
 
 /// Open the tab menu for each context menu request on a dock's tab.
-fn tab_menu_gate(mut asks: MessageReader<ContextMenuEvent>, mut commands: Commands) {
+fn tab_menu_gate(_: In<()>, mut asks: MessageReader<ContextMenuEvent>, mut commands: Commands) {
     let asks: Vec<(Entity, glam::Vec2)> = asks.read().map(|a| (a.entity, a.position)).collect();
+    if asks.is_empty() {
+        return;
+    }
     commands.queue(move |world: &mut World| {
         for (e, at) in asks {
             if let Some(panel) = crate::menu::tab_panel(world, e) {
@@ -951,6 +989,7 @@ fn tab_menu_gate(mut asks: MessageReader<ContextMenuEvent>, mut commands: Comman
 /// follows its `title` and `icon`, its window its `window-title` and
 /// `bind-window-title`, and the next placement its `place` and `dockable`.
 fn follow_panel_attrs(
+    _: In<()>,
     shared: Res<Shared>,
     changed: Query<(&DockPanel, &LumenAttributes), Changed<LumenAttributes>>,
     mut commands: Commands,
@@ -1017,10 +1056,14 @@ fn follow_panel_attrs(
 
 /// A panel's window title follows the signal its `bind-window-title` names.
 fn follow_title_signals(
+    _: In<()>,
     shared: Res<Shared>,
     store: Res<PropertyStore>,
     signals: Res<TitleSignals>,
 ) {
+    if signals.0.is_empty() || !store.is_changed() {
+        return;
+    }
     let names: Vec<String> = store
         .observe_dirty()
         .iter()
