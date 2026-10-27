@@ -869,49 +869,85 @@ fn decorate_tabs(
         let Some(rec) = core.panels.get(&tab.panel) else {
             continue;
         };
-        commands.entity(button).insert(DockTabButton);
-        let classes = vec!["dock-tab".to_string()];
+        commands
+            .entity(button)
+            .insert((DockTabButton, A11yLabel(rec.attrs.title.clone())));
         let closable = rec.attrs.closable;
-        let label = format!("{close} {}", rec.attrs.title);
+        let close_label = format!("{close} {}", rec.attrs.title);
+        let title = rec.attrs.title.clone();
         let panel = tab.panel.clone();
         let icon = rec.attrs.icon.clone();
         commands.queue(move |world: &mut World| {
-            if let Some(src) = icon {
-                set_tab_icon(world, button, Some(&src));
+            if world.get_entity(button).is_err() {
+                return;
             }
-            if let Ok(mut e) = world.get_entity_mut(button) {
+            {
+                let mut e = world.entity_mut(button);
                 let mut cl = e.take::<LumenClasses>().unwrap_or_default();
-                for c in &classes {
-                    if !cl.has(c) {
-                        cl.0.push(c.clone().into());
-                    }
+                if !cl.has("dock-tab") {
+                    cl.0.push("dock-tab".into());
                 }
                 e.insert((cl, StyleDirty));
             }
-            if !closable {
-                return;
+            // The title, then the close button, then the icon put first.
+            let caption = spawn_part(world, button, "label", "dock-tab-label", Some(title));
+            world.entity_mut(caption).insert(DockTabCaption);
+            if closable {
+                let x = spawn_part(
+                    world,
+                    button,
+                    "button",
+                    "dock-tab-close",
+                    Some(CLOSE.into()),
+                );
+                world.entity_mut(x).insert((
+                    lumen_module::lumen_core::components::TabIndex(-1),
+                    A11yRole::Button,
+                    A11yLabel(close_label),
+                    DockCloseButton { panel },
+                ));
             }
-            let el = Element {
-                tag: "button".into(),
-                attrs: Box::new(Attributes {
-                    classes: vec!["dock-tab-close".into()],
-                    tab_index: Some(-1),
-                    ..Attributes::default()
-                }),
-                ..Element::default()
-            };
-            let x = spawn_subtree(world, &el, Some(button), Placeholders::Resolved);
-            world.entity_mut(x).insert((
-                DockChrome,
-                lumen_module::lumen_core::components::DomHidden,
-                StyleDirty,
-                A11yRole::Button,
-                A11yLabel(label),
-                DockCloseButton { panel },
-            ));
+            if let Some(src) = icon {
+                set_tab_icon(world, button, Some(&src));
+            }
         });
     }
 }
+
+/// The close button's mark, until a stylesheet draws its own with
+/// `mask-image`.
+const CLOSE: &str = "x";
+
+/// Spawn one part of a dock tab under `parent`: the module's own structure,
+/// out of the document a script walks.
+fn spawn_part(
+    world: &mut World,
+    parent: Entity,
+    tag: &str,
+    class: &str,
+    text: Option<String>,
+) -> Entity {
+    let el = Element {
+        tag: tag.into(),
+        attrs: Box::new(Attributes {
+            classes: vec![class.into()],
+            text,
+            ..Attributes::default()
+        }),
+        ..Element::default()
+    };
+    let e = spawn_subtree(world, &el, Some(parent), Placeholders::Resolved);
+    world.entity_mut(e).insert((
+        DockChrome,
+        lumen_module::lumen_core::components::DomHidden,
+        StyleDirty,
+    ));
+    e
+}
+
+/// On the caption a dock tab shows its panel's title in.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct DockTabCaption;
 
 /// On a strip button that shows one of the dock's tabs.
 #[derive(Component, Clone, Copy, Debug)]
@@ -1008,6 +1044,7 @@ fn follow_panel_attrs(
         let icon = (next.icon != rec.attrs.icon).then(|| next.icon.clone());
         let signal = (next.window_title_signal != rec.attrs.window_title_signal)
             .then(|| next.window_title_signal.clone());
+        let title = retitled.then(|| next.title.clone());
         let close = (retitled && next.closable)
             .then(|| format!("{} {}", text("lumen-dock-close", "Close"), next.title));
         rec.attrs = next;
@@ -1038,6 +1075,21 @@ fn follow_panel_attrs(
             };
             if let Some(icon) = icon {
                 set_tab_icon(world, button, icon.as_deref());
+            }
+            if let Some(title) = &title {
+                world.entity_mut(button).insert(A11yLabel(title.clone()));
+                let caption = world
+                    .get::<bevy_ecs::hierarchy::Children>(button)
+                    .and_then(|kids| {
+                        kids.iter()
+                            .find(|&k| world.get::<DockTabCaption>(k).is_some())
+                    });
+                if let Some(caption) = caption {
+                    world.entity_mut(caption).insert((
+                        lumen_module::lumen_core::components::TextContent(title.clone()),
+                        lumen_module::lumen_core::components::DirtyLayout,
+                    ));
+                }
             }
             if let Some(label) = close {
                 let mut q = world.query::<(Entity, &DockCloseButton)>();

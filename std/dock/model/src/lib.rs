@@ -437,6 +437,13 @@ pub struct Spot {
     /// The stack's slot in that split.
     #[serde(default)]
     pub slot: usize,
+    /// The size the stack had in that split, in logical pixels, so a stack
+    /// made again for the panel takes the room it had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<f32>,
+    /// The share of the split's spare room the stack had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grow: Option<f32>,
 }
 
 /// Where a panel that is hidden or popped out goes back to.
@@ -1402,18 +1409,23 @@ impl Workspace {
     }
 
     fn spot_of(&self, dock: &str, loc: &Location) -> Spot {
-        let (split, slot) = self
+        let (split, slot, basis, grow) = self
             .docks
             .get(dock)
             .and_then(|d| d.root.parent_of(&loc.stack))
-            .map(|(s, i)| (Some(s.id.clone()), i))
-            .unwrap_or((None, 0));
+            .map(|(s, i)| {
+                let child = &s.children[i];
+                (Some(s.id.clone()), i, child.basis, Some(child.grow))
+            })
+            .unwrap_or((None, 0, None, None));
         Spot {
             dock: dock.to_string(),
             stack: loc.stack.clone(),
             index: loc.index,
             split,
             slot,
+            basis,
+            grow,
         }
     }
 
@@ -1540,9 +1552,17 @@ impl Workspace {
         let dock = self.docks.get_mut(&spot.dock)?;
         if let Some(Node::Split(split)) = dock.root.find_mut(&split_id) {
             let at = spot.slot.min(split.children.len());
+            // The stack takes the room it had; one with no record of it
+            // shares the split's spare room.
             split.children.insert(
                 at,
-                Child::grow(Node::Stack(Stack::with(stack_id, [panel])), 1.0),
+                Child {
+                    basis: spot.basis,
+                    grow: spot
+                        .grow
+                        .unwrap_or(if spot.basis.is_some() { 0.0 } else { 1.0 }),
+                    node: Node::Stack(Stack::with(stack_id, [panel])),
+                },
             );
             return Some(spot.dock.clone());
         }

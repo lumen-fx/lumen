@@ -414,7 +414,12 @@ fn register_panel(
     core.reported.remove(id);
     core.panels.insert(id.to_string(), rec);
     drop(core);
-    world.entity_mut(e).insert(DockPanel { id: id.to_string() });
+    let mut ent = world.entity_mut(e);
+    let mut classes = ent.take::<LumenClasses>().unwrap_or_default();
+    if !classes.has("dock-panel") {
+        classes.0.push("dock-panel".into());
+    }
+    ent.insert((classes, StyleDirty, DockPanel { id: id.to_string() }));
     true
 }
 
@@ -520,6 +525,8 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
                     index,
                     split: None,
                     slot: 0,
+                    basis: None,
+                    grow: None,
                 }),
                 window: None,
             },

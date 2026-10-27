@@ -48,8 +48,8 @@ pub use lumen_dock_model::Workspace as Layout;
 pub use menu::{DockMenuItem, MENU_ID, MenuAction};
 pub use persist::{FILE, Persist};
 pub use plugin::{
-    DESCRIPTOR, DockCloseButton, DockEvent, DockPlugin, DockSet, DockTabButton, DockTabIcon, NAME,
-    WindowClose,
+    DESCRIPTOR, DockCloseButton, DockEvent, DockPlugin, DockSet, DockTabButton, DockTabCaption,
+    DockTabIcon, NAME, WindowClose,
 };
 pub use realize::{DockStack, DockTab, DockWindow};
 

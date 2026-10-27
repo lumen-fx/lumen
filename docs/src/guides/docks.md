@@ -233,9 +233,11 @@ them never collide.
 The dock's look is CSS: tab height and padding, the strip, the stack border
 and background. Set the `--lumen-dock-*` tokens in your stylesheet or skin,
 or style the classes the dock uses (`dock-stack`, `dock-tab`,
-`dock-tab-icon`, `dock-tab-close`, `dock-split`, `dock-window`, and `center`, `collapsed`,
+`dock-tab-icon`, `dock-tab-label`, `dock-tab-close`, `dock-split`, `dock-window`, and `center`, `collapsed`,
 `single`, `maximized` on a stack). A window of panels carries `dock-window`
-and `dock-window-<kind>`, so `.dock-window` styles every pop-out.
+and `dock-window-<kind>`, so `.dock-window` styles every pop-out. A tab's
+close button shows a plain `x`; a skin that ships an icon draws its own with
+`mask-image` on `.dock-tab-close` and a transparent `text-color`.
 
 ## In a page
 
