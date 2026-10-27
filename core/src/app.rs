@@ -530,8 +530,20 @@ impl App {
     }
 
     /// Registers a message type with [`MessageRegistry`] so [`bevy_ecs::message::MessageWriter`] and [`bevy_ecs::message::MessageReader`] can be used for `M`.
+    ///
+    /// Registering a type that already has its buffer does nothing. Two
+    /// registrations would cycle the buffer twice a tick, and a message
+    /// written between ticks (a close the driver announces, an event a test
+    /// writes) would be gone before any system read it; plugins that each
+    /// need a message and cannot know which of them builds first can all
+    /// call this.
     pub fn add_message<M: Message>(&mut self) -> &mut Self {
-        MessageRegistry::register_message::<M>(&mut self.world);
+        if !self
+            .world
+            .contains_resource::<bevy_ecs::message::Messages<M>>()
+        {
+            MessageRegistry::register_message::<M>(&mut self.world);
+        }
         self
     }
 
