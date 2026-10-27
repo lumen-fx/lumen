@@ -413,8 +413,10 @@ fn headless_windows_take_the_scale_of_their_monitor() {
     );
 
     // A desktop that places windows itself ignores where one asks to go.
-    app.world
-        .insert_resource(HeadlessDesktop { positioning: false });
+    app.world.insert_resource(HeadlessDesktop {
+        positioning: false,
+        toplevel_drag: false,
+    });
     let placed = app
         .world
         .spawn(Window {
@@ -656,4 +658,241 @@ fn a_blocked_window_names_its_blocker() {
         app.world.get::<InputBlocked>(primary),
         Some(&InputBlocked { by: dialog })
     );
+}
+
+/// The surface drag events the app received since `cursor` last looked.
+fn drag_events(
+    app: &App,
+    cursor: &mut MessageCursor<lumen_core::surface_drag::SurfaceDragEvent>,
+) -> Vec<lumen_core::surface_drag::SurfaceDragEvent> {
+    let messages = app
+        .world
+        .resource::<Messages<lumen_core::surface_drag::SurfaceDragEvent>>();
+    cursor.read(messages).copied().collect()
+}
+
+/// Move the pointer to `at` in `window`'s logical pixels, as a backend
+/// reports a move, then tick.
+fn pointer_to(app: &mut App, window: Entity, at: Vec2) {
+    let mut state = app.world.resource_mut::<lumen_core::input::PointerState>();
+    state.window = Some(window);
+    state.position = Some(at);
+    app.world.write_message(lumen_core::input::PointerMoved {
+        position: at,
+        ..Default::default()
+    });
+    app.tick();
+}
+
+/// A drag across windows on the virtual desktop: the stand-in reports the
+/// window under the pointer in its own coordinates, moves a following
+/// window with the pointer, and reports the drop; on a desktop that does
+/// not position windows no window follows unless toplevel drag is on.
+#[test]
+fn the_headless_desktop_carries_a_drag_across_windows() {
+    use lumen_core::surface_drag::{SurfaceDragEvent, SurfaceDragRequest, SurfaceDragSupport};
+    let _guard = serial();
+    let mut app = headless_app();
+    let primary = primary_window(&mut app.world).unwrap();
+    primary_viewport_mut(&mut app.world).size = Vec2::new(400.0, 300.0);
+    app.tick();
+    let other = app
+        .world
+        .spawn(Window {
+            position: Some(IVec2::new(600, 0)),
+            ..Window::new("Other", Vec2::new(200.0, 200.0))
+        })
+        .id();
+    let follower = app
+        .world
+        .spawn(Window {
+            position: Some(IVec2::new(1200, 700)),
+            ..Window::new("Follower", Vec2::new(100.0, 100.0))
+        })
+        .id();
+    app.tick();
+    assert_eq!(
+        app.world.get::<WindowRuntime>(primary).unwrap().position,
+        Some(IVec2::ZERO)
+    );
+    assert!(app.world.resource::<SurfaceDragSupport>().follow);
+    let mut cursor = MessageCursor::default();
+    // No drag yet: moves report nothing.
+    pointer_to(&mut app, primary, Vec2::new(10.0, 10.0));
+    assert!(drag_events(&app, &mut cursor).is_empty());
+
+    app.world.write_message(SurfaceDragRequest::Begin {
+        source: primary,
+        follow: None,
+        grab_offset: Vec2::new(5.0, 5.0),
+    });
+    app.tick();
+    // Over its own window, then past its edge over the other window, then
+    // over nothing: the source window keeps the pointer's moves.
+    let mut seen = Vec::new();
+    for at in [(50.0, 60.0), (650.0, 20.0), (500.0, 900.0)] {
+        pointer_to(&mut app, primary, Vec2::from(at));
+        seen.extend(drag_events(&app, &mut cursor));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            SurfaceDragEvent::Over {
+                window: Some(primary),
+                position: Vec2::new(50.0, 60.0)
+            },
+            SurfaceDragEvent::Over {
+                window: Some(other),
+                position: Vec2::new(50.0, 20.0)
+            },
+            SurfaceDragEvent::Over {
+                window: None,
+                position: Vec2::new(500.0, 900.0)
+            },
+        ]
+    );
+    // A window that follows trails the pointer by the grab offset, and is
+    // never the window the pointer is over.
+    app.world
+        .write_message(SurfaceDragRequest::Follow(Some(follower)));
+    app.tick();
+    pointer_to(&mut app, primary, Vec2::new(700.0, 50.0));
+    assert_eq!(
+        app.world.get::<WindowRuntime>(follower).unwrap().position,
+        Some(IVec2::new(695, 45))
+    );
+    assert_eq!(
+        app.world.get::<Window>(follower).unwrap().position,
+        Some(IVec2::new(695, 45)),
+        "what the app asks follows, so a later change does not move it back"
+    );
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Over {
+            window: Some(other),
+            position: Vec2::new(100.0, 50.0)
+        }]
+    );
+    // The release drops there and ends the drag.
+    app.world.write_message(lumen_core::input::PointerReleased {
+        position: Vec2::new(700.0, 50.0),
+        ..Default::default()
+    });
+    app.tick();
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Dropped {
+            window: Some(other),
+            position: Vec2::new(100.0, 50.0)
+        }]
+    );
+    pointer_to(&mut app, primary, Vec2::new(20.0, 20.0));
+    assert!(
+        drag_events(&app, &mut cursor).is_empty(),
+        "the drag is over"
+    );
+
+    // A pointer the platform takes away cancels; an end request stops it.
+    app.world.write_message(SurfaceDragRequest::Begin {
+        source: primary,
+        follow: None,
+        grab_offset: Vec2::ZERO,
+    });
+    app.tick();
+    app.world
+        .write_message(lumen_core::input::PointerCancelled::default());
+    app.tick();
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Cancelled]
+    );
+    app.world.write_message(SurfaceDragRequest::Begin {
+        source: primary,
+        follow: None,
+        grab_offset: Vec2::ZERO,
+    });
+    app.tick();
+    app.world.write_message(SurfaceDragRequest::End);
+    app.tick();
+    pointer_to(&mut app, primary, Vec2::new(30.0, 30.0));
+    assert!(drag_events(&app, &mut cursor).is_empty());
+
+    // As Wayland without toplevel drag: the stand-in places every window
+    // itself and reports no position, but still knows which window the
+    // pointer is over; none follows, and the stand-in says so.
+    app.world.insert_resource(HeadlessDesktop {
+        positioning: false,
+        toplevel_drag: false,
+    });
+    app.world.despawn(other);
+    app.world.despawn(follower);
+    app.tick();
+    assert!(!app.world.resource::<SurfaceDragSupport>().follow);
+    let spawned = app
+        .world
+        .spawn(Window::new("Late", Vec2::new(100.0, 100.0)))
+        .id();
+    app.tick();
+    app.world.write_message(SurfaceDragRequest::Begin {
+        source: primary,
+        follow: Some(spawned),
+        grab_offset: Vec2::new(10.0, 10.0),
+    });
+    app.tick();
+    pointer_to(&mut app, primary, Vec2::new(100.0, 100.0));
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Over {
+            window: Some(spawned),
+            position: Vec2::new(68.0, 68.0)
+        }],
+        "the newest window lies on top, where the stand-in cascaded it"
+    );
+    assert_eq!(
+        app.world.get::<WindowRuntime>(spawned).unwrap().position,
+        None
+    );
+    app.world.write_message(SurfaceDragRequest::End);
+    app.tick();
+    // With toplevel drag on, a window follows again, though the desktop
+    // still reports no position for it.
+    app.world.insert_resource(HeadlessDesktop {
+        positioning: false,
+        toplevel_drag: true,
+    });
+    app.tick();
+    assert!(app.world.resource::<SurfaceDragSupport>().follow);
+    app.world.write_message(SurfaceDragRequest::Begin {
+        source: primary,
+        follow: Some(spawned),
+        grab_offset: Vec2::new(10.0, 10.0),
+    });
+    app.tick();
+    pointer_to(&mut app, primary, Vec2::new(300.0, 250.0));
+    assert_eq!(
+        app.world.get::<WindowRuntime>(spawned).unwrap().position,
+        None
+    );
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Over {
+            window: Some(primary),
+            position: Vec2::new(300.0, 250.0)
+        }],
+        "the window following is never the one under the pointer"
+    );
+    // It went where the pointer took it: once it stops following, the
+    // pointer just inside its corner is over it.
+    app.world.write_message(SurfaceDragRequest::Follow(None));
+    app.tick();
+    pointer_to(&mut app, primary, Vec2::new(295.0, 245.0));
+    assert_eq!(
+        drag_events(&app, &mut cursor),
+        vec![SurfaceDragEvent::Over {
+            window: Some(spawned),
+            position: Vec2::new(5.0, 5.0)
+        }]
+    );
+    app.world.write_message(SurfaceDragRequest::End);
+    app.tick();
 }

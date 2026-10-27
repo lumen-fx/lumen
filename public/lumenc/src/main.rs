@@ -186,7 +186,8 @@ const RUN_USAGE: &str = "lumenc run - run an app
 USAGE:
     lumenc run <dir> [--profile chrome|tracy|stderr]
                      [--headless [--size WxH] [--dpr N] [--ticks N]
-                                 [--monitors LIST] [--positioning=off]]
+                                 [--monitors LIST] [--positioning=off]
+                                 [--toplevel-drag]]
                      [--artifact <file>] [--assets <file.lpak>]
                      [--no-hooks] [--offline]
 
@@ -211,7 +212,12 @@ USAGE:
                       window opens on the first, at its scale. Default: one
                       1920x1080 monitor at --dpr.
     --positioning=off Ignore the positions windows ask for and place them,
-                      as Wayland does.
+                      as Wayland does. A window then follows the pointer
+                      during a drag across windows only with
+                      --toplevel-drag.
+    --toplevel-drag   With --positioning=off, let a dragged window follow
+                      the pointer, as a Wayland compositor with the
+                      toplevel-drag protocol does.
     --artifact FILE   Run a precompiled artifact (lumenc build) instead of
                       parsing source.
     --assets FILE     Read the app's assets from a .lpak archive instead of
@@ -234,6 +240,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut ticks: Option<u64> = None;
     let mut monitors: Vec<lumenc::MonitorInfo> = Vec::new();
     let mut positioning = true;
+    let mut toplevel_drag = false;
     let mut no_hooks = false;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
@@ -263,6 +270,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             }
             "--positioning=off" => positioning = false,
             "--positioning=on" => positioning = true,
+            "--toplevel-drag" => toplevel_drag = true,
             "--no-hooks" => no_hooks = true,
             "--profile" => {
                 let Some(v) = args.next() else {
@@ -379,10 +387,11 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             || dpr.is_some()
             || ticks.is_some()
             || !monitors.is_empty()
-            || !positioning)
+            || !positioning
+            || toplevel_drag)
     {
         eprintln!(
-            "lumenc run: --size / --dpr / --ticks / --monitors / --positioning require --headless"
+            "lumenc run: --size / --dpr / --ticks / --monitors / --positioning / --toplevel-drag require --headless"
         );
         return ExitCode::from(2);
     }
@@ -486,6 +495,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
                 ticks,
                 monitors,
                 positioning,
+                toplevel_drag,
             },
         )
     } else {
