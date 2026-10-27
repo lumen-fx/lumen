@@ -1114,6 +1114,7 @@ wherever the layout puts them with everything inside them.
 | | `icon` | An image shown in its tab before the title, as `<image src>` reads it. |
 | | `closable` | Boolean, default true. False takes away its close button and Delete. |
 | | `movable` | Boolean, default true. False keeps its tab from being dragged; the tab menu and the `dock` functions still move it. |
+| | `floatable` | Boolean, default true. False keeps it from floating over its dock, by a drag, the tab menu or `dock::float`. |
 | | `hidden` | Boolean. Starts hidden, with its place remembered. |
 | | `place` | Where it goes the first time it shows, when no layout places it: `center` (the default), `left`, `right`, `top`, `bottom` (a new stack along that edge of its dock), `window` (a window of its own), or `beside:<panel>` (a tab beside another panel). |
 | | `destroy-on-close` | Boolean. Closing removes the element instead of hiding it. |
@@ -1125,7 +1126,8 @@ wherever the layout puts them with everything inside them.
 | | `resizable` | Boolean, default true, for its own window. |
 | | `window-title` | Its own window's title. Defaults to `title`. |
 | | `bind-window-title` | A signal its own window's title follows, ahead of `window-title`: a document window titled with the file it shows. |
-| `<dock-layout>` | `name` | A named layout the app can apply. Its tree uses `<dock-ref panel>` in place of panels; a panel it does not name keeps its place. |
+| `<dock-sidebar>` | `edge` | `left` (the default), `right`, `top` or `bottom`. The `<dock-panel>`s in it start pinned to that edge of the dock (`hidden` ones pin there when first shown). |
+| `<dock-layout>` | `name` | A named layout the app can apply. Its tree uses `<dock-ref panel>` in place of panels, and `<dock-sidebar>` with `<dock-ref>`s pins them; a panel it does not name keeps its place. |
 | `<dock-window>` | `rect` | In a `<dock-layout>`: a window of its own at `"x y width height"`, holding a stack or a split. |
 
 A `<dock-panel>` written straight under `<dock>`, outside any stack, waits
@@ -1142,7 +1144,7 @@ these fields in its detail:
 | `panelactivate` | panel | It becomes its stack's showing tab. | `reason` |
 | `panelfocus` | panel | Keyboard focus enters it. | |
 | `panelclose` | panel | Before the user closes it. Cancelable: `prevent_default` keeps it open. | `reason` |
-| `panelmove` | panel | It moved between a dock and a window, or into or out of view. | `from`, `to` (`dock`, `window`, `hidden`), `reason` |
+| `panelmove` | panel | It moved between a dock, a float, an edge and a window, or into or out of view. | `from`, `to` (`dock`, `float`, `sidebar`, `window`, `hidden`), `reason` |
 | `windowfocus`, `windowblur` | panel | Its window gains or loses focus. Does not bubble. | |
 | `layoutchange` | dock | The arrangement changed. | `reason` |
 | `layouterror` | dock | A saved layout was not used. | `reason` (`parse`, `format`, `version`, `invalid`), `detail` |
@@ -1150,28 +1152,44 @@ these fields in its detail:
 
 A right click on a tab, or the Menu key or Shift+F10 on a focused tab, opens
 the tab menu: Move to new window, Move group to new window (when the stack
-has other panels), Maximize or Restore layout, Dock back (in a window of its
-own), and Close (when the panel is closable). Its items are `<menu>` items
-with the ids `lumen-dock-detach`, `lumen-dock-detach-group`,
+has other panels), Float (a docked `floatable` panel), Pin to sidebar (the
+edge of the dock nearest the panel), Maximize or Restore layout, Dock back
+(in a window, a float or an edge), and Close (when the panel is closable). Its
+items are `<menu>` items with the ids `lumen-dock-detach`,
+`lumen-dock-detach-group`, `lumen-dock-float`, `lumen-dock-pin`,
 `lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-attach` and
 `lumen-dock-close-panel`, so a script's `on_menu` hears them too. A completed
 move is announced to screen readers: "Inspector moved to a new window",
-"Inspector docked back", "Inspector moved beside Scene". The menu labels and
-the announcements are the module's messages (`lumen-dock-move-to-window`,
-`lumen-dock-move-group-to-window`, `lumen-dock-maximize`, `lumen-dock-restore`,
-`lumen-dock-dock-back`, `lumen-dock-close`, `lumen-dock-moved-to-window`,
-`lumen-dock-docked-back`, `lumen-dock-moved-beside`, `lumen-dock-moved`),
-which an app rewords or translates by writing the same ids in its own
-catalogue.
+"Inspector docked back", "Inspector moved beside Scene", "Inspector
+floating", "Inspector pinned to the sidebar". The menu labels and the
+announcements are the module's messages (`lumen-dock-move-to-window`,
+`lumen-dock-move-group-to-window`, `lumen-dock-float`, `lumen-dock-pin`,
+`lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-dock-back`,
+`lumen-dock-close`, `lumen-dock-moved-to-window`, `lumen-dock-docked-back`,
+`lumen-dock-moved-beside`, `lumen-dock-moved`, `lumen-dock-floated`,
+`lumen-dock-pinned`, `lumen-dock-more-tabs`, `lumen-dock-unpin`), which an app
+rewords or translates by writing the same ids in its own catalogue.
 
 Dragging a tab moves its panel: between two tabs, onto the middle of a
-stack, beside a stack on one of its edges, or along an edge of the whole
-dock; dragging a strip away from its tabs moves the whole stack. Past the
+stack, beside a stack on one of its edges, along an edge of the whole dock,
+or, let go over no stack in its window, into a float there; dragging a strip
+away from its tabs moves the whole stack. A float is a group over its dock,
+in the dock's window: its strip is its title bar and moves it, the frame
+along its edges resizes it, a double click on its strip docks it back, and
+its tabs drag like any other. Past the
 window's edge the tab tears off into a window of its own, which follows the
 pointer where the platform lets it (not on Wayland compositors without the
 toplevel-drag protocol, where the window opens on release instead); a window
 of one panel dragged by its tab docks into another window's dock. Escape
 cancels a drag, and a screen reader hears `lumen-dock-drag-cancelled`.
+
+A panel pinned to an edge, by `<dock-sidebar>` or `dock::pin`, shows as a
+button in a strip along that edge. The button slides the panel out over the
+dock; a click elsewhere, Escape, focus leaving it or a second click slides it
+back in, and the Dock button in its header docks it back where it was. A
+stack with more tabs than room shrinks them to their `min-width`, then
+scrolls the strip on the wheel, keeps the shown tab in view, and shows a
+button at the strip's end that lists every tab.
 
 Signals: `dock.active` holds the id of the panel holding focus,
 `dock.layout` the named layout in use, and `dock.shown.<panel>` whether a
@@ -1181,12 +1199,22 @@ Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
 or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
 (one panel), `no-tabs` and `maximized`, `dock-tab` on a tab (with `active`
 on the shown one) with `dock-tab-icon`, `dock-tab-label` and
-`dock-tab-close` on its icon, title and close button, `dock-panel` on every panel, `dock-window` with `dock-window-normal` or
-`dock-window-dialog` on the root of a window of panels, and while a tab
-drags: `dock-dragging` on the dock, `dock-drag-ghost` on the ghost following
-the pointer, and `dock-drop-preview` with one of `dock-drop-tab`,
-`dock-drop-center`, `dock-drop-left`, `dock-drop-right`, `dock-drop-top`,
-`dock-drop-bottom` or `dock-drop-root-<side>` on the region a drop fills. The default look reads
+`dock-tab-close` on its icon, title and close button, `overflowing` on a
+stack whose tabs do not fit with `dock-tabs-overflow` on its list button,
+`dock-panel` on every panel, `dock-window` with `dock-window-normal` or
+`dock-window-dialog` on the root of a window of panels, `dock-float` on a
+float with `dock-float-resize` and `dock-float-resize-<n|s|e|w|ne|nw|se|sw>`
+on its frame, `dock-pinned-<side>` on a dock with panels pinned to that edge,
+`dock-middle` on the row between its side strips, `dock-sidebar` with
+`dock-sidebar-<side>` on a strip and `dock-sidebar-button` (with `open`) on
+its buttons, `dock-sidebar-open` with `dock-sidebar-open-<side>` on the
+slid-out panel with `dock-sidebar-header`, `dock-sidebar-title` and
+`dock-sidebar-dock` in its header, and while a tab drags: `dock-dragging` on
+the dock, `dock-drag-ghost` on the ghost following the pointer, and
+`dock-drop-preview` with one of `dock-drop-tab`, `dock-drop-center`,
+`dock-drop-left`, `dock-drop-right`, `dock-drop-top`, `dock-drop-bottom`,
+`dock-drop-root-<side>` or `dock-drop-float` on the region a drop fills. The
+default look reads
 `--lumen-dock-*` tokens with the skin's own behind them:
 
 | Token | Styles |
@@ -1202,6 +1230,9 @@ the pointer, and `dock-drop-preview` with one of `dock-drop-tab`,
 | `--lumen-dock-ghost-bg`, `--lumen-dock-ghost-radius` | The ghost a dragged tab shows. |
 | `--lumen-dock-drop-bg`, `--lumen-dock-drop-border`, `--lumen-dock-drop-radius` | The region a drop fills, and the marker between two tabs. |
 | `--lumen-dock-tearoff-distance` | How far past the window's edge a dragged tab goes before it tears off. Default 24. |
+| `--lumen-dock-tab-min-width`, `--lumen-dock-overflow-width` | How narrow a tab gets before the strip scrolls, and the width of the button that lists the tabs. |
+| `--lumen-dock-float-bg`, `--lumen-dock-float-border`, `--lumen-dock-float-shadow` | A float, and the shadow under it and under a slid-out panel. |
+| `--lumen-dock-sidebar-bg`, `--lumen-dock-sidebar-size` | An edge's strip, and how far a pinned panel slides out when it has no docked size to keep. |
 
 In a page the dock shows its default layout, with tabs that switch; the
 functions that rearrange it leave it as it is. See

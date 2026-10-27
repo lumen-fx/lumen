@@ -24,7 +24,7 @@ inline bool hide(std::string_view panel) {
     return ::lumen::call("dock", "hide", {::lumen::Value::string(std::string(panel))}).as_bool();
 }
 
-/// Hide the panel if it is shown, show it if it is not: what a Window menu item calls. True when it is shown afterwards.
+/// Hide the panel if it is shown, show it if it is not: what a Window menu item calls. A pinned panel slides out and back in. True when it is shown afterwards.
 inline bool toggle(std::string_view panel) {
     return ::lumen::call("dock", "toggle", {::lumen::Value::string(std::string(panel))}).as_bool();
 }
@@ -59,7 +59,17 @@ inline bool detach_group(std::string_view panel) {
     return ::lumen::call("dock", "detach_group", {::lumen::Value::string(std::string(panel))}).as_bool();
 }
 
-/// Dock the panel back from its window to the place it came from. False when it is not in a window, or does not dock.
+/// Float the panel over its dock at x, y from the dock's top-left corner, w by h logical pixels, in a group of its own; a panel already alone in a float moves there. False when it does not float (floatable is false) or does not dock.
+inline bool float_(std::string_view panel, double x, double y, double w, double h) {
+    return ::lumen::call("dock", "float", {::lumen::Value::string(std::string(panel)), ::lumen::Value::floating(x), ::lumen::Value::floating(y), ::lumen::Value::floating(w), ::lumen::Value::floating(h)}).as_bool();
+}
+
+/// Pin the panel to an edge of its dock (left, right, top or bottom): it leaves the layout and shows as a button along that edge, which slides it out over the dock. dock::show slides it out too, and dock::attach docks it back where it was.
+inline bool pin(std::string_view panel, std::string_view edge) {
+    return ::lumen::call("dock", "pin", {::lumen::Value::string(std::string(panel)), ::lumen::Value::string(std::string(edge))}).as_bool();
+}
+
+/// Dock the panel back to the place it came from: from its window, its float, or the edge it is pinned to. False when it is in a dock already, or does not dock.
 inline bool attach(std::string_view panel) {
     return ::lumen::call("dock", "attach", {::lumen::Value::string(std::string(panel))}).as_bool();
 }
@@ -94,7 +104,7 @@ inline ::lumen::Value panels() {
     return ::lumen::call("dock", "panels", {});
 }
 
-/// Whether the panel is in view: in a dock or in a window of its own.
+/// Whether the panel is in view: in a dock, floating, in a window of its own, or slid out of its sidebar.
 inline bool is_shown(std::string_view panel) {
     return ::lumen::call("dock", "is_shown", {::lumen::Value::string(std::string(panel))}).as_bool();
 }
