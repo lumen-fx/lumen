@@ -2103,6 +2103,8 @@ fn a_tab_tears_off_and_drags_back() {
     pointer(app, Some(popped), target, Ptr::Move);
     let (zone, _) = preview(app).expect("the main window previews the drop");
     assert_eq!(zone, "dock-drop-center");
+    // The backend takes the request to conceal it on the next tick.
+    ticks(app, 1);
     assert!(
         !app.world.get::<Window>(popped).unwrap().visible,
         "the window being dragged gets out of the way"
@@ -2716,4 +2718,29 @@ fn hover(app: &mut App, e: Entity) {
         app.world.entity_mut(x).insert(lumen_core::input::Hovered);
         cur = parent(app, x);
     }
+}
+
+/// A dock whose tree comes down to one stack after a move gives that stack
+/// the whole dock, whatever size it had as a split's pane.
+#[test]
+fn a_stack_left_alone_fills_its_dock() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let markup = r#"<root><dock id="editor"><dock-split axis="row">
+      <dock-stack basis="240"><dock-panel id="files" title="Files"><label text="f"/></dock-panel></dock-stack>
+      <dock-stack center="true"><dock-panel id="scene" title="Scene"><label text="s"/></dock-panel></dock-stack>
+    </dock-split></dock><script src="main.cdl"/></root>"#;
+    let mut t = build("alone", markup, CANDELA, "");
+    let app = &mut t.app;
+    ticks(app, 2);
+    call(app, |d| d.detach("files").unwrap());
+    ticks(app, 4);
+    let dock = entity(app, "editor");
+    let scene = entity(app, "scene");
+    let stack = parent(app, parent(app, scene).unwrap()).unwrap();
+    let (_, ds) = rect_of(app, dock);
+    let (_, ss) = rect_of(app, stack);
+    assert!(
+        (ss - ds).abs().max_element() < 2.0,
+        "the stack fills the dock: {ss} in {ds}"
+    );
 }
