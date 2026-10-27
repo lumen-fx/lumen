@@ -1313,11 +1313,24 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     // for it, built from the attributes it was written with. Its own
     // components are in place by now and its children are not, so the
     // widget sees the element the markup made and nothing it nests.
-    if let Some(authored) = &el.attrs.widget_attributes
-        && let Some(spawn) = lumen_widget::widget_spawner(&el.tag)
-    {
-        let attrs = lumen_widget::Attributes::from(authored.clone());
-        spawn(id, &attrs, world);
+    if let Some(authored) = &el.attrs.widget_attributes {
+        // What the element was written with is its attribute set, as on any
+        // DOM element: a script's `get_attr` reads it, and so does a module
+        // whose systems adopt the element by its tag.
+        if !authored.is_empty() {
+            let mut attrs = world
+                .get::<lumen_core::components::LumenAttributes>(id)
+                .cloned()
+                .unwrap_or_default();
+            for (name, value) in authored {
+                attrs.0.entry(name.clone()).or_insert_with(|| value.clone());
+            }
+            world.entity_mut(id).insert(attrs);
+        }
+        if let Some(spawn) = lumen_widget::widget_spawner(&el.tag) {
+            let attrs = lumen_widget::Attributes::from(authored.clone());
+            spawn(id, &attrs, world);
+        }
     }
     // `<for each="...">` blocks attach a [`ForMarker`] to the spawned entity
     // and DEFER child spawning to the reconciler - children are the
