@@ -319,7 +319,32 @@ fn emit_element(
     for (name, value) in tag.fixed {
         write_attr(out, name, value);
     }
-    for (name, value) in html_attrs(ir_tag, attrs) {
+    let mapped = html_attrs(ir_tag, attrs);
+    // An add-on's element carries the attributes it was written with, so its
+    // web half reads them as its desktop half does. A name the page writes
+    // for the element itself is left to the page.
+    if foreign.is_some()
+        && let Some(authored) = &attrs.widget_attributes
+    {
+        for (name, value) in authored {
+            let taken = matches!(name.as_str(), "id" | "class" | "style")
+                || name.starts_with("data-lm")
+                || mapped.iter().any(|(m, _)| *m == name.as_str())
+                || tag.fixed.iter().any(|(f, _)| *f == name.as_str())
+                || written
+                    .extra
+                    .iter()
+                    .any(|(e, _)| e.as_str() == name.as_str());
+            let well_formed = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+            if !taken && well_formed {
+                write_attr(out, name, value);
+            }
+        }
+    }
+    for (name, value) in mapped {
         // A link and an asset reference are written as the IR holds them,
         // which is a page key and a path relative to the site root. Both
         // become URLs here, where the site's base path and page set are
