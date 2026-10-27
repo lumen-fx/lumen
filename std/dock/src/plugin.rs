@@ -20,7 +20,7 @@ use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
 use lumen_module::lumen_core::window::{PrimaryWindow, Window, WindowClosing, WindowRuntime};
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element};
-use lumen_module::lumen_primitives::{SplitResized, TabStripButton, Tabs, TabsSet};
+use lumen_module::lumen_primitives::{ActivePopupNav, SplitResized, TabStripButton, Tabs, TabsSet};
 use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
 use lumen_module::lumen_script::{CustomEvent, CustomEventDelivered, ScriptFnAppExt, ScriptSet};
 
@@ -270,6 +270,8 @@ struct InputDue<'w, 's> {
     store: Res<'w, PropertyStore>,
     arrivals: Res<'w, Arrivals>,
     shared: Res<'w, Shared>,
+    menu: Res<'w, TabMenu>,
+    nav: Option<Res<'w, ActivePopupNav>>,
 }
 
 fn input_due(mut due: InputDue) -> bool {
@@ -290,6 +292,7 @@ fn input_due(mut due: InputDue) -> bool {
         || !due.arrivals.new.is_empty()
         || !due.arrivals.gone.is_empty()
         || !due.arrivals.waiting.is_empty()
+        || (due.menu.pending.is_some() && due.nav.is_none_or(|n| n.0.is_none()))
         || due.shared.lock().dirty
 }
 
@@ -365,6 +368,53 @@ fn focus_gate(_: In<()>, shared: Res<Shared>, mut commands: Commands) {
     }
 }
 
+/// Do what the tab menu item `action` says to `panel`.
+fn menu_action(
+    core: &mut crate::state::Core,
+    events: &mut MessageWriter<CustomEvent>,
+    action: MenuAction,
+    panel: &str,
+) {
+    let done = match action {
+        MenuAction::Close => {
+            if let Some(e) = core
+                .panels
+                .get(panel)
+                .filter(|r| r.attrs.closable)
+                .and_then(|r| r.entity)
+            {
+                let mut ask = CustomEvent::new(e, "panelclose").with("reason", "user");
+                ask.cancelable = true;
+                events.write(ask);
+            }
+            Ok(())
+        }
+        MenuAction::Detach => core.op_detach(panel, Reason::User),
+        MenuAction::DetachGroup => core.op_detach_group(panel, Reason::User),
+        MenuAction::Attach => core.op_attach(panel, Reason::User),
+        MenuAction::Maximize => core.op_maximize(panel, Reason::User),
+        MenuAction::Restore => {
+            if let Where::Dock(d) = core.ws.where_is(panel) {
+                core.op_restore_maximized(&d, Reason::User);
+            }
+            Ok(())
+        }
+    };
+    match done {
+        // Keyboard focus goes with a panel that moved.
+        Ok(())
+            if matches!(
+                action,
+                MenuAction::Detach | MenuAction::DetachGroup | MenuAction::Attach
+            ) =>
+        {
+            core.focus_request = Some(panel.to_string());
+        }
+        Ok(()) => {}
+        Err(e) => lumen_module::lumen_core::warn_line!("lumen-dock: {e}"),
+    }
+}
+
 /// The panel a strip button shows, through the tab it stands for.
 fn panel_of_button(
     button: Entity,
@@ -407,7 +457,11 @@ fn user_input(
         Query<&ChildOf>,
     ),
     windows: Query<&DockWindow>,
-    (menu_items, tab_menu): (Query<&DockMenuItem>, Res<TabMenu>),
+    (menu_items, mut tab_menu, nav): (
+        Query<&DockMenuItem>,
+        ResMut<TabMenu>,
+        Option<Res<ActivePopupNav>>,
+    ),
 ) {
     let UserInput {
         clicks,
@@ -431,42 +485,19 @@ fn user_input(
             core.dirty = true;
         }
     }
+    // A tab menu item does what it says once the menu has closed and handed
+    // focus back to the tab it opened on: the move may rebuild that tab.
+    if nav.is_none_or(|n| n.0.is_none())
+        && let Some(action) = tab_menu.pending.take()
+        && let Some(panel) = tab_menu.panel.clone()
+    {
+        menu_action(&mut core, &mut events, action, &panel);
+    }
     // A close button, or a middle click on a tab, asks to close the panel;
-    // a tab menu item does what it says.
+    // a tab menu item waits for its menu to close.
     for click in clicks.read() {
         if let Some(action) = crate::menu::item_action(&menu_items, &parents, click.entity) {
-            let Some(panel) = tab_menu.panel.clone() else {
-                continue;
-            };
-            if action == MenuAction::Close {
-                if let Some(e) = core
-                    .panels
-                    .get(&panel)
-                    .filter(|r| r.attrs.closable)
-                    .and_then(|r| r.entity)
-                {
-                    let mut ask = CustomEvent::new(e, "panelclose").with("reason", "user");
-                    ask.cancelable = true;
-                    events.write(ask);
-                }
-                continue;
-            }
-            let done = match action {
-                MenuAction::Detach => core.op_detach(&panel, Reason::User),
-                MenuAction::DetachGroup => core.op_detach_group(&panel, Reason::User),
-                MenuAction::Attach => core.op_attach(&panel, Reason::User),
-                MenuAction::Maximize => core.op_maximize(&panel, Reason::User),
-                MenuAction::Restore => {
-                    if let Where::Dock(d) = core.ws.where_is(&panel) {
-                        core.op_restore_maximized(&d, Reason::User);
-                    }
-                    Ok(())
-                }
-                MenuAction::Close => Ok(()),
-            };
-            if let Err(e) = done {
-                lumen_module::lumen_core::warn_line!("lumen-dock: {e}");
-            }
+            tab_menu.pending = Some(action);
             continue;
         }
         let panel = match close_buttons.get(click.entity) {
