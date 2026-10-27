@@ -9,13 +9,10 @@
 //! the module's `keys` config.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
-use bevy_ecs::message::MessageCursor;
 use bevy_ecs::prelude::*;
 use lumen_dock_model::{Container, Where};
 use lumen_module::lumen_core::components::{Disabled, Display, Style, TabIndex, Visible};
-use lumen_module::lumen_core::input::{
-    FocusTracker, FocusVisible, Focused, Key, KeyPressed, Modifiers,
-};
+use lumen_module::lumen_core::input::{FocusTracker, FocusVisible, Focused, Key, Modifiers};
 use lumen_module::lumen_core::window::{PrimaryWindow, WindowRuntime};
 use lumen_module::lumen_primitives::TabStripButton;
 use lumen_module::lumen_script::CustomEvent;
@@ -285,17 +282,7 @@ fn container_of(shared: &Shared, panel: &str) -> Option<Container> {
 }
 
 /// Answer the dock's keys.
-pub fn dock_keys(world: &mut World, mut cursor: Local<MessageCursor<KeyPressed>>) {
-    let Some(messages) = world.get_resource::<bevy_ecs::message::Messages<KeyPressed>>() else {
-        return;
-    };
-    let pressed: Vec<(Key, Modifiers)> = cursor
-        .read(messages)
-        .map(|k| (k.key.clone(), k.modifiers))
-        .collect();
-    if pressed.is_empty() {
-        return;
-    }
+pub fn dock_keys(world: &mut World, pressed: Vec<(Key, Modifiers)>) {
     let keys = world.resource::<Keys>().clone();
     let shared = world.resource::<Shared>().clone();
     for (key, m) in pressed {
