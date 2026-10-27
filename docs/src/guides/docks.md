@@ -228,7 +228,7 @@ console.
 
 ## Where to look things up
 
-- [`<dock>` and its elements](../reference/tags.md#dock): every attribute,
+- [`<dock>` and its elements](../reference/tags.md#dock-and-its-panels): every attribute,
   event and class.
 - The `dock` functions for [candela](../reference/scripting-candela.md#docks-and-windows),
   [Rhai](../reference/scripting-rhai.md#docks-and-windows) and
