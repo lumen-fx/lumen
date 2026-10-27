@@ -1085,6 +1085,61 @@ impl Workspace {
         Ok(effects)
     }
 
+    /// Move every panel of the stack `stack` to `target`, keeping their
+    /// order and the one that shows: a whole tab group dragged onto another
+    /// stack, beside one, along a dock's edge, or out into a window of its
+    /// own. Moving a stack onto or beside itself does nothing. Refuses,
+    /// changing nothing, when a panel of the group does not dock and the
+    /// target is in a dock.
+    pub fn move_group(
+        &mut self,
+        stack: &str,
+        target: &Target,
+        info: &dyn Fn(&str) -> PanelInfo,
+    ) -> Result<Vec<Effect>, OpError> {
+        let group = self
+            .stack(stack)
+            .ok_or_else(|| OpError::UnknownTarget(stack.to_string()))?
+            .clone();
+        let Some(first) = group.panels.first().cloned() else {
+            return Ok(Vec::new());
+        };
+        let onto_itself = match target {
+            Target::Tab { stack: t, .. } => t == stack,
+            Target::Edge { node, .. } => node == stack,
+            Target::RootEdge { .. } | Target::NewWindow(_) => false,
+        };
+        if onto_itself {
+            return Ok(Vec::new());
+        }
+        if let Target::NewWindow(place) = target {
+            if let Some(Container::Dock(_)) = self.container_of_node(stack) {
+                return self.detach_group(&first, place.clone());
+            }
+            // Already a window's group: a window of its own is where it is.
+            return Ok(Vec::new());
+        }
+        if let Some(p) = group.panels.iter().find(|p| !info(p).dockable) {
+            return Err(OpError::NotDockable(p.clone()));
+        }
+        let mut effects = self.move_to(&first, target, &info(&first))?;
+        let landed = self.find(&first).expect("just moved").clone();
+        for (i, p) in group.panels.iter().enumerate().skip(1) {
+            let to = Target::Tab {
+                stack: landed.stack.clone(),
+                index: landed.index + i,
+            };
+            effects.extend(self.move_to(p, &to, &info(p))?);
+        }
+        if let Some(active) = &group.active
+            && let Some(s) = self.stack_mut(&landed.stack)
+            && s.panels.contains(active)
+        {
+            s.active = Some(active.clone());
+        }
+        Ok(effects)
+    }
+
     /// Dock `panel` back from its window: to the spot it came from, else
     /// where `info` places it.
     pub fn attach(&mut self, panel: &str, info: &PanelInfo) -> Result<Vec<Effect>, OpError> {

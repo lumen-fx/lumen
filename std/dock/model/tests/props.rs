@@ -45,6 +45,7 @@ enum Op {
     Collapse(usize, bool),
     Maximize(usize),
     Restore,
+    Group(usize, usize, u8),
 }
 
 fn side(n: u8) -> Side {
@@ -65,8 +66,9 @@ fn op() -> impl Strategy<Value = Op> {
         p.clone().prop_map(Op::Attach),
         (0..3usize, any::<bool>()).prop_map(|(a, b)| Op::CloseWindow(a, b)),
         (p.clone(), any::<bool>()).prop_map(|(a, b)| Op::Collapse(a, b)),
-        p.prop_map(Op::Maximize),
+        p.clone().prop_map(Op::Maximize),
         Just(Op::Restore),
+        (p.clone(), p, any::<u8>()).prop_map(|(a, b, c)| Op::Group(a, b, c)),
     ]
 }
 
@@ -155,6 +157,29 @@ fn run(w: &mut Workspace, op: &Op) {
             w.restore_maximized("dock");
             Ok(())
         }
+        // A whole stack onto another panel's stack, beside it, along the
+        // dock's edge, or out into a window, by the low bits of `how`.
+        Op::Group(a, b, how) => match (w.find(p(*a)), w.find(p(*b))) {
+            (Some(from), Some(to)) => {
+                let target = match how % 4 {
+                    0 => Target::Tab {
+                        stack: to.stack,
+                        index: (*how / 4) as usize,
+                    },
+                    1 => Target::Edge {
+                        node: to.stack,
+                        side: side(*how / 4),
+                    },
+                    2 => Target::RootEdge {
+                        dock: "dock".into(),
+                        side: side(*how / 4),
+                    },
+                    _ => Target::NewWindow(WindowPlace::default()),
+                };
+                w.move_group(&from.stack, &target, &|_| info(0)).map(drop)
+            }
+            _ => Ok(()),
+        },
     };
 }
 
