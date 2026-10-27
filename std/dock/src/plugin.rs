@@ -24,7 +24,7 @@ use lumen_module::lumen_script::{CustomEvent, CustomEventDelivered, ScriptFnAppE
 use crate::adopt::{
     Arrivals, DockChrome, DockPanel, TAGS, adopt_elements, arrivals_pending, install_observers,
 };
-use crate::keys::{Keys, dock_keys};
+use crate::keys::Keys;
 use crate::persist::{Persist, save_if_due};
 use crate::realize::{Built, DockStack, DockTab, DockWindow, realize};
 use crate::state::{Reason, Shared};
@@ -162,7 +162,17 @@ impl Plugin for DockPlugin {
         app.world.init_resource::<Built>();
         app.add_ua_stylesheet(NAME, UA_CSS);
         app.add_default_messages("en-US", MESSAGES_EN);
+        // Registered here, ahead of the runtime's own plugins, for an app
+        // assembled without them; registering a message twice is a no-op.
         message::<DockEvent>(&mut app.world);
+        message::<CustomEvent>(&mut app.world);
+        message::<CustomEventDelivered>(&mut app.world);
+        message::<WindowClosing>(&mut app.world);
+        message::<WindowFocused>(&mut app.world);
+        message::<ClickEvent>(&mut app.world);
+        message::<DoubleClickEvent>(&mut app.world);
+        message::<SplitResized>(&mut app.world);
+        message::<lumen_module::lumen_core::input::KeyPressed>(&mut app.world);
         install_observers(&mut app.world);
         match crate::api::script_fns(&shared) {
             Ok(fns) => {
@@ -170,16 +180,28 @@ impl Plugin for DockPlugin {
             }
             Err(e) => lumen_module::lumen_core::warn_line!("lumen-dock: {e}"),
         }
+        // The module's world-wide work (reading new elements, making the
+        // elements follow the model, moving focus, the keys) runs as queued
+        // commands that a cheap system adds only when there is work, so an
+        // idle tick runs no exclusive system of the module's and the
+        // schedule keeps its parallelism.
+        use bevy_ecs::schedule::common_conditions::{
+            any_match_filter, any_with_component, on_message, resource_changed,
+        };
+        use lumen_module::lumen_core::input::KeyPressed;
+        // Each system carries the condition under which it has work, so an
+        // idle tick dispatches none of them.
+        let input_due = on_message::<ClickEvent>
+            .or_eager(on_message::<DoubleClickEvent>)
+            .or_eager(on_message::<SplitResized>)
+            .or_eager(on_message::<WindowClosing>)
+            .or_eager(on_message::<CustomEventDelivered>)
+            .or_eager(any_match_filter::<(With<DockStack>, Changed<Tabs>)>);
         app.add_systems(
             TickStage::Systems,
             (
-                ensure_messages.run_if(messages_missing),
-                user_input,
-                dock_keys.run_if(
-                    bevy_ecs::schedule::common_conditions::on_message::<
-                        lumen_module::lumen_core::input::KeyPressed,
-                    >,
-                ),
+                user_input.run_if(input_due),
+                keys_gate.run_if(on_message::<KeyPressed>),
             )
                 .chain()
                 .in_set(DockSet::Input)
@@ -188,9 +210,11 @@ impl Plugin for DockPlugin {
         // Elements read twice a tick: before any handler runs, so a script's
         // `on_ready` finds the panels the markup declared, and after the DOM
         // commands, so a panel a script appended is placed on the same tick.
+        // The work itself runs as queued commands, so a tick with none runs no
+        // exclusive system of the module's.
         app.add_systems(
             TickStage::Systems,
-            adopt_elements
+            adopt_gate
                 .run_if(arrivals_pending)
                 .before(ScriptSet::Ready)
                 .before(ScriptSet::Dispatch)
@@ -199,34 +223,39 @@ impl Plugin for DockPlugin {
         );
         app.add_systems(
             TickStage::Systems,
-            adopt_elements
-                .run_if(arrivals_pending)
-                .in_set(DockSet::Adopt)
-                .after(DockSet::Input)
-                .after(lumen_module::lumen_scene::dom::apply_dom_commands),
-        );
-        app.add_systems(
-            TickStage::Systems,
-            realize
-                .run_if(|shared: Res<Shared>| shared.lock().dirty)
+            realize_gate
+                .run_if(|a: Res<Arrivals>, shared: Res<Shared>| {
+                    arrivals_pending(a) || shared.lock().dirty
+                })
                 .in_set(DockSet::Realize)
-                .after(DockSet::Adopt)
+                .after(DockSet::Input)
+                .after(lumen_module::lumen_scene::dom::apply_dom_commands)
                 .before(lumen_module::lumen_scene::widgets::keep_widget_parts),
         );
         app.add_systems(
             TickStage::Systems,
-            (report, track_windows, save_if_due)
+            (
+                report.run_if(
+                    (|shared: Res<Shared>| shared.lock().report_due)
+                        .or_eager(resource_changed::<FocusTracker>)
+                        .or_eager(on_message::<WindowFocused>),
+                ),
+                track_windows.run_if(any_with_component::<DockWindow>),
+                save_if_due
+                    .run_if(|p: Option<Res<Persist>>| p.is_some_and(|p| *p == Persist::Auto)),
+            )
                 .chain()
                 .in_set(DockSet::Report)
-                .after(DockSet::Realize),
+                .after(DockSet::Realize)
+                .after(lumen_module::lumen_scene::widgets::keep_widget_parts),
         );
         // After the tab sets show what the realization picked, so focus can
         // land in a panel that just became its stack's showing tab.
         app.add_systems(
             TickStage::Systems,
             (
-                decorate_tabs,
-                crate::keys::focus_requests.run_if(|shared: Res<Shared>| {
+                decorate_tabs.run_if(any_match_filter::<Added<TabStripButton>>),
+                focus_gate.run_if(|shared: Res<Shared>| {
                     let core = shared.lock();
                     core.focus_request.is_some() || !core.destroy.is_empty()
                 }),
@@ -238,32 +267,39 @@ impl Plugin for DockPlugin {
     }
 }
 
-/// Register, once, the messages the module reads that the runtime's own
-/// plugins normally register. Their plugins install after the module's, and
-/// a message registered twice drops what was written before it is read, so
-/// the module only fills the ones an app assembled without them lacks.
-fn ensure_messages(world: &mut World) {
-    message::<CustomEvent>(world);
-    message::<CustomEventDelivered>(world);
-    message::<WindowClosing>(world);
-    message::<WindowFocused>(world);
-    message::<ClickEvent>(world);
-    message::<DoubleClickEvent>(world);
-    message::<SplitResized>(world);
-    message::<lumen_module::lumen_core::input::KeyPressed>(world);
+/// Queue the elements the page added to be read.
+fn adopt_gate(mut commands: Commands) {
+    commands.queue(adopt_elements);
 }
 
-/// Whether a message the module reads has no buffer yet.
-fn messages_missing(world: &World) -> bool {
-    use bevy_ecs::message::Messages;
-    !(world.contains_resource::<Messages<CustomEvent>>()
-        && world.contains_resource::<Messages<CustomEventDelivered>>()
-        && world.contains_resource::<Messages<WindowClosing>>()
-        && world.contains_resource::<Messages<WindowFocused>>()
-        && world.contains_resource::<Messages<ClickEvent>>()
-        && world.contains_resource::<Messages<DoubleClickEvent>>()
-        && world.contains_resource::<Messages<SplitResized>>()
-        && world.contains_resource::<Messages<lumen_module::lumen_core::input::KeyPressed>>())
+/// Queue the elements to follow the model, reading any the DOM commands
+/// added first, when either has work.
+fn realize_gate(arrivals: Res<Arrivals>, shared: Res<Shared>, mut commands: Commands) {
+    let arrived = arrivals_pending(arrivals);
+    if arrived || shared.lock().dirty {
+        commands.queue(move |world: &mut World| {
+            if arrived {
+                adopt_elements(world);
+            }
+            realize(world);
+        });
+    }
+}
+
+/// Queue the keys pressed this tick for the dock to answer, when any was.
+fn keys_gate(
+    mut keys: MessageReader<lumen_module::lumen_core::input::KeyPressed>,
+    mut commands: Commands,
+) {
+    let pressed: Vec<_> = keys.read().map(|k| (k.key.clone(), k.modifiers)).collect();
+    if !pressed.is_empty() {
+        commands.queue(move |world: &mut World| crate::keys::dock_keys(world, pressed));
+    }
+}
+
+/// Queue the focus move or the panel removal the dock owes.
+fn focus_gate(mut commands: Commands) {
+    commands.queue(crate::keys::focus_requests);
 }
 
 /// The panel a strip button shows, through the tab it stands for.
