@@ -3,8 +3,8 @@
 .lm-dock, .lm-dock-split, .lm-dock-stack { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; }
 .lm-dock, .lm-dock-stack { flex-direction: column; }
 .lm-dock-split { flex-direction: row; }
-.lm-dock-split[axis="column"] { flex-direction: column; }
+.lm-dock-split[data-axis="column"] { flex-direction: column; }
 .lm-dock-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
-.lm-dock-panel[data-dock-inactive], .lm-dock > .lm-dock-panel, .lm-dock-stack[data-dock-collapsed] > .lm-dock-panel { display: none; }
+.lm-dock-panel[data-dock-inactive], .lm-dock > .lm-dock-panel, .lm-dock-stack > .lm-dock-panel[data-hidden="true"], .lm-dock-stack[data-dock-collapsed] > .lm-dock-panel { display: none; }
 .lm-dock-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
 .lm-dock-tabs > button[aria-selected="true"] { font-weight: 600; }
