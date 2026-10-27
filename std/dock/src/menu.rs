@@ -101,6 +101,8 @@ pub struct TabMenu {
     pub panel: Option<String>,
     /// The popup's root, under the dock or the window it opened in.
     pub root: Option<Entity>,
+    /// An item picked, waiting for the menu to close.
+    pub pending: Option<MenuAction>,
 }
 
 /// The panel whose tab `e` is, or is inside.
