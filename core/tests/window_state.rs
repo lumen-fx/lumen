@@ -424,8 +424,42 @@ fn headless_windows_take_the_scale_of_their_monitor() {
         .id();
     app.tick();
     let runtime = app.world.get::<WindowRuntime>(placed).unwrap();
-    assert_ne!(runtime.position, Some(IVec2::new(3000, 500)));
+    assert_eq!(
+        runtime.position, None,
+        "a desktop that places windows does not say where, as Wayland"
+    );
     assert_eq!(runtime.monitor.as_deref(), Some("left"));
+    // It placed the window, on the left monitor at scale 1, and keeps it
+    // there tick after tick.
+    assert_eq!(
+        app.world
+            .get::<WindowViewport>(placed)
+            .unwrap()
+            .scale_factor,
+        1.0
+    );
+    app.tick();
+    assert_eq!(
+        app.world.get::<WindowRuntime>(placed).unwrap().position,
+        None
+    );
+
+    // Maximized and fullscreen are what the window reports at once.
+    {
+        let mut w = app.world.get_mut::<Window>(placed).unwrap();
+        w.maximized = true;
+        w.fullscreen = true;
+    }
+    app.tick();
+    let runtime = app.world.get::<WindowRuntime>(placed).unwrap();
+    assert!(runtime.maximized && runtime.fullscreen);
+    app.world.get_mut::<Window>(placed).unwrap().fullscreen = false;
+    app.tick();
+    let runtime = app.world.get::<WindowRuntime>(placed).unwrap();
+    assert!(runtime.maximized && !runtime.fullscreen);
+    app.world.despawn(placed);
+    app.world.despawn(right);
+    app.tick();
 }
 
 /// Closing a secondary window announces it first, so its owner can take its

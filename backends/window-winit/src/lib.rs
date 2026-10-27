@@ -67,7 +67,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState as WinitModifiers, NamedKey as WinitNamed};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 /// Minimum wall interval between two consecutive animation-driven paints
 /// (~60 Hz). Used by [`ApplicationHandler::about_to_wait`] to pace redraws
@@ -610,6 +610,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         self.renderer.publish(&mut self.app.render_world);
         let sync = WindowSync::opened(&title, logical);
         self.insert(primary, window, a11y, sync);
+        self.follow_platform_state(primary);
         self.primary = Some(primary);
         // Windows the app spawned before the loop started open now.
         self.sync_windows(event_loop);
@@ -798,6 +799,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             WindowEvent::Moved(_) => {
                 // The window may now be on another monitor.
                 record_runtime(&mut self.app.world, entity, &window);
+                self.follow_platform_state(entity);
             }
             WindowEvent::RedrawRequested => {
                 // Anchor the animation-pacing deadline at the frame START so
@@ -1204,12 +1206,14 @@ fn record_runtime(world: &mut World, entity: Entity, window: &Window) {
         .map(|p| glam::IVec2::new(p.x, p.y));
     let monitor = window.current_monitor().and_then(|m| m.name());
     let maximized = window.is_maximized();
+    let fullscreen = window.fullscreen().is_some();
     let minimized = window.is_minimized().unwrap_or(false);
     if let Some(mut runtime) = world.get_mut::<WindowRuntime>(entity) {
         let next = WindowRuntime {
             position,
             monitor,
             maximized,
+            fullscreen,
             minimized,
             ..runtime.clone()
         };
@@ -1454,7 +1458,10 @@ impl WinitHandler {
         sync.position = wanted.position;
         sync.min_size = wanted.min_size;
         sync.max_size = wanted.max_size;
+        sync.maximized = wanted.maximized;
+        sync.fullscreen = wanted.fullscreen;
         self.insert(entity, window, a11y, sync);
+        self.follow_platform_state(entity);
         self.want_frame();
     }
 
@@ -1514,6 +1521,39 @@ impl WinitHandler {
             // send no `Resized`; take it the way a resize event lands.
             if let Some(physical) = window.request_inner_size(requested) {
                 self.resized(entity, &window, physical);
+            }
+        }
+        // After the size, so a restored window keeps the size it asked for
+        // when it is later un-maximized.
+        if let Some(fullscreen) = changes.fullscreen {
+            window.set_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
+        }
+        if let Some(maximized) = changes.maximized {
+            window.set_maximized(maximized);
+        }
+    }
+
+    /// Take a maximize, restore or fullscreen change the platform reported
+    /// for `entity` into its [`lumen_core::window::Window`].
+    fn follow_platform_state(&mut self, entity: Entity) {
+        let Some(os) = self
+            .ids
+            .get(&entity)
+            .and_then(|id| self.windows.get_mut(id))
+        else {
+            return;
+        };
+        let Some(runtime) = self.app.world.get::<WindowRuntime>(entity).cloned() else {
+            return;
+        };
+        if let Some(mut wanted) = self.app.world.get_mut::<lumen_core::window::Window>(entity) {
+            let before = (wanted.maximized, wanted.fullscreen);
+            let mut next = wanted.clone();
+            os.sync.take_platform_state(&mut next, &runtime);
+            if (next.maximized, next.fullscreen) != before {
+                let wanted = wanted.bypass_change_detection();
+                wanted.maximized = next.maximized;
+                wanted.fullscreen = next.fullscreen;
             }
         }
     }
@@ -1805,6 +1845,7 @@ impl WinitHandler {
             );
             self.platform_resized(entity, size, scale_factor);
             record_runtime(&mut self.app.world, entity, window);
+            self.follow_platform_state(entity);
             // Smart reactive resize: relayout + repaint synchronously
             // inside the resize event. Layout sees the new viewport and
             // re-lays out the window's roots; the frame-dirty roll-up folds
@@ -1899,6 +1940,12 @@ fn window_attributes(
     if let Some(max) = wanted.max_size {
         attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(max.x, max.y));
     }
+    if wanted.maximized {
+        attrs = attrs.with_maximized(true);
+    }
+    if wanted.fullscreen {
+        attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
+    }
     owned_window_attributes(attrs, wanted.kind, owner)
 }
 
@@ -1967,6 +2014,8 @@ struct WindowSync {
     position: Option<glam::IVec2>,
     min_size: Option<glam::Vec2>,
     max_size: Option<glam::Vec2>,
+    maximized: bool,
+    fullscreen: bool,
 }
 
 /// The changes [`WindowSync::take_changes`] found: each `Some` is a value to
@@ -1981,6 +2030,8 @@ struct WindowChanges {
     position: Option<Option<glam::IVec2>>,
     min_size: Option<Option<glam::Vec2>>,
     max_size: Option<Option<glam::Vec2>>,
+    maximized: Option<bool>,
+    fullscreen: Option<bool>,
 }
 
 impl WindowChanges {
@@ -2002,6 +2053,8 @@ impl WindowSync {
             position: None,
             min_size: None,
             max_size: None,
+            maximized: false,
+            fullscreen: false,
         }
     }
 
@@ -2041,7 +2094,34 @@ impl WindowSync {
             self.max_size = wanted.max_size;
             changes.max_size = Some(wanted.max_size);
         }
+        if wanted.maximized != self.maximized {
+            self.maximized = wanted.maximized;
+            changes.maximized = Some(wanted.maximized);
+        }
+        if wanted.fullscreen != self.fullscreen {
+            self.fullscreen = wanted.fullscreen;
+            changes.fullscreen = Some(wanted.fullscreen);
+        }
         changes
+    }
+
+    /// Take a maximize, restore or fullscreen change the platform made on
+    /// its own (the user's title-bar button, a window manager key) into
+    /// `wanted`, the way [`take_platform_size`] takes a resize: a request
+    /// the app made and the platform has not answered yet is kept.
+    fn take_platform_state(
+        &mut self,
+        wanted: &mut lumen_core::window::Window,
+        runtime: &WindowRuntime,
+    ) {
+        if wanted.maximized == self.maximized && runtime.maximized != self.maximized {
+            wanted.maximized = runtime.maximized;
+            self.maximized = runtime.maximized;
+        }
+        if wanted.fullscreen == self.fullscreen && runtime.fullscreen != self.fullscreen {
+            wanted.fullscreen = runtime.fullscreen;
+            self.fullscreen = runtime.fullscreen;
+        }
     }
 }
 
@@ -3235,6 +3315,41 @@ mod tests {
 
     fn wanted(title: &str, w: f32, h: f32) -> lumen_core::window::Window {
         lumen_core::window::Window::new(title, glam::Vec2::new(w, h))
+    }
+
+    /// Maximizing and fullscreen go to the platform window once each, and a
+    /// change the platform made on its own comes back into the app's window
+    /// unless the app asked for something the platform has not answered yet.
+    #[test]
+    fn maximized_and_fullscreen_follow_the_app_and_the_platform() {
+        let mut sync = WindowSync::opened("App", glam::Vec2::new(800.0, 600.0));
+        let mut app = wanted("App", 800.0, 600.0);
+        app.maximized = true;
+        let changes = sync.take_changes(&app);
+        assert_eq!((changes.maximized, changes.fullscreen), (Some(true), None));
+        assert!(sync.take_changes(&app).is_empty());
+        app.fullscreen = true;
+        assert_eq!(sync.take_changes(&app).fullscreen, Some(true));
+
+        // The platform reports what it did: maximized, out of fullscreen.
+        let mut runtime = lumen_core::window::WindowRuntime {
+            maximized: true,
+            ..Default::default()
+        };
+        let mut next = app.clone();
+        sync.take_platform_state(&mut next, &runtime);
+        assert_eq!((next.maximized, next.fullscreen), (true, false));
+        // The user restores the window.
+        runtime.maximized = false;
+        sync.take_platform_state(&mut next, &runtime);
+        assert_eq!((next.maximized, next.fullscreen), (false, false));
+        assert_eq!((sync.maximized, sync.fullscreen), (false, false));
+        assert!(sync.take_changes(&next).is_empty());
+        // An app request not handed to the platform yet is kept.
+        next.maximized = true;
+        sync.take_platform_state(&mut next, &runtime);
+        assert!(next.maximized);
+        assert_eq!(sync.take_changes(&next).maximized, Some(true));
     }
 
     /// The platform window gets what the app asked for and does not have,
