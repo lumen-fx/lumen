@@ -71,6 +71,8 @@ pub struct PanelAttrs {
     pub resizable: bool,
     /// Whether a user can close it.
     pub closable: bool,
+    /// Whether a user can drag its tab to rearrange it.
+    pub movable: bool,
     /// Closing removes the element instead of hiding it.
     pub destroy_on_close: bool,
     /// Starts hidden.
@@ -93,6 +95,7 @@ impl Default for PanelAttrs {
             window_size: None,
             resizable: true,
             closable: true,
+            movable: true,
             destroy_on_close: false,
             hidden: false,
             kind: None,
@@ -150,6 +153,7 @@ impl PanelAttrs {
             window_size: attr(attrs, "window-size").and_then(pair),
             resizable: flag(attrs, "resizable", true),
             closable: flag(attrs, "closable", true),
+            movable: flag(attrs, "movable", true),
             destroy_on_close: flag(attrs, "destroy-on-close", false),
             hidden: flag(attrs, "hidden", false),
             kind: attr(attrs, "kind").map(str::to_string),
@@ -334,6 +338,7 @@ mod tests {
             ("window-size", "640 480"),
             ("resizable", "false"),
             ("closable", "no"),
+            ("movable", "false"),
             ("destroy-on-close", ""),
             ("hidden", "true"),
             ("kind", "doc"),
@@ -347,7 +352,7 @@ mod tests {
         assert_eq!(p.window_kind, WindowKind::Dialog);
         assert_eq!(p.modal, Modal::Parent);
         assert_eq!(p.window_size, Some([640.0, 480.0]));
-        assert!(!p.resizable && !p.closable && p.destroy_on_close && p.hidden);
+        assert!(!p.resizable && !p.closable && !p.movable && p.destroy_on_close && p.hidden);
         assert_eq!(p.kind.as_deref(), Some("doc"));
         assert_eq!(p.state.as_deref(), Some(""));
         let info = panel_info(Some(&a), None);

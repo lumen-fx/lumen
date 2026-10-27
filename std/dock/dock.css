@@ -94,3 +94,29 @@
 }
 .dock-window > .dock-stack { flex-grow: 1; }
 .dock-window > .dock-split { flex-grow: 1; }
+
+/* Dragging a tab: the ghost that follows the pointer and the region a drop
+   would fill. Both sit above everything and never take the pointer. */
+.dock-drag-ghost {
+  padding: 4 12;
+  align-items: center;
+  border-radius: var(--lumen-dock-ghost-radius, var(--lumen-radius-sm, 4));
+  background: var(--lumen-dock-ghost-bg, var(--lumen-panel, #1a1b21));
+  border: 1px solid var(--lumen-dock-accent, var(--lumen-accent, #33c7ce));
+  text-color: var(--lumen-dock-tab-active-text, var(--lumen-text, #ffffff));
+  font-size: var(--lumen-dock-tab-font-size, 13);
+  opacity: 0.9;
+}
+.dock-drop-preview {
+  background: var(--lumen-dock-drop-bg, #33c7ce33);
+  border: 2px solid var(--lumen-dock-drop-border, var(--lumen-dock-accent, var(--lumen-accent, #33c7ce)));
+  border-radius: var(--lumen-dock-drop-radius, 2);
+}
+.dock-drop-preview.dock-drop-tab {
+  background: var(--lumen-dock-drop-border, var(--lumen-dock-accent, var(--lumen-accent, #33c7ce)));
+  border-width: 0;
+}
+
+/* How far past a window's edge a dragged tab goes before it tears off into
+   a window of its own. The module reads this element's width. */
+.dock-tearoff-probe { width: var(--lumen-dock-tearoff-distance, 24); }

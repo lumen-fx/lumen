@@ -17,3 +17,6 @@ lumen-dock-moved-to-window = moved to a new window
 lumen-dock-docked-back = docked back
 lumen-dock-moved-beside = moved beside
 lumen-dock-moved = moved
+
+# What a screen reader hears when Escape cancels a tab drag.
+lumen-dock-drag-cancelled = Move cancelled

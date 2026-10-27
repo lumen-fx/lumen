@@ -106,6 +106,9 @@ pub struct DesktopSurface {
     pub size: UVec2,
     /// Logical to physical multiplier.
     pub scale: f32,
+    /// Whether it shows. A hidden window still places the pointer's moves
+    /// reported in its coordinates, but the pointer is never over it.
+    pub visible: bool,
 }
 
 impl DesktopSurface {
@@ -116,19 +119,20 @@ impl DesktopSurface {
     }
 
     /// The desktop point `p` in this window's logical pixels.
-    pub fn to_local(&self, p: IVec2) -> Vec2 {
+    pub fn to_local(self, p: IVec2) -> Vec2 {
         (p - self.origin).as_vec2() / self.scale.max(0.01)
     }
 
     /// The point `local` (this window's logical pixels) on the desktop.
-    pub fn to_desktop(&self, local: Vec2) -> IVec2 {
+    pub fn to_desktop(self, local: Vec2) -> IVec2 {
         self.origin + (local * self.scale).round().as_ivec2()
     }
 }
 
-/// The window under the desktop point `p`: the first of `surfaces` that
-/// holds it, so the caller lists them top-most first. `skip` is left out
-/// (the window following the pointer is always under it).
+/// The window under the desktop point `p`: the first shown one of
+/// `surfaces` that holds it, so the caller lists them top-most first.
+/// `skip` is left out (the window following the pointer is always under
+/// it).
 pub fn surface_at(
     surfaces: &[DesktopSurface],
     p: IVec2,
@@ -136,7 +140,7 @@ pub fn surface_at(
 ) -> Option<&DesktopSurface> {
     surfaces
         .iter()
-        .filter(|s| Some(s.window) != skip)
+        .filter(|s| s.visible && Some(s.window) != skip)
         .find(|s| s.contains(p))
 }
 
@@ -298,18 +302,21 @@ mod tests {
                 origin: IVec2::new(150, 150),
                 size: UVec2::new(100, 100),
                 scale: 2.0,
+                visible: true,
             },
             DesktopSurface {
                 window: b,
                 origin: IVec2::new(900, 100),
                 size: UVec2::new(400, 300),
                 scale: 1.0,
+                visible: true,
             },
             DesktopSurface {
                 window: a,
                 origin: IVec2::new(100, 100),
                 size: UVec2::new(1600, 1200),
                 scale: 2.0,
+                visible: true,
             },
         ];
         (list, a, b, f)
@@ -325,6 +332,24 @@ mod tests {
         assert_eq!(s.to_local(IVec2::new(300, 500)), Vec2::new(100.0, 200.0));
         assert_eq!(s.to_desktop(Vec2::new(100.0, 200.0)), IVec2::new(300, 500));
         assert!(surface_at(&list, IVec2::new(-5, -5), None).is_none());
+        let mut hidden = list.clone();
+        hidden[2].visible = false;
+        assert!(surface_at(&hidden, IVec2::new(300, 500), None).is_none());
+        let mut drag = InProcessDrag::default();
+        drag.request(&SurfaceDragRequest::Begin {
+            source: a,
+            follow: None,
+            grab_offset: Vec2::ZERO,
+        });
+        assert_eq!(
+            drag.moved(&hidden, a, Vec2::new(100.0, 200.0))
+                .map(|s| s.event),
+            Some(SurfaceDragEvent::Over {
+                window: None,
+                position: Vec2::new(100.0, 200.0)
+            }),
+            "a hidden window still places a move reported in it"
+        );
     }
 
     #[test]

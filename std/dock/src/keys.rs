@@ -285,7 +285,14 @@ fn container_of(shared: &Shared, panel: &str) -> Option<Container> {
 pub fn dock_keys(world: &mut World, pressed: Vec<(Key, Modifiers)>) {
     let keys = world.resource::<Keys>().clone();
     let shared = world.resource::<Shared>().clone();
+    // Escape during a drag cancels the drag and nothing else.
+    let dragging = world
+        .get_resource::<crate::drag::DockDrag>()
+        .is_some_and(|d| d.active());
     for (key, m) in pressed {
+        if dragging && key == Key::Named(lumen_module::lumen_core::input::NamedKey::Escape) {
+            continue;
+        }
         let hit = |c: &Option<Chord>| c.as_ref().is_some_and(|c| c.matches(&key, m));
         let focused = world.resource::<FocusTracker>().0;
         let panel = focused.and_then(|f| panel_at(world, f));
