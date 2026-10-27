@@ -328,9 +328,19 @@ fn is_zero(v: &f32) -> bool {
 pub struct DockArea {
     /// Its tree.
     pub root: Node,
+    /// Groups floating over the dock in its window, the top-most last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floats: Vec<Float>,
+    /// Panels pinned to the dock's edges, shown as buttons there.
+    #[serde(default, skip_serializing_if = "Sidebars::is_empty")]
+    pub sidebars: Sidebars,
     /// The panel filling the dock, if one is maximized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximized: Option<PanelId>,
+    /// The pinned panel slid out over the dock, if one is. Not saved: a
+    /// slid-out panel hides again as soon as the user turns away from it.
+    #[serde(skip)]
+    pub open: Option<PanelId>,
 }
 
 impl DockArea {
@@ -338,8 +348,109 @@ impl DockArea {
     pub fn new(root: Node) -> Self {
         Self {
             root,
+            floats: Vec::new(),
+            sidebars: Sidebars::default(),
             maximized: None,
+            open: None,
         }
+    }
+
+    /// The edge `panel` is pinned to in this dock.
+    pub fn pinned(&self, panel: &str) -> Option<Side> {
+        self.sidebars.side_of(panel)
+    }
+}
+
+/// A group floating over its dock, inside the dock's window: a stack, or a
+/// small tree of them, at a rectangle the user moves and resizes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Float {
+    /// The float's id, stable across saves.
+    #[serde(rename = "float")]
+    pub id: String,
+    /// Where it is: its top-left corner from the dock's, and its size, in
+    /// logical pixels.
+    pub rect: Rect,
+    /// Its tree.
+    pub root: Node,
+}
+
+/// The panels pinned to each edge of a dock, in button order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sidebars {
+    /// Along the left edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left: Vec<PanelId>,
+    /// Along the right edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub right: Vec<PanelId>,
+    /// Along the top edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top: Vec<PanelId>,
+    /// Along the bottom edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bottom: Vec<PanelId>,
+}
+
+impl Sidebars {
+    /// Whether no panel is pinned.
+    pub fn is_empty(&self) -> bool {
+        self.left.is_empty()
+            && self.right.is_empty()
+            && self.top.is_empty()
+            && self.bottom.is_empty()
+    }
+
+    /// The panels pinned to `side`.
+    pub fn get(&self, side: Side) -> &Vec<PanelId> {
+        match side {
+            Side::Left => &self.left,
+            Side::Right => &self.right,
+            Side::Top => &self.top,
+            Side::Bottom => &self.bottom,
+        }
+    }
+
+    fn get_mut(&mut self, side: Side) -> &mut Vec<PanelId> {
+        match side {
+            Side::Left => &mut self.left,
+            Side::Right => &mut self.right,
+            Side::Top => &mut self.top,
+            Side::Bottom => &mut self.bottom,
+        }
+    }
+
+    /// Every edge with its panels, left, right, top, bottom.
+    pub fn edges(&self) -> [(Side, &Vec<PanelId>); 4] {
+        [
+            (Side::Left, &self.left),
+            (Side::Right, &self.right),
+            (Side::Top, &self.top),
+            (Side::Bottom, &self.bottom),
+        ]
+    }
+
+    /// The edge `panel` is pinned to.
+    pub fn side_of(&self, panel: &str) -> Option<Side> {
+        self.edges()
+            .into_iter()
+            .find(|(_, ps)| ps.iter().any(|p| p == panel))
+            .map(|(s, _)| s)
+    }
+
+    /// Every pinned panel.
+    pub fn panels(&self) -> impl Iterator<Item = &PanelId> {
+        self.left
+            .iter()
+            .chain(&self.right)
+            .chain(&self.top)
+            .chain(&self.bottom)
+    }
+
+    fn remove(&mut self, panel: &str) -> Option<Side> {
+        let side = self.side_of(panel)?;
+        self.get_mut(side).retain(|p| p != panel);
+        Some(side)
     }
 }
 
@@ -455,6 +566,14 @@ pub struct Home {
     /// The window it was hidden from: `show` opens a window there again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowPlace>,
+    /// The float it was hidden from, by its rectangle in the dock of its
+    /// `dock` spot: `show` floats it there again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub float: Option<Rect>,
+    /// The edge it was pinned to when it was hidden: `show` pins it there
+    /// again and slides it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar: Option<Side>,
 }
 
 /// What an app keeps about a panel it creates at run time, so a restore can
@@ -516,6 +635,10 @@ pub struct PanelInfo {
 pub enum Where {
     /// In a dock.
     Dock(String),
+    /// Floating over a dock, by the dock.
+    Float(String),
+    /// Pinned to an edge of a dock, by the dock.
+    Sidebar(String),
     /// In a window of its own.
     Window(String),
     /// Not shown.
@@ -523,11 +646,13 @@ pub enum Where {
 }
 
 impl Where {
-    /// The name the `panelmove` event gives it: `dock`, `window` or
-    /// `hidden`.
+    /// The name the `panelmove` event gives it: `dock`, `float`,
+    /// `sidebar`, `window` or `hidden`.
     pub fn kind(&self) -> &'static str {
         match self {
             Where::Dock(_) => "dock",
+            Where::Float(_) => "float",
+            Where::Sidebar(_) => "sidebar",
             Where::Window(_) => "window",
             Where::Hidden => "hidden",
         }
@@ -611,6 +736,14 @@ pub enum Target {
         /// The side.
         side: Side,
     },
+    /// A new group floating over a dock, at a rectangle from the dock's
+    /// top-left corner.
+    NewFloat {
+        /// The dock.
+        dock: String,
+        /// Where, in logical pixels.
+        rect: Rect,
+    },
     /// A window of its own.
     NewWindow(WindowPlace),
 }
@@ -620,6 +753,13 @@ pub enum Target {
 pub enum Container {
     /// A dock, by id.
     Dock(String),
+    /// A group floating over a dock.
+    Float {
+        /// The dock.
+        dock: String,
+        /// The float's id.
+        float: String,
+    },
     /// A window, by id.
     Window(String),
 }
@@ -628,7 +768,16 @@ impl Container {
     fn to_where(&self) -> Where {
         match self {
             Container::Dock(d) => Where::Dock(d.clone()),
+            Container::Float { dock, .. } => Where::Float(dock.clone()),
             Container::Window(w) => Where::Window(w.clone()),
+        }
+    }
+
+    /// The dock the container is or floats over.
+    pub fn dock(&self) -> Option<&str> {
+        match self {
+            Container::Dock(d) | Container::Float { dock: d, .. } => Some(d),
+            Container::Window(_) => None,
         }
     }
 }
@@ -673,37 +822,70 @@ impl Workspace {
 
     /// Where `panel` is in the tree, if it is shown.
     pub fn find(&self, panel: &str) -> Option<Location> {
-        for (id, dock) in &self.docks {
-            if let Some((stack, index)) = locate(&dock.root, panel) {
-                return Some(Location {
-                    container: Container::Dock(id.clone()),
-                    stack,
-                    index,
-                });
-            }
-        }
-        for w in &self.windows {
-            if let Some((stack, index)) = locate(&w.root, panel) {
-                return Some(Location {
-                    container: Container::Window(w.id.clone()),
-                    stack,
-                    index,
-                });
-            }
-        }
-        None
+        self.roots().find_map(|(container, root)| {
+            locate(root, panel).map(|(stack, index)| Location {
+                container,
+                stack,
+                index,
+            })
+        })
     }
 
-    /// Where `panel` is shown.
+    /// Where `panel` is: in a dock, a float, a window, pinned to a dock's
+    /// edge, or hidden.
     pub fn where_is(&self, panel: &str) -> Where {
-        self.find(panel)
-            .map(|l| l.container.to_where())
-            .unwrap_or(Where::Hidden)
+        if let Some(l) = self.find(panel) {
+            return l.container.to_where();
+        }
+        match self.pinned_at(panel) {
+            Some((dock, _)) => Where::Sidebar(dock),
+            None => Where::Hidden,
+        }
     }
 
-    /// Whether `panel` is in the tree.
+    /// Whether `panel` is in the tree: in a dock, a float or a window.
     pub fn is_shown(&self, panel: &str) -> bool {
         self.find(panel).is_some()
+    }
+
+    /// Whether `panel` is in view: in the tree, or pinned and slid out.
+    pub fn in_view(&self, panel: &str) -> bool {
+        self.is_shown(panel)
+            || self
+                .docks
+                .values()
+                .any(|d| d.open.as_deref() == Some(panel))
+    }
+
+    /// The dock and edge `panel` is pinned to.
+    pub fn pinned_at(&self, panel: &str) -> Option<(String, Side)> {
+        self.docks
+            .iter()
+            .find_map(|(id, d)| d.pinned(panel).map(|s| (id.clone(), s)))
+    }
+
+    /// Whether the workspace places `panel` anywhere: in the tree or pinned.
+    pub fn is_placed(&self, panel: &str) -> bool {
+        self.is_shown(panel) || self.pinned_at(panel).is_some()
+    }
+
+    /// Every panel the workspace places: the tree's, then the pinned ones.
+    pub fn placed_panels(&self) -> Vec<PanelId> {
+        let mut out = self.shown_panels();
+        for d in self.docks.values() {
+            out.extend(d.sidebars.panels().cloned());
+        }
+        out
+    }
+
+    /// The float called `id`, and its dock.
+    pub fn float(&self, id: &str) -> Option<(&str, &Float)> {
+        self.docks.iter().find_map(|(d, area)| {
+            area.floats
+                .iter()
+                .find(|f| f.id == id)
+                .map(|f| (d.as_str(), f))
+        })
     }
 
     /// The stack called `id`, wherever it is.
@@ -727,11 +909,24 @@ impl Workspace {
         self.windows.iter().find(|w| w.id == id)
     }
 
-    /// Every container's root, docks first by id, then windows in order.
+    /// Every container's root: each dock by id followed by its floats,
+    /// bottom-most first, then the windows in order.
     pub fn roots(&self) -> impl Iterator<Item = (Container, &Node)> {
         self.docks
             .iter()
-            .map(|(id, d)| (Container::Dock(id.clone()), &d.root))
+            .flat_map(|(id, d)| {
+                std::iter::once((Container::Dock(id.clone()), &d.root)).chain(d.floats.iter().map(
+                    move |f| {
+                        (
+                            Container::Float {
+                                dock: id.clone(),
+                                float: f.id.clone(),
+                            },
+                            &f.root,
+                        )
+                    },
+                ))
+            })
             .chain(
                 self.windows
                     .iter()
@@ -742,7 +937,19 @@ impl Workspace {
     fn roots_mut(&mut self) -> impl Iterator<Item = (Container, &mut Node)> {
         self.docks
             .iter_mut()
-            .map(|(id, d)| (Container::Dock(id.clone()), &mut d.root))
+            .flat_map(|(id, d)| {
+                std::iter::once((Container::Dock(id.clone()), &mut d.root)).chain(
+                    d.floats.iter_mut().map(move |f| {
+                        (
+                            Container::Float {
+                                dock: id.clone(),
+                                float: f.id.clone(),
+                            },
+                            &mut f.root,
+                        )
+                    }),
+                )
+            })
             .chain(
                 self.windows
                     .iter_mut()
@@ -757,13 +964,27 @@ impl Workspace {
             .collect()
     }
 
-    /// The stacks of a container in tree order: what F6 cycles through.
+    /// The stacks of a container in tree order: what F6 cycles through. A
+    /// dock's are its tree's, then its floats'.
     pub fn stacks_of(&self, container: &Container) -> Vec<&Stack> {
-        let root = match container {
-            Container::Dock(d) => self.docks.get(d).map(|d| &d.root),
-            Container::Window(w) => self.window(w).map(|w| &w.root),
-        };
-        root.map(Node::stacks).unwrap_or_default()
+        match container {
+            Container::Dock(d) => self
+                .docks
+                .get(d)
+                .map(|d| {
+                    let mut out = d.root.stacks();
+                    for f in &d.floats {
+                        out.extend(f.root.stacks());
+                    }
+                    out
+                })
+                .unwrap_or_default(),
+            Container::Float { float, .. } => self
+                .float(float)
+                .map(|(_, f)| f.root.stacks())
+                .unwrap_or_default(),
+            Container::Window(w) => self.window(w).map(|w| w.root.stacks()).unwrap_or_default(),
+        }
     }
 
     /// The panel showing in the stack that holds `panel`.
@@ -834,6 +1055,26 @@ impl Workspace {
                     "dock '{id}' maximizes '{m}', which it does not hold"
                 ));
             }
+            for f in &dock.floats {
+                if !ids.insert(format!("float:{}", f.id)) {
+                    return Err(format!("float id '{}' twice", f.id));
+                }
+                if f.root.panels().is_empty() {
+                    return Err(format!("float '{}' holds no panel", f.id));
+                }
+            }
+            for p in dock.sidebars.panels() {
+                if !panels.insert(p.clone()) {
+                    return Err(format!("panel '{p}' is pinned and placed elsewhere too"));
+                }
+            }
+            if let Some(o) = &dock.open
+                && dock.pinned(o).is_none()
+            {
+                return Err(format!(
+                    "dock '{id}' slides out '{o}', which it has not pinned"
+                ));
+            }
         }
         Ok(())
     }
@@ -853,8 +1094,28 @@ impl Workspace {
         Ok(vec![Effect::Activated(panel.to_string())])
     }
 
-    /// Take `panel` out of view, remembering where it was.
+    /// Take `panel` out of view, remembering where it was. A pinned panel
+    /// leaves its edge, and comes back to it when shown.
     pub fn hide(&mut self, panel: &str) -> Result<Vec<Effect>, OpError> {
+        if let Some((dock, side)) = self.pinned_at(panel) {
+            let area = self.docks.get_mut(&dock).expect("pinned there");
+            area.sidebars.remove(panel);
+            let was_open = area.open.as_deref() == Some(panel);
+            if was_open {
+                area.open = None;
+            }
+            self.homes.entry(panel.to_string()).or_default().sidebar = Some(side);
+            let mut effects = Vec::new();
+            if was_open {
+                effects.push(Effect::Hidden(panel.to_string()));
+            }
+            effects.push(Effect::Moved {
+                panel: panel.to_string(),
+                from: Where::Sidebar(dock),
+                to: Where::Hidden,
+            });
+            return Ok(effects);
+        }
         let loc = self
             .find(panel)
             .ok_or_else(|| OpError::UnknownPanel(panel.into()))?;
@@ -872,8 +1133,43 @@ impl Workspace {
         if self.is_shown(panel) {
             return self.activate(panel);
         }
-        let home = self.homes.remove(panel).unwrap_or_default();
-        let to = if let Some(place) = home.window.clone() {
+        if self.pinned_at(panel).is_some() {
+            return self.open_pinned(panel);
+        }
+        let mut home = self.homes.remove(panel).unwrap_or_default();
+        let home_dock = home
+            .dock
+            .as_ref()
+            .map(|s| s.dock.clone())
+            .or_else(|| info.dock.clone())
+            .filter(|d| self.docks.contains_key(d));
+        if let (Some(side), Some(dock)) = (home.sidebar.take(), home_dock.clone())
+            && info.dockable
+        {
+            // Back to the edge it was pinned to, slid out.
+            if home.dock.is_some() {
+                self.homes.insert(panel.to_string(), home);
+            }
+            let area = self.docks.get_mut(&dock).expect("checked");
+            area.sidebars.get_mut(side).push(panel.to_string());
+            let mut effects = vec![Effect::Moved {
+                panel: panel.to_string(),
+                from: Where::Hidden,
+                to: Where::Sidebar(dock),
+            }];
+            effects.extend(self.open_pinned(panel)?);
+            return Ok(effects);
+        }
+        let floated = match (home.float.take(), home_dock) {
+            (Some(rect), Some(dock)) if info.dockable && home.window.is_none() => {
+                self.new_float(&dock, rect, panel);
+                Some(Where::Float(dock))
+            }
+            _ => None,
+        };
+        let to = if let Some(to) = floated {
+            to
+        } else if let Some(place) = home.window.clone() {
             Where::Window(self.open_window(panel, info, place))
         } else if !info.dockable || info.dock.is_none() {
             Where::Window(self.open_window(panel, info, WindowPlace::default()))
@@ -886,15 +1182,16 @@ impl Workspace {
         } else {
             self.put_by_place(panel, info)?
         };
-        if let Where::Window(_) = to
+        if let Where::Window(_) | Where::Float(_) = to
             && let Some(spot) = home.dock
         {
-            // A panel shown in a window keeps the dock spot it docks back to.
+            // A panel shown in a window or a float keeps the dock spot it
+            // docks back to.
             self.homes.insert(
                 panel.to_string(),
                 Home {
                     dock: Some(spot),
-                    window: None,
+                    ..Home::default()
                 },
             );
         }
@@ -939,7 +1236,7 @@ impl Workspace {
                     return Ok(Vec::new());
                 }
             }
-            Target::RootEdge { dock, .. } => {
+            Target::RootEdge { dock, .. } | Target::NewFloat { dock, .. } => {
                 if !self.docks.contains_key(dock) {
                     return Err(OpError::UnknownTarget(dock.clone()));
                 }
@@ -982,9 +1279,13 @@ impl Workspace {
                 self.insert_at_root_edge(dock, *side, Node::Stack(stack));
                 Where::Dock(dock.clone())
             }
+            Target::NewFloat { dock, rect } => {
+                self.new_float(dock, *rect, panel);
+                Where::Float(dock.clone())
+            }
             Target::NewWindow(place) => {
                 let home = info.dock.clone().or_else(|| match &from.container {
-                    Container::Dock(d) => Some(d.clone()),
+                    Container::Dock(d) | Container::Float { dock: d, .. } => Some(d.clone()),
                     Container::Window(w) => self.window(w).and_then(|w| w.home.clone()),
                 });
                 let id = self.fresh("w");
@@ -1044,9 +1345,10 @@ impl Workspace {
         let loc = self
             .find(panel)
             .ok_or_else(|| OpError::UnknownPanel(panel.into()))?;
-        let Container::Dock(dock) = loc.container.clone() else {
+        let Some(dock) = loc.container.dock().map(str::to_string) else {
             return Ok(Vec::new());
         };
+        let from_where = loc.container.to_where();
         let stack = self.stack(&loc.stack).expect("located").clone();
         for (i, p) in stack.panels.iter().enumerate() {
             let l = Location {
@@ -1078,7 +1380,7 @@ impl Workspace {
         for p in moved {
             effects.push(Effect::Moved {
                 panel: p,
-                from: Where::Dock(dock.clone()),
+                from: from_where.clone(),
                 to: Where::Window(id.clone()),
             });
         }
@@ -1107,16 +1409,26 @@ impl Workspace {
         let onto_itself = match target {
             Target::Tab { stack: t, .. } => t == stack,
             Target::Edge { node, .. } => node == stack,
-            Target::RootEdge { .. } | Target::NewWindow(_) => false,
+            Target::RootEdge { .. } | Target::NewWindow(_) | Target::NewFloat { .. } => false,
         };
         if onto_itself {
             return Ok(Vec::new());
         }
+        let container = self.container_of_node(stack);
         if let Target::NewWindow(place) = target {
-            if let Some(Container::Dock(_)) = self.container_of_node(stack) {
+            if let Some(Container::Dock(_) | Container::Float { .. }) = container {
                 return self.detach_group(&first, place.clone());
             }
             // Already a window's group: a window of its own is where it is.
+            return Ok(Vec::new());
+        }
+        if let (Target::NewFloat { dock, rect }, Some(Container::Float { dock: d, float })) =
+            (target, &container)
+            && d == dock
+            && self.float(float).is_some_and(|(_, f)| f.root.id() == stack)
+        {
+            // The whole float, floated again: it only moves.
+            self.set_float_rect(float, *rect);
             return Ok(Vec::new());
         }
         if let Some(p) = group.panels.iter().find(|p| !info(p).dockable) {
@@ -1146,8 +1458,9 @@ impl Workspace {
         let loc = self
             .find(panel)
             .ok_or_else(|| OpError::UnknownPanel(panel.into()))?;
-        let Container::Window(window) = loc.container.clone() else {
-            return Err(OpError::NotInWindow(panel.into()));
+        let from = match &loc.container {
+            Container::Window(_) | Container::Float { .. } => loc.container.to_where(),
+            Container::Dock(_) => return Err(OpError::NotInWindow(panel.into())),
         };
         if !info.dockable
             || (info.dock.is_none()
@@ -1181,7 +1494,7 @@ impl Workspace {
         let mut effects = self.prune();
         effects.push(Effect::Moved {
             panel: panel.to_string(),
-            from: Where::Window(window),
+            from,
             to: dock,
         });
         Ok(effects)
@@ -1278,6 +1591,12 @@ impl Workspace {
             effects.push(Effect::Hidden(panel.to_string()));
             effects.extend(self.prune());
         }
+        for area in self.docks.values_mut() {
+            if area.sidebars.remove(panel).is_some() && area.open.as_deref() == Some(panel) {
+                area.open = None;
+                effects.push(Effect::Hidden(panel.to_string()));
+            }
+        }
         self.homes.remove(panel);
         self.panels.remove(panel);
         effects
@@ -1305,9 +1624,21 @@ impl Workspace {
         for (id, dock) in &self.docks {
             next.docks.entry(id.clone()).or_insert_with(|| dock.clone());
         }
-        let named_panels: BTreeSet<PanelId> = named.shown_panels().into_iter().collect();
+        // Panels pinned now stay pinned unless the layout places them.
+        let named_panels: BTreeSet<PanelId> = named.placed_panels().into_iter().collect();
+        for (id, dock) in &self.docks {
+            if let Some(area) = next.docks.get_mut(id) {
+                for (side, panels) in dock.sidebars.edges() {
+                    for p in panels {
+                        if !named_panels.contains(p) && area.sidebars.side_of(p).is_none() {
+                            area.sidebars.get_mut(side).push(p.clone());
+                        }
+                    }
+                }
+            }
+        }
         for p in default.shown_panels() {
-            if named_panels.contains(&p) || next.is_shown(&p) {
+            if named_panels.contains(&p) || next.is_placed(&p) {
                 continue;
             }
             let Some(loc) = default.find(&p) else {
@@ -1330,7 +1661,7 @@ impl Workspace {
         // Panels shown now that the result does not show are hidden, and
         // remember where they were.
         for p in before.keys() {
-            if !next.is_shown(p)
+            if !next.is_placed(p)
                 && let Some(loc) = self.find(p)
             {
                 let mut home = self.homes.get(p).cloned().unwrap_or_default();
@@ -1341,7 +1672,7 @@ impl Workspace {
             }
         }
         for (p, h) in &self.homes {
-            if !next.is_shown(p) {
+            if !next.is_placed(p) {
                 next.homes.entry(p.clone()).or_insert_with(|| h.clone());
             }
         }
@@ -1352,21 +1683,22 @@ impl Workspace {
     /// Make this workspace `next`, reporting each panel that entered or left
     /// view or moved between docks and windows.
     pub fn replace_with(&mut self, next: Workspace) -> Vec<Effect> {
-        let before: BTreeMap<PanelId, Where> = self
-            .shown_panels()
+        let before: BTreeMap<PanelId, (Where, bool)> = self
+            .placed_panels()
             .into_iter()
             .map(|p| {
-                let w = self.where_is(&p);
+                let w = (self.where_is(&p), self.in_view(&p));
                 (p, w)
             })
             .collect();
         *self = next;
         let mut effects = Vec::new();
-        for (p, was) in &before {
+        for (p, (was, seen)) in &before {
             let now = self.where_is(p);
-            if now == Where::Hidden {
+            if *seen && !self.in_view(p) {
                 effects.push(Effect::Hidden(p.clone()));
-            } else if now != *was {
+            }
+            if now != *was && now != Where::Hidden {
                 effects.push(Effect::Moved {
                     panel: p.clone(),
                     from: was.clone(),
@@ -1374,9 +1706,11 @@ impl Workspace {
                 });
             }
         }
-        for p in self.shown_panels() {
+        for p in self.placed_panels() {
             if !before.contains_key(&p) {
-                effects.push(Effect::Shown(p.clone()));
+                if self.in_view(&p) {
+                    effects.push(Effect::Shown(p.clone()));
+                }
                 let to = self.where_is(&p);
                 effects.push(Effect::Moved {
                     panel: p,
@@ -1398,7 +1732,7 @@ impl Workspace {
             self.docks.entry(id.clone()).or_insert_with(|| dock.clone());
         }
         self.docks.retain(|id, _| default.docks.contains_key(id));
-        let mut mentioned: BTreeSet<PanelId> = self.shown_panels().into_iter().collect();
+        let mut mentioned: BTreeSet<PanelId> = self.placed_panels().into_iter().collect();
         mentioned.extend(self.homes.keys().cloned());
         for p in default.shown_panels() {
             if mentioned.contains(&p) {
@@ -1422,19 +1756,226 @@ impl Workspace {
                 s.fix_active();
             }
         }
+        for (id, dock) in &default.docks {
+            for (side, panels) in dock.sidebars.edges() {
+                for p in panels {
+                    if !mentioned.contains(p)
+                        && let Some(area) = self.docks.get_mut(id)
+                    {
+                        area.sidebars.get_mut(side).push(p.clone());
+                    }
+                }
+            }
+        }
         for (p, h) in &default.homes {
-            if !mentioned.contains(p) && !self.is_shown(p) {
+            if !mentioned.contains(p) && !self.is_placed(p) {
                 self.homes.insert(p.clone(), h.clone());
             }
         }
         self.prune();
-        self.shown_panels()
+        self.placed_panels()
             .into_iter()
             .filter(|p| !known.contains(p))
             .collect()
     }
 
+    /// Float `panel` over `dock` at `rect` (from the dock's top-left
+    /// corner, logical pixels), in a group of its own.
+    pub fn float_panel(
+        &mut self,
+        panel: &str,
+        dock: &str,
+        rect: Rect,
+        info: &PanelInfo,
+    ) -> Result<Vec<Effect>, OpError> {
+        self.move_to(
+            panel,
+            &Target::NewFloat {
+                dock: dock.to_string(),
+                rect,
+            },
+            info,
+        )
+    }
+
+    /// Move or resize the float `id`. Returns whether there is one.
+    pub fn set_float_rect(&mut self, id: &str, rect: Rect) -> bool {
+        for area in self.docks.values_mut() {
+            if let Some(f) = area.floats.iter_mut().find(|f| f.id == id) {
+                f.rect = rect;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Put the float `id` on top of the others of its dock. Returns whether
+    /// that changed anything.
+    pub fn raise_float(&mut self, id: &str) -> bool {
+        for area in self.docks.values_mut() {
+            if let Some(i) = area.floats.iter().position(|f| f.id == id) {
+                if i + 1 == area.floats.len() {
+                    return false;
+                }
+                let f = area.floats.remove(i);
+                area.floats.push(f);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Pin `panel` to the `side` edge of its dock: it leaves the tree and
+    /// shows as a button along that edge, from which it slides out over
+    /// the dock. Where it was is remembered, so [`Self::unpin`] puts it
+    /// back.
+    pub fn pin(
+        &mut self,
+        panel: &str,
+        side: Side,
+        info: &PanelInfo,
+    ) -> Result<Vec<Effect>, OpError> {
+        if !info.dockable {
+            return Err(OpError::NotDockable(panel.into()));
+        }
+        let loc = self.find(panel);
+        let pinned = self.pinned_at(panel);
+        let dock = match (&loc, &pinned) {
+            (Some(l), _) => l
+                .container
+                .dock()
+                .map(str::to_string)
+                .or_else(|| match &l.container {
+                    Container::Window(w) => self.window(w).and_then(|w| w.home.clone()),
+                    _ => None,
+                }),
+            (None, Some((d, _))) => Some(d.clone()),
+            (None, None) => self
+                .homes
+                .get(panel)
+                .and_then(|h| h.dock.as_ref())
+                .map(|s| s.dock.clone()),
+        }
+        .or_else(|| info.dock.clone())
+        .filter(|d| self.docks.contains_key(d))
+        .ok_or_else(|| OpError::NotDockable(panel.into()))?;
+        let mut effects = Vec::new();
+        let from = self.where_is(panel);
+        if let Some(loc) = &loc {
+            self.remember_spot(panel, loc);
+            self.take_out(panel, loc);
+            effects.push(Effect::Hidden(panel.to_string()));
+            effects.extend(self.prune());
+        } else if let Some((d, s)) = &pinned {
+            if *d == dock && *s == side {
+                return Ok(Vec::new());
+            }
+            let area = self.docks.get_mut(d).expect("pinned there");
+            area.sidebars.remove(panel);
+            if area.open.as_deref() == Some(panel) {
+                area.open = None;
+                effects.push(Effect::Hidden(panel.to_string()));
+            }
+        }
+        if let Some(h) = self.homes.get_mut(panel) {
+            h.sidebar = None;
+            h.window = None;
+            h.float = None;
+        }
+        let area = self.docks.get_mut(&dock).expect("checked");
+        area.sidebars.get_mut(side).push(panel.to_string());
+        effects.push(Effect::Moved {
+            panel: panel.to_string(),
+            from,
+            to: Where::Sidebar(dock),
+        });
+        Ok(effects)
+    }
+
+    /// Dock a pinned `panel` back where it was before it was pinned, else
+    /// where `info` places it.
+    pub fn unpin(&mut self, panel: &str, info: &PanelInfo) -> Result<Vec<Effect>, OpError> {
+        let (dock, _) = self
+            .pinned_at(panel)
+            .ok_or_else(|| OpError::UnknownPanel(panel.into()))?;
+        let area = self.docks.get_mut(&dock).expect("pinned there");
+        area.sidebars.remove(panel);
+        let was_open = area.open.as_deref() == Some(panel);
+        if was_open {
+            area.open = None;
+        }
+        let home = self.homes.remove(panel).unwrap_or_default();
+        let to = match home
+            .dock
+            .as_ref()
+            .and_then(|spot| self.put_at_spot(panel, spot))
+        {
+            Some(d) => Where::Dock(d),
+            None => {
+                let mut info = info.clone();
+                if info.dock.is_none() {
+                    info.dock = Some(dock.clone());
+                }
+                if info.place == Place::Window {
+                    info.place = Place::Center;
+                }
+                self.put_by_place(panel, &info)?
+            }
+        };
+        let mut effects = Vec::new();
+        if !was_open {
+            effects.push(Effect::Shown(panel.to_string()));
+        }
+        effects.push(Effect::Moved {
+            panel: panel.to_string(),
+            from: Where::Sidebar(dock),
+            to,
+        });
+        Ok(effects)
+    }
+
+    /// Slide the pinned `panel` out over its dock, sliding in any other
+    /// panel of the dock that was out.
+    pub fn open_pinned(&mut self, panel: &str) -> Result<Vec<Effect>, OpError> {
+        let (dock, _) = self
+            .pinned_at(panel)
+            .ok_or_else(|| OpError::UnknownPanel(panel.into()))?;
+        let area = self.docks.get_mut(&dock).expect("pinned there");
+        if area.open.as_deref() == Some(panel) {
+            return Ok(Vec::new());
+        }
+        let mut effects = Vec::new();
+        if let Some(other) = area.open.replace(panel.to_string()) {
+            effects.push(Effect::Hidden(other));
+        }
+        effects.push(Effect::Shown(panel.to_string()));
+        Ok(effects)
+    }
+
+    /// Slide the open pinned panel of `dock` back in.
+    pub fn close_pinned(&mut self, dock: &str) -> Vec<Effect> {
+        self.docks
+            .get_mut(dock)
+            .and_then(|d| d.open.take())
+            .map(|p| vec![Effect::Hidden(p)])
+            .unwrap_or_default()
+    }
+
     // ---- internals --------------------------------------------------------
+
+    /// A new float over `dock` at `rect` holding `panel`; its id.
+    fn new_float(&mut self, dock: &str, rect: Rect, panel: &str) -> String {
+        let id = self.fresh("f");
+        let stack_id = self.fresh("s");
+        if let Some(area) = self.docks.get_mut(dock) {
+            area.floats.push(Float {
+                id: id.clone(),
+                rect,
+                root: Node::Stack(Stack::with(stack_id, [panel])),
+            });
+        }
+        id
+    }
 
     fn center_of(&self, dock: &str) -> Option<String> {
         let area = self.docks.get(dock)?;
@@ -1455,6 +1996,11 @@ impl Workspace {
     fn root_mut(&mut self, container: &Container) -> Option<&mut Node> {
         match container {
             Container::Dock(d) => self.docks.get_mut(d).map(|d| &mut d.root),
+            Container::Float { dock, float } => self
+                .docks
+                .get_mut(dock)
+                .and_then(|d| d.floats.iter_mut().find(|f| f.id == *float))
+                .map(|f| &mut f.root),
             Container::Window(w) => self
                 .windows
                 .iter_mut()
@@ -1487,13 +2033,20 @@ impl Workspace {
     /// Remember where a panel leaving view was.
     fn remember(&mut self, panel: &str, loc: &Location) {
         let mut home = self.homes.get(panel).cloned().unwrap_or_default();
+        home.sidebar = None;
         match &loc.container {
             Container::Dock(d) => {
                 home.dock = Some(self.spot_of(d, loc));
                 home.window = None;
+                home.float = None;
+            }
+            Container::Float { float, .. } => {
+                home.float = self.float(float).map(|(_, f)| f.rect);
+                home.window = None;
             }
             Container::Window(w) => {
                 home.window = Some(self.window(w).map(|w| w.place.clone()).unwrap_or_default());
+                home.float = None;
             }
         }
         self.homes.insert(panel.to_string(), home);
@@ -1508,6 +2061,8 @@ impl Workspace {
         let home = self.homes.entry(panel.to_string()).or_default();
         home.dock = Some(spot);
         home.window = None;
+        home.float = None;
+        home.sidebar = None;
     }
 
     /// Take the panel out of its stack, leaving the tree unpruned.
@@ -1538,6 +2093,8 @@ impl Workspace {
             {
                 dock.maximized = None;
             }
+            dock.floats
+                .retain_mut(|f| f.root.prune() && !f.root.panels().is_empty());
         }
         let mut effects = Vec::new();
         self.windows.retain_mut(|w| {
@@ -1560,6 +2117,9 @@ impl Workspace {
         }
         for w in &self.windows {
             used.insert(w.id.clone());
+        }
+        for d in self.docks.values() {
+            used.extend(d.floats.iter().map(|f| f.id.clone()));
         }
         for h in self.homes.values() {
             if let Some(s) = &h.dock {
