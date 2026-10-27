@@ -381,6 +381,130 @@ fn detaching_a_group_moves_the_stack_and_leaves_the_center() {
 }
 
 #[test]
+fn a_group_moves_whole_and_keeps_its_order_and_shown_panel() {
+    let mut w = editor();
+    w.activate("game").unwrap();
+    // The center stack beside the inspector: a new stack takes both.
+    w.move_group(
+        "center",
+        &Target::Edge {
+            node: "s3".into(),
+            side: Side::Bottom,
+        },
+        &|_| docked(),
+    )
+    .unwrap();
+    let loc = w.find("scene").unwrap();
+    let s = w.stack(&loc.stack).unwrap();
+    assert_eq!(s.panels, vec!["scene", "game"]);
+    assert_eq!(s.active.as_deref(), Some("game"));
+    assert!(
+        w.stack("center").unwrap().panels.is_empty(),
+        "the center stays"
+    );
+    w.check().unwrap();
+    // Onto another stack as tabs at an index.
+    let group = loc.stack.clone();
+    w.move_group(
+        &group,
+        &Target::Tab {
+            stack: "s1".into(),
+            index: 0,
+        },
+        &|_| docked(),
+    )
+    .unwrap();
+    assert_eq!(
+        w.stack("s1").unwrap().panels,
+        vec!["scene", "game", "hierarchy"]
+    );
+    w.check().unwrap();
+    // Onto or beside itself, nothing moves.
+    let before = w.clone();
+    for t in [
+        Target::Tab {
+            stack: "s1".into(),
+            index: 2,
+        },
+        Target::Edge {
+            node: "s1".into(),
+            side: Side::Left,
+        },
+    ] {
+        assert!(w.move_group("s1", &t, &|_| docked()).unwrap().is_empty());
+    }
+    assert_eq!(w, before);
+    // Along the dock's edge, and out into a window of its own.
+    w.move_group(
+        "s1",
+        &Target::RootEdge {
+            dock: "editor".into(),
+            side: Side::Top,
+        },
+        &|_| docked(),
+    )
+    .unwrap();
+    w.check().unwrap();
+    let top = w.find("hierarchy").unwrap().stack;
+    w.move_group(&top, &Target::NewWindow(WindowPlace::default()), &|_| {
+        docked()
+    })
+    .unwrap();
+    assert_eq!(
+        w.windows[0].root.panels(),
+        vec!["scene", "game", "hierarchy"]
+    );
+    // A window's group stays in its window; back into the dock it docks.
+    let win = w.find("scene").unwrap().stack;
+    assert!(
+        w.move_group(&win, &Target::NewWindow(WindowPlace::default()), &|_| {
+            docked()
+        })
+        .unwrap()
+        .is_empty()
+    );
+    w.move_group(
+        &win,
+        &Target::Tab {
+            stack: "s3".into(),
+            index: 1,
+        },
+        &|_| docked(),
+    )
+    .unwrap();
+    assert!(w.windows.is_empty(), "the emptied window goes");
+    assert_eq!(
+        w.stack("s3").unwrap().panels,
+        vec!["inspector", "scene", "game", "hierarchy"]
+    );
+    w.check().unwrap();
+    // A group holding a panel that does not dock stays where it is.
+    let before = w.clone();
+    let refuse = |p: &str| PanelInfo {
+        dockable: p != "game",
+        ..docked()
+    };
+    assert_eq!(
+        w.move_group(
+            "s3",
+            &Target::Tab {
+                stack: "s2".into(),
+                index: 0
+            },
+            &refuse
+        ),
+        Err(OpError::NotDockable("game".into()))
+    );
+    assert_eq!(w, before);
+    assert_eq!(
+        w.move_group("nope", &Target::NewWindow(WindowPlace::default()), &|_| {
+            docked()
+        }),
+        Err(OpError::UnknownTarget("nope".into()))
+    );
+}
+
+#[test]
 fn closing_a_window_hides_what_does_not_dock() {
     let mut w = editor();
     w.detach("game", WindowPlace::default(), &docked()).unwrap();
