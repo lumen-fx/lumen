@@ -824,21 +824,23 @@ stderr.
 | --- | --- | --- |
 | `dock.show(panel)` | boolean | Bring the panel into view where it was hidden from, else where its `place` puts it, and make it its stack's showing tab. A panel outside any dock, or one that does not dock, opens in a window of its own. |
 | `dock.hide(panel)` | boolean | Take the panel out of view, remembering where it was. Its content stays mounted. |
-| `dock.toggle(panel)` | boolean | Hide the panel if it is shown, else show it. Whether it is shown afterwards. |
+| `dock.toggle(panel)` | boolean | Hide the panel if it is shown, else show it; a pinned panel slides out and back in. Whether it is shown afterwards. |
 | `dock.focus(panel)` | boolean | Show the panel and move keyboard focus into it: to the element last focused there, else its first focusable element, else its tab. Raises its window. |
 | `dock.activate(panel)` | boolean | Make the panel its stack's showing tab. |
 | `dock.close(panel)` | boolean | Close the panel without asking: hide it, or remove its element when it has `destroy-on-close`. |
 | `dock.move(panel, target, zone)` | boolean | Move the panel beside `target`, a panel or a dock id. `zone` is `tab` (into the target's stack, or the dock's center stack) or `left`, `right`, `top`, `bottom` (a new stack on that side of the target's stack, or along that edge of the dock). |
 | `dock.detach(panel)` | boolean | Pop the panel out into a window of its own, over the place it has on screen. |
 | `dock.detach_group(panel)` | boolean | Pop the panel's whole stack out into a window of its own. |
-| `dock.attach(panel)` | boolean | Dock the panel back from its window to where it came from. `false` when it is not in a window or does not dock. |
+| `dock.float(panel, x, y, w, h)` | boolean | Float the panel over its dock at `x`, `y` from the dock's top-left corner, `w` by `h` pixels, in a group of its own; a panel already alone in a float moves there. `false` when it does not float (`floatable="false"`) or does not dock. |
+| `dock.pin(panel, edge)` | boolean | Pin the panel to an edge of its dock, `left`, `right`, `top` or `bottom`: it shows as a button along that edge that slides it out over the dock. `dock.show` slides it out too. |
+| `dock.attach(panel)` | boolean | Dock the panel back to where it came from: from its window, its float, or the edge it is pinned to. `false` when it is in a dock already, or does not dock. |
 | `dock.window_of(panel)` | number | `0` for the main window, the window's number for a window of its own, `-1` when the panel is not shown. |
 | `dock.windows()` | table | The numbers of the windows of their own that hold panels. |
 | `dock.collapse(panel, collapsed)` | boolean | Collapse the panel's stack to its header, or expand it. |
 | `dock.maximize(panel)` | boolean | Fill the panel's dock with its stack. `false` when the panel is not in a dock. |
 | `dock.restore_maximized(dock)` | boolean | Give the dock its whole layout back. `false` when nothing in it was maximized. |
 | `dock.panels()` | table | Every panel id the module knows, shown or not. |
-| `dock.is_shown(panel)` | boolean | Whether the panel is in a dock or a window of its own. |
+| `dock.is_shown(panel)` | boolean | Whether the panel is in view: in a dock, floating, in a window of its own, or slid out of its edge. |
 | `dock.save()` | string | The whole arrangement as JSON, for `dock.restore` in this run or another. |
 | `dock.restore(layout)` | boolean | Arrange everything as a saved layout says. `false`, with a `layouterror` event, for a layout of another format or `layout-version`, or a broken one. |
 | `dock.layouts()` | table | The named layouts: the markup's `<dock-layout>`s and the user's own. |

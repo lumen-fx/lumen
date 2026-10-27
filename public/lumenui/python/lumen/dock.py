@@ -23,7 +23,7 @@ def hide(panel: str) -> bool:
 
 
 def toggle(panel: str) -> bool:
-    """Hide the panel if it is shown, show it if it is not: what a Window menu item calls. True when it is shown afterwards."""
+    """Hide the panel if it is shown, show it if it is not: what a Window menu item calls. A pinned panel slides out and back in. True when it is shown afterwards."""
 
     return call("dock", "toggle", panel)  # type: ignore[return-value]
 
@@ -64,8 +64,20 @@ def detach_group(panel: str) -> bool:
     return call("dock", "detach_group", panel)  # type: ignore[return-value]
 
 
+def float(panel: str, x: float, y: float, w: float, h: float) -> bool:
+    """Float the panel over its dock at x, y from the dock's top-left corner, w by h logical pixels, in a group of its own; a panel already alone in a float moves there. False when it does not float (floatable is false) or does not dock."""
+
+    return call("dock", "float", panel, x, y, w, h)  # type: ignore[return-value]
+
+
+def pin(panel: str, edge: str) -> bool:
+    """Pin the panel to an edge of its dock (left, right, top or bottom): it leaves the layout and shows as a button along that edge, which slides it out over the dock. dock::show slides it out too, and dock::attach docks it back where it was."""
+
+    return call("dock", "pin", panel, edge)  # type: ignore[return-value]
+
+
 def attach(panel: str) -> bool:
-    """Dock the panel back from its window to the place it came from. False when it is not in a window, or does not dock."""
+    """Dock the panel back to the place it came from: from its window, its float, or the edge it is pinned to. False when it is in a dock already, or does not dock."""
 
     return call("dock", "attach", panel)  # type: ignore[return-value]
 
@@ -107,7 +119,7 @@ def panels() -> list:
 
 
 def is_shown(panel: str) -> bool:
-    """Whether the panel is in view: in a dock or in a window of its own."""
+    """Whether the panel is in view: in a dock, floating, in a window of its own, or slid out of its sidebar."""
 
     return call("dock", "is_shown", panel)  # type: ignore[return-value]
 
