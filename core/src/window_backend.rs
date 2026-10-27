@@ -605,8 +605,8 @@ fn headless_surfaces(
 ) -> Vec<crate::surface_drag::DesktopSurface> {
     let mut list: Vec<(bool, Entity, crate::surface_drag::DesktopSurface)> = windows
         .iter()
-        .filter(|(_, w, _, _, _)| w.visible)
-        .filter_map(|(e, _, viewport, runtime, _)| {
+        .filter_map(|(e, w, viewport, runtime, _)| {
+            let wanted = w;
             let origin = runtime.position.or_else(|| places.0.get(&e).copied())?;
             let (w, h) = viewport.physical_size();
             Some((
@@ -617,6 +617,7 @@ fn headless_surfaces(
                     origin,
                     size: UVec2::new(w, h),
                     scale: viewport.scale_factor,
+                    visible: wanted.visible,
                 },
             ))
         })

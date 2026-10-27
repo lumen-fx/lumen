@@ -33,6 +33,7 @@
 
 mod adopt;
 pub mod api;
+pub mod drag;
 mod keys;
 mod menu;
 mod persist;
@@ -42,6 +43,7 @@ mod state;
 
 pub use adopt::{DockChrome, DockElement, DockPanel, TAGS};
 pub use api::{Dock, DockError};
+pub use drag::{DockDrag, Payload, TearoffProbe, Zone};
 pub use keys::{Chord, Keys};
 pub use lumen_dock_model as model;
 pub use lumen_dock_model::Workspace as Layout;
