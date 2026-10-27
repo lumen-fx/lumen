@@ -216,22 +216,15 @@ fn move_focus(
     to: Entity,
     visible: bool,
 ) {
-    // Either end may be gone by the time the commands apply: a popup's
-    // action can rebuild the element that opened it.
     if let Some(prev) = from
         && prev != to
     {
-        commands
-            .entity(prev)
-            .try_remove::<(Focused, FocusVisible)>();
+        commands.entity(prev).remove::<(Focused, FocusVisible)>();
     }
     if visible {
-        commands.entity(to).try_insert((Focused, FocusVisible));
+        commands.entity(to).insert((Focused, FocusVisible));
     } else {
-        commands
-            .entity(to)
-            .try_insert(Focused)
-            .try_remove::<FocusVisible>();
+        commands.entity(to).insert(Focused).remove::<FocusVisible>();
     }
     tracker.0 = Some(to);
 }
@@ -369,9 +362,7 @@ pub fn popup_nav_lifecycle(
                         session.prev_focus_visible,
                     );
                 } else if let Some(prev) = from {
-                    commands
-                        .entity(prev)
-                        .try_remove::<(Focused, FocusVisible)>();
+                    commands.entity(prev).remove::<(Focused, FocusVisible)>();
                     tracker.0 = None;
                 }
             }
