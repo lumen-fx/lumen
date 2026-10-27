@@ -486,9 +486,11 @@ pub(crate) mod wayland {
         }
 
         /// Whether the backend should wake soon to read the drag: one is
-        /// running, or a press could become one.
+        /// running. A press needs no wake-up: winit wakes the loop for it,
+        /// and the backend reads this queue before taking the app's
+        /// requests, so the press serial is known when a drag begins.
         pub fn wants_wakeups(&self) -> bool {
-            self.active() || self.state.press_serial.is_some()
+            self.active()
         }
     }
 
