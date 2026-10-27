@@ -107,6 +107,13 @@ pub struct Window {
     /// [`WindowKind::Tool`] window stays above its owner and minimizes
     /// with it. `None` for a top-level window.
     pub owner: Option<Entity>,
+    /// Whether the window is maximized. The backend writes back a maximize
+    /// or restore the user made from outside the app; while the window is
+    /// maximized, [`Self::size`] is the size the platform gave it.
+    pub maximized: bool,
+    /// Whether the window covers its monitor with no decorations. The
+    /// backend writes back a change the user made from outside the app.
+    pub fullscreen: bool,
 }
 
 impl Default for Window {
@@ -122,6 +129,8 @@ impl Default for Window {
             min_size: None,
             max_size: None,
             owner: None,
+            maximized: false,
+            fullscreen: false,
         }
     }
 }
@@ -194,6 +203,8 @@ pub struct WindowRuntime {
     pub minimized: bool,
     /// The window is maximized.
     pub maximized: bool,
+    /// The window covers its monitor with no decorations.
+    pub fullscreen: bool,
     /// The outer top-left corner in physical desktop pixels, where the
     /// platform tells (not on Wayland).
     pub position: Option<IVec2>,

@@ -35,6 +35,7 @@ use crate::window_state;
 use bevy_ecs::message::{MessageCursor, Messages};
 use bevy_ecs::prelude::*;
 use glam::{IVec2, UVec2};
+use std::collections::HashMap;
 
 /// One window backend: its name, its rank, and how to make it.
 #[derive(Clone, Copy, Debug)]
@@ -340,8 +341,10 @@ pub fn seed_window(world: &mut World, window: Entity, title: &str, size: glam::V
 /// does.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct HeadlessDesktop {
-    /// Apply [`Window::position`]; off, windows are placed by cascading
-    /// from the primary monitor's corner, as a compositor would.
+    /// Apply [`Window::position`] and report where each window is; off,
+    /// windows are placed by cascading from the primary monitor's corner,
+    /// as a compositor would, and [`WindowRuntime::position`] stays `None`,
+    /// as on Wayland.
     pub positioning: bool,
 }
 
@@ -370,7 +373,8 @@ pub fn default_virtual_monitor(scale: f32) -> MonitorInfo {
 /// With no platform window between the app and its viewports, a change to a
 /// [`Window`] applies at once: a new size becomes the viewport and lays out
 /// on the same tick, a new title is what `window.title()` reports, a new
-/// position moves the window and takes the scale of the monitor it lands on.
+/// position moves the window and takes the scale of the monitor it lands on,
+/// and maximizing or going fullscreen is what the window reports at once.
 /// A new window opens focused. Installed by the headless runners beside
 /// [`WindowCorePlugin`]; a window backend never installs it, since there the
 /// platform decides what each window gets.
@@ -430,9 +434,12 @@ fn apply_windows_headless(
     monitors: Res<Monitors>,
     desktop: Res<HeadlessDesktop>,
     mut focus: MessageWriter<WindowFocused>,
-    mut placed: Local<i32>,
+    (mut placed, mut unreported): (Local<i32>, Local<HashMap<Entity, IVec2>>),
 ) {
     let mut opened: Option<Entity> = None;
+    if !desktop.positioning && unreported.len() > windows.iter().count() {
+        unreported.retain(|e, _| windows.contains(*e));
+    }
     for (entity, mut window, mut viewport, mut runtime, primary) in &mut windows {
         let added = window.is_added();
         let asked = window.is_changed() && window.last_changed() != window.added();
@@ -458,8 +465,16 @@ fn apply_windows_headless(
         }
         // Placement: a new window lands where it asked (when the desktop
         // positions windows) or cascades; a moved one follows its request.
+        // A desktop that does not position windows does not say where they
+        // are either, as Wayland does not; the stand-in keeps the place it
+        // gave each one to itself.
         let wants = window.position.filter(|_| desktop.positioning);
-        let place = match (runtime.position, wants) {
+        let at = if desktop.positioning {
+            runtime.position
+        } else {
+            unreported.get(&entity).copied()
+        };
+        let place = match (at, wants) {
             (None, Some(p)) => Some(p),
             (None, None) => {
                 let p = if primary {
@@ -474,7 +489,14 @@ fn apply_windows_headless(
             _ => None,
         };
         if let Some(p) = place {
-            runtime.position = Some(p);
+            if desktop.positioning {
+                runtime.position = Some(p);
+            } else {
+                unreported.insert(entity, p);
+                if runtime.position.is_some() {
+                    runtime.position = None;
+                }
+            }
             let center = p + (window.size * viewport.scale_factor / 2.0).as_ivec2();
             if let Some(monitor) = monitors.at(center).or_else(|| monitors.0.first()) {
                 if runtime.monitor.as_deref() != Some(monitor.name.as_str()) {
@@ -484,6 +506,14 @@ fn apply_windows_headless(
                     viewport.scale_factor = monitor.scale;
                 }
             }
+        }
+        // Maximized and fullscreen are the window's state as asked; the
+        // stand-in has no screen edges to fit, so the size stays.
+        if (added || asked)
+            && (runtime.maximized, runtime.fullscreen) != (window.maximized, window.fullscreen)
+        {
+            runtime.maximized = window.maximized;
+            runtime.fullscreen = window.fullscreen;
         }
         if added && !primary {
             opened = Some(entity);

@@ -524,14 +524,17 @@ An app has one or more windows, and each is an entity in the main world.
 On desktop, `App::new` spawns the primary one, marked `PrimaryWindow`; spawning another
 entity with a `Window` component opens a window, and despawning it closes the
 window. `Window` is what the app wants: title, size, kind, visibility,
-decorations, position, size limits, and an owner window. `WindowViewport` is
-what the window has, and `WindowRuntime` is what the platform reports back:
-focus, occlusion, minimized and maximized state, position, and monitor.
+decorations, position, size limits, an owner window, and whether it is
+maximized or fullscreen. `WindowViewport` is what the window has, and
+`WindowRuntime` is what the platform reports back: focus, occlusion,
+minimized, maximized and fullscreen state, position, and monitor.
 App code writes `Window`; after each tick the window backend hands what changed
-to the platform window and writes back what the platform settled on. A
-headless run installs `HeadlessWindowPlugin` in the backend's place, which
-applies `Window` straight to the viewport and places windows on a virtual
-desktop. The `Monitors` resource lists the displays; positions are physical
+to the platform window and writes back what the platform settled on, including
+a resize, maximize or fullscreen change the user made. A headless run installs
+`HeadlessWindowPlugin` in the backend's place, which applies `Window` straight
+to the viewport and places windows on a virtual desktop; in its Wayland mode
+(`HeadlessDesktop { positioning: false }`) it places windows itself and
+reports no position. The `Monitors` resource lists the displays; positions are physical
 desktop pixels.
 
 Windows do not own trees. There is one document, and an element shows in a

@@ -47,7 +47,7 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
 | `--monitors` | comma-separated `WxH[@SCALE]` | one 1920x1080 monitor at `--dpr` | The virtual desktop the app's windows open on, monitors laid out left to right; `@SCALE` defaults to 1. A window takes the scale of the monitor it lands on, and the primary window opens on the first, so `--dpr` is ignored. Requires `--headless`. |
-| `--positioning` | `on`, `off` | `on` | `off` ignores the positions windows ask for and places every window itself, the way Wayland does. Requires `--headless`. |
+| `--positioning` | `on`, `off` | `on` | `off` ignores the positions windows ask for, places every window itself, and does not report where a window is, the way Wayland does. Requires `--headless`. |
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
 | `--assets` | path to a `.lpak` | none | Reads images, icons, sounds, and the font files `@font-face` names from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
