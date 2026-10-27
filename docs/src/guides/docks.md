@@ -140,7 +140,8 @@ fn open_preferences() {
 `window::close()` in a handler of a pop-out closes that window the same way
 its close button does. Closing the main window quits the app and its other
 windows close with it, unless `[app] quit = "explicit"` keeps the app
-running.
+running: then the main window and the panels' windows hide, and showing the
+main window again shows them again.
 
 ## The keyboard
 
@@ -160,9 +161,12 @@ The module's `keys` config rebinds any of them, or turns them off.
 ## Keeping the arrangement
 
 `dock::save()` returns the whole arrangement as a string: every dock, each
-window of its own with its size and the monitor it was on, and where each
-hidden panel goes back to. `dock::restore(layout)` puts it back, in this run
-or a later one. An editor keeps one per project this way, with the
+window of its own with its size, the monitor it was on and whether it was
+maximized or fullscreen, and where each hidden panel goes back to.
+`dock::restore(layout)` puts it back, in this run or a later one. On Wayland
+the desktop places each window itself, so a restore brings back its size and
+state but not its position; the saved position stays in the layout for a
+desktop that can use it. An editor keeps one per project this way, with the
 [`lumen-fs`](../reference/lumen-toml.md#dependencies) module:
 
 ```rust

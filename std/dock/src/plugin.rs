@@ -15,7 +15,7 @@ use lumen_module::lumen_core::input::{
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
-use lumen_module::lumen_core::window::{Window, WindowClosing, WindowRuntime};
+use lumen_module::lumen_core::window::{PrimaryWindow, Window, WindowClosing, WindowRuntime};
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element};
 use lumen_module::lumen_primitives::{SplitResized, TabStripButton, Tabs, TabsSet};
 use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
@@ -241,6 +241,7 @@ impl Plugin for DockPlugin {
                         .or_eager(on_message::<WindowFocused>),
                 ),
                 track_windows.run_if(any_with_component::<DockWindow>),
+                show_with_the_primary.run_if(any_with_component::<DockWindow>),
                 save_if_due
                     .run_if(|p: Option<Res<Persist>>| p.is_some_and(|p| *p == Persist::Auto)),
             )
@@ -651,21 +652,49 @@ fn track_windows(
         let Some(layout) = core.ws.windows.iter_mut().find(|w| w.id == dw.id) else {
             continue;
         };
-        let previous = Some((layout.place.rect, layout.place.monitor.clone()));
-        let (rect, key) = lumen_dock_model::record(
-            runtime.position.map(|p| [p.x, p.y]),
-            [window.size.x, window.size.y],
-            &monitors,
-            previous,
-        );
+        // A maximized or fullscreen window keeps the rectangle it had
+        // before, which is where it goes when the user restores it.
+        let covering = window.maximized || window.fullscreen;
+        let (rect, key) = if covering && layout.place.rect.is_some() {
+            (layout.place.rect, layout.place.monitor.clone())
+        } else {
+            let previous = Some((layout.place.rect, layout.place.monitor.clone()));
+            let (rect, key) = lumen_dock_model::record(
+                runtime.position.map(|p| [p.x, p.y]),
+                [window.size.x, window.size.y],
+                &monitors,
+                previous,
+            );
+            (Some(rect), key)
+        };
         let place = lumen_dock_model::WindowPlace {
-            rect: Some(rect),
+            rect,
             monitor: key,
-            maximized: runtime.maximized,
+            maximized: window.maximized,
+            fullscreen: window.fullscreen,
         };
         if layout.place != place {
             layout.place = place;
             core.save_due = true;
+        }
+    }
+}
+
+/// Show the windows of panels again when the main window shows again: under
+/// `[app] quit = "explicit"`, closing the main window hides every window,
+/// and an app that brings the main window back brings its panels' windows
+/// with it.
+fn show_with_the_primary(
+    primary: Query<Ref<Window>, With<PrimaryWindow>>,
+    mut windows: Query<&mut Window, (With<DockWindow>, Without<PrimaryWindow>)>,
+) {
+    let Ok(main) = primary.single() else { return };
+    if !main.is_changed() || !main.visible {
+        return;
+    }
+    for mut w in &mut windows {
+        if !w.visible {
+            w.visible = true;
         }
     }
 }
