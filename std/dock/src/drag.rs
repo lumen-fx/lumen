@@ -548,8 +548,12 @@ fn place_overlay(world: &mut World, overlay: Entity, parent: Entity, (o, s): (Ve
         .get::<Transform>(parent)
         .map_or(Vec2::ZERO, |t| t.absolute);
     let at = o - base;
-    set_inline(world, overlay, "left", Some(format!("{}px", at.x.round())));
-    set_inline(world, overlay, "top", Some(format!("{}px", at.y.round())));
+    set_inline(
+        world,
+        overlay,
+        "inset",
+        Some(format!("{} auto auto {}", at.y.round(), at.x.round())),
+    );
     set_inline(world, overlay, "width", Some(format!("{}px", s.x.round())));
     set_inline(world, overlay, "height", Some(format!("{}px", s.y.round())));
     unhide(world, overlay);
@@ -709,6 +713,12 @@ pub fn drag_step(world: &mut World, inputs: Vec<DragInput>) {
             }
         }
     }
+    // A drop or a cancel changed the model after this tick's realize gate
+    // looked: make the elements follow now, so nothing waits for another
+    // event to wake the loop.
+    if shared.lock().dirty {
+        realize(world);
+    }
 }
 
 fn start_drag(world: &mut World, shared: &Shared, entity: Entity, start: Vec2) {
@@ -833,8 +843,6 @@ fn over(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) {
                         .filter(|s| s.x > 1.0)
                         .unwrap_or(Vec2::new(120.0, 28.0));
                     place_overlay(world, ghost, parent, (p - session.grab, size));
-                    set_inline(world, ghost, "width", None);
-                    set_inline(world, ghost, "height", None);
                 }
             }
             // Over a window that would take the drop, the window being
@@ -993,9 +1001,11 @@ fn drop_at(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) 
             }
             Err(e) => lumen_module::lumen_core::warn_line!("lumen-dock: {e}"),
         }
-    } else if session.open_on_release && window.is_none() {
-        // No window could follow: the pop-out opens where the drop was,
-        // which the platform decides.
+    } else if window.is_none() && session.seam && session.moving.is_none() {
+        // Released over no window with nothing following the pointer (no
+        // window can follow, or the pointer left faster than the drag
+        // could tear off): the pop-out opens where the drop was, which the
+        // platform decides.
         if let Ok(effects) = pop_out(&mut core, &session.payload) {
             core.apply(effects, Reason::User);
             moved = true;
@@ -1007,17 +1017,6 @@ fn drop_at(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) 
         if !moved || core.ws.window(id).is_some() {
             set_window_visible(world, &built, id, true);
         }
-    }
-    let focus = moved
-        .then(|| first_panel(&core.ws, &session.payload))
-        .flatten();
-    if let Some(panel) = focus.or_else(|| {
-        (session.torn)
-            .then(|| first_panel(&core.ws, &session.payload))
-            .flatten()
-    }) {
-        core.focus_request = Some(panel);
-        core.dirty = true;
     }
     finish(world, &core, &session);
     drop(core);

@@ -4919,6 +4919,9 @@ dependencies = [
  "signal-hook",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "windows-sys 0.61.2",
  "winit",
 ]

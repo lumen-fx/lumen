@@ -1878,7 +1878,14 @@ fn tabs_drag_within_the_window() {
             .find(|(_, c)| c.has("dock-drag-ghost"))
             .map(|(e, _)| e)
     };
-    assert!(ghost.is_some(), "a ghost follows the pointer");
+    let ghost = ghost.expect("a ghost follows the pointer");
+    let (go, _) = rect_of(app, ghost);
+    let grab = middle(app, game) - rect_of(app, game).0;
+    assert!(
+        (go - (target - grab)).abs().max_element() < 2.0,
+        "the ghost is held where the tab was grabbed: {go} vs {}",
+        target - grab
+    );
     let dock = entity(app, "editor");
     assert!(
         app.world

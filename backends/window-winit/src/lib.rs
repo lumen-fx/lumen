@@ -36,6 +36,7 @@
 
 pub mod capability;
 mod pointer;
+mod surface_drag;
 
 use bevy_ecs::message::{MessageCursor, Messages};
 use lumen_core::input::{CloseReason, PendingFileDrops, WindowFocused, WindowOccluded};
@@ -262,6 +263,23 @@ fn run(
     if !app.is_plugin_added::<WindowCorePlugin>() {
         app.add_plugin(WindowCorePlugin);
     }
+    // Drags across the app's windows. Where the pressed window keeps the
+    // pointer past its edge (Windows, macOS, X11) this backend tracks the
+    // drag itself and moves a following window; on Wayland the seam is
+    // bound once the connection is up (`resumed`).
+    app.add_message::<lumen_core::surface_drag::SurfaceDragRequest>();
+    app.add_message::<lumen_core::surface_drag::SurfaceDragEvent>();
+    #[cfg(target_os = "linux")]
+    let on_wayland = {
+        use winit::platform::wayland::EventLoopExtWayland;
+        event_loop.is_wayland()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let on_wayland = false;
+    if !on_wayland {
+        app.world
+            .insert_resource(lumen_core::surface_drag::SurfaceDragSupport { follow: true });
+    }
     // The (Linux-only) XDG portal listener pushes `XdgColorSchemeUpdate
     // { dark }` through [`lumen_core::command::Command::Typed`]; this
     // handler applies it on the main thread inside
@@ -384,6 +402,8 @@ fn run(
         focus_requests: MessageCursor::default(),
         ticked: false,
         lock: None,
+        drag: surface_drag::DragSeam::default(),
+        drag_requests: MessageCursor::default(),
     };
     event_loop
         .run_app(&mut handler)
@@ -501,6 +521,10 @@ struct WinitHandler {
     ticked: bool,
     /// The pointer lock this backend applied, if one is in effect.
     lock: Option<AppliedLock>,
+    /// A drag across the app's windows (the core's surface-drag seam).
+    drag: surface_drag::DragSeam,
+    /// The app's surface-drag requests.
+    drag_requests: MessageCursor<lumen_core::surface_drag::SurfaceDragRequest>,
 }
 
 /// A pointer lock in effect on a platform window.
@@ -571,6 +595,8 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         // falls back to the winit-reported `WindowEvent::ThemeChanged` path.
         #[cfg(target_os = "linux")]
         try_spawn_xdg_color_scheme_listener(&mut self.app.world);
+        #[cfg(target_os = "linux")]
+        self.bind_wayland_drag(event_loop);
         refresh_monitors(&mut self.app.world, event_loop);
         // The window the platform opened is the one the app has: seed the
         // viewport (logical size at the window's scale) and the app's
@@ -852,6 +878,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     local: None,
                     pointer: pointer.stamped(),
                 });
+                self.drag_moved(entity, p);
                 self.want_frame();
             }
             WindowEvent::CursorLeft { .. } => {
@@ -884,6 +911,13 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 let mods = self.app.world.resource::<ModifiersState>().0;
                 if let Some(key) = map_key(&event) {
                     let code = map_code(&event);
+                    #[cfg(target_os = "linux")]
+                    if event.state == ElementState::Pressed
+                        && key == Key::Named(lumen_core::input::NamedKey::Escape)
+                        && let Some(w) = self.drag.wayland.as_mut()
+                    {
+                        w.escape_pressed();
+                    }
                     match event.state {
                         ElementState::Pressed => {
                             self.app.world.write_message(KeyPressed {
@@ -968,6 +1002,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 }
                 self.roll_up();
                 if focused {
+                    self.drag.raised(entity);
                     // The focused window sets the pace: it presents on the
                     // display's refresh, the others do not wait on theirs.
                     let windows: Vec<Entity> = self.ids.keys().copied().collect();
@@ -1036,6 +1071,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                             local: None,
                             pointer: data.stamped(),
                         });
+                        if matches!(lumen_button, PointerButton::Primary) {
+                            self.drag_released(entity, pos);
+                        }
                     }
                 }
                 self.want_frame();
@@ -1096,6 +1134,39 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
     ///    window whose frame changed. Focus is not a factor - a
     ///    visible-but-unfocused window keeps animating.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.idle_step(event_loop);
+        // A Wayland drag reads its own queue on winit's connection, which
+        // winit does not wake the loop for: while a press could become a
+        // drag, or one runs, look again soon.
+        #[cfg(target_os = "linux")]
+        if !self.close.committed
+            && self
+                .drag
+                .wayland
+                .as_ref()
+                .is_some_and(|w| w.wants_wakeups())
+        {
+            let soon = std::time::Instant::now() + DRAG_POLL;
+            let later = match event_loop.control_flow() {
+                ControlFlow::WaitUntil(at) => at > soon,
+                ControlFlow::Wait => true,
+                ControlFlow::Poll => false,
+            };
+            if later {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(soon));
+            }
+        }
+    }
+}
+
+/// How often the loop looks at a Wayland drag that may be running.
+#[cfg(target_os = "linux")]
+const DRAG_POLL: std::time::Duration = std::time::Duration::from_millis(4);
+
+impl WinitHandler {
+    /// [`ApplicationHandler::about_to_wait`]'s work, before the drag's
+    /// wake-up.
+    fn idle_step(&mut self, event_loop: &ActiveEventLoop) {
         self.ticked = false;
         // A `window.close()` / `app.quit()` the ticks of this batch asked
         // for runs the same veto path the close button does.
@@ -1108,8 +1179,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
+        self.take_drag_requests();
         self.sync_windows(event_loop);
         self.apply_focus_requests();
+        #[cfg(target_os = "linux")]
+        self.dispatch_wayland_drag();
         // A deadline a system asked to be woken at (a script timer) that
         // has come due needs a tick: this is the pass the `WaitUntil` set
         // below resumes into.
@@ -1387,6 +1461,7 @@ impl WinitHandler {
             .filter(|e| !wanted.iter().any(|(w, _)| w == e))
             .collect();
         for entity in gone {
+            self.drag.closed(entity);
             self.renderer.detach(entity);
             if let Some(id) = self.ids.remove(&entity)
                 && let Some(mut os) = self.windows.remove(&id)
@@ -1422,7 +1497,26 @@ impl WinitHandler {
             .and_then(|o| self.ids.get(&o))
             .and_then(|id| self.windows.get(id))
             .map(|w| w.window.clone());
-        let attrs = window_attributes(wanted, owner.as_deref());
+        let mut attrs = window_attributes(wanted, owner.as_deref());
+        // A window opening to follow the pointer opens under it and leaves
+        // the keyboard with the drag.
+        let following = self.drag.open_following.remove(&entity);
+        if following {
+            attrs = attrs.with_active(false);
+            let scale = self
+                .ids
+                .get(&self.primary.unwrap_or(entity))
+                .and_then(|id| self.windows.get(id))
+                .map_or(1.0, |os| os.window.scale_factor() as f32);
+            if let Some(at) = self
+                .drag
+                .inner
+                .grab_offset()
+                .and_then(|g| self.drag.open_at(g, scale))
+            {
+                attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(at.x, at.y));
+            }
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -1462,6 +1556,17 @@ impl WinitHandler {
         sync.fullscreen = wanted.fullscreen;
         self.insert(entity, window, a11y, sync);
         self.follow_platform_state(entity);
+        #[cfg(target_os = "linux")]
+        if following && self.drag.wayland.is_some() {
+            let surfaces = self.wayland_surfaces();
+            if let Some(w) = self.drag.wayland.as_mut() {
+                w.set_surfaces(&surfaces);
+                w.request(
+                    &lumen_core::surface_drag::SurfaceDragRequest::Follow(Some(entity)),
+                    &surfaces,
+                );
+            }
+        }
         self.want_frame();
     }
 
@@ -1891,6 +1996,159 @@ impl WinitHandler {
     /// Publish every window's accessibility tree, then present every shown,
     /// unoccluded window whose frame changed; `force` names a window whose
     /// buffers were just recreated and must repaint in full.
+    /// Every window on the desktop, the top-most first, for the drag.
+    fn desktop_surfaces(&self) -> Vec<lumen_core::surface_drag::DesktopSurface> {
+        let list = self
+            .windows
+            .values()
+            .filter_map(|os| {
+                let visible = self
+                    .app
+                    .world
+                    .get::<lumen_core::window::Window>(os.entity)
+                    .is_none_or(|w| w.visible);
+                surface_drag::desktop_surface(os.entity, &os.window, visible)
+            })
+            .collect();
+        surface_drag::stack(list, &self.drag.order)
+    }
+
+    /// The pointer moved to `p` in `entity` during a drag this backend
+    /// tracks: report where it is and move the following window.
+    fn drag_moved(&mut self, entity: Entity, p: glam::Vec2) {
+        if !self.drag.inner.is_active() || self.drag.on_wayland() {
+            return;
+        }
+        let surfaces = self.desktop_surfaces();
+        let Some((event, follow)) = self.drag.moved(&surfaces, entity, p) else {
+            return;
+        };
+        self.app.world.write_message(event);
+        if let Some((f, to)) = follow
+            && let Some(os) = self.ids.get(&f).and_then(|id| self.windows.get(id))
+        {
+            surface_drag::place_client_area(&os.window, to);
+        }
+    }
+
+    /// The button came up at `p` in `entity` during a drag this backend
+    /// tracks: report the drop.
+    fn drag_released(&mut self, entity: Entity, p: glam::Vec2) {
+        if !self.drag.inner.is_active() || self.drag.on_wayland() {
+            return;
+        }
+        let surfaces = self.desktop_surfaces();
+        if let Some(event) = self.drag.inner.released(&surfaces, entity, p) {
+            self.app.world.write_message(event);
+        }
+    }
+
+    /// Take in the drag requests the app wrote since the last look.
+    fn take_drag_requests(&mut self) {
+        let Some(messages) = self
+            .app
+            .world
+            .get_resource::<bevy_ecs::message::Messages<lumen_core::surface_drag::SurfaceDragRequest>>()
+        else {
+            return;
+        };
+        let requests: Vec<lumen_core::surface_drag::SurfaceDragRequest> =
+            self.drag_requests.read(messages).copied().collect();
+        if requests.is_empty() {
+            return;
+        }
+        let opened: std::collections::HashSet<Entity> = self.ids.keys().copied().collect();
+        for r in &requests {
+            self.drag.request(r, &|e| opened.contains(&e));
+        }
+        #[cfg(target_os = "linux")]
+        if self.drag.wayland.is_some() {
+            let surfaces = self.wayland_surfaces();
+            if let Some(w) = self.drag.wayland.as_mut() {
+                w.set_surfaces(&surfaces);
+                for r in &requests {
+                    w.request(r, &surfaces);
+                }
+            }
+        }
+    }
+
+    /// Bind the drag's Wayland objects on winit's connection, and say what
+    /// the compositor lets a drag do.
+    #[cfg(target_os = "linux")]
+    fn bind_wayland_drag(&mut self, event_loop: &ActiveEventLoop) {
+        use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+        let Ok(handle) = event_loop.display_handle() else {
+            return;
+        };
+        let RawDisplayHandle::Wayland(h) = handle.as_raw() else {
+            return;
+        };
+        // SAFETY: the display is the event loop's own, alive as long as the
+        // loop; the drag is dropped with this handler, inside the loop.
+        let drag = unsafe { surface_drag::wayland::WaylandDrag::new(h.display.as_ptr()) };
+        if let Some(drag) = &drag {
+            self.app
+                .world
+                .insert_resource(lumen_core::surface_drag::SurfaceDragSupport {
+                    follow: drag.can_follow(),
+                });
+        }
+        self.drag.wayland = drag;
+    }
+
+    /// The app's windows as the Wayland drag sees them.
+    #[cfg(target_os = "linux")]
+    fn wayland_surfaces(&self) -> Vec<surface_drag::wayland::Surface> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use winit::platform::wayland::WindowExtWayland;
+        self.windows
+            .values()
+            .filter_map(|os| {
+                let RawWindowHandle::Wayland(h) = os.window.window_handle().ok()?.as_raw() else {
+                    return None;
+                };
+                let size = self
+                    .app
+                    .world
+                    .get::<WindowViewport>(os.entity)
+                    .map_or(glam::Vec2::ZERO, |v| v.size);
+                Some(surface_drag::wayland::Surface {
+                    window: os.entity,
+                    surface: h.surface.as_ptr(),
+                    toplevel: os.window.xdg_toplevel().map(|t| t.as_ptr()),
+                    size,
+                })
+            })
+            .collect()
+    }
+
+    /// Read the Wayland drag's events into the app.
+    #[cfg(target_os = "linux")]
+    fn dispatch_wayland_drag(&mut self) {
+        let Some(active) = self.drag.wayland.as_ref().map(|w| w.active()) else {
+            return;
+        };
+        if active {
+            let surfaces = self.wayland_surfaces();
+            if let Some(w) = self.drag.wayland.as_mut() {
+                w.set_surfaces(&surfaces);
+            }
+        }
+        let events = self
+            .drag
+            .wayland
+            .as_mut()
+            .map(|w| w.dispatch())
+            .unwrap_or_default();
+        if !events.is_empty() {
+            for e in events {
+                self.app.world.write_message(e);
+            }
+            self.want_frame();
+        }
+    }
+
     fn present(&mut self, force: Option<Entity>) {
         let mut targets: Vec<PresentTarget<'_>> = Vec::with_capacity(self.windows.len());
         let world = &self.app.world;
