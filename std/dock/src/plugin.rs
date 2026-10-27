@@ -920,6 +920,14 @@ fn decorate_tabs(
                 }
                 e.insert((cl, StyleDirty));
             }
+            // The stack's shown tab is marked from its first frame.
+            if let Some(strip) = world.get::<ChildOf>(button).map(ChildOf::parent) {
+                let shown = world
+                    .get::<ChildOf>(strip)
+                    .and_then(|stack| world.get::<Tabs>(stack.parent()))
+                    .and_then(|t| t.shown);
+                crate::realize::mark_active_tab(world, strip, shown);
+            }
             // The title, then the close button, then the icon put first.
             let caption = spawn_part(world, button, "label", "dock-tab-label", Some(title));
             world.entity_mut(caption).insert(DockTabCaption);
@@ -945,9 +953,9 @@ fn decorate_tabs(
     }
 }
 
-/// The close button's mark, until a stylesheet draws its own with
-/// `mask-image`.
-const CLOSE: &str = "x";
+/// The close button's mark, the multiplication sign, until a stylesheet
+/// draws its own with `mask-image`.
+const CLOSE: &str = "\u{d7}";
 
 /// Spawn one part of a dock tab under `parent`: the module's own structure,
 /// out of the document a script walks.

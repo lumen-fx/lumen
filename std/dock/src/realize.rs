@@ -22,7 +22,7 @@ use lumen_module::lumen_core::window::{
     InputBlocked, Monitors, PrimaryWindow, Window, WindowKind, WindowName, WindowOf, WindowRuntime,
 };
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element, TabSpec};
-use lumen_module::lumen_primitives::{SplitGutter, SplitPane, TabStrip};
+use lumen_module::lumen_primitives::{SplitGutter, SplitPane, TabStrip, TabStripButton};
 use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
 
 use crate::adopt::{DockChrome, hide, spawn_chrome, unhide};
@@ -444,7 +444,32 @@ fn build_stack(
     {
         world.entity_mut(e).insert(A11yLabel(label));
     }
+    let shown_tab = active.and_then(|a| built.tabs.get(a).copied());
+    for strip in strip {
+        mark_active_tab(world, strip, shown_tab);
+    }
     Some(e)
+}
+
+/// The class the strip button of a stack's shown tab carries, beside the
+/// core's `:selected` state, so a stylesheet can style all of it and not
+/// only its background.
+pub const ACTIVE_TAB: &str = "active";
+
+/// Give the strip button of `shown` in `strip` the [`ACTIVE_TAB`] class and
+/// take it from the others.
+pub fn mark_active_tab(world: &mut World, strip: Entity, shown: Option<Entity>) {
+    for b in children_of(world, strip) {
+        let Some(tab) = world.get::<TabStripButton>(b).map(|t| t.tab) else {
+            continue;
+        };
+        let wanted: &[&str] = if Some(tab) == shown {
+            &[ACTIVE_TAB]
+        } else {
+            &[]
+        };
+        set_classes(world, b, wanted, &[ACTIVE_TAB]);
+    }
 }
 
 /// The path of node ids from `node` to the stack holding `panel`.

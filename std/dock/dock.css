@@ -1,7 +1,9 @@
-/* The dock's default look, at user-agent origin: every skin, the app's CSS
-   and a markup attribute override it. Each value reads a --lumen-dock-*
-   token first and the skin's generic token behind it, so a skin or an app
-   restyles the dock by setting the tokens. */
+/* The dock's default look, at user-agent origin: the app's CSS and a markup
+   attribute override it, and so does a skin rule that matches as
+   specifically. Each value reads a --lumen-dock-* token first, then the
+   skin's token, then a value that suits the dark window an app with no skin
+   opens, so the dock looks finished without a skin and follows a skin or an
+   app that sets the tokens. */
 
 .dock { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; min-height: 0; }
 
@@ -13,48 +15,72 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--lumen-dock-stack-bg, var(--lumen-panel));
-  border: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle));
+  background: var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21));
+  border: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
 }
+
+/* The strip: a darker band the tabs sit in, the shown tab taking the
+   stack's own color so it reads as the front of the stack, and the
+   `active` class on its button. The selectors
+   name the stack, so they outrank a skin's `button` and view-switcher tab
+   rules; a skin restyles the dock by matching them as specifically. */
 .dock-stack > .tab-strip {
   flex-shrink: 0;
-  gap: var(--lumen-dock-tab-gap, 2);
-  padding: var(--lumen-dock-strip-padding, 2);
+  height: var(--lumen-dock-tab-height, 30);
+  gap: var(--lumen-dock-tab-gap, 0);
+  padding: var(--lumen-dock-strip-padding, 0);
   border-radius: 0;
-  background: var(--lumen-dock-strip-bg, var(--lumen-surface));
+  background: var(--lumen-dock-strip-bg, var(--lumen-window-bg, #121217));
+  border-bottom: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
 }
 .dock-stack.no-tabs > .tab-strip { display: none; }
 .dock-stack.collapsed > .dock-tab-body { display: none; }
 
-.dock-tab {
+.dock-stack .dock-tab {
   flex-grow: 0;
-  height: var(--lumen-dock-tab-height, 28);
-  padding: 0 var(--lumen-dock-tab-padding, 10);
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 0 var(--lumen-dock-tab-padding, 6) 0 var(--lumen-dock-tab-padding-start, 12);
   gap: 6;
   align-items: center;
-  border-radius: var(--lumen-dock-tab-radius, var(--lumen-radius-sm));
+  border-radius: var(--lumen-dock-tab-radius, 0);
   background: var(--lumen-dock-tab-bg, #00000000);
+  text-color: var(--lumen-dock-tab-text, var(--lumen-text-muted, #ffffffa6));
+  font-size: var(--lumen-dock-tab-font-size, 13);
+  border-top: 2px solid #00000000;
 }
-.dock-stack.single .dock-tab { flex-grow: 1; justify-content: flex-start; }
-.dock-tab-icon {
+/* The shown tab: the stack's color, full-strength text and an accent line
+   along its top edge. */
+.dock-stack .dock-tab.active {
+  text-color: var(--lumen-dock-tab-active-text, var(--lumen-text, #ffffff));
+  border-top-color: var(--lumen-dock-accent, var(--lumen-accent, #33c7ce));
+}
+.dock-stack .dock-tab:hover { background: var(--lumen-dock-tab-hover-bg, var(--lumen-panel-hover, #ffffff12)); }
+.dock-stack .dock-tab:selected { background: var(--lumen-dock-tab-active-bg, var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21))); }
+.dock-stack .dock-tab-icon {
   width: var(--lumen-dock-icon-size, 16);
   height: var(--lumen-dock-icon-size, 16);
   flex-shrink: 0;
 }
-.dock-tab-label { flex-shrink: 0; }
-.dock-tab-close {
-  width: 16;
-  height: 16;
+.dock-stack .dock-tab-label { flex-shrink: 0; }
+.dock-stack .dock-tab-close {
+  width: 18;
+  height: 18;
   min-height: 0;
   padding: 0;
   flex-shrink: 0;
   justify-content: center;
   align-items: center;
-  font-size: 11;
-  border-radius: var(--lumen-radius-sm);
+  font-size: 14;
+  border-radius: var(--lumen-radius-sm, 4);
   background: var(--lumen-dock-close-bg, #00000000);
+  opacity: 0.7;
 }
-.dock-tab-close:hover { background: var(--lumen-dock-close-hover-bg, var(--lumen-surface-hover)); }
+.dock-stack .dock-tab-close:hover {
+  background: var(--lumen-dock-close-hover-bg, var(--lumen-surface-hover, #ffffff1f));
+  opacity: 1;
+}
 
 .dock-tab-body { flex-grow: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .dock-panel { flex-grow: 1; flex-direction: column; min-width: 0; min-height: 0; }
@@ -64,7 +90,7 @@
   width: 100%;
   height: 100%;
   flex-direction: column;
-  background: var(--lumen-dock-window-bg, var(--lumen-window-bg, #111317));
+  background: var(--lumen-dock-window-bg, var(--lumen-window-bg, #121217));
 }
 .dock-window > .dock-stack { flex-grow: 1; }
 .dock-window > .dock-split { flex-grow: 1; }
