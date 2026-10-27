@@ -503,6 +503,7 @@ mod tests {
                     html: "div".to_string(),
                     void: false,
                     note: None,
+                    not_inside: Vec::new(),
                 }],
             }],
             unlinked: vec![UnlinkedCapability {

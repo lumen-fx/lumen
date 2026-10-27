@@ -166,6 +166,8 @@ struct ElementDecl {
     void: bool,
     #[serde(default)]
     note: Option<String>,
+    #[serde(default, rename = "not-inside")]
+    not_inside: Vec<String>,
 }
 
 /// Parse a descriptor's text, checking the files it names against `dir`.
@@ -306,6 +308,7 @@ fn parse_descriptor(name: &str, text: &str) -> Result<(Header, Addon), String> {
             html: decl.html,
             void: decl.void,
             note: decl.note.filter(|n| !n.trim().is_empty()),
+            not_inside: decl.not_inside,
         });
     }
 

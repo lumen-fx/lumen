@@ -515,6 +515,9 @@ pub fn check_app(
     )?;
     // Parse-time lint findings already went to stderr from `load_ir`,
     // which every compile path shares.
+    if let Some(misplaced) = misplaced_element(&ir.root, &every_addon, &mut Vec::new()) {
+        return Err(RunError::ParseHtml(misplaced));
+    }
     let has_script = !ir.script_source.trim().is_empty() || !ir.external_scripts.is_empty();
     // RC6: compile the app's scripts with the same engine settings
     // `lumenc run` uses. Compile-only - the top level is never evaluated, so
@@ -544,6 +547,34 @@ pub fn check_app(
         element_count: count_elements(&ir.root),
         has_script,
     })
+}
+
+/// The first element written inside one its module says it may not be in
+/// (`not-inside` in the module's descriptor), described for the author.
+/// `above` holds the tags of the elements over `el`.
+#[cfg(feature = "runtime-parse")]
+fn misplaced_element(
+    el: &lumen_ir::layout_ir::Element,
+    addons: &[lumen_ir::addon::Addon],
+    above: &mut Vec<String>,
+) -> Option<String> {
+    for addon in addons {
+        for rule in addon.elements.iter().filter(|e| e.tag == el.tag) {
+            if let Some(outer) = rule.not_inside.iter().find(|t| above.contains(t)) {
+                return Some(format!(
+                    "<{}> cannot be written inside <{outer}>: the `{}` module does not support it",
+                    el.tag, addon.name
+                ));
+            }
+        }
+    }
+    above.push(el.tag.clone());
+    let found = el
+        .children
+        .iter()
+        .find_map(|c| misplaced_element(c, addons, above));
+    above.pop();
+    found
 }
 
 /// Compile-check a program once for each of `targets`, each against that

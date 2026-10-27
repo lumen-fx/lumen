@@ -80,4 +80,10 @@ pub struct AddonElement {
     /// compiled app.
     #[serde(skip)]
     pub note: Option<String>,
+    /// Tags the element may not be written inside, at any depth: a `<dock>`
+    /// inside another dock's panel, say. `lumenc check` refuses such markup.
+    /// Read from the descriptor when an app is checked; not carried in a
+    /// compiled app.
+    #[serde(skip)]
+    pub not_inside: Vec<String>,
 }
