@@ -1230,6 +1230,63 @@ What the producer sends back arrives as events on the element:
 and [Showing another renderer's frames](../guides/surfaces.md) for the whole
 picture.
 
+## Docks and windows
+
+These functions come from the `lumen-dock` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-dock = { bundled = true }
+```
+
+They name a [`<dock-panel>`](tags.md#dock-and-its-panels) by its `id`.
+Every window but the main one is a panel in a window of its own, so these
+also open, place and close the app's other windows. A call naming a panel the
+module does not know does nothing and answers `false`, with one line on
+stderr.
+
+| Function | Returns | Behaviour |
+| --- | --- | --- |
+| `dock::show(panel: string)` | `bool` | Bring the panel into view where it was hidden from, else where its `place` puts it, and make it its stack's showing tab. A panel outside any dock, or one that does not dock, opens in a window of its own. |
+| `dock::hide(panel: string)` | `bool` | Take the panel out of view, remembering where it was. Its content stays mounted. |
+| `dock::toggle(panel: string)` | `bool` | Hide the panel if it is shown, else show it. Whether it is shown afterwards. |
+| `dock::focus(panel: string)` | `bool` | Show the panel and move keyboard focus into it: to the element last focused there, else its first focusable element, else its tab. Raises its window. |
+| `dock::activate(panel: string)` | `bool` | Make the panel its stack's showing tab. |
+| `dock::close(panel: string)` | `bool` | Close the panel without asking: hide it, or remove its element when it has `destroy-on-close`. |
+| `dock::move(panel: string, target: string, zone: string)` | `bool` | Move the panel beside `target`, a panel or a dock id. `zone` is `tab` (into the target's stack, or the dock's center stack) or `left`, `right`, `top`, `bottom` (a new stack on that side of the target's stack, or along that edge of the dock). |
+| `dock::detach(panel: string)` | `bool` | Pop the panel out into a window of its own, over the place it has on screen. |
+| `dock::detach_group(panel: string)` | `bool` | Pop the panel's whole stack out into a window of its own. |
+| `dock::attach(panel: string)` | `bool` | Dock the panel back from its window to where it came from. `false` when it is not in a window or does not dock. |
+| `dock::window_of(panel: string)` | `int` | `0` for the main window, the window's number for a window of its own, `-1` when the panel is not shown. |
+| `dock::windows()` | `int[]` | The numbers of the windows of their own that hold panels. |
+| `dock::collapse(panel: string, collapsed: bool)` | `bool` | Collapse the panel's stack to its header, or expand it. |
+| `dock::maximize(panel: string)` | `bool` | Fill the panel's dock with its stack. `false` when the panel is not in a dock. |
+| `dock::restore_maximized(dock: string)` | `bool` | Give the dock its whole layout back. `false` when nothing in it was maximized. |
+| `dock::panels()` | `string[]` | Every panel id the module knows, shown or not. |
+| `dock::is_shown(panel: string)` | `bool` | Whether the panel is in a dock or a window of its own. |
+| `dock::save()` | `string` | The whole arrangement as JSON, for `dock::restore` in this run or another. |
+| `dock::restore(layout: string)` | `bool` | Arrange everything as a saved layout says. `false`, with a `layouterror` event, for a layout of another format or `layout-version`, or a broken one. |
+| `dock::layouts()` | `string[]` | The named layouts: the markup's `<dock-layout>`s and the user's own. |
+| `dock::save_layout(name: string)` | `bool` | Keep the arrangement as the named layout `name`. |
+| `dock::apply_layout(name: string)` | `bool` | Arrange everything as the named layout says. Panels it does not name keep their place. |
+| `dock::delete_layout(name: string)` | `bool` | Delete a layout the user saved. |
+| `dock::reset()` | `bool` | Go back to the named layout the arrangement came from, else to the markup's. |
+| `dock::forget(panel: string)` | `bool` | Drop everything remembered about a panel: its place and what a restore would ask the app to recreate. |
+
+```rust
+fn on_click(id: string) {
+    if id == "pop-out" { dock::detach("inspector"); }
+    if id == "layout-focus" { dock::apply_layout("Focus"); }
+}
+```
+
+The dock tells the app what changed with events on the panels and the
+dock (`panelshow`, `panelclose`, `panelmove`, `layoutchange` and the rest)
+and the `dock.active`, `dock.layout` and `dock.shown.<panel>` signals; see
+[`<dock>`](tags.md#dock-and-its-panels) for each, and
+[Docks and windows](../guides/docks.md) for the whole picture.
+
 ## Filesystem
 
 These functions come from the `lumen-fs` runtime module and exist only when

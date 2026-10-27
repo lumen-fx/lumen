@@ -27,8 +27,8 @@ the workflow generates them rather than anyone typing them.
 | `sha256sums.txt`               | GitHub Actions, the publish job        |
 
 `lumen-modules-<target>.tar.gz` carries the bundled runtime modules (today:
-`lumen-archive`, `lumen-audio`, `lumen-canvas`, `lumen-download`,
-`lumen-fs`, and `lumen-process`), built by the same cargo invocation as the engine so their
+`lumen-archive`, `lumen-audio`, `lumen-canvas`, `lumen-dock`,
+`lumen-download`, `lumen-fs`, and `lumen-process`), built by the same cargo invocation as the engine so their
 build ids match it, in the same `bin/` layout as the toolchain archive.
 `install.sh` unpacks it over the same prefix. Windows has no modules archive:
 no engine dylib exists there, so a module's plugin is compiled into the app
@@ -54,7 +54,7 @@ kit it is published on every platform, `install.sh` never fetches it, and
 `lumenui-engine-<target>.tar.zst` carries the prebuilt engine the published
 `lumenui` crate links: the compiled crates of `lumenui-engine`
 (public/lumenui/rust/engine) for that target, the runtime modules the
-`lumenui-<name>` crates re-export (`lumen-canvas`, `lumen-surface`), the
+`lumenui-<name>` crates re-export (`lumen-canvas`, `lumen-dock`, `lumen-surface`), the
 proc-macro libraries they use, and any native library they link without carrying, collected by
 `tools/release/lumenui-engine.py`. `lumenui-engine-<target>.json` is its
 manifest (the rustc that built it, the target, the Lumen version, every file

@@ -49,10 +49,10 @@ See [shell completions](../reference/cli.md#completions).
 ### Runtime modules
 
 Some capabilities live outside the engine, in libraries the runtime loads at
-startup: files, audio, canvas, downloads, processes, archives, stored values,
-cookies, WebSockets, and the browser-only ones a web build uses (the page's
-JavaScript, the browser around it, SVG drawings). An app asks for
-one by name under [`[dependencies]`](../reference/lumen-toml.md#dependencies)
+startup: files, audio, canvas, docks and windows, downloads, processes,
+archives, stored values, cookies, WebSockets, and the browser-only ones a web
+build uses (the page's JavaScript, the browser around it, SVG drawings). An
+app asks for one by name under [`[dependencies]`](../reference/lumen-toml.md#dependencies)
 in `lumen.toml`, which lists the modules and their config keys;
 [scripting](../guides/scripting.md) covers the calls each one adds.
 

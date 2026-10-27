@@ -43,6 +43,7 @@ nav = [
      "guides/animations.md",
      "guides/os-integration.md",
      "guides/surfaces.md",
+"guides/docks.md",
      "guides/i18n.md",
      "guides/accessibility.md",
      "guides/packaging.md",

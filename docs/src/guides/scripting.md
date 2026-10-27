@@ -341,6 +341,29 @@ replaces it. Each firing calls `on_timer(name)`, or the function you routed
 that name to with `on("timer", ...)`. A repeating timer cancelled from inside
 its own handler stops immediately.
 
+## Windows and docking
+
+An app has one main window, and `window::` reads and changes the window the
+event being handled happened in: `window::set_title`, `window::set_size`,
+`window::close`. Every other window is a panel in a window of its own, so the
+functions that open, place and close windows are the `lumen-dock` module's
+`dock::` functions, which take a panel's id:
+
+```rust
+fn on_click(id: string) {
+    if id == "open-prefs" { dock::show("prefs"); }        // a dialog window
+    if id == "pop-out" { dock::detach("inspector"); }     // a panel into its own window
+    if id == "dock-back" { dock::attach("inspector"); }
+}
+```
+
+A panel keeps its elements and their state wherever it shows, and its
+elements stay in the app's one document, so `get_by_id` and the signals reach
+them from a handler in any window. See [Docks and windows](docks.md) for
+writing a docked workspace and dialog windows, and the
+[catalog](../reference/scripting-candela.md#docks-and-windows) for every
+function.
+
 ## Reaching the OS
 
 Notifications, clipboard, file dialogs, menus, the tray, global hotkeys, audio,

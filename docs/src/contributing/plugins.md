@@ -111,7 +111,8 @@ app.add_plugin(PressPlugin {
   between extract and render, for work that reads what extract just produced.
 - `add_extract_fn(f)` appends a cross-world extract function.
 - `add_message::<M>()` registers a message type so writers and readers work for
-  it.
+  it. A type already registered is left as it is, so two plugins that both
+  need a message can both call it, in either order.
 - `register_command::<T, _>(handler)` registers a handler for a typed command,
   which is how off-thread code reaches the world.
 - `request_threads_at_least(n)` raises the worker budget. It is monotonic
@@ -780,7 +781,9 @@ Outside markup, spawn the entity first and hand it to `spawn` yourself:
 `Gauge::spawn(world.spawn_empty().id(), &attrs, world)`. A tag registered by
 name alone (`register_widget_tag`, or a runtime module's
 `register_widget_tag_owned`) has no `spawn`: its element is a plain element
-with that tag, which the plugin's own systems pick up by `LumenTag`.
+with that tag, which the plugin's own systems pick up by `LumenTag`. Either
+way the element carries the attributes it was written with in its
+`LumenAttributes`, which is also what a script's `get_attr` reads.
 
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
@@ -810,12 +813,23 @@ A plugin that builds a workspace out of panes and tabs reuses `<split>` and
 gutters and tab buttons drag, step on the keyboard and announce themselves
 like every other split and tab set. Build them the way the parser would,
 with `lumen_scene::spawn::spawn_subtree` and a `lumen_ir::layout_ir::Element`
-for the widget and for each pane or `<tab>`, or through the DOM commands a
-script issues. The scene puts a gutter between every two panes of a split,
+for the widget and for each pane or `<tab>` (both reach a module through
+`lumen-module`, as `lumen_module::lumen_scene` and `lumen_module::lumen_ir`),
+or through the DOM commands a script issues. The scene puts a gutter between every two panes of a split,
 and a strip with one button per tab in front of a `<tabs>`, however the
 children arrived, and keeps both in step when children come, go or move, so
 reparenting a pane into another split or a tab into another tab set needs
 nothing more.
+
+When the elements you build hold the app's own (a panel of the app's markup
+moved into your tab), mark yours `DomHidden`. The scripting DOM passes
+through an element marked so: the app's element keeps the nearest element
+above it that is not hidden as its parent, selectors and `parent()` see the
+document as the app wrote it, and its events bubble past your structure to
+that element. When you move an element of the app's from one parent to
+another, insert its `ChildOf` before reordering with `replace_children`;
+`replace_children` alone leaves it listed under the parent it came from, and
+despawning that parent would take it along.
 
 ### Split sizes
 

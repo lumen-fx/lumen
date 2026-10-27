@@ -1223,3 +1223,61 @@ A producer in another process speaks the Lumen surface protocol, through the
 The C ABI, C++ and Python reach the same calls through the module's generated
 wrappers: `<lumen_surface.hpp>` (`lumen::surface::endpoint("scene")`) and
 `lumen.surface`.
+
+### Docks
+
+The `lumenui-dock` crate gives a Rust app [`<dock>` and
+`<dock-panel>`](tags.md#dock-and-its-panels): tab stacks in resizable splits,
+panels popped out into windows of their own and docked back, and dialog
+windows. Add it beside `lumenui`, at the same version, and install
+`DockPlugin` with `add_plugin`:
+
+```toml
+[dependencies]
+lumenui = "X.Y.Z"
+lumenui-dock = "X.Y.Z"
+```
+
+```rust
+use lumenui::prelude::*;
+use lumenui_dock::{Dock, DockPlugin, Persist};
+
+fn pop_out(dock: Dock, mut clicks: MessageReader<ClickEvent>, ids: Query<&LumenId>) {
+    for click in clicks.read() {
+        if ids.get(click.entity).is_ok_and(|id| id.0 == "pop-out") {
+            let _ = dock.detach("inspector");
+        }
+    }
+}
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .add_plugin(DockPlugin {
+            persist: Persist::Auto,
+            ..DockPlugin::default()
+        })
+        .add_systems(TickStage::Systems, pop_out)
+        .run()
+}
+```
+
+`Dock` is a system parameter with the same operations the
+[`dock` namespace](scripting-candela.md#docks-and-windows) has: `show`,
+`hide`, `toggle`, `focus`, `activate`, `close`, `move_to`, `detach`,
+`detach_group`, `attach`, `collapse`, `maximize`, `restore_maximized`,
+`is_shown`, `panels`, `window_of`, the named layouts, and `forget`. Each
+returns a `DockError` where a script function answers `false`. `save` returns
+the arrangement as a `Layout` value, which a Rust app keeps, edits and hands
+back to `restore`; `Layout::to_json` and `Layout::from_json` read and write
+the same text `dock::save` does, and `restore_json` takes that text directly.
+`DockPlugin { persist, layout_version, window_close, keys }` takes what the
+module's `config` table sets.
+
+On each panel's element sits `DockPanel { id }`, on each dock's `DockElement
+{ id }`, and on each window of panels `DockWindow { id }`. `DockEvent`
+messages report what the dock's DOM events report, for a system that reads
+messages rather than handling events.
+
+The C ABI, C++ and Python reach the same calls through the module's generated
+wrappers: `<lumen_dock.hpp>` (`lumen::dock::detach("inspector")`) and
+`lumen.dock`.
