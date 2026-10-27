@@ -1136,8 +1136,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.idle_step(event_loop);
         // A Wayland drag reads its own queue on winit's connection, which
-        // winit does not wake the loop for: while a press could become a
-        // drag, or one runs, look again soon.
+        // winit does not wake the loop for: while one runs, look again soon.
         #[cfg(target_os = "linux")]
         if !self.close.committed
             && self
@@ -1179,11 +1178,13 @@ impl WinitHandler {
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
+        // The Wayland drag's queue first: a drag the app begins needs the
+        // serial of the press that came in with this batch.
+        #[cfg(target_os = "linux")]
+        self.dispatch_wayland_drag();
         self.take_drag_requests();
         self.sync_windows(event_loop);
         self.apply_focus_requests();
-        #[cfg(target_os = "linux")]
-        self.dispatch_wayland_drag();
         // A deadline a system asked to be woken at (a script timer) that
         // has come due needs a tick: this is the pass the `WaitUntil` set
         // below resumes into.
