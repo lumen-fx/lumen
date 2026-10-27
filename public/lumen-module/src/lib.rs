@@ -104,6 +104,11 @@ pub use lumen_core::app::{App, Plugin};
 /// [`lumen_input::dispatch_clicks`], which runs in
 /// [`lumen_core::input::ClickSet::Producers`].
 pub use lumen_input;
+/// The markup tree's types: a module that builds elements of its own (a
+/// `<split>`, a `<tabs>` and its `<tab>`s) describes each as a
+/// [`lumen_ir::layout_ir::Element`] and spawns it with
+/// [`lumen_scene::spawn::spawn_subtree`], as the parser's output is spawned.
+pub use lumen_ir;
 /// Export a [`Plugin`] as a runtime module. See the crate docs for the
 /// authoring shape, and `lumen-module-macros` for what the expansion holds.
 pub use lumen_module_macros::lumen_module;
