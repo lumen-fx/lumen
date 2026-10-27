@@ -1,0 +1,14 @@
+<root>
+  <dock id="editor" label="Editor">
+    <dock-split axis="row">
+      <dock-stack basis="240">
+        <dock-panel id="files" title="Files"><label text="files"/></dock-panel>
+      </dock-stack>
+      <dock-stack center="true">
+        <dock-panel id="scene" title="Scene"><label text="scene"/></dock-panel>
+        <dock-panel id="game" title="Game"><label text="game"/></dock-panel>
+      </dock-stack>
+    </dock-split>
+  </dock>
+  <script src="main.cdl"/>
+</root>

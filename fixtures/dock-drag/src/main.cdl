@@ -1,0 +1,15 @@
+// Says where each panel goes, one line a move, for whoever drives the drag.
+import "lumen.cdl";
+
+fn on_move(ev: int) {
+    let detail = lumen::event_detail(ev) as {string: any};
+    let panel = lumen::node_id(lumen::event_target(ev));
+    print("dock-drag " + panel + " " + (detail["to"] as string));
+}
+
+fn on_ready() {
+    lumen::event_on(lumen::node_get_by_id("editor"), "panelmove", "on_move");
+    print("dock-drag ready");
+}
+
+fn main() {}
