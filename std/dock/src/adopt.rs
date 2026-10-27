@@ -20,6 +20,7 @@ use lumen_module::lumen_core::components::Display;
 use lumen_module::lumen_core::components::{
     A11yLabel, A11yRole, DomHidden, LumenAttributes, LumenClasses, LumenId, LumenTag, StyleDirty,
 };
+use lumen_module::lumen_core::property_store::PropertyStore;
 use lumen_module::lumen_core::style_overrides::{StyleOverrides, StyleOwner, StyleValues, hold_on};
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element};
 use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
@@ -73,6 +74,10 @@ pub struct DockHides;
 impl StyleOwner for DockHides {
     const RANK: u8 = 45;
 }
+
+/// The signals panels bind their window titles to (`bind-window-title`).
+#[derive(Resource, Default, Debug)]
+pub struct TitleSignals(pub BTreeSet<String>);
 
 /// Elements that arrived or left since the module last looked.
 #[derive(Resource, Default)]
@@ -366,6 +371,19 @@ fn register_panel(
     declared_in: Option<Entity>,
 ) -> bool {
     let attrs = world.get::<LumenAttributes>(e).cloned();
+    let panel_attrs = PanelAttrs::read(attrs.as_ref(), id);
+    let bound_title = panel_attrs.window_title_signal.as_deref().and_then(|name| {
+        world
+            .get_resource::<PropertyStore>()
+            .and_then(|store| store.get_global_str(name))
+            .map(|v| v.to_string())
+    });
+    if let Some(name) = &panel_attrs.window_title_signal {
+        world
+            .get_resource_or_insert_with(TitleSignals::default)
+            .0
+            .insert(name.clone());
+    }
     let mut core = shared.lock();
     if let Some(existing) = core.panels.get(id)
         && let Some(other) = existing.entity
@@ -380,8 +398,9 @@ fn register_panel(
     let rec = PanelRec {
         entity: Some(e),
         info: panel_info(attrs.as_ref(), dock.map(str::to_string)),
-        attrs: PanelAttrs::read(attrs.as_ref(), id),
+        attrs: panel_attrs,
         declared_in,
+        bound_title,
     };
     if let (Some(kind), Some(state)) = (&rec.attrs.kind, &rec.attrs.state) {
         core.ws.panels.insert(

@@ -1101,7 +1101,8 @@ wherever the layout puts them with everything inside them.
 | | `active` | The panel showing at first; the first one otherwise. |
 | | `basis`, `grow` | As on a split. |
 | `<dock-panel>` | `id` | Required. The panel's name in every call and in a saved layout. |
-| | `title` | Its tab text and accessible name. Defaults to the `id`. |
+| | `title` | Its tab text and accessible name. Defaults to the `id`. A script that changes it changes the tab and the window title with it. |
+| | `icon` | An image shown in its tab before the title, as `<image src>` reads it. |
 | | `closable` | Boolean, default true. False takes away its close button and Delete. |
 | | `hidden` | Boolean. Starts hidden, with its place remembered. |
 | | `place` | Where it goes the first time it shows, when no layout places it: `center` (the default), `left`, `right`, `top`, `bottom` (a new stack along that edge of its dock), `window` (a window of its own), or `beside:<panel>` (a tab beside another panel). |
@@ -1113,6 +1114,7 @@ wherever the layout puts them with everything inside them.
 | | `window-size` | Inner size of its own window in pixels, `"640 480"`. Defaults to the size it has where it is. |
 | | `resizable` | Boolean, default true, for its own window. |
 | | `window-title` | Its own window's title. Defaults to `title`. |
+| | `bind-window-title` | A signal its own window's title follows, ahead of `window-title`: a document window titled with the file it shows. |
 | `<dock-layout>` | `name` | A named layout the app can apply. Its tree uses `<dock-ref panel>` in place of panels; a panel it does not name keeps its place. |
 | `<dock-window>` | `rect` | In a `<dock-layout>`: a window of its own at `"x y width height"`, holding a stack or a split. |
 
@@ -1136,14 +1138,30 @@ these fields in its detail:
 | `layouterror` | dock | A saved layout was not used. | `reason` (`parse`, `format`, `version`, `invalid`), `detail` |
 | `panelrestore` | dock | A layout names a panel the app has not created. | `panel`, `kind`, `state` |
 
+A right click on a tab, or the Menu key or Shift+F10 on a focused tab, opens
+the tab menu: Move to new window, Move group to new window (when the stack
+has other panels), Maximize or Restore layout, Dock back (in a window of its
+own), and Close (when the panel is closable). Its items are `<menu>` items
+with the ids `lumen-dock-detach`, `lumen-dock-detach-group`,
+`lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-attach` and
+`lumen-dock-close-panel`, so a script's `on_menu` hears them too. A completed
+move is announced to screen readers: "Inspector moved to a new window",
+"Inspector docked back", "Inspector moved beside Scene". The menu labels and
+the announcements are the module's messages (`lumen-dock-move-to-window`,
+`lumen-dock-move-group-to-window`, `lumen-dock-maximize`, `lumen-dock-restore`,
+`lumen-dock-dock-back`, `lumen-dock-close`, `lumen-dock-moved-to-window`,
+`lumen-dock-docked-back`, `lumen-dock-moved-beside`, `lumen-dock-moved`),
+which an app rewords or translates by writing the same ids in its own
+catalogue.
+
 Signals: `dock.active` holds the id of the panel holding focus,
 `dock.layout` the named layout in use, and `dock.shown.<panel>` whether a
 panel is in view.
 
 Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
 or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
-(one panel), `no-tabs` and `maximized`, `dock-tab` and `dock-tab-close` on a
-tab and its close button, and `dock-window` with `dock-window-normal` or
+(one panel), `no-tabs` and `maximized`, `dock-tab`, `dock-tab-icon` and
+`dock-tab-close` on a tab, its icon and its close button, and `dock-window` with `dock-window-normal` or
 `dock-window-dialog` on the root of a window of panels. The default look reads
 `--lumen-dock-*` tokens with the skin's own behind them.
 

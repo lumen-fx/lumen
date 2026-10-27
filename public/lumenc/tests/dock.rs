@@ -1258,3 +1258,277 @@ fn page_navigation_closes_a_pages_windows_and_brings_them_back() {
     let button = entity(app, "game-btn");
     assert_eq!(window_of(app, button), Some(windows[0].0));
 }
+
+/// The items of the open tab menu, in order.
+fn menu_items(app: &mut App) -> Vec<(Entity, lumen_dock::MenuAction)> {
+    let mut q = app
+        .world
+        .query::<(Entity, &lumen_dock::DockMenuItem, &ChildOf)>();
+    let mut items: Vec<(Entity, lumen_dock::MenuAction, Entity)> = q
+        .iter(&app.world)
+        .map(|(e, a, p)| (e, a.0, p.parent()))
+        .collect();
+    // Only the latest menu: the one whose popup is open.
+    let open = signal(app, &format!("__menu_open:{}", lumen_dock::MENU_ID));
+    if open.as_deref() != Some("true") {
+        return Vec::new();
+    }
+    let panel = items.last().map(|i| i.2);
+    items.retain(|i| Some(i.2) == panel);
+    let order = |e: Entity| {
+        app.world
+            .get::<ChildOf>(e)
+            .and_then(|p| app.world.get::<bevy_ecs::hierarchy::Children>(p.parent()))
+            .and_then(|kids| kids.iter().position(|k| *k == e))
+            .unwrap_or(0)
+    };
+    items.sort_by_key(|i| order(i.0));
+    items.into_iter().map(|(e, a, _)| (e, a)).collect()
+}
+
+fn context_menu(app: &mut App, on: Entity) {
+    app.world
+        .write_message(lumen_core::input::ContextMenuEvent {
+            entity: on,
+            position: glam::Vec2::new(40.0, 30.0),
+            button: lumen_core::input::PointerButton::Secondary,
+            local: None,
+        });
+    ticks(app, 2);
+}
+
+/// What the dock announced, kept by [`hear`] before the accessibility
+/// tree takes the queue.
+#[derive(bevy_ecs::resource::Resource, Default)]
+struct Heard(Vec<String>);
+
+/// Keep every announcement the dock queues, for [`announced`].
+fn hear(app: &mut App) {
+    use bevy_ecs::schedule::IntoScheduleConfigs;
+    app.world.init_resource::<Heard>();
+    app.add_systems(
+        lumen_core::tick::TickStage::Systems,
+        (|queue: bevy_ecs::system::Res<lumen_core::components::A11yAnnouncementQueue>,
+          mut heard: bevy_ecs::system::ResMut<Heard>| {
+            heard.0.extend(queue.pending.iter().map(|(m, _)| m.clone()));
+        })
+        .after(lumen_dock::DockSet::Report),
+    );
+}
+
+fn announced(app: &App) -> Vec<String> {
+    app.world.resource::<Heard>().0.clone()
+}
+
+/// A tab's context menu offers what fits where the panel is, does it, and
+/// says so to a screen reader.
+#[test]
+fn the_tab_menu_moves_panels_out_and_back() {
+    use lumen_dock::MenuAction as A;
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("tabmenu", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    hear(app);
+    let game_tab = tab_button(app, "game");
+    context_menu(app, game_tab);
+    let items = menu_items(app);
+    let actions: Vec<A> = items.iter().map(|i| i.1).collect();
+    assert_eq!(
+        actions,
+        [A::Detach, A::DetachGroup, A::Maximize, A::Close],
+        "a docked panel sharing its stack"
+    );
+    let text = |app: &App, e: Entity| {
+        app.world
+            .get::<lumen_core::components::TextContent>(e)
+            .map(|t| t.0.clone())
+    };
+    assert_eq!(text(app, items[0].0).as_deref(), Some("Move to new window"));
+    click(app, items[0].0, lumen_core::input::PointerButton::Primary);
+    let windows = window_entity(app);
+    assert_eq!(windows.len(), 1, "Move to new window opened one");
+    let w = windows[0].0;
+    assert_eq!(window_named(app, "game-btn"), Some(w));
+    assert!(
+        announced(app).contains(&"Game moved to a new window".to_string()),
+        "{:?}",
+        announced(app)
+    );
+
+    // In its own window, alone: dock it back or close it.
+    let game_tab = tab_button(app, "game");
+    context_menu(app, game_tab);
+    let items = menu_items(app);
+    assert_eq!(
+        items.iter().map(|i| i.1).collect::<Vec<_>>(),
+        [A::Attach, A::Close]
+    );
+    assert_eq!(
+        window_of(app, items[0].0),
+        Some(w),
+        "the menu opens in the window the tab is in"
+    );
+    click(app, items[0].0, lumen_core::input::PointerButton::Primary);
+    assert!(window_entity(app).is_empty(), "Dock back closed the window");
+    assert!(announced(app).contains(&"Game docked back".to_string()));
+
+    // Maximize and back, then close through the menu.
+    let scene_tab = tab_button(app, "scene");
+    context_menu(app, scene_tab);
+    let maximize = menu_items(app)[2].0;
+    click(app, maximize, lumen_core::input::PointerButton::Primary);
+    call(app, |d| {
+        assert_eq!(d.save().docks["editor"].maximized.as_deref(), Some("scene"))
+    });
+    let scene_tab = tab_button(app, "scene");
+    context_menu(app, scene_tab);
+    let items = menu_items(app);
+    assert_eq!(
+        items.iter().map(|i| i.1).collect::<Vec<_>>(),
+        [A::Detach, A::DetachGroup, A::Restore, A::Close]
+    );
+    click(app, items[2].0, lumen_core::input::PointerButton::Primary);
+    call(app, |d| {
+        assert_eq!(d.save().docks["editor"].maximized, None)
+    });
+    let log_tab = tab_button(app, "log");
+    context_menu(app, log_tab);
+    let items = menu_items(app);
+    assert_eq!(items.last().map(|i| i.1), Some(A::Close));
+    click(
+        app,
+        items.last().unwrap().0,
+        lumen_core::input::PointerButton::Primary,
+    );
+    call(app, |d| assert!(!d.is_shown("log"), "Close hid it"));
+
+    // A move inside the dock names its new neighbour.
+    call(app, |d| d.move_to("files", "scene", "tab").unwrap());
+    ticks(app, 2);
+    assert!(
+        announced(app).contains(&"Files moved beside Scene".to_string()),
+        "{:?}",
+        announced(app)
+    );
+}
+
+/// The Menu key on a focused tab opens the same menu, and the arrow keys
+/// and Enter pick an item.
+#[test]
+fn the_tab_menu_answers_the_keyboard() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("tabmenukeys", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    let files_tab = tab_button(app, "files");
+    lumen_core_focus(app, files_tab);
+    press(app, "ContextMenu", false, false);
+    let items = menu_items(app);
+    assert_eq!(
+        items.first().map(|i| i.1),
+        Some(lumen_dock::MenuAction::Detach)
+    );
+    press(app, "ArrowDown", false, false);
+    assert_eq!(
+        focused(app),
+        Some(items[0].0),
+        "the first item is highlighted"
+    );
+    press(app, "Enter", false, false);
+    ticks(app, 2);
+    call(app, |d| {
+        assert!(d.window_of("files") > 0, "Enter moved it out")
+    });
+}
+
+const RETITLE: &str = r#"import "lumen.cdl";
+fn on_ready() {
+    lumen::signal_set("game.file", "level1.map");
+}
+fn main() {}
+"#;
+
+/// A panel's tab follows its title and icon when a script changes them,
+/// and its window's title follows the signal it binds.
+#[test]
+fn a_tab_follows_its_panels_title_icon_and_bound_window_title() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let markup = MARKUP.replace(
+        r#"<dock-panel id="game" title="Game">"#,
+        r#"<dock-panel id="game" title="Game" icon="icons/game.svg" bind-window-title="game.file">"#,
+    );
+    let mut t = build("retitle", &markup, RETITLE, "");
+    let app = &mut t.app;
+    let game_tab = tab_button(app, "game");
+    let first_child = |app: &App, e: Entity| {
+        app.world
+            .get::<bevy_ecs::hierarchy::Children>(e)
+            .and_then(|k| k.first().copied())
+    };
+    let icon = first_child(app, game_tab).expect("the tab has children");
+    assert!(
+        app.world.get::<lumen_dock::DockTabIcon>(icon).is_some(),
+        "the icon comes first"
+    );
+    // A new title reaches the tab, its close button and the stack's name.
+    let game = entity(app, "game");
+    app.world
+        .get_mut::<LumenAttributes>(game)
+        .unwrap()
+        .set("title", "Play");
+    ticks(app, 3);
+    let game_tab = tab_button(app, "game");
+    assert_eq!(
+        app.world
+            .get::<lumen_core::components::TextContent>(game_tab)
+            .map(|t| t.0.as_str()),
+        Some("Play")
+    );
+    let mut q = app.world.query::<(
+        &lumen_dock::DockCloseButton,
+        &lumen_core::components::A11yLabel,
+    )>();
+    let label = q
+        .iter(&app.world)
+        .find(|(b, _)| b.panel == "game")
+        .map(|(_, l)| l.0.clone());
+    assert_eq!(label.as_deref(), Some("Close Play"));
+    // A new icon replaces the old one; no icon takes it away.
+    app.world
+        .get_mut::<LumenAttributes>(game)
+        .unwrap()
+        .set("icon", "icons/play.svg");
+    ticks(app, 3);
+    let icons = {
+        let mut q = app.world.query::<(Entity, &lumen_dock::DockTabIcon)>();
+        q.iter(&app.world).count()
+    };
+    assert_eq!(icons, 1);
+    app.world
+        .get_mut::<LumenAttributes>(game)
+        .unwrap()
+        .remove("icon");
+    ticks(app, 3);
+    let icons = {
+        let mut q = app.world.query::<(Entity, &lumen_dock::DockTabIcon)>();
+        q.iter(&app.world).count()
+    };
+    assert_eq!(icons, 0);
+
+    // Popped out, its window takes the bound signal's value as its title.
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    assert_eq!(app.world.get::<Window>(w).unwrap().title, "level1.map");
+    app.world
+        .resource_mut::<PropertyStore>()
+        .set_global_str("game.file", "level2.map");
+    ticks(app, 3);
+    assert_eq!(app.world.get::<Window>(w).unwrap().title, "level2.map");
+    // Unbound, the window goes back to the panel's title.
+    app.world
+        .get_mut::<LumenAttributes>(game)
+        .unwrap()
+        .remove("bind-window-title");
+    ticks(app, 3);
+    assert_eq!(app.world.get::<Window>(w).unwrap().title, "Play");
+}

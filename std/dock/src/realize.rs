@@ -172,7 +172,7 @@ fn live_panels(world: &World, core: &Core) -> BTreeMap<PanelId, Live> {
                 Live {
                     entity: e,
                     title: rec.attrs.title.clone(),
-                    os_title: rec.attrs.os_title().to_string(),
+                    os_title: rec.os_title().to_string(),
                     min,
                 },
             ))
@@ -678,10 +678,13 @@ pub fn realize(world: &mut World) {
             continue;
         };
         used_windows.insert(layout.id.clone());
+        // The tree goes first; a tab menu open in the window stays after it.
         if let Some(root) = build(world, &mut built, &mut pass, &layout.root, true)
-            && children_of(world, surface) != vec![root]
+            && children_of(world, surface).first() != Some(&root)
         {
-            reorder(world, surface, &[root]);
+            put_under(world, root, surface);
+            world.entity_mut(surface).insert_children(0, &[root]);
+            world.entity_mut(surface).insert(DirtyLayout);
         }
         for p in layout.root.panels() {
             shown.insert(p.clone());
