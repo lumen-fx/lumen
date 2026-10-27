@@ -37,6 +37,14 @@ name = "editor_frame"
 harness = false
 required-features = ["dev-run"]
 
+# What a 30-panel docked workspace costs at rest and while a tab, a float
+# and a crowded strip are dragged: `cargo bench -p lumenc --features dev-run
+# --bench dock_drag`.
+[[bench]]
+name = "dock_drag"
+harness = false
+required-features = ["dev-run"]
+
 [dependencies]
 lumen-core = { workspace = true }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
@@ -197,6 +205,12 @@ ctrlc = { workspace = true, optional = true }
 # kanban DnD integration tests: offscreen renderers on both backends / real
 # app world driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# dock_x11.rs drives a real window on a private X server: the pointer
+# through XTest and the windows read back from the server. The version winit
+# already builds.
+x11rb = { version = "0.13", features = ["xtest"] }
+
 [dev-dependencies]
 # web_cli.rs renders a site the way a server would, straight through the
 # renderer.

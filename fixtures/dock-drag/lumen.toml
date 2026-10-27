@@ -1,0 +1,18 @@
+# A docked app for driving drags across real windows: a CI step and the
+# X11 test in public/lumenc/tests press, move and release the pointer on it
+# and read back what it prints and which windows it has.
+[app]
+id = "lumen-dock-drag-check"
+
+[window]
+title = "dock-drag-check"
+size = [800, 500]
+
+[dependencies]
+lumen-dock = { bundled = true }
+
+[mcp]
+port = 0
+
+[render]
+backend = "cpu"
