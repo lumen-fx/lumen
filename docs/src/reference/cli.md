@@ -31,7 +31,8 @@ for example `lumenc run --help`. A bare `help` is not a subcommand flag, so
 ```
 lumenc run <dir> [--profile chrome|tracy|stderr]
                  [--headless [--size WxH] [--dpr N] [--ticks N]
-                             [--monitors LIST] [--positioning=on|off]]
+                             [--monitors LIST] [--positioning=on|off]
+                             [--toplevel-drag]]
                  [--artifact <file>] [--assets <file.lpak>] [--no-hooks]
                  [--offline]
 ```
@@ -47,7 +48,8 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
 | `--monitors` | comma-separated `WxH[@SCALE]` | one 1920x1080 monitor at `--dpr` | The virtual desktop the app's windows open on, monitors laid out left to right; `@SCALE` defaults to 1. A window takes the scale of the monitor it lands on, and the primary window opens on the first, so `--dpr` is ignored. Requires `--headless`. |
-| `--positioning` | `on`, `off` | `on` | `off` ignores the positions windows ask for, places every window itself, and does not report where a window is, the way Wayland does. Requires `--headless`. |
+| `--positioning` | `on`, `off` | `on` | `off` ignores the positions windows ask for, places every window itself, and does not report where a window is, the way Wayland does. A window dragged across windows (a dock tab torn off) then does not follow the pointer and opens where the drop lands. Requires `--headless`. |
+| `--toplevel-drag` | - | off | With `--positioning=off`, lets a dragged window follow the pointer, as a Wayland compositor with the toplevel-drag protocol (KWin, mutter) does. Requires `--headless`. |
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
 | `--assets` | path to a `.lpak` | none | Reads images, icons, sounds, and the font files `@font-face` names from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
@@ -56,8 +58,8 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 Both `--flag value` and `--flag=value` are accepted for `--profile`,
 `--size`, `--dpr`, `--ticks`, `--monitors`, `--artifact`, and `--assets`.
 
-Without `--headless`, passing `--size`, `--dpr`, `--ticks`, `--monitors`, or
-`--positioning` is a usage error.
+Without `--headless`, passing `--size`, `--dpr`, `--ticks`, `--monitors`,
+`--positioning`, or `--toplevel-drag` is a usage error.
 
 `run` executes the app's `[[hooks]]` entries: every `prebuild` hook, then
 every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).

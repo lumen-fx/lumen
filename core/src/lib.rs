@@ -31,6 +31,7 @@ pub mod render_world;
 pub mod request;
 pub mod signals;
 pub mod style_overrides;
+pub mod surface_drag;
 pub mod task;
 pub mod text_events;
 pub mod text_model;

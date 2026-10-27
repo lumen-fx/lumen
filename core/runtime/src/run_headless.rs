@@ -51,7 +51,10 @@
 //! a virtual desktop of monitors ([`HeadlessOptions::monitors`], one
 //! 1920x1080 screen by default), which is what `--monitors` sets. With
 //! [`HeadlessOptions::positioning`] off (`--positioning=off`), the desktop
-//! ignores the positions windows ask for, as Wayland does.
+//! ignores the positions windows ask for, as Wayland does, and no window
+//! follows the pointer during a drag across windows unless
+//! [`HeadlessOptions::toplevel_drag`] (`--toplevel-drag`) says the
+//! compositor would move it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -170,6 +173,10 @@ pub struct HeadlessOptions {
     /// Whether windows land where they ask to be put. `false` behaves like
     /// Wayland: positions are ignored and every window is placed for it.
     pub positioning: bool,
+    /// With [`Self::positioning`] off, still let a window follow the pointer
+    /// during a drag across windows, as a Wayland compositor with the
+    /// toplevel-drag protocol does (`--toplevel-drag`).
+    pub toplevel_drag: bool,
 }
 
 impl Default for HeadlessOptions {
@@ -179,6 +186,7 @@ impl Default for HeadlessOptions {
             ticks: None,
             monitors: Vec::new(),
             positioning: true,
+            toplevel_drag: false,
         }
     }
 }
@@ -354,6 +362,7 @@ pub fn run_app_headless_rendered(
     app.world.insert_resource(Monitors(monitors));
     app.world.insert_resource(HeadlessDesktop {
         positioning: headless.positioning,
+        toplevel_drag: headless.toplevel_drag,
     });
 
     // Viewport: logical size from the resolved window options (CLI --size

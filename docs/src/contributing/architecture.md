@@ -537,9 +537,28 @@ to the platform window and writes back what the platform settled on, including
 a resize, maximize or fullscreen change the user made. A headless run installs
 `HeadlessWindowPlugin` in the backend's place, which applies `Window` straight
 to the viewport and places windows on a virtual desktop; in its Wayland mode
-(`HeadlessDesktop { positioning: false }`) it places windows itself and
+(`HeadlessDesktop { positioning: false, .. }`) it places windows itself and
 reports no position. The `Monitors` resource lists the displays; positions are physical
 desktop pixels.
+
+A drag that crosses windows goes through one seam in `lumen_core::surface_drag`.
+The dragging side (the dock module tearing a tab off) writes
+`SurfaceDragRequest`s: `Begin` in the window the press happened in, `Follow` to
+make a window move with the pointer, and `End`. The window backend writes
+`SurfaceDragEvent`s: `Over` and `Dropped` name the app window under the pointer
+(`None` for none) with a position in its logical pixels, and `Cancelled` says
+the platform ended the drag. A backend that carries the seam inserts
+`SurfaceDragSupport`, whose `follow` says whether a window can follow the
+pointer. Where the backend sees every pointer move of the drag itself (the
+headless stand-in; Windows, macOS and X11, where the pressed window keeps
+receiving moves past its edge), `InProcessDrag` turns each move into the event
+and the following window's place from the windows' desktop rectangles. On
+Wayland the winit backend runs a `wl_data_device` drag with a private MIME type
+on winit's own connection, moves the window with `xdg_toplevel_drag_v1` where
+the compositor offers it, and reports `follow: false` where it does not. The
+headless stand-in carries the seam on its virtual desktop; `toplevel_drag`
+emulates the protocol in its Wayland mode. Content dragged to or from other
+applications is the os-dnd capability's, not this seam's.
 
 Windows do not own trees. There is one document, and an element shows in a
 secondary window when it carries `WindowOf(window)`; it is then a surface
