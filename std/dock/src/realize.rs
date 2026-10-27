@@ -516,10 +516,15 @@ fn ensure_window(
         && alive(world, window)
         && alive(world, surface)
     {
-        if let Some(mut w) = world.get_mut::<Window>(window)
-            && w.title != title
-        {
-            w.title = title;
+        if let Some(mut w) = world.get_mut::<Window>(window) {
+            if w.title != title {
+                w.title = title;
+            }
+            // A restored layout puts a window it keeps back the way it was.
+            let state = (layout.place.maximized, layout.place.fullscreen);
+            if (w.maximized, w.fullscreen) != state {
+                (w.maximized, w.fullscreen) = state;
+            }
         }
         return Some((window, surface));
     }
@@ -576,6 +581,8 @@ fn ensure_window(
                 min_size: None,
                 max_size: None,
                 owner: (kind != WindowKind::Normal).then_some(primary).flatten(),
+                maximized: layout.place.maximized,
+                fullscreen: layout.place.fullscreen,
             },
             WindowName(first.clone()),
             DockWindow {

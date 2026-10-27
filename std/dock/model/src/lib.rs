@@ -384,7 +384,9 @@ pub struct MonitorKey {
 }
 
 /// Where a window was: its rectangle, its monitor and whether the platform
-/// had it maximized.
+/// had it maximized or fullscreen. The rectangle is the window's restored
+/// one, so a window maximized when saved comes back maximized and goes back
+/// to that rectangle when the user restores it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowPlace {
     /// Its rectangle; `None` lets the dock pick one.
@@ -396,6 +398,9 @@ pub struct WindowPlace {
     /// Maximized by the platform.
     #[serde(default, skip_serializing_if = "is_false")]
     pub maximized: bool,
+    /// Covering its monitor.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fullscreen: bool,
 }
 
 /// A window of its own holding panels.

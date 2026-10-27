@@ -89,6 +89,18 @@ fn build_in(
     script: &str,
     config: &str,
 ) -> TestApp {
+    build_with(dir, name, markup, script, config, "")
+}
+
+/// Build the app in `dir` with `app` added to its `[app]` table.
+fn build_with(
+    dir: &std::path::Path,
+    name: &str,
+    markup: &str,
+    script: &str,
+    config: &str,
+    app: &str,
+) -> TestApp {
     let dir = dir.to_path_buf();
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
@@ -97,7 +109,7 @@ fn build_in(
     std::fs::write(
         dir.join("lumen.toml"),
         format!(
-            "[app]\nid = \"lumenc-dock-{name}-{}\"\n\n[dependencies]\nlumen-dock = {{ bundled = true{config} }}\n\n[mcp]\nport = 0\n\n[render]\nbackend = \"cpu\"\n",
+            "[app]\nid = \"lumenc-dock-{name}-{}\"\n{app}\n[dependencies]\nlumen-dock = {{ bundled = true{config} }}\n\n[mcp]\nport = 0\n\n[render]\nbackend = \"cpu\"\n",
             std::process::id()
         ),
     )
@@ -1014,4 +1026,235 @@ fn every_script_function_answers() {
     ] {
         assert_eq!(signal(app, name).as_deref(), Some(want), "{name}");
     }
+}
+
+/// A saved layout's window that was maximized or fullscreen comes back that
+/// way, and keeps the rectangle it goes back to when the user restores it.
+#[test]
+fn a_window_comes_back_maximized_or_fullscreen() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("maxwin", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    {
+        let mut win = app.world.get_mut::<Window>(w).unwrap();
+        win.position = Some(glam::IVec2::new(300, 200));
+        win.size = glam::Vec2::new(500.0, 400.0);
+    }
+    ticks(app, 2);
+    // The user maximizes it; the platform hands it the whole screen.
+    {
+        let mut win = app.world.get_mut::<Window>(w).unwrap();
+        win.maximized = true;
+        win.size = glam::Vec2::new(1920.0, 1080.0);
+    }
+    ticks(app, 3);
+    let saved = {
+        let mut out = None;
+        call(app, |d| out = Some(d.save()));
+        out.unwrap()
+    };
+    let place = &saved.windows[0].place;
+    assert!(place.maximized && !place.fullscreen);
+    let rect = place.rect.expect("a rect");
+    assert_eq!(
+        (rect.w, rect.h),
+        (500.0, 400.0),
+        "the rectangle it restores to"
+    );
+    let text = {
+        let mut out = String::new();
+        call(app, |d| out = d.save().to_json());
+        out
+    };
+    assert!(text.contains("\"maximized\": true"), "{text}");
+
+    // Docked back and restored: it opens maximized over its old rectangle.
+    call(app, |d| d.attach("game").unwrap());
+    ticks(app, 2);
+    assert!(window_entity(app).is_empty());
+    call(app, |d| d.restore(&saved));
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    let win = app.world.get::<Window>(w).unwrap();
+    assert!(win.maximized && !win.fullscreen);
+    assert_eq!(win.size, glam::Vec2::new(500.0, 400.0));
+    assert!(
+        app.world
+            .get::<lumen_core::window::WindowRuntime>(w)
+            .unwrap()
+            .maximized,
+        "the window reports it"
+    );
+
+    // A restore into the window it already has applies the state too.
+    let mut full = saved.clone();
+    full.windows[0].place.maximized = false;
+    full.windows[0].place.fullscreen = true;
+    call(app, |d| d.restore(&full));
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    let win = app.world.get::<Window>(w).unwrap();
+    assert!(!win.maximized && win.fullscreen);
+}
+
+/// On a desktop that places windows itself and does not say where (the
+/// headless stand-in's Wayland mode), a window opens at its saved size
+/// where the desktop puts it, and the saved position is kept, so the same
+/// layout restores in full on a desktop that does position windows.
+#[test]
+fn wayland_places_windows_and_the_saved_position_survives() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("wayland", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    app.world
+        .insert_resource(lumen_core::window_backend::HeadlessDesktop { positioning: false });
+    ticks(app, 1);
+    // A pop-out with no saved place opens where the desktop puts it.
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    let runtime = app
+        .world
+        .get::<lumen_core::window::WindowRuntime>(w)
+        .unwrap()
+        .clone();
+    assert_eq!(runtime.position, None, "the desktop does not say where");
+    assert!(runtime.monitor.is_some(), "it does say which monitor");
+    // A layout saved elsewhere: its position is not applied, its size is.
+    let mut layout = {
+        let mut out = None;
+        call(app, |d| out = Some(d.save()));
+        out.unwrap()
+    };
+    layout.windows[0].place.rect = Some(lumen_dock::model::Rect {
+        x: 300.0,
+        y: 200.0,
+        w: 500.0,
+        h: 400.0,
+    });
+    layout.windows[0].place.monitor = Some(lumen_dock::model::MonitorKey {
+        name: "virtual-1".into(),
+        origin: [0, 0],
+        scale: 1.0,
+    });
+    call(app, |d| d.attach("game").unwrap());
+    ticks(app, 2);
+    assert!(window_entity(app).is_empty());
+    call(app, |d| {
+        d.restore_json(&layout.to_json())
+            .expect("a layout this app can use")
+    });
+    ticks(app, 3);
+    let (w, _) = window_entity(app)[0].clone();
+    assert_eq!(
+        app.world.get::<Window>(w).unwrap().size,
+        glam::Vec2::new(500.0, 400.0),
+        "the size restores"
+    );
+    assert_eq!(
+        app.world
+            .get::<lumen_core::window::WindowRuntime>(w)
+            .unwrap()
+            .position,
+        None
+    );
+    // Saved again, it keeps where it was on the other desktop.
+    let saved = {
+        let mut out = None;
+        call(app, |d| out = Some(d.save()));
+        out.unwrap()
+    };
+    let place = &saved.windows[0].place;
+    let rect = place.rect.expect("a rect");
+    assert_eq!(
+        (rect.x, rect.y, rect.w, rect.h),
+        (300.0, 200.0, 500.0, 400.0)
+    );
+    assert_eq!(
+        place.monitor.as_ref().map(|m| m.name.as_str()),
+        Some("virtual-1")
+    );
+}
+
+/// With `[app] quit = "explicit"`, closing the main window hides it and the
+/// windows of panels with it; the app runs on, and showing the main window
+/// again shows them again.
+#[test]
+fn quit_explicit_hides_every_window_and_brings_them_back() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("lumenc_dock_explicit_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut t = build_with(
+        &dir,
+        "explicit",
+        MARKUP,
+        CANDELA,
+        "",
+        "quit = \"explicit\"\n",
+    );
+    let app = &mut t.app;
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    let main = primary(app);
+    let mut requests = lumen_core::window_backend::CloseRequests::default();
+    let outcome = lumen_core::window_backend::run_close_request(
+        app,
+        &mut requests,
+        Some(main),
+        lumen_core::input::CloseReason::WindowClose,
+    );
+    assert_eq!(outcome, lumen_core::window_backend::CloseOutcome::Hidden);
+    ticks(app, 2);
+    assert!(!app.world.get::<Window>(main).unwrap().visible);
+    assert!(!app.world.get::<Window>(w).unwrap().visible);
+    call(app, |d| {
+        assert!(d.window_of("game") > 0, "the panel stays in its window")
+    });
+    app.world.get_mut::<Window>(main).unwrap().visible = true;
+    ticks(app, 2);
+    assert!(app.world.get::<Window>(w).unwrap().visible);
+}
+
+/// A page's dock and the windows its panels popped out into close when the
+/// app navigates away, without asking anyone, and come back where they were
+/// when it returns.
+#[test]
+fn page_navigation_closes_a_pages_windows_and_brings_them_back() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("lumenc_dock_pages_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/other.lmn"),
+        r#"<root><label id="other" text="OTHER"/></root>"#,
+    )
+    .unwrap();
+    let mut t = build_with(
+        &dir,
+        "pages",
+        MARKUP,
+        CANDELA,
+        "",
+        "\n[pages]\nentry = \"main\"\n",
+    );
+    let app = &mut t.app;
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    assert_eq!(window_entity(app).len(), 1);
+    lumen_core::nav::navigate("other");
+    ticks(app, 5);
+    assert!(window_entity(app).is_empty(), "the page's window closed");
+    call(app, |d| {
+        assert_eq!(d.window_of("game"), 1, "its place is remembered");
+    });
+    lumen_core::nav::navigate("main");
+    ticks(app, 6);
+    let windows = window_entity(app);
+    assert_eq!(windows.len(), 1, "the window is back");
+    let button = entity(app, "game-btn");
+    assert_eq!(window_of(app, button), Some(windows[0].0));
 }

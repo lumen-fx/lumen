@@ -596,6 +596,7 @@ fn json_round_trips_and_checks_versions() {
                 scale: 1.0,
             }),
             maximized: true,
+            fullscreen: true,
         },
         &docked(),
     )
@@ -611,6 +612,7 @@ fn json_round_trips_and_checks_versions() {
     let text = w.to_json();
     assert!(text.contains("\"lumen-dock\": 2"));
     assert!(text.contains("\"rect\": ["));
+    assert!(text.contains("\"fullscreen\": true"));
     assert_eq!(Workspace::from_json(&text, 3).unwrap(), w);
     assert_eq!(
         Workspace::from_json(&text, 4),
