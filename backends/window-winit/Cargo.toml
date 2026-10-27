@@ -51,6 +51,13 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# A drag across the app's windows on Wayland: a data-device drag on winit's
+# own connection (`client_system` opens it from winit's `wl_display`), and
+# `xdg_toplevel_drag_v1` where the compositor offers it. The same versions
+# winit already builds; nothing new is downloaded.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # Reads the desktop's color-scheme preference via
 # `org.freedesktop.portal.Settings` (the standard XDG Settings portal).
 # Best-effort: when the portal daemon is missing (CI, headless
