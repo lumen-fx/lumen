@@ -205,8 +205,7 @@ fn capture_once(
     name: &str,
     run: u32,
     backend: Backend,
-    markup: &str,
-    css: &str,
+    (markup, css, manifest): (&str, &str, &str),
     drive: &dyn Fn(&mut App),
 ) -> RgbaImage {
     // Temp app dir: only `lumen.toml` lives on disk (markup/CSS are passed
@@ -218,7 +217,11 @@ fn capture_once(
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp app dir");
-    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        format!("[mcp]\nport = 0\n{manifest}"),
+    )
+    .expect("write lumen.toml");
 
     let mut opts = RunOptions::new(&dir).with_markup(markup).with_css(css);
     opts.hot_reload = false;
@@ -443,6 +446,12 @@ fn diff_images(a: &RgbaImage, b: &RgbaImage, tol: &Tolerance) -> (DiffStats, Rgb
 // --- Case runner ------------------------------------------------------------
 
 fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
+    run_case_with(name, (markup, css, ""), drive);
+}
+
+/// [`run_case`] for an app whose `lumen.toml` also carries `manifest`: the
+/// runtime modules a case declares.
+fn run_case_with(name: &str, app: (&str, &str, &str), drive: &dyn Fn(&mut App)) {
     if let Some(why) = gpu_blocker() {
         eprintln!("golden[{name}]: GPU skipped - {why}; comparing the CPU backend only");
     }
@@ -453,8 +462,8 @@ fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
     for backend in backends() {
         let label = format!("{name}/{}", backend.name());
         // Determinism audit: two fully independent builds must agree.
-        let first = capture_once(name, 0, backend, markup, css, drive);
-        let second = capture_once(name, 1, backend, markup, css, drive);
+        let first = capture_once(name, 0, backend, app, drive);
+        let second = capture_once(name, 1, backend, app, drive);
         let (self_stats, self_heat) = diff_images(&first, &second, &SELF_TOLERANCE);
         if !self_stats.within(&SELF_TOLERANCE) {
             let out = failure_dir().join(name).join(backend.name());
@@ -875,4 +884,151 @@ fn golden_opacity_nesting() {
 .o-inner { bg: #f7768e; opacity: 0.5; }"#,
         &no_drive,
     );
+}
+
+// --- The dock module --------------------------------------------------------
+
+/// The manifest line that loads the dock module.
+const DOCK: &str = "[dependencies]\nlumen-dock = { bundled = true }\n";
+
+/// A two-stack dock: Files and Search on the left, Scene and Game in the
+/// center.
+const DOCK_MARKUP: &str = r##"<root skin="default" bg="#11141b">
+  <button id="bar" text="toolbar"/>
+  <dock id="d">
+    <dock-split axis="row">
+      <dock-stack basis="150">
+        <dock-panel id="files" title="Files"><tile width="80px" height="40px" bg="#7aa2f7" radius="6" /></dock-panel>
+        <dock-panel id="search" title="Search"><tile width="80px" height="40px" bg="#bb9af7" radius="6" /></dock-panel>
+      </dock-stack>
+      <dock-stack center="true">
+        <dock-panel id="scene" title="Scene"><tile width="120px" height="70px" bg="#9ece6a" radius="6" /></dock-panel>
+        <dock-panel id="game" title="Game"><tile width="120px" height="70px" bg="#e0af68" radius="6" /></dock-panel>
+      </dock-stack>
+    </dock-split>
+  </dock>
+</root>"##;
+
+/// The strip button of the dock tab showing `panel`.
+fn dock_tab(app: &mut App, panel: &str) -> Vec2 {
+    let mut q = app
+        .world
+        .query::<(&lumen_primitives::TabStripButton, &Transform)>();
+    let found: Vec<(bevy_ecs::entity::Entity, Vec2)> = q
+        .iter(&app.world)
+        .map(|(b, t)| (b.tab, t.absolute + t.size * 0.5))
+        .collect();
+    found
+        .into_iter()
+        .find(|(tab, _)| {
+            app.world
+                .get::<lumen_dock::DockTab>(*tab)
+                .is_some_and(|t| t.panel == panel)
+        })
+        .map(|(_, at)| at)
+        .unwrap_or_else(|| panic!("no tab for {panel}"))
+}
+
+/// Press `panel`'s tab, pass the drag threshold, and hold the pointer at
+/// `to`.
+fn dock_drag_to(app: &mut App, panel: &str, to: Vec2) {
+    let from = dock_tab(app, panel);
+    pointer_press(app, from);
+    pointer_move(app, from + Vec2::new(8.0, 0.0));
+    pointer_move(app, to);
+}
+
+/// Run `f` on the dock, as a Rust system would.
+fn with_dock(app: &mut App, f: impl FnOnce(&lumen_dock::Dock<'_>) + Send + Sync + 'static) {
+    use bevy_ecs::system::RunSystemOnce;
+    let f = std::sync::Mutex::new(Some(f));
+    app.world
+        .run_system_once(move |d: lumen_dock::Dock| {
+            if let Some(f) = f.lock().unwrap().take() {
+                f(&d);
+            }
+        })
+        .expect("the dock module is loaded");
+    tick(app);
+}
+
+/// A tab dragged over the right edge of the center stack: the ghost under
+/// the pointer and the preview of the half the panel would take.
+#[test]
+fn golden_dock_drag_edge() {
+    run_case_with("dock_drag_edge", (DOCK_MARKUP, "", DOCK), &|app| {
+        settle(app, 100);
+        let to = Vec2::new(VIEW_W as f32 - 20.0, VIEW_H as f32 * 0.6);
+        dock_drag_to(app, "search", to);
+    });
+}
+
+/// A tab dragged over the toolbar, where no stack is: the dashed preview of
+/// the float it would make.
+#[test]
+fn golden_dock_drag_float() {
+    run_case_with("dock_drag_float", (DOCK_MARKUP, "", DOCK), &|app| {
+        settle(app, 100);
+        let to = find_center(app, "bar");
+        dock_drag_to(app, "game", to);
+    });
+}
+
+/// A float over the dock, with its strip and its shadow, and a crowded
+/// stack whose strip overflows behind its list button.
+#[test]
+fn golden_dock_float_and_overflow() {
+    let markup = r##"<root skin="default" bg="#11141b">
+  <dock id="d">
+    <dock-split axis="row">
+      <dock-stack basis="150">
+        <dock-panel id="a" title="Alpha"><tile width="40px" height="40px" bg="#7aa2f7" /></dock-panel>
+        <dock-panel id="b" title="Beta"><tile width="40px" height="40px" bg="#7aa2f7" /></dock-panel>
+        <dock-panel id="c" title="Gamma"><tile width="40px" height="40px" bg="#7aa2f7" /></dock-panel>
+        <dock-panel id="e" title="Epsilon"><tile width="40px" height="40px" bg="#7aa2f7" /></dock-panel>
+      </dock-stack>
+      <dock-stack center="true">
+        <dock-panel id="scene" title="Scene"><tile width="120px" height="70px" bg="#9ece6a" radius="6" /></dock-panel>
+        <dock-panel id="tool" title="Tool"><tile width="60px" height="40px" bg="#f7768e" radius="6" /></dock-panel>
+      </dock-stack>
+    </dock-split>
+  </dock>
+</root>"##;
+    run_case_with("dock_float_overflow", (markup, "", DOCK), &|app| {
+        with_dock(app, |d| {
+            d.float(
+                "tool",
+                lumen_dock::model::Rect {
+                    x: 210.0,
+                    y: 120.0,
+                    w: 160.0,
+                    h: 120.0,
+                },
+            )
+            .unwrap();
+        });
+    });
+}
+
+/// Panels pinned to the left and bottom edges: their strips of buttons,
+/// one panel slid out over the dock.
+#[test]
+fn golden_dock_sidebars() {
+    let markup = r##"<root skin="default" bg="#11141b">
+  <dock id="d">
+    <dock-stack center="true">
+      <dock-panel id="scene" title="Scene"><tile width="120px" height="70px" bg="#9ece6a" radius="6" /></dock-panel>
+    </dock-stack>
+    <dock-sidebar edge="left">
+      <dock-panel id="files" title="Files"><tile width="60px" height="40px" bg="#7aa2f7" /></dock-panel>
+      <dock-panel id="outline" title="Outline"><tile width="60px" height="40px" bg="#bb9af7" /></dock-panel>
+    </dock-sidebar>
+    <dock-sidebar edge="bottom">
+      <dock-panel id="console" title="Console"><tile width="60px" height="30px" bg="#e0af68" /></dock-panel>
+    </dock-sidebar>
+  </dock>
+</root>"##;
+    run_case_with("dock_sidebars", (markup, "", DOCK), &|app| {
+        with_dock(app, |d| d.show("files").unwrap());
+    });
 }

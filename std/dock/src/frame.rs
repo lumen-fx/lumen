@@ -513,6 +513,19 @@ pub fn arrange(world: &mut World, parts: &mut FrameParts, used: &mut FrameUse, a
         };
         set_inline(world, e, dim, a.open_size.map(|s| format!("{s}px")));
         set_inline(world, e, other, None);
+        // Beside the strip it slid out of, which shares the middle row with
+        // the tree; the top and bottom strips lie outside that row.
+        let beside = |s: Side| {
+            strips
+                .get(&s)
+                .map_or(0.0, |&k| laid_out_size(world, k).x.round())
+        };
+        let inset = match side {
+            Side::Left => Some(format!("0 auto 0 {}", beside(Side::Left))),
+            Side::Right => Some(format!("0 {} 0 auto", beside(Side::Right))),
+            Side::Top | Side::Bottom => None,
+        };
+        set_inline(world, e, "inset", inset);
         if world.get::<DockSlideOut>(e).is_none_or(|s| s.panel != *p) {
             world.entity_mut(e).insert(DockSlideOut {
                 dock: dock_id.to_string(),

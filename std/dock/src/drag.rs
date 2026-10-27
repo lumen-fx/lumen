@@ -1078,12 +1078,12 @@ fn start_drag(world: &mut World, shared: &Shared, entity: Entity, start: Vec2) {
             .get(p)
             .is_none_or(|r| r.attrs.floatable && r.info.dockable)
     });
-    // A new float takes the size of the stack the drag starts from.
+    // A new float a little smaller than the stack the drag starts from.
     let float_size = payload_stack(&core.ws, &payload)
         .and_then(|(stack, _)| built.nodes.get(&stack).copied())
         .and_then(|e| rect(world, e))
-        .map_or(Vec2::new(320.0, 240.0), |(_, s)| s)
-        .clamp(Vec2::new(200.0, 150.0), Vec2::new(480.0, 360.0));
+        .map_or(Vec2::new(320.0, 240.0), |(_, s)| s * 0.75)
+        .clamp(Vec2::new(160.0, 120.0), Vec2::new(360.0, 260.0));
     let title = match &payload {
         Payload::Panel(p) => core.panels.get(p).map(|r| r.attrs.title.clone()),
         Payload::Group(s) => core
