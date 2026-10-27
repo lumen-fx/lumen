@@ -13,8 +13,8 @@ use std::collections::BTreeSet;
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_dock_model::{
-    Axis, Child, DockArea, Node, PanelId, Rect, Split, Stack, TabsMode, WindowLayout, WindowPlace,
-    Workspace,
+    Axis, Child, DockArea, Node, PanelId, Rect, Side, Sidebars, Split, Stack, TabsMode,
+    WindowLayout, WindowPlace, Workspace,
 };
 use lumen_module::lumen_core::components::Display;
 use lumen_module::lumen_core::components::{
@@ -41,9 +41,11 @@ pub const LAYOUT: &str = "dock-layout";
 pub const REF: &str = "dock-ref";
 /// A window in a named layout.
 pub const WINDOW: &str = "dock-window";
+/// The panels pinned to one edge of a dock.
+pub const SIDEBAR: &str = "dock-sidebar";
 
 /// Every element the module answers for.
-pub const TAGS: [&str; 7] = [DOCK, SPLIT, STACK, PANEL, LAYOUT, REF, WINDOW];
+pub const TAGS: [&str; 8] = [DOCK, SPLIT, STACK, PANEL, LAYOUT, REF, WINDOW, SIDEBAR];
 
 /// On each `<dock-panel>` the module adopted: the panel's id.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
@@ -190,6 +192,8 @@ struct Reader<'a> {
     /// Panels written hidden: id, the stack they were written in, and their
     /// index there.
     hidden_at: Vec<(String, String, usize)>,
+    /// Panels written hidden in a sidebar, with its edge.
+    hidden_pinned: Vec<(String, Side)>,
     /// Read `<dock-ref panel>` instead of `<dock-panel>`.
     refs: bool,
 }
@@ -291,6 +295,43 @@ impl Reader<'_> {
     }
 }
 
+/// The panels the `<dock-sidebar>`s among `kids` pin to each edge. A
+/// sidebar with no `edge` pins to the left.
+fn sidebars_of(reader: &mut Reader<'_>, world: &World, kids: &[Entity]) -> Sidebars {
+    let mut out = Sidebars::default();
+    for &k in kids {
+        if tag_of(world, k).as_deref() != Some(SIDEBAR) {
+            continue;
+        }
+        let side = attr(world.get::<LumenAttributes>(k), "edge")
+            .and_then(Side::parse)
+            .unwrap_or(Side::Left);
+        for p in children_of(world, k) {
+            let panel = match tag_of(world, p).as_deref() {
+                Some(REF) if reader.refs => {
+                    attr(world.get::<LumenAttributes>(p), "panel").map(|p| (p.to_string(), false))
+                }
+                Some(PANEL) if !reader.refs => reader.panel(world, p),
+                _ => None,
+            };
+            match panel {
+                Some((id, true)) => reader.hidden_pinned.push((id, side)),
+                Some((id, false)) if out.side_of(&id).is_none() => {
+                    let list = match side {
+                        Side::Left => &mut out.left,
+                        Side::Right => &mut out.right,
+                        Side::Top => &mut out.top,
+                        Side::Bottom => &mut out.bottom,
+                    };
+                    list.push(id);
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// The root a dock's declared children make: their one tree, a row of
 /// them, or an empty center stack.
 fn root_of(reader: &mut Reader<'_>, world: &World, kids: &[Entity]) -> Node {
@@ -321,11 +362,14 @@ fn read_layout(world: &World, dock: &str, layout: Entity, into: &mut Workspace) 
         seq: 1000,
         panels: Vec::new(),
         hidden_at: Vec::new(),
+        hidden_pinned: Vec::new(),
         refs: true,
     };
     let kids = children_of(world, layout);
     let root = root_of(&mut reader, world, &kids);
-    into.docks.insert(dock.to_string(), DockArea::new(root));
+    let mut area = DockArea::new(root);
+    area.sidebars = sidebars_of(&mut reader, world, &kids);
+    into.docks.insert(dock.to_string(), area);
     for k in kids {
         if tag_of(world, k).as_deref() != Some(WINDOW) {
             continue;
@@ -441,11 +485,14 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
         seq: 0,
         panels: Vec::new(),
         hidden_at: Vec::new(),
+        hidden_pinned: Vec::new(),
         refs: false,
     };
     let root = root_of(&mut reader, world, &kids);
+    let sidebars = sidebars_of(&mut reader, world, &kids);
     let in_tree = std::mem::take(&mut reader.panels);
     let hidden_at = std::mem::take(&mut reader.hidden_at);
+    let hidden_pinned = std::mem::take(&mut reader.hidden_pinned);
     // Panels written straight under the dock wait in its catalogue, hidden
     // until shown.
     let catalogue: Vec<(String, Entity)> = kids
@@ -486,7 +533,7 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
     for k in kids {
         if matches!(
             tag_of(world, k).as_deref(),
-            Some(SPLIT | STACK | LAYOUT | REF | WINDOW)
+            Some(SPLIT | STACK | LAYOUT | REF | WINDOW | SIDEBAR)
         ) && let Ok(e) = world.get_entity_mut(k)
         {
             e.despawn();
@@ -512,7 +559,20 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
 
     let mut core = shared.lock();
     let mut area = Workspace::default();
-    area.docks.insert(id.clone(), DockArea::new(root));
+    let mut dock_area = DockArea::new(root);
+    dock_area.sidebars = sidebars;
+    area.docks.insert(id.clone(), dock_area);
+    // A panel written hidden in a sidebar starts hidden, pinned there when
+    // shown.
+    for (p, side) in hidden_pinned {
+        area.homes.insert(
+            p,
+            lumen_dock_model::Home {
+                sidebar: Some(side),
+                ..lumen_dock_model::Home::default()
+            },
+        );
+    }
     // A panel written hidden in a stack starts hidden, with its place in
     // that stack remembered.
     for (p, stack, index) in hidden_at {
@@ -528,7 +588,7 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
                     basis: None,
                     grow: None,
                 }),
-                window: None,
+                ..lumen_dock_model::Home::default()
             },
         );
     }

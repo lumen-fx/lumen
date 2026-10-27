@@ -34,8 +34,10 @@
 mod adopt;
 pub mod api;
 pub mod drag;
+mod frame;
 mod keys;
 mod menu;
+mod overflow;
 mod persist;
 mod plugin;
 mod realize;
@@ -44,10 +46,14 @@ mod state;
 pub use adopt::{DockChrome, DockElement, DockPanel, TAGS};
 pub use api::{Dock, DockError};
 pub use drag::{DockDrag, Payload, TearoffProbe, Zone};
+pub use frame::{
+    DockFloat, DockFloatHandle, DockPinButton, DockSlideOut, DockUnpinButton, Edges, FLOAT_MIN,
+};
 pub use keys::{Chord, Keys};
 pub use lumen_dock_model as model;
 pub use lumen_dock_model::Workspace as Layout;
 pub use menu::{DockMenuItem, MENU_ID, MenuAction};
+pub use overflow::{DockOverflowButton, DockOverflowItem, DockStrip, StripScroll};
 pub use persist::{FILE, Persist};
 pub use plugin::{
     DESCRIPTOR, DockCloseButton, DockEvent, DockPlugin, DockSet, DockTabButton, DockTabCaption,

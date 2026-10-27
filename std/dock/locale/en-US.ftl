@@ -9,6 +9,8 @@ lumen-dock-close = Close
 lumen-dock-move-to-window = Move to new window
 lumen-dock-move-group-to-window = Move group to new window
 lumen-dock-dock-back = Dock back
+lumen-dock-float = Float
+lumen-dock-pin = Pin to sidebar
 lumen-dock-maximize = Maximize
 lumen-dock-restore = Restore layout
 
@@ -17,6 +19,14 @@ lumen-dock-moved-to-window = moved to a new window
 lumen-dock-docked-back = docked back
 lumen-dock-moved-beside = moved beside
 lumen-dock-moved = moved
+lumen-dock-floated = floating
+lumen-dock-pinned = pinned to the sidebar
 
 # What a screen reader hears when Escape cancels a tab drag.
 lumen-dock-drag-cancelled = Move cancelled
+
+# The button a stack shows when its tabs do not all fit, which lists them.
+lumen-dock-more-tabs = More tabs
+
+# The button that docks a panel slid out of a sidebar back where it was.
+lumen-dock-unpin = Dock

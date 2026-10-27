@@ -1338,7 +1338,14 @@ fn the_tab_menu_moves_panels_out_and_back() {
     let actions: Vec<A> = items.iter().map(|i| i.1).collect();
     assert_eq!(
         actions,
-        [A::Detach, A::DetachGroup, A::Maximize, A::Close],
+        [
+            A::Detach,
+            A::DetachGroup,
+            A::Float,
+            A::Pin,
+            A::Maximize,
+            A::Close
+        ],
         "a docked panel sharing its stack"
     );
     let text = |app: &App, e: Entity| {
@@ -1378,7 +1385,11 @@ fn the_tab_menu_moves_panels_out_and_back() {
     // Maximize and back, then close through the menu.
     let scene_tab = tab_button(app, "scene");
     context_menu(app, scene_tab);
-    let maximize = menu_items(app)[2].0;
+    let maximize = menu_items(app)
+        .into_iter()
+        .find(|i| i.1 == A::Maximize)
+        .unwrap()
+        .0;
     click(app, maximize, lumen_core::input::PointerButton::Primary);
     call(app, |d| {
         assert_eq!(d.save().docks["editor"].maximized.as_deref(), Some("scene"))
@@ -1388,9 +1399,16 @@ fn the_tab_menu_moves_panels_out_and_back() {
     let items = menu_items(app);
     assert_eq!(
         items.iter().map(|i| i.1).collect::<Vec<_>>(),
-        [A::Detach, A::DetachGroup, A::Restore, A::Close]
+        [
+            A::Detach,
+            A::DetachGroup,
+            A::Float,
+            A::Pin,
+            A::Restore,
+            A::Close
+        ]
     );
-    click(app, items[2].0, lumen_core::input::PointerButton::Primary);
+    click(app, items[4].0, lumen_core::input::PointerButton::Primary);
     call(app, |d| {
         assert_eq!(d.save().docks["editor"].maximized, None)
     });
@@ -2209,4 +2227,493 @@ fn without_the_seam_tabs_drag_within_the_window() {
     ticks(app, 2);
     assert_eq!(window_holding(app, "files"), primary(app));
     assert!(window_entity(app).is_empty());
+}
+
+/// The element of the float `panel` floats in, if it floats.
+fn float_element(app: &App, panel: &str) -> Option<Entity> {
+    let mut cur = Some(entity_of(app, panel));
+    while let Some(e) = cur {
+        if app.world.get::<lumen_dock::DockFloat>(e).is_some() {
+            return Some(e);
+        }
+        cur = parent(app, e);
+    }
+    None
+}
+
+/// The element with id `id`, without a mutable world.
+fn entity_of(app: &App, id: &str) -> Entity {
+    let found = app
+        .world
+        .iter_entities()
+        .find(|e| e.get::<LumenId>().is_some_and(|i| i.0 == id))
+        .map(|e| e.id());
+    found.unwrap_or_else(|| panic!("no element `{id}`"))
+}
+
+fn float_rect(app: &mut App, panel: &str) -> lumen_dock::model::Rect {
+    let mut out = None;
+    call(app, |d| {
+        let ws = d.save();
+        let loc = ws.find(panel).expect("shown");
+        let lumen_dock::model::Container::Float { float, .. } = loc.container else {
+            panic!("{panel} does not float")
+        };
+        out = Some(ws.float(&float).unwrap().1.rect);
+    });
+    out.unwrap()
+}
+
+const TOOLBAR_MARKUP: &str = r#"<root>
+  <button id="bar" text="toolbar"/>
+  <dock id="editor" label="Editor">
+    <dock-split axis="row">
+      <dock-stack basis="200">
+        <dock-panel id="files" title="Files"><input id="name"/></dock-panel>
+      </dock-stack>
+      <dock-stack center="true">
+        <dock-panel id="scene" title="Scene"><button id="scene-btn" text="scene"/></dock-panel>
+        <dock-panel id="game" title="Game"><button id="game-btn" text="game"/></dock-panel>
+      </dock-stack>
+      <dock-stack basis="240">
+        <dock-panel id="log" title="Log" floatable="false"><label text="log"/></dock-panel>
+        <dock-panel id="inspector" title="Inspector"><label text="inspect"/></dock-panel>
+      </dock-stack>
+    </dock-split>
+    <dock-sidebar edge="bottom">
+      <dock-panel id="console" title="Console"><input id="cmd"/></dock-panel>
+    </dock-sidebar>
+  </dock>
+  <script src="main.cdl"/>
+</root>"#;
+
+/// A panel floats over its dock: by `dock::float`, by the tab menu, and by
+/// a drag released over no stack; the float moves by its tab, resizes by its
+/// frame, docks by a drag onto a stack, and a double click on its strip
+/// docks it back where it came from.
+#[test]
+fn panels_float_over_the_dock() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("float", TOOLBAR_MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    hear(app);
+    ticks(app, 2);
+    let dock = entity(app, "editor");
+    let (dock_at, _) = rect_of(app, dock);
+    // By the API.
+    call(app, |d| {
+        d.float(
+            "game",
+            lumen_dock::model::Rect {
+                x: 300.0,
+                y: 120.0,
+                w: 260.0,
+                h: 180.0,
+            },
+        )
+        .unwrap()
+    });
+    ticks(app, 3);
+    let fe = float_element(app, "game").expect("game floats");
+    let (fo, fs) = rect_of(app, fe);
+    assert!(
+        (fo - (dock_at + glam::Vec2::new(300.0, 120.0)))
+            .abs()
+            .max_element()
+            < 1.5
+            && (fs - glam::Vec2::new(260.0, 180.0)).abs().max_element() < 1.5,
+        "the float sits where it was put: {fo} {fs}"
+    );
+    assert!(announced(app).iter().any(|t| t == "Game floating"));
+    // A panel that does not float refuses.
+    call(app, |d| {
+        assert!(matches!(
+            d.float("log", lumen_dock::model::Rect::default()),
+            Err(lumen_dock::DockError::NotFloatable(_))
+        ))
+    });
+    // Its strip is its title bar: dragged there, the whole float moves.
+    let tab = tab_button(app, "game");
+    let (so, ss) = rect_of(app, parent(app, tab).unwrap());
+    let from = glam::Vec2::new(so.x + ss.x - 20.0, so.y + ss.y / 2.0);
+    let to = from + glam::Vec2::new(-120.0, 60.0);
+    drag_through(app, None, from, &[to]);
+    let (moved, _) = rect_of(app, fe);
+    assert!(
+        (moved - (fo + glam::Vec2::new(-120.0, 60.0)))
+            .abs()
+            .max_element()
+            < 2.0,
+        "the float follows the pointer: {moved} from {fo}"
+    );
+    pointer(app, None, to, Ptr::Up);
+    ticks(app, 2);
+    let r = float_rect(app, "game");
+    assert!(
+        (r.x - 180.0).abs() < 2.0 && (r.y - 180.0).abs() < 2.0,
+        "{r:?}"
+    );
+    // Its south-east corner resizes it.
+    let se = app
+        .world
+        .iter_entities()
+        .find(|e| {
+            e.get::<lumen_dock::DockFloatHandle>()
+                .is_some_and(|h| h.edges.right && h.edges.bottom)
+        })
+        .map(|e| e.id())
+        .unwrap();
+    let corner = middle(app, se);
+    drag_through(app, None, corner, &[corner + glam::Vec2::new(40.0, 30.0)]);
+    assert!(app.world.resource::<lumen_dock::DockDrag>().resizing());
+    pointer(app, None, corner + glam::Vec2::new(40.0, 30.0), Ptr::Up);
+    ticks(app, 2);
+    let r2 = float_rect(app, "game");
+    assert!(
+        (r2.w - (r.w + 40.0)).abs() < 2.0 && (r2.h - (r.h + 30.0)).abs() < 2.0,
+        "{r2:?} from {r:?}"
+    );
+    // Escape mid-resize puts it back.
+    let corner = middle(app, se);
+    drag_through(app, None, corner, &[corner + glam::Vec2::new(-60.0, 0.0)]);
+    press(app, "Escape", false, false);
+    assert!(!app.world.resource::<lumen_dock::DockDrag>().active());
+    pointer(app, None, corner, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(float_rect(app, "game"), r2);
+    // The float has its own place in F6's cycle and its tab menu docks it.
+    let tab = tab_button(app, "game");
+    context_menu(app, tab);
+    let actions: Vec<lumen_dock::MenuAction> =
+        menu_items(app).into_iter().map(|(_, a)| a).collect();
+    assert!(actions.contains(&lumen_dock::MenuAction::Attach));
+    press(app, "Escape", false, false);
+    // A double click on its strip docks it back where it came from.
+    let tab = tab_button(app, "game");
+    app.world
+        .write_message(lumen_core::input::DoubleClickEvent {
+            entity: tab,
+            position: glam::Vec2::ZERO,
+        });
+    ticks(app, 3);
+    assert!(float_element(app, "game").is_none());
+    assert_eq!(stack_panels(app, "game"), vec!["scene", "game"]);
+
+    // A tab dropped over no stack floats where it was let go.
+    let tab = tab_button(app, "inspector");
+    let bar_e = entity(app, "bar");
+    let bar = middle(app, bar_e);
+    drag_through(app, None, middle(app, tab), &[bar]);
+    assert_eq!(
+        preview(app).map(|p| p.0).as_deref(),
+        Some("dock-drop-float")
+    );
+    pointer(app, None, bar, Ptr::Up);
+    ticks(app, 3);
+    assert!(float_element(app, "inspector").is_some());
+    // One that does not float lands nowhere there.
+    let tab = tab_button(app, "log");
+    drag_through(app, None, middle(app, tab), &[bar]);
+    assert!(preview(app).is_none());
+    pointer(app, None, bar, Ptr::Up);
+    ticks(app, 2);
+    assert!(float_element(app, "log").is_none());
+
+    // The float's tab dragged onto the center stack docks it there.
+    let tab = tab_button(app, "inspector");
+    let scene = entity(app, "scene");
+    let center = parent(app, parent(app, scene).unwrap()).unwrap();
+    // Below the float, which lies over the top of the center stack.
+    let (co, cs) = rect_of(app, center);
+    let mid = glam::Vec2::new(co.x + cs.x / 2.0, co.y + cs.y * 0.7);
+    drag_through(app, None, middle(app, tab), &[mid]);
+    assert_eq!(
+        preview(app).map(|p| p.0).as_deref(),
+        Some("dock-drop-center"),
+        "a float's tab docks where it is dropped"
+    );
+    pointer(app, None, mid, Ptr::Up);
+    ticks(app, 3);
+    assert!(float_element(app, "inspector").is_none());
+    assert!(stack_panels(app, "scene").contains(&"inspector".to_string()));
+
+    // The tab menu floats a docked panel.
+    let tab = tab_button(app, "files");
+    context_menu(app, tab);
+    let float = menu_items(app)
+        .into_iter()
+        .find(|(_, a)| *a == lumen_dock::MenuAction::Float)
+        .map(|(e, _)| e)
+        .expect("a Float item");
+    click(app, float, lumen_core::input::PointerButton::Primary);
+    ticks(app, 3);
+    assert!(float_element(app, "files").is_some());
+    // Saved and restored, it floats again.
+    let saved = {
+        let mut out = String::new();
+        call(app, |d| out = d.save().to_json());
+        out
+    };
+    assert!(saved.contains("\"floats\""));
+    call(app, |d| d.reset());
+    ticks(app, 3);
+    assert!(float_element(app, "files").is_none());
+    call(app, |d| d.restore_json(&saved).unwrap());
+    ticks(app, 3);
+    assert!(float_element(app, "files").is_some());
+}
+
+/// Panels pinned to an edge: the markup's sidebar and `dock::pin` show a
+/// button along the edge; clicking it slides the panel out over the dock,
+/// clicking elsewhere or Escape slides it back in, and its Dock button docks
+/// it where it was.
+#[test]
+fn pinned_panels_slide_out_of_the_edges() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("pin", TOOLBAR_MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    hear(app);
+    ticks(app, 2);
+    let button = |app: &mut App, panel: &str| -> Option<Entity> {
+        app.world
+            .iter_entities()
+            .find(|e| {
+                e.get::<lumen_dock::DockPinButton>()
+                    .is_some_and(|b| b.panel == panel)
+            })
+            .map(|e| e.id())
+    };
+    let slid_out = |app: &App, panel: &str| -> bool {
+        let mut cur = Some(entity_of(app, panel));
+        while let Some(e) = cur {
+            if app.world.get::<lumen_dock::DockSlideOut>(e).is_some() {
+                return true;
+            }
+            cur = parent(app, e);
+        }
+        false
+    };
+    let console = button(app, "console").expect("the bottom strip has a button for console");
+    call(app, |d| assert!(!d.is_shown("console")));
+    assert_eq!(
+        signal(app, "dock.shown.console").as_deref(),
+        Some("false"),
+        "pinned and slid in is out of view"
+    );
+    // Its button slides it out; the dock leaves room for the strip.
+    let dock = entity(app, "editor");
+    assert!(
+        app.world
+            .get::<lumen_core::components::LumenClasses>(dock)
+            .unwrap()
+            .has("dock-pinned-bottom")
+    );
+    click(app, console, lumen_core::input::PointerButton::Primary);
+    assert!(slid_out(app, "console"));
+    call(app, |d| assert!(d.is_shown("console")));
+    let state = app
+        .world
+        .get::<lumen_core::components::A11yState>(console)
+        .copied()
+        .unwrap();
+    assert!(state.contains(lumen_core::components::A11yState::EXPANDED));
+    // A click elsewhere slides it back in.
+    let bar = entity(app, "bar");
+    click(app, bar, lumen_core::input::PointerButton::Primary);
+    assert!(!slid_out(app, "console"));
+    // So does Escape, and a second click on its button.
+    click(app, console, lumen_core::input::PointerButton::Primary);
+    assert!(slid_out(app, "console"));
+    press(app, "Escape", false, false);
+    assert!(!slid_out(app, "console"));
+    call(app, |d| {
+        d.toggle("console").unwrap();
+    });
+    ticks(app, 2);
+    assert!(slid_out(app, "console"));
+    click(app, console, lumen_core::input::PointerButton::Primary);
+    assert!(!slid_out(app, "console"));
+
+    // Pinning a docked panel takes it out of its stack.
+    call(app, |d| d.pin("files", "left").unwrap());
+    ticks(app, 3);
+    let files = button(app, "files").expect("a left strip with files");
+    assert!(
+        announced(app)
+            .iter()
+            .any(|t| t == "Files pinned to the sidebar")
+    );
+    call(app, |d| {
+        assert!(matches!(
+            d.pin("files", "middle"),
+            Err(lumen_dock::DockError::BadEdge(_))
+        ));
+        assert!(d.save().find("files").is_none());
+        // Shown, it slides out.
+        d.show("files").unwrap();
+    });
+    ticks(app, 3);
+    assert!(slid_out(app, "files"));
+    // Its Dock button puts it back where it was.
+    let dock_back = app
+        .world
+        .iter_entities()
+        .find(|e| e.get::<lumen_dock::DockUnpinButton>().is_some())
+        .map(|e| e.id())
+        .unwrap();
+    click(app, dock_back, lumen_core::input::PointerButton::Primary);
+    ticks(app, 2);
+    assert!(
+        button(app, "files").is_none(),
+        "{files:?} went with its pin"
+    );
+    assert_eq!(stack_panels(app, "files"), vec!["files"]);
+    // The tab menu pins too.
+    let tab = tab_button(app, "files");
+    context_menu(app, tab);
+    let pin = menu_items(app)
+        .into_iter()
+        .find(|(_, a)| *a == lumen_dock::MenuAction::Pin)
+        .map(|(e, _)| e)
+        .expect("a Pin item");
+    click(app, pin, lumen_core::input::PointerButton::Primary);
+    ticks(app, 3);
+    assert!(button(app, "files").is_some());
+    call(app, |d| {
+        let ws = d.save();
+        assert_eq!(ws.docks["editor"].sidebars.left, vec!["files".to_string()]);
+        // Docked back by the API.
+        d.attach("files").unwrap();
+    });
+    ticks(app, 3);
+    assert!(button(app, "files").is_none());
+    assert!(
+        !app.world
+            .get::<lumen_core::components::LumenClasses>(dock)
+            .unwrap()
+            .has("dock-pinned-left")
+    );
+}
+
+/// A stack with more tabs than room scrolls its strip on the wheel, keeps
+/// its shown tab in view, and lists every tab under its overflow button.
+#[test]
+fn a_crowded_strip_scrolls_and_lists_its_tabs() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let panels: String = (1..=12)
+        .map(|i| {
+            format!(
+                r#"<dock-panel id="p{i}" title="Panel number {i}"><label text="{i}"/></dock-panel>"#
+            )
+        })
+        .collect();
+    let markup = format!(
+        r#"<root><dock id="editor"><dock-split axis="row">
+          <dock-stack basis="300">{panels}</dock-stack>
+          <dock-stack center="true"><dock-panel id="main" title="Main"><label text="m"/></dock-panel></dock-stack>
+        </dock-split></dock><script src="main.cdl"/></root>"#
+    );
+    let mut t = build("overflow", &markup, CANDELA, "");
+    let app = &mut t.app;
+    ticks(app, 4);
+    let p1 = entity(app, "p1");
+    let stack = parent(app, parent(app, p1).unwrap()).unwrap();
+    let classes = |app: &App, e: Entity| {
+        app.world
+            .get::<lumen_core::components::LumenClasses>(e)
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert!(classes(app, stack).has("overflowing"));
+    let more = app
+        .world
+        .iter_entities()
+        .find(|e| e.get::<lumen_dock::DockOverflowButton>().is_some())
+        .map(|e| e.id())
+        .expect("an overflow button");
+    // The tabs shrank to their minimum before overflowing.
+    let first = tab_button(app, "p1");
+    let (_, fs) = rect_of(app, first);
+    assert!(
+        fs.x < 100.0 && fs.x >= 71.0,
+        "a tab shrinks to its min-width: {fs}"
+    );
+    // The wheel moves the strip along.
+    let strip = parent(app, first).unwrap();
+    let at = middle(app, strip);
+    hover(app, first);
+    app.world.write_message(lumen_core::input::MouseWheel {
+        delta: glam::Vec2::new(0.0, 120.0),
+        position: at,
+        local: None,
+        time_stamp: std::time::Instant::now(),
+    });
+    ticks(app, 3);
+    let scroll = app
+        .world
+        .get::<lumen_dock::StripScroll>(strip)
+        .copied()
+        .unwrap();
+    assert!(scroll.offset > 100.0, "{scroll:?}");
+    // Showing the last tab keeps it in view.
+    call(app, |d| d.activate("p12").unwrap());
+    ticks(app, 4);
+    let last = tab_button(app, "p12");
+    let (lo, ls) = rect_of(app, last);
+    let (so, ss) = rect_of(app, strip);
+    assert!(
+        lo.x >= so.x - 0.5 && lo.x + ls.x <= so.x + ss.x + 0.5,
+        "the shown tab is in view: {lo} {ls} in {so} {ss}"
+    );
+    // The overflow button lists every tab; picking one shows it.
+    click(app, more, lumen_core::input::PointerButton::Primary);
+    ticks(app, 2);
+    let items: Vec<(Entity, String)> = app
+        .world
+        .iter_entities()
+        .filter_map(|e| {
+            e.get::<lumen_dock::DockOverflowItem>()
+                .map(|i| (e.id(), i.0.clone()))
+        })
+        .collect();
+    assert_eq!(items.len(), 12);
+    let (third, _) = items.iter().find(|(_, p)| p == "p3").unwrap().clone();
+    click(app, third, lumen_core::input::PointerButton::Primary);
+    ticks(app, 4);
+    call(app, |d| {
+        let ws = d.save();
+        assert_eq!(
+            ws.stack(&ws.find("p3").unwrap().stack)
+                .unwrap()
+                .active
+                .as_deref(),
+            Some("p3")
+        );
+    });
+    let p3 = tab_button(app, "p3");
+    let (po, _) = rect_of(app, p3);
+    assert!(po.x >= so.x - 0.5, "the picked tab scrolled into view");
+    // Room again: no overflow, no button.
+    call(app, |d| {
+        for i in 2..=12 {
+            d.hide(&format!("p{i}")).unwrap();
+        }
+    });
+    ticks(app, 5);
+    assert!(!classes(app, stack).has("overflowing"));
+    let shown = app
+        .world
+        .get::<lumen_core::components::Style>(more)
+        .is_some_and(|s| s.display != lumen_core::components::Display::None);
+    assert!(!shown, "the overflow button goes with the overflow");
+}
+
+/// Put the pointer's hover on `e` and its ancestors, as the input pipeline
+/// does.
+fn hover(app: &mut App, e: Entity) {
+    let mut cur = Some(e);
+    while let Some(x) = cur {
+        app.world.entity_mut(x).insert(lumen_core::input::Hovered);
+        cur = parent(app, x);
+    }
 }
