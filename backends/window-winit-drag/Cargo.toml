@@ -1,0 +1,37 @@
+# Drags across the app's windows for the winit window backend: the
+# platform side of the core's surface-drag seam, riding the backend's event
+# loop as an extension. Registered as the `window-winit-drag` capability, so
+# an app whose link leaves it out carries none of it.
+[package]
+name = "lumen-window-winit-drag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Drags that cross a Lumen app's windows, on the winit window backend."
+keywords = ["ui", "gui", "window", "winit", "lumen"]
+categories = ["gui", "os"]
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-capability = { workspace = true }
+lumen-window-winit = { workspace = true }
+bevy_ecs.workspace = true
+glam.workspace = true
+winit.workspace = true
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The drag on Wayland: a data-device drag on winit's own connection
+# (`client_system` opens it from winit's `wl_display`), and
+# `xdg_toplevel_drag_v1` where the compositor offers it. The same versions
+# winit already builds; nothing new is downloaded.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+[dev-dependencies]
+toml.workspace = true

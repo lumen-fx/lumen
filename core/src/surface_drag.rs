@@ -50,6 +50,12 @@ pub enum SurfaceDragRequest {
     /// window that has not opened yet opens under the pointer without taking
     /// focus, so the drag keeps the keyboard.
     Follow(Option<Entity>),
+    /// Get the window following the pointer out of the way (`true`), or
+    /// bring it back where it was (`false`), while the pointer is over a
+    /// window that would take the drop. The drag goes on: where hiding the
+    /// window would end the pointer grab it holds, the backend moves it off
+    /// the desktop instead. The drag's end brings it back too.
+    Conceal(bool),
     /// The drag is over; the backend stops reporting it. Written after a
     /// drop or a cancel the dragging side handled, or to abandon a drag
     /// (Escape).
@@ -150,6 +156,7 @@ struct Active {
     source: Entity,
     follow: Option<Entity>,
     grab_offset: Vec2,
+    concealed: bool,
 }
 
 /// The bookkeeping of a drag a backend tracks itself: it sees every pointer
@@ -188,11 +195,17 @@ impl InProcessDrag {
                     source,
                     follow,
                     grab_offset,
+                    concealed: false,
                 });
             }
             SurfaceDragRequest::Follow(window) => {
                 if let Some(a) = self.active.as_mut() {
                     a.follow = window;
+                }
+            }
+            SurfaceDragRequest::Conceal(concealed) => {
+                if let Some(a) = self.active.as_mut() {
+                    a.concealed = concealed;
                 }
             }
             SurfaceDragRequest::End => self.active = None,
@@ -218,6 +231,11 @@ impl InProcessDrag {
     /// The window following the pointer.
     pub fn follow(&self) -> Option<Entity> {
         self.active.and_then(|a| a.follow)
+    }
+
+    /// Whether the window following the pointer is out of the way.
+    pub fn concealed(&self) -> bool {
+        self.active.is_some_and(|a| a.concealed)
     }
 
     /// Where the pointer is, given `local` in the logical pixels of the
@@ -254,7 +272,8 @@ impl InProcessDrag {
     ) -> Option<DragStep> {
         let (p, under, position) = self.locate(surfaces, window, local)?;
         let a = self.active?;
-        let follow_to = a.follow.map(|f| {
+        // A concealed window stays out of the way until it is brought back.
+        let follow_to = a.follow.filter(|_| !a.concealed).map(|f| {
             let scale = surfaces
                 .iter()
                 .find(|s| s.window == f)
@@ -435,6 +454,19 @@ mod tests {
             drag.moved(&list, world.spawn_empty().id(), Vec2::ZERO)
                 .is_none()
         );
+        // Concealed, the window stays out of the way until brought back.
+        drag.request(&SurfaceDragRequest::Conceal(true));
+        assert!(drag.concealed());
+        let step = drag.moved(&list, b, Vec2::new(20.0, 20.0)).unwrap();
+        assert_eq!(step.follow_to, None);
+        drag.request(&SurfaceDragRequest::Conceal(false));
+        assert!(!drag.concealed());
+        assert!(
+            drag.moved(&list, b, Vec2::new(20.0, 20.0))
+                .unwrap()
+                .follow_to
+                .is_some()
+        );
         drag.request(&SurfaceDragRequest::Follow(None));
         assert_eq!(drag.follow(), None);
         // The release drops where it happens and ends the drag.
@@ -450,6 +482,8 @@ mod tests {
         assert_eq!(drag.cancelled(), None);
         drag.request(&SurfaceDragRequest::Follow(Some(f)));
         assert_eq!(drag.follow(), None, "no drag to follow");
+        drag.request(&SurfaceDragRequest::Conceal(true));
+        assert!(!drag.concealed(), "no drag to conceal");
     }
 
     #[test]

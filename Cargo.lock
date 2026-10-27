@@ -4638,6 +4638,7 @@ dependencies = [
  "lumen-text",
  "lumen-text-cosmic",
  "lumen-window-winit-capability",
+ "lumen-window-winit-drag-capability",
  "lumenc-plugin",
  "notify",
  "serde",
@@ -4919,9 +4920,6 @@ dependencies = [
  "signal-hook",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
  "windows-sys 0.61.2",
  "winit",
 ]
@@ -4932,6 +4930,31 @@ version = "0.0.11"
 dependencies = [
  "lumen-capability",
  "lumen-window-winit",
+]
+
+[[package]]
+name = "lumen-window-winit-drag"
+version = "0.0.11"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "lumen-capability",
+ "lumen-core",
+ "lumen-window-winit",
+ "raw-window-handle",
+ "toml 1.1.4+spec-1.1.0",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "winit",
+]
+
+[[package]]
+name = "lumen-window-winit-drag-capability"
+version = "0.0.11"
+dependencies = [
+ "lumen-capability",
+ "lumen-window-winit-drag",
 ]
 
 [[package]]
@@ -5007,6 +5030,7 @@ dependencies = [
  "toml_edit 0.25.15+spec-1.1.0",
  "tracing",
  "ureq",
+ "x11rb",
  "zip",
 ]
 

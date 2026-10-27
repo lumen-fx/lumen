@@ -1,5 +1,6 @@
-//! The window backend's side of a drag that crosses the app's windows (the
-//! core's surface-drag seam).
+//! Drags that cross the app's windows, on the winit window backend: the
+//! platform side of the core's surface-drag seam
+//! (`lumen_core::surface_drag`).
 //!
 //! On Windows, macOS and X11 the window that was pressed keeps receiving the
 //! pointer's moves past its edge until the release (Windows captures the
@@ -14,24 +15,62 @@
 //! On Wayland no client may learn where the pointer is outside its own
 //! surfaces or place its windows, so the drag runs as a `wl_data_device`
 //! drag with a MIME type private to this process ([`wayland`]).
+//!
+//! It rides the winit backend's event loop as a
+//! [`LoopExtension`](lumen_window_winit::extension::LoopExtension), and the
+//! `window-winit-drag` capability registers it: an app whose link leaves the
+//! capability out carries none of this, and its drags stay inside a window.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
+use bevy_ecs::message::{MessageCursor, Messages};
 use bevy_ecs::prelude::*;
 use glam::{IVec2, UVec2, Vec2};
+use lumen_capability::{CapabilityEnv, Select};
+use lumen_core::app::App;
 use lumen_core::surface_drag::{
-    DesktopSurface, InProcessDrag, SurfaceDragEvent, SurfaceDragRequest,
+    DesktopSurface, InProcessDrag, SurfaceDragEvent, SurfaceDragRequest, SurfaceDragSupport,
 };
-use winit::window::Window;
+use lumen_window_winit::extension::{LoopCx, LoopExtension, add_loop_extension};
+use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::keyboard::{Key, NamedKey};
+use winit::window::{Window, WindowAttributes};
+
+/// A link that picks its capabilities carries this one for an app that
+/// declares the dock module, the one that drags across windows; one whose
+/// sources it cannot read carries it too.
+pub const SELECT: Select = Select::OnUse(&["lumen-dock"]);
+
+/// Where a concealed window waits during a drag, off every desktop.
+const OFF_DESKTOP: IVec2 = IVec2::new(-30000, -30000);
+
+/// How often the loop looks at a Wayland drag that may be running: winit
+/// reads the shared connection and does not wake the loop for the drag's
+/// own queue.
+const DRAG_POLL: Duration = Duration::from_millis(4);
+
+/// Register the drag with the winit backend. What the capability crate
+/// beside this one registers.
+pub fn install(app: &mut App, _env: &CapabilityEnv) {
+    app.add_message::<SurfaceDragRequest>();
+    app.add_message::<SurfaceDragEvent>();
+    add_loop_extension(app, Box::<WinitDrag>::default());
+}
 
 /// What the backend keeps of a drag across windows.
 #[derive(Default)]
-pub(crate) struct DragSeam {
+pub struct DragSeam {
     /// The drag, where the backend tracks the pointer itself.
     pub inner: InProcessDrag,
     /// Windows the app asked to follow before they opened: they open
     /// inactive, under the pointer.
     pub open_following: HashSet<Entity>,
+    /// Windows opening to follow the pointer, until they have opened.
+    pub opening: HashSet<Entity>,
+    /// A concealed following window moved off the desktop, and where its
+    /// client area was.
+    pub parked: Option<(Entity, IVec2)>,
     /// The window entities, most recently focused first.
     pub order: Vec<Entity>,
     /// The pointer's last desktop position during a drag, physical pixels.
@@ -66,6 +105,10 @@ impl DragSeam {
     pub fn closed(&mut self, window: Entity) {
         self.order.retain(|&w| w != window);
         self.open_following.remove(&window);
+        self.opening.remove(&window);
+        if self.parked.is_some_and(|(w, _)| w == window) {
+            self.parked = None;
+        }
     }
 
     /// Take in a request the app wrote.
@@ -114,11 +157,7 @@ impl DragSeam {
 }
 
 /// `window` on the desktop: its client area, scale and whether it shows.
-pub(crate) fn desktop_surface(
-    entity: Entity,
-    window: &Window,
-    visible: bool,
-) -> Option<DesktopSurface> {
+pub fn desktop_surface(entity: Entity, window: &Window, visible: bool) -> Option<DesktopSurface> {
     let origin = window.inner_position().ok()?;
     let size = window.inner_size();
     Some(DesktopSurface {
@@ -132,7 +171,7 @@ pub(crate) fn desktop_surface(
 
 /// Move `window` so its client area's top-left corner is at `client`
 /// (physical desktop pixels).
-pub(crate) fn place_client_area(window: &Window, client: IVec2) {
+pub fn place_client_area(window: &Window, client: IVec2) {
     let offset = match (window.inner_position(), window.outer_position()) {
         (Ok(inner), Ok(outer)) => IVec2::new(inner.x - outer.x, inner.y - outer.y),
         _ => IVec2::ZERO,
@@ -143,7 +182,7 @@ pub(crate) fn place_client_area(window: &Window, client: IVec2) {
 
 /// Order `surfaces` top-most first by `order` (most recently focused
 /// first); a window never focused goes after, newest first.
-pub(crate) fn stack(mut surfaces: Vec<DesktopSurface>, order: &[Entity]) -> Vec<DesktopSurface> {
+pub fn stack(mut surfaces: Vec<DesktopSurface>, order: &[Entity]) -> Vec<DesktopSurface> {
     surfaces.sort_by(|a, b| {
         let rank = |e: Entity| order.iter().position(|&o| o == e).unwrap_or(usize::MAX);
         rank(a.window)
@@ -153,8 +192,301 @@ pub(crate) fn stack(mut surfaces: Vec<DesktopSurface>, order: &[Entity]) -> Vec<
     surfaces
 }
 
+/// The drag across windows, as the winit backend's loop extension.
+#[derive(Default)]
+pub struct WinitDrag {
+    /// The drag's bookkeeping.
+    pub seam: DragSeam,
+    /// The app's requests read so far.
+    requests: MessageCursor<SurfaceDragRequest>,
+    /// Where the pointer last was in each window, logical pixels.
+    last: HashMap<Entity, Vec2>,
+}
+
+impl WinitDrag {
+    /// Every open window on the desktop, the top-most first.
+    fn desktop_surfaces(&self, cx: &LoopCx<'_>) -> Vec<DesktopSurface> {
+        let list = cx
+            .open_windows()
+            .iter()
+            .filter_map(|&e| {
+                let window = cx.window(e)?;
+                let visible = cx
+                    .app
+                    .world
+                    .get::<lumen_core::window::Window>(e)
+                    .is_none_or(|w| w.visible);
+                desktop_surface(e, &window, visible)
+            })
+            .collect();
+        stack(list, &self.seam.order)
+    }
+
+    /// The pointer moved to `p` in `window` during a drag tracked here.
+    fn moved(&mut self, cx: &mut LoopCx<'_>, window: Entity, p: Vec2) {
+        if !self.seam.inner.is_active() || self.seam.on_wayland() {
+            return;
+        }
+        let surfaces = self.desktop_surfaces(cx);
+        let Some((event, follow)) = self.seam.moved(&surfaces, window, p) else {
+            return;
+        };
+        cx.app.world.write_message(event);
+        cx.want_frame();
+        if let Some((f, to)) = follow
+            && let Some(w) = cx.window(f)
+        {
+            place_client_area(&w, to);
+        }
+    }
+
+    /// The button came up at `p` in `window` during a drag tracked here.
+    fn released(&mut self, cx: &mut LoopCx<'_>, window: Entity, p: Vec2) {
+        if !self.seam.inner.is_active() || self.seam.on_wayland() {
+            return;
+        }
+        let surfaces = self.desktop_surfaces(cx);
+        if let Some(event) = self.seam.inner.released(&surfaces, window, p) {
+            cx.app.world.write_message(event);
+            cx.want_frame();
+        }
+    }
+
+    /// The app's drag requests since the last look.
+    fn take_requests(&mut self, cx: &mut LoopCx<'_>) -> Vec<SurfaceDragRequest> {
+        let Some(messages) = cx.app.world.get_resource::<Messages<SurfaceDragRequest>>() else {
+            return Vec::new();
+        };
+        let requests: Vec<SurfaceDragRequest> = self.requests.read(messages).copied().collect();
+        let opened: HashSet<Entity> = cx.open_windows().iter().copied().collect();
+        for r in &requests {
+            let follow = self.seam.inner.follow();
+            match *r {
+                SurfaceDragRequest::Conceal(c) => self.conceal(cx, follow, c),
+                SurfaceDragRequest::End => self.conceal(cx, follow, false),
+                _ => {}
+            }
+            self.seam.request(r, &|e| opened.contains(&e));
+        }
+        requests
+    }
+
+    /// Get the following window out of the way, or bring it back. Hiding the
+    /// window that holds the pointer grab ends the grab on X11 and Windows,
+    /// so off Wayland the window is moved off the desktop instead and put
+    /// back where it was; Wayland keeps the drag on the data device and the
+    /// window hides.
+    fn conceal(&mut self, cx: &mut LoopCx<'_>, follow: Option<Entity>, concealed: bool) {
+        if self.seam.on_wayland() {
+            if let Some(w) = follow.and_then(|f| cx.window(f)) {
+                w.set_visible(!concealed);
+            }
+            return;
+        }
+        match (concealed, self.seam.parked) {
+            (true, None) => {
+                let Some((f, w)) = follow.and_then(|f| cx.window(f).map(|w| (f, w))) else {
+                    return;
+                };
+                let Ok(at) = w.inner_position() else { return };
+                self.seam.parked = Some((f, IVec2::new(at.x, at.y)));
+                place_client_area(&w, OFF_DESKTOP);
+            }
+            (false, Some((f, at))) => {
+                self.seam.parked = None;
+                if let Some(w) = cx.window(f) {
+                    place_client_area(&w, at);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The app's windows as the Wayland drag sees them.
+    #[cfg(target_os = "linux")]
+    fn wayland_surfaces(cx: &LoopCx<'_>) -> Vec<wayland::Surface> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use winit::platform::wayland::WindowExtWayland;
+        cx.open_windows()
+            .iter()
+            .filter_map(|&e| {
+                let window = cx.window(e)?;
+                let RawWindowHandle::Wayland(h) = window.window_handle().ok()?.as_raw() else {
+                    return None;
+                };
+                let size = cx
+                    .app
+                    .world
+                    .get::<lumen_core::window::WindowViewport>(e)
+                    .map_or(Vec2::ZERO, |v| v.size);
+                Some(wayland::Surface {
+                    window: e,
+                    surface: h.surface.as_ptr(),
+                    toplevel: window.xdg_toplevel().map(|t| t.as_ptr()),
+                    size,
+                })
+            })
+            .collect()
+    }
+}
+
+impl LoopExtension for WinitDrag {
+    fn resumed(&mut self, cx: &mut LoopCx<'_>) {
+        // On Wayland the drag binds its objects on winit's connection and
+        // asks the compositor whether a window can follow; elsewhere the
+        // pressed window keeps the pointer and a window always can.
+        #[cfg(target_os = "linux")]
+        {
+            use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            if let Ok(handle) = cx.event_loop.display_handle()
+                && let RawDisplayHandle::Wayland(h) = handle.as_raw()
+            {
+                // SAFETY: the display is the event loop's own, alive as long
+                // as the loop; the drag is dropped with the backend, inside
+                // the loop.
+                self.seam.wayland = unsafe { wayland::WaylandDrag::new(h.display.as_ptr()) };
+                match &self.seam.wayland {
+                    Some(w) => {
+                        let follow = w.can_follow();
+                        cx.app.world.insert_resource(SurfaceDragSupport { follow });
+                    }
+                    None => {
+                        cx.app.world.remove_resource::<SurfaceDragSupport>();
+                    }
+                }
+                return;
+            }
+        }
+        cx.app
+            .world
+            .insert_resource(SurfaceDragSupport { follow: true });
+    }
+
+    fn window_event(&mut self, cx: &mut LoopCx<'_>, window: Entity, event: &WindowEvent) {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = cx.window(window).map_or(1.0, |w| w.scale_factor());
+                let logical = position.to_logical::<f32>(scale);
+                let p = Vec2::new(logical.x, logical.y);
+                self.last.insert(window, p);
+                self.moved(cx, window, p);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let p = self.last.get(&window).copied().unwrap_or_default();
+                self.released(cx, window, p);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && event.logical_key == Key::Named(NamedKey::Escape) =>
+            {
+                #[cfg(target_os = "linux")]
+                if let Some(w) = self.seam.wayland.as_mut() {
+                    w.escape_pressed();
+                }
+            }
+            WindowEvent::Focused(true) => self.seam.raised(window),
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, cx: &mut LoopCx<'_>) {
+        // The Wayland drag's queue first: a drag the app begins needs the
+        // serial of the press that came in with this batch.
+        #[cfg(target_os = "linux")]
+        if let Some(active) = self.seam.wayland.as_ref().map(|w| w.active()) {
+            let surfaces = Self::wayland_surfaces(cx);
+            let w = self.seam.wayland.as_mut().expect("checked");
+            if active {
+                w.set_surfaces(&surfaces);
+            }
+            let events = w.dispatch();
+            if !events.is_empty() {
+                for e in events {
+                    cx.app.world.write_message(e);
+                }
+                cx.want_frame();
+            }
+        }
+        let requests = self.take_requests(cx);
+        #[cfg(target_os = "linux")]
+        if !requests.is_empty() && self.seam.wayland.is_some() {
+            let surfaces = Self::wayland_surfaces(cx);
+            if let Some(w) = self.seam.wayland.as_mut() {
+                w.set_surfaces(&surfaces);
+                for r in &requests {
+                    w.request(r, &surfaces);
+                }
+            }
+        }
+        let _ = requests;
+    }
+
+    fn before_open(
+        &mut self,
+        cx: &mut LoopCx<'_>,
+        window: Entity,
+        attrs: WindowAttributes,
+    ) -> WindowAttributes {
+        // A window opening to follow the pointer opens under it and leaves
+        // the keyboard with the drag.
+        if !self.seam.open_following.remove(&window) {
+            return attrs;
+        }
+        self.seam.opening.insert(window);
+        let attrs = attrs.with_active(false);
+        let scale = cx
+            .primary()
+            .and_then(|p| cx.window(p))
+            .map_or(1.0, |w| w.scale_factor() as f32);
+        match self
+            .seam
+            .inner
+            .grab_offset()
+            .and_then(|g| self.seam.open_at(g, scale))
+        {
+            Some(at) => attrs.with_position(winit::dpi::PhysicalPosition::new(at.x, at.y)),
+            None => attrs,
+        }
+    }
+
+    fn opened(&mut self, cx: &mut LoopCx<'_>, window: Entity) {
+        let following = self.seam.opening.remove(&window);
+        #[cfg(target_os = "linux")]
+        if following && self.seam.wayland.is_some() {
+            let surfaces = Self::wayland_surfaces(cx);
+            if let Some(w) = self.seam.wayland.as_mut() {
+                w.set_surfaces(&surfaces);
+                w.request(&SurfaceDragRequest::Follow(Some(window)), &surfaces);
+            }
+        }
+        let _ = (cx, following);
+    }
+
+    fn closed(&mut self, window: Entity) {
+        self.seam.closed(window);
+        self.last.remove(&window);
+    }
+
+    fn wake_at(&self) -> Option<Instant> {
+        #[cfg(target_os = "linux")]
+        if self
+            .seam
+            .wayland
+            .as_ref()
+            .is_some_and(|w| w.wants_wakeups())
+        {
+            return Some(Instant::now() + DRAG_POLL);
+        }
+        None
+    }
+}
+
 #[cfg(target_os = "linux")]
-pub(crate) mod wayland {
+pub mod wayland {
     //! The drag on Wayland: a `wl_data_device` drag on winit's own
     //! connection, with a MIME type private to the process, so the app's
     //! own surfaces report where the pointer is and nothing outside the app
@@ -181,7 +513,7 @@ pub(crate) mod wayland {
     //! therefore a cancel when an Escape press follows it promptly, and a
     //! drop on no window otherwise.
 
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use bevy_ecs::prelude::Entity;
     use glam::Vec2;
@@ -197,9 +529,47 @@ pub(crate) mod wayland {
         xdg_toplevel_drag_manager_v1, xdg_toplevel_drag_v1,
     };
 
+    use super::Duration;
+
     /// How long after a `cancelled` with no drop an Escape press may still
     /// arrive and make it a cancel.
     const ESCAPE_GRACE: Duration = Duration::from_millis(60);
+
+    /// The MIME type the drag offers: private to this process, so no other
+    /// application takes the drop.
+    pub fn mime_type(pid: u32, nonce: u32) -> String {
+        format!("application/x-lumen-surface-drag;token={pid:x}{nonce:08x}")
+    }
+
+    /// What a drag the compositor cancelled with no drop comes to, `since`
+    /// the cancel: nothing to report when the app ended it itself; a cancel
+    /// when an Escape press reached the app; a drop on no window once the
+    /// grace for that Escape has passed; and `None` while it may still come.
+    pub fn after_cancel(
+        ended_by_app: bool,
+        escape: bool,
+        since: Duration,
+        position: Vec2,
+    ) -> Option<Vec<SurfaceDragEvent>> {
+        if ended_by_app {
+            Some(Vec::new())
+        } else if escape {
+            Some(vec![SurfaceDragEvent::Cancelled])
+        } else if since >= ESCAPE_GRACE {
+            Some(vec![SurfaceDragEvent::Dropped {
+                window: None,
+                position,
+            }])
+        } else {
+            None
+        }
+    }
+
+    /// Whether `position` lies inside a surface of `size`, in its own
+    /// coordinates.
+    pub fn within(position: Vec2, size: Vec2) -> bool {
+        position.x >= 0.0 && position.y >= 0.0 && position.x < size.x && position.y < size.y
+    }
 
     /// One of the app's windows as the Wayland drag sees it.
     #[derive(Clone, Debug)]
@@ -259,12 +629,8 @@ pub(crate) mod wayland {
         /// last surface entered while the pointer is over the desktop.
         fn under(&self) -> Option<Entity> {
             self.over.filter(|w| {
-                self.size_of(*w).is_some_and(|size| {
-                    self.position.x >= 0.0
-                        && self.position.y >= 0.0
-                        && self.position.x < size.x
-                        && self.position.y < size.y
-                })
+                self.size_of(*w)
+                    .is_some_and(|size| within(self.position, size))
             })
         }
     }
@@ -296,12 +662,11 @@ pub(crate) mod wayland {
             let qh = queue.handle();
             conn.display().get_registry(&qh, ());
             let mut state = State {
-                mime: format!(
-                    "application/x-lumen-surface-drag;token={:x}{:08x}",
+                mime: mime_type(
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.subsec_nanos())
+                        .map_or(0, |d| d.subsec_nanos()),
                 ),
                 ..State::default()
             };
@@ -435,8 +800,9 @@ pub(crate) mod wayland {
                 }
                 SurfaceDragRequest::Follow(Some(w)) => self.attach(w, surfaces),
                 // The protocol has no detach; the window stays with the
-                // drag until it ends.
-                SurfaceDragRequest::Follow(None) => {}
+                // drag until it ends. Concealing is the window's own
+                // visibility, which the backend sets.
+                SurfaceDragRequest::Follow(None) | SurfaceDragRequest::Conceal(_) => {}
                 SurfaceDragRequest::End => {
                     self.ended_by_app = true;
                     self.end();
@@ -465,19 +831,15 @@ pub(crate) mod wayland {
             }
             // A cancel with no drop: Escape, or a release away from the app.
             if let Some(at) = self.state.cancelled_at {
-                if self.ended_by_app {
+                let outcome = after_cancel(
+                    self.ended_by_app,
+                    self.escape,
+                    at.elapsed(),
+                    self.state.position,
+                );
+                if let Some(outcome) = outcome {
+                    self.state.events.extend(outcome);
                     self.state.cancelled_at = None;
-                } else if self.escape {
-                    self.state.events.push(SurfaceDragEvent::Cancelled);
-                    self.state.cancelled_at = None;
-                } else if at.elapsed() >= ESCAPE_GRACE {
-                    self.state.events.push(SurfaceDragEvent::Dropped {
-                        window: None,
-                        position: self.state.position,
-                    });
-                    self.state.cancelled_at = None;
-                }
-                if self.state.cancelled_at.is_none() {
                     self.end();
                 }
             }
@@ -738,6 +1100,72 @@ pub(crate) mod wayland {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cancelled_wayland_drag_is_told_apart_from_a_drop_on_nothing() {
+        use wayland::{after_cancel, mime_type, within};
+        let at = Vec2::new(5.0, 6.0);
+        assert_eq!(
+            after_cancel(true, true, Duration::ZERO, at),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            after_cancel(false, true, Duration::ZERO, at),
+            Some(vec![SurfaceDragEvent::Cancelled])
+        );
+        assert_eq!(
+            after_cancel(false, false, Duration::from_millis(10), at),
+            None
+        );
+        assert_eq!(
+            after_cancel(false, false, Duration::from_millis(100), at),
+            Some(vec![SurfaceDragEvent::Dropped {
+                window: None,
+                position: at
+            }])
+        );
+        assert_eq!(
+            mime_type(0x1f, 0xab),
+            "application/x-lumen-surface-drag;token=1f000000ab"
+        );
+        let size = Vec2::new(10.0, 10.0);
+        assert!(within(Vec2::new(0.0, 9.9), size));
+        assert!(!within(Vec2::new(10.0, 1.0), size));
+        assert!(!within(Vec2::new(-1.0, 1.0), size));
+    }
+
+    #[test]
+    fn the_capability_registers_the_drag_messages() {
+        let mut app = App::new();
+        install(
+            &mut app,
+            &CapabilityEnv::new(".", toml::Table::new(), String::new(), false),
+        );
+        assert!(
+            app.world
+                .contains_resource::<Messages<SurfaceDragRequest>>()
+        );
+        assert!(app.world.contains_resource::<Messages<SurfaceDragEvent>>());
+        let list = app
+            .world
+            .get_non_send::<lumen_window_winit::extension::LoopExtensions>()
+            .expect("the extension waits for the backend");
+        assert_eq!(list.0.len(), 1);
+        assert!(list.0[0].wake_at().is_none());
+        assert_eq!(SELECT, Select::OnUse(&["lumen-dock"]));
+    }
+
+    #[test]
+    fn a_window_opening_to_follow_is_tracked_until_it_opens() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let mut seam = DragSeam::default();
+        seam.open_following.insert(a);
+        seam.opening.insert(a);
+        seam.closed(a);
+        assert!(seam.opening.is_empty() && seam.open_following.is_empty());
+    }
 
     #[test]
     fn the_most_recently_focused_window_is_on_top() {

@@ -246,6 +246,7 @@ its builtins prints a warning when the app runs.
 | `os-crash` | every app | Crash handling: the panic hook, the fault handler, and the start of the `lumen-crash` helper. `[crash] enabled = false` turns it off at startup instead. |
 | `render-gpu` | `[render] backend` is `gpu` or `auto` | The GPU renderer. |
 | `render-cpu` | `[render] backend` is `cpu` or `auto` | The CPU renderer. |
+| `window-winit-drag` | the app declares the `lumen-dock` module | Drags that cross the app's windows: tearing a dock tab off into a window of its own and dragging a window's tab back into a dock. Without it a tab drags within its window, and Move to new window and Dock back still work. |
 | `mcp` | never; `mcp = true` asks for it | The introspection server. |
 | `devtools` | never; `devtools = true` asks for it | The in-window devtools overlay. |
 

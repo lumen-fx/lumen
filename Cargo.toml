@@ -299,6 +299,7 @@ lumen-render-gpu-capability = { path = "capabilities/render-gpu" }
 lumen-render-cpu-capability = { path = "capabilities/render-cpu" }
 lumen-layout-taffy-capability = { path = "capabilities/layout-taffy" }
 lumen-window-winit-capability = { path = "capabilities/window-winit" }
+lumen-window-winit-drag-capability = { path = "capabilities/window-winit-drag" }
 lumen-capability-macros = { path = "core/capability/macros" }
 lumen-module-registry = { path = "core/module-registry" }
 lumen-modules = { path = "core/modules" }
@@ -350,6 +351,7 @@ lumen-websocket = { path = "std/websocket", default-features = false }
 lumen-widget = { path = "core/widget" }
 lumen-widget-macros = { path = "core/widget/macros" }
 lumen-window-winit = { path = "backends/window-winit" }
+lumen-window-winit-drag = { path = "backends/window-winit-drag" }
 # A default lumenc links the whole runtime. The launcher stub and the LSP each
 # take one feature of it instead, so defaults are off here and the engine, which
 # wants the parser, asks for them back.
