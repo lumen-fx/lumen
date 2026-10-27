@@ -1,0 +1,23 @@
+# The dock module's workspace model: docks, tab stacks, splits and pop-out
+# windows as plain data, the operations that rearrange them, and the layout
+# format they save to. No engine types, so it is tested on its own and can
+# later run wherever the dock does, a page included.
+[package]
+name = "lumen-dock-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The workspace model behind Lumen's dock module: tab stacks, splits and pop-out windows as data, their operations, and the saved layout format."
+keywords = ["ui", "gui", "docking", "layout"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
