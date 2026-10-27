@@ -3847,6 +3847,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-dock"
+version = "0.0.11"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "lumen-candela-dev",
+ "lumen-core",
+ "lumen-dock-model",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
+ "serde",
+ "serde_json",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "lumen-dock-model"
+version = "0.0.11"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lumen-download"
 version = "0.0.11"
 dependencies = [
@@ -3982,6 +4009,7 @@ dependencies = [
  "lumen-candela",
  "lumen-canvas",
  "lumen-cookie",
+ "lumen-dock",
  "lumen-download",
  "lumen-fs",
  "lumen-js",
@@ -4927,6 +4955,7 @@ dependencies = [
  "lumen-cookie",
  "lumen-core",
  "lumen-devtools",
+ "lumen-dock",
  "lumen-download",
  "lumen-dylib",
  "lumen-fs",

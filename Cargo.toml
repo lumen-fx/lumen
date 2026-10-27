@@ -181,6 +181,9 @@ members = [
     # The surface module's protocol crate, which an engine depends on without
     # the module.
     "std/surface/protocol",
+    # The dock module's workspace model, which the module's web half will
+    # also compile.
+    "std/dock/model",
     # The script hosts' libraries, apart from the module entries above them so
     # a build script can depend on them without building a module.
     "std/candela/host",
@@ -258,6 +261,8 @@ lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-cookie = { path = "std/cookie", default-features = false }
 lumen-core = { path = "core" }
 lumen-devtools = { path = "dev/devtools" }
+lumen-dock = { path = "std/dock", default-features = false }
+lumen-dock-model = { path = "std/dock/model" }
 lumen-download = { path = "std/download", default-features = false }
 # The engine in the form a Rust app links instead of compiling in. Excluded from
 # the workspace, so it is the one internal crate that cannot inherit this table;
