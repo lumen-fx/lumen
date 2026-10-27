@@ -17,9 +17,10 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_dock_model::{DockArea, Float, PanelId, Side};
 use lumen_module::lumen_core::components::{
-    A11yLabel, A11yRole, A11yState, TextContent, Transform,
+    A11yLabel, A11yRole, A11yState, Edges as Inset, Length, Position, TextContent, Transform,
 };
 use lumen_module::lumen_core::render_world::{OverlayLayer, OverlayOpenOrder};
+use lumen_module::lumen_core::style_overrides::{StyleOwner, StyleValues, hold_on};
 
 use crate::adopt::spawn_chrome;
 use crate::realize::{alive, children_of, reorder, set_classes, set_inline};
@@ -173,6 +174,8 @@ pub struct FrameParts {
     pub pins: HashMap<PanelId, Entity>,
     /// Each dock's slide-out.
     pub slide_outs: HashMap<String, Entity>,
+    /// Each dock's float host, while it has floats.
+    pub float_hosts: HashMap<String, Entity>,
 }
 
 /// What one realization of the frame used, so the rest can go.
@@ -183,6 +186,7 @@ pub struct FrameUse {
     strips: HashSet<(String, Side)>,
     pins: HashSet<PanelId>,
     slide_outs: HashSet<String>,
+    float_hosts: HashSet<String>,
 }
 
 fn side_name(side: Side) -> &'static str {
@@ -217,17 +221,31 @@ pub fn clamp_rect(rect: lumen_dock_model::Rect, size: Vec2) -> lumen_dock_model:
     }
 }
 
+/// A float's place over its dock, held on its style: written straight to
+/// its layout, so a float moved with the pointer is laid out again but not
+/// restyled.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DockFloatPlace;
+
+impl StyleOwner for DockFloatPlace {
+    const RANK: u8 = 47;
+}
+
 /// Write a float element's place: `rect` from its dock's top-left corner.
 pub fn place_float(world: &mut World, e: Entity, rect: lumen_dock_model::Rect) {
-    set_inline(world, e, "position", Some("absolute".into()));
-    set_inline(
-        world,
-        e,
-        "inset",
-        Some(format!("{} auto auto {}", rect.y.round(), rect.x.round())),
-    );
-    set_inline(world, e, "width", Some(format!("{}px", rect.w.round())));
-    set_inline(world, e, "height", Some(format!("{}px", rect.h.round())));
+    let mut inset = Inset::auto();
+    inset.left = rect.x.round();
+    inset.top = rect.y.round();
+    let values = StyleValues {
+        position: Some(Position::Absolute),
+        inset: Some(inset),
+        width: Some(Length::Px(rect.w.round())),
+        height: Some(Length::Px(rect.h.round())),
+        ..StyleValues::default()
+    };
+    if let Ok(mut ent) = world.get_entity_mut(e) {
+        hold_on::<DockFloatPlace>(&mut ent, values);
+    }
 }
 
 /// The size `e` was last laid out at.
@@ -255,7 +273,7 @@ pub fn build_float(
         None => {
             // In the top layer, as it paints and takes the pointer over the
             // dock's tree whatever lies deeper there.
-            let e = spawn_chrome(world, "column", &["dock-float"], Some(dock));
+            let e = spawn_chrome(world, "column", &["dock-float"], None);
             world.entity_mut(e).insert((
                 DockFloat {
                     id: float.id.clone(),
@@ -365,10 +383,50 @@ fn stack_floats(world: &mut World, floats: &[Entity]) {
     }
 }
 
+/// The element `dock`'s floats sit in: an empty box over the whole dock. A
+/// float moved or resized lays out that box and not the dock's tree.
+fn float_host(
+    world: &mut World,
+    parts: &mut FrameParts,
+    used: &mut FrameUse,
+    (dock_id, dock): (&str, Entity),
+    floats: &[Entity],
+) -> Option<Entity> {
+    if floats.is_empty() {
+        return None;
+    }
+    used.float_hosts.insert(dock_id.to_string());
+    let host = match parts
+        .float_hosts
+        .get(dock_id)
+        .copied()
+        .filter(|&e| alive(world, e))
+    {
+        Some(e) => e,
+        None => {
+            let e = spawn_chrome(world, "column", &["dock-floats"], Some(dock));
+            set_inline(world, e, "position", Some("absolute".into()));
+            set_inline(world, e, "inset", Some("0".into()));
+            parts.float_hosts.insert(dock_id.to_string(), e);
+            e
+        }
+    };
+    if children_of(world, host) != floats {
+        for k in children_of(world, host) {
+            if !floats.contains(&k) {
+                world.entity_mut(k).remove::<bevy_ecs::hierarchy::ChildOf>();
+            }
+        }
+        reorder(world, host, floats);
+    }
+    Some(host)
+}
+
 /// Lay a dock out: the tree, the floats over it, and, when panels are
 /// pinned, the strips along its edges and the slide-out.
 pub fn arrange(world: &mut World, parts: &mut FrameParts, used: &mut FrameUse, a: Around<'_>) {
     stack_floats(world, &a.floats);
+    let floats = float_host(world, parts, used, a.dock, &a.floats);
     let (dock_id, dock) = a.dock;
     let area = a.area;
     let titles = a.titles;
@@ -386,7 +444,7 @@ pub fn arrange(world: &mut World, parts: &mut FrameParts, used: &mut FrameUse, a
         .collect();
     set_classes(world, dock, &pinned, &PINNED_CLASSES);
     if edges.is_empty() {
-        let prefix: Vec<Entity> = a.root.into_iter().chain(a.floats).collect();
+        let prefix: Vec<Entity> = a.root.into_iter().chain(floats).collect();
         set_prefix(world, dock, &prefix);
         return;
     }
@@ -573,7 +631,7 @@ pub fn arrange(world: &mut World, parts: &mut FrameParts, used: &mut FrameUse, a
     prefix.extend(strips.get(&Side::Top));
     prefix.push(middle);
     prefix.extend(strips.get(&Side::Bottom));
-    prefix.extend(a.floats);
+    prefix.extend(floats);
     set_prefix(world, dock, &prefix);
 }
 
@@ -603,6 +661,13 @@ pub fn sweep(world: &mut World, parts: &mut FrameParts, used: &FrameUse) {
     });
     parts.strips.retain(|id, e| {
         let keep = used.strips.contains(id);
+        if !keep {
+            gone.push(*e);
+        }
+        keep
+    });
+    parts.float_hosts.retain(|id, e| {
+        let keep = used.float_hosts.contains(id);
         if !keep {
             gone.push(*e);
         }

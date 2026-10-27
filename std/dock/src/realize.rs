@@ -658,6 +658,24 @@ fn ensure_window(
     Some((window, surface))
 }
 
+/// A tree's root is no split's pane: the size a split gave it when it was
+/// one goes, and the stylesheet sizes it in its dock or window.
+fn unpane(world: &mut World, root: Entity) {
+    if world
+        .get::<InlineStyle>(root)
+        .is_some_and(|s| s.get("flex-basis").is_some() || s.get("flex-shrink").is_some())
+    {
+        if let Ok(mut ent) = world.get_entity_mut(root) {
+            release_on::<SplitPane>(&mut ent);
+        }
+        set_inline(world, root, "flex-basis", None);
+        set_inline(world, root, "flex-shrink", None);
+        if world.get::<DockStack>(root).is_none() {
+            set_inline(world, root, "flex-grow", None);
+        }
+    }
+}
+
 /// Make the elements follow the model, when it changed.
 pub fn realize(world: &mut World) {
     let shared = world.resource::<Shared>().clone();
@@ -704,10 +722,14 @@ pub fn realize(world: &mut World) {
             .and_then(|m| path_to(&area.root, m))
             .unwrap_or_default();
         let root = build(world, &mut built, &mut pass, &area.root, true);
+        if let Some(root) = root {
+            unpane(world, root);
+        }
         let path = std::mem::take(&mut pass.max_path);
         let mut floats = Vec::new();
         for f in &area.floats {
             if let Some(node) = build(world, &mut built, &mut pass, &f.root, true) {
+                unpane(world, node);
                 floats.push(crate::frame::build_float(
                     world,
                     &mut frame,
@@ -769,7 +791,11 @@ pub fn realize(world: &mut World) {
         };
         used_windows.insert(layout.id.clone());
         // The tree goes first; a tab menu open in the window stays after it.
-        if let Some(root) = build(world, &mut built, &mut pass, &layout.root, true)
+        let root = build(world, &mut built, &mut pass, &layout.root, true);
+        if let Some(root) = root {
+            unpane(world, root);
+        }
+        if let Some(root) = root
             && children_of(world, surface).first() != Some(&root)
         {
             put_under(world, root, surface);

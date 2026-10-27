@@ -8,6 +8,8 @@
 .dock { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; min-height: 0; }
 
 .dock-split { flex-grow: 1; min-width: 0; min-height: 0; }
+/* A stack that is a dock's whole tree fills the dock. */
+.dock > .dock-stack { flex-grow: 1; }
 .dock-split-row { flex-direction: row; }
 .dock-split-column { flex-direction: column; }
 

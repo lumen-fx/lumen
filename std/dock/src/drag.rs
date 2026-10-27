@@ -39,8 +39,7 @@ use crate::adopt::{DockChrome, hide, spawn_chrome, unhide};
 use crate::frame::{DockFloat, DockFloatHandle, Edges, FLOAT_MIN, clamp_rect, place_float};
 use crate::plugin::{DockCloseButton, text};
 use crate::realize::{
-    Built, DockStack, DockTab, DockWindow, alive, children_of, primary, realize, set_classes,
-    set_inline,
+    Built, DockStack, DockTab, alive, children_of, primary, realize, set_classes, set_inline,
 };
 use crate::state::{Core, Reason, Shared};
 
@@ -361,11 +360,6 @@ fn shown(world: &World, e: Entity) -> bool {
     true
 }
 
-/// The model id of the window `window` is, when the dock opened it.
-fn model_window(world: &World, window: Entity) -> Option<String> {
-    world.get::<DockWindow>(window).map(|w| w.id.clone())
-}
-
 /// What a press on `entity` would drag: a tab's panel, a strip's stack, or
 /// the group of a window whose only tab it is; `None` for a close button or
 /// anything that is not the dock's. A float's strip is its title bar: the
@@ -667,49 +661,56 @@ fn float_zone(
     Some((Zone::Float { dock, rect: r }, region))
 }
 
-/// The element the overlays sit in for `window`: the dock under `p` in the
-/// main window, else its first dock; a pop-out's root.
-fn container(
+/// On the element the drag's overlays sit in, one per dock and per window
+/// of panels: an empty box over the whole of it that takes no pointer, so
+/// moving an overlay with the pointer lays out that box and nothing else.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct OverlayHost;
+
+/// The overlay host of `window`: under the dock the pointer is over in the
+/// main window (else its first dock), under the root of a window of panels.
+fn overlay_host(
     world: &mut World,
     core: &Core,
     built: &Built,
     window: Entity,
     p: Vec2,
 ) -> Option<Entity> {
-    if let Some(id) = model_window(world, window) {
-        return built
-            .windows
-            .get(&id)
-            .map(|(_, root)| *root)
-            .filter(|&r| alive(world, r));
-    }
-    let docks: Vec<Entity> = core
-        .docks
+    let container = match built
+        .windows
         .values()
-        .map(|d| d.entity)
-        .filter(|&e| alive(world, e))
-        .collect();
-    let mut first = None;
-    for e in docks {
-        if window_of(world, e) != Some(window) {
-            continue;
-        }
-        first.get_or_insert(e);
-        if rect(world, e).is_some_and(|r| inside(p, r)) {
-            return Some(e);
-        }
+        .find(|(w, _)| *w == window)
+        .map(|(_, root)| *root)
+    {
+        Some(root) => Some(root),
+        None => dock_at(world, core, window, p).map(|(_, e)| e),
     }
-    first
+    .filter(|&e| alive(world, e))?;
+    let existing = children_of(world, container)
+        .into_iter()
+        .find(|&k| world.get::<OverlayHost>(k).is_some());
+    Some(existing.unwrap_or_else(|| {
+        let e = spawn_chrome(world, "column", &["dock-overlay-host"], Some(container));
+        world
+            .entity_mut(e)
+            .insert((OverlayHost, PointerEvents::None));
+        set_inline(world, e, "position", Some("absolute".into()));
+        set_inline(world, e, "inset", Some("0".into()));
+        e
+    }))
 }
 
-/// Put `overlay` under `parent` covering `(origin, size)` in window
-/// coordinates.
-fn place_overlay(world: &mut World, overlay: Entity, parent: Entity, (o, s): (Vec2, Vec2)) {
-    if world.get::<ChildOf>(overlay).map(ChildOf::parent) != Some(parent) {
-        world.entity_mut(overlay).insert(ChildOf(parent));
+/// Show `overlay` in `host` over `(origin, size)` in window coordinates.
+fn place_overlay(world: &mut World, overlay: Entity, host: Entity, (o, s): (Vec2, Vec2)) {
+    if world.get::<ChildOf>(overlay).map(ChildOf::parent) != Some(host) {
+        world.entity_mut(overlay).insert(ChildOf(host));
     }
+    // The host fills the element it sits in; before its first layout, that
+    // element's corner is where it will be.
     let base = world
-        .get::<Transform>(parent)
+        .get::<Transform>(host)
+        .filter(|t| t.size.x > 0.0)
+        .or_else(|| parent(world, host).and_then(|p| world.get::<Transform>(p)))
         .map_or(Vec2::ZERO, |t| t.absolute);
     let at = o - base;
     set_inline(
@@ -812,6 +813,17 @@ fn window_entity(world: &World, built: &Built, id: &str) -> Option<Entity> {
         .get(id)
         .map(|(w, _)| *w)
         .filter(|&w| alive(world, w))
+}
+
+/// Get the window the drag moves out of the way, or bring it back: through
+/// the window backend, which keeps the drag going, when it carries the
+/// drag; by hiding the window otherwise.
+fn conceal(world: &mut World, built: &Built, session: &Session, id: &str, concealed: bool) {
+    if session.seam {
+        world.write_message(SurfaceDragRequest::Conceal(concealed));
+    } else {
+        set_window_visible(world, built, id, !concealed);
+    }
 }
 
 fn set_window_visible(world: &mut World, built: &Built, id: &str, visible: bool) {
@@ -1175,16 +1187,16 @@ fn over(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) {
             // A window dragged by its group lands nowhere in itself.
             let found = found
                 .filter(|_| !(session.moving.is_some() && w == session.source && !session.torn));
-            let target = container(world, &core, &built, w, p);
-            match (&found, target, session.preview) {
-                (Some((zone, region)), Some(parent), Some(preview)) => {
+            let host = overlay_host(world, &core, &built, w, p);
+            match (&found, host, session.preview) {
+                (Some((zone, region)), Some(host), Some(preview)) => {
                     set_classes(world, preview, &[zone.class().as_str()], &ZONE_CLASSES);
-                    place_overlay(world, preview, parent, *region);
+                    place_overlay(world, preview, host, *region);
                 }
                 (_, _, Some(preview)) => hide(world, preview),
                 _ => {}
             }
-            if let (Some(ghost), Some(parent)) = (session.ghost, target) {
+            if let (Some(ghost), Some(host)) = (session.ghost, host) {
                 if session.moving.is_some() && !session.moving_hidden {
                     hide(world, ghost);
                 } else {
@@ -1193,7 +1205,7 @@ fn over(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) {
                         .map(|t| t.size)
                         .filter(|s| s.x > 1.0)
                         .unwrap_or(Vec2::new(120.0, 28.0));
-                    place_overlay(world, ghost, parent, (p - session.grab, size));
+                    place_overlay(world, ghost, host, (p - session.grab, size));
                 }
             }
             // Over a window that would take the drop, the window being
@@ -1202,7 +1214,7 @@ fn over(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) {
                 let hide_it =
                     found.is_some() && w != session.source || found.is_some() && session.torn;
                 if hide_it != session.moving_hidden {
-                    set_window_visible(world, &built, &id, !hide_it);
+                    conceal(world, &built, &session, &id, hide_it);
                     session.moving_hidden = hide_it;
                 }
             }
@@ -1219,7 +1231,7 @@ fn over(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) {
             if let Some(id) = session.moving.clone()
                 && session.moving_hidden
             {
-                set_window_visible(world, &built, &id, true);
+                conceal(world, &built, &session, &id, false);
                 session.moving_hidden = false;
             }
             // Far enough off the window, a tab tears off.
@@ -1369,11 +1381,12 @@ fn drop_at(world: &mut World, shared: &Shared, window: Option<Entity>, p: Vec2) 
         }
     }
     let built = world.remove_resource::<Built>().unwrap_or_default();
-    if let Some(id) = &session.moving {
+    if let Some(id) = &session.moving
+        && session.moving_hidden
+        && (!moved || core.ws.window(id).is_some())
+    {
         // A window that was hidden over a target shows again where it went.
-        if !moved || core.ws.window(id).is_some() {
-            set_window_visible(world, &built, id, true);
-        }
+        conceal(world, &built, &session, id, false);
     }
     finish(world, &core, &session);
     drop(core);
@@ -1397,8 +1410,9 @@ fn cancel(world: &mut World, shared: &Shared, by_key: bool) {
     let built = world.remove_resource::<Built>().unwrap_or_default();
     if let Some(id) = &session.moving
         && !session.torn
+        && session.moving_hidden
     {
-        set_window_visible(world, &built, id, true);
+        conceal(world, &built, &session, id, false);
     }
     finish(world, &core, &session);
     if by_key {
