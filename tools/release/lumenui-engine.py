@@ -105,7 +105,7 @@ HELPER = "lumen-crash"
 # invocation with the engine: a separate build resolves features on its own
 # and produces crates whose hashes are not the engine's, which an app cannot
 # use together.
-MODULES = ("lumen-canvas", "lumen-surface")
+MODULES = ("lumen-canvas", "lumen-dock", "lumen-surface")
 
 # The rlib of each crate the build asks for by name, which cargo reports by
 # the copy it uplifts out of deps/. A module's library is named after its
