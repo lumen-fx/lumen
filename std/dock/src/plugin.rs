@@ -172,7 +172,15 @@ impl Plugin for DockPlugin {
         }
         app.add_systems(
             TickStage::Systems,
-            (ensure_messages, user_input, dock_keys)
+            (
+                ensure_messages.run_if(messages_missing),
+                user_input,
+                dock_keys.run_if(
+                    bevy_ecs::schedule::common_conditions::on_message::<
+                        lumen_module::lumen_core::input::KeyPressed,
+                    >,
+                ),
+            )
                 .chain()
                 .in_set(DockSet::Input)
                 .after(ScriptSet::DomState),
@@ -200,6 +208,7 @@ impl Plugin for DockPlugin {
         app.add_systems(
             TickStage::Systems,
             realize
+                .run_if(|shared: Res<Shared>| shared.lock().dirty)
                 .in_set(DockSet::Realize)
                 .after(DockSet::Adopt)
                 .before(lumen_module::lumen_scene::widgets::keep_widget_parts),
@@ -215,7 +224,13 @@ impl Plugin for DockPlugin {
         // land in a panel that just became its stack's showing tab.
         app.add_systems(
             TickStage::Systems,
-            (decorate_tabs, crate::keys::focus_requests)
+            (
+                decorate_tabs,
+                crate::keys::focus_requests.run_if(|shared: Res<Shared>| {
+                    let core = shared.lock();
+                    core.focus_request.is_some() || !core.destroy.is_empty()
+                }),
+            )
                 .chain()
                 .after(TabsSet)
                 .after(DockSet::Report),
@@ -227,10 +242,7 @@ impl Plugin for DockPlugin {
 /// plugins normally register. Their plugins install after the module's, and
 /// a message registered twice drops what was written before it is read, so
 /// the module only fills the ones an app assembled without them lacks.
-fn ensure_messages(world: &mut World, mut done: Local<bool>) {
-    if std::mem::replace(&mut *done, true) {
-        return;
-    }
+fn ensure_messages(world: &mut World) {
     message::<CustomEvent>(world);
     message::<CustomEventDelivered>(world);
     message::<WindowClosing>(world);
@@ -239,6 +251,19 @@ fn ensure_messages(world: &mut World, mut done: Local<bool>) {
     message::<DoubleClickEvent>(world);
     message::<SplitResized>(world);
     message::<lumen_module::lumen_core::input::KeyPressed>(world);
+}
+
+/// Whether a message the module reads has no buffer yet.
+fn messages_missing(world: &World) -> bool {
+    use bevy_ecs::message::Messages;
+    !(world.contains_resource::<Messages<CustomEvent>>()
+        && world.contains_resource::<Messages<CustomEventDelivered>>()
+        && world.contains_resource::<Messages<WindowClosing>>()
+        && world.contains_resource::<Messages<WindowFocused>>()
+        && world.contains_resource::<Messages<ClickEvent>>()
+        && world.contains_resource::<Messages<DoubleClickEvent>>()
+        && world.contains_resource::<Messages<SplitResized>>()
+        && world.contains_resource::<Messages<lumen_module::lumen_core::input::KeyPressed>>())
 }
 
 /// The panel a strip button shows, through the tab it stands for.
@@ -258,18 +283,22 @@ pub struct DockCloseButton {
     pub panel: String,
 }
 
+/// The messages [`user_input`] reads.
+#[derive(bevy_ecs::system::SystemParam)]
+struct UserInput<'w, 's> {
+    clicks: MessageReader<'w, 's, ClickEvent>,
+    doubles: MessageReader<'w, 's, DoubleClickEvent>,
+    resized: MessageReader<'w, 's, SplitResized>,
+    closing: MessageReader<'w, 's, WindowClosing>,
+    delivered: MessageReader<'w, 's, CustomEventDelivered>,
+}
+
 /// Read what the user did to the dock this tick: a tab picked, a close
 /// button or a middle click, a double click on a window's strip, a split
 /// resized, a window closed, a panel close a handler allowed.
-#[allow(clippy::too_many_arguments)]
 fn user_input(
-    shared: Res<Shared>,
-    settings: Res<Settings>,
-    mut clicks: MessageReader<ClickEvent>,
-    mut doubles: MessageReader<DoubleClickEvent>,
-    mut resized: MessageReader<SplitResized>,
-    mut closing: MessageReader<WindowClosing>,
-    mut delivered: MessageReader<CustomEventDelivered>,
+    (shared, settings, built): (Res<Shared>, Res<Settings>, Res<Built>),
+    mut input: UserInput,
     mut events: MessageWriter<CustomEvent>,
     picked: Query<(&DockStack, &Tabs), Changed<Tabs>>,
     (dock_tabs, buttons, close_buttons, parents): (
@@ -279,8 +308,14 @@ fn user_input(
         Query<&ChildOf>,
     ),
     windows: Query<&DockWindow>,
-    built: Res<Built>,
 ) {
+    let UserInput {
+        clicks,
+        doubles,
+        resized,
+        closing,
+        delivered,
+    } = &mut input;
     let mut core = shared.lock();
     // A tab the user picked becomes the stack's showing panel.
     for (stack, tabs) in &picked {
@@ -375,20 +410,20 @@ fn user_input(
 
 /// Raise the events and set the signals for what changed since the last
 /// tick that did.
-#[allow(clippy::too_many_arguments)]
 fn report(
-    shared: Res<Shared>,
-    mut events: MessageWriter<CustomEvent>,
-    mut messages: MessageWriter<DockEvent>,
+    (shared, focus): (Res<Shared>, Res<FocusTracker>),
+    (mut events, mut messages): (MessageWriter<CustomEvent>, MessageWriter<DockEvent>),
     mut store: ResMut<PropertyStore>,
-    focus: Res<FocusTracker>,
     mut focused_window: MessageReader<WindowFocused>,
-    panels_q: Query<&DockPanel>,
-    parents: Query<&ChildOf>,
-    windows: Query<&DockWindow>,
+    (panels_q, parents, windows): (Query<&DockPanel>, Query<&ChildOf>, Query<&DockWindow>),
     mut last_focus: Local<Option<String>>,
 ) {
     let mut core = shared.lock();
+    // An idle tick reports nothing and builds nothing to find that out.
+    let model_moved = std::mem::take(&mut core.report_due);
+    if !model_moved && !focus.is_changed() && focused_window.is_empty() {
+        return;
+    }
     let pending = std::mem::take(&mut core.pending);
     let changed = core.changed.take();
     let errors = std::mem::take(&mut core.errors);
@@ -455,14 +490,17 @@ fn report(
         }
     }
     // A layout naming a panel the app does not have asks for it once.
-    let missing: Vec<String> = core
-        .ws
-        .shown_panels()
-        .into_iter()
-        .chain(core.ws.homes.keys().cloned())
-        .filter(|p| core.panels.get(p).is_none_or(|r| r.entity.is_none()))
-        .filter(|p| !core.reported.contains(p))
-        .collect();
+    let missing: Vec<String> = if !model_moved {
+        Vec::new()
+    } else {
+        core.ws
+            .shown_panels()
+            .into_iter()
+            .chain(core.ws.homes.keys().cloned())
+            .filter(|p| core.panels.get(p).is_none_or(|r| r.entity.is_none()))
+            .filter(|p| !core.reported.contains(p))
+            .collect()
+    };
     for p in missing {
         let meta = core.ws.panels.get(&p).cloned().unwrap_or_default();
         for &d in &docks {
@@ -477,7 +515,11 @@ fn report(
     }
     // `dock.shown.<panel>` for each panel whose view changed, and for every
     // panel the first time.
-    let ids: Vec<String> = core.panels.keys().cloned().collect();
+    let ids: Vec<String> = if model_moved {
+        core.panels.keys().cloned().collect()
+    } else {
+        Vec::new()
+    };
     for p in ids {
         let name = format!("dock.shown.{p}");
         let shown = core.ws.is_shown(&p);
@@ -539,14 +581,14 @@ fn report(
     }
 }
 
+/// A window the platform moved or resized, or the app changed.
+type WindowMoved = Or<(Changed<WindowRuntime>, Changed<Window>)>;
+
 /// Keep each window's place in the model as the platform reports it, so a
 /// save writes where the window is.
 fn track_windows(
     shared: Res<Shared>,
-    windows: Query<
-        (&DockWindow, &Window, &WindowRuntime),
-        Or<(Changed<WindowRuntime>, Changed<Window>)>,
-    >,
+    windows: Query<(&DockWindow, &Window, &WindowRuntime), WindowMoved>,
     monitors: Option<Res<lumen_module::lumen_core::window::Monitors>>,
 ) {
     if windows.is_empty() {

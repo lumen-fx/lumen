@@ -416,14 +416,16 @@ fn report<T>(what: &str, r: Result<T, DockError>, fallback: T) -> T {
     }
 }
 
+/// One script function's work on the state, given its call.
+type Op = Box<
+    dyn Fn(&mut Core, &lumen_module::lumen_script::ScriptFnCx<'_>) -> ScriptValue + Send + Sync,
+>;
+
 /// The script functions, bound to `shared`, with the signatures the web
 /// half declares.
 pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
     let s = shared.clone();
-    let body = move |f: Box<
-        dyn Fn(&mut Core, &lumen_module::lumen_script::ScriptFnCx<'_>) -> ScriptValue + Send + Sync,
-    >|
-          -> ScriptFnBody {
+    let body = move |f: Op| -> ScriptFnBody {
         let s = s.clone();
         Arc::new(move |cx| {
             let mut core = s.lock();
@@ -572,12 +574,7 @@ pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
         (
             "panels".into(),
             body(Box::new(|c, _| {
-                ScriptValue::Array(
-                    c.panel_ids()
-                        .into_iter()
-                        .map(|p| ScriptValue::Str(p.into()))
-                        .collect(),
-                )
+                ScriptValue::Array(c.panel_ids().into_iter().map(ScriptValue::Str).collect())
             })),
         ),
         (
@@ -588,9 +585,7 @@ pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
         ),
         (
             "save".into(),
-            body(Box::new(|c, _| {
-                ScriptValue::Str(c.snapshot().to_json().into())
-            })),
+            body(Box::new(|c, _| ScriptValue::Str(c.snapshot().to_json()))),
         ),
         (
             "restore".into(),
@@ -606,12 +601,7 @@ pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
         (
             "layouts".into(),
             body(Box::new(|c, _| {
-                ScriptValue::Array(
-                    c.layout_names()
-                        .into_iter()
-                        .map(|p| ScriptValue::Str(p.into()))
-                        .collect(),
-                )
+                ScriptValue::Array(c.layout_names().into_iter().map(ScriptValue::Str).collect())
             })),
         ),
         (

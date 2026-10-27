@@ -1262,7 +1262,7 @@ impl Workspace {
         }
         // Panels shown now that the result does not show are hidden, and
         // remember where they were.
-        for (p, _) in before.iter() {
+        for p in before.keys() {
             if !next.is_shown(p)
                 && let Some(loc) = self.find(p)
             {
