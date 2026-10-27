@@ -1,10 +1,36 @@
 /* The dock on a page: the default layout as written, the splits as flex
-   rows and columns, each stack's panels behind a strip of tabs. */
+   rows and columns, each stack's panels behind a strip of tabs that looks
+   like the desktop dock's and reads the same tokens. */
 .lm-dock, .lm-dock-split, .lm-dock-stack { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; }
 .lm-dock, .lm-dock-stack { flex-direction: column; }
 .lm-dock-split { flex-direction: row; }
 .lm-dock-split[data-axis="column"] { flex-direction: column; }
 .lm-dock-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .lm-dock-panel[data-dock-inactive], .lm-dock > .lm-dock-panel, .lm-dock-stack > .lm-dock-panel[data-hidden="true"], .lm-dock-stack[data-dock-collapsed] > .lm-dock-panel { display: none; }
-.lm-dock-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
-.lm-dock-tabs > button[aria-selected="true"] { font-weight: 600; }
+.lm-dock-stack {
+  background: var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21));
+  border: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
+}
+.lm-dock-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  height: 30px;
+  background: var(--lumen-dock-strip-bg, var(--lumen-window-bg, #121217));
+  border-bottom: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
+}
+.lm-dock-tabs > button {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border: 0;
+  border-top: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--lumen-dock-tab-text, var(--lumen-text-muted, #ffffffa6));
+  font-size: 13px;
+}
+.lm-dock-tabs > button:hover { background: var(--lumen-dock-tab-hover-bg, var(--lumen-panel-hover, #ffffff12)); }
+.lm-dock-tabs > button[aria-selected="true"] {
+  background: var(--lumen-dock-tab-active-bg, var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21)));
+  color: var(--lumen-dock-tab-active-text, var(--lumen-text, #ffffff));
+  border-top-color: var(--lumen-dock-accent, var(--lumen-accent, #33c7ce));
+}
