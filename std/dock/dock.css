@@ -36,6 +36,11 @@
   background: var(--lumen-dock-tab-bg, #00000000);
 }
 .dock-stack.single .dock-tab { flex-grow: 1; justify-content: flex-start; }
+.dock-tab-icon {
+  width: var(--lumen-dock-icon-size, 16);
+  height: var(--lumen-dock-icon-size, 16);
+  flex-shrink: 0;
+}
 .dock-tab-close {
   width: 16;
   height: 16;

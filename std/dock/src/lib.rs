@@ -34,6 +34,7 @@
 mod adopt;
 pub mod api;
 mod keys;
+mod menu;
 mod persist;
 mod plugin;
 mod realize;
@@ -44,9 +45,11 @@ pub use api::{Dock, DockError};
 pub use keys::{Chord, Keys};
 pub use lumen_dock_model as model;
 pub use lumen_dock_model::Workspace as Layout;
+pub use menu::{DockMenuItem, MENU_ID, MenuAction};
 pub use persist::{FILE, Persist};
 pub use plugin::{
-    DESCRIPTOR, DockCloseButton, DockEvent, DockPlugin, DockSet, DockTabButton, NAME, WindowClose,
+    DESCRIPTOR, DockCloseButton, DockEvent, DockPlugin, DockSet, DockTabButton, DockTabIcon, NAME,
+    WindowClose,
 };
 pub use realize::{DockStack, DockTab, DockWindow};
 

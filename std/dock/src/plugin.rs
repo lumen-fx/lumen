@@ -9,9 +9,11 @@ use bevy_ecs::prelude::*;
 use lumen_dock_model::{Effect, Where};
 use lumen_module::ModuleConfig;
 use lumen_module::lumen_core::app::{App, Plugin};
-use lumen_module::lumen_core::components::{A11yLabel, A11yRole, LumenClasses, StyleDirty};
+use lumen_module::lumen_core::components::{
+    A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, LumenAttributes, LumenClasses, StyleDirty,
+};
 use lumen_module::lumen_core::input::{
-    ClickEvent, DoubleClickEvent, FocusTracker, PointerButton, WindowFocused,
+    ClickEvent, ContextMenuEvent, DoubleClickEvent, FocusTracker, PointerButton, WindowFocused,
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
@@ -22,12 +24,14 @@ use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
 use lumen_module::lumen_script::{CustomEvent, CustomEventDelivered, ScriptFnAppExt, ScriptSet};
 
 use crate::adopt::{
-    Arrivals, DockChrome, DockPanel, TAGS, adopt_elements, arrivals_pending, install_observers,
+    Arrivals, DockChrome, DockPanel, TAGS, TitleSignals, adopt_elements, arrivals_pending,
+    install_observers,
 };
 use crate::keys::Keys;
+use crate::menu::{DockMenuItem, MenuAction, TabMenu};
 use crate::persist::{Persist, save_if_due};
 use crate::realize::{Built, DockStack, DockTab, DockWindow, realize};
-use crate::state::{Reason, Shared};
+use crate::state::{PanelAttrs, Reason, Shared, panel_info};
 
 /// The module's name, as an app declares it.
 pub const NAME: &str = "lumen-dock";
@@ -40,6 +44,11 @@ const UA_CSS: &str = include_str!("../dock.css");
 
 /// The default strings, under the app's own catalogue.
 const MESSAGES_EN: &str = include_str!("../locale/en-US.ftl");
+
+/// The module's message `key` in the app's language, else `fallback`.
+pub(crate) fn text(key: &str, fallback: &str) -> String {
+    lumen_module::lumen_core::i18n::try_translate(key).unwrap_or_else(|| fallback.to_string())
+}
 
 /// What closing a window of panels does with them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -160,6 +169,9 @@ impl Plugin for DockPlugin {
         });
         app.world.init_resource::<Arrivals>();
         app.world.init_resource::<Built>();
+        app.world.init_resource::<TabMenu>();
+        app.world.init_resource::<TitleSignals>();
+        app.world.init_resource::<A11yAnnouncementQueue>();
         app.add_ua_stylesheet(NAME, UA_CSS);
         app.add_default_messages("en-US", MESSAGES_EN);
         // Registered here, ahead of the runtime's own plugins, for an app
@@ -171,6 +183,7 @@ impl Plugin for DockPlugin {
         message::<WindowFocused>(&mut app.world);
         message::<ClickEvent>(&mut app.world);
         message::<DoubleClickEvent>(&mut app.world);
+        message::<ContextMenuEvent>(&mut app.world);
         message::<SplitResized>(&mut app.world);
         message::<lumen_module::lumen_core::input::KeyPressed>(&mut app.world);
         install_observers(&mut app.world);
@@ -202,10 +215,27 @@ impl Plugin for DockPlugin {
             (
                 user_input.run_if(input_due),
                 keys_gate.run_if(on_message::<KeyPressed>),
+                tab_menu_gate.run_if(on_message::<ContextMenuEvent>),
             )
                 .chain()
                 .in_set(DockSet::Input)
                 .after(ScriptSet::DomState),
+        );
+        // A panel's attributes or its bound window title changed, by a
+        // script or the DOM commands: the elements follow on the same tick.
+        app.add_systems(
+            TickStage::Systems,
+            (
+                follow_panel_attrs
+                    .run_if(any_match_filter::<(With<DockPanel>, Changed<LumenAttributes>)>),
+                follow_title_signals.run_if(
+                    (|t: Res<TitleSignals>| !t.0.is_empty())
+                        .and_then(resource_changed::<PropertyStore>),
+                ),
+            )
+                .after(DockSet::Input)
+                .after(lumen_module::lumen_scene::dom::apply_dom_commands)
+                .before(DockSet::Realize),
         );
         // Elements read twice a tick: before any handler runs, so a script's
         // `on_ready` finds the panels the markup declared, and after the DOM
@@ -345,6 +375,7 @@ fn user_input(
         Query<&ChildOf>,
     ),
     windows: Query<&DockWindow>,
+    (menu_items, tab_menu): (Query<&DockMenuItem>, Res<TabMenu>),
 ) {
     let UserInput {
         clicks,
@@ -368,8 +399,44 @@ fn user_input(
             core.dirty = true;
         }
     }
-    // A close button, or a middle click on a tab, asks to close the panel.
+    // A close button, or a middle click on a tab, asks to close the panel;
+    // a tab menu item does what it says.
     for click in clicks.read() {
+        if let Some(action) = crate::menu::item_action(&menu_items, &parents, click.entity) {
+            let Some(panel) = tab_menu.panel.clone() else {
+                continue;
+            };
+            if action == MenuAction::Close {
+                if let Some(e) = core
+                    .panels
+                    .get(&panel)
+                    .filter(|r| r.attrs.closable)
+                    .and_then(|r| r.entity)
+                {
+                    let mut ask = CustomEvent::new(e, "panelclose").with("reason", "user");
+                    ask.cancelable = true;
+                    events.write(ask);
+                }
+                continue;
+            }
+            let done = match action {
+                MenuAction::Detach => core.op_detach(&panel, Reason::User),
+                MenuAction::DetachGroup => core.op_detach_group(&panel, Reason::User),
+                MenuAction::Attach => core.op_attach(&panel, Reason::User),
+                MenuAction::Maximize => core.op_maximize(&panel, Reason::User),
+                MenuAction::Restore => {
+                    if let Where::Dock(d) = core.ws.where_is(&panel) {
+                        core.op_restore_maximized(&d, Reason::User);
+                    }
+                    Ok(())
+                }
+                MenuAction::Close => Ok(()),
+            };
+            if let Err(e) = done {
+                lumen_module::lumen_core::warn_line!("lumen-dock: {e}");
+            }
+            continue;
+        }
         let panel = match close_buttons.get(click.entity) {
             Ok(b) => Some(b.panel.clone()),
             Err(_) if click.button == PointerButton::Middle => {
@@ -449,7 +516,11 @@ fn user_input(
 /// tick that did.
 fn report(
     (shared, focus): (Res<Shared>, Res<FocusTracker>),
-    (mut events, mut messages): (MessageWriter<CustomEvent>, MessageWriter<DockEvent>),
+    (mut events, mut messages, mut announce): (
+        MessageWriter<CustomEvent>,
+        MessageWriter<DockEvent>,
+        ResMut<A11yAnnouncementQueue>,
+    ),
     mut store: ResMut<PropertyStore>,
     mut focused_window: MessageReader<WindowFocused>,
     (panels_q, parents, windows): (Query<&DockPanel>, Query<&ChildOf>, Query<&DockWindow>),
@@ -491,6 +562,11 @@ fn report(
             }
             Effect::Moved { panel, from, to } => {
                 touched.insert(panel.clone());
+                if pending.reason != Reason::Layout
+                    && let Some(text) = announcement(&core, &panel, &from, &to)
+                {
+                    announce.pending.push((text, A11yLive::Polite));
+                }
                 if let Some(e) = entity(&core, &panel) {
                     events.write(
                         CustomEvent::new(e, "panelmove")
@@ -618,6 +694,47 @@ fn report(
     }
 }
 
+/// What a screen reader hears when a panel moved: "Inspector moved to a
+/// new window", "Inspector docked back", "Inspector moved beside Scene".
+/// A panel coming into or going out of view is not a move.
+fn announcement(
+    core: &crate::state::Core,
+    panel: &str,
+    from: &Where,
+    to: &Where,
+) -> Option<String> {
+    let title = |p: &str| core.panels.get(p).map(|r| r.attrs.title.clone());
+    let name = title(panel)?;
+    let said = match (from, to) {
+        (Where::Dock(_), Where::Window(_)) | (Where::Window(_), Where::Window(_)) => {
+            text("lumen-dock-moved-to-window", "moved to a new window")
+        }
+        (Where::Window(_), Where::Dock(_)) => text("lumen-dock-docked-back", "docked back"),
+        (Where::Dock(_), Where::Dock(_)) => {
+            let beside = core
+                .ws
+                .find(panel)
+                .and_then(|loc| core.ws.stack(&loc.stack))
+                .and_then(|s| {
+                    s.panels
+                        .iter()
+                        .filter(|p| p.as_str() != panel)
+                        .find(|p| core.panels.get(*p).is_some_and(|r| r.entity.is_some()))
+                        .and_then(|p| title(p))
+                });
+            match beside {
+                Some(other) => format!(
+                    "{} {other}",
+                    text("lumen-dock-moved-beside", "moved beside")
+                ),
+                None => text("lumen-dock-moved", "moved"),
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("{name} {said}"))
+}
+
 /// A window the platform moved or resized, or the app changed.
 type WindowMoved = Or<(Changed<WindowRuntime>, Changed<Window>)>;
 
@@ -711,8 +828,7 @@ fn decorate_tabs(
         return;
     }
     let core = shared.lock();
-    let close = lumen_module::lumen_core::i18n::try_translate("lumen-dock-close")
-        .unwrap_or_else(|| "Close".to_string());
+    let close = text("lumen-dock-close", "Close");
     for (button, b) in &new {
         let Ok(tab) = tabs.get(b.tab) else { continue };
         let Some(rec) = core.panels.get(&tab.panel) else {
@@ -723,7 +839,11 @@ fn decorate_tabs(
         let closable = rec.attrs.closable;
         let label = format!("{close} {}", rec.attrs.title);
         let panel = tab.panel.clone();
+        let icon = rec.attrs.icon.clone();
         commands.queue(move |world: &mut World| {
+            if let Some(src) = icon {
+                set_tab_icon(world, button, Some(&src));
+            }
             if let Ok(mut e) = world.get_entity_mut(button) {
                 let mut cl = e.take::<LumenClasses>().unwrap_or_default();
                 for c in &classes {
@@ -761,3 +881,174 @@ fn decorate_tabs(
 /// On a strip button that shows one of the dock's tabs.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct DockTabButton;
+
+/// On the image a tab shows its panel's `icon` in.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct DockTabIcon;
+
+/// Show `src` before the title on the strip button `button`, or take the
+/// icon away when `src` is `None`.
+fn set_tab_icon(world: &mut World, button: Entity, src: Option<&str>) {
+    if world.get_entity(button).is_err() {
+        return;
+    }
+    let existing = world
+        .get::<bevy_ecs::hierarchy::Children>(button)
+        .and_then(|kids| kids.iter().find(|&k| world.get::<DockTabIcon>(k).is_some()));
+    match (existing, src) {
+        (Some(icon), None) => {
+            world.entity_mut(icon).despawn();
+        }
+        (Some(icon), Some(src)) => {
+            lumen_module::lumen_scene::spawn::set_image_source(
+                &mut world.entity_mut(icon),
+                Some(src),
+            );
+        }
+        (None, Some(src)) => {
+            let el = Element {
+                tag: "image".into(),
+                attrs: Box::new(Attributes {
+                    classes: vec!["dock-tab-icon".into()],
+                    src: Some(src.to_string()),
+                    ..Attributes::default()
+                }),
+                ..Element::default()
+            };
+            let icon = spawn_subtree(world, &el, Some(button), Placeholders::Resolved);
+            world.entity_mut(icon).insert((
+                DockChrome,
+                DockTabIcon,
+                lumen_module::lumen_core::components::DomHidden,
+                StyleDirty,
+            ));
+            world.entity_mut(button).insert_children(0, &[icon]);
+        }
+        (None, None) => {}
+    }
+}
+
+/// The strip button showing `panel`'s tab, if it has one.
+fn button_of(world: &mut World, panel: &str) -> Option<Entity> {
+    let tab = world.resource::<Built>().tabs.get(panel).copied()?;
+    let mut q = world.try_query::<(Entity, &TabStripButton)>()?;
+    q.iter(world).find(|(_, b)| b.tab == tab).map(|(e, _)| e)
+}
+
+/// Open the tab menu for each context menu request on a dock's tab.
+fn tab_menu_gate(mut asks: MessageReader<ContextMenuEvent>, mut commands: Commands) {
+    let asks: Vec<(Entity, glam::Vec2)> = asks.read().map(|a| (a.entity, a.position)).collect();
+    commands.queue(move |world: &mut World| {
+        for (e, at) in asks {
+            if let Some(panel) = crate::menu::tab_panel(world, e) {
+                crate::menu::open(world, panel, at);
+            }
+        }
+    });
+}
+
+/// Read a panel's attributes again when a script changed them: its tab
+/// follows its `title` and `icon`, its window its `window-title` and
+/// `bind-window-title`, and the next placement its `place` and `dockable`.
+fn follow_panel_attrs(
+    shared: Res<Shared>,
+    changed: Query<(&DockPanel, &LumenAttributes), Changed<LumenAttributes>>,
+    mut commands: Commands,
+) {
+    let mut core = shared.lock();
+    for (panel, attrs) in &changed {
+        let Some(rec) = core.panels.get_mut(&panel.id) else {
+            continue;
+        };
+        let next = PanelAttrs::read(Some(attrs), &panel.id);
+        let info = panel_info(Some(attrs), rec.info.dock.clone());
+        if next == rec.attrs && info == rec.info {
+            continue;
+        }
+        let retitled = next.title != rec.attrs.title;
+        let icon = (next.icon != rec.attrs.icon).then(|| next.icon.clone());
+        let signal = (next.window_title_signal != rec.attrs.window_title_signal)
+            .then(|| next.window_title_signal.clone());
+        let close = (retitled && next.closable)
+            .then(|| format!("{} {}", text("lumen-dock-close", "Close"), next.title));
+        rec.attrs = next;
+        rec.info = info;
+        if signal.is_some() {
+            rec.bound_title = None;
+        }
+        core.dirty = true;
+        let id = panel.id.clone();
+        commands.queue(move |world: &mut World| {
+            if let Some(signal) = signal {
+                let value = signal.as_deref().and_then(|name| {
+                    world
+                        .resource::<PropertyStore>()
+                        .get_global_str(name)
+                        .map(|v| v.to_string())
+                });
+                if let Some(name) = signal {
+                    world.resource_mut::<TitleSignals>().0.insert(name);
+                }
+                let shared = world.resource::<Shared>().clone();
+                if let Some(rec) = shared.lock().panels.get_mut(&id) {
+                    rec.bound_title = value;
+                }
+            }
+            let Some(button) = button_of(world, &id) else {
+                return;
+            };
+            if let Some(icon) = icon {
+                set_tab_icon(world, button, icon.as_deref());
+            }
+            if let Some(label) = close {
+                let mut q = world.query::<(Entity, &DockCloseButton)>();
+                let buttons: Vec<Entity> = q
+                    .iter(world)
+                    .filter(|(_, b)| b.panel == id)
+                    .map(|(e, _)| e)
+                    .collect();
+                for b in buttons {
+                    world.entity_mut(b).insert(A11yLabel(label.clone()));
+                }
+            }
+        });
+    }
+}
+
+/// A panel's window title follows the signal its `bind-window-title` names.
+fn follow_title_signals(
+    shared: Res<Shared>,
+    store: Res<PropertyStore>,
+    signals: Res<TitleSignals>,
+) {
+    let names: Vec<String> = store
+        .observe_dirty()
+        .iter()
+        .filter_map(|k| match k {
+            lumen_module::lumen_core::property_store::PropertyKey::Global(name) => {
+                Some(name.to_string())
+            }
+            _ => None,
+        })
+        .filter(|n| signals.0.contains(n))
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    let mut core = shared.lock();
+    let mut changed = false;
+    for name in names {
+        let value = store.get_global_str(&name).map(|v| v.to_string());
+        for rec in core.panels.values_mut() {
+            if rec.attrs.window_title_signal.as_deref() == Some(name.as_str())
+                && rec.bound_title != value
+            {
+                rec.bound_title = value.clone();
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        core.dirty = true;
+    }
+}

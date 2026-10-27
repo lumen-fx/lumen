@@ -107,6 +107,19 @@ window's close button docks it back where it came from. With
 `window-close = "hide"` in the module's config, closing the window hides its
 panels instead.
 
+The user does the same from a tab's menu, opened with a right click on the
+tab or the Menu key or Shift+F10 when the tab has focus: Move to new window,
+Move group to new window, Dock back, Maximize, and Close, whichever fit where
+the panel is. A screen reader hears each move ("Inspector moved to a new
+window"). The menu's words are the module's messages, so the app's own
+catalogue translates them; the [tag reference](../reference/tags.md#dock-and-its-panels)
+lists their ids.
+
+A document panel's window can carry the name of what it shows:
+`bind-window-title="doc.name"` makes the window's title follow that signal,
+and a panel's `title` and `icon` attributes, changed from a script, change
+its tab.
+
 A panel written outside any `<dock>` is a window the app opens by showing it.
 Its window's properties are attributes of the panel:
 
@@ -155,6 +168,7 @@ Every arrangement has a keyboard path:
 | Shift+Space on a tab | Maximize its panel to fill the dock, or give the dock its layout back. |
 | Escape | Give a maximized dock its layout back. |
 | Delete on a tab | Close its panel. |
+| Menu key, Shift+F10 on a tab | Open its tab menu: move the panel to a new window, dock it back, maximize it, close it. |
 
 The module's `keys` config rebinds any of them, or turns them off.
 
@@ -219,7 +233,7 @@ them never collide.
 The dock's look is CSS: tab height and padding, the strip, the stack border
 and background. Set the `--lumen-dock-*` tokens in your stylesheet or skin,
 or style the classes the dock uses (`dock-stack`, `dock-tab`,
-`dock-tab-close`, `dock-split`, `dock-window`, and `center`, `collapsed`,
+`dock-tab-icon`, `dock-tab-close`, `dock-split`, `dock-window`, and `center`, `collapsed`,
 `single`, `maximized` on a stack). A window of panels carries `dock-window`
 and `dock-window-<kind>`, so `.dock-window` styles every pop-out.
 

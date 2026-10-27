@@ -57,6 +57,10 @@ pub struct PanelAttrs {
     pub title: String,
     /// The OS title of its own window.
     pub window_title: Option<String>,
+    /// The signal its own window's title follows (`bind-window-title`).
+    pub window_title_signal: Option<String>,
+    /// The image its tab shows before the title.
+    pub icon: Option<String>,
     /// The OS window type of its own window.
     pub window_kind: WindowKind,
     /// Whose input its window blocks.
@@ -82,6 +86,8 @@ impl Default for PanelAttrs {
         Self {
             title: String::new(),
             window_title: None,
+            window_title_signal: None,
+            icon: None,
             window_kind: WindowKind::Normal,
             modal: Modal::None,
             window_size: None,
@@ -129,6 +135,8 @@ impl PanelAttrs {
         Self {
             title: attr(attrs, "title").unwrap_or(id).to_string(),
             window_title: attr(attrs, "window-title").map(str::to_string),
+            window_title_signal: attr(attrs, "bind-window-title").map(str::to_string),
+            icon: attr(attrs, "icon").map(str::to_string),
             window_kind: match attr(attrs, "window-kind") {
                 Some("dialog") => WindowKind::Dialog,
                 Some("tool") => WindowKind::Tool,
@@ -179,6 +187,19 @@ pub struct PanelRec {
     pub attrs: PanelAttrs,
     /// The element it was declared under: a free panel's window sits there.
     pub declared_in: Option<Entity>,
+    /// The value of the signal its window title is bound to, once it has
+    /// one.
+    pub bound_title: Option<String>,
+}
+
+impl PanelRec {
+    /// The OS title of its own window: the bound signal's value, else its
+    /// `window-title`, else its `title`.
+    pub fn os_title(&self) -> &str {
+        self.bound_title
+            .as_deref()
+            .unwrap_or_else(|| self.attrs.os_title())
+    }
 }
 
 /// One `<dock>` element of the page.
@@ -346,12 +367,26 @@ mod tests {
             ("window-kind", "tool"),
             ("modal", "app"),
             ("window-title", "T"),
+            ("bind-window-title", "doc.name"),
+            ("icon", "icons/t.svg"),
         ]);
         let p = PanelAttrs::read(Some(&tool), "t");
         assert_eq!(
             (p.window_kind, p.modal, p.os_title()),
             (WindowKind::Tool, Modal::App, "T")
         );
+        assert_eq!(p.window_title_signal.as_deref(), Some("doc.name"));
+        assert_eq!(p.icon.as_deref(), Some("icons/t.svg"));
+        let mut rec = PanelRec {
+            entity: None,
+            info: panel_info(None, None),
+            attrs: p,
+            declared_in: None,
+            bound_title: None,
+        };
+        assert_eq!(rec.os_title(), "T");
+        rec.bound_title = Some("draft.txt".into());
+        assert_eq!(rec.os_title(), "draft.txt");
         assert_eq!(pair("10, 20px"), Some([10.0, 20.0]));
         assert_eq!(pair("10"), None);
         assert_eq!(pair("1 2 3"), None);
