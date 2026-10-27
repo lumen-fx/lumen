@@ -1731,3 +1731,475 @@ fn the_default_look_needs_no_skin() {
     assert!(has_class(app, buttons[0], "active"));
     assert!(!has_class(app, buttons[1], "active"));
 }
+
+/// What the pointer does in [`pointer`].
+#[derive(Clone, Copy, PartialEq)]
+enum Ptr {
+    Down,
+    Move,
+    Up,
+}
+
+/// Drive the mouse as a window backend reports it: `at` in the logical
+/// pixels of `window` (the primary window when `None`), then one tick.
+fn pointer(app: &mut App, window: Option<Entity>, at: glam::Vec2, what: Ptr) {
+    use lumen_core::input::{
+        PointerButton, PointerData, PointerMoved, PointerPressed, PointerReleased, PointerState,
+    };
+    {
+        let mut state = app.world.resource_mut::<PointerState>();
+        state.window = window;
+        state.position = Some(at);
+        match what {
+            Ptr::Down => state.primary_down = true,
+            Ptr::Up => state.primary_down = false,
+            Ptr::Move => {}
+        }
+    }
+    let held = if what == Ptr::Up { 0 } else { 1 };
+    app.world.write_message(PointerMoved {
+        position: at,
+        local: None,
+        pointer: PointerData::mouse(held).stamped(),
+    });
+    match what {
+        Ptr::Down => {
+            app.world.write_message(PointerPressed {
+                position: at,
+                button: PointerButton::Primary,
+                local: None,
+                pointer: PointerData::mouse(1).stamped(),
+            });
+        }
+        Ptr::Up => {
+            app.world.write_message(PointerReleased {
+                position: at,
+                button: PointerButton::Primary,
+                local: None,
+                pointer: PointerData::mouse(0).stamped(),
+            });
+        }
+        Ptr::Move => {}
+    }
+    ticks(app, 1);
+}
+
+/// The middle of `e` on screen.
+fn middle(app: &App, e: Entity) -> glam::Vec2 {
+    let t = app
+        .world
+        .get::<lumen_core::components::Transform>(e)
+        .expect("laid out");
+    t.absolute + t.size / 2.0
+}
+
+/// The rectangle of `e`: its corner and size.
+fn rect_of(app: &App, e: Entity) -> (glam::Vec2, glam::Vec2) {
+    let t = app
+        .world
+        .get::<lumen_core::components::Transform>(e)
+        .expect("laid out");
+    (t.absolute, t.size)
+}
+
+/// Press `from` and drag through `path` in `window`, without releasing.
+fn drag_through(app: &mut App, window: Option<Entity>, from: glam::Vec2, path: &[glam::Vec2]) {
+    pointer(app, window, from, Ptr::Down);
+    // Past the threshold, then each stop.
+    pointer(app, window, from + glam::Vec2::new(8.0, 0.0), Ptr::Move);
+    for &p in path {
+        pointer(app, window, p, Ptr::Move);
+    }
+}
+
+/// The panels of the stack holding `panel`, in tab order.
+fn stack_panels(app: &mut App, panel: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    call(app, |d| {
+        let ws = d.save();
+        let loc = ws.find(panel).expect("shown");
+        out = ws.stack(&loc.stack).unwrap().panels.clone();
+    });
+    out
+}
+
+/// The drop preview, if one shows: its zone class and its rectangle.
+fn preview(app: &mut App) -> Option<(String, (glam::Vec2, glam::Vec2))> {
+    let mut q = app.world.query::<(
+        Entity,
+        &lumen_core::components::LumenClasses,
+        &lumen_core::components::Transform,
+    )>();
+    let found: Vec<(Entity, Vec<String>, lumen_core::components::Transform)> = q
+        .iter(&app.world)
+        .filter(|(_, c, _)| c.has("dock-drop-preview"))
+        .map(|(e, c, t)| (e, c.0.iter().map(|s| s.to_string()).collect(), t.clone()))
+        .collect();
+    let (e, classes, t) = found.into_iter().next()?;
+    let hidden = app
+        .world
+        .get::<lumen_core::components::Style>(e)
+        .is_some_and(|s| s.display == lumen_core::components::Display::None);
+    if hidden {
+        return None;
+    }
+    let zone = classes
+        .into_iter()
+        .find(|c| c.starts_with("dock-drop-") && c != "dock-drop-preview")?;
+    Some((zone, (t.absolute, t.size)))
+}
+
+/// Dragging tabs within the window: reorder in a strip, onto another stack,
+/// beside one on an edge, along the dock's own edge; the ghost and preview
+/// show while it runs, Escape puts everything back, and a screen reader
+/// hears where a panel went.
+#[test]
+fn tabs_drag_within_the_window() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("drag_in", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    hear(app);
+    ticks(app, 2);
+    assert_eq!(stack_panels(app, "scene"), vec!["scene", "game"]);
+    // Game before scene, in the strip.
+    let game = tab_button(app, "game");
+    let scene = tab_button(app, "scene");
+    let (so, ss) = rect_of(app, scene);
+    let target = glam::Vec2::new(so.x + 3.0, so.y + ss.y / 2.0);
+    drag_through(app, None, middle(app, game), &[target]);
+    assert!(app.world.resource::<lumen_dock::DockDrag>().active());
+    let (zone, _) = preview(app).expect("the preview shows");
+    assert_eq!(zone, "dock-drop-tab");
+    let ghost = {
+        let mut q = app
+            .world
+            .query::<(Entity, &lumen_core::components::LumenClasses)>();
+        q.iter(&app.world)
+            .find(|(_, c)| c.has("dock-drag-ghost"))
+            .map(|(e, _)| e)
+    };
+    assert!(ghost.is_some(), "a ghost follows the pointer");
+    let dock = entity(app, "editor");
+    assert!(
+        app.world
+            .get::<lumen_core::components::LumenClasses>(dock)
+            .unwrap()
+            .has("dock-dragging")
+    );
+    pointer(app, None, target, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(stack_panels(app, "scene"), vec!["game", "scene"]);
+    assert!(!app.world.resource::<lumen_dock::DockDrag>().active());
+    assert!(preview(app).is_none(), "the overlays go with the drag");
+
+    // Files onto the middle of the center stack: a tab at its end.
+    let files = tab_button(app, "files");
+    let scene_panel = entity(app, "scene");
+    let center = parent(app, parent(app, scene_panel).unwrap()).unwrap();
+    let mid = middle(app, center);
+    drag_through(app, None, middle(app, files), &[mid]);
+    assert_eq!(
+        preview(app).map(|p| p.0).as_deref(),
+        Some("dock-drop-center")
+    );
+    pointer(app, None, mid, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(stack_panels(app, "scene"), vec!["game", "scene", "files"]);
+    ticks(app, 3);
+    assert_eq!(signal(app, "moved").as_deref(), Some("dock"));
+
+    // Log onto the left edge of the center stack: a stack of its own.
+    let log = tab_button(app, "log");
+    let scene_panel = entity(app, "scene");
+    let center = parent(app, parent(app, scene_panel).unwrap()).unwrap();
+    let (co, cs) = rect_of(app, center);
+    let edge = glam::Vec2::new(co.x + 30.0, co.y + cs.y / 2.0);
+    drag_through(app, None, middle(app, log), &[edge]);
+    let (zone, (po, ps)) = preview(app).expect("the preview shows");
+    assert_eq!(zone, "dock-drop-left");
+    assert!(
+        (ps.x - cs.x / 2.0).abs() < 2.0 && (po.x - co.x).abs() < 2.0,
+        "the preview fills the half the panel takes"
+    );
+    pointer(app, None, edge, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(stack_panels(app, "log"), vec!["log"]);
+    let heard = announced(app);
+    assert!(
+        heard.iter().any(|t| t.starts_with("Log moved")),
+        "a screen reader hears where it went: {heard:?}"
+    );
+
+    // Escape mid-drag puts it all back, and the drag ends.
+    let before = {
+        let mut out = None;
+        call(app, |d| out = Some(d.save()));
+        out.unwrap()
+    };
+    let game = tab_button(app, "game");
+    let dock_rect = rect_of(app, dock);
+    let root = glam::Vec2::new(dock_rect.0.x + 4.0, dock_rect.0.y + dock_rect.1.y / 2.0);
+    drag_through(app, None, middle(app, game), &[root]);
+    assert_eq!(
+        preview(app).map(|p| p.0).as_deref(),
+        Some("dock-drop-root-left")
+    );
+    press(app, "Escape", false, false);
+    assert!(!app.world.resource::<lumen_dock::DockDrag>().active());
+    assert!(announced(app).contains(&"Move cancelled".to_string()));
+    pointer(app, None, root, Ptr::Up);
+    ticks(app, 2);
+    let after = {
+        let mut out = None;
+        call(app, |d| out = Some(d.save()));
+        out.unwrap()
+    };
+    // Pressing a tab shows it, as in a browser; nothing else changed.
+    let shape = |ws: &lumen_dock::Layout| {
+        ws.docks["editor"]
+            .root
+            .stacks()
+            .iter()
+            .map(|s| (s.id.clone(), s.panels.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(shape(&after), shape(&before), "nothing moved");
+
+    // Along the dock's own edge, for real this time.
+    let game = tab_button(app, "game");
+    drag_through(app, None, middle(app, game), &[root]);
+    pointer(app, None, root, Ptr::Up);
+    ticks(app, 2);
+    call(app, |d| {
+        let ws = d.save();
+        let root = &ws.docks["editor"].root;
+        let lumen_dock::model::Node::Split(split) = root else {
+            panic!("a split at the root")
+        };
+        assert_eq!(split.axis, lumen_dock::model::Axis::Row);
+        assert_eq!(
+            split.children[0].node.panels(),
+            vec!["game"],
+            "game docks along the left edge of the whole dock"
+        );
+    });
+    // A press that never passes the threshold is a click, not a drag.
+    let scene = tab_button(app, "scene");
+    let at = middle(app, scene);
+    pointer(app, None, at, Ptr::Down);
+    pointer(app, None, at + glam::Vec2::new(1.0, 0.0), Ptr::Move);
+    assert!(!app.world.resource::<lumen_dock::DockDrag>().active());
+    pointer(app, None, at, Ptr::Up);
+}
+
+/// The window `panel` shows in, as an entity.
+fn window_holding(app: &mut App, panel: &str) -> Entity {
+    let e = entity(app, panel);
+    app.world
+        .resource::<WindowPartitions>()
+        .window_of(e)
+        .expect("a window")
+}
+
+/// Tearing a tab off: past the window's edge it pops out into a window that
+/// follows the pointer and stays where it is released; dragging that
+/// window by its tab over the main window shows the preview there, hides
+/// the window being dragged, and docks it on release. A tab dragged out of
+/// a window of two tears off on its own.
+#[test]
+fn a_tab_tears_off_and_drags_back() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("tearoff", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    ticks(app, 2);
+    let main = primary(app);
+    let size = app
+        .world
+        .get::<lumen_core::window::WindowViewport>(main)
+        .unwrap()
+        .size;
+    let files = tab_button(app, "files");
+    let start = middle(app, files);
+    let grab = start - rect_of(app, files).0;
+    // Out past the right edge of the window: it tears off.
+    let out = glam::Vec2::new(size.x + 200.0, 300.0);
+    drag_through(
+        app,
+        None,
+        start,
+        &[glam::Vec2::new(size.x + 5.0, 300.0), out],
+    );
+    ticks(app, 1);
+    let popped = window_holding(app, "files");
+    assert_ne!(popped, main, "the tab tore off into a window of its own");
+    // It follows the pointer, held where the tab was grabbed.
+    let out2 = out + glam::Vec2::new(40.0, 30.0);
+    pointer(app, None, out2, Ptr::Move);
+    let at = app
+        .world
+        .get::<lumen_core::window::WindowRuntime>(popped)
+        .unwrap()
+        .position
+        .expect("the desktop positions windows");
+    let want = (out2 - grab).round().as_ivec2();
+    assert!(
+        (at - want).abs().max_element() <= 1,
+        "it trails the pointer: {at} vs {want}"
+    );
+    pointer(app, None, out2, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(window_holding(app, "files"), popped, "released, it stays");
+    assert!(app.world.get::<Window>(popped).unwrap().visible);
+
+    // Drag it back by its tab: over the main window's center stack the
+    // preview shows there and the dragged window hides.
+    let tab = tab_button(app, "files");
+    let from = middle(app, tab);
+    let scene_panel = entity(app, "scene");
+    let center = parent(app, parent(app, scene_panel).unwrap()).unwrap();
+    let target_main = middle(app, center);
+    drag_through(
+        app,
+        Some(popped),
+        from,
+        &[from + glam::Vec2::new(10.0, 0.0)],
+    );
+    // The window follows the pointer, so the platform reports each move in
+    // the window's coordinates where it is now: the main window's point,
+    // through the desktop.
+    let pos = app
+        .world
+        .get::<lumen_core::window::WindowRuntime>(popped)
+        .unwrap()
+        .position
+        .unwrap()
+        .as_vec2();
+    let target = target_main - pos;
+    pointer(app, Some(popped), target, Ptr::Move);
+    let (zone, _) = preview(app).expect("the main window previews the drop");
+    assert_eq!(zone, "dock-drop-center");
+    assert!(
+        !app.world.get::<Window>(popped).unwrap().visible,
+        "the window being dragged gets out of the way"
+    );
+    let pos = app
+        .world
+        .get::<lumen_core::window::WindowRuntime>(popped)
+        .unwrap()
+        .position
+        .unwrap()
+        .as_vec2();
+    pointer(app, Some(popped), target_main - pos, Ptr::Up);
+    ticks(app, 3);
+    assert_eq!(window_holding(app, "files"), main, "it docked");
+    assert_eq!(stack_panels(app, "files"), vec!["scene", "game", "files"]);
+    assert!(window_entity(app).is_empty(), "the emptied window went");
+
+    // A window of two: dragging one tab out tears that one off alone.
+    call(app, |d| d.detach_group("scene").unwrap());
+    ticks(app, 3);
+    let group = window_holding(app, "scene");
+    assert_ne!(group, main);
+    let game = tab_button(app, "game");
+    let from = middle(app, game);
+    let gsize = app
+        .world
+        .get::<lumen_core::window::WindowViewport>(group)
+        .unwrap()
+        .size;
+    let off = glam::Vec2::new(gsize.x + 300.0, gsize.y + 300.0);
+    drag_through(app, Some(group), from, &[off]);
+    ticks(app, 1);
+    let alone = window_holding(app, "game");
+    assert_ne!(alone, group);
+    assert_ne!(alone, main);
+    assert_eq!(window_holding(app, "scene"), group, "the rest stays");
+    // Escape now puts it back in the window it came from.
+    press(app, "Escape", false, false);
+    ticks(app, 2);
+    assert_eq!(window_holding(app, "game"), group);
+    pointer(app, Some(group), off, Ptr::Up);
+    ticks(app, 2);
+}
+
+/// As on Wayland without the toplevel-drag protocol: no window follows the
+/// pointer; a tab released over no window opens in a window of its own
+/// where the desktop puts it, and one released over a window docks there.
+#[test]
+fn without_a_following_window_a_tab_opens_where_it_drops() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("drop_to_open", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    app.world
+        .insert_resource(lumen_core::window_backend::HeadlessDesktop {
+            positioning: false,
+            toplevel_drag: false,
+        });
+    ticks(app, 2);
+    let main = primary(app);
+    let size = app
+        .world
+        .get::<lumen_core::window::WindowViewport>(main)
+        .unwrap()
+        .size;
+    let files = tab_button(app, "files");
+    let out = glam::Vec2::new(size.x + 200.0, 300.0);
+    drag_through(app, None, middle(app, files), &[out]);
+    ticks(app, 1);
+    assert_eq!(
+        window_holding(app, "files"),
+        main,
+        "nothing pops out while the drag runs"
+    );
+    assert!(window_entity(app).is_empty());
+    pointer(app, None, out, Ptr::Up);
+    ticks(app, 3);
+    let popped = window_holding(app, "files");
+    assert_ne!(popped, main, "released over no window, it opens in one");
+
+    // Dragged back over the main window, it docks.
+    let tab = tab_button(app, "files");
+    let from = middle(app, tab);
+    let log = tab_button(app, "log");
+    let log_stack = parent(app, parent(app, log).unwrap()).unwrap();
+    let target_main = middle(app, log_stack);
+    // The stand-in cascades windows from the corner; the pop-out is the
+    // newest, so a point it covers is over it. Find the main-window point
+    // through the pop-out's place on the stand-in's desktop: the seam does
+    // that itself, so a move reported in main-window coordinates works.
+    drag_through(app, Some(popped), from, &[]);
+    pointer(app, None, target_main, Ptr::Move);
+    pointer(app, None, target_main, Ptr::Up);
+    ticks(app, 3);
+    assert_eq!(window_holding(app, "files"), main);
+    assert!(stack_panels(app, "log").contains(&"files".to_string()));
+}
+
+/// With no backend carrying drags across windows, a tab still drags within
+/// its window, from the plain pointer messages.
+#[test]
+fn without_the_seam_tabs_drag_within_the_window() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("no_seam", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    app.world
+        .remove_resource::<lumen_core::surface_drag::SurfaceDragSupport>();
+    ticks(app, 2);
+    let game = tab_button(app, "game");
+    let scene = tab_button(app, "scene");
+    let (so, ss) = rect_of(app, scene);
+    let target = glam::Vec2::new(so.x + 3.0, so.y + ss.y / 2.0);
+    drag_through(app, None, middle(app, game), &[target]);
+    assert_eq!(preview(app).map(|p| p.0).as_deref(), Some("dock-drop-tab"));
+    pointer(app, None, target, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(stack_panels(app, "scene"), vec!["game", "scene"]);
+    // Off the window there is nowhere to land: nothing moves.
+    let files = tab_button(app, "files");
+    let out = glam::Vec2::new(-300.0, 20.0);
+    drag_through(app, None, middle(app, files), &[out]);
+    pointer(app, None, out, Ptr::Up);
+    ticks(app, 2);
+    assert_eq!(window_holding(app, "files"), primary(app));
+    assert!(window_entity(app).is_empty());
+}

@@ -13,11 +13,12 @@ use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, LumenAttributes, LumenClasses, StyleDirty,
 };
 use lumen_module::lumen_core::input::{
-    ClickEvent, ContextMenuEvent, DoubleClickEvent, FocusTracker, KeyPressed, PointerButton,
-    WindowFocused,
+    ClickEvent, ContextMenuEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
+    FocusTracker, Key, KeyPressed, NamedKey, PointerButton, WindowFocused,
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
+use lumen_module::lumen_core::surface_drag::{SurfaceDragEvent, SurfaceDragRequest};
 use lumen_module::lumen_core::window::{PrimaryWindow, Window, WindowClosing, WindowRuntime};
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element};
 use lumen_module::lumen_primitives::{ActivePopupNav, SplitResized, TabStripButton, Tabs, TabsSet};
@@ -173,6 +174,7 @@ impl Plugin for DockPlugin {
         app.world.init_resource::<TabMenu>();
         app.world.init_resource::<TitleSignals>();
         app.world.init_resource::<A11yAnnouncementQueue>();
+        app.world.init_resource::<crate::drag::DockDrag>();
         app.add_ua_stylesheet(NAME, UA_CSS);
         app.add_default_messages("en-US", MESSAGES_EN);
         // Registered here, ahead of the runtime's own plugins, for an app
@@ -187,6 +189,11 @@ impl Plugin for DockPlugin {
         message::<ContextMenuEvent>(&mut app.world);
         message::<SplitResized>(&mut app.world);
         message::<lumen_module::lumen_core::input::KeyPressed>(&mut app.world);
+        message::<DragStartEvent>(&mut app.world);
+        message::<DragMoveEvent>(&mut app.world);
+        message::<DragEndEvent>(&mut app.world);
+        message::<SurfaceDragEvent>(&mut app.world);
+        message::<SurfaceDragRequest>(&mut app.world);
         install_observers(&mut app.world);
         match crate::api::script_fns(&shared) {
             Ok(fns) => {
@@ -221,6 +228,7 @@ impl Plugin for DockPlugin {
             user_input
                 .pipe(keys_gate)
                 .pipe(tab_menu_gate)
+                .pipe(drag_gate)
                 .pipe(follow_panel_attrs)
                 .pipe(follow_title_signals)
                 .pipe(realize_gate)
@@ -264,6 +272,12 @@ struct InputDue<'w, 's> {
     delivered: MessageReader<'w, 's, CustomEventDelivered>,
     keys: MessageReader<'w, 's, KeyPressed>,
     menus: MessageReader<'w, 's, ContextMenuEvent>,
+    drags: (
+        MessageReader<'w, 's, DragStartEvent>,
+        MessageReader<'w, 's, DragMoveEvent>,
+        MessageReader<'w, 's, DragEndEvent>,
+        MessageReader<'w, 's, SurfaceDragEvent>,
+    ),
     picked: Query<'w, 's, (), (With<DockStack>, Changed<Tabs>)>,
     retitled: Query<'w, 's, (), (With<DockPanel>, Changed<LumenAttributes>)>,
     titles: Res<'w, TitleSignals>,
@@ -284,6 +298,10 @@ fn input_due(mut due: InputDue) -> bool {
         due.delivered.read().count(),
         due.keys.read().count(),
         due.menus.read().count(),
+        due.drags.0.read().count(),
+        due.drags.1.read().count(),
+        due.drags.2.read().count(),
+        due.drags.3.read().count(),
     ];
     messages.iter().any(|&n| n > 0)
         || !due.picked.is_empty()
@@ -354,6 +372,48 @@ fn keys_gate(
     let pressed: Vec<_> = keys.read().map(|k| (k.key.clone(), k.modifiers)).collect();
     if !pressed.is_empty() {
         commands.queue(move |world: &mut World| crate::keys::dock_keys(world, pressed));
+    }
+}
+
+/// Queue what the pointer did to a drag this tick: a drag starting on a
+/// tab, moves and the release (through the seam where the window backend
+/// carries one), and Escape.
+fn drag_gate(
+    _: In<()>,
+    (mut starts, mut moves, mut ends, mut seam): (
+        MessageReader<DragStartEvent>,
+        MessageReader<DragMoveEvent>,
+        MessageReader<DragEndEvent>,
+        MessageReader<SurfaceDragEvent>,
+    ),
+    mut keys: MessageReader<KeyPressed>,
+    drag: Res<crate::drag::DockDrag>,
+    mut commands: Commands,
+) {
+    use crate::drag::DragInput;
+    let mut inputs: Vec<DragInput> = starts
+        .read()
+        .map(|s| DragInput::Start {
+            entity: s.entity,
+            start: s.start,
+        })
+        .collect();
+    let started = !inputs.is_empty();
+    if drag.active() || started {
+        inputs.extend(moves.read().map(|m| DragInput::Moved(m.position)));
+        inputs.extend(ends.read().map(|e| DragInput::Ended(e.position)));
+        inputs.extend(seam.read().map(|e| DragInput::Seam(*e)));
+        if keys.read().any(|k| k.key == Key::Named(NamedKey::Escape)) {
+            inputs.push(DragInput::Escape);
+        }
+    } else {
+        moves.clear();
+        ends.clear();
+        seam.clear();
+        keys.clear();
+    }
+    if !inputs.is_empty() {
+        commands.queue(move |world: &mut World| crate::drag::drag_step(world, inputs));
     }
 }
 

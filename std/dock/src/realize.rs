@@ -78,11 +78,11 @@ pub struct Built {
     pub max_hidden: HashSet<Entity>,
 }
 
-fn alive(world: &World, e: Entity) -> bool {
+pub(crate) fn alive(world: &World, e: Entity) -> bool {
     world.get_entity(e).is_ok()
 }
 
-fn children_of(world: &World, e: Entity) -> Vec<Entity> {
+pub(crate) fn children_of(world: &World, e: Entity) -> Vec<Entity> {
     world
         .get::<Children>(e)
         .map(|c| c.to_vec())
@@ -109,7 +109,7 @@ fn reorder(world: &mut World, parent: Entity, wanted: &[Entity]) {
 }
 
 /// Write an inline style property, restyling when it changed.
-fn set_inline(world: &mut World, e: Entity, prop: &str, value: Option<String>) {
+pub(crate) fn set_inline(world: &mut World, e: Entity, prop: &str, value: Option<String>) {
     let mut ent = world.entity_mut(e);
     let mut inline = ent.take::<InlineStyle>().unwrap_or_default();
     let changed = match &value {
@@ -131,7 +131,7 @@ fn set_inline(world: &mut World, e: Entity, prop: &str, value: Option<String>) {
 
 /// Keep `classes` on `e` as the classes under the module's control: every
 /// class in `managed` that is not wanted goes, every wanted one comes.
-fn set_classes(world: &mut World, e: Entity, wanted: &[&str], managed: &[&str]) {
+pub(crate) fn set_classes(world: &mut World, e: Entity, wanted: &[&str], managed: &[&str]) {
     let mut ent = world.entity_mut(e);
     let mut classes = ent.take::<LumenClasses>().unwrap_or_default();
     let before = classes.0.clone();
@@ -510,7 +510,7 @@ fn monitors(world: &World) -> Vec<lumen_dock_model::Monitor> {
         .unwrap_or_default()
 }
 
-fn primary(world: &mut World) -> Option<Entity> {
+pub(crate) fn primary(world: &mut World) -> Option<Entity> {
     world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .iter(world)
@@ -870,7 +870,12 @@ pub fn realize(world: &mut World) {
 }
 
 /// The store of `dock`, built on first use.
-fn store_of(world: &mut World, built: &mut Built, dock: Entity, dock_id: &str) -> Entity {
+pub(crate) fn store_of(
+    world: &mut World,
+    built: &mut Built,
+    dock: Entity,
+    dock_id: &str,
+) -> Entity {
     if let Some(&s) = built.stores.get(dock_id)
         && alive(world, s)
     {
