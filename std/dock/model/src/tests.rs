@@ -963,3 +963,315 @@ fn check_reports_each_broken_rule() {
     assert_eq!(w.stacks_of(&Container::Dock("editor".into())).len(), 4);
     assert!(w.stacks_of(&Container::Window("none".into())).is_empty());
 }
+
+fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+    Rect { x, y, w, h }
+}
+
+#[test]
+fn a_panel_floats_over_its_dock_and_docks_back() {
+    let mut w = editor();
+    let effects = w
+        .float_panel("game", "editor", rect(40.0, 30.0, 300.0, 200.0), &docked())
+        .unwrap();
+    assert!(effects.contains(&Effect::Moved {
+        panel: "game".into(),
+        from: Where::Dock("editor".into()),
+        to: Where::Float("editor".into()),
+    }));
+    w.check().unwrap();
+    let loc = w.find("game").unwrap();
+    let Container::Float { dock, float } = &loc.container else {
+        panic!("not floating: {loc:?}");
+    };
+    assert_eq!(dock, "editor");
+    let (d, f) = w.float(float).unwrap();
+    assert_eq!((d, f.rect), ("editor", rect(40.0, 30.0, 300.0, 200.0)));
+    assert_eq!(w.where_is("game").kind(), "float");
+    // F6 reaches the float after the dock's tree.
+    let stacks = w.stacks_of(&Container::Dock("editor".into()));
+    assert_eq!(stacks.last().unwrap().panels, vec!["game".to_string()]);
+    assert_eq!(w.stacks_of(&loc.container).len(), 1);
+    // Moved and raised.
+    let id = float.clone();
+    assert!(w.set_float_rect(&id, rect(1.0, 2.0, 3.0, 4.0)));
+    assert!(!w.set_float_rect("nope", rect(0.0, 0.0, 1.0, 1.0)));
+    assert!(!w.raise_float(&id));
+    w.float_panel("inspector", "editor", rect(0.0, 0.0, 10.0, 10.0), &docked())
+        .unwrap();
+    assert_eq!(w.docks["editor"].floats.len(), 2);
+    assert!(w.raise_float(&id));
+    assert_eq!(w.docks["editor"].floats.last().unwrap().id, id);
+    assert!(!w.raise_float("nope"));
+    // A tab joins the float; an edge splits it.
+    let float_stack = w.find("game").unwrap().stack;
+    w.move_to(
+        "assets",
+        &Target::Edge {
+            node: float_stack.clone(),
+            side: Side::Right,
+        },
+        &docked(),
+    )
+    .unwrap();
+    w.check().unwrap();
+    assert!(matches!(
+        w.find("assets").unwrap().container,
+        Container::Float { .. }
+    ));
+    // Docking back goes home.
+    let effects = w.attach("game", &docked()).unwrap();
+    assert!(effects.contains(&Effect::Moved {
+        panel: "game".into(),
+        from: Where::Float("editor".into()),
+        to: Where::Dock("editor".into()),
+    }));
+    let loc = w.find("game").unwrap();
+    assert_eq!((loc.stack.as_str(), loc.index), ("center", 1));
+    // Hidden from a float, a panel floats again where it was.
+    w.hide("inspector").unwrap();
+    assert!(
+        w.docks["editor"]
+            .floats
+            .iter()
+            .all(|f| !f.root.panels().iter().any(|p| *p == "inspector"))
+    );
+    w.show("inspector", &docked()).unwrap();
+    assert_eq!(w.where_is("inspector"), Where::Float("editor".into()));
+    w.check().unwrap();
+    // A float that empties goes.
+    w.attach("inspector", &docked()).unwrap();
+    w.attach("assets", &docked()).unwrap();
+    assert!(
+        w.docks["editor"].floats.is_empty(),
+        "{:#?}",
+        w.docks["editor"].floats
+    );
+    w.check().unwrap();
+    // Unknown docks are refused.
+    assert_eq!(
+        w.float_panel("game", "nowhere", rect(0.0, 0.0, 1.0, 1.0), &docked()),
+        Err(OpError::UnknownTarget("nowhere".into()))
+    );
+}
+
+#[test]
+fn a_float_group_moves_whole_and_pops_out() {
+    let mut w = editor();
+    w.float_panel("game", "editor", rect(0.0, 0.0, 100.0, 100.0), &docked())
+        .unwrap();
+    let stack = w.find("game").unwrap().stack;
+    w.move_to(
+        "assets",
+        &Target::Tab {
+            stack: stack.clone(),
+            index: 9,
+        },
+        &docked(),
+    )
+    .unwrap();
+    // Floating the whole float again only moves it.
+    let before = w.docks["editor"].floats.len();
+    let target = Target::NewFloat {
+        dock: "editor".into(),
+        rect: rect(5.0, 6.0, 100.0, 100.0),
+    };
+    assert!(
+        w.move_group(&stack, &target, &|_| docked())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(w.docks["editor"].floats.len(), before);
+    assert_eq!(
+        w.docks["editor"].floats[0].rect,
+        rect(5.0, 6.0, 100.0, 100.0)
+    );
+    // A dock stack floats as a group.
+    w.move_group("s3", &target, &|_| docked()).unwrap();
+    assert_eq!(w.docks["editor"].floats.len(), 2);
+    w.check().unwrap();
+    // A float's group pops out into a window, keeping its order.
+    let effects = w
+        .move_group(&stack, &Target::NewWindow(WindowPlace::default()), &|_| {
+            docked()
+        })
+        .unwrap();
+    assert!(effects.contains(&Effect::Moved {
+        panel: "game".into(),
+        from: Where::Float("editor".into()),
+        to: Where::Window("w1".into()),
+    }));
+    assert_eq!(w.windows[0].root.panels(), vec!["game", "assets"]);
+    w.check().unwrap();
+    // A floated panel saved and restored keeps its float.
+    let text = w.to_json();
+    assert!(text.contains("\"floats\""));
+    let back = Workspace::from_json(&text, 0).unwrap();
+    assert_eq!(back, w);
+}
+
+#[test]
+fn a_pinned_panel_slides_out_and_docks_back() {
+    let mut w = editor();
+    let effects = w.pin("inspector", Side::Bottom, &docked()).unwrap();
+    assert_eq!(
+        effects,
+        vec![
+            Effect::Hidden("inspector".into()),
+            Effect::Moved {
+                panel: "inspector".into(),
+                from: Where::Dock("editor".into()),
+                to: Where::Sidebar("editor".into()),
+            }
+        ]
+    );
+    w.check().unwrap();
+    assert!(!w.is_shown("inspector") && w.is_placed("inspector"));
+    assert!(!w.in_view("inspector"));
+    assert_eq!(w.where_is("inspector").kind(), "sidebar");
+    assert_eq!(
+        w.pinned_at("inspector"),
+        Some(("editor".into(), Side::Bottom))
+    );
+    assert_eq!(
+        w.docks["editor"].sidebars.bottom,
+        vec!["inspector".to_string()]
+    );
+    assert!(w.placed_panels().contains(&"inspector".to_string()));
+    // Pinning again to the same edge changes nothing; another edge moves it.
+    assert!(
+        w.pin("inspector", Side::Bottom, &docked())
+            .unwrap()
+            .is_empty()
+    );
+    w.pin("inspector", Side::Left, &docked()).unwrap();
+    assert_eq!(
+        w.docks["editor"].sidebars.left,
+        vec!["inspector".to_string()]
+    );
+    assert!(w.docks["editor"].sidebars.bottom.is_empty());
+    // Showing it slides it out; showing another slides the first back in.
+    assert_eq!(
+        w.show("inspector", &docked()).unwrap(),
+        vec![Effect::Shown("inspector".into())]
+    );
+    assert!(w.in_view("inspector"));
+    assert!(w.open_pinned("inspector").unwrap().is_empty());
+    w.pin("assets", Side::Left, &docked()).unwrap();
+    assert_eq!(
+        w.open_pinned("assets").unwrap(),
+        vec![
+            Effect::Hidden("inspector".into()),
+            Effect::Shown("assets".into())
+        ]
+    );
+    assert_eq!(
+        w.close_pinned("editor"),
+        vec![Effect::Hidden("assets".into())]
+    );
+    assert!(w.close_pinned("editor").is_empty());
+    w.check().unwrap();
+    // Saved and restored, it stays pinned; the slid-out one does not.
+    w.open_pinned("assets").unwrap();
+    let back = Workspace::from_json(&w.to_json(), 0).unwrap();
+    assert_eq!(
+        back.pinned_at("assets"),
+        Some(("editor".into(), Side::Left))
+    );
+    assert_eq!(back.docks["editor"].open, None);
+    // Hiding takes it off the edge; showing pins it there again, slid out.
+    let effects = w.hide("assets").unwrap();
+    assert!(effects.contains(&Effect::Hidden("assets".into())));
+    assert_eq!(w.where_is("assets"), Where::Hidden);
+    assert_eq!(w.homes["assets"].sidebar, Some(Side::Left));
+    w.show("assets", &docked()).unwrap();
+    assert_eq!(w.pinned_at("assets"), Some(("editor".into(), Side::Left)));
+    assert!(w.in_view("assets"));
+    w.check().unwrap();
+    // Docking back puts it where it was before it was pinned.
+    let effects = w.unpin("inspector", &docked()).unwrap();
+    assert!(effects.contains(&Effect::Moved {
+        panel: "inspector".into(),
+        from: Where::Sidebar("editor".into()),
+        to: Where::Dock("editor".into()),
+    }));
+    assert!(w.find("inspector").is_some());
+    assert_eq!(
+        w.unpin("inspector", &docked()),
+        Err(OpError::UnknownPanel("inspector".into()))
+    );
+    // Forgetting drops a pinned panel too.
+    w.forget("assets");
+    assert!(!w.is_placed("assets"));
+    w.check().unwrap();
+    // A panel that does not dock is not pinned.
+    let free = PanelInfo {
+        dockable: false,
+        ..docked()
+    };
+    assert_eq!(
+        w.pin("game", Side::Top, &free),
+        Err(OpError::NotDockable("game".into()))
+    );
+}
+
+#[test]
+fn pinned_panels_survive_layouts_and_restores() {
+    let mut w = editor();
+    let default = w.clone();
+    w.pin("inspector", Side::Right, &docked()).unwrap();
+    // A named layout that does not place it leaves it pinned.
+    let mut named = Workspace::default();
+    let mut center = Stack::with("center", ["scene"]);
+    center.center = true;
+    named
+        .docks
+        .insert("editor".into(), DockArea::new(Node::Stack(center)));
+    w.apply_named(&named, &default);
+    assert_eq!(w.pinned_at("inspector").map(|(_, s)| s), Some(Side::Right));
+    w.check().unwrap();
+    // A restore fitted to the app keeps it pinned, and a default that pins
+    // a panel the saved layout does not mention pins it.
+    let mut def = editor();
+    def.pin("assets", Side::Top, &docked()).unwrap();
+    let mut saved = editor();
+    saved.hide("assets").unwrap();
+    saved.homes.remove("assets");
+    let known: BTreeSet<PanelId> = def.placed_panels().into_iter().collect();
+    saved.reconcile(&def, &known);
+    assert_eq!(saved.pinned_at("assets").map(|(_, s)| s), Some(Side::Top));
+    // A replace reports the move to the edge.
+    let mut live = editor();
+    let effects = live.replace_with(def.clone());
+    assert!(effects.contains(&Effect::Hidden("assets".into())));
+    assert!(effects.contains(&Effect::Moved {
+        panel: "assets".into(),
+        from: Where::Dock("editor".into()),
+        to: Where::Sidebar("editor".into()),
+    }));
+    // Broken pins fail the check.
+    let mut bad = def.clone();
+    bad.docks
+        .get_mut("editor")
+        .unwrap()
+        .sidebars
+        .left
+        .push("scene".into());
+    assert!(bad.check().unwrap_err().contains("pinned"));
+    let mut bad = def.clone();
+    bad.docks.get_mut("editor").unwrap().open = Some("scene".into());
+    assert!(bad.check().unwrap_err().contains("slides out"));
+    let mut bad = editor();
+    bad.float_panel("game", "editor", rect(0.0, 0.0, 1.0, 1.0), &docked())
+        .unwrap();
+    let f = bad.docks["editor"].floats[0].clone();
+    bad.docks.get_mut("editor").unwrap().floats.push(f);
+    assert!(bad.check().is_err());
+    let mut bad = editor();
+    bad.docks.get_mut("editor").unwrap().floats.push(Float {
+        id: "f9".into(),
+        rect: Rect::default(),
+        root: Node::Stack(Stack::new("empty")),
+    });
+    assert!(bad.check().is_err());
+}
