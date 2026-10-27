@@ -28,6 +28,10 @@ use lumen_module::lumen_scene::spawn::{Placeholders, spawn_subtree};
 use crate::adopt::{DockChrome, hide, spawn_chrome, unhide};
 use crate::state::{Core, Modal, Shared};
 
+/// What a dock tab's strip button says itself; its title is in its
+/// caption element.
+pub const BLANK: &str = " ";
+
 /// The tab a panel sits in, on the `<tab>` the module built for it.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub struct DockTab {
@@ -254,7 +258,9 @@ fn build(
                     world,
                     pane,
                     "flex-basis",
-                    Some(basis.unwrap_or_else(|| "auto".into())),
+                    // A child with no size of its own shares what the sized ones
+                    // leave, as `flex: 1` does, whatever its content measures.
+                    Some(basis.unwrap_or_else(|| "0px".into())),
                 );
                 set_inline(world, pane, "flex-grow", Some(format!("{}", child.grow)));
                 set_inline(world, pane, "flex-shrink", Some("1".into()));
@@ -371,11 +377,15 @@ fn build_stack(
         let tab = match built.tabs.get(*p).copied().filter(|&t| alive(world, t)) {
             Some(t) => t,
             None => {
+                // The strip button's own caption is a blank: the title shows
+                // in a caption element inside the button, beside the icon and
+                // the close button, since an element with children lays out
+                // by its children and not by its own text.
                 let el = Element {
                     tag: "tab".into(),
                     attrs: Box::new(Attributes {
                         classes: vec!["dock-tab-body".into()],
-                        tab: Some(TabSpec::new((*p).clone(), Some(panel.title.clone()))),
+                        tab: Some(TabSpec::new((*p).clone(), Some(BLANK.to_string()))),
                         ..Attributes::default()
                     }),
                     ..Element::default()
@@ -393,12 +403,6 @@ fn build_stack(
                 t
             }
         };
-        // The tab's label follows the panel's title.
-        if let Some(mut attrs) = world.get_mut::<LumenAttributes>(tab)
-            && attrs.get("label") != Some(panel.title.as_str())
-        {
-            attrs.set("label", panel.title.clone());
-        }
         put_under(world, panel.entity, tab);
         unhide(world, panel.entity);
         tabs.push(tab);

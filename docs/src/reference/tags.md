@@ -1160,8 +1160,9 @@ panel is in view.
 
 Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
 or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
-(one panel), `no-tabs` and `maximized`, `dock-tab`, `dock-tab-icon` and
-`dock-tab-close` on a tab, its icon and its close button, and `dock-window` with `dock-window-normal` or
+(one panel), `no-tabs` and `maximized`, `dock-tab` on a tab with
+`dock-tab-icon`, `dock-tab-label` and `dock-tab-close` on its icon, title and
+close button, `dock-panel` on every panel, and `dock-window` with `dock-window-normal` or
 `dock-window-dialog` on the root of a window of panels. The default look reads
 `--lumen-dock-*` tokens with the skin's own behind them.
 

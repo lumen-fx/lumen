@@ -1477,11 +1477,27 @@ fn a_tab_follows_its_panels_title_icon_and_bound_window_title() {
         .set("title", "Play");
     ticks(app, 3);
     let game_tab = tab_button(app, "game");
+    let caption = app
+        .world
+        .get::<bevy_ecs::hierarchy::Children>(game_tab)
+        .and_then(|kids| {
+            kids.iter()
+                .copied()
+                .find(|&k| app.world.get::<lumen_dock::DockTabCaption>(k).is_some())
+        })
+        .expect("the tab has a caption");
     assert_eq!(
         app.world
-            .get::<lumen_core::components::TextContent>(game_tab)
+            .get::<lumen_core::components::TextContent>(caption)
             .map(|t| t.0.as_str()),
         Some("Play")
+    );
+    assert_eq!(
+        app.world
+            .get::<lumen_core::components::A11yLabel>(game_tab)
+            .map(|l| l.0.as_str()),
+        Some("Play"),
+        "the tab's accessible name follows"
     );
     let mut q = app.world.query::<(
         &lumen_dock::DockCloseButton,

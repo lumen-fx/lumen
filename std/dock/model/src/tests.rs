@@ -332,6 +332,25 @@ fn detach_and_attach_round_trip() {
     w.check().unwrap();
 }
 
+/// A panel whose stack went with it into a window comes back in a stack of
+/// the size the old one had, not one that takes the split's spare room.
+#[test]
+fn a_stack_made_again_takes_the_room_the_old_one_had() {
+    let mut w = editor();
+    w.detach("inspector", WindowPlace::default(), &docked())
+        .unwrap();
+    assert!(w.stack("s3").is_none(), "the emptied stack went");
+    let home = w.homes["inspector"].dock.clone().expect("a spot");
+    assert_eq!((home.basis, home.grow), (Some(320.0), Some(0.0)));
+    w.attach("inspector", &docked()).unwrap();
+    let Node::Split(root) = &w.docks["editor"].root else {
+        panic!("a split")
+    };
+    let back = root.children.last().expect("at its slot");
+    assert_eq!((back.basis, back.grow), (Some(320.0), 0.0));
+    w.check().unwrap();
+}
+
 #[test]
 fn detaching_a_group_moves_the_stack_and_leaves_the_center() {
     let mut w = editor();
