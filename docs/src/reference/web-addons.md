@@ -225,11 +225,11 @@ over. The
 page writes it as the `html` element, carrying `data-lm-foreign` with its tag,
 and puts that content inside.
 
-The element carries the attributes the markup wrote on it, as HTML
-attributes of the same names, so a web half reads `title` or `axis` off the
-element the way the desktop half reads them off its own. An attribute the page
-writes for the element itself (`id`, `class`, `style`, Lumen's own `data-lm`
-marks) keeps the page's value.
+The element carries the attributes the markup wrote on it as `data-`
+attributes, `axis="column"` as `data-axis="column"`, so a web half reads
+what the markup said about the element the way the desktop half does. They
+are not written under their own names, which would give them the browser's
+meaning: a canvas's `width` is its bitmap, a `title` a tooltip.
 
 From there the element is the web half's. The runtime binds it to its node, so a
 script reaches it by `id` and its classes, attributes and inline style are

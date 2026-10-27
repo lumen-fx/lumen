@@ -4,16 +4,22 @@
 // size its `basis` and `grow` attributes declare. Rearranging needs the runtime to move panels, which a page does
 // not do yet, so the script functions say so and change nothing.
 
+// An attribute the markup wrote on a dock element, which the page carries
+// as `data-<name>`.
+function attr(el, name) {
+  return el.getAttribute(`data-${name}`);
+}
+
 function truthy(value) {
   return value !== null && !["false", "no", "0"].includes(value.trim());
 }
 
 function strip(stack) {
   const panels = Array.from(stack.children).filter(
-    (c) => c.classList.contains("lm-dock-panel") && !c.hasAttribute("hidden"),
+    (c) => c.classList.contains("lm-dock-panel") && !truthy(attr(c, "hidden")),
   );
   if (panels.length === 0) return;
-  const wanted = stack.getAttribute("active");
+  const wanted = attr(stack, "active");
   let shown = panels.find((p) => p.id === wanted) || panels[0];
   const bar = document.createElement("div");
   bar.className = "lm-dock-tabs";
@@ -30,7 +36,7 @@ function strip(stack) {
     b.type = "button";
     b.setAttribute("role", "tab");
     b.dataset.panel = panel.id;
-    b.textContent = panel.getAttribute("title") || panel.id;
+    b.textContent = attr(panel, "title") || panel.id;
     b.addEventListener("click", () => show(panel));
     bar.appendChild(b);
   }
@@ -40,14 +46,14 @@ function strip(stack) {
 
 function sizes(root) {
   for (const el of root.querySelectorAll(".lm-dock-split, .lm-dock-stack")) {
-    const basis = el.getAttribute("basis");
-    const grow = el.getAttribute("grow");
+    const basis = attr(el, "basis");
+    const grow = attr(el, "grow");
     if (basis) {
       el.style.flex = `${grow || 0} 1 ${parseFloat(basis)}px`;
     } else if (grow) {
       el.style.flexGrow = grow;
     }
-    if (el.classList.contains("lm-dock-stack") && truthy(el.getAttribute("collapsed") || "false")) {
+    if (el.classList.contains("lm-dock-stack") && truthy(attr(el, "collapsed") || "false")) {
       el.toggleAttribute("data-dock-collapsed", true);
     }
   }
