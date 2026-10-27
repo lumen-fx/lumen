@@ -117,7 +117,7 @@ fn doc_blocks() -> Vec<Block> {
 /// documentation page showing such an element shows the markup, not the
 /// `lumen.toml` beside it, so the harness supplies the declaration the page's
 /// own prose tells a reader to write.
-const MODULE_TAGS: &[(&str, &str)] = &[("canvas", "lumen-canvas")];
+const MODULE_TAGS: &[(&str, &str)] = &[("canvas", "lumen-canvas"), ("dock", "lumen-dock")];
 
 /// The `[dependencies]` table a snippet needs, given the code it ships.
 fn dependencies_for(files: &[(&str, &str)]) -> String {

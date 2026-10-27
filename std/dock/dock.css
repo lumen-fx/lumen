@@ -1,0 +1,60 @@
+/* The dock's default look, at user-agent origin: every skin, the app's CSS
+   and a markup attribute override it. Each value reads a --lumen-dock-*
+   token first and the skin's generic token behind it, so a skin or an app
+   restyles the dock by setting the tokens. */
+
+.dock { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; min-height: 0; }
+
+.dock-split { flex-grow: 1; min-width: 0; min-height: 0; }
+.dock-split-row { flex-direction: row; }
+.dock-split-column { flex-direction: column; }
+
+.dock-stack {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--lumen-dock-stack-bg, var(--lumen-panel));
+  border: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle));
+}
+.dock-stack > .tab-strip {
+  flex-shrink: 0;
+  gap: var(--lumen-dock-tab-gap, 2);
+  padding: var(--lumen-dock-strip-padding, 2);
+  border-radius: 0;
+  background: var(--lumen-dock-strip-bg, var(--lumen-surface));
+}
+.dock-stack.no-tabs > .tab-strip { display: none; }
+.dock-stack.collapsed > .dock-tab-body { display: none; }
+
+.dock-tab {
+  flex-grow: 0;
+  height: var(--lumen-dock-tab-height, 28);
+  padding: 0 var(--lumen-dock-tab-padding, 10);
+  gap: 6;
+  align-items: center;
+  border-radius: var(--lumen-dock-tab-radius, var(--lumen-radius-sm));
+  background: var(--lumen-dock-tab-bg, #00000000);
+}
+.dock-stack.single .dock-tab { flex-grow: 1; justify-content: flex-start; }
+.dock-tab-close {
+  width: 16;
+  height: 16;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--lumen-radius-sm);
+  background: var(--lumen-dock-close-bg, #00000000);
+}
+.dock-tab-close:hover { background: var(--lumen-dock-close-hover-bg, var(--lumen-surface-hover)); }
+
+.dock-tab-body { flex-grow: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.dock-panel { flex-grow: 1; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* A window of panels fills its window. */
+.dock-window {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  background: var(--lumen-dock-window-bg, var(--lumen-window-bg, #111317));
+}
+.dock-window > .dock-stack { flex-grow: 1; }
+.dock-window > .dock-split { flex-grow: 1; }
