@@ -2721,6 +2721,12 @@ fn apply_attribute(
                 "text" => BindKind::Text,
                 "checked" => BindKind::Checked,
                 "value" => BindKind::Value,
+                // A custom tag's own binding (a module element's
+                // `bind-window-title`) is the tag owner's to read from the
+                // attribute bag, as any other attribute of its own.
+                _ if attrs.widget_attributes.is_some() && !KNOWN_TAGS.contains(&tag) => {
+                    return Ok(false);
+                }
                 other => {
                     return Err(bad(
                         tag,
@@ -3317,6 +3323,29 @@ mod widget_tag_tests {
         assert!(bag(&kids[1]).is_empty());
         assert!(kids[2].attrs.widget_attributes.is_none());
         assert!(ir.root.attrs.widget_attributes.is_none());
+    }
+
+    #[test]
+    fn a_custom_tags_own_binding_is_its_attribute() {
+        lumen_widget::register_widget_tag("parse-bag-pane");
+        let ir = parse_html(
+            "<root><parse-bag-pane bind-window-title=\"doc.name\" bind-text=\"t\"/></root>",
+        )
+        .expect("a binding the tag owns parses");
+        let pane = &ir.root.children[0];
+        assert_eq!(
+            bag(pane),
+            [("bind-window-title", "doc.name"), ("bind-text", "t")]
+        );
+        assert_eq!(
+            pane.attrs.bind.as_ref().map(|b| b.name.as_str()),
+            Some("t"),
+            "a binding the vocabulary knows still binds"
+        );
+        assert!(
+            parse_html("<root><label bind-window-title=\"x\"/></root>").is_err(),
+            "a built-in tag has no such binding"
+        );
     }
 
     #[test]
