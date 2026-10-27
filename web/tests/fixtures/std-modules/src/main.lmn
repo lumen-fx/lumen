@@ -21,5 +21,15 @@
   <label id="canvas-size" bind-text="canvas_size" text="waiting" />
   <svg-view id="art" text="no drawing yet" />
   <canvas id="paint" width="40" height="20" />
+  <dock id="desk">
+    <dock-split axis="column">
+      <dock-stack basis="40"><dock-panel id="desk-top" title="Top"><label text="top" /></dock-panel></dock-stack>
+      <dock-stack center="true" active="desk-b">
+        <dock-panel id="desk-a" title="Alpha"><label text="alpha" /></dock-panel>
+        <dock-panel id="desk-b" title="Beta"><label text="beta" /></dock-panel>
+      </dock-stack>
+    </dock-split>
+    <dock-panel id="desk-spare" title="Spare"><label text="spare" /></dock-panel>
+  </dock>
   <script src="main.cdl" />
 </root>

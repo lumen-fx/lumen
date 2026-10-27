@@ -1,10 +1,10 @@
 /* The dock on a page: the default layout as written, the splits as flex
    rows and columns, each stack's panels behind a strip of tabs. */
-.lm-dock, .lm-dock-split { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; }
-.lm-dock { flex-direction: column; }
+.lm-dock, .lm-dock-split, .lm-dock-stack { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; }
+.lm-dock, .lm-dock-stack { flex-direction: column; }
 .lm-dock-split { flex-direction: row; }
 .lm-dock-split[axis="column"] { flex-direction: column; }
-.lm-dock-stack { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 auto; }
-.lm-dock-stack > .lm-dock-panel[hidden], .lm-dock > .lm-dock-panel, .lm-dock-layout { display: none; }
-.lm-dock-tabs { display: flex; gap: 2px; }
+.lm-dock-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.lm-dock-panel[data-dock-inactive], .lm-dock > .lm-dock-panel, .lm-dock-stack[data-dock-collapsed] > .lm-dock-panel { display: none; }
+.lm-dock-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
 .lm-dock-tabs > button[aria-selected="true"] { font-weight: 600; }

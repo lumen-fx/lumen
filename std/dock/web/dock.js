@@ -1,16 +1,16 @@
 // The dock on a page: each stack shows its first panel (or the one its
 // `active` attribute names) behind a strip of tabs a visitor switches
-// between, and each split child takes the size its `basis` attribute
-// declares. Rearranging needs the runtime to move panels, which a page does
+// between, each split lays out along its `axis`, and each child takes the
+// size its `basis` and `grow` attributes declare. Rearranging needs the runtime to move panels, which a page does
 // not do yet, so the script functions say so and change nothing.
 
-function stacks(root) {
-  return root.querySelectorAll(".lm-dock-stack");
+function truthy(value) {
+  return value !== null && !["false", "no", "0"].includes(value.trim());
 }
 
 function strip(stack) {
-  const panels = Array.from(stack.children).filter((c) =>
-    c.classList.contains("lm-dock-panel"),
+  const panels = Array.from(stack.children).filter(
+    (c) => c.classList.contains("lm-dock-panel") && !c.hasAttribute("hidden"),
   );
   if (panels.length === 0) return;
   const wanted = stack.getAttribute("active");
@@ -20,7 +20,7 @@ function strip(stack) {
   bar.setAttribute("role", "tablist");
   const show = (panel) => {
     shown = panel;
-    for (const p of panels) p.hidden = p !== panel;
+    for (const p of panels) p.toggleAttribute("data-dock-inactive", p !== panel);
     for (const b of bar.children) {
       b.setAttribute("aria-selected", String(b.dataset.panel === panel.id));
     }
@@ -39,10 +39,25 @@ function strip(stack) {
 }
 
 function sizes(root) {
-  for (const el of root.querySelectorAll(".lm-dock-split > *, .lm-dock > *")) {
+  for (const el of root.querySelectorAll(".lm-dock-split, .lm-dock-stack")) {
     const basis = el.getAttribute("basis");
-    if (basis) el.style.flex = `0 0 ${parseFloat(basis)}px`;
+    const grow = el.getAttribute("grow");
+    if (basis) {
+      el.style.flex = `${grow || 0} 1 ${parseFloat(basis)}px`;
+    } else if (grow) {
+      el.style.flexGrow = grow;
+    }
+    if (el.classList.contains("lm-dock-stack") && truthy(el.getAttribute("collapsed") || "false")) {
+      el.toggleAttribute("data-dock-collapsed", true);
+    }
   }
+}
+
+function layout(dock) {
+  if (dock.dataset.dockLaidOut) return;
+  dock.dataset.dockLaidOut = "1";
+  sizes(dock);
+  for (const s of dock.querySelectorAll(".lm-dock-stack")) strip(s);
 }
 
 function refuse(name) {
@@ -53,11 +68,20 @@ function refuse(name) {
 }
 
 export function install() {
-  for (const dock of document.querySelectorAll(".lm-dock")) {
-    sizes(dock);
-    for (const s of stacks(dock)) strip(s);
+  // A panel outside any dock is a window the app opens by showing it, which
+  // a page does not do yet: it stays out of sight.
+  for (const panel of document.querySelectorAll(".lm-dock-panel")) {
+    if (!panel.closest(".lm-dock")) panel.hidden = true;
   }
 }
+
+export const elements = {
+  dock: {
+    mount(element) {
+      layout(element);
+    },
+  },
+};
 
 export const show = refuse("show");
 export const hide = refuse("hide");
