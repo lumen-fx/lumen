@@ -552,13 +552,26 @@ the platform ended the drag. A backend that carries the seam inserts
 pointer. Where the backend sees every pointer move of the drag itself (the
 headless stand-in; Windows, macOS and X11, where the pressed window keeps
 receiving moves past its edge), `InProcessDrag` turns each move into the event
-and the following window's place from the windows' desktop rectangles. On
-Wayland the winit backend runs a `wl_data_device` drag with a private MIME type
-on winit's own connection, moves the window with `xdg_toplevel_drag_v1` where
-the compositor offers it, and reports `follow: false` where it does not. The
-headless stand-in carries the seam on its virtual desktop; `toplevel_drag`
-emulates the protocol in its Wayland mode. Content dragged to or from other
-applications is the os-dnd capability's, not this seam's.
+and the following window's place from the windows' desktop rectangles. The
+winit backend's side is `lumen-window-winit-drag`, which the
+`window-winit-drag` capability registers: on Windows, macOS and X11 it tracks
+the drag from the pressed window's moves, and on Wayland it runs a
+`wl_data_device` drag with a private MIME type on winit's own connection, moves
+the window with `xdg_toplevel_drag_v1` where the compositor offers it, and
+reports `follow: false` where it does not. A link that leaves the capability
+out carries none of it; the backend then inserts no `SurfaceDragSupport` and a
+drag stays inside its window. The headless stand-in carries the seam on its
+virtual desktop; `toplevel_drag` emulates the protocol in its Wayland mode.
+Content dragged to or from other applications is the os-dnd capability's, not
+this seam's.
+
+A capability that needs the platform's own window events and the event loop
+itself, as that drag does, rides the winit backend as a
+`lumen_window_winit::extension::LoopExtension` registered with
+`add_loop_extension` when it installs. The backend calls every extension at
+the same points (the loop resuming, each window event, before the loop waits,
+a window opening and closing) and wakes the loop when one asks to; it names
+none of them.
 
 Windows do not own trees. There is one document, and an element shows in a
 secondary window when it carries `WindowOf(window)`; it is then a surface

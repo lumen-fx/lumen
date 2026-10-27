@@ -73,6 +73,9 @@ lumen-render-cpu-capability = { workspace = true }
 # runs the window backend from their registries and names neither.
 lumen-layout-taffy-capability = { workspace = true }
 lumen-window-winit-capability = { workspace = true }
+# Drags across the app's windows on the winit backend, riding its event
+# loop; a link that leaves the capability out drags within a window.
+lumen-window-winit-drag-capability = { workspace = true }
 # Async spawn/timer bridge (tokio rt-multi-thread). OPTIONAL behind the
 # `async` feature. File dialogs resolve on this runtime; a trimmed bundle
 # drops the crate and falls back to the blocking path.

@@ -61,6 +61,7 @@ use lumen_os_tray_capability as _;
 use lumen_render_cpu_capability as _;
 use lumen_render_gpu_capability as _;
 use lumen_window_winit_capability as _;
+use lumen_window_winit_drag_capability as _;
 /// File-based pages - multi-`.lmn` discovery, `<if>`-reconciler page mount,
 /// and the navigation resolver reachable from every embedding surface.
 pub mod pages;
