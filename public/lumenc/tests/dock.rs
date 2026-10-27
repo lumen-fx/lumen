@@ -1833,7 +1833,7 @@ fn preview(app: &mut App) -> Option<(String, (glam::Vec2, glam::Vec2))> {
     let found: Vec<(Entity, Vec<String>, lumen_core::components::Transform)> = q
         .iter(&app.world)
         .filter(|(_, c, _)| c.has("dock-drop-preview"))
-        .map(|(e, c, t)| (e, c.0.iter().map(|s| s.to_string()).collect(), t.clone()))
+        .map(|(e, c, t)| (e, c.0.iter().map(|s| s.to_string()).collect(), *t))
         .collect();
     let (e, classes, t) = found.into_iter().next()?;
     let hidden = app
