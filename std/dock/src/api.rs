@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bevy_ecs::system::{Res, SystemParam};
-use lumen_dock_model::{OpError, PanelId, Side, Target, WindowPlace, Workspace};
+use lumen_dock_model::{OpError, PanelId, Rect, Side, Target, Where, WindowPlace, Workspace};
 use lumen_module::lumen_script::{ScriptFn, ScriptFnBody, ScriptValue};
 
 use crate::state::{Core, Reason, Shared};
@@ -24,6 +24,10 @@ pub enum DockError {
     UnknownLayout(String),
     /// A zone that is not `tab`, `left`, `right`, `top` or `bottom`.
     BadZone(String),
+    /// An edge that is not `left`, `right`, `top` or `bottom`.
+    BadEdge(String),
+    /// The panel does not float (`floatable="false"`).
+    NotFloatable(String),
     /// A layout that cannot be used.
     Restore(lumen_dock_model::RestoreError),
 }
@@ -39,6 +43,10 @@ impl std::fmt::Display for DockError {
                 f,
                 "'{z}' is not a zone: use tab, left, right, top or bottom"
             ),
+            DockError::BadEdge(e) => {
+                write!(f, "'{e}' is not an edge: use left, right, top or bottom")
+            }
+            DockError::NotFloatable(p) => write!(f, "panel '{p}' does not float"),
             DockError::Restore(e) => e.fmt(f),
         }
     }
@@ -49,6 +57,40 @@ impl std::error::Error for DockError {}
 impl From<OpError> for DockError {
     fn from(e: OpError) -> Self {
         DockError::Op(e)
+    }
+}
+
+/// The edge of its dock nearest to where `panel` sits in the dock's tree,
+/// as the tab menu's Pin pins it: a stack first in a row is nearest the
+/// left, last the right; first in a column the top, last the bottom; the
+/// bottom when nothing says otherwise.
+pub fn nearest_edge(ws: &Workspace, panel: &str) -> &'static str {
+    let Some(dock) = ws
+        .find(panel)
+        .and_then(|l| l.container.dock().map(str::to_string))
+    else {
+        return "bottom";
+    };
+    let mut node = &ws.docks[&dock].root;
+    loop {
+        let lumen_dock_model::Node::Split(split) = node else {
+            return "bottom";
+        };
+        let Some(i) = split
+            .children
+            .iter()
+            .position(|c| c.node.panels().iter().any(|p| *p == panel))
+        else {
+            return "bottom";
+        };
+        let last = split.children.len() - 1;
+        match (split.axis, i) {
+            (lumen_dock_model::Axis::Row, 0) => return "left",
+            (lumen_dock_model::Axis::Row, i) if i == last => return "right",
+            (lumen_dock_model::Axis::Column, 0) => return "top",
+            (lumen_dock_model::Axis::Column, i) if i == last => return "bottom",
+            _ => node = &split.children[i].node,
+        }
     }
 }
 
@@ -86,7 +128,18 @@ impl Core {
     }
 
     /// Show `panel` if hidden, hide it if shown. Returns whether it is shown.
+    /// A pinned panel slides out and back in.
     pub fn op_toggle(&mut self, panel: &str, reason: Reason) -> Result<bool, DockError> {
+        if let Some((dock, _)) = self.ws.pinned_at(panel) {
+            if self.ws.in_view(panel) {
+                let effects = self.ws.close_pinned(&dock);
+                self.apply(effects, reason);
+                return Ok(false);
+            }
+            let effects = self.ws.open_pinned(panel)?;
+            self.apply(effects, reason);
+            return Ok(true);
+        }
         if self.ws.is_shown(panel) {
             self.op_hide(panel, reason).map(|()| false)
         } else {
@@ -212,11 +265,80 @@ impl Core {
         Ok(())
     }
 
-    /// Dock `panel` back from its window.
+    /// Dock `panel` back from its window, its float or its sidebar.
     pub fn op_attach(&mut self, panel: &str, reason: Reason) -> Result<(), DockError> {
         self.known(panel)?;
         let info = self.info(panel);
-        let effects = self.ws.attach(panel, &info)?;
+        let effects = if self.ws.pinned_at(panel).is_some() {
+            self.ws.unpin(panel, &info)?
+        } else {
+            self.ws.attach(panel, &info)?
+        };
+        self.apply(effects, reason);
+        Ok(())
+    }
+
+    /// Dock back every panel of the float `float`.
+    pub fn op_attach_float(&mut self, float: &str, reason: Reason) {
+        let panels: Vec<PanelId> = self
+            .ws
+            .float(float)
+            .map(|(_, f)| f.root.panels().into_iter().cloned().collect())
+            .unwrap_or_default();
+        for p in panels {
+            let info = self.info(&p);
+            if let Ok(effects) = self.ws.attach(&p, &info) {
+                self.apply(effects, reason);
+            }
+        }
+    }
+
+    /// Float `panel` over its dock at `rect`, from the dock's top-left
+    /// corner in logical pixels.
+    pub fn op_float(&mut self, panel: &str, rect: Rect, reason: Reason) -> Result<(), DockError> {
+        self.known(panel)?;
+        if self.panels.get(panel).is_some_and(|r| !r.attrs.floatable) {
+            return Err(DockError::NotFloatable(panel.to_string()));
+        }
+        let info = self.info(panel);
+        if !self.ws.is_shown(panel) {
+            self.op_show(panel, reason)?;
+        }
+        let dock = self
+            .ws
+            .find(panel)
+            .and_then(|l| l.container.dock().map(str::to_string))
+            .or_else(|| info.dock.clone())
+            .or_else(|| self.docks.keys().next().cloned())
+            .ok_or_else(|| DockError::Op(OpError::NotDockable(panel.to_string())))?;
+        let rect = Rect {
+            w: rect.w.max(1.0),
+            h: rect.h.max(1.0),
+            ..rect
+        };
+        // A panel alone in a float only moves.
+        if let Some(loc) = self.ws.find(panel)
+            && let lumen_dock_model::Container::Float { float, .. } = &loc.container
+            && self
+                .ws
+                .float(float)
+                .is_some_and(|(_, f)| f.root.panels().len() == 1)
+        {
+            self.ws.set_float_rect(float, rect);
+            self.apply(Vec::new(), reason);
+            return Ok(());
+        }
+        let effects = self.ws.float_panel(panel, &dock, rect, &info)?;
+        self.apply(effects, reason);
+        Ok(())
+    }
+
+    /// Pin `panel` to the `edge` of its dock.
+    pub fn op_pin(&mut self, panel: &str, edge: &str, reason: Reason) -> Result<(), DockError> {
+        self.known(panel)?;
+        let side = Side::parse(edge).ok_or_else(|| DockError::BadEdge(edge.to_string()))?;
+        let info = self.info(panel);
+        let effects = self.ws.pin(panel, side, &info)?;
         self.apply(effects, reason);
         Ok(())
     }
@@ -284,9 +406,10 @@ impl Core {
     /// or -1 when it is not shown.
     pub fn window_of(&self, panel: &str) -> i64 {
         match self.ws.where_is(panel) {
-            lumen_dock_model::Where::Dock(_) => 0,
-            lumen_dock_model::Where::Window(id) => window_number(&id),
-            lumen_dock_model::Where::Hidden => -1,
+            Where::Dock(_) | Where::Float(_) => 0,
+            Where::Sidebar(_) if self.ws.in_view(panel) => 0,
+            Where::Window(id) => window_number(&id),
+            Where::Sidebar(_) | Where::Hidden => -1,
         }
     }
 
@@ -523,6 +646,32 @@ pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
             })),
         ),
         (
+            "float".into(),
+            body(Box::new(move |c, cx| {
+                let rect = Rect {
+                    x: cx.float_arg(1) as f32,
+                    y: cx.float_arg(2) as f32,
+                    w: cx.float_arg(3) as f32,
+                    h: cx.float_arg(4) as f32,
+                };
+                b(report(
+                    "float",
+                    c.op_float(&cx.str_arg(0), rect, api).map(|()| true),
+                    false,
+                ))
+            })),
+        ),
+        (
+            "pin".into(),
+            body(Box::new(move |c, cx| {
+                b(report(
+                    "pin",
+                    c.op_pin(&cx.str_arg(0), &cx.str_arg(1), api).map(|()| true),
+                    false,
+                ))
+            })),
+        ),
+        (
             "attach".into(),
             body(Box::new(move |c, cx| {
                 b(report(
@@ -580,7 +729,7 @@ pub fn script_fns(shared: &Shared) -> Result<Vec<ScriptFn>, String> {
         (
             "is_shown".into(),
             body(Box::new(|c, cx| {
-                ScriptValue::Bool(c.ws.is_shown(&cx.str_arg(0)))
+                ScriptValue::Bool(c.ws.in_view(&cx.str_arg(0)))
             })),
         ),
         (
@@ -739,13 +888,34 @@ impl Dock<'_> {
         self.shared.lock().op_detach_group(panel, Reason::Api)
     }
 
-    /// Dock `panel` back from its window.
+    /// Dock `panel` back from its window, its float or its sidebar.
     ///
     /// # Errors
     ///
-    /// The panel is not in a window, or does not dock.
+    /// The panel is in a dock already, or does not dock.
     pub fn attach(&self, panel: &str) -> Result<(), DockError> {
         self.shared.lock().op_attach(panel, Reason::Api)
+    }
+
+    /// Float `panel` over its dock at `rect`, from the dock's top-left
+    /// corner in logical pixels.
+    ///
+    /// # Errors
+    ///
+    /// No panel has the id, or it does not float.
+    pub fn float(&self, panel: &str, rect: Rect) -> Result<(), DockError> {
+        self.shared.lock().op_float(panel, rect, Reason::Api)
+    }
+
+    /// Pin `panel` to `edge` of its dock: `left`, `right`, `top` or
+    /// `bottom`.
+    ///
+    /// # Errors
+    ///
+    /// No panel has the id, the edge is not one, or the panel does not
+    /// dock.
+    pub fn pin(&self, panel: &str, edge: &str) -> Result<(), DockError> {
+        self.shared.lock().op_pin(panel, edge, Reason::Api)
     }
 
     /// Collapse or expand the stack holding `panel`.
@@ -773,9 +943,10 @@ impl Dock<'_> {
         self.shared.lock().op_restore_maximized(dock, Reason::Api)
     }
 
-    /// Whether `panel` is in view.
+    /// Whether `panel` is in view: in a dock, a float or a window, or slid
+    /// out of its sidebar.
     pub fn is_shown(&self, panel: &str) -> bool {
-        self.shared.lock().ws.is_shown(panel)
+        self.shared.lock().ws.in_view(panel)
     }
 
     /// Every panel id the module knows.

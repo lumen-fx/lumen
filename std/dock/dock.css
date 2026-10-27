@@ -34,11 +34,37 @@
   border-bottom: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
 }
 .dock-stack.no-tabs > .tab-strip { display: none; }
+
+/* More tabs than room: the tabs shrink to their min-width, then the strip
+   clips them, the wheel moves them along, and a button over the strip's
+   end lists them all. */
+.dock-stack > .tab-strip { overflow: hidden; }
+.dock-stack.overflowing > .tab-strip {
+  padding: 0 var(--lumen-dock-overflow-width, 28) 0 0;
+}
+.dock-stack > .dock-tabs-overflow {
+  position: absolute;
+  inset: 0 0 auto auto;
+  width: var(--lumen-dock-overflow-width, 28);
+  height: var(--lumen-dock-tab-height, 30);
+  min-height: 0;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
+  border-radius: 0;
+  background: var(--lumen-dock-strip-bg, var(--lumen-window-bg, #121217));
+  text-color: var(--lumen-dock-tab-text, var(--lumen-text-muted, #ffffffa6));
+  font-size: 14;
+}
+.dock-stack > .dock-tabs-overflow:hover {
+  background: var(--lumen-dock-tab-hover-bg, var(--lumen-panel-hover, #ffffff12));
+}
 .dock-stack.collapsed > .dock-tab-body { display: none; }
 
 .dock-stack .dock-tab {
   flex-grow: 0;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: var(--lumen-dock-tab-min-width, 72);
   height: 100%;
   min-height: 0;
   padding: 0 var(--lumen-dock-tab-padding, 6) 0 var(--lumen-dock-tab-padding-start, 12);
@@ -63,7 +89,7 @@
   height: var(--lumen-dock-icon-size, 16);
   flex-shrink: 0;
 }
-.dock-stack .dock-tab-label { flex-shrink: 0; }
+.dock-stack .dock-tab-label { flex-shrink: 1; min-width: 0; text-overflow: ellipsis; }
 .dock-stack .dock-tab-close {
   width: 18;
   height: 18;
@@ -120,3 +146,85 @@
 /* How far past a window's edge a dragged tab goes before it tears off into
    a window of its own. The module reads this element's width. */
 .dock-tearoff-probe { width: var(--lumen-dock-tearoff-distance, 24); }
+
+/* A group floating over its dock: a stack (or a small tree of them) whose
+   strip is its title bar, with a resize frame along its edges and corners
+   just outside its border. */
+.dock-float {
+  flex-direction: column;
+  background: var(--lumen-dock-float-bg, var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21)));
+  border: 1px solid var(--lumen-dock-float-border, var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff33)));
+  box-shadow: 0 6 20 var(--lumen-dock-float-shadow, #00000099);
+}
+.dock-float > .dock-stack, .dock-float > .dock-split { flex-grow: 1; }
+.dock-float-resize { position: absolute; }
+.dock-float-resize-n { inset: -4 8 auto 8; height: 8; cursor: ns-resize; }
+.dock-float-resize-s { inset: auto 8 -4 8; height: 8; cursor: ns-resize; }
+.dock-float-resize-w { inset: 8 auto 8 -4; width: 8; cursor: ew-resize; }
+.dock-float-resize-e { inset: 8 -4 8 auto; width: 8; cursor: ew-resize; }
+.dock-float-resize-nw { inset: -4 auto auto -4; width: 12; height: 12; cursor: nwse-resize; }
+.dock-float-resize-ne { inset: -4 -4 auto auto; width: 12; height: 12; cursor: nesw-resize; }
+.dock-float-resize-sw { inset: auto auto -4 -4; width: 12; height: 12; cursor: nesw-resize; }
+.dock-float-resize-se { inset: auto -4 -4 auto; width: 12; height: 12; cursor: nwse-resize; }
+.dock-drop-preview.dock-drop-float { border-style: dashed; }
+
+/* Panels pinned to a dock's edges: a strip of buttons along each edge, and
+   the panel slid out of one lying over the dock along that edge. */
+.dock-middle { flex-grow: 1; flex-direction: row; min-width: 0; min-height: 0; }
+.dock-middle > .dock-split, .dock-middle > .dock-stack { flex-grow: 1; }
+.dock-sidebar {
+  flex-shrink: 0;
+  gap: 2;
+  padding: 2;
+  background: var(--lumen-dock-sidebar-bg, var(--lumen-dock-strip-bg, var(--lumen-window-bg, #121217)));
+}
+.dock-sidebar-left, .dock-sidebar-right { flex-direction: column; }
+.dock-sidebar-top, .dock-sidebar-bottom { flex-direction: row; }
+.dock-sidebar-left { border-right: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a)); }
+.dock-sidebar-right { border-left: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a)); }
+.dock-sidebar-top { border-bottom: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a)); }
+.dock-sidebar-bottom { border-top: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a)); }
+.dock-sidebar-button {
+  min-height: 0;
+  padding: 4 8;
+  border-radius: var(--lumen-radius-sm, 4);
+  background: var(--lumen-dock-tab-bg, #00000000);
+  text-color: var(--lumen-dock-tab-text, var(--lumen-text-muted, #ffffffa6));
+  font-size: var(--lumen-dock-tab-font-size, 13);
+}
+.dock-sidebar-button:hover { background: var(--lumen-dock-tab-hover-bg, var(--lumen-panel-hover, #ffffff12)); }
+.dock-sidebar-button.open {
+  background: var(--lumen-dock-tab-active-bg, var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21)));
+  text-color: var(--lumen-dock-tab-active-text, var(--lumen-text, #ffffff));
+}
+.dock-sidebar-open {
+  position: absolute;
+  flex-direction: column;
+  background: var(--lumen-dock-stack-bg, var(--lumen-panel, #1a1b21));
+  border: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
+  box-shadow: 0 6 20 var(--lumen-dock-float-shadow, #00000099);
+}
+.dock-sidebar-open-left { inset: 0 auto 0 0; width: var(--lumen-dock-sidebar-size, 280); }
+.dock-sidebar-open-right { inset: 0 0 0 auto; width: var(--lumen-dock-sidebar-size, 280); }
+.dock-sidebar-open-top { inset: 0 0 auto 0; height: var(--lumen-dock-sidebar-size, 220); }
+.dock-sidebar-open-bottom { inset: auto 0 0 0; height: var(--lumen-dock-sidebar-size, 220); }
+.dock-sidebar-header {
+  flex-shrink: 0;
+  height: var(--lumen-dock-tab-height, 30);
+  padding: 0 6 0 12;
+  gap: 6;
+  align-items: center;
+  background: var(--lumen-dock-strip-bg, var(--lumen-window-bg, #121217));
+  border-bottom: 1px solid var(--lumen-dock-border, var(--lumen-border-subtle, #ffffff1a));
+  text-color: var(--lumen-dock-tab-active-text, var(--lumen-text, #ffffff));
+  font-size: var(--lumen-dock-tab-font-size, 13);
+}
+.dock-sidebar-title { flex-grow: 1; min-width: 0; text-overflow: ellipsis; }
+.dock-sidebar-dock {
+  min-height: 0;
+  padding: 2 8;
+  font-size: 12;
+  border-radius: var(--lumen-radius-sm, 4);
+  background: var(--lumen-dock-close-bg, #00000000);
+}
+.dock-sidebar-dock:hover { background: var(--lumen-dock-close-hover-bg, var(--lumen-surface-hover, #ffffff1f)); }

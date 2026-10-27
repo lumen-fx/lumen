@@ -73,6 +73,8 @@ pub struct PanelAttrs {
     pub closable: bool,
     /// Whether a user can drag its tab to rearrange it.
     pub movable: bool,
+    /// Whether it can float over its dock, by a drag or `dock::float`.
+    pub floatable: bool,
     /// Closing removes the element instead of hiding it.
     pub destroy_on_close: bool,
     /// Starts hidden.
@@ -96,6 +98,7 @@ impl Default for PanelAttrs {
             resizable: true,
             closable: true,
             movable: true,
+            floatable: true,
             destroy_on_close: false,
             hidden: false,
             kind: None,
@@ -154,6 +157,7 @@ impl PanelAttrs {
             resizable: flag(attrs, "resizable", true),
             closable: flag(attrs, "closable", true),
             movable: flag(attrs, "movable", true),
+            floatable: flag(attrs, "floatable", true),
             destroy_on_close: flag(attrs, "destroy-on-close", false),
             hidden: flag(attrs, "hidden", false),
             kind: attr(attrs, "kind").map(str::to_string),
@@ -339,6 +343,7 @@ mod tests {
             ("resizable", "false"),
             ("closable", "no"),
             ("movable", "false"),
+            ("floatable", "no"),
             ("destroy-on-close", ""),
             ("hidden", "true"),
             ("kind", "doc"),
@@ -353,6 +358,7 @@ mod tests {
         assert_eq!(p.modal, Modal::Parent);
         assert_eq!(p.window_size, Some([640.0, 480.0]));
         assert!(!p.resizable && !p.closable && !p.movable && p.destroy_on_close && p.hidden);
+        assert!(!p.floatable && PanelAttrs::default().floatable);
         assert_eq!(p.kind.as_deref(), Some("doc"));
         assert_eq!(p.state.as_deref(), Some(""));
         let info = panel_info(Some(&a), None);
