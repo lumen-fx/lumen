@@ -46,6 +46,11 @@ enum Op {
     Maximize(usize),
     Restore,
     Group(usize, usize, u8),
+    Float(usize, u8),
+    Pin(usize, u8),
+    Unpin(usize),
+    OpenPin(usize),
+    ClosePin,
 }
 
 fn side(n: u8) -> Side {
@@ -68,7 +73,12 @@ fn op() -> impl Strategy<Value = Op> {
         (p.clone(), any::<bool>()).prop_map(|(a, b)| Op::Collapse(a, b)),
         p.clone().prop_map(Op::Maximize),
         Just(Op::Restore),
-        (p.clone(), p, any::<u8>()).prop_map(|(a, b, c)| Op::Group(a, b, c)),
+        (p.clone(), p.clone(), any::<u8>()).prop_map(|(a, b, c)| Op::Group(a, b, c)),
+        (p.clone(), any::<u8>()).prop_map(|(a, b)| Op::Float(a, b)),
+        (p.clone(), any::<u8>()).prop_map(|(a, b)| Op::Pin(a, b)),
+        p.clone().prop_map(Op::Unpin),
+        p.prop_map(Op::OpenPin),
+        Just(Op::ClosePin),
     ]
 }
 
@@ -174,12 +184,41 @@ fn run(w: &mut Workspace, op: &Op) {
                         dock: "dock".into(),
                         side: side(*how / 4),
                     },
-                    _ => Target::NewWindow(WindowPlace::default()),
+                    3 if how & 16 == 0 => Target::NewWindow(WindowPlace::default()),
+                    _ => Target::NewFloat {
+                        dock: "dock".into(),
+                        rect: Rect {
+                            x: 3.0,
+                            y: 4.0,
+                            w: 50.0,
+                            h: 60.0,
+                        },
+                    },
                 };
                 w.move_group(&from.stack, &target, &|_| info(0)).map(drop)
             }
             _ => Ok(()),
         },
+        Op::Float(a, at) => w
+            .float_panel(
+                p(*a),
+                "dock",
+                Rect {
+                    x: f32::from(*at),
+                    y: 1.0,
+                    w: 100.0,
+                    h: 80.0,
+                },
+                &i,
+            )
+            .map(drop),
+        Op::Pin(a, s) => w.pin(p(*a), side(*s), &i).map(drop),
+        Op::Unpin(a) => w.unpin(p(*a), &i).map(drop),
+        Op::OpenPin(a) => w.open_pinned(p(*a)).map(drop),
+        Op::ClosePin => {
+            w.close_pinned("dock");
+            Ok(())
+        }
     };
 }
 
@@ -197,7 +236,7 @@ proptest! {
             }
             // Every panel is either shown once or remembered as hidden;
             // none is lost.
-            let shown: BTreeSet<String> = w.shown_panels().into_iter().collect();
+            let shown: BTreeSet<String> = w.placed_panels().into_iter().collect();
             for p in PANELS {
                 prop_assert!(
                     shown.contains(p) || w.homes.contains_key(p),
@@ -207,6 +246,10 @@ proptest! {
         }
         let text = w.to_json();
         let back = Workspace::from_json(&text, w.layout_version).expect("restores");
+        // A slid-out panel is not saved.
+        for d in w.docks.values_mut() {
+            d.open = None;
+        }
         prop_assert_eq!(back, w);
     }
 
@@ -217,11 +260,11 @@ proptest! {
             run(&mut w, op);
         }
         let panel = PANELS[pick];
-        if w.is_shown(panel) {
+        if w.is_placed(panel) {
             w.hide(panel).unwrap();
         }
         w.show(panel, &info(0)).unwrap();
-        prop_assert!(w.is_shown(panel));
+        prop_assert!(w.in_view(panel));
         prop_assert!(w.check().is_ok());
     }
 }
