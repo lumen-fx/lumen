@@ -567,12 +567,15 @@ impl Plugin for DockPlugin {
 ```
 
 The stylesheet sits at user-agent origin, below the built-in user-agent sheet
-and the skins: a skin, the app's CSS and a markup attribute all override it,
-and so does a built-in user-agent rule of the same weight. Write it against
-the skins' tokens with a token of the plugin's own as the override point,
-`bg: var(--lumen-dock-tab-bg, var(--lumen-surface-2))`, so a skin or an app
-restyles the plugin by setting `--lumen-dock-*` rather than by matching its
-selectors. The text is parsed with the app's CSS parser when the app is built
+and the skins: the app's CSS and a markup attribute override it, and a skin
+or built-in user-agent rule overrides it at the same or a higher weight.
+Write it against the skins' tokens with a token of the plugin's own as the
+override point and a plain value last,
+`bg: var(--lumen-dock-tab-bg, var(--lumen-surface, #1a1b21))`, so a skin or
+an app restyles the plugin by setting `--lumen-dock-*` rather than by
+matching its selectors. The plain value is what an app with no skin gets:
+the `--lumen-*` tokens come from the skins, and a declaration whose `var()`
+resolves to nothing is dropped. The text is parsed with the app's CSS parser when the app is built
 and again on a hot reload; a sheet that does not parse is reported and left
 out, and a runtime built without the parser applies none.
 

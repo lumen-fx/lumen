@@ -230,14 +230,22 @@ them never collide.
 
 ## Styling
 
-The dock's look is CSS: tab height and padding, the strip, the stack border
-and background. Set the `--lumen-dock-*` tokens in your stylesheet or skin,
-or style the classes the dock uses (`dock-stack`, `dock-tab`,
-`dock-tab-icon`, `dock-tab-label`, `dock-tab-close`, `dock-split`, `dock-window`, and `center`, `collapsed`,
-`single`, `maximized` on a stack). A window of panels carries `dock-window`
-and `dock-window-<kind>`, so `.dock-window` styles every pop-out. A tab's
-close button shows a plain `x`; a skin that ships an icon draws its own with
-`mask-image` on `.dock-tab-close` and a transparent `text-color`.
+The dock's look is CSS. By default each stack has a darker strip of compact
+tabs, each as wide as its title, and the shown tab takes the stack's color,
+full-strength text and an accent line along its top edge. It reads the
+skin's tokens where a skin sets them and suits the dark window of an app
+with no skin otherwise.
+
+Set the `--lumen-dock-*` tokens in your stylesheet or skin, or style the
+classes the dock uses (`dock-stack`, `dock-tab`, `dock-tab-icon`,
+`dock-tab-label`, `dock-tab-close`, `dock-split`, `dock-window`, `center`,
+`collapsed`, `single`, `maximized` on a stack, and `active` on the shown
+tab). The dock's own rules name the stack (`.dock-stack .dock-tab`), so your
+CSS always wins and a skin wins where its rule is as specific. A window of
+panels carries `dock-window` and `dock-window-<kind>`, so `.dock-window`
+styles every pop-out. A tab's close button shows the multiplication sign; a
+skin that ships an icon draws its own with `mask-image` on `.dock-tab-close`
+and a transparent `text-color`.
 
 ## In a page
 

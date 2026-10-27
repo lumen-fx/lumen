@@ -1548,3 +1548,183 @@ fn a_tab_follows_its_panels_title_icon_and_bound_window_title() {
     ticks(app, 3);
     assert_eq!(app.world.get::<Window>(w).unwrap().title, "Play");
 }
+
+/// The live-check demo's markup: an icon on the first panel, a center
+/// stack of two, an inspector on the right.
+const DEMO: &str = r#"<root>
+  <dock id="editor" label="Editor">
+    <dock-split axis="row">
+      <dock-stack basis="240">
+        <dock-panel id="files" title="Files"><column padding="12" gap="8"><label text="Files panel"/><input id="name" text="kept text"/></column></dock-panel>
+      </dock-stack>
+      <dock-stack center="true">
+        <dock-panel id="scene" title="Scene"><column padding="12" grow="1"><label text="Scene view"/></column></dock-panel>
+        <dock-panel id="game" title="Game"><column padding="12" grow="1"><label text="Game view"/></column></dock-panel>
+      </dock-stack>
+      <dock-stack basis="260">
+        <dock-panel id="inspector" title="Inspector"><column padding="12" grow="1"><label text="Inspector panel"/></column></dock-panel>
+      </dock-stack>
+    </dock-split>
+  </dock>
+  <script src="main.cdl"/>
+</root>"#;
+
+/// The laid-out rectangle of `e`: origin and size.
+fn rect(app: &App, e: Entity) -> (glam::Vec2, glam::Vec2) {
+    let t = app
+        .world
+        .get::<lumen_core::components::Transform>(e)
+        .expect("laid out");
+    (t.absolute, t.size)
+}
+
+/// The strip buttons of the stack `panel` shows in, in strip order.
+fn strip_buttons(app: &mut App, panel: &str) -> Vec<Entity> {
+    let p = entity(app, panel);
+    let (stack, _) = stack_of(app, p);
+    let strip = app
+        .world
+        .get::<bevy_ecs::hierarchy::Children>(stack)
+        .and_then(|k| {
+            k.iter()
+                .copied()
+                .find(|&c| app.world.get::<lumen_primitives::TabStrip>(c).is_some())
+        })
+        .expect("the stack has a strip");
+    app.world
+        .get::<bevy_ecs::hierarchy::Children>(strip)
+        .map(|k| {
+            k.iter()
+                .copied()
+                .filter(|&c| {
+                    app.world
+                        .get::<lumen_primitives::TabStripButton>(c)
+                        .is_some()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every panel of the demo shows in its stack, inside the window, with a
+/// tab sized to its title.
+fn assert_demo_laid_out(app: &mut App, width: f32) {
+    call(app, |d| {
+        for p in ["files", "scene", "game", "inspector"] {
+            assert!(d.is_shown(p), "`{p}` shows at {width} wide");
+        }
+    });
+    let files = entity(app, "files");
+    let scene = entity(app, "scene");
+    let game = entity(app, "game");
+    let inspector = entity(app, "inspector");
+    let (files_stack, _) = stack_of(app, files);
+    let (center, shown) = stack_of(app, scene);
+    assert_eq!(shown.as_deref(), Some("scene"), "the first panel shows");
+    assert_eq!(stack_of(app, game).0, center);
+    let (right, _) = stack_of(app, inspector);
+    let (fo, fs) = rect(app, files_stack);
+    let (co, cs) = rect(app, center);
+    let (ro, rs) = rect(app, right);
+    assert!(
+        fs.x > 1.0 && cs.x > 1.0 && rs.x > 1.0,
+        "every stack has room at {width}: {fs} {cs} {rs}"
+    );
+    assert!(fo.x < co.x && co.x < ro.x, "the stacks keep their order");
+    assert!(
+        ro.x + rs.x <= width + 0.5,
+        "the right stack ends inside the window at {width}: {ro} {rs}"
+    );
+    for panel in ["files", "scene", "inspector"] {
+        let buttons = strip_buttons(app, panel);
+        for b in &buttons {
+            let (_, size) = rect(app, *b);
+            assert!(
+                size.x > 20.0 && size.x < 140.0,
+                "`{panel}`'s tab is sized to its title, not to its strip: {size}"
+            );
+        }
+    }
+    assert_eq!(
+        strip_buttons(app, "scene").len(),
+        2,
+        "both center tabs show"
+    );
+}
+
+/// The demo laid out at a small window, after the window manager resizes it
+/// right after it opens, and after a resize through a tiny size.
+#[test]
+fn a_small_or_resized_window_keeps_every_panel_in_place() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("lumenc_dock_small_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut t = build_with(
+        &dir,
+        "small",
+        DEMO,
+        "import \"lumen.cdl\";\nfn main() {}\n",
+        "",
+        "\n[window]\nsize = [1000, 640]\n",
+    );
+    let app = &mut t.app;
+    ticks(app, 2);
+    assert_demo_laid_out(app, 1000.0);
+    for (w, h) in [(670.0, 1040.0), (1.0, 1.0), (861.0, 1356.0), (520.0, 400.0)] {
+        let primary = primary(app);
+        app.world.get_mut::<Window>(primary).unwrap().size = glam::Vec2::new(w, h);
+        ticks(app, 3);
+        if w > 100.0 {
+            assert_demo_laid_out(app, w);
+        }
+    }
+}
+
+fn has_class(app: &App, e: Entity, class: &str) -> bool {
+    app.world
+        .get::<lumen_core::components::LumenClasses>(e)
+        .is_some_and(|c| c.has(class))
+}
+
+/// With no skin, the dock still draws its stacks and marks its shown tabs
+/// in its own colors, and the shown tab's button carries `active`.
+#[test]
+fn the_default_look_needs_no_skin() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("look", DEMO, "import \"lumen.cdl\";\nfn main() {}\n", "");
+    let app = &mut t.app;
+    let scene = entity(app, "scene");
+    let (center, _) = stack_of(app, scene);
+    let fill = app
+        .world
+        .get::<lumen_core::components::Visuals>(center)
+        .and_then(|v| v.fill.clone());
+    assert!(fill.is_some(), "a stack has a background without a skin");
+    let buttons = strip_buttons(app, "scene");
+    let style = |app: &App, b: Entity| {
+        *app.world
+            .get::<lumen_primitives::TabButtonStyle>(b)
+            .expect("a strip button")
+    };
+    assert_ne!(
+        style(app, buttons[0]).selected_bg,
+        lumen_primitives::TAB_SELECTED_BG,
+        "the shown tab takes the dock's color, not the view switcher's"
+    );
+    assert!(has_class(app, buttons[0], "active"));
+    assert!(!has_class(app, buttons[1], "active"));
+    call(app, |d| d.activate("game").unwrap());
+    ticks(app, 3);
+    let buttons = strip_buttons(app, "scene");
+    assert!(!has_class(app, buttons[0], "active"));
+    assert!(
+        has_class(app, buttons[1], "active"),
+        "`active` follows the shown tab"
+    );
+    // A tab the user picks moves it too.
+    click(app, buttons[0], lumen_core::input::PointerButton::Primary);
+    ticks(app, 3);
+    let buttons = strip_buttons(app, "scene");
+    assert!(has_class(app, buttons[0], "active"));
+    assert!(!has_class(app, buttons[1], "active"));
+}

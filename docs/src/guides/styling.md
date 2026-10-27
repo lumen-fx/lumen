@@ -188,10 +188,11 @@ skin's tokens is usually enough:
 ```
 
 A module that brings elements of its own brings their default look too, as a
-user-agent stylesheet beneath the skins. A skin and your CSS both override
-it, and most modules take their colors from the skin's tokens with a token of
-their own in front, so `:root { --lumen-dock-tab-bg: #222; }` restyles one
-part without touching the rest.
+user-agent stylesheet beneath the skins. Your CSS always overrides it, and a
+skin does wherever its rule is at least as specific as the module's. Most
+modules take their colors from the skin's tokens with a token of their own in
+front, so `:root { --lumen-dock-tab-bg: #222; }` restyles one part without
+touching the rest.
 
 ## Responding to the environment
 

@@ -1160,11 +1160,22 @@ panel is in view.
 
 Classes for styling: `dock` on the dock, `dock-split` with `dock-split-row`
 or `dock-split-column`, `dock-stack` with `center`, `collapsed`, `single`
-(one panel), `no-tabs` and `maximized`, `dock-tab` on a tab with
-`dock-tab-icon`, `dock-tab-label` and `dock-tab-close` on its icon, title and
-close button, `dock-panel` on every panel, and `dock-window` with `dock-window-normal` or
+(one panel), `no-tabs` and `maximized`, `dock-tab` on a tab (with `active`
+on the shown one) with `dock-tab-icon`, `dock-tab-label` and
+`dock-tab-close` on its icon, title and close button, `dock-panel` on every panel, and `dock-window` with `dock-window-normal` or
 `dock-window-dialog` on the root of a window of panels. The default look reads
-`--lumen-dock-*` tokens with the skin's own behind them.
+`--lumen-dock-*` tokens with the skin's own behind them:
+
+| Token | Styles |
+| --- | --- |
+| `--lumen-dock-stack-bg`, `--lumen-dock-border` | A stack's background and its border, the strip's bottom edge too. |
+| `--lumen-dock-strip-bg`, `--lumen-dock-strip-padding`, `--lumen-dock-tab-gap` | The tab strip. |
+| `--lumen-dock-tab-height`, `--lumen-dock-tab-padding-start`, `--lumen-dock-tab-padding`, `--lumen-dock-tab-radius`, `--lumen-dock-tab-font-size` | A tab's size and shape; the padding before its title and after its close button. |
+| `--lumen-dock-tab-bg`, `--lumen-dock-tab-hover-bg`, `--lumen-dock-tab-text` | A tab at rest and under the pointer. |
+| `--lumen-dock-tab-active-bg`, `--lumen-dock-tab-active-text`, `--lumen-dock-accent` | The shown tab and the line along its top edge. |
+| `--lumen-dock-icon-size` | A tab's icon. |
+| `--lumen-dock-close-bg`, `--lumen-dock-close-hover-bg` | A tab's close button. |
+| `--lumen-dock-window-bg` | The root of a window of panels. |
 
 In a page the dock shows its default layout, with tabs that switch; the
 functions that rearrange it leave it as it is. See
