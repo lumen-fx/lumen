@@ -1269,7 +1269,8 @@ fn main() -> lumenui::Result<()> {
 `Dock` is a system parameter with the same operations the
 [`dock` namespace](scripting-candela.md#docks-and-windows) has: `show`,
 `hide`, `toggle`, `focus`, `activate`, `close`, `move_to`, `detach`,
-`detach_group`, `attach`, `collapse`, `maximize`, `restore_maximized`,
+`detach_group`, `attach`, `float` (with a `model::Rect`), `pin`,
+`collapse`, `maximize`, `restore_maximized`,
 `is_shown`, `panels`, `window_of`, the named layouts, and `forget`. Each
 returns a `DockError` where a script function answers `false`. `save` returns
 the arrangement as a `Layout` value, which a Rust app keeps, edits and hands
@@ -1279,7 +1280,8 @@ the same text `dock::save` does, and `restore_json` takes that text directly.
 module's `config` table sets.
 
 On each panel's element sits `DockPanel { id }`, on each dock's `DockElement
-{ id }`, and on each window of panels `DockWindow { id }`. `DockEvent`
+{ id }`, on each window of panels `DockWindow { id }`, and on each float
+`DockFloat { id }`. `DockEvent`
 messages report what the dock's DOM events report, for a system that reads
 messages rather than handling events.
 

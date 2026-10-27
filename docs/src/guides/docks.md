@@ -109,8 +109,8 @@ panels instead.
 
 The user does the same from a tab's menu, opened with a right click on the
 tab or the Menu key or Shift+F10 when the tab has focus: Move to new window,
-Move group to new window, Dock back, Maximize, and Close, whichever fit where
-the panel is. A screen reader hears each move ("Inspector moved to a new
+Move group to new window, Float, Pin to sidebar, Dock back, Maximize, and
+Close, whichever fit where the panel is. A screen reader hears each move ("Inspector moved to a new
 window"). The menu's words are the module's messages, so the app's own
 catalogue translates them; the [tag reference](../reference/tags.md#dock-and-its-panels)
 lists their ids.
@@ -168,6 +168,8 @@ where the panel lands if you let go there.
 - Near an edge of a stack: the panel takes that half, in a stack of its own
   beside it.
 - Along an edge of the whole dock: the panel takes a stack along that edge.
+- Over no stack at all, inside the window (a toolbar, a status bar): the
+  panel floats there, over the dock.
 
 Dragging a stack's strip, away from its tabs, moves the whole stack. Escape
 puts everything back where it was, and a screen reader hears where a panel
@@ -189,6 +191,63 @@ and the panel then opens in a window of its own where the compositor places
 it. Dragging a tab or a window's tab onto another window still docks it. The
 tab menu's Move to new window and Dock back work everywhere.
 
+## Floating panels
+
+A float is a group of panels lying over its dock, inside the dock's window:
+a tool palette the user keeps beside their work without giving it a share of
+the layout. A panel floats by a drag released over no stack, by Float in its
+tab menu, or from a script:
+
+```rust
+fn float_palette() {
+    // From the dock's top-left corner: x, y, width, height.
+    dock::float("palette", 40.0, 40.0, 280.0, 360.0);
+}
+```
+
+The float's tab strip is its title bar: drag it there to move the float, and
+drag the frame along its edges and corners to resize it. Its tabs drag like
+any other, onto a stack, beside one, or out of the window. A double click on
+its strip, Dock back in the tab menu, or `dock::attach` puts its panels back
+where they came from. A click in a float brings it above the others, floats
+are saved with the layout, and `floatable="false"` on a panel keeps it from
+floating.
+
+## Pinning panels to the edges
+
+A panel pinned to an edge of its dock leaves the layout and shows as a
+button in a strip along that edge, the way an editor keeps its console and
+its search results out of the way until they are wanted. Clicking the button
+slides the panel out over the dock; a click elsewhere, Escape, or moving focus
+out of it slides it back in. Pin panels in the markup with `<dock-sidebar>`,
+from the tab menu's Pin to sidebar, or with `dock::pin`:
+
+```html
+<dock id="editor">
+  ...
+  <dock-sidebar edge="bottom">
+    <dock-panel id="console" title="Console">...</dock-panel>
+  </dock-sidebar>
+</dock>
+```
+
+```rust
+fn on_ready() {
+    dock::pin("outline", "right");
+}
+```
+
+`dock::show` and `dock::toggle` slide a pinned panel out, the way a Window
+menu item opens it. The Dock button in the slid-out panel's header, or
+`dock::attach`, puts the panel back where it was before it was pinned.
+
+## Crowded tab strips
+
+When a stack holds more tabs than its strip has room for, the tabs shrink to
+their `min-width` first, then the strip scrolls: the wheel over it moves it
+along, the shown tab is kept in view, and a button at the strip's end lists
+every tab of the stack to pick from.
+
 ## The keyboard
 
 Every arrangement has a keyboard path:
@@ -199,7 +258,7 @@ Every arrangement has a keyboard path:
 | Ctrl+F6, Ctrl+Shift+F6 | Move focus to the next or previous window. |
 | Ctrl+PageDown, Ctrl+PageUp | Show the next or previous tab of the stack holding focus. |
 | Shift+Space on a tab | Maximize its panel to fill the dock, or give the dock its layout back. |
-| Escape | Cancel a drag in progress, or give a maximized dock its layout back. |
+| Escape | Cancel a drag in progress, slide a pinned panel back in, or give a maximized dock its layout back. |
 | Delete on a tab | Close its panel. |
 | Menu key, Shift+F10 on a tab | Open its tab menu: move the panel to a new window, dock it back, maximize it, close it. |
 
@@ -272,10 +331,14 @@ with no skin otherwise.
 Set the `--lumen-dock-*` tokens in your stylesheet or skin, or style the
 classes the dock uses (`dock-stack`, `dock-tab`, `dock-tab-icon`,
 `dock-tab-label`, `dock-tab-close`, `dock-split`, `dock-window`, `center`,
-`collapsed`, `single`, `maximized` on a stack, and `active` on the shown
-tab, `dock-dragging` on the dock while a drag runs, `dock-drag-ghost` on the
-ghost and `dock-drop-preview` with `dock-drop-tab`, `dock-drop-center`,
-`dock-drop-<side>` or `dock-drop-root-<side>` on the highlighted region).
+`collapsed`, `single`, `maximized` and `overflowing` on a stack, and `active`
+on the shown tab, `dock-float` on a float, `dock-sidebar` and
+`dock-sidebar-button` on an edge's strip and its buttons, `dock-sidebar-open`
+on a slid-out panel, `dock-dragging` on the dock while a drag runs,
+`dock-drag-ghost` on the ghost and `dock-drop-preview` with `dock-drop-tab`,
+`dock-drop-center`, `dock-drop-<side>`, `dock-drop-root-<side>` or
+`dock-drop-float` on the highlighted region; the
+[tag reference](../reference/tags.md#dock-and-its-panels) lists them all).
 `--lumen-dock-tearoff-distance` sets how far past the window's edge a tab
 goes before it tears off. The dock's own rules name the stack (`.dock-stack .dock-tab`), so your
 CSS always wins and a skin wins where its rule is as specific. A window of
@@ -287,9 +350,10 @@ and a transparent `text-color`.
 ## In a page
 
 A web build shows each dock's default layout, splits laid out and tabs that
-switch. Moving, popping out, saving and restoring panels are desktop features
-for now: in a page those calls leave the layout as it is and say so on the
-console.
+switch. Moving, floating, pinning, popping out, saving and restoring panels
+are desktop features for now: in a page those calls leave the layout as it
+is and say so on the console, and the panels of a `<dock-sidebar>` stay out
+of the page's layout.
 
 ## Where to look things up
 
