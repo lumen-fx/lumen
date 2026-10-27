@@ -342,8 +342,8 @@ impl LoopExtension for WinitDrag {
                 && let RawDisplayHandle::Wayland(h) = handle.as_raw()
             {
                 // SAFETY: the display is the event loop's own, alive as long
-                // as the loop; the drag is dropped with the backend, inside
-                // the loop.
+                // as the loop; the backend drops its loop extensions when the
+                // loop exits, before the display closes.
                 self.seam.wayland = unsafe { wayland::WaylandDrag::new(h.display.as_ptr()) };
                 match &self.seam.wayland {
                     Some(w) => {

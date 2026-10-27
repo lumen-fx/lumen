@@ -77,7 +77,9 @@ impl<'a> LoopCx<'a> {
 }
 
 /// A capability riding the event loop. Every method has a default that
-/// does nothing, so an extension implements the points it needs.
+/// does nothing, so an extension implements the points it needs. The
+/// backend drops its extensions when the loop exits, while the platform
+/// connection is still open.
 pub trait LoopExtension: 'static {
     /// The loop started, or resumed, and the connection to the platform is
     /// up.
