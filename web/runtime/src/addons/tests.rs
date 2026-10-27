@@ -94,6 +94,7 @@ fn echo() -> Addon {
             html: "div".to_string(),
             void: false,
             note: None,
+            not_inside: Vec::new(),
         }],
     }
 }

@@ -159,6 +159,8 @@ doc = "Drop everything remembered about a panel: its place, its home, and what a
 tag = "dock"
 html = "div"
 note = "a page shows a dock's default layout and switches its tabs; moving, popping out and saving panels work on the desktop only for now"
+# A dock inside another dock's panel is not supported yet.
+not-inside = ["dock"]
 
 [[element]]
 tag = "dock-split"

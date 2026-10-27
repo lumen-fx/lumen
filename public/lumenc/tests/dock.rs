@@ -880,3 +880,22 @@ fn a_window_remembers_its_place_on_the_desktop() {
         Some(((rect.x) as i32, (rect.y) as i32))
     );
 }
+
+#[test]
+fn check_refuses_a_dock_inside_a_dock() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let nested = MARKUP.replace(
+        r#"<label text="log"/>"#,
+        r#"<dock id="inner"><dock-stack><dock-panel id="deep" title="Deep"/></dock-stack></dock>"#,
+    );
+    let t = build("nested", MARKUP, CANDELA, "");
+    std::fs::write(t.dir.join("src/main.lmn"), &nested).unwrap();
+    let err = lumenc::check_app(&t.dir).expect_err("a nested dock is refused");
+    assert!(
+        err.to_string()
+            .contains("<dock> cannot be written inside <dock>"),
+        "{err}"
+    );
+    std::fs::write(t.dir.join("src/main.lmn"), MARKUP).unwrap();
+    lumenc::check_app(&t.dir).expect("the plain dock checks");
+}
