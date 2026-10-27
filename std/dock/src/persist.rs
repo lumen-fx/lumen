@@ -70,7 +70,7 @@ pub fn restore_if_due(world: &mut World, shared: &Shared) {
 }
 
 /// Write the arrangement when it changed this tick and the app keeps it.
-pub fn save_if_due(shared: Res<Shared>, persist: Option<Res<Persist>>) {
+pub fn save_if_due(_: In<()>, shared: Res<Shared>, persist: Option<Res<Persist>>) {
     if persist.is_none_or(|p| *p != Persist::Auto) {
         return;
     }
