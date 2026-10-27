@@ -209,6 +209,12 @@ impl InProcessDrag {
         self.active.map(|a| a.source)
     }
 
+    /// Where the pointer holds the following window, from its corner, in
+    /// its logical pixels.
+    pub fn grab_offset(&self) -> Option<Vec2> {
+        self.active.map(|a| a.grab_offset)
+    }
+
     /// The window following the pointer.
     pub fn follow(&self) -> Option<Entity> {
         self.active.and_then(|a| a.follow)
@@ -365,6 +371,7 @@ mod tests {
         });
         assert!(drag.is_active());
         assert_eq!(drag.source(), Some(a));
+        assert_eq!(drag.grab_offset(), Some(Vec2::new(10.0, 5.0)));
         // Over a, in a's own coordinates.
         let step = drag.moved(&list, a, Vec2::new(300.0, 300.0)).unwrap();
         assert_eq!(
