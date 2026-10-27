@@ -655,6 +655,10 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
             sch.pending = false;
         }
+        // The loop extensions go while the platform connection they may
+        // share is still open: it closes with the event loop, before this
+        // handler is dropped.
+        self.extensions.clear();
         // Release every accessibility bridge before the window it wraps.
         for os in self.windows.values_mut() {
             os.a11y = None;
