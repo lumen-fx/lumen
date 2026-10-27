@@ -625,10 +625,7 @@ fn a_layout_saves_restores_and_names() {
     });
     assert_eq!(signal(app, "change").as_deref(), Some("layout"));
     // Restoring brings the window back.
-    let mut restored = None;
-    call(app, |d| {
-        restored = Some(lumen_dock::Layout::from_json(&saved, 3).unwrap())
-    });
+    let restored = Some(lumen_dock::Layout::from_json(&saved, 3).unwrap());
     call(app, |d| d.restore(restored.as_ref().unwrap()));
     ticks(app, 3);
     assert_eq!(window_entity(app).len(), 1);
@@ -898,4 +895,123 @@ fn check_refuses_a_dock_inside_a_dock() {
     );
     std::fs::write(t.dir.join("src/main.lmn"), MARKUP).unwrap();
     lumenc::check_app(&t.dir).expect("the plain dock checks");
+}
+
+const WINDOWED: &str = r#"import "lumen.cdl";
+fn on_focus(ev: int) {
+    lumen::signal_set("focus", lumen::event_type(ev));
+}
+fn on_ready() {
+    lumen::event_on(lumen::node_get_by_id("game"), "windowfocus", "on_focus");
+    lumen::event_on(lumen::node_get_by_id("game"), "windowblur", "on_focus");
+    dock::detach("game");
+    lumen::signal_set("windows", str(dock::windows().len()));
+}
+fn main() {}
+"#;
+
+#[test]
+fn a_window_of_panels_tells_them_about_its_focus() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("winfocus", MARKUP, WINDOWED, "");
+    let app = &mut t.app;
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    app.world.write_message(lumen_core::input::WindowFocused {
+        window: w,
+        focused: true,
+    });
+    ticks(app, 3);
+    assert_eq!(signal(app, "focus").as_deref(), Some("windowfocus"));
+    app.world.write_message(lumen_core::input::WindowFocused {
+        window: w,
+        focused: false,
+    });
+    ticks(app, 3);
+    assert_eq!(signal(app, "focus").as_deref(), Some("windowblur"));
+}
+
+#[test]
+fn window_close_hide_and_keys_off_follow_the_config() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let config = ", config = { window-close = \"hide\", keys = { next-stack = \"Alt+F7\", close-tab = \"\" } }";
+    let mut t = build("config", MARKUP, CANDELA, config);
+    let app = &mut t.app;
+    call(app, |d| d.detach("game").unwrap());
+    ticks(app, 2);
+    let (w, _) = window_entity(app)[0].clone();
+    let mut requests = lumen_core::window_backend::CloseRequests::default();
+    lumen_core::window_backend::run_close_request(
+        app,
+        &mut requests,
+        Some(w),
+        lumen_core::input::CloseReason::WindowClose,
+    );
+    ticks(app, 2);
+    call(app, |d| {
+        assert!(!d.is_shown("game"), "closing the window hid it")
+    });
+    // F6 is rebound to Alt+F7.
+    press(app, "F6", false, false);
+    assert_eq!(focused(app), None);
+    app.world.write_message(lumen_core::input::KeyPressed {
+        key: lumen_core::input::Key::from("F7"),
+        code: lumen_core::input::Key::from("F7").us_code(),
+        modifiers: lumen_core::input::Modifiers {
+            alt: true,
+            ..Default::default()
+        },
+        repeat: false,
+        time_stamp: std::time::Instant::now(),
+    });
+    ticks(app, 2);
+    assert_eq!(focused(app), Some(entity(app, "name")));
+    // Delete is off.
+    let files_tab = tab_button(app, "files");
+    lumen_core_focus(app, files_tab);
+    press(app, "Delete", false, false);
+    call(app, |d| assert!(d.is_shown("files")));
+}
+
+const SCRIPT_LAYOUTS: &str = r#"import "lumen.cdl";
+fn on_ready() {
+    let saved = dock::save();
+    dock::hide("files");
+    lumen::signal_set("bad", str(dock::restore("not a layout")));
+    lumen::signal_set("good", str(dock::restore(saved)));
+    lumen::signal_set("named", str(dock::save_layout("Mine")) + str(dock::apply_layout("Focus")));
+    lumen::signal_set("deleted", str(dock::delete_layout("Mine")));
+    dock::reset();
+    lumen::signal_set("focus", str(dock::focus("game")));
+    lumen::signal_set("maxed", str(dock::maximize("game")) + str(dock::restore_maximized("editor")));
+    lumen::signal_set("toggled", str(dock::toggle("log")));
+    lumen::signal_set("closed", str(dock::close("log")));
+    lumen::signal_set("forgot", str(dock::forget("profiler")));
+    lumen::signal_set("group", str(dock::detach_group("scene")) + str(dock::attach("scene")));
+    lumen::signal_set("missing", str(dock::show("nope")));
+}
+fn main() {}
+"#;
+
+#[test]
+fn every_script_function_answers() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("allfns", MARKUP, SCRIPT_LAYOUTS, "");
+    let app = &mut t.app;
+    ticks(app, 3);
+    for (name, want) in [
+        ("bad", "false"),
+        ("good", "true"),
+        ("named", "truetrue"),
+        ("deleted", "true"),
+        ("focus", "true"),
+        ("maxed", "truetrue"),
+        ("toggled", "false"),
+        ("closed", "true"),
+        ("forgot", "false"),
+        ("group", "truetrue"),
+        ("missing", "false"),
+    ] {
+        assert_eq!(signal(app, name).as_deref(), Some(want), "{name}");
+    }
 }

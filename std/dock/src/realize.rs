@@ -614,6 +614,7 @@ pub fn realize(world: &mut World) {
     let mut built = world.remove_resource::<Built>().unwrap_or_default();
     let mut core = shared.lock();
     core.dirty = false;
+    core.report_due = true;
     let ws = core.ws.clone();
     let live = live_panels(world, &core);
     let mut pass = Pass {
@@ -670,10 +671,10 @@ pub fn realize(world: &mut World) {
             continue;
         };
         used_windows.insert(layout.id.clone());
-        if let Some(root) = build(world, &mut built, &mut pass, &layout.root, true) {
-            if children_of(world, surface) != vec![root] {
-                reorder(world, surface, &[root]);
-            }
+        if let Some(root) = build(world, &mut built, &mut pass, &layout.root, true)
+            && children_of(world, surface) != vec![root]
+        {
+            reorder(world, surface, &[root]);
         }
         for p in layout.root.panels() {
             shown.insert(p.clone());

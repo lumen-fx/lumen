@@ -239,6 +239,9 @@ pub struct Core {
     pub destroy: Vec<Entity>,
     /// The element last focused in each panel, where F6 returns to.
     pub last_focused: BTreeMap<PanelId, Entity>,
+    /// The elements followed a change the events and signals have not
+    /// reported yet.
+    pub report_due: bool,
 }
 
 impl Core {
