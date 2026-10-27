@@ -224,6 +224,7 @@ pub fn build_dom_index(
         ),
         Without<lumen_core::components::DomHidden>,
     >,
+    tree: Query<(Option<&ChildOf>, Option<&Children>)>,
     changed: Query<
         (),
         Or<(
@@ -258,18 +259,31 @@ pub fn build_dom_index(
     }
     *built = true;
     let indexed: HashSet<u64> = query.iter().map(|(e, ..)| e.to_bits()).collect();
+    let is_indexed = |e: Entity| indexed.contains(&e.to_bits());
     let mut records: Vec<DomRecord> = Vec::with_capacity(indexed.len());
     for (entity, tag, classes, id, child_of, children) in query.iter() {
-        let parent = child_of
-            .map(|c| c.parent())
-            .filter(|p| indexed.contains(&p.to_bits()));
-        let kids: Vec<Entity> = children
-            .map(|c| {
-                c.iter()
-                    .filter(|e| indexed.contains(&e.to_bits()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // An element hidden from the DOM between two elements (a widget's
+        // own structure around content the app wrote) is passed through:
+        // the element above it is the parent, the elements below it are
+        // children, as if it were not there. A hidden subtree with nothing
+        // indexed above it stays out entirely.
+        let mut parent = child_of.map(ChildOf::parent);
+        while let Some(p) = parent
+            && !is_indexed(p)
+        {
+            parent = tree.get(p).ok().and_then(|(c, _)| c).map(ChildOf::parent);
+        }
+        let mut kids: Vec<Entity> = Vec::new();
+        if let Some(children) = children {
+            let mut stack: Vec<Entity> = children.iter().rev().collect();
+            while let Some(k) = stack.pop() {
+                if is_indexed(k) {
+                    kids.push(k);
+                } else if let Ok((_, Some(grand))) = tree.get(k) {
+                    stack.extend(grand.iter().rev());
+                }
+            }
+        }
         records.push(DomRecord {
             entity,
             generation: entity.generation().to_bits(),
