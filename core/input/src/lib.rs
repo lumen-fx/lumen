@@ -37,8 +37,11 @@ pub mod pointer_lock;
 ///
 /// * `Preedit { text, cursor }` - insert/update [`ImeState`] on the
 ///   focused entity. Empty `text` removes the component (preedit cleared).
-/// * `Commit(text)` - append `text` to the focused entity's
-///   [`TextContent`], clear [`ImeState`], emit [`TextInputCommitted`].
+/// * `Commit(text)` - type `text` at the focused field's caret, replacing
+///   any selection, clear [`ImeState`], and announce the edit with
+///   [`TextEditApplied`](lumen_core::text_events::TextEditApplied), as a
+///   typed key does. A commit ends a composition, not the field's edit: it
+///   raises no [`TextInputCommitted`], which is Enter's.
 /// * `Enabled` / `Disabled` - no-op at the routing layer; consumed for
 ///   completeness so the message bus doesn't accumulate stale events.
 ///
@@ -49,11 +52,8 @@ pub fn route_ime_events(
     mut commands: Commands,
     mut ime: MessageReader<ImeEvent>,
     tracker: Res<FocusTracker>,
-    mut inputs: Query<
-        (&mut TextContent, &mut TextInput),
-        Without<lumen_core::components::ReadOnly>,
-    >,
-    mut commits: MessageWriter<TextInputCommitted>,
+    mut inputs: Query<ImeField, Without<lumen_core::components::ReadOnly>>,
+    mut applied: MessageWriter<lumen_core::text_events::TextEditApplied>,
 ) {
     let Some(entity) = tracker.0 else {
         ime.read().for_each(drop);
@@ -77,29 +77,93 @@ pub fn route_ime_events(
                 }
             }
             ImeEvent::Commit(text) => {
-                if let Ok((mut tc, mut input)) = inputs.get_mut(entity) {
-                    // Defensive: a hot-reload / signal-driven overwrite of
-                    // TextContent can leave `cursor` past the buffer end OR
-                    // in the middle of a multi-byte codepoint. `insert_str`
-                    // panics on a non-char-boundary index, so clamp to len
-                    // first and then snap downward to the nearest valid
-                    // boundary before splicing.
-                    let mut at = input.cursor.min(tc.0.len());
-                    while at > 0 && !tc.0.is_char_boundary(at) {
-                        at -= 1;
-                    }
-                    tc.0.insert_str(at, text);
-                    input.cursor = at + text.len();
+                if let Ok((mut tc, mut input, buf, cur, undo)) = inputs.get_mut(entity) {
+                    commit_ime_text(
+                        entity,
+                        text,
+                        (&mut tc, &mut input),
+                        (buf, cur, undo),
+                        &mut applied,
+                    );
                 }
                 commands.entity(entity).remove::<ImeState>();
-                commits.write(TextInputCommitted {
-                    entity,
-                    text: text.clone(),
-                });
             }
             ImeEvent::Enabled | ImeEvent::Disabled => {}
         }
     }
+}
+
+/// A text field as an IME commit edits it: the legacy pair, and the
+/// buffer, caret and undo history when they are attached.
+type ImeField = (
+    &'static mut TextContent,
+    &'static mut TextInput,
+    Option<&'static mut TextBuffer>,
+    Option<&'static mut TextCursor>,
+    Option<&'static mut UndoStack>,
+);
+
+/// A field's attached buffer, caret and undo history, each when present.
+type FieldBuffers<'a> = (
+    Option<Mut<'a, TextBuffer>>,
+    Option<Mut<'a, TextCursor>>,
+    Option<Mut<'a, UndoStack>>,
+);
+
+/// Type an IME commit into `entity` the way [`type_into_focused`] types a
+/// key: through its [`TextBuffer`] when it has one (so the edit is undoable
+/// and the buffer-to-content mirror sees it), else through a buffer seeded
+/// from the legacy pair. The legacy pair is rewritten in lockstep, and a
+/// change is announced as an insert or replace.
+fn commit_ime_text(
+    entity: Entity,
+    text: &str,
+    (tc, input): (&mut TextContent, &mut TextInput),
+    (mut buf, mut cur, mut undo): FieldBuffers<'_>,
+    applied: &mut MessageWriter<lumen_core::text_events::TextEditApplied>,
+) {
+    use lumen_core::text_events::{AppliedKind, TextEditApplied};
+    let mut tmp_buf = seed_buffer(tc, input);
+    let mut tmp_cur = seed_cursor(&tc.0, input);
+    let mut tmp_undo = UndoStack::default();
+    let attached = buf.is_some() && cur.is_some() && undo.is_some();
+    let (b, c, u): (&mut TextBuffer, &mut TextCursor, &mut UndoStack) =
+        match (buf.as_deref_mut(), cur.as_deref_mut(), undo.as_deref_mut()) {
+            (Some(b), Some(c), Some(u)) if attached => {
+                // A write that replaced the text since the buffer last
+                // mirrored (a binding, a hot reload) wins, as in
+                // `type_into_focused`.
+                if b.to_string() != tc.0 {
+                    *b = tmp_buf.clone();
+                    *c = tmp_cur;
+                    u.clear();
+                }
+                (b, c, u)
+            }
+            _ => (&mut tmp_buf, &mut tmp_cur, &mut tmp_undo),
+        };
+    let before = b.to_string();
+    let before_byte = c.head.byte;
+    let replaced = c.selection_range().is_some();
+    type_text(text, b, c, u);
+    let after = b.to_string();
+    if after == before {
+        return;
+    }
+    applied.write(TextEditApplied {
+        entity,
+        version: b.version,
+        kind: if replaced {
+            AppliedKind::Replace
+        } else {
+            AppliedKind::Insert
+        },
+        before_byte,
+        after_byte: c.head.byte,
+    });
+    tc.0 = after;
+    input.cursor = c.head.byte;
+    input.selection_anchor = None;
 }
 
 /// True for the canonical named-key strings the window backend forwards
@@ -289,6 +353,25 @@ pub fn type_into_focused(
     }
 }
 
+/// Insert `text` at the caret, replacing any live selection, as a typed
+/// key, a paste or an IME commit does. Strips newlines for single-line
+/// buffers (Qt's QLineEdit convention), matching the sanitize step of the
+/// request mutator.
+fn type_text(text: &str, b: &mut TextBuffer, c: &mut TextCursor, u: &mut UndoStack) {
+    use lumen_text::{insert_text, replace_range};
+    let sanitized;
+    let text = if b.is_single_line() && text.contains('\n') {
+        sanitized = text.replace('\n', " ");
+        sanitized.as_str()
+    } else {
+        text
+    };
+    match c.selection_range() {
+        Some(r) => replace_range(b, c, u, r, text),
+        None => insert_text(b, c, u, c.head.byte, text),
+    }
+}
+
 /// Build a [`TextBuffer`] from the legacy `TextContent` + `TextInput`
 /// pair (fallback path and reconcile path of [`type_into_focused`]).
 fn seed_buffer(tc: &TextContent, input: &TextInput) -> TextBuffer {
@@ -394,22 +477,6 @@ fn apply_focused_key_inner(
     // bitfield alone, so accept either.
     let cmd_or_ctrl = mods.ctrl || mods.super_;
 
-    // Insert `text` at the caret, replacing any live selection. Strips
-    // newlines for single-line buffers (Qt's QLineEdit convention),
-    // matching the sanitize step of the request mutator.
-    let type_text = |text: &str, b: &mut TextBuffer, c: &mut TextCursor, u: &mut UndoStack| {
-        let sanitized;
-        let text = if b.is_single_line() && text.contains('\n') {
-            sanitized = text.replace('\n', " ");
-            sanitized.as_str()
-        } else {
-            text
-        };
-        match c.selection_range() {
-            Some(r) => replace_range(b, c, u, r, text),
-            None => insert_text(b, c, u, c.head.byte, text),
-        }
-    };
     // Move the caret along `motion`; Shift keeps the anchor (extends).
     let motion_key = |motion: CursorMotion, b: &TextBuffer, c: &mut TextCursor| {
         let p = move_cursor(b, c.head, motion);
@@ -4163,5 +4230,106 @@ mod text_block_origin_tests {
         let baseline = top + text_baseline_in_line(SIZE_PX, LINE_H);
         // Same value the pre-existing extract formula produced.
         assert!((baseline - (inner_h + SIZE_PX * 0.72) / 2.0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod ime_commit_tests {
+    use super::*;
+    use bevy_ecs::message::Messages;
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::text_events::{AppliedKind, TextEditApplied};
+
+    fn world_with(field: (TextContent, TextInput)) -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<Messages<ImeEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        let e = world.spawn(field).id();
+        world.insert_resource(FocusTracker(Some(e)));
+        (world, e)
+    }
+
+    fn commit(world: &mut World, text: &str) {
+        world.write_message(ImeEvent::Commit(text.to_string()));
+        world.run_system_once(route_ime_events).expect("ran");
+    }
+
+    /// An IME commit is typing: it lands at the caret through the field's
+    /// buffer, is announced as an edit, and is not the field's commit,
+    /// which only Enter raises. Before, it raised `TextInputCommitted`, so
+    /// every composed word fired the DOM `change` and `submit`.
+    #[test]
+    fn an_ime_commit_types_and_does_not_commit_the_field() {
+        let (mut world, e) = world_with((
+            TextContent("ab".to_string()),
+            TextInput {
+                cursor: 1,
+                ..TextInput::default()
+            },
+        ));
+        let buffer = TextBuffer::single_line("ab");
+        let cursor = TextCursor {
+            head: TextPos::from_byte("ab", 1),
+            anchor: TextPos::from_byte("ab", 1),
+            ..TextCursor::default()
+        };
+        world
+            .entity_mut(e)
+            .insert((buffer, cursor, UndoStack::default()));
+        commit(&mut world, "\u{65e5}\u{672c}");
+
+        assert_eq!(world.get::<TextContent>(e).unwrap().0, "a\u{65e5}\u{672c}b");
+        assert_eq!(
+            world.get::<TextBuffer>(e).unwrap().to_string(),
+            "a\u{65e5}\u{672c}b"
+        );
+        assert_eq!(
+            world.get::<TextInput>(e).unwrap().cursor,
+            1 + "\u{65e5}\u{672c}".len()
+        );
+        let edits: Vec<(Entity, AppliedKind)> = world
+            .resource::<Messages<TextEditApplied>>()
+            .iter_current_update_messages()
+            .map(|a| (a.entity, a.kind))
+            .collect();
+        assert!(
+            matches!(edits[..], [(x, AppliedKind::Insert)] if x == e),
+            "{edits:?}"
+        );
+        assert_eq!(
+            world
+                .resource::<Messages<TextInputCommitted>>()
+                .iter_current_update_messages()
+                .count(),
+            0,
+            "an IME commit is not Enter"
+        );
+        assert!(
+            !world.get::<UndoStack>(e).unwrap().is_empty(),
+            "the commit can be undone"
+        );
+    }
+
+    /// A field without an attached buffer takes the commit too.
+    #[test]
+    fn an_ime_commit_reaches_a_field_with_no_buffer() {
+        let (mut world, e) = world_with((
+            TextContent("ab".to_string()),
+            TextInput {
+                cursor: 2,
+                ..TextInput::default()
+            },
+        ));
+        commit(&mut world, "c");
+        assert_eq!(world.get::<TextContent>(e).unwrap().0, "abc");
+        assert_eq!(world.get::<TextInput>(e).unwrap().cursor, 3);
+        assert_eq!(
+            world
+                .resource::<Messages<TextEditApplied>>()
+                .iter_current_update_messages()
+                .count(),
+            1
+        );
     }
 }

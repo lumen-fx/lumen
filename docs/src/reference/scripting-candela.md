@@ -703,7 +703,8 @@ confines the pointer, the cursor is confined, hidden and put back in the
 middle after each move, which is the same to a script.
 
 `input` fires per keystroke: every edit that changes the text raises one,
-carrying the buffer as it stands after that edit. A caret move raises nothing.
+carrying the buffer as it stands after that edit. Text an input method commits
+is an edit like a keystroke. A caret move raises nothing.
 A color field raises `input` for every color it moves to and `change` when its
 panel closes on a new one, with the color in `value`: `#rrggbb`, or
 `color(srgb r g b / a)` on a field with `alpha`. A `<checkbox>`, `<toggle>` or
