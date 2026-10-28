@@ -188,8 +188,10 @@ windows (KDE Plasma, GNOME), the window follows the pointer. On other Wayland
 compositors (Hyprland, sway and the rest of the wlroots family) a window
 cannot follow the pointer: tearing a tab off shows nothing until you let go,
 and the panel then opens in a window of its own where the compositor places
-it. Dragging a tab or a window's tab onto another window still docks it. The
-tab menu's Move to new window and Dock back work everywhere.
+it. Dragging a tab or a window's tab onto another window still docks it.
+These compositors keep keys from every app while a drag is outside its
+window, so Escape cancels a drag only before the pointer leaves the window it
+began in. The tab menu's Move to new window and Dock back work everywhere.
 
 ## Floating panels
 
