@@ -178,6 +178,16 @@ pub fn substitute_attrs(
     {
         substitute(text);
     }
+    // `class` is a whitespace-separated list once the values are in, as in
+    // HTML: a value holding two names gives two classes, an empty one none.
+    if changed {
+        out.classes = out
+            .classes
+            .join(" ")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+    }
     changed.then_some(out)
 }
 
@@ -561,6 +571,31 @@ mod tests {
         assert_eq!(
             out, "a {$absent} b {unclosed",
             "a global no signal holds is left standing, and a brace with no end is text"
+        );
+    }
+
+    #[test]
+    fn a_class_value_holding_several_names_gives_several_classes() {
+        let store = PropertyStore::default();
+        let row = item(&[("cls", "a  b"), ("none", "")]);
+        let attrs = Attributes {
+            classes: vec![
+                "row".to_string(),
+                "{row.cls}".to_string(),
+                "{row.none}".to_string(),
+            ],
+            ..Attributes::default()
+        };
+        let slots = [
+            InterpolationSlot::Row("cls".to_string()),
+            InterpolationSlot::Row("none".to_string()),
+        ];
+        let scope = Scope::new(&store).with_row(&row, 0);
+        let out = substitute_attrs(&attrs, &slots, &scope).expect("placeholders resolve");
+        assert_eq!(
+            out.classes,
+            ["row", "a", "b"],
+            "split on whitespace, empties dropped"
         );
     }
 
