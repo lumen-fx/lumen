@@ -292,11 +292,16 @@ pub(crate) fn register_reactive(app: &mut App) {
         TickStage::Input,
         crate::spawn::close_dialogs_on_escape.after(lumen_input::cancel_press_on_escape),
     );
-    // In-app error overlay: hot-reload parse failures land in
-    // `ErrorBanner`, the reconciler spawns / updates / despawns the
-    // banner entity, and Esc dismisses.
+    // In-app error overlay: hot-reload parse failures and script load
+    // failures land in `ErrorBanner`, the reconciler swaps the banner on
+    // screen when it changes, its Copy button copies the report, and Esc
+    // dismisses.
     app.world.insert_resource(ErrorBanner::default());
     app.add_systems(TickStage::Systems, reconcile_error_banner);
+    app.add_systems(
+        TickStage::Systems,
+        copy_error_banner_on_click.run_if(|banner: Res<ErrorBanner>| banner.0.is_some()),
+    );
     app.add_systems(TickStage::Input, dismiss_error_banner_on_escape);
 }
 

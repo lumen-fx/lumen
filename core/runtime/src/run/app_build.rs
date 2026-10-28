@@ -418,8 +418,8 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // Mirror it into the in-app error banner so the failure is visible in the
     // window itself, not only in the stderr banner the host printed.
     if let Some(fail) = app.world.get_resource::<lumen_script::ScriptLoadFailure>() {
-        let msg = format!("script load failed: {}", fail.0);
-        app.world.resource_mut::<ErrorBanner>().0 = Some(msg);
+        let report = ErrorReport::from_load_failure(fail);
+        app.world.resource_mut::<ErrorBanner>().0 = Some(report);
     }
     app.world.insert_resource(reloaders);
     app.world
@@ -806,5 +806,5 @@ fn no_host_for(app: &mut App, language: &str, table: &LanguageTable) {
          ================================================================\n"
     );
     app.world
-        .insert_resource(lumen_script::ScriptLoadFailure(reason));
+        .insert_resource(lumen_script::ScriptLoadFailure(reason, None));
 }

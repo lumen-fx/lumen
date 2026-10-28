@@ -150,3 +150,29 @@ progress { width: 100%; height: 6; }
 /* A separator is a rule line, not a gap: it keeps its pixel rather than
    taking the grow `spacer` gives the tag it is spelled with. */
 .menu-separator { grow: 0; }
+/* The error banner shown across the top of the window when a markup or
+   CSS file stops parsing or a script does not load: the report in a read-only
+   `textarea.lumen-error-text` the user can select from, and a
+   `button.lumen-error-copy` that copies all of it. Restyle it by setting
+   the `--lumen-error-*` tokens in `:root`, or with rules of your own for
+   these classes. The state rules are spelled out so a skin's
+   `textarea:hover` or `button:active` does not reach in. */
+.lumen-error {
+  position: absolute; inset: 0 0 auto 0; width: 100%; max-height: 50%;
+  flex-direction: row; align: start; gap: 8; padding: 8 12;
+  bg: var(--lumen-error-bg, #b3261e);
+}
+.lumen-error-text, .lumen-error-text:hover, .lumen-error-text:focus {
+  grow: 1; min-width: 0; padding: 6 8; radius: 4; border: none;
+  bg: var(--lumen-error-field-bg, #00000033);
+  text-color: var(--lumen-error-text, #ffffff);
+  font-family: var(--lumen-error-font, monospace); font-size: 13;
+  selection-color: var(--lumen-error-selection, #ffffff);
+  selection-text-color: var(--lumen-error-selection-text, #b3261e);
+}
+.lumen-error-copy, .lumen-error-copy:hover, .lumen-error-copy:active {
+  grow: 0; flex-shrink: 0; min-height: 0; padding: 4 12; radius: 4;
+  border: 1px solid var(--lumen-error-text, #ffffff);
+  bg: var(--lumen-error-button-bg, #ffffff26);
+  text-color: var(--lumen-error-text, #ffffff); font-size: 13;
+}

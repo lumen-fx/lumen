@@ -4967,6 +4967,7 @@ dependencies = [
  "lumen-mcp",
  "lumen-module-registry",
  "lumen-modules",
+ "lumen-os-clipboard",
  "lumen-os-dnd",
  "lumen-os-filedialog",
  "lumen-os-hotkey",

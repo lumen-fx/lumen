@@ -656,6 +656,7 @@ mod tests {
 mod app_build;
 mod caret_scroll;
 mod check;
+mod error_banner;
 mod fonts;
 mod hot_reload;
 mod i18n;
@@ -699,10 +700,11 @@ pub use check::module_surface;
 pub use check::script_exports;
 #[cfg(feature = "runtime-parse")]
 pub use check::{CompileDeps, ModuleSurface, check_app, compile_app, compile_app_with_skin};
+pub use error_banner::{
+    ErrorBanner, ErrorBannerCopy, ErrorBannerMarker, ErrorLocation, ErrorReport,
+    copy_error_banner_on_click, dismiss_error_banner_on_escape, reconcile_error_banner,
+};
 #[cfg(feature = "runtime-parse")]
 pub(crate) use hot_reload::HotReloadDriver;
 pub use i18n::locale_dir;
-pub use restyle::{
-    ColorSchemeIntent, ErrorBanner, ErrorBannerMarker, dismiss_error_banner_on_escape,
-    reconcile_error_banner,
-};
+pub use restyle::ColorSchemeIntent;

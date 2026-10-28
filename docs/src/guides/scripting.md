@@ -581,10 +581,28 @@ Elements a script created through the DOM API are rebuilt rather than
 preserved: the tree is respawned from markup and `on_ready` fires again, so the
 script recreates them the way it did at first mount.
 
-An error keeps the app alive. A markup or CSS problem shows a banner across the
-top of the window and leaves the last working version running. A script that
-fails to compile leaves the previously loaded script in place and reports the
-error.
+An error keeps the app alive. A markup or CSS problem leaves the last working
+version running, and a script that fails to compile leaves the previously
+loaded script in place. Either way the error shows on stderr and in a banner
+across the top of the window, which the next good save clears and Esc
+dismisses. When the error names a place in a file, the banner reads
+`file:line:col` and shows that line with a caret under the column:
+
+```text
+hot-reload: candela script: Cannot find function not_there in this scope
+ --> /home/me/myapp/src/main.cdl:4:5
+  |
+4 |     not_there(n);
+  |     ^
+```
+
+The banner's text is selectable: drag across it and copy with the platform
+shortcut, or press Copy to put the whole report on the clipboard. Markup and
+CSS errors do not name a file position yet; their banner shows the parser's
+message. The banner takes its look from the `--lumen-error-bg`,
+`--lumen-error-text`, `--lumen-error-field-bg`, `--lumen-error-button-bg`,
+`--lumen-error-font`, `--lumen-error-selection` and
+`--lumen-error-selection-text` tokens, so a `:root` rule restyles it.
 
 One case needs a restart: renaming a handler function and the `on(...)` call
 that binds it in the same edit. The old name stays registered because nothing

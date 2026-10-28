@@ -120,7 +120,7 @@ fn install(app: &mut App, program: ScriptProgram, multi_host: bool) {
             program.uri
         );
         warn_line!("lumen-candela: {message}");
-        app.world.insert_resource(ScriptLoadFailure(message));
+        app.world.insert_resource(ScriptLoadFailure(message, None));
         return;
     };
     let mut plugin = ScriptCandelaVmPlugin::new(image).with_uri(program.uri);

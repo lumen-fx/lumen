@@ -124,7 +124,7 @@ pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION, push_plugin_event};
 /// re-parsing the error message. `Runtime` is still a free-form string;
 /// Rhai's runtime errors don't always carry positions and the
 /// trait-level shape is "best effort".
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ScriptError {
     /// Source failed to parse / compile.
     #[error("script compile error at {uri}:{line}:{col}: {message}")]
