@@ -19,6 +19,7 @@ use lumen_module::lumen_core::input::{
 };
 use lumen_module::lumen_core::prelude::TickStage;
 use lumen_module::lumen_core::property_store::PropertyStore;
+use lumen_module::lumen_core::render_world::AnimationsActive;
 use lumen_module::lumen_core::surface_drag::{SurfaceDragEvent, SurfaceDragRequest};
 use lumen_module::lumen_core::window::{PrimaryWindow, Window, WindowClosing, WindowRuntime};
 use lumen_module::lumen_ir::layout_ir::{Attributes, Element};
@@ -861,12 +862,18 @@ fn report(
         Query<(), SlideOutParts>,
     ),
     mut last_focus: Local<Option<String>>,
+    animations: Option<Res<AnimationsActive>>,
 ) {
     let mut core = shared.lock();
     // An idle tick reports nothing and builds nothing to find that out.
     let model_moved = std::mem::take(&mut core.report_due);
     if !model_moved && !focus.is_changed() && focused_window.is_empty() {
         return;
+    }
+    // The events written here reach scripts on the next tick, which nothing
+    // else may wake the loop for.
+    if let Some(a) = &animations {
+        a.request();
     }
     let pending = std::mem::take(&mut core.pending);
     let changed = core.changed.take();
