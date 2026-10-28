@@ -14,6 +14,10 @@ rd = dbus.Interface(bus.get_object(BUS, "/org/gnome/Mutter/RemoteDesktop"), BUS)
 path = rd.CreateSession()
 session = dbus.Interface(bus.get_object(BUS, path), BUS + ".Session")
 session.Start()
+# mutter adds the session's keyboard to the seat on its first key, too late
+# for that key to reach a client: a Shift tap makes it now.
+session.NotifyKeyboardKeycode(42, True)
+session.NotifyKeyboardKeycode(42, False)
 session.NotifyPointerMotionRelative(-100000.0, -100000.0)
 x, y = 0.0, 0.0
 for line in sys.stdin:

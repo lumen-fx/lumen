@@ -11,7 +11,7 @@ name: window drag
 
 on:
   push:
-    branches: [feat/dock-drag]
+    branches: [feat/dock-drag, feat/dock-drag-main]
   pull_request:
     paths:
       - std/dock/**
