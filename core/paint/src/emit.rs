@@ -654,14 +654,71 @@ fn shape_text<S: TextShaper + ?Sized>(
         weight: text.weight,
         line_height: Some(text.line_height_px * dpr),
     };
-    let shaped = shaper.shape(&text.text, text.size_px * dpr, shape_opts);
-    let measured = shaped.as_ref().map(|r| r.width).unwrap_or(0.0);
-    let align_dx = match text.align {
-        TextAlign::Start => 0.0,
-        TextAlign::Center => ((container_width - measured) / 2.0).max(0.0),
-        TextAlign::End => (container_width - measured).max(0.0),
+    let mut shaped = shaper.shape(&text.text, text.size_px * dpr, shape_opts);
+    let share = match text.align {
+        TextAlign::Start => return (shaped, text.origin.x * dpr),
+        TextAlign::Center => 0.5,
+        TextAlign::End => 1.0,
     };
+    // A run of several lines aligns each line on its own width, as CSS does;
+    // the glyphs move and the run is drawn from the container's edge.
+    if let Some(run) = shaped.as_mut()
+        && align_lines(run, &text.text, container_width, share)
+    {
+        return (shaped, text.origin.x * dpr);
+    }
+    let measured = shaped.as_ref().map(|r| r.width).unwrap_or(0.0);
+    let align_dx = ((container_width - measured) * share).max(0.0);
     (shaped, text.origin.x * dpr + align_dx)
+}
+
+/// Shift each line of a multi-line `run` by `share` of the room its own
+/// width leaves in `container_width` (a half to centre, all of it to end).
+/// A line's width runs from its first glyph to the end of its last one that
+/// is not whitespace, so the space a wrap breaks at does not count. Returns
+/// `false`, touching nothing, for a run of one line.
+fn align_lines(run: &mut ShapedRun, source: &str, container_width: f32, share: f32) -> bool {
+    // Lines in the order they appear, keyed by baseline: (y, start, end).
+    let mut lines: Vec<(f32, f32, f32)> = Vec::new();
+    for g in &run.glyphs {
+        // A synthesised glyph (an ellipsis) has an empty range and is ink.
+        let blank = g.byte_start < g.byte_end
+            && source
+                .get(g.byte_start as usize..g.byte_end as usize)
+                .is_some_and(|s| s.chars().all(char::is_whitespace));
+        let i = match lines.iter().position(|l| l.0 == g.y) {
+            Some(i) => i,
+            None => {
+                lines.push((g.y, f32::INFINITY, f32::NEG_INFINITY));
+                lines.len() - 1
+            }
+        };
+        let line = &mut lines[i];
+        line.1 = line.1.min(g.x);
+        if !blank {
+            line.2 = line.2.max(g.x + g.advance);
+        }
+    }
+    if lines.len() < 2 {
+        return false;
+    }
+    let shift = |y: f32| {
+        lines
+            .iter()
+            .find(|l| l.0 == y)
+            .map_or(0.0, |&(_, start, end)| {
+                let width = if end > start { end - start } else { 0.0 };
+                ((container_width - width) * share).max(0.0) - start
+            })
+    };
+    for g in run
+        .glyphs
+        .iter_mut()
+        .chain(run.segments.iter_mut().flat_map(|s| s.glyphs.iter_mut()))
+    {
+        g.x += shift(g.y);
+    }
+    true
 }
 
 /// The box in target pixels that holds everything [`draw_text`] paints for
@@ -1640,17 +1697,26 @@ mod tests {
             if text.is_empty() {
                 return None;
             }
-            let glyphs: Vec<GlyphPosition> = (0..text.len())
-                .map(|i| GlyphPosition {
+            // One glyph per byte, a `\n` starting the next line 20 px down.
+            let (mut col, mut line) = (0.0f32, 0.0f32);
+            let mut width = 0.0f32;
+            let mut glyphs: Vec<GlyphPosition> = Vec::new();
+            for (i, b) in text.bytes().enumerate() {
+                if b == b'\n' {
+                    (col, line) = (0.0, line + 1.0);
+                    continue;
+                }
+                glyphs.push(GlyphPosition {
                     id: i as u32 + 1,
-                    x: i as f32 * self.advance,
-                    y: 0.0,
+                    x: col * self.advance,
+                    y: line * 20.0,
                     advance: self.advance,
                     byte_start: i as u32,
                     byte_end: i as u32 + 1,
-                })
-                .collect();
-            let width = glyphs.len() as f32 * self.advance;
+                });
+                col += 1.0;
+                width = width.max(col * self.advance);
+            }
             let font_data = Arc::new(Vec::new());
             Some(ShapedRun {
                 font_data: font_data.clone(),
@@ -1727,6 +1793,41 @@ mod tests {
             };
             assert_eq!(glyphs.len(), 4);
             assert_eq!(transform.translation(), (x, 20.0).into(), "{align:?}");
+        }
+    }
+
+    /// Each line of a multi-line run is aligned on its own width, so a
+    /// centred paragraph centres its shorter line too, and the space a line
+    /// ends in does not count toward its width.
+    #[test]
+    fn each_line_of_a_paragraph_aligns_on_its_own_width() {
+        use lumen_core::components::TextAlign;
+        let mut shaper = MonoShaper { advance: 10.0 };
+        // Lines of 6 and 2 glyphs (the first ends in a space) in 200 px.
+        for (align, first, second) in [
+            (TextAlign::Start, 0.0, 0.0),
+            (TextAlign::Center, 75.0, 90.0),
+            (TextAlign::End, 150.0, 180.0),
+        ] {
+            let mut text = label("abcde \nfg");
+            text.align = align;
+            let (run, draw_x) = shape_text(&mut shaper, &text, 1.0);
+            let run = run.expect("shaped");
+            assert_eq!(draw_x, 10.0, "{align:?}: drawn from the container's edge");
+            let starts: Vec<f32> = [0.0, 20.0]
+                .iter()
+                .map(|&y| {
+                    run.glyphs
+                        .iter()
+                        .filter(|g| g.y == y)
+                        .map(|g| g.x)
+                        .fold(f32::INFINITY, f32::min)
+                })
+                .collect();
+            assert_eq!(starts, [first, second], "{align:?}");
+            let painted: Vec<f32> = run.segments[0].glyphs.iter().map(|g| g.x).collect();
+            let listed: Vec<f32> = run.glyphs.iter().map(|g| g.x).collect();
+            assert_eq!(painted, listed, "{align:?}: segments move with the run");
         }
     }
 
