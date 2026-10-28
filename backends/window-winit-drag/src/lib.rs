@@ -50,6 +50,15 @@ const OFF_DESKTOP: IVec2 = IVec2::new(-30000, -30000);
 /// own queue.
 const DRAG_POLL: Duration = Duration::from_millis(4);
 
+/// Whether `event` ends the drag, and with it the press that began it.
+#[cfg(target_os = "linux")]
+fn ends_press(event: &SurfaceDragEvent) -> bool {
+    matches!(
+        event,
+        SurfaceDragEvent::Dropped { .. } | SurfaceDragEvent::Cancelled
+    )
+}
+
 /// Register the drag with the winit backend. What the capability crate
 /// beside this one registers.
 pub fn install(app: &mut App, _env: &CapabilityEnv) {
@@ -405,6 +414,11 @@ impl LoopExtension for WinitDrag {
             }
             let events = w.dispatch();
             if !events.is_empty() {
+                // The compositor ran the drag and kept the button's release
+                // from the window; the drag's end is that release.
+                if events.iter().any(ends_press) {
+                    cx.release_pointer();
+                }
                 for e in events {
                     cx.app.world.write_message(e);
                 }
@@ -673,8 +687,10 @@ pub mod wayland {
             queue.roundtrip(&mut state).ok()?;
             let seat = state.seat.clone()?;
             let ddm = state.ddm.clone()?;
-            state.pointer = Some(seat.get_pointer(&qh, ()));
             state.device = Some(ddm.get_data_device(&seat, &qh, ()));
+            // The seat's capabilities, and with them our pointer, arrive in
+            // reply to the bind.
+            queue.roundtrip(&mut state).ok()?;
             let _ = conn.flush();
             Some(Self {
                 conn,
@@ -887,15 +903,33 @@ pub mod wayland {
         }
     }
 
+    /// Whether a seat's capabilities include a pointer. Asking a seat with
+    /// none for its pointer is a protocol error that ends the connection,
+    /// which this one shares with the event loop.
+    pub(crate) fn has_pointer(caps: WEnum<wl_seat::Capability>) -> bool {
+        matches!(caps, WEnum::Value(c) if c.contains(wl_seat::Capability::Pointer))
+    }
+
     impl Dispatch<wl_seat::WlSeat, ()> for State {
         fn event(
-            _: &mut Self,
-            _: &wl_seat::WlSeat,
-            _: wl_seat::Event,
+            s: &mut Self,
+            seat: &wl_seat::WlSeat,
+            e: wl_seat::Event,
             _: &(),
             _: &Connection,
-            _: &QueueHandle<Self>,
+            qh: &QueueHandle<Self>,
         ) {
+            if let wl_seat::Event::Capabilities { capabilities } = e {
+                let has = has_pointer(capabilities);
+                if has && s.pointer.is_none() {
+                    s.pointer = Some(seat.get_pointer(qh, ()));
+                } else if !has && let Some(pointer) = s.pointer.take() {
+                    if pointer.version() >= 3 {
+                        pointer.release();
+                    }
+                    s.press_serial = None;
+                }
+            }
         }
     }
 
@@ -1133,6 +1167,35 @@ mod tests {
         assert!(within(Vec2::new(0.0, 9.9), size));
         assert!(!within(Vec2::new(10.0, 1.0), size));
         assert!(!within(Vec2::new(-1.0, 1.0), size));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_drop_or_a_cancel_ends_the_press() {
+        assert!(ends_press(&SurfaceDragEvent::Cancelled));
+        assert!(ends_press(&SurfaceDragEvent::Dropped {
+            window: None,
+            position: Vec2::ZERO
+        }));
+        assert!(!ends_press(&SurfaceDragEvent::Over {
+            window: None,
+            position: Vec2::ZERO
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_seat_with_a_pointer_is_asked_for_one() {
+        use wayland::has_pointer;
+        use wayland_client::WEnum;
+        use wayland_client::protocol::wl_seat::Capability;
+        assert!(has_pointer(WEnum::Value(Capability::Pointer)));
+        assert!(has_pointer(WEnum::Value(
+            Capability::Pointer | Capability::Keyboard
+        )));
+        assert!(!has_pointer(WEnum::Value(Capability::Keyboard)));
+        assert!(!has_pointer(WEnum::Value(Capability::empty())));
+        assert!(!has_pointer(WEnum::Unknown(0x80)));
     }
 
     #[test]

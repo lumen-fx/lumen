@@ -1028,34 +1028,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                let lumen_button = map_button(button);
-                let data = self
-                    .pointers
-                    .mouse_button(lumen_button, matches!(state, ElementState::Pressed));
-                let pos = self.pointer_position(entity);
-                if matches!(lumen_button, PointerButton::Primary) {
-                    self.app.world.resource_mut::<PointerState>().primary_down =
-                        matches!(state, ElementState::Pressed);
-                }
-                match state {
-                    ElementState::Pressed => {
-                        self.app.world.write_message(PointerPressed {
-                            position: pos,
-                            button: lumen_button,
-                            local: None,
-                            pointer: data.stamped(),
-                        });
-                    }
-                    ElementState::Released => {
-                        self.app.world.write_message(PointerReleased {
-                            position: pos,
-                            button: lumen_button,
-                            local: None,
-                            pointer: data.stamped(),
-                        });
-                    }
-                }
-                self.want_frame();
+                self.mouse_input(
+                    entity,
+                    map_button(button),
+                    matches!(state, ElementState::Pressed),
+                );
             }
             _ => {}
         }
@@ -1156,10 +1133,56 @@ impl WinitHandler {
             f(ext.as_mut(), &mut cx);
         }
         let frame = cx.wants_frame();
+        let release = cx.wants_release();
         self.extensions = list;
+        if release {
+            self.release_held_buttons();
+        }
         if frame {
             self.want_frame();
         }
+    }
+
+    /// Release every mouse button still held, in the window the pointer
+    /// was last in: the platform ended the press without telling it.
+    fn release_held_buttons(&mut self) {
+        let Some(entity) = self
+            .app
+            .world
+            .resource::<PointerState>()
+            .window
+            .or(self.primary)
+        else {
+            return;
+        };
+        for button in self.pointers.held_mouse_buttons() {
+            self.mouse_input(entity, button, false);
+        }
+    }
+
+    /// A mouse button went down or up in `entity`.
+    fn mouse_input(&mut self, entity: Entity, button: PointerButton, pressed: bool) {
+        let data = self.pointers.mouse_button(button, pressed);
+        let pos = self.pointer_position(entity);
+        if matches!(button, PointerButton::Primary) {
+            self.app.world.resource_mut::<PointerState>().primary_down = pressed;
+        }
+        if pressed {
+            self.app.world.write_message(PointerPressed {
+                position: pos,
+                button,
+                local: None,
+                pointer: data.stamped(),
+            });
+        } else {
+            self.app.world.write_message(PointerReleased {
+                position: pos,
+                button,
+                local: None,
+                pointer: data.stamped(),
+            });
+        }
+        self.want_frame();
     }
 
     /// [`ApplicationHandler::about_to_wait`]'s work, before an extension's
