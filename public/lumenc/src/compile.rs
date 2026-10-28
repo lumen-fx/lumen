@@ -36,8 +36,8 @@ use lumen_ir::layout_ir::Element;
 /// the runtime-parse dev-run path and `lumenc build`; this path cannot
 /// depend on `lumen-runtime` (see the module doc comment above), so it
 /// includes the identical bytes directly instead of sharing the constant.
-/// There is exactly one `ua.css` file on disk, with two `include_str!`
-/// sites reading it.
+/// There is exactly one `ua.css` file on disk; `lumen-devtools` reads it
+/// the same way for its overlay.
 const UA_CSS: &str = include_str!("../../../core/runtime/src/skins/ua.css");
 
 /// Errors raised while compiling a source directory to LMNA bytes.

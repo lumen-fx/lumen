@@ -47,7 +47,7 @@ pub fn update_scrollbars(
     parents: Query<&ChildOf>,
     children_q: Query<(&ChildOf, &Transform)>,
     bare: Query<Entity, (With<Scroll>, Without<ScrollbarState>)>,
-    styles: Query<&ScrollbarStyle>,
+    (styles, visibles): (Query<&ScrollbarStyle>, Query<&Visible>),
     mut scrolls: Query<(
         Entity,
         &Transform,
@@ -306,6 +306,17 @@ pub fn update_scrollbars(
             next.idle_secs = (next.idle_secs + dt).min(fade_delay + fade_len + 1.0);
             if next.idle_secs > fade_delay {
                 next.alpha = (next.alpha - dt / fade_len).max(0.0);
+            }
+            // A container nobody can see (a closed devtools panel, a
+            // hidden tab) has no bar to fade: it goes straight to idle
+            // rather than keeping the loop awake for the fade.
+            if next.alpha > 0.0
+                && std::iter::once(entity)
+                    .chain(parents.iter_ancestors(entity))
+                    .any(|e| visibles.get(e).is_ok_and(|v| !v.0))
+            {
+                next.alpha = 0.0;
+                next.idle_secs = fade_delay + fade_len + 1.0;
             }
         }
         if next != *state {
@@ -711,6 +722,25 @@ mod fsm_tests {
         assert!(
             (alpha - 1.0).abs() < f32::EPSILON,
             "scroll reactivates the bars (alpha {alpha})"
+        );
+    }
+
+    /// A scroller under a hidden ancestor (a closed devtools panel) goes
+    /// straight to idle instead of running the fade, so it does not keep
+    /// the loop awake for a bar nobody sees.
+    #[test]
+    fn a_hidden_scroller_does_not_keep_the_loop_awake() {
+        let (mut world, scroller) = world_with_scroller();
+        let panel = world.spawn(Visible(false)).id();
+        world.entity_mut(scroller).insert(ChildOf(panel));
+        world.resource_mut::<Tick>().dt = std::time::Duration::from_millis(16);
+        run(&mut world);
+        assert_eq!(world.get::<ScrollbarState>(scroller).unwrap().alpha, 0.0);
+        world.resource::<AnimationsActive>().clear();
+        run(&mut world);
+        assert!(
+            !world.resource::<AnimationsActive>().get(),
+            "nothing left to animate"
         );
     }
 

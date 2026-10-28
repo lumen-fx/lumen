@@ -70,6 +70,12 @@ pub use network::{NetEntry, NetworkCapture};
 pub const OVERLAY_LMN: &str = include_str!("assets/overlay.lmn");
 /// Embedded overlay stylesheet (authored `.css`).
 pub const OVERLAY_CSS: &str = include_str!("assets/overlay.css");
+/// The user-agent baseline every Lumen document is cascaded under: what a
+/// `<column>` and a `<scroll>` are, the control sizing floors. The overlay
+/// is cascaded on its own, apart from the app's stylesheet, so it folds
+/// this in beneath [`OVERLAY_CSS`] itself. The same file
+/// `lumen_runtime::skins::UA` embeds; this crate sits below the runtime.
+pub const UA_CSS: &str = include_str!("../../../core/runtime/src/skins/ua.css");
 
 /// `LumenId` of the text-blob body entity (Signals / Network tabs, and the
 /// Elements empty-state hint).
