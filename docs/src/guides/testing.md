@@ -82,6 +82,35 @@ assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
 The `rust` template ships a test like this. The [Rust SDK
 reference](../reference/ffi.md#running-headless) has the details.
 
+### A real window with no display
+
+When the windowed path itself is what you test, run the app inside a headless
+Wayland compositor:
+
+```sh
+weston --backend=headless --socket=lumen-test &
+WAYLAND_DISPLAY=lumen-test lumenc run myapp
+```
+
+With a Mesa Vulkan driver and Weston's GL renderer (`--renderer=gl`), a window
+that repaints every frame stutters: a few frames at the normal rate, then a
+pause of a fraction of a second, over and over. Mesa schedules each frame for
+a display time through the compositor's commit-timing protocol, the headless
+output shows every frame one refresh after that time, and Mesa answers by
+scheduling further ahead until no swap-chain buffer is free. The pauses come
+from that exchange, not from the app's own work. Weston's default renderer
+does not take this path and keeps the full refresh rate.
+
+With the GL renderer, turn off Mesa's frame scheduling and the window keeps
+vsync pacing at the full refresh rate:
+
+```sh
+MESA_VK_WSI_DEBUG=nowlts WAYLAND_DISPLAY=lumen-test lumenc run myapp
+```
+
+`MESA_VK_WSI_PRESENT_MODE=mailbox` also removes the pauses, but the window then
+stops waiting for vsync.
+
 ## Drive a running app
 
 A running app can answer questions about its own UI and accept input, over a
