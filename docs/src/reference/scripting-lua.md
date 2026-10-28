@@ -484,7 +484,7 @@ size.
 | `window.set_title(title)` | | Ask for a new window title. |
 | `window.dpr()` | number | Device pixel ratio. |
 | `window.size()` | table | `{ width, height }` the window has, in logical pixels. |
-| `window.set_size(width, height)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
+| `window.set_size(width, height)` | | Ask for a new window size, in logical pixels. A maximized window is restored first. Both sides must be positive. |
 | `window.close()` | | Close the window. `on_close` runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
 | `window.location.path()` | string | The current page path. |
 | `window.location.query()` | string | The query string of the request the document is being rendered for, without the leading `?`. |
