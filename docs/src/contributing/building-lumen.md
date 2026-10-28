@@ -35,6 +35,10 @@ authoritative list is `.github/scripts/linux-deps.sh`, which CI runs verbatim:
   compile the C reference producer against.
 - `mesa-vulkan-drivers` for the lavapipe software device. Without a Vulkan
   device the renderer tests skip instead of running.
+- `xvfb` with `libxkbcommon-x11-0`, `libx11-xcb1`, `libxcursor1`,
+  `libxrandr2` and `libxi6` for the test that drags a dock tab across real
+  windows: it starts a private X server, and the winit backend loads these
+  libraries at run time. Without `Xvfb` on the `PATH` the test skips.
 
 macOS and Windows need no system packages beyond the Rust toolchain. The
 renderer selects Metal on macOS and DX12 on Windows, both of which ship with
