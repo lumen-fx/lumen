@@ -683,7 +683,10 @@ fn set_window_size(world: &mut World, handle: u64, size: glam::Vec2) {
     }
     if let Some(mut window) = target_window(world, handle).and_then(|e| world.get_mut::<Window>(e))
     {
+        // A size request restores a maximized window, as its restore
+        // button does: a maximized window has the size its screen gives it.
         window.size = size;
+        window.maximized = false;
     }
 }
 

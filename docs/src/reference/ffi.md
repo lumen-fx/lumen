@@ -285,7 +285,7 @@ window is restored to take a new size.
 | --- | --- |
 | `lumen_window_set_title(LumenWindow window, const char *title)` | Ask for a new window title. |
 | `lumen_window_title(LumenWindow window, char *buf, size_t buf_len, size_t *out_len)` | The title the window has, string-out convention. |
-| `lumen_window_set_size(LumenWindow window, float width, float height)` | Ask for a new window size, in logical pixels. A side that is not positive returns `LUMEN_ERR_BAD_ARG`. |
+| `lumen_window_set_size(LumenWindow window, float width, float height)` | Ask for a new window size, in logical pixels. A maximized window is restored first. A side that is not positive returns `LUMEN_ERR_BAD_ARG`. |
 | `lumen_window_size(LumenWindow window, float *width, float *height)` | The size the window has, in logical pixels. |
 | `lumen_window_dpr(LumenWindow window, float *out)` | The window's device pixel ratio. |
 | `lumen_window_close(LumenWindow window)` | Close the window. The close hook runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
@@ -927,7 +927,8 @@ A system that wants to keep the window open reads
 in the same tick. The window is an entity carrying
 `lumenui::lumen_core::window::Window` and `PrimaryWindow`; a system may write
 `Window`'s `title` and `size` directly, which is what `set_title` and
-`set_size` do.
+`set_size` do; `set_size` also clears `maximized`, restoring a maximized
+window.
 
 ### Crash reports
 
