@@ -226,3 +226,40 @@ root { padding: 0; align: start; }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The shape of a pixel-art tool icon (#533): the element's own
+/// `image-rendering: pixelated`, a mask contained and centred in a box
+/// larger than the image. The scaled mask keeps a hard edge down the middle.
+#[test]
+fn a_contained_pixelated_mask_on_the_element_keeps_its_hard_edges() {
+    const CSS: &str = r#"
+root { padding: 0; align: start; }
+#bar { gap: 10px; align: start; }
+#tinted, #parent { width: 24px; height: 24px; bg: #ff0000; }
+#tinted {
+  image-rendering: pixelated;
+  mask-image: url("art/mask.png");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+"#;
+    for backend in [Backend::Cpu, Backend::Gpu] {
+        if let (Backend::Gpu, Some(why)) = (backend, gpu_unavailable_reason()) {
+            eprintln!("skipping the GPU half: {why}");
+            continue;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-css-mask-contained-pixelated-{backend:?}-{}",
+            std::process::id()
+        ));
+        let mut app = boot(&dir, backend, MARKUP, CSS);
+        settle(&mut app);
+        for (x, want) in [(10.5, RED), (11.5, RED), (12.5, BLACK), (13.5, BLACK)] {
+            let got = pixel(&mut app, "tinted", x, 12.0);
+            assert_eq!(got, want, "x = {x} on {backend:?}");
+        }
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
