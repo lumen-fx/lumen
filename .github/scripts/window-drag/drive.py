@@ -297,6 +297,17 @@ class App:
                 self.proc.kill()
 
 
+def desktop_shot(path):
+    """The whole screen, where Pillow can grab it (Windows, macOS): what
+    the app's own screenshots cannot show, its windows' places."""
+    try:
+        from PIL import ImageGrab
+
+        ImageGrab.grab().save(path)
+    except Exception as e:
+        print(f"no desktop picture: {e}", flush=True)
+
+
 def png_size(path):
     try:
         head = path.read_bytes()[16:24]
@@ -480,10 +491,15 @@ def main():
         # Dock back: the pop-out's tab over the main window.
         time.sleep(1.0)
         wins = inp.windows(app.proc.pid)
+        desktop_shot(out / "4-tear-off-desktop.png")
         files = wins.get("Files")
         guesses = [end]
         if files:
-            guesses = [(files[0] + 40, files[1] + 40), (files[0] + files[2] / 2, files[1] + files[3] / 2)] + guesses
+            # Down its left side from the top, where its tab is, as far as
+            # the screen shows it: a window opened near the screen's edge
+            # runs past it.
+            x, y, _, h = files
+            guesses = [(x + 40, y + dy) for dy in range(8, int(min(h, sh - 2 - y)), 12)] + guesses
         pop = run.locate(guesses + grid)
         run.check("locate pop-out", pop is not None, f"the pop-out starts at {pop}, desktop says {files}")
         if pop is None:
@@ -492,7 +508,11 @@ def main():
         run.drag(
             (pop[0] + 36, pop[1] + 15),
             at(560, 300),
-            lambda: (time.sleep(0.4), app.shot("5-dock-back-preview")),
+            lambda: (
+                time.sleep(0.4),
+                app.shot("5-dock-back-preview"),
+                desktop_shot(out / "5-dock-back-desktop.png"),
+            ),
         )
         back = app.wait_line("dock-drag files dock", 15, since)
         lay = run.settle(lambda l: (stack_of(l, "files") or ("", []))[0] == "dock")
