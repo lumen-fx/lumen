@@ -706,9 +706,16 @@ middle after each move, which is the same to a script.
 carrying the buffer as it stands after that edit. A caret move raises nothing.
 A color field raises `input` for every color it moves to and `change` when its
 panel closes on a new one, with the color in `value`: `#rrggbb`, or
-`color(srgb r g b / a)` on a field with `alpha`.
-`change` and `submit` come from the commit signal instead, so they fire when the
-field is committed with Enter.
+`color(srgb r g b / a)` on a field with `alpha`. A `<checkbox>`, `<toggle>` or
+`<switch>` the user flips raises `input` and then `change`, with `true` or
+`false` in `value`. A `<slider>` raises `input` for every value it moves to and
+`change` when the user settles on one: a click, a key, a wheel notch, or the
+release that ends a drag. A `<dropdown>` raises `input` and then `change` when
+the user picks an option other than the one it holds, with the option's value,
+and a `<radio>` the user chooses raises them on itself, with its `value`.
+A script or a binding that sets any of these raises nothing.
+On a text field, `change` and `submit` come from the commit signal, so they fire
+when the field is committed with Enter.
 
 `contextmenu` fires when the user asks for a context menu: a right click on the
 element under the pointer (on the press, or the release on Windows), the

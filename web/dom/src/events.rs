@@ -1333,6 +1333,13 @@ pub fn drain_dom_events(
                         value: color.value(),
                         committed: true,
                     });
+                } else if sliders.contains(entity) {
+                    // A range input's `change` is the release that settles it.
+                    controls.write(ControlInput {
+                        entity,
+                        value,
+                        committed: true,
+                    });
                 }
             }
             PendingEvent::Input { path, value } => {
@@ -1372,6 +1379,11 @@ pub fn drain_dom_events(
                         && slider.value != moved
                     {
                         slider.value = moved;
+                        controls.write(ControlInput {
+                            entity,
+                            value,
+                            committed: false,
+                        });
                     }
                     continue;
                 }
@@ -1403,6 +1415,14 @@ pub fn drain_dom_events(
                     && toggle.checked != checked
                 {
                     toggle.checked = checked;
+                    // A checkbox's `input` and `change` come together.
+                    for committed in [false, true] {
+                        controls.write(ControlInput {
+                            entity,
+                            value: checked.to_string(),
+                            committed,
+                        });
+                    }
                 }
             }
             // The browser owns focus; the world mirrors it, so a binding

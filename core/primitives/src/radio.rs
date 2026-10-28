@@ -27,12 +27,13 @@
 //!   in the Tab chain, so Tab enters and leaves the GROUP, not each
 //!   item ([`sync_radio_tab_index`]).
 
-use bevy_ecs::message::MessageReader;
+use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{Color, DocumentOrder, Selected, Visuals};
 use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
 
 use crate::held::{hold_fill, release_fill};
+use lumen_core::input::ControlInput;
 use lumen_core::prelude::*;
 use lumen_core::property_store::PropertyStore;
 
@@ -85,17 +86,20 @@ impl Plugin for RadioPlugin {
             TickStage::Systems,
             dispatch_radio_clicks.after(lumen_input::dispatch_clicks),
         );
+        // A page's radios are the browser's own, which moves the selection
+        // on the arrows itself and raises the click that selects here.
+        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
             TickStage::Systems,
-            radio_group_keys.after(lumen_input::dispatch_focused_keys),
+            radio_group_keys
+                .after(lumen_input::dispatch_focused_keys)
+                .before(sync_radio_selected),
         );
         // Marker + visuals + roving tabindex settle after both input
         // paths so this tick's selection is reflected this tick.
         app.add_systems(
             TickStage::Systems,
-            sync_radio_selected
-                .after(dispatch_radio_clicks)
-                .after(radio_group_keys),
+            sync_radio_selected.after(dispatch_radio_clicks),
         );
         app.add_systems(
             TickStage::Systems,
@@ -142,7 +146,9 @@ pub fn dispatch_radio_clicks(
     radios: Query<&RadioButton>,
     disabled: Query<(), With<lumen_core::components::Disabled>>,
     parents: Query<&ChildOf>,
-    mut store: ResMut<PropertyStore>,
+    // Where a choice lands: the group signal, and the `input` / `change`
+    // raised on the radio.
+    (mut store, mut changes): (ResMut<PropertyStore>, MessageWriter<ControlInput>),
 ) {
     for click in clicks.read() {
         let Some(root) = owning_radio(click.entity, &parents, &radios) else {
@@ -154,7 +160,7 @@ pub fn dispatch_radio_clicks(
         let Ok(radio) = radios.get(root) else {
             continue;
         };
-        store.set_global_str(&radio.group, radio.value.as_str());
+        crate::tabs::pick_option(&mut store, &mut changes, &radio.group, &radio.value, root);
         if tracker.0 != Some(root) {
             if let Some(prev) = tracker.0 {
                 commands
@@ -273,6 +279,7 @@ pub fn sync_radio_tab_index(
 /// radiogroup; unlike tabs, which clamp). Selection follows focus -
 /// the newly focused member is selected immediately (Qt/GTK). Also
 /// moves the `Focused` + `FocusVisible` markers and the tracker.
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub fn radio_group_keys(
     mut commands: Commands,
@@ -282,6 +289,7 @@ pub fn radio_group_keys(
     radios: Query<(Entity, &RadioButton)>,
     disableds: Query<(), With<lumen_core::components::Disabled>>,
     orders: Query<&DocumentOrder>,
+    mut changes: MessageWriter<ControlInput>,
 ) {
     // Drain on every early-out so stale arrow presses from a tick where
     // focus wasn't on a radio can't replay later (same discipline as
@@ -352,7 +360,7 @@ pub fn radio_group_keys(
             .entity(*next)
             .insert((Focused, lumen_core::input::FocusVisible));
         tracker.0 = Some(*next);
-        store.set_global_str(&group, value.as_str());
+        crate::tabs::pick_option(&mut store, &mut changes, &group, value, *next);
     }
 }
 
@@ -400,6 +408,7 @@ mod tests {
         world.insert_resource(FocusTracker(None));
         world.init_resource::<Messages<KeyPressed>>();
         world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<ControlInput>>();
         let a = radio(&mut world, "fruit", "apple", 0);
         let b = radio(&mut world, "fruit", "banana", 1);
         let c = radio(&mut world, "fruit", "cherry", 2);
@@ -478,6 +487,60 @@ mod tests {
             world.resource::<FocusTracker>().0,
             Some(b),
             "clicking a radio focuses it (Qt), so arrow nav continues from there"
+        );
+    }
+
+    /// Every `input` / `change` raised so far, as `(entity, value,
+    /// committed)`, clearing them.
+    fn raised(world: &mut World) -> Vec<(Entity, String, bool)> {
+        let out = world
+            .resource::<Messages<ControlInput>>()
+            .iter_current_update_messages()
+            .map(|c| (c.entity, c.value.clone(), c.committed))
+            .collect();
+        world.resource_mut::<Messages<ControlInput>>().clear();
+        out
+    }
+
+    /// Choosing a member raises `input` then `change` on it with its value,
+    /// by click and by arrow key, as a browser radio does; clicking the
+    /// member already chosen raises none.
+    #[test]
+    fn choosing_a_member_raises_input_and_change() {
+        let (mut world, [a, b, _c, d]) = group_world();
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_str("fruit", "apple");
+        let click = |world: &mut World, entity: Entity| {
+            world
+                .resource_mut::<Messages<ClickEvent>>()
+                .write(ClickEvent {
+                    entity,
+                    position: glam::Vec2::ZERO,
+                    button: PointerButton::Primary,
+                    local: None,
+                });
+            world.run_system_once(dispatch_radio_clicks).unwrap();
+            world.resource_mut::<Messages<ClickEvent>>().clear();
+        };
+        click(&mut world, a);
+        assert!(raised(&mut world).is_empty(), "already chosen");
+        click(&mut world, b);
+        assert_eq!(
+            raised(&mut world),
+            [
+                (b, "banana".to_string(), false),
+                (b, "banana".to_string(), true)
+            ]
+        );
+        press(&mut world, NamedKey::ArrowRight);
+        run_keys(&mut world);
+        assert_eq!(
+            raised(&mut world),
+            [
+                (d, "date".to_string(), false),
+                (d, "date".to_string(), true)
+            ]
         );
     }
 

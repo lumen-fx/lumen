@@ -529,6 +529,29 @@ pub struct DropdownOptionButton {
     pub open_signal: String,
 }
 
+/// Commit `value` to a dropdown's `value_signal`, raising `input` and
+/// `change` on `entity` when it differs from the value held, as a `<select>`
+/// does.
+pub(crate) fn pick_option(
+    store: &mut PropertyStore,
+    changes: &mut MessageWriter<ControlInput>,
+    value_signal: &str,
+    value: &str,
+    entity: Entity,
+) {
+    if store.get_global_str(value_signal).as_deref() == Some(value) {
+        return;
+    }
+    store.set_global_str(value_signal, value);
+    for committed in [false, true] {
+        changes.write(ControlInput {
+            entity,
+            value: value.to_string(),
+            committed,
+        });
+    }
+}
+
 /// `<dropdown>` click dispatcher. Toggles the open-panel signal on header clicks; writes the selected value and closes the panel on option clicks.
 ///
 /// Open / close state goes through [`PropertyStore::set_global_bool`] /
@@ -538,10 +561,11 @@ pub struct DropdownOptionButton {
 /// comparator recognises. The on-the-wire signal repr is unchanged.
 pub fn dispatch_dropdown_clicks(
     mut clicks: MessageReader<ClickEvent>,
-    headers: Query<&DropdownButton>,
+    headers: Query<(Entity, &DropdownButton)>,
     options: Query<&DropdownOptionButton>,
     parents: Query<&ChildOf>,
     mut store: ResMut<PropertyStore>,
+    mut changes: MessageWriter<ControlInput>,
 ) {
     for ev in clicks.read() {
         // Hit-shadowing (W5): pointer clicks resolve to the header's /
@@ -555,13 +579,25 @@ pub fn dispatch_dropdown_clicks(
             crate::controls::resolve_control(ev.entity, &parents, |e| options.contains(e))
             && let Ok(opt) = options.get(target)
         {
-            store.set_global_str(&opt.value_signal, opt.value.as_str());
+            // The events belong to the `<dropdown>` box, the header's parent.
+            let dropdown = headers
+                .iter()
+                .find(|(_, h)| h.open_signal == opt.open_signal)
+                .map(|(h, _)| parents.get(h).map_or(h, ChildOf::parent))
+                .unwrap_or(target);
+            pick_option(
+                &mut store,
+                &mut changes,
+                &opt.value_signal,
+                &opt.value,
+                dropdown,
+            );
             store.set_global_bool(&opt.open_signal, false);
             continue;
         }
         if let Some(target) =
             crate::controls::resolve_control(ev.entity, &parents, |e| headers.contains(e))
-            && let Ok(btn) = headers.get(target)
+            && let Ok((_, btn)) = headers.get(target)
         {
             // Default to closed (false) when the signal has never been
             // written or carries a non-boolean value; otherwise flip
@@ -1206,6 +1242,7 @@ mod hit_shadowing_tests {
         let mut world = World::new();
         world.insert_resource(PropertyStore::default());
         world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<ControlInput>>();
         let header = world
             .spawn(DropdownButton::new("__dropdown_open:fruit"))
             .id();
@@ -1226,6 +1263,7 @@ mod hit_shadowing_tests {
         let mut world = World::new();
         world.insert_resource(PropertyStore::default());
         world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<ControlInput>>();
         world
             .resource_mut::<PropertyStore>()
             .set_global_bool("__dropdown_open:fruit", true);
@@ -1246,6 +1284,64 @@ mod hit_shadowing_tests {
             Some(false),
             "option child click commits AND closes"
         );
+    }
+
+    /// Picking a new option raises `input` then `change` on the `<dropdown>`
+    /// box, the header's parent; picking the one already held raises none.
+    #[test]
+    fn picking_an_option_raises_input_and_change_on_the_dropdown() {
+        let mut world = World::new();
+        world.insert_resource(PropertyStore::default());
+        world.init_resource::<Messages<ClickEvent>>();
+        world.init_resource::<Messages<ControlInput>>();
+        let open = "__dropdown_open:fruit";
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_str("fruit", "apple");
+        let dropdown = world.spawn_empty().id();
+        let mut header = DropdownButton::new(open);
+        header.value_signal = "fruit".to_string();
+        world.spawn((header, ChildOf(dropdown)));
+        let option = |world: &mut World, value: &str| {
+            world
+                .spawn((
+                    DropdownOptionButton {
+                        value_signal: "fruit".to_string(),
+                        value: value.to_string(),
+                        open_signal: open.to_string(),
+                    },
+                    ChildOf(dropdown),
+                ))
+                .id()
+        };
+        let mango = option(&mut world, "mango");
+        let apple = option(&mut world, "apple");
+        let raised = |world: &mut World| -> Vec<(Entity, String, bool)> {
+            let out = world
+                .resource::<Messages<ControlInput>>()
+                .iter_current_update_messages()
+                .map(|c| (c.entity, c.value.clone(), c.committed))
+                .collect();
+            world.resource_mut::<Messages<ControlInput>>().clear();
+            out
+        };
+
+        click(&mut world, mango);
+        world.run_system_once(dispatch_dropdown_clicks).unwrap();
+        assert_eq!(
+            raised(&mut world),
+            [
+                (dropdown, "mango".to_string(), false),
+                (dropdown, "mango".to_string(), true)
+            ]
+        );
+        let mango_again = option(&mut world, "mango");
+        click(&mut world, mango_again);
+        world.run_system_once(dispatch_dropdown_clicks).unwrap();
+        assert!(raised(&mut world).is_empty(), "same value, no events");
+        click(&mut world, apple);
+        world.run_system_once(dispatch_dropdown_clicks).unwrap();
+        assert_eq!(raised(&mut world).len(), 2);
     }
 
     #[test]

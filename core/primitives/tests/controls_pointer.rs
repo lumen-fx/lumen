@@ -653,3 +653,96 @@ fn a_drag_ends_on_release_after_its_entity_despawns() {
         "the release ends the drag the despawned entity started"
     );
 }
+
+/// Every DOM `input` / `change` the controls raised, in order, as
+/// `(entity, value, committed)`.
+#[derive(Resource, Default)]
+struct Raised(Vec<(Entity, String, bool)>);
+
+fn record_raised(
+    mut reader: bevy_ecs::message::MessageReader<lumen_core::input::ControlInput>,
+    mut raised: ResMut<Raised>,
+) {
+    for c in reader.read() {
+        raised.0.push((c.entity, c.value.clone(), c.committed));
+    }
+}
+
+fn recording_app() -> App {
+    let mut app = test_app();
+    app.world.init_resource::<Raised>();
+    app.add_systems(TickStage::Systems, record_raised);
+    app
+}
+
+fn take_raised(app: &mut App) -> Vec<(Entity, String, bool)> {
+    std::mem::take(&mut app.world.resource_mut::<Raised>().0)
+}
+
+/// A toggle flipped by a click raises `input` and then `change` with its new
+/// checked state, as a browser checkbox does.
+#[test]
+fn a_toggle_click_raises_input_and_change() {
+    let mut app = recording_app();
+    let toggle = app
+        .world
+        .spawn((
+            Transform::new(glam::Vec2::ZERO, glam::Vec2::new(48.0, 24.0)),
+            Visuals::default(),
+            Toggleable { checked: false },
+        ))
+        .id();
+    let at = glam::Vec2::new(12.0, 12.0);
+    move_pointer(&mut app.world, at);
+    app.tick();
+    press(&mut app.world, at);
+    app.tick();
+    release(&mut app.world, at);
+    settle(&mut app);
+    assert_eq!(
+        take_raised(&mut app),
+        [
+            (toggle, "true".to_string(), false),
+            (toggle, "true".to_string(), true)
+        ]
+    );
+}
+
+/// A slider drag raises `input` for each value it passes through and one
+/// `change` when the release settles it; a key step raises both at once.
+#[test]
+fn a_slider_drag_raises_inputs_then_one_change_on_release() {
+    let mut app = recording_app();
+    let (slider, thumb) = spawn_slider(&mut app.world, 30.0);
+    let grab = thumb_center(&app.world, thumb);
+    move_pointer(&mut app.world, grab);
+    app.tick();
+    press(&mut app.world, grab);
+    app.tick();
+    move_pointer(&mut app.world, glam::Vec2::new(140.0, 12.0));
+    app.tick();
+    move_pointer(&mut app.world, glam::Vec2::new(150.0, 12.0));
+    settle(&mut app);
+    let moving = take_raised(&mut app);
+    assert!(!moving.is_empty(), "the drag raised input");
+    assert!(
+        moving
+            .iter()
+            .all(|(e, _, committed)| *e == slider && !committed),
+        "no change while the drag is in flight: {moving:?}"
+    );
+
+    release(&mut app.world, glam::Vec2::new(150.0, 12.0));
+    settle(&mut app);
+    let settled = take_raised(&mut app);
+    let value = slider_value(&app.world, slider).to_string();
+    assert_eq!(settled, [(slider, value, true)], "{settled:?}");
+
+    app.world
+        .insert_resource(lumen_core::input::FocusTracker(Some(slider)));
+    press_key(&mut app.world, Key::Named(NamedKey::ArrowLeft));
+    settle(&mut app);
+    let stepped = take_raised(&mut app);
+    assert_eq!(stepped.len(), 2, "{stepped:?}");
+    assert!(!stepped[0].2 && stepped[1].2);
+}

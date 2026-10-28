@@ -38,9 +38,10 @@
 //! - `change` and `submit` fire on commit, from the input router's
 //!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
 //!   single-line input.
-//! - A control that is not a text field (a color field) raises
-//!   [`ControlInput`]: `input` for every new value, and `change` when the
-//!   user commits the one they settled on.
+//! - A control that is not a text field (a color field, a toggle, a
+//!   checkbox, a slider, a dropdown) raises [`ControlInput`]: `input` for
+//!   every new value, and `change` when the user commits the one they
+//!   settled on.
 //! - A widget's own internal parts ([`WidgetInternal`], a color panel's hex
 //!   field) raise no `input`, `change` or `submit`; the widget raises its
 //!   own.

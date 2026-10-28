@@ -43,7 +43,7 @@
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_core::components::{Disabled, DocumentOrder};
-use lumen_core::input::{FocusVisible, Key, KeyPressed, NamedKey};
+use lumen_core::input::{ControlInput, FocusVisible, Key, KeyPressed, NamedKey};
 use lumen_core::prelude::*;
 use lumen_core::time::{Duration, Instant};
 
@@ -641,7 +641,13 @@ pub fn closed_dropdown_keys(
     mut type_ahead: ResMut<TypeAheadBuffer>,
     tracker: Res<FocusTracker>,
     headers: Query<&DropdownButton>,
-    mut store: ResMut<PropertyStore>,
+    // Where a pick lands: the bound signal, and the `input` / `change`
+    // raised on the `<dropdown>` box, the header's parent.
+    (mut store, mut changes, parents): (
+        ResMut<PropertyStore>,
+        MessageWriter<ControlInput>,
+        Query<&ChildOf>,
+    ),
 ) {
     let Some(focused) = tracker.0 else {
         return;
@@ -707,7 +713,15 @@ pub fn closed_dropdown_keys(
             // Closed-state movement commits directly (Qt: the closed
             // combobox has no separate highlight - arrows change the
             // value).
-            store.set_global_str(&header.value_signal, header.options[idx].value.as_str());
+            // The events belong to the `<dropdown>` box, the header's parent.
+            let dropdown = parents.get(focused).map_or(focused, ChildOf::parent);
+            crate::tabs::pick_option(
+                &mut store,
+                &mut changes,
+                &header.value_signal,
+                &header.options[idx].value,
+                dropdown,
+            );
         }
     }
 }
@@ -729,6 +743,7 @@ mod tests {
     fn base_world() -> World {
         let mut world = World::new();
         world.init_resource::<Messages<KeyPressed>>();
+        world.init_resource::<Messages<ControlInput>>();
         world.insert_resource(PropertyStore::default());
         world.insert_resource(FocusTracker::default());
         world.init_resource::<ActivePopupNav>();

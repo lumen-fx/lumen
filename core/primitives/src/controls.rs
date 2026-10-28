@@ -11,6 +11,7 @@
 use bevy_ecs::message::{Message, MessageReader, MessageWriter, Messages};
 use bevy_ecs::prelude::*;
 use lumen_core::components::Visuals;
+use lumen_core::input::ControlInput;
 use lumen_core::prelude::*;
 use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
 
@@ -147,6 +148,29 @@ pub struct SliderChanged {
     pub entity: Entity,
     /// New value, clamped to `[min, max]`.
     pub value: f32,
+}
+
+/// Raise the DOM `input` event for a control's new `value`, and `change`
+/// after it when the user settled on that value: a click, a key, a wheel
+/// notch, or the release that ends a drag. A drag's moves are `input` only.
+pub(crate) fn raise_control_value(
+    out: &mut MessageWriter<ControlInput>,
+    entity: Entity,
+    value: String,
+    settled: bool,
+) {
+    out.write(ControlInput {
+        entity,
+        value: value.clone(),
+        committed: false,
+    });
+    if settled {
+        out.write(ControlInput {
+            entity,
+            value,
+            committed: true,
+        });
+    }
 }
 
 /// Plugin: registers the toggle + slider behavior systems and their
@@ -377,6 +401,7 @@ pub fn flip_toggle_on_click(
     mut q: Query<&mut Toggleable>,
     parents: Query<&ChildOf>,
     mut out: MessageWriter<ToggleChanged>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     for click in clicks.read() {
         let Some(target) = resolve_control(click.entity, &parents, |e| q.contains(e)) else {
@@ -388,6 +413,7 @@ pub fn flip_toggle_on_click(
                 entity: target,
                 checked: t.checked,
             });
+            raise_control_value(&mut dom, target, t.checked.to_string(), true);
         }
     }
 }
@@ -441,6 +467,7 @@ pub fn set_slider_on_click(
     mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
     parents: Query<&ChildOf>,
     mut out: MessageWriter<SliderChanged>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     for click in clicks.read() {
         let Some(target) = resolve_control(click.entity, &parents, |e| q.contains(e)) else {
@@ -456,6 +483,7 @@ pub fn set_slider_on_click(
                     entity: target,
                     value: new,
                 });
+                raise_control_value(&mut dom, target, new.to_string(), true);
             }
         }
     }
@@ -482,6 +510,7 @@ pub fn move_slider_on_keys(
     tracker: Res<FocusTracker>,
     mut sliders: Query<&mut SliderValue>,
     mut out: MessageWriter<SliderChanged>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     let Some(entity) = tracker.0 else {
         keys.read().for_each(drop);
@@ -514,6 +543,7 @@ pub fn move_slider_on_keys(
                 entity,
                 value: clamped,
             });
+            raise_control_value(&mut dom, entity, clamped.to_string(), true);
         }
     }
 }
@@ -532,6 +562,7 @@ pub fn set_slider_on_drag(
     mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
     parents: Query<&ChildOf>,
     mut out: MessageWriter<SliderChanged>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     for d in drags.read() {
         let Some(target) = resolve_control(d.entity, &parents, |e| q.contains(e)) else {
@@ -547,6 +578,7 @@ pub fn set_slider_on_drag(
                     entity: target,
                     value: new,
                 });
+                raise_control_value(&mut dom, target, new.to_string(), false);
             }
         }
     }
@@ -570,6 +602,7 @@ pub fn adjust_slider_on_wheel(
     parents: Query<&ChildOf>,
     mut sliders: Query<&mut SliderValue>,
     mut out: MessageWriter<SliderChanged>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     let mut total = 0.0_f32;
     for ev in wheels.read() {
@@ -599,6 +632,7 @@ pub fn adjust_slider_on_wheel(
             entity: target,
             value: new,
         });
+        raise_control_value(&mut dom, target, new.to_string(), true);
     }
 }
 
@@ -632,16 +666,26 @@ pub fn snapshot_slider_drag_origin(
 
 /// A drag that ends normally (pointer release) commits the dragged
 /// value: drop the snapshot so a later Escape doesn't roll back a
-/// finished interaction.
+/// finished interaction, and raise `change` when the drag moved it.
 pub fn clear_slider_drag_origin_on_end(
     mut commands: Commands,
     mut ends: MessageReader<DragEndEvent>,
-    sliders: Query<(), With<SliderDragOrigin>>,
+    sliders: Query<(&SliderDragOrigin, &SliderValue)>,
     parents: Query<&ChildOf>,
+    mut dom: MessageWriter<ControlInput>,
 ) {
     for ev in ends.read() {
         if let Some(target) = resolve_control(ev.entity, &parents, |e| sliders.contains(e)) {
             commands.entity(target).remove::<SliderDragOrigin>();
+            if let Ok((origin, s)) = sliders.get(target)
+                && s.value != origin.0
+            {
+                dom.write(ControlInput {
+                    entity: target,
+                    value: s.value.to_string(),
+                    committed: true,
+                });
+            }
         }
     }
 }
@@ -660,7 +704,9 @@ pub fn cancel_slider_drag_on_escape(
     mut sliders: Query<&mut SliderValue>,
     origins: Query<&SliderDragOrigin>,
     parents: Query<&ChildOf>,
-    mut out: MessageWriter<SliderChanged>,
+    // What the restored value is reported through: the widget message and
+    // the DOM `input` event.
+    (mut out, mut dom): (MessageWriter<SliderChanged>, MessageWriter<ControlInput>),
 ) {
     let escape = keys
         .read()
@@ -683,6 +729,8 @@ pub fn cancel_slider_drag_on_escape(
                 entity: target,
                 value: origin.0,
             });
+            // Back where it started: `input` with the value, no `change`.
+            raise_control_value(&mut dom, target, origin.0.to_string(), false);
         }
         commands.entity(target).remove::<SliderDragOrigin>();
         commands
@@ -818,6 +866,7 @@ mod slider_key_tests {
         let mut world = World::new();
         world.init_resource::<Messages<KeyPressed>>();
         world.init_resource::<Messages<SliderChanged>>();
+        world.init_resource::<Messages<ControlInput>>();
         let e = world
             .spawn(SliderValue {
                 value,
@@ -990,6 +1039,7 @@ mod slider_key_tests {
         let mut world = World::new();
         world.init_resource::<Messages<MouseWheel>>();
         world.init_resource::<Messages<SliderChanged>>();
+        world.init_resource::<Messages<ControlInput>>();
         let e = world
             .spawn((
                 SliderValue {
