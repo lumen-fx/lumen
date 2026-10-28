@@ -91,6 +91,13 @@ State pseudo-classes select a routing slot rather than filtering
 elements: a rule written with one always applies, and the runtime swaps
 the value in when the element enters that state.
 
+A state pseudo-class works on the selector's last compound only, the
+element the rule styles. One written on an ancestor or a sibling, as in
+`.tool:hover .icon` or `.tool:disabled > .label`, never matches on the
+desktop, and the rule is reported with a warning; the web target emits it
+as written and the browser applies it. To style a child by its parent's
+state on the desktop, toggle a class on the child from a script.
+
 | Pseudo-class | Matches |
 | --- | --- |
 | `:hover` | Pointer over the element or one of its descendants. |
