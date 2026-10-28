@@ -452,6 +452,47 @@ struct OsWindow {
     window: Arc<Window>,
     /// What the platform window was last given.
     sync: WindowSync,
+    /// Whether a frame of the window has been put up.
+    presented: bool,
+    /// A restore from maximized the platform has not applied yet.
+    restoring: Option<Restoring>,
+}
+
+/// How long a window's first frame waits for the platform to restore it
+/// from maximized before it is put up at the size the window has.
+const RESTORE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A window the app asked to leave maximized, until the platform reports it
+/// restored or [`RESTORE_WAIT`] passes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Restoring {
+    /// When to stop waiting: a platform that keeps the window maximized
+    /// shows it at the size it has.
+    until: std::time::Instant,
+    /// The size the app asked for, asked again once the window is
+    /// restored: a Wayland window ignores a size request while it is
+    /// maximized.
+    size: Option<glam::Vec2>,
+    /// Whether the window's first frame waits for the restore. A window
+    /// that first shows at the size of the screen and is restored right
+    /// after may be maximized again by the window manager (GNOME maximizes
+    /// a window that maps at nearly the size of its screen), so a restore
+    /// asked before the first frame is applied before that frame shows.
+    hold: bool,
+}
+
+impl Restoring {
+    /// What became of the restore at `now`: `None` while it still waits,
+    /// else whether the platform restored the window.
+    fn settle(&self, maximized: bool, now: std::time::Instant) -> Option<bool> {
+        if !maximized {
+            Some(true)
+        } else if now >= self.until {
+            Some(false)
+        } else {
+            None
+        }
+    }
 }
 
 struct WinitHandler {
@@ -838,6 +879,12 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     }
                     self.tick();
                     self.apply_input_requests(event_loop);
+                    // What the app asked of a window that has not shown a
+                    // frame yet (a size from its ready handler) reaches the
+                    // platform before that frame does.
+                    if self.windows.values().any(|os| !os.presented) {
+                        self.sync_windows(event_loop);
+                    }
                 }
                 // One tick paints every window whose frame changed.
                 self.present(None);
@@ -1093,7 +1140,12 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         self.idle_step(event_loop);
         // An extension waiting on something the platform does not wake the
         // loop for looks again when it asks to.
-        let soon = self.extensions.iter().filter_map(|e| e.wake_at()).min();
+        let soon = self
+            .extensions
+            .iter()
+            .filter_map(|e| e.wake_at())
+            .chain(self.restore_deadline())
+            .min();
         if !self.close.committed
             && let Some(soon) = soon
         {
@@ -1203,6 +1255,13 @@ impl WinitHandler {
         self.each_extension(event_loop, |ext, cx| ext.about_to_wait(cx));
         self.sync_windows(event_loop);
         self.apply_focus_requests();
+        // A held first frame whose restore never came is put up now.
+        if self
+            .restore_deadline()
+            .is_some_and(|at| at <= std::time::Instant::now())
+        {
+            self.want_frame();
+        }
         // A deadline a system asked to be woken at (a script timer) that
         // has come due needs a tick: this is the pass the `WaitUntil` set
         // below resumes into.
@@ -1449,6 +1508,8 @@ impl WinitHandler {
                 a11y,
                 window,
                 sync,
+                presented: false,
+                restoring: None,
             },
         );
     }
@@ -1586,6 +1647,9 @@ impl WinitHandler {
             return;
         }
         let window = os.window.clone();
+        let presented = os.presented;
+        // A restore from maximized this change asks for.
+        let mut restore = None;
         if let Some(title) = &changes.title {
             window.set_title(title);
             lumen_core::window_state::publish_title(Some(entity), title);
@@ -1618,6 +1682,7 @@ impl WinitHandler {
             // first, as the window's restore button does.
             if window.is_maximized() {
                 window.set_maximized(false);
+                restore = Some(Some(size));
             }
             let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
             // `Some` means the platform applied the size at once and may
@@ -1632,8 +1697,65 @@ impl WinitHandler {
             window.set_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
         }
         if let Some(maximized) = changes.maximized {
-            window.set_maximized(maximized);
+            if maximized {
+                restore = None;
+                window.set_maximized(true);
+            } else if restore.is_none() && window.is_maximized() {
+                window.set_maximized(false);
+                restore = Some(None);
+            }
         }
+        if let Some(os) = self.windows.get_mut(&id) {
+            if let Some(size) = restore {
+                os.restoring = Some(Restoring {
+                    until: std::time::Instant::now() + RESTORE_WAIT,
+                    size,
+                    hold: !presented,
+                });
+            } else if changes.maximized == Some(true) {
+                os.restoring = None;
+            }
+        }
+    }
+
+    /// The earliest time a window's held first frame stops waiting for its
+    /// restore.
+    fn restore_deadline(&self) -> Option<std::time::Instant> {
+        self.windows
+            .values()
+            .filter_map(|os| os.restoring.filter(|r| r.hold).map(|r| r.until))
+            .min()
+    }
+
+    /// Finish the restores the platform applied or gave up waiting for, and
+    /// ask a restored window again for the size the app wanted. Returns the
+    /// windows whose held first frame may now be put up.
+    fn settle_restores(&mut self) -> Vec<Entity> {
+        let now = std::time::Instant::now();
+        let mut released = Vec::new();
+        let mut sizes = Vec::new();
+        for os in self.windows.values_mut() {
+            let Some(restoring) = os.restoring else {
+                continue;
+            };
+            let Some(restored) = restoring.settle(os.window.is_maximized(), now) else {
+                continue;
+            };
+            os.restoring = None;
+            if restoring.hold {
+                released.push(os.entity);
+            }
+            if let (true, Some(size)) = (restored, restoring.size) {
+                sizes.push((os.entity, os.window.clone(), size));
+            }
+        }
+        for (entity, window, size) in sizes {
+            let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
+            if let Some(physical) = window.request_inner_size(requested) {
+                self.resized(entity, &window, physical);
+            }
+        }
+        released
     }
 
     /// Take a maximize, restore or fullscreen change the platform reported
@@ -1995,6 +2117,7 @@ impl WinitHandler {
     /// unoccluded window whose frame changed; `force` names a window whose
     /// buffers were just recreated and must repaint in full.
     fn present(&mut self, force: Option<Entity>) {
+        let released = self.settle_restores();
         let mut targets: Vec<PresentTarget<'_>> = Vec::with_capacity(self.windows.len());
         let world = &self.app.world;
         let mut entries: Vec<&mut OsWindow> = self.windows.values_mut().collect();
@@ -2005,12 +2128,14 @@ impl WinitHandler {
                 .is_some_and(|w| w.visible)
                 && !world
                     .get::<WindowRuntime>(os.entity)
-                    .is_some_and(|r| r.occluded || r.minimized);
+                    .is_some_and(|r| r.occluded || r.minimized)
+                && !os.restoring.is_some_and(|r| r.hold);
+            os.presented |= shown;
             targets.push(PresentTarget {
                 window: os.entity,
                 a11y: os.a11y.as_deref_mut(),
                 shown,
-                force_full: force == Some(os.entity),
+                force_full: force == Some(os.entity) || released.contains(&os.entity),
             });
         }
         present_frame(&mut self.app, self.renderer.as_mut(), &mut targets);
@@ -2909,6 +3034,26 @@ mod tests {
     use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
     use std::any::Any;
     use std::sync::Arc;
+
+    /// A restore from maximized settles once the platform reports the
+    /// window restored, or gives up at its deadline with the window still
+    /// maximized.
+    #[test]
+    fn a_restore_settles_when_the_platform_restores_or_at_its_deadline() {
+        use super::Restoring;
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let restoring = Restoring {
+            until: now + Duration::from_millis(250),
+            size: None,
+            hold: true,
+        };
+        assert_eq!(restoring.settle(true, now), None);
+        assert_eq!(restoring.settle(false, now), Some(true));
+        let late = now + Duration::from_millis(300);
+        assert_eq!(restoring.settle(true, late), Some(false));
+        assert_eq!(restoring.settle(false, late), Some(true));
+    }
 
     /// winit's physical keys carry their DOM `code` names across, Super
     /// becoming Meta and the function keys the DOM does not name becoming
