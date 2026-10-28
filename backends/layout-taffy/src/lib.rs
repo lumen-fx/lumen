@@ -892,14 +892,30 @@ pub fn sync_layout(
         }
     }
 
-    // Roots inside the dirty set: entities whose parent is not dirty
-    // (or who have no parent).
-    // A surface root is always a root: it lays out in its own window.
+    // Roots inside the dirty set: dirty entities with no dirty ancestor.
+    // Propagation stops at a relayout boundary, so a dirty boundary can sit
+    // under a dirty root with clean elements between them; the root's solve
+    // lays it out, and solving it again on its own would pin it to the box
+    // it had the tick before, over the root's intrinsic sizing and position.
+    // A surface root is always a root: it lays out in its own window, and
+    // the walk stops there.
     let dirty_roots: Vec<Entity> = dirty_q
         .iter()
-        .filter(|e| match parent_q.get(*e) {
-            Ok(p) => surface_q.contains(*e) || dirty_q.get(p.parent()).is_err(),
-            Err(_) => true,
+        .filter(|&e| {
+            if surface_q.contains(e) {
+                return true;
+            }
+            let mut cur = e;
+            while let Ok(p) = parent_q.get(cur) {
+                cur = p.parent();
+                if dirty_q.contains(cur) {
+                    return false;
+                }
+                if surface_q.contains(cur) {
+                    break;
+                }
+            }
+            true
         })
         .collect();
 

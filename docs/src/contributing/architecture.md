@@ -759,9 +759,11 @@ spawner, once it has built the element, hands it and those attributes to the
 
 Layout runs in `LayoutSync`. Change filters on styles, children, text, images,
 and writing direction mark entities dirty; dirtiness propagates up to the
-nearest relayout boundary; taffy computes the tree with a measure function that
-calls the text shaper for intrinsic sizes; and the results are written back as
-absolute coordinates. The taffy tree is a non-send resource, because taffy's
+nearest relayout boundary; taffy computes the tree from each topmost dirty
+element with a measure function that calls the text shaper for intrinsic sizes;
+and the results are written back as absolute coordinates. A dirty boundary
+with a dirty ancestor lays out in that ancestor's solve; only a boundary whose
+ancestors are all clean solves on its own, in the box it had before. The taffy tree is a non-send resource, because taffy's
 compact length representation stores a raw pointer and is neither `Send` nor
 `Sync`.
 
