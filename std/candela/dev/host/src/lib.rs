@@ -58,6 +58,10 @@ mod engine_host;
 mod install;
 pub mod markup;
 mod package_entry;
+// The build script's warning for a standard library it could not find. The
+// library compiles it only to test it, like `install`.
+#[cfg(test)]
+mod stage_message;
 
 use bevy_ecs::prelude::World;
 use lumen_core::prelude::{App, Plugin};

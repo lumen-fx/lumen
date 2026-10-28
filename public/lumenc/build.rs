@@ -31,10 +31,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// Directory the script standard library sits in, beside the binaries that
-/// read it. Matches `SCRIPT_LIBRARY_DIR` in `src/package/cli.rs`, the release
-/// archives, and the Windows installer.
-const SCRIPT_LIBRARY_DIR: &str = "libs";
+#[path = "src/stage_message.rs"]
+mod stage_message;
+
+use stage_message::{SCRIPT_LIBRARY_DIR, library_not_beside_lumenc};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=LUMEN_SKIP_ENGINE_BUILD");
@@ -186,11 +186,7 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
         &built.join(SCRIPT_LIBRARY_DIR),
         &bin_dir.join(SCRIPT_LIBRARY_DIR),
     ) {
-        warn(&format!(
-            "{message}, so the candela standard library is not beside lumenc. \
-             `import \"std/...\"` will not resolve until a {SCRIPT_LIBRARY_DIR} tree \
-             is there or CANDELA_LIB_PATH names one."
-        ));
+        warn(&library_not_beside_lumenc(&message));
     }
     Ok(())
 }

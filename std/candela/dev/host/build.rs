@@ -41,6 +41,11 @@ mod install;
 
 use install::install_tree;
 
+#[path = "src/stage_message.rs"]
+mod stage_message;
+
+use stage_message::library_not_staged;
+
 /// The standard library modules that bind a C source file, with the sources
 /// each one is built from. The rest of `std` is candela text and is copied.
 const NATIVE_MODULES: [(&str, &[&str]); 4] = [
@@ -56,9 +61,7 @@ fn main() {
     let source = match candela_libs() {
         Ok(source) => source,
         Err(why) => {
-            warn(&format!(
-                "{why}, so the candela standard library was not staged. `import \"std/...\"` will not resolve."
-            ));
+            warn(&library_not_staged(&why));
             return;
         }
     };
