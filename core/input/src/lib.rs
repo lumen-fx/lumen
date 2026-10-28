@@ -46,7 +46,10 @@ pub fn route_ime_events(
     mut commands: Commands,
     mut ime: MessageReader<ImeEvent>,
     tracker: Res<FocusTracker>,
-    mut inputs: Query<(&mut TextContent, &mut TextInput)>,
+    mut inputs: Query<
+        (&mut TextContent, &mut TextInput),
+        Without<lumen_core::components::ReadOnly>,
+    >,
     mut commits: MessageWriter<TextInputCommitted>,
 ) {
     let Some(entity) = tracker.0 else {
@@ -150,6 +153,7 @@ pub fn type_into_focused(
         Option<&mut UndoStack>,
         Option<&EchoMode>,
         Option<&lumen_text::ShapedText>,
+        Has<lumen_core::components::ReadOnly>,
     )>,
 ) {
     if keys.is_empty() {
@@ -159,7 +163,8 @@ pub fn type_into_focused(
         keys.read().for_each(drop);
         return;
     };
-    let Ok((mut tc, mut input, mut buf, mut cur, mut undo, echo, shaped)) = inputs.get_mut(entity)
+    let Ok((mut tc, mut input, mut buf, mut cur, mut undo, echo, shaped, read_only)) =
+        inputs.get_mut(entity)
     else {
         keys.read().for_each(drop);
         return;
@@ -230,6 +235,9 @@ pub fn type_into_focused(
     let before_byte = c.head.byte;
     for ev in keys.read() {
         if ev.entity != entity {
+            continue;
+        }
+        if read_only && edits(ev, multiline) {
             continue;
         }
         apply_focused_key(ev, multiline, concealed, &mut clipboard, b, c, u, geom);
@@ -328,6 +336,23 @@ fn apply_focused_key(
     apply_focused_key_inner(ev, multiline, concealed, clipboard, b, c, u, geom);
     if concealed && (b.len_bytes() == 0 || is_submit_key(ev, multiline)) {
         u.clear();
+    }
+}
+
+/// Whether `ev` changes the text rather than moving through it: typing, a
+/// newline, Backspace / Delete, and the cut / paste / undo / redo chords. A
+/// [`ReadOnly`](lumen_core::components::ReadOnly) field skips these and keeps
+/// caret motion, selection and copy.
+fn edits(ev: &FocusedKey, multiline: bool) -> bool {
+    let chord = ev.modifiers.ctrl || ev.modifiers.super_;
+    match &ev.key {
+        Key::Character(s) if chord => {
+            matches!(s.to_ascii_lowercase().as_str(), "x" | "v" | "z" | "y")
+        }
+        Key::Character(s) => !is_named_key_string(s),
+        Key::Named(NamedKey::Space | NamedKey::Backspace | NamedKey::Delete) => true,
+        Key::Named(NamedKey::Enter) => multiline && !ev.modifiers.shift,
+        _ => false,
     }
 }
 
