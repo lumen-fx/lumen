@@ -20,7 +20,9 @@ use lumen_ir::fragment::FragmentTable;
 use lumen_scene::source_parser::SourceParser;
 use lumen_scene::spawn::{Placeholders, spawn_subtree};
 
-use crate::{DevtoolsPlugin, OVERLAY_CSS, OVERLAY_LMN, OverlayPalette, env_open, mount_marks};
+use crate::{
+    DevtoolsPlugin, OVERLAY_CSS, OVERLAY_LMN, OverlayPalette, UA_CSS, env_open, mount_marks,
+};
 
 /// Carried by a static package only when the app asks for it by name:
 /// a development subsystem, not one the app's users reach.
@@ -39,7 +41,8 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
             return;
         }
     };
-    let sheet = match parser.parse_css(OVERLAY_CSS) {
+    // The user-agent baseline first, so the overlay's own rules win ties.
+    let sheet = match parser.parse_css(&format!("{UA_CSS}\n{OVERLAY_CSS}")) {
         Ok(sheet) => {
             let media = MediaContext::default();
             if let Err(e) = apply_css_with_media(&mut ir, &sheet, &media) {

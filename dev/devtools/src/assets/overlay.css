@@ -47,6 +47,7 @@
   color: #9aa0a6;
   padding: 5 10 5 10;
   font-size: 12;
+  min-height: 0;
 }
 
 .dt-hint {

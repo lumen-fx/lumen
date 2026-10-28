@@ -51,6 +51,18 @@ fn devtools_overlay_mounts_and_refreshes() {
         "tag_color resolved from overlay.css's --dt-tag-color"
     );
 
+    // The overlay is cascaded under the user-agent baseline, so the panel
+    // stacks its toolbar, tree and inspect pane in a column.
+    let mut panels = app
+        .world
+        .query::<(&LumenId, &lumen_core::components::Style)>();
+    let panel = panels
+        .iter(&app.world)
+        .find(|(id, _)| id.0 == lumen_devtools::PANEL_ID)
+        .map(|(_, s)| s.flex_direction)
+        .expect("dt-panel spawned");
+    assert_eq!(panel, lumen_core::components::FlexDirection::Column);
+
     // The data-driven body entity exists and carries DevtoolsMarker (so the
     // Elements tab excludes the overlay's own entities).
     let mut bodies = app
