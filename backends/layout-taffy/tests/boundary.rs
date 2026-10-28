@@ -366,3 +366,68 @@ fn percent_width_with_fixed_height_and_margin_is_not_zero() {
         "margin offsets origin"
     );
 }
+
+/// A boundary laid out by an ancestor's solve sizes from its content, as it
+/// does on a tick where it is not dirty: its last box is not held over the
+/// ancestor's intrinsic sizing.
+#[test]
+fn boundary_under_a_dirty_root_sizes_from_its_content() {
+    let mut app = app_with_viewport(800.0, 600.0);
+    let root = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Row,
+                ..px_style(800.0, 400.0)
+            },
+            DirtyLayout,
+        ))
+        .id();
+    let pane = |app: &mut App| {
+        app.world
+            .spawn((
+                Style {
+                    grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    ..Style::default()
+                },
+                ChildOf(root),
+                DirtyLayout,
+            ))
+            .id()
+    };
+    let left = pane(&mut app);
+    let left_leaf = app
+        .world
+        .spawn((px_style(100.0, 20.0), ChildOf(left), DirtyLayout))
+        .id();
+    let center = pane(&mut app);
+    let boundary = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                height: Length::Px(200.0),
+                ..Style::default()
+            },
+            RelayoutBoundary,
+            ChildOf(center),
+            DirtyLayout,
+        ))
+        .id();
+    let leaf = app
+        .world
+        .spawn((px_style(50.0, 20.0), ChildOf(boundary), DirtyLayout))
+        .id();
+    let right = pane(&mut app);
+    app.world
+        .spawn((px_style(100.0, 20.0), ChildOf(right), DirtyLayout));
+    app.tick();
+    let settled = app.world.get::<Transform>(center).unwrap().size;
+
+    // Dirt inside the boundary and outside the center pane in one tick.
+    app.world.entity_mut(leaf).insert(DirtyLayout);
+    app.world.entity_mut(left_leaf).insert(DirtyLayout);
+    app.tick();
+    assert_eq!(app.world.get::<Transform>(center).unwrap().size, settled);
+}
