@@ -83,7 +83,9 @@ anything you depend on.
   [panels popped out of a dock or shown as dialogs](guides/docks.md); panels
   move between windows by command, not yet by dragging. Dialogs, popups, and
   overlays are drawn inside the window they belong to.
-- Desktop only. There is no web, iOS, or Android target.
+- There is no iOS or Android target. The web target turns an app into a
+  static site the browser lays out; [the web guide](guides/web.md#known-limits)
+  lists what it does not carry over from the desktop.
 - The CSS is a subset. There are no pseudo-elements, and animation is limited
   to transitions between property values.
 - Scripts in different languages share signals but nothing else. One language's
