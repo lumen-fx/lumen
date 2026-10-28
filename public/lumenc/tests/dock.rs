@@ -2744,3 +2744,35 @@ fn a_stack_left_alone_fills_its_dock() {
         "the stack fills the dock: {ss} in {ds}"
     );
 }
+
+/// A stack split off to the side of another shares the room with it.
+#[test]
+fn a_split_off_stack_shares_the_room() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let markup = r#"<root><dock id="editor"><dock-split axis="row">
+      <dock-stack basis="240"><dock-panel id="files" title="Files"><label text="f"/></dock-panel></dock-stack>
+      <dock-stack center="true"><dock-panel id="scene" title="Scene"><label text="s"/></dock-panel><dock-panel id="game" title="Game"><label text="g"/></dock-panel></dock-stack>
+    </dock-split></dock><script src="main.cdl"/></root>"#;
+    let mut t = build("share", markup, CANDELA, "");
+    let app = &mut t.app;
+    ticks(app, 2);
+    call(app, |d| d.move_to("game", "scene", "right").unwrap());
+    ticks(app, 4);
+    let scene = entity(app, "scene");
+    let game = entity(app, "game");
+    let s = parent(app, parent(app, scene).unwrap()).unwrap();
+    let g = parent(app, parent(app, game).unwrap()).unwrap();
+    let (_, ss) = rect_of(app, s);
+    let (_, gs) = rect_of(app, g);
+    assert!((ss.x - gs.x).abs() < 4.0, "scene {ss} game {gs}");
+    // One along the whole dock's edge takes a side panel's room.
+    call(app, |d| d.move_to("files", "editor", "bottom").unwrap());
+    ticks(app, 4);
+    let files = entity(app, "files");
+    let f = parent(app, parent(app, files).unwrap()).unwrap();
+    let (_, fs) = rect_of(app, f);
+    assert!(
+        (fs.y - lumen_dock::model::EDGE_BASIS).abs() < 4.0,
+        "the stack along the bottom is {fs}"
+    );
+}

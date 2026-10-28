@@ -21,7 +21,7 @@
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
-use lumen_dock_model::{Container, PanelId, Rect, Side, Target, WindowPlace, Workspace};
+use lumen_dock_model::{Container, EDGE_BASIS, PanelId, Rect, Side, Target, WindowPlace, Workspace};
 use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLive, Length, Style, Transform,
 };
@@ -591,9 +591,10 @@ fn root_edge(
         if let Some((_, side)) = near
             && !matches!(payload, Payload::Group(g) if core.ws.stack(g).is_some_and(|s| s.center))
         {
+            // The preview covers what the new stack takes.
             let band = match side {
-                Side::Left | Side::Right => (s.x / 3.0).min(300.0),
-                Side::Top | Side::Bottom => (s.y / 3.0).min(300.0),
+                Side::Left | Side::Right => (s.x / 3.0).min(EDGE_BASIS),
+                Side::Top | Side::Bottom => (s.y / 3.0).min(EDGE_BASIS),
             };
             let region = match side {
                 Side::Left => (o, Vec2::new(band, s.y)),
