@@ -46,6 +46,15 @@ An element's text child becomes its text: `<label>Hello</label>` is the
 same as `<label text="Hello"/>`. An explicit `text` attribute wins, and
 only the first non-empty text child is read.
 
+An element with both text and element children lays its text out first,
+before the children, as a browser does:
+`<button text="Save"><column width="16" height="16"/></button>` is wide
+enough for the caption and the icon, and its `gap`, `padding`,
+`flex-direction`, and alignment place the text like a child. The text is not
+an element of its own: selectors, scripts, and the element's `children`
+list do not see it. Text fields (`<input>`, `<textarea>`) are the exception;
+their text always fills the field.
+
 `{...}` placeholders are substituted in `text`, `placeholder`, `src`,
 `id`, `class`, `style`, and `drag-payload`:
 

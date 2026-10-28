@@ -1027,6 +1027,29 @@ pub struct TextBlockOrigin {
     pub top: f32,
 }
 
+/// Where an element's own text was laid out when the element also has
+/// element children.
+///
+/// CSS wraps such text in an anonymous box that lays out as the first of
+/// the element's children, so the text takes its own room in the flow and
+/// the element's direction, gap, and alignment place it like any child.
+/// The layout engine does the same: it measures the text in a box of its
+/// own and writes the result here. The box is not an element: it has no
+/// entity, no selector matches it, and the element's children list is
+/// unchanged.
+///
+/// Absent on a leaf, whose text fills its content box. When present, the
+/// text paints in this box instead, and [`TextBlockOrigin::top`] is
+/// measured from its top.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct AnonymousTextBox {
+    /// Offset of the box's top-left corner from the element's border-box
+    /// origin ([`Transform::absolute`]), in logical pixels.
+    pub offset: Vec2,
+    /// Size of the box in logical pixels.
+    pub size: Vec2,
+}
+
 /// Per-input content scroll offset that keeps the caret visible inside
 /// the field box (W2 text-editing core).
 ///

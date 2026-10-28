@@ -16,10 +16,10 @@
 
 use crate::app::App;
 use crate::components::{
-    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, Display, EchoMode, Fill, FlexDirection,
-    FlexJustify, ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign,
-    TextBlockOrigin, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform,
-    Visible, Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
+    AnonymousTextBox, CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, Display, EchoMode, Fill,
+    FlexDirection, FlexJustify, ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style,
+    TextAlign, TextBlockOrigin, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle,
+    Transform, Visible, Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use crate::node_ir::{Node, transform_extracted_to_nodes};
@@ -2909,6 +2909,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
         Option<&'a TextBlockOrigin>,
         Option<&'a CaretWidth>,
         Option<&'a PasswordCharacter>,
+        Option<&'a AnonymousTextBox>,
     );
     let mut q = main.query::<RowFor>();
     let pairs: Vec<(Entity, ExtractedText)> = q
@@ -2930,6 +2931,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 block_origin,
                 caret_width,
                 password_char,
+                anon,
             )| {
                 let ts = ts.cloned().unwrap_or_default();
                 let size_px = ts.size_px;
@@ -2993,20 +2995,43 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 // soft-wrap-aware answer; without it, fall back to the same
                 // rule over the logical line count so the drawn baseline
                 // still agrees with the pointer hit test.
-                let pad_left = style.map(|s| s.padding.left).unwrap_or(0.0);
-                let pad_right = style.map(|s| s.padding.right).unwrap_or(0.0);
-                let pad_top = style.map(|s| s.padding.top).unwrap_or(0.0);
-                let pad_bottom = style.map(|s| s.padding.bottom).unwrap_or(0.0);
-                let inner_h = (t.size.y - pad_top - pad_bottom).max(size_px);
+                //
+                // A leaf's text fills its content box and is placed along
+                // the main axis like the item a browser would wrap it in
+                // (see `text_run_align`). Text beside element children has
+                // that item already, its anonymous box, so it paints there
+                // and only `text-align` places the lines inside it.
+                let (text_left, text_top, inner_w, inner_h, align) = match anon {
+                    Some(a) => (
+                        a.offset.x,
+                        a.offset.y,
+                        a.size.x,
+                        a.size.y.max(size_px),
+                        ts.align,
+                    ),
+                    None => {
+                        let pad_left = style.map(|s| s.padding.left).unwrap_or(0.0);
+                        let pad_right = style.map(|s| s.padding.right).unwrap_or(0.0);
+                        let pad_top = style.map(|s| s.padding.top).unwrap_or(0.0);
+                        let pad_bottom = style.map(|s| s.padding.bottom).unwrap_or(0.0);
+                        (
+                            pad_left,
+                            pad_top,
+                            t.size.x - pad_left - pad_right,
+                            (t.size.y - pad_top - pad_bottom).max(size_px),
+                            text_run_align(ts.align, style),
+                        )
+                    }
+                };
                 let block_top = block_origin.map(|b| b.top).unwrap_or_else(|| {
                     let stacked = input.is_some_and(|i| i.multiline) || combined.contains('\n');
                     text_block_top(inner_h, line_height_px, stacked)
                 });
                 let baseline_y = t.absolute.y
-                    + pad_top
+                    + text_top
                     + block_top
                     + text_baseline_in_line(size_px, line_height_px);
-                let container_width = (t.size.x - pad_left - pad_right).max(0.0);
+                let container_width = inner_w.max(0.0);
                 let alpha = draw_opacity(&alphas, e);
                 let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
                 // AABB-cull against the nearest scroll / overflow-hidden ancestor; matches the rule applied in `extract_rects`.
@@ -3023,7 +3048,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 Some((
                     e,
                     ExtractedText {
-                        origin: Vec2::new(t.absolute.x + pad_left, baseline_y) - off - edit_off,
+                        origin: Vec2::new(t.absolute.x + text_left, baseline_y) - off - edit_off,
                         text: combined,
                         size_px,
                         fill: alpha.apply(ts.color),
@@ -3035,7 +3060,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                             .map(|c| alpha.apply(c)),
                         caret_color: paint.and_then(|p| p.caret_color).map(|c| alpha.apply(c)),
                         container_width,
-                        align: text_run_align(ts.align, style),
+                        align,
                         wrap: ts.wrap,
                         max_lines: ts.max_lines,
                         family: ts.family.clone(),
