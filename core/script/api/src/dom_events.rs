@@ -1288,8 +1288,8 @@ pub(crate) mod text_event_tests {
         let node = lumen_core::node::NodeHandle::new(field).pack();
         let seen = watch(node, &["input"]);
 
-        // An IME commit mutates the buffer and raises the commit signal in
-        // the same tick; a handler sees one edit, not two.
+        // Several edits in one tick (a burst of keys, a paste beside a
+        // key) reach a handler as one `input`.
         for version in 1..=3 {
             world
                 .resource_mut::<Messages<TextEditApplied>>()

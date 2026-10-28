@@ -2088,9 +2088,8 @@ pub fn dispatch_dialog_closes_to_script<H: ScriptHost + Resource<Mutability = Mu
 ///
 /// Fires on every edit that changes the text, which is what a live preview
 /// needs, and once more when the field is committed with Enter. An entity
-/// gets at most one call per tick: an IME commit both mutates the buffer
-/// and raises [`TextInputCommitted`], and the script should see that as one
-/// edit, not two.
+/// gets at most one call per tick: an edit and an Enter in the same tick
+/// are one change to the script, not two.
 pub fn dispatch_text_input_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
