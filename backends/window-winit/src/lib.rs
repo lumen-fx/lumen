@@ -392,7 +392,6 @@ fn run(
         ticked: false,
         lock: None,
         extensions,
-        restoring: HashMap::new(),
     };
     event_loop
         .run_app(&mut handler)
@@ -513,16 +512,7 @@ struct WinitHandler {
     /// The capabilities riding the event loop, called at each of its
     /// points.
     extensions: Vec<Box<dyn extension::LoopExtension>>,
-    /// Windows the app restored from maximized, until the platform answers
-    /// with their new size or the deadline passes: a frame at the
-    /// maximized size meanwhile reads to GNOME as a window asking for the
-    /// whole screen, which it maximizes again.
-    restoring: HashMap<Entity, std::time::Instant>,
 }
-
-/// How long a restored window waits for the platform's new size before it
-/// paints again anyway.
-const RESTORE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// A pointer lock in effect on a platform window.
 struct AppliedLock {
@@ -785,10 +775,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     .set_system_dark(matches!(theme, winit::window::Theme::Dark));
                 self.want_frame();
             }
-            WindowEvent::Resized(new_size) => {
-                self.restoring.remove(&entity);
-                self.resized(entity, &window, new_size);
-            }
+            WindowEvent::Resized(new_size) => self.resized(entity, &window, new_size),
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut inner_size_writer,
@@ -1117,25 +1104,10 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
     ///    window whose frame changed. Focus is not a factor - a
     ///    visible-but-unfocused window keeps animating.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // A restored window the platform never answered paints again.
-        let now = std::time::Instant::now();
-        let before = self.restoring.len();
-        self.restoring.retain(|_, until| *until > now);
-        if self.restoring.len() != before {
-            if let Some(mut fd) = self.app.world.get_resource_mut::<FrameDirty>() {
-                fd.dirty = true;
-            }
-            self.want_frame();
-        }
         self.idle_step(event_loop);
         // An extension waiting on something the platform does not wake the
         // loop for looks again when it asks to.
-        let soon = self
-            .extensions
-            .iter()
-            .filter_map(|e| e.wake_at())
-            .chain(self.restoring.values().copied())
-            .min();
+        let soon = self.extensions.iter().filter_map(|e| e.wake_at()).min();
         if !self.close.committed
             && let Some(soon) = soon
         {
@@ -1660,8 +1632,6 @@ impl WinitHandler {
             // first, as the window's restore button does.
             if window.is_maximized() {
                 window.set_maximized(false);
-                self.restoring
-                    .insert(entity, std::time::Instant::now() + RESTORE_WAIT);
             }
             let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
             // `Some` means the platform applied the size at once and may
@@ -1676,10 +1646,6 @@ impl WinitHandler {
             window.set_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
         }
         if let Some(maximized) = changes.maximized {
-            if !maximized && window.is_maximized() {
-                self.restoring
-                    .insert(entity, std::time::Instant::now() + RESTORE_WAIT);
-            }
             window.set_maximized(maximized);
         }
     }
@@ -2053,8 +2019,7 @@ impl WinitHandler {
                 .is_some_and(|w| w.visible)
                 && !world
                     .get::<WindowRuntime>(os.entity)
-                    .is_some_and(|r| r.occluded || r.minimized)
-                && !self.restoring.contains_key(&os.entity);
+                    .is_some_and(|r| r.occluded || r.minimized);
             targets.push(PresentTarget {
                 window: os.entity,
                 a11y: os.a11y.as_deref_mut(),
