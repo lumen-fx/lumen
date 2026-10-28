@@ -33,9 +33,15 @@ CONF
       sleep 0.1
     done
     export WAYLAND_DISPLAY=wayland-1 SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
+    # A headless seat has no keyboard; one that stays for the whole run lets
+    # the app bind it, so the Escape wtype sends reaches the app.
+    wtype -s 86400000 &
+    keyboard=$!
+    sleep 0.5
     status=0
     python3 "$here/drive.py" "$lumenc" "$out" --desktop wayland --compositor sway \
       --pointer "$work/wlr-pointer" 1280 1024 || status=$?
+    kill "$keyboard" 2>/dev/null || true
     ;;
   kwin)
     build /usr/share/plasma-wayland-protocols/fake-input.xml fake-input "$here/kwin-pointer.c"
