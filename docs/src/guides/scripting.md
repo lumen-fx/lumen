@@ -168,7 +168,10 @@ The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
 `input`, `change`, `focus`, `blur`, `submit`, `scroll`, `pointerlockchange`,
 and `pointerlockerror`. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
-field to commit. `click` and `contextmenu` have a default action to prevent:
+field to commit. Checkboxes,
+toggles, switches, sliders, radios, dropdowns and color fields raise `input` and
+`change` as the user changes them. `click` and `contextmenu` have a default
+action to prevent:
 `click` suppresses the navigation an `<a href>` would otherwise perform, and
 `contextmenu` keeps a browser from opening its own menu in a web build. Key
 events go to the focused element; with nothing focused they go to the

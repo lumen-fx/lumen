@@ -72,9 +72,11 @@ pub use progress::{
     PROGRESS_PERIOD_MS, ProgressBar, ProgressChunk, ProgressFill, ProgressPlugin,
     apply_progress_bindings, sync_progress_fill,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use radio::radio_group_keys;
 pub use radio::{
-    RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks, radio_group_keys,
-    sync_radio_selected, sync_radio_tab_index, sync_radio_visuals,
+    RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks, sync_radio_selected,
+    sync_radio_tab_index, sync_radio_visuals,
 };
 pub use reserve::{ReservedEdge, reserve_parent_edges};
 pub use scroll::{ScrollPlugin, accumulate_wheel};

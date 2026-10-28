@@ -2458,6 +2458,7 @@ fn dropdown_inside_tab_opens_and_commits_on_clicks() {
     let mut world = World::new();
     world.insert_resource(PropertyStore::default());
     world.init_resource::<bevy_ecs::message::Messages<ClickEvent>>();
+    world.init_resource::<bevy_ecs::message::Messages<lumen_core::input::ControlInput>>();
     ir.spawn_into(&mut world);
 
     // Settling the tree shows the first tab, which mounts its content:
