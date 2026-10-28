@@ -121,6 +121,20 @@ impl PointerTracker {
         PointerData::mouse(self.mouse_buttons)
     }
 
+    /// The mouse buttons held now.
+    pub fn held_mouse_buttons(&self) -> Vec<PointerButton> {
+        [
+            PointerButton::Primary,
+            PointerButton::Secondary,
+            PointerButton::Middle,
+            PointerButton::Back,
+            PointerButton::Forward,
+        ]
+        .into_iter()
+        .filter(|b| self.mouse_buttons & b.bit() != 0)
+        .collect()
+    }
+
     /// A mouse button went down or up; the mouse as it is after.
     pub fn mouse_button(&mut self, button: PointerButton, pressed: bool) -> PointerData {
         if pressed {
@@ -310,10 +324,15 @@ mod tests {
         assert_eq!(d.pressure, 0.5, "no sensor: 0.5 while a button is held");
         let d = t.mouse_button(PointerButton::Secondary, true);
         assert_eq!(d.buttons, 3);
+        assert_eq!(
+            t.held_mouse_buttons(),
+            vec![PointerButton::Primary, PointerButton::Secondary]
+        );
         let d = t.mouse_button(PointerButton::Primary, false);
         assert_eq!(d.buttons, 2);
         let d = t.mouse_button(PointerButton::Secondary, false);
         assert_eq!((d.buttons, d.pressure), (0, 0.0));
+        assert!(t.held_mouse_buttons().is_empty());
     }
 
     #[test]

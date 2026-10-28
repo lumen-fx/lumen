@@ -30,6 +30,7 @@ pub struct LoopCx<'a> {
     open: Vec<Entity>,
     primary: Option<Entity>,
     frame: bool,
+    release: bool,
 }
 
 impl<'a> LoopCx<'a> {
@@ -47,6 +48,7 @@ impl<'a> LoopCx<'a> {
             open,
             primary,
             frame: false,
+            release: false,
         }
     }
 
@@ -73,6 +75,18 @@ impl<'a> LoopCx<'a> {
 
     pub(crate) fn wants_frame(&self) -> bool {
         self.frame
+    }
+
+    /// The platform ended the pointer's press without telling the window,
+    /// as a drag the compositor runs does: the backend releases the mouse
+    /// buttons it still holds, where the pointer last was, once the
+    /// extension returns.
+    pub fn release_pointer(&mut self) {
+        self.release = true;
+    }
+
+    pub(crate) fn wants_release(&self) -> bool {
+        self.release
     }
 }
 
