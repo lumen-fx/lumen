@@ -4272,6 +4272,13 @@ mod tests {
     /// other test reads a value it already overwrote.
     static SIGNAL_STATE: Mutex<()> = Mutex::new(());
 
+    /// The last-error slot falls back to a process-wide global. Every test
+    /// that drives a call into an error path writes it, so those tests and
+    /// the one that reads the global back from a fresh thread hold this
+    /// lock; otherwise another test's message lands between the write and
+    /// the read.
+    static LAST_ERROR: Mutex<()> = Mutex::new(());
+
     #[test]
     fn abi_version_is_packed_correctly() {
         let v = lumen_abi_version();
@@ -4292,6 +4299,7 @@ mod tests {
 
     #[test]
     fn last_error_thread_local_then_global() {
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         set_last_error("test message");
         let p = unsafe { lumen_last_error() };
         assert!(!p.is_null());
@@ -4421,6 +4429,7 @@ mod tests {
     #[test]
     fn typed_signal_get_missing_returns_err_bad_arg() {
         let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("never_set_typed").unwrap();
             let mut out: i64 = -1;
@@ -4598,6 +4607,7 @@ mod tests {
     #[test]
     fn typed_signal_str_round_trips() {
         let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("ffi_get_str_test").unwrap();
             let value = CString::new("hello world").unwrap();
@@ -4649,6 +4659,7 @@ mod tests {
     #[test]
     fn typed_getters_reject_a_type_mismatch() {
         let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("ffi_mismatch_test").unwrap();
             let value = CString::new("not a number").unwrap();
@@ -4752,6 +4763,7 @@ mod tests {
     /// come back as statuses.
     #[test]
     fn lumen_call_reaches_a_published_function() {
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         use lumen_script::{ScriptFnRegistry, ScriptNs, ScriptTy};
         let mut registry = ScriptFnRegistry::default();
         registry.push(
@@ -4859,6 +4871,7 @@ mod tests {
     #[test]
     fn lumen_event_detail_reads_the_current_event() {
         let _event = CURRENT_EVENT.lock().unwrap_or_else(|e| e.into_inner());
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
         let mut detail = HashMap::new();
         detail.insert("reason".to_string(), ScriptValue::Str("user".into()));
         lumen_script::event::set_current_event(lumen_script::event::EventData {
