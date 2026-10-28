@@ -347,6 +347,108 @@ jobs:
             if (-not ($out -match [regex]::Escape($line))) { "missing: $line"; $failed = $true }
           }
           if ($failed) { exit 1 }
+      # A drag that crosses real windows only happens on a desktop. The suite
+      # drags on Linux under an Xvfb of its own (tests/dock_x11.rs); the
+      # Windows leg drags on the runner's desktop: the dock-drag fixture's
+      # Files tab past the window's edge, which tears it off into a window of
+      # its own, then that window's tab back over the main window, which
+      # docks it. The fixture prints each move.
+      - name: Drag a tab across real windows
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\dock-drag"
+          New-Item -ItemType Directory -Force -Path $log | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Drag {
+              [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+              [StructLayout(LayoutKind.Sequential)] public struct Rect { public int L, T, R, B; }
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
+              [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref Point p);
+              [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Rect r);
+              [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+              [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+              [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+              [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+          }
+          "@
+          $p = Start-Process -FilePath "target\debug\lumenc.exe" -ArgumentList "run", "fixtures/dock-drag" `
+            -RedirectStandardError "$log\stderr.txt" -RedirectStandardOutput "$log\stdout.txt" -PassThru
+          function Find-Window([string]$title) {
+            for ($i = 0; $i -lt 300; $i++) {
+              $h = [Drag]::FindWindowW([NullString]::Value, $title)
+              if ($h -ne [IntPtr]::Zero) { return $h }
+              Start-Sleep -Milliseconds 200
+            }
+            return [IntPtr]::Zero
+          }
+          function Wait-Line([string]$line) {
+            for ($i = 0; $i -lt 100; $i++) {
+              if ((Get-Content "$log\stdout.txt" -ErrorAction SilentlyContinue) -match [regex]::Escape($line)) { return $true }
+              Start-Sleep -Milliseconds 200
+            }
+            return $false
+          }
+          # Press the first tab of `hwnd` and drag it to the screen point
+          # `tx`,`ty`, a move a frame, then let go.
+          function Drag-Tab([IntPtr]$hwnd, [int]$tx, [int]$ty) {
+            $scale = [Drag]::GetDpiForWindow($hwnd) / 96.0
+            $o = New-Object Drag+Point
+            [Drag]::ClientToScreen($hwnd, [ref]$o) | Out-Null
+            $fx = $o.X + [int](40 * $scale); $fy = $o.Y + [int](15 * $scale)
+            [Drag]::SetForegroundWindow($hwnd) | Out-Null
+            [Drag]::SetCursorPos($fx, $fy) | Out-Null
+            Start-Sleep -Milliseconds 300
+            [Drag]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 200
+            for ($k = 1; $k -le 40; $k++) {
+              [Drag]::SetCursorPos([int]($fx + ($tx - $fx) * $k / 40), [int]($fy + ($ty - $fy) * $k / 40)) | Out-Null
+              Start-Sleep -Milliseconds 25
+            }
+            Start-Sleep -Milliseconds 300
+            [Drag]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+          }
+          $failed = $false
+          $main = Find-Window "dock-drag-check"
+          if ($main -eq [IntPtr]::Zero -or -not (Wait-Line "dock-drag ready")) {
+            "the fixture did not come up"; $failed = $true
+          } else {
+            Start-Sleep -Seconds 2
+            $o = New-Object Drag+Point
+            [Drag]::ClientToScreen($main, [ref]$o) | Out-Null
+            $r = New-Object Drag+Rect
+            [Drag]::GetClientRect($main, [ref]$r) | Out-Null
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            # Below the window where the screen has room for it, else past
+            # its right edge.
+            $tx = $o.X + 60; $ty = [Math]::Min($o.Y + $r.B + 120, $screen.Bottom - 2)
+            if ($ty -lt $o.Y + $r.B + 40) { $tx = [Math]::Min($o.X + $r.R + 120, $screen.Right - 2); $ty = $o.Y + 60 }
+            Drag-Tab $main $tx $ty
+            $files = Find-Window "Files"
+            if ($files -eq [IntPtr]::Zero -or -not (Wait-Line "dock-drag files window")) {
+              "the tab did not tear off into a window of its own"; $failed = $true
+            } else {
+              Start-Sleep -Seconds 1
+              Drag-Tab $files ($o.X + [int]($r.R * 0.65)) ($o.Y + [int]($r.B * 0.6))
+              if (-not (Wait-Line "dock-drag files dock")) { "the window did not dock back"; $failed = $true }
+            }
+          }
+          $bmp = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+          $bmp.Save("$log\screen.png")
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Content "$log\stdout.txt", "$log\stderr.txt" -ErrorAction SilentlyContinue
+          if ($failed) { exit 1 }
+      - if: always() && needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dock-drag-windows
+          path: ${{ runner.temp }}/dock-drag/
+          if-no-files-found: ignore
+          retention-days: 7
       - if: always() && needs.changes.outputs.rust == 'true' && runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:

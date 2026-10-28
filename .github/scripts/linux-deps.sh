@@ -14,6 +14,10 @@
 #                       has. Without it wgpu finds no adapter, the GPU render
 #                       tests skip, and the golden images compare on the CPU
 #                       backend alone.
+#   xvfb and the X11    a private X server, and the client libraries winit
+#   client libraries    loads at run time, for the test that drags across
+#                       real windows (public/lumenc/tests/dock_x11.rs). The
+#                       test starts its own server; without one it skips.
 set -euxo pipefail
 
 sudo apt-get update
@@ -25,4 +29,10 @@ sudo apt-get install -y --no-install-recommends \
   libwayland-dev \
   libvulkan1 \
   libvulkan-dev \
-  mesa-vulkan-drivers
+  mesa-vulkan-drivers \
+  xvfb \
+  libxkbcommon-x11-0 \
+  libx11-xcb1 \
+  libxcursor1 \
+  libxrandr2 \
+  libxi6
