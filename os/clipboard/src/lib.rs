@@ -9,6 +9,8 @@
 //! - [`ClipboardHost::set_rgba8_image`] / [`ClipboardHost::get_rgba8_image`] -
 //!   images as RGBA8 pixels in memory, behind the `copy_image` /
 //!   `save_clipboard_image` script builtins and the Rust SDK `Clipboard`.
+//! - [`ClipboardHost::in_memory`] - a clipboard private to the process, for
+//!   tests and automation that must not touch the desktop's clipboard.
 //!
 //! `arboard::Clipboard` is `!Send` on Linux/Wayland - store as a
 //! `NonSend` ECS resource, which is how `lumen-input` installs it.
@@ -42,7 +44,43 @@ pub use lumen_os_mime as mime;
 /// once corrupts memory there rather than returning an error.
 pub struct ClipboardHost {
     #[cfg(not(target_arch = "wasm32"))]
-    inner: Mutex<arboard::Clipboard>,
+    inner: Backend,
+}
+
+/// Where a desktop [`ClipboardHost`] keeps what it holds.
+#[cfg(not(target_arch = "wasm32"))]
+enum Backend {
+    /// The system clipboard.
+    System(Mutex<arboard::Clipboard>),
+    /// A clipboard private to this process; see [`ClipboardHost::in_memory`].
+    Memory(Mutex<Held>),
+}
+
+/// What an in-memory clipboard holds: text and an image, each optional, as
+/// the system clipboard can hold both at once.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct Held {
+    text: Option<String>,
+    image: Option<(u32, u32, Vec<u8>)>,
+}
+
+/// The locked clipboard a call works on.
+#[cfg(not(target_arch = "wasm32"))]
+enum Guard<'a> {
+    System(std::sync::MutexGuard<'a, arboard::Clipboard>),
+    Memory(std::sync::MutexGuard<'a, Held>),
+}
+
+/// Lock `mutex`, recovering from a poisoned lock. What either clipboard
+/// holds stays valid when a holder panicked, so the guard is safe to reuse;
+/// dropping to the empty answer instead would brick the clipboard silently.
+#[cfg(not(target_arch = "wasm32"))]
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| {
+        eprintln!("lumen-os-clipboard: recovered poisoned clipboard lock");
+        e.into_inner()
+    })
 }
 
 impl ClipboardHost {
@@ -52,8 +90,19 @@ impl ClipboardHost {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new() -> Option<Self> {
         arboard::Clipboard::new().ok().map(|cb| Self {
-            inner: Mutex::new(cb),
+            inner: Backend::System(Mutex::new(cb)),
         })
+    }
+
+    /// A clipboard private to this process, starting empty. Everything
+    /// written to it reads back from it and nothing reaches the system
+    /// clipboard, so a test or an automated run can exercise copy and paste
+    /// without disturbing the desktop it runs on.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn in_memory() -> Self {
+        Self {
+            inner: Backend::Memory(Mutex::new(Held::default())),
+        }
     }
 
     /// Find the page's clipboard. `None` outside a secure context, where
@@ -63,19 +112,13 @@ impl ClipboardHost {
         page_clipboard().map(|_| Self {})
     }
 
-    /// Lock the inner clipboard, recovering from a poisoned mutex.
-    ///
-    /// `arboard::Clipboard` stays valid even if a holder panicked, so
-    /// recovering the guard is safe. The previous per-site `lock().ok()`
-    /// dropped to the empty/`false` fallback on poison - permanently and
-    /// silently bricking clipboard access with no diagnostic. Here we log
-    /// once and carry on.
+    /// Lock whichever clipboard this host holds.
     #[cfg(not(target_arch = "wasm32"))]
-    fn guard(&self) -> std::sync::MutexGuard<'_, arboard::Clipboard> {
-        self.inner.lock().unwrap_or_else(|e| {
-            eprintln!("lumen-os-clipboard: recovered poisoned clipboard lock");
-            e.into_inner()
-        })
+    fn guard(&self) -> Guard<'_> {
+        match &self.inner {
+            Backend::System(m) => Guard::System(lock(m)),
+            Backend::Memory(m) => Guard::Memory(lock(m)),
+        }
     }
 
     /// Read the current clipboard contents as a multi-format
@@ -84,16 +127,23 @@ impl ClipboardHost {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self) -> MimePayload {
         let mut payload = MimePayload::new();
-        let mut cb = self.guard();
-        if let Ok(text) = cb.get_text() {
+        let (text, image) = match self.guard() {
+            Guard::System(mut cb) => (
+                cb.get_text().ok(),
+                cb.get_image()
+                    .ok()
+                    .map(|img| (img.width as u32, img.height as u32, img.bytes.into_owned())),
+            ),
+            Guard::Memory(held) => (held.text.clone(), held.image.clone()),
+        };
+        if let Some(text) = text {
             payload = payload.with(MimeKind::TextPlain, text.into_bytes());
         }
-        // arboard's `get_image` is RGBA8 raw; we surface it under a
-        // synthetic raw-rgba MIME (PNG encoding is a lumenc-layer
-        // concern - see `handle_save_clipboard_image`).
-        if let Ok(img) = cb.get_image() {
-            let bytes = img.bytes.into_owned();
-            let header = format!("{}x{}:", img.width, img.height);
+        // The image is RGBA8 raw; we surface it under a synthetic raw-rgba
+        // MIME (PNG encoding is a lumenc-layer concern - see
+        // `handle_save_clipboard_image`).
+        if let Some((width, height, bytes)) = image {
+            let header = format!("{width}x{height}:");
             let mut combined = header.into_bytes();
             combined.extend_from_slice(&bytes);
             payload = payload.with(
@@ -115,11 +165,9 @@ impl ClipboardHost {
     /// Returns `true` on success.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn write(&self, payload: &MimePayload) -> bool {
-        let mut cb = self.guard();
         // Prefer text/plain; arboard's API only exposes text + image.
         if let Some(bytes) = payload.get(&MimeKind::TextPlain) {
-            let text = String::from_utf8_lossy(bytes).into_owned();
-            return cb.set_text(text).is_ok();
+            return self.write_text(&String::from_utf8_lossy(bytes));
         }
         // No directly-supported MIME - caller must use
         // `set_rgba8_image` for image payloads since the encoded
@@ -142,8 +190,18 @@ impl ClipboardHost {
     /// only have a `&str` (the text editor's copy / cut path).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn write_text(&self, text: &str) -> bool {
-        let mut cb = self.guard();
-        cb.set_text(text.to_string()).is_ok()
+        match self.guard() {
+            Guard::System(mut cb) => cb.set_text(text.to_string()).is_ok(),
+            Guard::Memory(mut held) => {
+                // Setting text replaces whatever the clipboard held, image
+                // included, as it does on the system clipboard.
+                *held = Held {
+                    text: Some(text.to_string()),
+                    image: None,
+                };
+                true
+            }
+        }
     }
 
     /// Convenience: write a plain-text payload through the page's
@@ -174,8 +232,10 @@ impl ClipboardHost {
     /// string when no text payload is available.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_text(&self) -> String {
-        let mut cb = self.guard();
-        cb.get_text().unwrap_or_default()
+        match self.guard() {
+            Guard::System(mut cb) => cb.get_text().unwrap_or_default(),
+            Guard::Memory(held) => held.text.clone().unwrap_or_default(),
+        }
     }
 
     /// Convenience: read the current clipboard text - a page cannot read it
@@ -227,8 +287,13 @@ impl ClipboardHost {
     /// Clear the clipboard. Returns `true` on success.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn clear(&self) -> bool {
-        let mut cb = self.guard();
-        cb.clear().is_ok()
+        match self.guard() {
+            Guard::System(mut cb) => cb.clear().is_ok(),
+            Guard::Memory(mut held) => {
+                *held = Held::default();
+                true
+            }
+        }
     }
 
     /// Clear the clipboard - no backend on wasm32.
@@ -241,12 +306,22 @@ impl ClipboardHost {
     /// the system clipboard. Backs the `copy_image` script builtin.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_rgba8_image(&self, width: u32, height: u32, rgba: Vec<u8>) -> bool {
-        let img = arboard::ImageData {
-            width: width as usize,
-            height: height as usize,
-            bytes: std::borrow::Cow::Owned(rgba),
-        };
-        self.guard().set_image(img).is_ok()
+        match self.guard() {
+            Guard::System(mut cb) => cb
+                .set_image(arboard::ImageData {
+                    width: width as usize,
+                    height: height as usize,
+                    bytes: std::borrow::Cow::Owned(rgba),
+                })
+                .is_ok(),
+            Guard::Memory(mut held) => {
+                *held = Held {
+                    text: None,
+                    image: Some((width, height, rgba)),
+                };
+                true
+            }
+        }
     }
 
     /// Write an RGBA8 image to the system clipboard - no backend on wasm32.
@@ -259,9 +334,13 @@ impl ClipboardHost {
     /// `(width, height, rgba_bytes)` when an image is present.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn get_rgba8_image(&self) -> Option<(u32, u32, Vec<u8>)> {
-        let mut cb = self.guard();
-        let img = cb.get_image().ok()?;
-        Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
+        match self.guard() {
+            Guard::System(mut cb) => {
+                let img = cb.get_image().ok()?;
+                Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
+            }
+            Guard::Memory(held) => held.image.clone(),
+        }
     }
 
     /// Read the current clipboard image as RGBA8 - no backend on wasm32.
@@ -302,5 +381,23 @@ mod tests {
         // arboard can send).
         let p: MimePayload = vec![0u8, 1, 2].into();
         assert!(!p.has(&MimeKind::TextPlain));
+    }
+
+    /// The in-memory clipboard reads back what was written to it, text and
+    /// image each replacing the other, without a display server.
+    #[test]
+    fn the_in_memory_clipboard_reads_back_what_was_written() {
+        let clip = ClipboardHost::in_memory();
+        assert_eq!(clip.read_text(), "");
+        assert!(clip.write_text("copied"));
+        assert_eq!(clip.read_text(), "copied");
+        assert_eq!(clip.read().text().as_deref(), Some("copied"));
+        assert!(clip.set_rgba8_image(1, 1, vec![1, 2, 3, 4]));
+        assert_eq!(clip.get_rgba8_image(), Some((1, 1, vec![1, 2, 3, 4])));
+        assert_eq!(clip.read_text(), "");
+        assert!(clip.write(&MimePayload::from("again")));
+        assert_eq!(clip.get_rgba8_image(), None);
+        assert!(clip.clear());
+        assert_eq!(clip.read_text(), "");
     }
 }
