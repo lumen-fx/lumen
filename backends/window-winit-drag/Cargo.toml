@@ -32,6 +32,9 @@ raw-window-handle = "0.6"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# The token in the drag's private MIME type. The version the workspace
+# already builds.
+getrandom = "0.3"
 
 [dev-dependencies]
 toml.workspace = true
