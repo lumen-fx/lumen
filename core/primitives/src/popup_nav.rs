@@ -346,13 +346,18 @@ pub fn popup_nav_lifecycle(
             .map(|e| in_panel_scope(e, session.panel, &parents))
             .unwrap_or(false);
         if !still_open {
-            // Closed by Escape / commit / dismissal: hand focus back.
+            // Closed by Escape / commit / dismissal: hand focus back. A
+            // popup's action can despawn the element it opened from (an
+            // item that rebuilds its own tab) or the row it ran from, and
+            // a focus command on a dead entity fails the tick, so only
+            // elements still in the tree take part.
+            let from = from.filter(|&e| parents.contains(e));
             if focus_inside {
                 let target = headers
                     .iter()
                     .find(|(_, h)| h.open_signal == session.open_signal)
                     .map(|(e, _)| e)
-                    .or(session.prev_focus);
+                    .or(session.prev_focus.filter(|&e| parents.contains(e)));
                 if let Some(target) = target {
                     move_focus(
                         &mut commands,
@@ -361,8 +366,10 @@ pub fn popup_nav_lifecycle(
                         target,
                         session.prev_focus_visible,
                     );
-                } else if let Some(prev) = from {
-                    commands.entity(prev).remove::<(Focused, FocusVisible)>();
+                } else {
+                    if let Some(prev) = from {
+                        commands.entity(prev).remove::<(Focused, FocusVisible)>();
+                    }
                     tracker.0 = None;
                 }
             }
@@ -1201,7 +1208,8 @@ mod tests {
     #[test]
     fn menu_close_restores_previous_focus() {
         let mut world = base_world();
-        let prev = world.spawn_empty().id();
+        let root = world.spawn_empty().id();
+        let prev = world.spawn(ChildOf(root)).id();
         world.resource_mut::<FocusTracker>().0 = Some(prev);
         let (_, items) = spawn_menu(&mut world);
         world
@@ -1220,6 +1228,36 @@ mod tests {
             focused(&world),
             Some(prev),
             "menu close hands focus back to the pre-open holder"
+        );
+    }
+
+    /// A menu item's action can despawn the element the menu opened from;
+    /// closing the menu then hands focus to nothing rather than queueing a
+    /// focus insert on a dead entity, which would fail the tick.
+    #[test]
+    fn menu_close_survives_a_despawned_previous_focus() {
+        let mut world = base_world();
+        let root = world.spawn_empty().id();
+        let prev = world.spawn(ChildOf(root)).id();
+        world.resource_mut::<FocusTracker>().0 = Some(prev);
+        let (_, items) = spawn_menu(&mut world);
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_bool(MENU_OPEN, true);
+        run_lifecycle(&mut world);
+        press(&mut world, Key::Named(NamedKey::ArrowDown));
+        run_keys(&mut world);
+        assert_eq!(focused(&world), Some(items[0]));
+
+        world.despawn(prev);
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_bool(MENU_OPEN, false);
+        run_lifecycle(&mut world);
+        assert_eq!(focused(&world), None, "nothing left to hand focus back to");
+        assert!(
+            world.get::<Focused>(items[0]).is_none(),
+            "the item the menu closed from loses focus"
         );
     }
 
