@@ -31,9 +31,16 @@
   --dt-tip-text: #e8eaed;
 }
 
+/* The overlay root spans the window to dock the panel at its right edge;
+   the pointer passes through it to the app, and only the panel takes it. */
+.dt-overlay {
+  pointer-events: none;
+}
+
 .dt-panel {
   background: #202124;
   border-left: 1 solid #3c4043;
+  pointer-events: auto;
 }
 
 .dt-toolbar {

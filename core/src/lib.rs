@@ -75,11 +75,11 @@ pub mod prelude {
         ImeEvent, ImeRequest, Key, KeyPressed, KeyReleased, LongPressEvent, Modifiers,
         ModifiersState, MouseWheel, NamedKey, PointerButton, PointerCancelled, PointerData,
         PointerKind, PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState,
-        PointerTargets, Pressed, SCROLLBAR_MARGIN, SCROLLBAR_MIN_THUMB, SCROLLBAR_THICKNESS,
-        SCROLLBAR_THICKNESS_THIN, Scroll, ScrollAxis, ScrollOffset, ScrollbarAxisPick,
-        ScrollbarDrag, ScrollbarGeometry, ScrollbarInteraction, ScrollbarMetrics, ScrollbarPart,
-        ScrollbarState, ScrollbarStyle, ScrollbarWidthMode, TextInputCommitted,
-        horizontal_scrollbar, vertical_scrollbar,
+        PointerTargets, PressWithin, Pressed, SCROLLBAR_MARGIN, SCROLLBAR_MIN_THUMB,
+        SCROLLBAR_THICKNESS, SCROLLBAR_THICKNESS_THIN, Scroll, ScrollAxis, ScrollOffset,
+        ScrollbarAxisPick, ScrollbarDrag, ScrollbarGeometry, ScrollbarInteraction,
+        ScrollbarMetrics, ScrollbarPart, ScrollbarState, ScrollbarStyle, ScrollbarWidthMode,
+        TextInputCommitted, horizontal_scrollbar, vertical_scrollbar,
     };
     pub use crate::native::{
         ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, NativePainters,

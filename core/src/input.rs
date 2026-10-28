@@ -952,8 +952,10 @@ pub struct PointerState {
 
 /// Marker on the one entity under the primary pointer, the hit target:
 /// the innermost element the hit test picked, like a browser's
-/// `event.target`. Pointer events, presses and clicks aim at it, and
-/// pointer capture confines it to the pressed entity mid-press.
+/// `event.target`. Every element with a laid-out box can be it, painted or
+/// not, unless `pointer-events: none` lets the pointer through. Pointer
+/// events and presses aim at it, and pointer capture confines it to the
+/// pressed element, its ancestors and its descendants mid-press.
 ///
 /// For "is this element hovered" in the CSS `:hover` sense, which also
 /// holds for every ancestor of the hit target, read [`HoverWithin`].
@@ -968,27 +970,32 @@ pub struct Hovered;
 /// `pointerleave` key off this marker.
 ///
 /// Whatever places [`Hovered`] keeps the chain in step through
-/// [`reconcile_hover_chain`].
+/// [`reconcile_chain`].
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct HoverWithin;
 
-/// Put [`HoverWithin`] on `hit` and its ancestors and take it off every
-/// other entity carrying it, touching only the entities whose membership
-/// changes. `chain` is the live set of [`HoverWithin`] entities.
+/// Put the chain marker `M` on every entity in `targets` and on their
+/// ancestors, and take it off every other entity carrying it, touching only
+/// the entities whose membership changes. `chain` is the live set of `M`
+/// entities. [`HoverWithin`] follows the hit target this way and
+/// [`PressWithin`] follows every [`Pressed`] element.
 ///
 /// Removals go innermost first and insertions outermost first, the order a
 /// browser fires `pointerleave` and `pointerenter` in.
-pub fn reconcile_hover_chain(
+pub fn reconcile_chain<M: Component + Default>(
     commands: &mut Commands,
-    hit: Option<Entity>,
+    targets: &[Entity],
     parents: &Query<&ChildOf>,
-    chain: &Query<Entity, With<HoverWithin>>,
+    chain: &Query<Entity, With<M>>,
 ) {
-    // Innermost first: the hit target, then each ancestor up to the root.
+    // Innermost first: each target, then each ancestor up to the root.
     let mut want: smallvec::SmallVec<[Entity; 32]> = smallvec::SmallVec::new();
-    if let Some(hit) = hit {
-        want.push(hit);
-        want.extend(parents.iter_ancestors(hit));
+    for &target in targets {
+        for e in std::iter::once(target).chain(parents.iter_ancestors(target)) {
+            if !want.contains(&e) {
+                want.push(e);
+            }
+        }
     }
     let mut stale: smallvec::SmallVec<[(usize, Entity); 8]> = chain
         .iter()
@@ -997,11 +1004,11 @@ pub fn reconcile_hover_chain(
         .collect();
     stale.sort_unstable_by(|a, b| b.cmp(a));
     for (_, e) in stale {
-        commands.entity(e).try_remove::<HoverWithin>();
+        commands.entity(e).try_remove::<M>();
     }
     for &e in want.iter().rev() {
         if !chain.contains(e) {
-            commands.entity(e).try_insert(HoverWithin);
+            commands.entity(e).try_insert(M::default());
         }
     }
 }
@@ -1022,10 +1029,28 @@ pub enum PointerEvents {
     None,
 }
 
-/// Marker indicating an active primary-button press on the entity.
-/// Inserted on `PointerPressed`; removed on `PointerReleased` and `PointerLeft`.
+/// Marker on the element a press went down on: the hit target of a primary
+/// pointer press, or the focused element a Space key press holds down. It
+/// is the press target, like the `pointerdown` event's target, so a press on
+/// a button's label marks the label. It is also the pointer capture: while
+/// it is held, the hit test keeps the pointer on it, its ancestors and its
+/// descendants. Inserted on `PointerPressed`; removed on `PointerReleased`
+/// and `PointerLeft`.
+///
+/// For "is this element pressed" in the CSS `:active` sense, which also
+/// holds for every ancestor of the press target, read [`PressWithin`].
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Pressed;
+
+/// Marker on every [`Pressed`] element and on every ancestor of it: the
+/// press chain, the press's twin of [`HoverWithin`]. An element counts as
+/// pressed while a press holds it or one of its descendants, as CSS
+/// `:active` does in a browser, so a button shows `:active` and its press
+/// tint while the press is on its label. Kept in step with [`Pressed`] by
+/// [`reconcile_chain`], which the input layer runs after every system that
+/// places or lifts a press.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PressWithin;
 
 /// Tick-scoped flag written by `lumen_input::cancel_press_on_escape`:
 /// `true` exactly on ticks where an Escape key-press cancelled an

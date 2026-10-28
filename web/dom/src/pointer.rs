@@ -49,7 +49,7 @@ use lumen_core::components::Disabled;
 use lumen_core::input::{
     HoverWithin, Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind,
     PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
-    reconcile_hover_chain,
+    reconcile_chain,
 };
 use lumen_core::time::Instant;
 use wasm_bindgen::JsCast;
@@ -581,7 +581,7 @@ pub fn drain_pointer_events(
     }
     // The hover chain follows: the target and its ancestors are hovered,
     // as the browser's own `:hover` has them.
-    reconcile_hover_chain(&mut commands, hover, &parents, &chain);
+    reconcile_chain(&mut commands, hover.as_slice(), &parents, &chain);
 }
 
 /// The message writers [`drain_pointer_events`] fills, grouped so the system

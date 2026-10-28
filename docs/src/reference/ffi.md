@@ -119,7 +119,7 @@ replaces that part of it.
 | Function | Behaviour |
 | --- | --- |
 | `LumenStatus lumen_app_expose(LumenApp *app, const char *name, uint32_t arg_count, LumenFn func, void *user_data)` | Expose a native function to the app's script under `name`, with the given arity. |
-| `LumenStatus lumen_app_on_click(LumenApp *app, const char *id, LumenClickFn cb, void *user_data)` | Route clicks on the element with that `id` to a native callback. A second registration for the same id replaces the first. Register before `lumen_app_run`. Not delivered under `lumen_app_run_headless`, which injects no input. |
+| `LumenStatus lumen_app_on_click(LumenApp *app, const char *id, LumenClickFn cb, void *user_data)` | Route clicks on the element with that `id`, or on an element inside it when no element in between has a handler, to a native callback. A second registration for the same id replaces the first. Register before `lumen_app_run`. Not delivered under `lumen_app_run_headless`, which injects no input. |
 | `LumenStatus lumen_app_on_close(LumenApp *app, LumenCloseFn cb, void *user_data)` | Register a close hook. It fires before the window closes, on its close button, a signal, `lumen_window_close`, or `lumen_app_quit`; return non-zero to allow the close, `0` to veto. A second registration replaces the first. On Unix a second SIGINT or SIGTERM bypasses the hook. Under `lumen_app_run_headless` it fires for `lumen_window_close` and `lumen_app_quit` only. |
 | `LumenStatus lumen_app_quit(void)` | Ask the running app to quit, from a callback while `lumen_app_run` blocks. Every window is asked to close, and a veto from the close hook cancels the quit. Takes no `LumenApp`, which `lumen_app_run` consumed. |
 | `LumenStatus lumen_signal_watch(const char *name, LumenWatchFn cb, void *user_data)` | Subscribe to changes of a global signal. Fires once per tick in which the value commits, plus once with the current value on the first tick after registration. Registration is global, independent of any app handle, and additive: a second watch on the same name adds a second watcher. Fires only while the app runs. |
@@ -696,10 +696,12 @@ reaches the UI the way a script does. A handler is a closure on an element id
 that gets a `Ui` (the app) and an `Event` (what happened):
 
 Two markers say where the pointer is. `Hovered` sits on the innermost element
-under the pointer, the one a click and the pointer events name. `HoverWithin`
-sits on that element and on every ancestor of it, which is what CSS `:hover`
-matches, so a system that asks whether a card is hovered, its children
-included, queries `With<HoverWithin>`.
+under the pointer, painted or not, the one a click and the pointer events
+name. `HoverWithin` sits on that element and on every ancestor of it, which is
+what CSS `:hover` matches, so a system that asks whether a card is hovered,
+its children included, queries `With<HoverWithin>`. Presses pair the same
+way: `Pressed` sits on the element a press went down on and `PressWithin` on
+it and its ancestors, which is what CSS `:active` matches.
 
 ```rust
 use lumenui::prelude::*;

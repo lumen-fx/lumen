@@ -126,6 +126,13 @@ Other callbacks in the same family cover text commits, toggles and sliders,
 file drops and picks, in-app drag and drop, hotkeys, menus, the tray, dialog
 results, HTTP replies, and window close.
 
+A pointer event lands on the innermost element under the pointer, painted or
+not: the label inside a button, or a plain row in a list. `on_click`,
+`on_double_click` and `on_long_press` receive the id of the nearest element at
+or above that target which has an id, so a click on an id-less label inside
+`<button id="save">` arrives as `"save"`; a per-id handler (below) on an
+element further up wins over a nearer id that has none.
+
 In candela, annotate the parameters. Nothing in the script calls a handler, so
 its declared types are all the compiler has to work from. A bare parameter is
 taken as `any`, and `lumenc build` warns about each function that has one. A
@@ -157,7 +164,12 @@ btn.on_capture("keydown", "handle_key");
 ```
 
 These follow the web propagation model: the event runs down the ancestor chain
-in the capture phase, fires on the target, and bubbles back up. A handler
+in the capture phase, fires on the target, and bubbles back up. The target of
+a pointer event is the innermost element under the pointer, so a handler on a
+button hears clicks on its label through the bubble, and reads the button
+from `current_target` rather than `target`. A `click` goes to the nearest
+element holding both the press and the release: a press on a button's label
+released over the button's padding clicks the button. A handler
 receives an event it can inspect and control, with `target`, `current_target`,
 `key`, `value`, `button`, coordinates, wheel deltas, modifier flags,
 `prevent_default`, `stop_propagation`, and `stop_immediate_propagation`.

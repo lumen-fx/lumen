@@ -422,15 +422,22 @@ pub fn handle_clicks(
     own: Query<(), With<DevtoolsMarker>>,
     vis: Query<&Visible>,
     texts: Query<&TextContent>,
+    parents: Query<&ChildOf>,
     store: Option<ResMut<lumen_core::property_store::PropertyStore>>,
 ) {
     let mut new_tab: Option<Tab> = None;
     for ev in reader.read() {
-        if let Ok(row) = rows.get(ev.entity) {
+        // A click lands on the innermost element, often a row's label part
+        // or a button's text; the control is the nearest row or id above.
+        let control = std::iter::once(ev.entity)
+            .chain(parents.iter_ancestors(ev.entity))
+            .find(|e| rows.contains(*e) || ids.contains(*e))
+            .unwrap_or(ev.entity);
+        if let Ok(row) = rows.get(control) {
             state.selected = Some(row.0);
             continue;
         }
-        if let Ok((_, id)) = ids.get(ev.entity) {
+        if let Ok((_, id)) = ids.get(control) {
             let selected = state.selected.and_then(Entity::try_from_bits);
             match id.0.as_str() {
                 "dt-tab-elements" => new_tab = Some(Tab::Elements),
@@ -560,9 +567,10 @@ pub fn rebuild_element_rows(
         return;
     };
     for r in &rows {
-        // The row container carries the target + hit-test Visuals; each
-        // label part is a child with its own syntax color (only the
-        // container is a hit candidate, so hover/click land on the row).
+        // The row container carries the target; each label part is a child
+        // with its own syntax color. Hover and clicks land on the part under
+        // the pointer, and the row's hover state and click handling follow
+        // the ancestor chain up to the row.
         let row = commands
             .spawn((
                 DevtoolsMarker,

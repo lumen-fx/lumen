@@ -79,9 +79,9 @@ optional.
 
 | Handler | Arguments |
 | --- | --- |
-| `on_click(id)` | Element id. Fires on every click, the second of a quick pair included, as a DOM `click` does. |
-| `on_double_click(id)` | Element id. Fires once for a quick pair of clicks, after the `on_click` of the second. |
-| `on_long_press(id)` | Element id. |
+| `on_click(id)` | The id of the nearest element at or above the click that has one. Fires on every click, the second of a quick pair included, as a DOM `click` does. |
+| `on_double_click(id)` | Element id, as for `on_click`. Fires once for a quick pair of clicks, after the `on_click` of the second. |
+| `on_long_press(id)` | Element id, as for `on_click`. |
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |
 | `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |

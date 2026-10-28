@@ -393,9 +393,11 @@ pub fn drag_split_gutters(
         if !press.is_primary() {
             continue;
         }
+        // The press may land on an element inside the gutter (a grip).
         *drag = hovered
             .iter()
-            .find(|e| marks.contains(*e))
+            .next()
+            .and_then(|h| crate::controls::resolve_control(h, &parents, |e| marks.contains(e)))
             .and_then(|g| split_of(g, &parents, &splits))
             .and_then(|(split, index)| {
                 let s = splits.get(split).ok()?;

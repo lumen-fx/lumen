@@ -404,8 +404,9 @@ pub type LumenFn = unsafe extern "C" fn(
 );
 
 /// Id-scoped native click callback (ABI 0.3). Registered with
-/// [`lumen_app_on_click`]; invoked once per [`ClickEvent`] whose target
-/// element carries the matching `LumenId`. `id` is the element id
+/// [`lumen_app_on_click`]; invoked once per [`ClickEvent`] on the element
+/// carrying the matching `LumenId` or on an element inside it, when no
+/// element in between has a handler of its own. `id` is the element id
 /// (UTF-8, NUL-terminated), borrowed for the duration of the call.
 ///
 /// Fires on the Lumen tick thread (which may be a `bevy_ecs` worker,
@@ -797,7 +798,9 @@ pub unsafe extern "C" fn lumen_app_expose(
 /// Register an id-scoped native click handler (ABI 0.3).
 ///
 /// `cb` fires once per click on the element whose `LumenId` equals `id`,
-/// routed by the runtime - no `main.lmn` forwarding boilerplate and no
+/// or on an element inside it (a button's label) when no element in
+/// between has a handler of its own, routed by the runtime - no
+/// `main.lmn` forwarding boilerplate and no
 /// per-embedder dispatch table over the global `on_click(id)` hook. A
 /// second registration for the same `id` **replaces** the first. Must be
 /// called before `lumen_app_run` / `lumen_app_run_headless`.
@@ -1205,14 +1208,23 @@ fn build_run_options(app: LumenApp) -> RunOptions {
         opts = opts.with_app_hook(move |app| {
             use bevy_ecs::schedule::IntoScheduleConfigs;
             use lumen_core::prelude::{
-                ClickEvent, ClickSet, LumenId, MessageReader, Query, TickStage,
+                ChildOf, ClickEvent, ClickSet, LumenId, MessageReader, Query, TickStage,
             };
             let handlers = click_handlers;
             // After every click producer, so a click is handled on the tick
-            // it lands rather than the next one.
-            let route = move |mut clicks: MessageReader<ClickEvent>, ids: Query<&LumenId>| {
+            // it lands rather than the next one. A click lands on the
+            // innermost element under the pointer, so it reaches the nearest
+            // element at or above that has a handler: a click on a button's
+            // label is the button's.
+            let route = move |mut clicks: MessageReader<ClickEvent>,
+                              ids: Query<&LumenId>,
+                              parents: Query<&ChildOf>| {
                 for click in clicks.read() {
-                    let Ok(id) = ids.get(click.entity) else {
+                    let Some(id) = std::iter::once(click.entity)
+                        .chain(parents.iter_ancestors(click.entity))
+                        .filter_map(|e| ids.get(e).ok())
+                        .find(|id| handlers.contains_key(id.0.as_str()))
+                    else {
                         continue;
                     };
                     if let Some(&(cb, ud)) = handlers.get(id.0.as_str())

@@ -557,7 +557,17 @@ browser runtime does not install the window core at all.
 Input follows the same split. Hit testing considers only the elements in the
 window under the pointer (`PointerState::window`), but the hover chain that
 puts `:hover` on an element's ancestors, and event bubbling, run up the one
-tree across window boundaries, the way they would in one browser document. Media
+tree across window boundaries, the way they would in one browser document.
+Every entity with a `Transform` is a hit candidate; the hit test walks the
+tree once from its roots, carrying scroll offsets, clips, `pointer-events`
+and the hidden and disabled state down, and skips a subtree whole when it is
+hidden, disabled or clipped away at the pointer. Among the boxes under the
+pointer the one painted last wins, in the paint order the extract uses (top
+layer first, then document order with `z-index` among siblings). It carries
+`Hovered`, the element a press went down on carries `Pressed`, and the chain
+markers `HoverWithin` and `PressWithin` sit on those and their ancestors;
+widget code that needs the control under the pointer walks up from the
+target. Media
 queries evaluate per window: an element matches against its own window's
 viewport. One element has focus app-wide; each window remembers the element it
 last had in `LastFocus` and gets it back when it regains focus, focusing an

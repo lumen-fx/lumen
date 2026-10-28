@@ -183,7 +183,8 @@ typedef void (*LumenFn)(LumenValue* out,
 /*
  * Id-scoped native click callback (ABI 0.3). Registered with
  * lumen_app_on_click(); Lumen calls it once per click on the element
- * whose id equals the registered id. `id` (UTF-8, NUL-terminated) is
+ * whose id equals the registered id, or on an element inside it when no
+ * element in between has a handler. `id` (UTF-8, NUL-terminated) is
  * borrowed for the call. Fires on the Lumen tick thread.
  */
 typedef void (*LumenClickFn)(const char* id, void* user_data);
@@ -250,7 +251,9 @@ LumenStatus lumen_app_expose(LumenApp* app,
 
 /*
  * Register an id-scoped native click handler (ABI 0.3). `cb` fires once
- * per click on the element whose id equals `id`, routed by the runtime;
+ * per click on the element whose id equals `id`, or on an element inside
+ * it (a button's label) when no element in between has a handler, routed
+ * by the runtime;
  * no main.lmn forwarding boilerplate, no per-embedder dispatch table
  * over the global on_click(id) hook. A second registration for the same
  * id REPLACES the first. Call before lumen_app_run(); coexists with any

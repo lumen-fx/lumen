@@ -142,7 +142,7 @@ impl Plugin for HoverTintPlugin {
             TickStage::Systems,
             apply_press_tint
                 .after(apply_hover_tint)
-                .after(lumen_input::dispatch_clicks),
+                .after(lumen_input::sync_press_chain),
         );
         app.add_systems(TickStage::Systems, apply_state_borders);
         // Render-world side: focused entities also produce an outline.
@@ -501,14 +501,15 @@ impl StyleOwner for PressTween {
 /// while the entity is *visually* pressed. Tweens over
 /// [`PRESS_TWEEN_DURATION`] using ease-out.
 ///
-/// Visually pressed = `Pressed` AND (currently over OR keyboard press):
-/// during a pointer press, `Pressed` doubles as the capture marker and
-/// survives the pointer dragging off the widget (spec section 0 rule 3), but
-/// the pressed *visual* must un-press while off and re-press on
-/// re-entry. "Currently over" is the [`Hovered`] marker (`hit_test`
-/// confines it to the captured entity mid-press); keyboard presses
-/// (Space FSM) have the primary button up and present pressed
-/// regardless of hover.
+/// Visually pressed = in the press chain ([`PressWithin`]: the press
+/// target or an ancestor of it, so a button tints while the press is on its
+/// label) AND (currently over OR keyboard press): during a pointer press,
+/// `Pressed` doubles as the capture marker and survives the pointer
+/// dragging off the widget (spec section 0 rule 3), but the pressed
+/// *visual* must un-press while off and re-press on re-entry. "Currently
+/// over" is the hover chain ([`HoverWithin`]; `hit_test` confines the hit
+/// to the press mid-press); keyboard presses (Space FSM) have the primary
+/// button up and present pressed regardless of hover.
 ///
 /// The press layer sits over the hover layer in [`StyleOverrides`], so it
 /// blends from whatever the element shows under it, hover tint included,
@@ -528,10 +529,10 @@ pub fn apply_press_tint(
             &mut StyleOverrides,
             Option<&mut PressTween>,
             Option<&crate::transition::TransitionSpecs>,
-            Has<Pressed>,
-            Has<Hovered>,
+            Has<PressWithin>,
+            Has<HoverWithin>,
         ),
-        Or<(With<Pressed>, With<PressTween>)>,
+        Or<(With<PressWithin>, With<PressTween>)>,
     >,
     mut orphaned: Query<
         (Entity, &mut Visuals, &mut StyleOverrides),
@@ -594,7 +595,7 @@ pub fn apply_press_tint(
         } else {
             // Not visually pressed: released, or captured-but-off. Fade
             // the tint back out. Entities that never tinted (pressed with
-            // no tween yet - e.g. gained `Pressed` while dragged off)
+            // no tween yet - e.g. joined the press chain while dragged off)
             // have nothing to fade.
             let Some(mut tween) = tween else {
                 continue;
@@ -624,7 +625,7 @@ pub fn apply_press_tint(
 #[cfg(test)]
 mod press_tint_tests {
     //! Pressed-but-off visual (spec section 0 rule 3): the press tint shows only
-    //! while `Pressed` AND (`Hovered` OR pointer-up). Dragging off the
+    //! while `PressWithin` AND (`HoverWithin` OR pointer-up). Dragging off the
     //! captured widget fades the tint out; re-entering snaps it back on;
     //! keyboard presses (pointer up, no hover) tint too.
     use super::*;
@@ -694,14 +695,16 @@ mod press_tint_tests {
     #[test]
     fn pressed_and_hovered_tints_dragged_off_untints_reenter_retints() {
         let (mut world, e) = world_with_button(true);
-        world.entity_mut(e).insert((Pressed, Hovered));
+        world
+            .entity_mut(e)
+            .insert((Pressed, PressWithin, Hovered, HoverWithin));
         run(&mut world);
         assert_eq!(fill(&world, e), TINT, "pressed+over shows the press tint");
 
         // Drag off: capture retained (Pressed stays), hover gone -> the
         // visual must fade back toward idle. Advance time far enough to
         // finish the 60 ms fade in one step.
-        world.entity_mut(e).remove::<Hovered>();
+        world.entity_mut(e).remove::<(Hovered, HoverWithin)>();
         world.resource_mut::<Tick>().now = Instant::now() + std::time::Duration::from_secs(1);
         run(&mut world);
         assert_eq!(
@@ -712,7 +715,7 @@ mod press_tint_tests {
         assert!(world.get::<Pressed>(e).is_some(), "capture retained");
 
         // Re-enter: instant-on press tint again.
-        world.entity_mut(e).insert(Hovered);
+        world.entity_mut(e).insert((Hovered, HoverWithin));
         run(&mut world);
         assert_eq!(fill(&world, e), TINT, "re-entering re-presses");
     }
@@ -720,7 +723,7 @@ mod press_tint_tests {
     #[test]
     fn keyboard_press_tints_without_hover() {
         let (mut world, e) = world_with_button(false);
-        world.entity_mut(e).insert(Pressed);
+        world.entity_mut(e).insert((Pressed, PressWithin));
         run(&mut world);
         assert_eq!(
             fill(&world, e),

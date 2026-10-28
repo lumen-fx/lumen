@@ -245,7 +245,7 @@ pub mod prelude {
         DragStartEvent, EditCommitted, Focused, HoverWithin, Hovered, Key, KeyPressed, KeyReleased,
         LongPressEvent, MenuClicked, Modifiers, ModifiersState, MouseWheel, NamedKey,
         PointerButton, PointerData, PointerKind, PointerMoved, PointerPressed, PointerReleased,
-        Pressed, WindowFocused,
+        PressWithin, Pressed, WindowFocused,
     };
 
     // Typed signal surface.
