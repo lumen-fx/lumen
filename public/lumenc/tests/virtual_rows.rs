@@ -6,14 +6,17 @@
 //! Where a virtualized `<for>` row lays out, on the tick it mounts and after.
 //!
 //! A row sits at `position: absolute` in the slot its index gives it, so it
-//! never counts toward the content size of anything above it.
+//! never counts toward the content size of anything above it, and it follows
+//! its list wherever a relayout moves the list.
 //!
 //! Headless: no window, no GPU.
 
 use bevy_ecs::entity::Entity;
+use glam::Vec2;
 use lumen_core::app::App;
 use lumen_core::components::{LumenClasses, LumenId, TextContent, Transform};
 use lumen_core::signals::{ArrayItem, ArraySignals};
+use lumen_core::window::primary_viewport_mut;
 
 /// One app at a time: the headless apps share process-global buses.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -144,5 +147,62 @@ fn a_mounting_row_does_not_widen_its_ancestors() {
         let next = h.transform(pane).size;
         assert_eq!(mount, next, "line {n}: the mount tick matches the next");
         assert_eq!(mount, settled, "line {n}: the pane keeps its width");
+    }
+}
+
+/// #578: after a resize moves the list, its rows follow it on the same
+/// frame, even when a row mounts in that frame too.
+#[test]
+fn rows_follow_their_list_through_a_resize() {
+    let markup = r##"<root>
+  <column width="100%" height="100%">
+    <column id="top" class="grow" />
+    <scroll id="console" height="200">
+      <for each="lines" virtualized="true" row-height="18">
+        <row class="line"><label text="{row.text}" /></row>
+      </for>
+    </scroll>
+  </column>
+</root>"##;
+    let mut h = Harness::new(markup, ".grow { flex-grow: 1; }");
+    let mut lines: Vec<String> = (0..5).map(|i| format!("line {i}")).collect();
+    h.set_lines(&lines);
+    h.ticks(4);
+    let list = h.by_id("console");
+    assert_eq!(
+        h.transform(list).absolute.y,
+        400.0,
+        "the list sits at the bottom"
+    );
+
+    for (size, scale) in [
+        (Vec2::new(800.0, 900.0), 1.0),
+        (Vec2::new(1200.0, 1400.0), 1.5),
+    ] {
+        {
+            let mut vp = primary_viewport_mut(&mut h.app.world);
+            vp.size = size;
+            vp.scale_factor = scale;
+        }
+        // A line arrives in the frame the window resizes.
+        lines.push(format!("line {}", lines.len()));
+        h.set_lines(&lines);
+        h.ticks(1);
+        let at = h.transform(list).absolute;
+        assert_eq!(
+            at.y,
+            size.y - 200.0,
+            "the list follows the window to {size:?}"
+        );
+        let rows = h.by_class("line");
+        assert_eq!(rows.len(), lines.len(), "every line mounts");
+        for row in rows {
+            let t = h.transform(row);
+            assert!(
+                t.absolute.y >= at.y && t.absolute.y < at.y + 200.0,
+                "row at {:?} sits inside the list at {at:?} after resizing to {size:?}",
+                t.absolute
+            );
+        }
     }
 }

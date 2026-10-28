@@ -367,6 +367,79 @@ fn percent_width_with_fixed_height_and_margin_is_not_zero() {
     );
 }
 
+/// A boundary under a dirty root, with clean elements between them, is laid
+/// out by the root's solve: a viewport change that moves it and dirt inside
+/// it in the same tick land it where the root's solve puts it, not where it
+/// sat the tick before.
+#[test]
+fn boundary_moves_with_a_root_relayout_in_the_same_tick() {
+    let mut app = app_with_viewport(800.0, 600.0);
+    let root = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                width: Length::Percent(100.0),
+                height: Length::Percent(100.0),
+                ..Style::default()
+            },
+            DirtyLayout,
+        ))
+        .id();
+    let _spacer = app
+        .world
+        .spawn((
+            Style {
+                grow: 1.0,
+                ..Style::default()
+            },
+            ChildOf(root),
+            DirtyLayout,
+        ))
+        .id();
+    let wrapper = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                ..Style::default()
+            },
+            ChildOf(root),
+            DirtyLayout,
+        ))
+        .id();
+    let boundary = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                height: Length::Px(200.0),
+                ..Style::default()
+            },
+            RelayoutBoundary,
+            ChildOf(wrapper),
+            DirtyLayout,
+        ))
+        .id();
+    let leaf = app
+        .world
+        .spawn((px_style(50.0, 20.0), ChildOf(boundary), DirtyLayout))
+        .id();
+    app.tick();
+    assert_eq!(
+        app.world.get::<Transform>(boundary).unwrap().absolute.y,
+        400.0
+    );
+
+    lumen_core::window::primary_viewport_mut(&mut app.world).size = glam::Vec2::new(800.0, 900.0);
+    app.world.entity_mut(leaf).insert(DirtyLayout);
+    app.tick();
+    let b = *app.world.get::<Transform>(boundary).unwrap();
+    let l = *app.world.get::<Transform>(leaf).unwrap();
+    assert_eq!(b.absolute.y, 700.0, "the boundary follows the viewport");
+    assert_eq!(l.absolute.y, 700.0, "and its content follows it");
+}
+
 /// A boundary laid out by an ancestor's solve sizes from its content, as it
 /// does on a tick where it is not dirty: its last box is not held over the
 /// ancestor's intrinsic sizing.
