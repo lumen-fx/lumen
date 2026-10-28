@@ -37,7 +37,8 @@
 //!   caret move is not an edit and fires nothing.
 //! - `change` and `submit` fire on commit, from the input router's
 //!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
-//!   single-line input.
+//!   single-line input. A field that loses focus after an edit nothing
+//!   committed raises `change` (no `submit`) just before its `blur`.
 //! - A control that is not a text field (a color field, a toggle, a
 //!   checkbox, a slider, a dropdown) raises [`ControlInput`]: `input` for
 //!   every new value, and `change` when the user commits the one they
@@ -843,6 +844,8 @@ pub fn queue_state_events(
     parents: Query<&ChildOf>,
     scrolled: Query<Entity, Changed<ScrollOffset>>,
     fields: Query<FieldText>,
+    // Fields edited since they last committed: leaving one raises `change`.
+    mut edited: Local<Vec<Entity>>,
     // Optional: a world built without the input layer has no lock to report.
     #[cfg(not(target_arch = "wasm32"))] (mut lock_changes, mut lock_errors): (
         Option<MessageReader<lumen_core::input::PointerLockChanged>>,
@@ -855,11 +858,51 @@ pub fn queue_state_events(
     // no-op. No explicit liveness check is needed here.
     let queue = &mut pending.state;
 
-    // focus / blur.
+    // The fields this tick edited, once each, and the edits no commit has
+    // settled yet: leaving a field holding one raises `change`.
+    let mut fired: Vec<Entity> = Vec::new();
+    for ev in edits.read() {
+        let e = ev.entity;
+        if matches!(ev.kind, lumen_core::text_events::AppliedKind::CursorMove)
+            || internal.contains(e)
+            || fired.contains(&e)
+        {
+            continue;
+        }
+        fired.push(e);
+        if !edited.contains(&e) {
+            edited.push(e);
+        }
+    }
+    // change / submit from the commit signal (Enter on a single-line
+    // input), queued after this tick's `input`. The commit settles the
+    // edit, so leaving the field after it raises no second `change`.
+    let mut settled: Vec<(EventData, Entity)> = Vec::new();
+    for c in commits.read() {
+        edited.retain(|&x| x != c.entity);
+        if internal.contains(c.entity) {
+            continue;
+        }
+        for etype in ["change", "submit"] {
+            let mut data = base(c.entity, etype);
+            data.value = c.text.clone();
+            settled.push((data, c.entity));
+        }
+    }
+    // focus / blur. A field left after an edit nothing committed raises
+    // `change` first, as a browser does on the way out of an `<input>`.
     for e in gained_focus.iter() {
         queue.push((base(e, "focus"), e));
     }
     for e in lost_focus.read() {
+        if let Some(at) = edited.iter().position(|&x| x == e) {
+            edited.swap_remove(at);
+            if let Some(value) = fields.get(e).ok().and_then(field_text) {
+                let mut data = base(e, "change");
+                data.value = value;
+                queue.push((data, e));
+            }
+        }
         queue.push((base(e, "blur"), e));
     }
     // pointerenter / pointerleave. Entered elements outermost first; the
@@ -877,38 +920,16 @@ pub fn queue_state_events(
         queue.push((base(e, "pointerleave"), e));
     }
     // input, once per edit that changed the text. An entity gets at most
-    // one `input` per tick: an IME commit both mutates the buffer and
-    // raises `TextInputCommitted`, and that is one edit to a handler, not
-    // two. The value is the live buffer, so a handler reads the text as it
-    // stands after the edit it was told about.
-    let mut fired: Vec<Entity> = Vec::new();
-    for ev in edits.read() {
-        if matches!(ev.kind, lumen_core::text_events::AppliedKind::CursorMove)
-            || fired.contains(&ev.entity)
-            || internal.contains(ev.entity)
-        {
-            continue;
-        }
-        let Some(value) = fields.get(ev.entity).ok().and_then(field_text) else {
-            continue;
-        };
-        fired.push(ev.entity);
-        let mut data = base(ev.entity, "input");
-        data.value = value;
-        queue.push((data, ev.entity));
-    }
-    // change / submit from the commit signal (Enter on a single-line
-    // input, or focus leaving a committed field).
-    for c in commits.read() {
-        if internal.contains(c.entity) {
-            continue;
-        }
-        for etype in ["change", "submit"] {
-            let mut data = base(c.entity, etype);
-            data.value = c.text.clone();
-            queue.push((data, c.entity));
+    // one `input` per tick. The value is the live buffer, so a handler
+    // reads the text as it stands after the edit it was told about.
+    for e in fired {
+        if let Some(value) = fields.get(e).ok().and_then(field_text) {
+            let mut data = base(e, "input");
+            data.value = value;
+            queue.push((data, e));
         }
     }
+    queue.append(&mut settled);
     // input for each new value, and change for the commit, from a control
     // that is not a text field.
     for c in controls.read() {
@@ -1100,6 +1121,77 @@ pub(crate) mod text_event_tests {
                 ("submit".to_string(), "ab".to_string()),
             ],
         );
+        event::clear_all_bindings();
+    }
+
+    /// Leaving a field after an edit raises `change` (no `submit`) just
+    /// before `blur`, across ticks; a field left after Enter committed it,
+    /// or left without an edit, raises none.
+    #[test]
+    fn leaving_an_edited_field_raises_change() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        world.init_resource::<Messages<ControlInput>>();
+        world.init_resource::<PendingDomEvents>();
+        let field = world.spawn((TextBuffer::single_line("ab"), Focused)).id();
+        let node = lumen_core::node::NodeHandle::new(field).pack();
+        let seen = watch(node, &["change", "submit", "blur"]);
+        // One system kept across ticks, as a schedule keeps it.
+        let queue = world.register_system(queue_state_events);
+        let tick = |world: &mut World| {
+            world.run_system(queue).expect("system ran");
+            deliver_state_events(world);
+            world.resource_mut::<Messages<TextEditApplied>>().clear();
+            world.resource_mut::<Messages<TextInputCommitted>>().clear();
+            world.clear_trackers();
+        };
+        let edit = |world: &mut World| {
+            world.write_message(TextEditApplied {
+                entity: field,
+                version: 1,
+                kind: AppliedKind::Insert,
+                before_byte: 1,
+                after_byte: 2,
+            });
+        };
+        let take = |seen: &Arc<Mutex<Vec<(String, String)>>>| -> Vec<String> {
+            std::mem::take(&mut *seen.lock().unwrap())
+                .into_iter()
+                .map(|(t, v)| format!("{t}:{v}"))
+                .collect()
+        };
+
+        edit(&mut world);
+        tick(&mut world);
+        tick(&mut world);
+        world.entity_mut(field).remove::<Focused>();
+        tick(&mut world);
+        assert_eq!(take(&seen), ["change:ab", "blur:"]);
+
+        // Focused again and left with no edit: blur only.
+        world.entity_mut(field).insert(Focused);
+        tick(&mut world);
+        world.entity_mut(field).remove::<Focused>();
+        tick(&mut world);
+        assert_eq!(take(&seen), ["blur:"]);
+
+        // Edited, committed with Enter, then left: the commit's pair only.
+        world.entity_mut(field).insert(Focused);
+        tick(&mut world);
+        edit(&mut world);
+        tick(&mut world);
+        world.write_message(TextInputCommitted {
+            entity: field,
+            text: "ab".to_string(),
+        });
+        tick(&mut world);
+        world.entity_mut(field).remove::<Focused>();
+        tick(&mut world);
+        assert_eq!(take(&seen), ["change:ab", "submit:ab", "blur:"]);
         event::clear_all_bindings();
     }
 
