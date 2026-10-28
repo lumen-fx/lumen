@@ -771,6 +771,14 @@ ancestors are all clean solves on its own, in the box it had before. The taffy t
 compact length representation stores a raw pointer and is neither `Send` nor
 `Sync`.
 
+taffy measures leaves only, so an element whose own text sits beside element
+children gets an anonymous text box: a taffy leaf with no entity, measured from
+the element's text and placed first among its children, as CSS does. The
+engine writes where it landed as the element's `AnonymousTextBox`, and text
+extraction paints the run in that box instead of the content box. A leaf
+carries no such component and takes the unchanged path. Editable fields never
+get one.
+
 The engine is a `LayoutEngine` from the `LayoutBackends` registry in
 `lumen-core`. Its capability crate registers it in the `Backends` phase, before
 the core stack is installed, and the runtime installs the highest-priority

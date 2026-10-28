@@ -27,6 +27,10 @@ The rules are strict and small:
 - `<!-- comments -->` work anywhere between tags.
 - Text between an open and close tag becomes the element's text:
   `<label>Hello</label>` and `<label text="Hello" />` are the same thing.
+- An element can have text and children at once. The text lays out first,
+  then the children, with the element's `gap` between them:
+  `<button text="Save"><image src="save.svg" /></button>` shows the caption
+  and then the icon.
 
 An unknown tag is an error, so a typo fails at `lumenc check` instead of
 silently rendering nothing. An unknown attribute is dropped with a warning

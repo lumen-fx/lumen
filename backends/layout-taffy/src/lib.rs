@@ -43,11 +43,11 @@ use bevy_ecs::resource::IsResource;
 use bevy_ecs::system::NonSendMut;
 use glam::Vec2;
 use lumen_core::components::{
-    DirtyLayout, EchoMode, Edges as LumenEdges, FlexAlign as LumenAlign,
+    AnonymousTextBox, DirtyLayout, EchoMode, Edges as LumenEdges, FlexAlign as LumenAlign,
     FlexDirection as LumenFlexDir, FlexJustify as LumenJustify, ImageComponent, LayoutDirection,
     Length as LumenLength, LineHeightSpec, Overflow as LumenOverflow, Position as LumenPosition,
-    RelayoutBoundary, ResolvedDirection, Style, TextBlockOrigin, TextContent, TextStyle, TextWrap,
-    Transform, resolve_line_height, text_block_top,
+    RelayoutBoundary, ResolvedDirection, Style, TextBlockOrigin, TextContent, TextInput, TextStyle,
+    TextWrap, Transform, resolve_line_height, text_block_top,
 };
 use lumen_core::prelude::*;
 use lumen_core::text_model::TextBuffer;
@@ -286,6 +286,7 @@ pub fn update_wrapped_text_origin(
             Option<&TextStyle>,
             Option<&Style>,
             Option<&TextBlockOrigin>,
+            Option<&AnonymousTextBox>,
         ),
         (
             Without<TextBuffer>,
@@ -294,11 +295,12 @@ pub fn update_wrapped_text_origin(
                 Changed<TextContent>,
                 Changed<TextStyle>,
                 Changed<Style>,
+                Changed<AnonymousTextBox>,
             )>,
         ),
     >,
 ) {
-    for (e, text, t, ts, style, existing) in &q {
+    for (e, text, t, ts, style, existing, anon) in &q {
         let ts = ts.cloned().unwrap_or_default();
         let wrap = WrapMode::from(ts.wrap);
         if wrap == WrapMode::None || text.0.is_empty() {
@@ -309,18 +311,26 @@ pub fn update_wrapped_text_origin(
             continue;
         }
         let size_px = ts.size_px;
-        let (pad_l, pad_r, pad_t, pad_b) = style
-            .map(|s| {
-                (
-                    s.padding.left,
-                    s.padding.right,
-                    s.padding.top,
-                    s.padding.bottom,
-                )
-            })
-            .unwrap_or((0.0, 0.0, 0.0, 0.0));
-        let inner_w = (t.size.x - pad_l - pad_r).max(0.0);
-        let inner_h = (t.size.y - pad_t - pad_b).max(size_px);
+        // Text beside children sits in its anonymous box, which has no
+        // padding of its own; a leaf's fills its content box.
+        let inner = match anon {
+            Some(a) => a.size,
+            None => {
+                let (pad_l, pad_r, pad_t, pad_b) = style
+                    .map(|s| {
+                        (
+                            s.padding.left,
+                            s.padding.right,
+                            s.padding.top,
+                            s.padding.bottom,
+                        )
+                    })
+                    .unwrap_or((0.0, 0.0, 0.0, 0.0));
+                Vec2::new(t.size.x - pad_l - pad_r, t.size.y - pad_t - pad_b)
+            }
+        };
+        let inner_w = inner.x.max(0.0);
+        let inner_h = inner.y.max(size_px);
         let line_h = resolve_line_height(ts.line_height, size_px);
         let opts = ShapeOptions {
             width: Some(inner_w),
@@ -447,6 +457,12 @@ pub struct LayoutResource {
     /// surface roots, as last laid out. A change dirties that window's
     /// surface roots.
     windows: HashMap<Entity, Vec2>,
+    /// The anonymous text box of every element whose own text sits beside
+    /// element children: a taffy leaf with no entity of its own, measured
+    /// from the element's text and laid out first among its children (see
+    /// [`AnonymousTextBox`]). Empty in a document whose text is all in
+    /// leaves.
+    anon: HashMap<Entity, NodeId>,
 }
 
 impl LayoutResource {
@@ -466,6 +482,7 @@ impl LayoutResource {
             visits_last_sync: 0,
             dock_insets: (0.0, 0.0),
             windows: HashMap::new(),
+            anon: HashMap::new(),
         }
     }
 
@@ -508,6 +525,20 @@ impl LayoutResource {
     /// dirty root.
     pub fn solves_last_sync(&self) -> usize {
         self.solves_last_sync
+    }
+
+    /// Whether `entity`'s own text lays out in an anonymous box beside its
+    /// element children (see [`AnonymousTextBox`]).
+    pub fn has_anonymous_text_box(&self, entity: Entity) -> bool {
+        self.anon.contains_key(&entity)
+    }
+
+    /// Drop `entity`'s anonymous text box, if it has one.
+    fn remove_anon(&mut self, entity: Entity) {
+        if let Some(node) = self.anon.remove(&entity) {
+            let _ = self.tree.remove(node);
+            self.geometry.remove(node);
+        }
     }
 
     /// Nodes computed by the most recent non-idle [`sync_layout`] run. Grows
@@ -752,7 +783,7 @@ pub fn sync_layout(
     mut layout: NonSendMut<LayoutResource>,
     mut shaper: NonSendMut<ShaperService>,
     style_q: Query<(Entity, &Style)>,
-    text_q: Query<(&TextContent, Option<&TextStyle>)>,
+    text_q: TextQuery,
     image_q: Query<&ImageComponent>,
     children_q: Query<&Children>,
     parent_q: Query<&ChildOf>,
@@ -775,11 +806,9 @@ pub fn sync_layout(
     // Dock-inset exemption: top-layer roots solve against the full
     // viewport while a docked panel shrinks everyone else's. Surface roots
     // solve against their own window's viewport.
-    (overlay_q, surface_q, viewport_q): (
-        Query<(), With<lumen_core::render_world::OverlayLayer>>,
-        Query<&WindowOf>,
-        Query<&WindowViewport>,
-    ),
+    // An element whose text sits in an anonymous box gets the box's
+    // geometry here.
+    (overlay_q, surface_q, viewport_q, mut anon_box_q): PlacementQueries,
 ) {
     // Idle-tick fast path: with no dirty entities there is no relayout to
     // do, so we also skip the map/tree bookkeeping below. Entity despawns
@@ -809,6 +838,12 @@ pub fn sync_layout(
             }
             layout.last_style.remove(&entity);
             layout.last_context.remove(&entity);
+            if layout.anon.contains_key(&entity) {
+                layout.remove_anon(entity);
+                if let Ok(mut e) = commands.get_entity(entity) {
+                    e.try_remove::<AnonymousTextBox>();
+                }
+            }
             memo.heights.remove(&entity);
         }
         // Defensive sweep: an entity may be despawned without
@@ -828,6 +863,7 @@ pub fn sync_layout(
             }
             layout.last_style.remove(&e);
             layout.last_context.remove(&e);
+            layout.remove_anon(e);
             memo.heights.remove(&e);
         }
     }
@@ -838,7 +874,27 @@ pub fn sync_layout(
     // [`LayoutDirection`] into the diff key so an LTR<->RTL flip
     // invalidates the cache.
     for (entity, style) in &style_q {
-        let context = classify_node_context(entity, &text_q, &image_q);
+        // Text beside element children goes into an anonymous box laid out
+        // first among them, as CSS does; taffy measures leaves only, so the
+        // element itself would be sized by its children alone. The element
+        // becomes a plain container and the box carries the text.
+        let (context, anon) = classify_node_context(entity, &text_q, &image_q, |children| {
+            children
+                .iter()
+                .any(|c| style_q.contains(c) && !surface_q.contains(c))
+        });
+        if anon {
+            if !layout.anon.contains_key(&entity) {
+                let node = layout
+                    .tree
+                    .new_leaf_with_context(taffy::Style::default(), NodeContext::Text(entity))
+                    .expect("taffy new_leaf_with_context should not fail");
+                layout.anon.insert(entity, node);
+            }
+        } else if layout.anon.contains_key(&entity) {
+            layout.remove_anon(entity);
+            commands.entity(entity).remove::<AnonymousTextBox>();
+        }
         let dir = dir_q
             .get(entity)
             .map(|r| match r.direction() {
@@ -888,6 +944,11 @@ pub fn sync_layout(
     // flag-setting up the chain, never subtree-wide).
     for entity in &dirty_q {
         if let Some(&node) = layout.map.get(&entity) {
+            let _ = layout.tree.mark_dirty(node);
+        }
+        // The element's text is measured in its anonymous box, whose cached
+        // measure a text edit must drop too.
+        if let Some(&node) = layout.anon.get(&entity) {
             let _ = layout.tree.mark_dirty(node);
         }
     }
@@ -1024,6 +1085,11 @@ pub fn sync_layout(
         }
         let mut leaves: Vec<Entity> = Vec::new();
         collect_text_leaves(sc, &children_q, &measure_inputs, &scroll_set, &mut leaves);
+        // Text in an anonymous box is sized beside its element's children,
+        // which the element-wide estimate knows nothing about: keep it exact.
+        if !layout.anon.is_empty() {
+            leaves.retain(|e| !layout.anon.contains_key(e));
+        }
         // Below this many leaves, shaping the lot is cheap - skip the
         // machinery so small scrollers behave exactly as before.
         if leaves.len() < LAZY_TEXT_MIN_LEAVES {
@@ -1282,6 +1348,7 @@ pub fn sync_layout(
             &children_q,
             &surface_q,
             &mut transform_q,
+            &mut anon_box_q,
             &mut commands,
             &measured_baselines,
         );
@@ -1452,37 +1519,66 @@ struct TextMeasureInput {
     line_height: Option<LineHeightSpec>,
 }
 
+/// What places a root and where an anonymous text box lands: top-layer
+/// roots, surface roots, each window's viewport, and the boxes themselves.
+type PlacementQueries<'w, 's> = (
+    Query<'w, 's, (), With<lumen_core::render_world::OverlayLayer>>,
+    Query<'w, 's, &'static WindowOf>,
+    Query<'w, 's, &'static WindowViewport>,
+    Query<'w, 's, &'static mut AnonymousTextBox>,
+);
+
+/// An element's text and text style, with what decides whether that text
+/// is a leaf's or sits in an anonymous box: the element's children, and
+/// whether it is an editable field (whose text is always a leaf's).
+type TextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TextContent,
+        Option<&'static TextStyle>,
+        Option<&'static Children>,
+        Has<TextInput>,
+    ),
+>;
+
+/// The context `entity`'s own taffy node carries, and whether its text goes
+/// into an anonymous box instead: it has text, is not an editable field,
+/// and `lays_out` accepts one of its children. Such an element is a plain
+/// container; the box is measured from its text.
 fn classify_node_context(
     entity: Entity,
-    text_q: &Query<(&TextContent, Option<&TextStyle>)>,
+    text_q: &TextQuery,
     image_q: &Query<&ImageComponent>,
-) -> NodeContext {
-    if text_q
-        .get(entity)
-        .map(|(t, _)| !t.0.is_empty())
-        .unwrap_or(false)
+    lays_out: impl Fn(&Children) -> bool,
+) -> (NodeContext, bool) {
+    if let Ok((text, _, children, editable)) = text_q.get(entity)
+        && !text.0.is_empty()
     {
-        return NodeContext::Text(entity);
+        if !editable && children.is_some_and(lays_out) {
+            return (NodeContext::None, true);
+        }
+        return (NodeContext::Text(entity), false);
     }
     if image_q
         .get(entity)
         .map(|img| img.natural_size.is_some())
         .unwrap_or(false)
     {
-        return NodeContext::Image(entity);
+        return (NodeContext::Image(entity), false);
     }
-    NodeContext::None
+    (NodeContext::None, false)
 }
 
 fn build_measure_inputs(
     style_q: &Query<(Entity, &Style)>,
-    text_q: &Query<(&TextContent, Option<&TextStyle>)>,
+    text_q: &TextQuery,
     image_q: &Query<&ImageComponent>,
 ) -> HashMap<Entity, MeasureInput> {
     let mut out = HashMap::new();
     let default_style = TextStyle::default();
     for (entity, style) in style_q.iter() {
-        if let Ok((tc, ts)) = text_q.get(entity)
+        if let Ok((tc, ts, _, _)) = text_q.get(entity)
             && !tc.0.is_empty()
         {
             let ts = ts.unwrap_or(&default_style);
@@ -1545,13 +1641,19 @@ fn rebuild_taffy_subtree(
     let Some(&parent_node) = layout.map.get(&entity) else {
         return;
     };
+    // An anonymous text box lays out first among the element's children.
+    let anon = layout.anon.get(&entity).copied();
     let child_ids: Vec<NodeId> = match children_q.get(entity) {
-        Ok(children) => children
-            .iter()
-            .filter(|c| !surface_q.contains(*c))
-            .filter_map(|c| layout.map.get(&c).copied())
+        Ok(children) => anon
+            .into_iter()
+            .chain(
+                children
+                    .iter()
+                    .filter(|c| !surface_q.contains(*c))
+                    .filter_map(|c| layout.map.get(&c).copied()),
+            )
             .collect(),
-        Err(_) => Vec::new(),
+        Err(_) => anon.into_iter().collect(),
     };
     // D7: `set_children` marks the node dirty in taffy even when the
     // list is identical, pessimistically invalidating taffy's caches
@@ -1582,12 +1684,22 @@ fn write_transforms_recursive(
     children_q: &Query<&Children>,
     surface_q: &Query<&WindowOf>,
     transform_q: &mut Query<&mut Transform>,
+    anon_box_q: &mut Query<&mut AnonymousTextBox>,
     commands: &mut Commands,
     measured_baselines: &HashMap<Entity, f32>,
 ) {
     let Some(&node) = layout.map.get(&entity) else {
         return;
     };
+    // The anonymous text box, placed relative to this element's border box
+    // like any child. Its measured baseline is relative to the box.
+    let anon_box = layout.anon.get(&entity).map(|&anon| {
+        let g = layout.geometry.get(anon).unwrap_or_default();
+        AnonymousTextBox {
+            offset: Vec2::new(g.location.x, g.location.y),
+            size: Vec2::new(g.size.width, g.size.height),
+        }
+    });
     let layout_result = layout.geometry.get(node).unwrap_or_default();
     let local = Vec2::new(layout_result.location.x, layout_result.location.y);
     let size = Vec2::new(layout_result.size.width, layout_result.size.height);
@@ -1601,7 +1713,7 @@ fn write_transforms_recursive(
     // need an entry in the map.
     let baseline_y = measured_baselines
         .get(&entity)
-        .copied()
+        .map(|b| b + anon_box.map_or(0.0, |a| a.offset.y))
         .or_else(|| transform_q.get(entity).ok().and_then(|t| t.baseline_y));
     let next = Transform {
         absolute,
@@ -1620,6 +1732,15 @@ fn write_transforms_recursive(
     } else {
         commands.entity(entity).insert(next);
     }
+    if let Some(anon_box) = anon_box {
+        if let Ok(mut a) = anon_box_q.get_mut(entity) {
+            if *a != anon_box {
+                *a = anon_box;
+            }
+        } else {
+            commands.entity(entity).insert(anon_box);
+        }
+    }
 
     if let Ok(children) = children_q.get(entity) {
         // A surface root under this one is written by its own window's solve.
@@ -1636,6 +1757,7 @@ fn write_transforms_recursive(
                 children_q,
                 surface_q,
                 transform_q,
+                anon_box_q,
                 commands,
                 measured_baselines,
             );
