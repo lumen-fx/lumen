@@ -503,7 +503,12 @@ def main():
             # runs past it.
             x, y, _, h = files
             guesses = [(x + 40, y + dy) for dy in range(8, int(min(h, sh - 2 - y)), 12)] + guesses
-        pop = run.locate(guesses + grid)
+        # Off the main window: a desktop that lists no windows (KWin, mutter)
+        # leaves the pop-out to be found by the grid.
+        off_main = [
+            (gx, gy) for gx, gy in grid if not (ox <= gx < ox + 800 and oy <= gy < oy + 500)
+        ]
+        pop = run.locate(guesses + off_main)
         run.check("locate pop-out", pop is not None, f"the pop-out starts at {pop}, desktop says {files}")
         if pop is None:
             return report(run)
