@@ -611,9 +611,14 @@ pub mod wayland {
     const ESCAPE_GRACE: Duration = Duration::from_millis(60);
 
     /// The MIME type the drag offers: private to this process, so no other
-    /// application takes the drop.
-    pub fn mime_type(pid: u32, nonce: u32) -> String {
-        format!("application/x-lumen-surface-drag;token={pid:x}{nonce:08x}")
+    /// application takes the drop. Its token is 128 bits from the OS random
+    /// source, so another client on the seat cannot guess it; `None` when
+    /// that source fails.
+    pub fn mime_type() -> Option<String> {
+        let mut token = [0u8; 16];
+        getrandom::fill(&mut token).ok()?;
+        let hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
+        Some(format!("application/x-lumen-surface-drag;token={hex}"))
     }
 
     /// What a drag the compositor cancelled with no drop comes to, `since`
@@ -763,7 +768,8 @@ pub mod wayland {
 
     impl WaylandDrag {
         /// Bind the drag's objects on the connection `display` (winit's
-        /// `wl_display`). `None` when the compositor offers no data device.
+        /// `wl_display`). `None` when the compositor offers no data device,
+        /// or when the OS random source cannot draw the drag type's token.
         ///
         /// # Safety
         ///
@@ -777,12 +783,7 @@ pub mod wayland {
             let qh = queue.handle();
             conn.display().get_registry(&qh, ());
             let mut state = State {
-                mime: mime_type(
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.subsec_nanos()),
-                ),
+                mime: mime_type()?,
                 ..State::default()
             };
             queue.roundtrip(&mut state).ok()?;
@@ -1354,10 +1355,13 @@ mod tests {
                 position: at
             }])
         );
-        assert_eq!(
-            mime_type(0x1f, 0xab),
-            "application/x-lumen-surface-drag;token=1f000000ab"
-        );
+        let mime = mime_type().expect("the OS random source draws a token");
+        let token = mime
+            .strip_prefix("application/x-lumen-surface-drag;token=")
+            .expect("the drag type carries the private prefix");
+        assert_eq!(token.len(), 32);
+        assert!(token.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(mime_type(), Some(mime));
         let size = Vec2::new(10.0, 10.0);
         assert!(within(Vec2::new(0.0, 9.9), size));
         assert!(!within(Vec2::new(10.0, 1.0), size));

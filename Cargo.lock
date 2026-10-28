@@ -4937,6 +4937,7 @@ name = "lumen-window-winit-drag"
 version = "0.0.11"
 dependencies = [
  "bevy_ecs",
+ "getrandom 0.3.4",
  "glam 0.33.3",
  "lumen-capability",
  "lumen-core",
