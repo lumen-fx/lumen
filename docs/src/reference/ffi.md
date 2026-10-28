@@ -979,7 +979,10 @@ fn main() -> lumenui::Result<()> {
 `set_text(text)`, and `image()` and `set_image(&image)` for images as RGBA8
 pixels in memory (`RgbaImage`, four bytes per pixel, rows top to bottom). A
 system that takes it runs on the main thread. With no clipboard the reads find
-nothing and the writes return `false`.
+nothing and the writes return `false`. In a test, give the app a clipboard of
+its own with
+`world.insert_non_send(lumenui::clipboard::ClipboardHost::in_memory())`: copy and
+paste work against it and the desktop's clipboard is never touched.
 
 ```rust
 fn paste(clipboard: Clipboard) {
