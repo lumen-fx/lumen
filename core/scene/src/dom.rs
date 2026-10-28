@@ -33,9 +33,7 @@ use lumen_core::components::{
     DirtyLayout, Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenId,
     LumenTag, Selected, StyleDirty, TextContent, TextInput, Toggleable,
 };
-use lumen_core::input::{
-    ClickSet, FocusVisible, Focused, HoverWithin, Hovered, PointerState, Pressed,
-};
+use lumen_core::input::{ClickSet, FocusVisible, Focused, HoverWithin, PointerState};
 use lumen_core::node::{
     DomIndex, DomRecord, DomStates, ElementState, NodeHandle, is_reserved_token, publish_dom_index,
     publish_dom_states,
@@ -302,14 +300,21 @@ pub fn build_dom_index(
     publish_dom_index(DomIndex::build(records));
 }
 
+/// The marker `:active` reads: the press chain on the desktop. A page's
+/// browser keeps `:active` for its own styling, and the input layer runs no
+/// press chain there, so a page's query reads the press target alone.
+#[cfg(not(target_arch = "wasm32"))]
+type ActiveMarker = lumen_core::input::PressWithin;
+#[cfg(target_arch = "wasm32")]
+type ActiveMarker = lumen_core::input::Pressed;
+
 /// The state markers [`build_dom_states`] reads, one per state
 /// pseudo-class.
 type StateMarkers = (
     Has<HoverWithin>,
     Has<Focused>,
     Has<FocusVisible>,
-    Has<Pressed>,
-    Has<Hovered>,
+    Has<ActiveMarker>,
     Has<Disabled>,
     Option<&'static Toggleable>,
     Has<Selected>,
@@ -318,9 +323,9 @@ type StateMarkers = (
 
 /// Publish the live state of every element in one, for a query's state
 /// pseudo-classes: the hover chain for `:hover`, the focus for `:focus` and
-/// `:focus-visible`, a press for `:active`, and the markers and toggle state
-/// the rest test. `:active` reads as the press tint does: a press dragged off
-/// its element leaves it.
+/// `:focus-visible`, the press chain for `:active`, and the markers and
+/// toggle state the rest test. `:active` reads as the press tint does: a
+/// press dragged off its element leaves it.
 ///
 /// Rebuilds only on a tick where a marker came, went or a toggle flipped, or
 /// the primary button changed, which `:active` reads.
@@ -331,7 +336,7 @@ pub fn build_dom_states(
         Or<(
             With<HoverWithin>,
             With<Focused>,
-            With<Pressed>,
+            With<ActiveMarker>,
             With<Disabled>,
             With<Toggleable>,
             With<Selected>,
@@ -344,8 +349,7 @@ pub fn build_dom_states(
             Added<HoverWithin>,
             Added<Focused>,
             Added<FocusVisible>,
-            Added<Pressed>,
-            Added<Hovered>,
+            Added<ActiveMarker>,
             Added<Disabled>,
             Changed<Toggleable>,
             Added<Selected>,
@@ -356,8 +360,7 @@ pub fn build_dom_states(
         RemovedComponents<HoverWithin>,
         RemovedComponents<Focused>,
         RemovedComponents<FocusVisible>,
-        RemovedComponents<Pressed>,
-        RemovedComponents<Hovered>,
+        RemovedComponents<ActiveMarker>,
         RemovedComponents<Disabled>,
         RemovedComponents<Toggleable>,
         RemovedComponents<Selected>,
@@ -373,8 +376,7 @@ pub fn build_dom_states(
         + removed.4.read().count()
         + removed.5.read().count()
         + removed.6.read().count()
-        + removed.7.read().count()
-        + removed.8.read().count();
+        + removed.7.read().count();
     let primary_down = pointer.is_some_and(|p| p.primary_down);
     let first = last_primary_down.is_none();
     let button_moved = *last_primary_down != Some(primary_down);
@@ -383,12 +385,12 @@ pub fn build_dom_states(
         return;
     }
     let states = marked.iter().map(
-        |(entity, (hover, focus, visible, pressed, target, disabled, toggle, selected, over))| {
+        |(entity, (hover, focus, visible, pressed, disabled, toggle, selected, over))| {
             let mut s = ElementState::empty();
             s.set(ElementState::HOVER, hover);
             s.set(ElementState::FOCUS, focus);
             s.set(ElementState::FOCUS_VISIBLE, focus && visible);
-            s.set(ElementState::ACTIVE, pressed && (target || !primary_down));
+            s.set(ElementState::ACTIVE, pressed && (hover || !primary_down));
             s.set(ElementState::DISABLED, disabled);
             s.set(ElementState::CHECKED, toggle.is_some_and(|t| t.checked));
             s.set(ElementState::SELECTED, selected);

@@ -113,18 +113,21 @@ impl Plugin for StateStylePlugin {
     fn build(self, app: &mut App) {
         // Ejection runs first (with a sync point in between) so the
         // `:disabled` swap on the disable tick lands on the true idle
-        // style, not a half-faded hover tint.
+        // style, not a half-faded hover tint. It lands before the press
+        // chain is reconciled, so a press it lifts leaves the ancestors
+        // this tick. `.after(sync_press_chain)` (=> after `dispatch_clicks`
+        // and `hit_test` too): flush the hover and press chain commands
+        // before the swap so `:hover` / `:active` / `:disabled` styling
+        // reflects this tick's input. No-op when `lumen-input` isn't
+        // installed.
         app.add_systems(
             TickStage::Systems,
-            eject_interaction_on_disable.before(apply_state_visuals),
-        );
-        // `.after(dispatch_clicks)` (=> after `hit_test` too): flush the
-        // Hovered / Pressed marker commands before the swap so `:hover`
-        // / `:active` / `:disabled` styling reflects this tick's input.
-        // No-op when `lumen-input` isn't installed.
-        app.add_systems(
-            TickStage::Systems,
-            apply_state_visuals.after(lumen_input::dispatch_clicks),
+            (
+                eject_interaction_on_disable
+                    .before(apply_state_visuals)
+                    .before(lumen_input::sync_press_chain),
+                apply_state_visuals.after(lumen_input::sync_press_chain),
+            ),
         );
     }
 }
@@ -158,17 +161,16 @@ pub fn apply_state_visuals(
             &mut StyleOverrides,
             Has<StatePatched>,
             Has<HoverWithin>,
-            Has<Hovered>,
             Option<&Focused>,
             Option<&lumen_core::input::FocusVisible>,
-            Option<&Pressed>,
+            Has<PressWithin>,
             Has<Disabled>,
             Has<DropHovered>,
         ),
         Or<(
             With<HoverWithin>,
             With<Focused>,
-            With<Pressed>,
+            With<PressWithin>,
             With<Disabled>,
             With<DropHovered>,
         )>,
@@ -186,7 +188,7 @@ pub fn apply_state_visuals(
             With<StateVisuals>,
             Without<HoverWithin>,
             Without<Focused>,
-            Without<Pressed>,
+            Without<PressWithin>,
             Without<Disabled>,
             Without<DropHovered>,
         ),
@@ -212,7 +214,6 @@ pub fn apply_state_visuals(
         mut overrides,
         patched,
         hovered,
-        over_target,
         focused,
         focus_visible,
         pressed,
@@ -221,12 +222,11 @@ pub fn apply_state_visuals(
     ) in &mut active
     {
         // `:active` mirrors the press-tint contract (spec section 0 rule 3):
-        // a pointer press dragged off the captured widget presents
-        // un-pressed even though `Pressed` (the capture marker) stays.
-        // Keyboard presses (pointer up) present pressed without hover.
-        // "Over the captured widget" is the hit target: capture confines
-        // `Hovered` to the pressed entity.
-        let active_on = pressed.is_some() && (over_target || !primary_down);
+        // it holds for the press chain, the press target and its ancestors,
+        // and a pointer press dragged off the element presents un-pressed
+        // even though `Pressed` (the capture marker) stays. Keyboard presses
+        // (pointer up) present pressed without hover.
+        let active_on = pressed && (hovered || !primary_down);
         // Field-wise merge: hover < focus < focus-visible < active <
         // disabled (disabled stamps last).
         let mut patch = StatePatch::default();
@@ -491,14 +491,14 @@ mod tests {
         assert_eq!(world.get::<Visuals>(e).unwrap().shadows, vec![shadow(4.0)]);
 
         // Hover + press -> active text color wins; hover opacity stays.
-        world.entity_mut(e).insert(Pressed);
+        world.entity_mut(e).insert((Pressed, PressWithin));
         run(&mut world);
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, green);
         assert_eq!(world.get::<Opacity>(e).map(|o| o.0), Some(0.8));
 
         // All states end -> baseline restored, capture removed.
         world.entity_mut(e).remove::<(Hovered, HoverWithin)>();
-        world.entity_mut(e).remove::<Pressed>();
+        world.entity_mut(e).remove::<(Pressed, PressWithin)>();
         run(&mut world);
         assert_eq!(world.get::<TextStyle>(e).unwrap().color, idle);
         assert!(world.get::<Opacity>(e).is_none(), "idle Opacity was absent");

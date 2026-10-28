@@ -1704,6 +1704,31 @@ fn resolve_handler<H: ScriptHost>(host: &H, event_name: &str, key: &str, fallbac
         .unwrap_or_else(|| fallback.to_string())
 }
 
+/// The id a pointer event on `entity` is routed under: the nearest id at or
+/// above the element that has a per-id handler for `event_name`, else the
+/// nearest id at all, else `""`. The pointer lands on the innermost element
+/// under it, so a click on a button's label routes as the button's when the
+/// label has no id of its own.
+fn pointer_route_id<'a, H: ScriptHost>(
+    host: &H,
+    event_name: &str,
+    entity: Entity,
+    ids: &'a Query<&LumenId>,
+    parents: &Query<&ChildOf>,
+) -> &'a str {
+    let mut nearest = None;
+    for e in std::iter::once(entity).chain(parents.iter_ancestors(entity)) {
+        let Ok(id) = ids.get(e) else {
+            continue;
+        };
+        if host.handler_for(event_name, &id.0).is_some() {
+            return id.0.as_str();
+        }
+        nearest.get_or_insert(id.0.as_str());
+    }
+    nearest.unwrap_or("")
+}
+
 /// Dispatch a single-arg event through the host's per-id handler
 /// registry. If `on(event, key, fn_name)` registered a specific handler
 /// for `(event_name, key)`, call that fn name with `key` as the single
@@ -1845,7 +1870,7 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     mut host: ResMut<H>,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
-    ids: Query<&LumenId>,
+    (ids, parents): (Query<&LumenId>, Query<&ChildOf>),
     mut out: MessageWriter<ScriptCommandEvent>,
     partitions: Option<Res<lumen_core::window::WindowPartitions>>,
 ) {
@@ -1859,14 +1884,14 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     let window_of = |e: Entity| partitions.as_ref().and_then(|p| p.window_of(e));
 
     for click in clicks.read() {
-        let id_str = ids.get(click.entity).map(|i| i.0.as_str()).unwrap_or("");
+        let id_str = pointer_route_id(&*host, "click", click.entity, &ids, &parents);
         lumen_core::window_state::set_current(window_of(click.entity));
         if let Err(e) = route_event(&mut *host, "click", "on_click", id_str, &mut out) {
             warn_line!("{}: on_click failed: {e}", prefix(host.lang()));
         }
     }
     for entity in double_order {
-        let id_str = ids.get(entity).map(|i| i.0.as_str()).unwrap_or("");
+        let id_str = pointer_route_id(&*host, "double_click", entity, &ids, &parents);
         lumen_core::window_state::set_current(window_of(entity));
         if let Err(e) = route_event(
             &mut *host,
@@ -1988,11 +2013,11 @@ pub fn dispatch_slider_to_script<H: ScriptHost + Resource<Mutability = Mutable>>
 pub fn dispatch_long_press_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
     mut events: MessageReader<LongPressEvent>,
-    ids: Query<&LumenId>,
+    (ids, parents): (Query<&LumenId>, Query<&ChildOf>),
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
     for ev in events.read() {
-        let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
+        let id_str = pointer_route_id(&*host, "long_press", ev.entity, &ids, &parents);
         if let Err(e) = route_event(&mut *host, "long_press", "on_long_press", id_str, &mut out) {
             warn_line!("{}: on_long_press failed: {e}", prefix(host.lang()));
         }

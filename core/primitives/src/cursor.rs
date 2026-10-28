@@ -49,9 +49,9 @@ impl Plugin for CursorPlugin {
 ///    ([`ScrollbarInteraction::hover`], thumb part) or a slider thumb.
 /// 3. Otherwise the hovered element's computed `cursor`: the [`Cursor`]
 ///    it or its nearest ancestor declares, which is how the property
-///    inherits; `auto` when none does. Declaring a cursor makes an element
-///    a hit-test candidate, so a transparent box gets its own. Disabled
-///    widgets are never [`Hovered`] (`hit_test` skips them).
+///    inherits; `auto` when none does. Every element with a box is a
+///    hit-test candidate, so a transparent box shows its own cursor.
+///    Disabled widgets are never [`Hovered`] (`hit_test` skips them).
 #[allow(clippy::type_complexity)]
 pub fn update_cursor_request(
     mut req: ResMut<CursorRequest>,
@@ -91,7 +91,7 @@ pub fn update_cursor_request(
         // An in-flight handle drag owns the pointer regardless of what is
         // hovered (capture may have moved it off the handle).
         Cursor::keyword(CursorKeyword::Grabbing)
-    } else if over_scrollbar_thumb || hovered.is_some_and(is_thumb) {
+    } else if over_scrollbar_thumb || hovered.is_some_and(|h| self_or_ancestor(h, &is_thumb)) {
         // Resting on a grabbable handle. Overlay-scrollbar hover resolves
         // the scroll container through the bar-target path, so the thumb
         // itself may hold no `Hovered`.

@@ -103,7 +103,7 @@ state on the desktop, toggle a class on the child from a script.
 | `:hover` | Pointer over the element or one of its descendants. |
 | `:focus` | Element has keyboard focus. |
 | `:focus-visible` | Focus arrived from the keyboard. |
-| `:active` | Element is pressed. |
+| `:active` | A press is held on the element or one of its descendants. |
 | `:disabled` | Element is disabled. |
 | `:checked` | `<toggle>`, `<switch>`, or `<checkbox>` is on. |
 | `:selected` | Tab strip button of the active tab. |
@@ -794,9 +794,17 @@ top-left corner, which is the default. The first image that loads is shown at
 its own pixel size, and the keyword stands in while it loads or when none
 does. The keyword is required, as on the web.
 
+Every element with a box takes the pointer, as in a browser: painted or not,
+focusable or not, the innermost element under the pointer is the one it is
+over. That element and its ancestors match `:hover`, and while a press is held
+on it they match `:active`, so a button keeps both while the pointer is on its
+label. An empty layout box laid over other content, a full-window overlay for
+instance, hides that content from the pointer unless it sets
+`pointer-events: none`.
+
 The pointer shows the cursor of the element under it. The value inherits, so a
 container's cursor reaches everything inside it until a descendant declares
-its own; an element that declares one receives hover even with no background.
+its own.
 The user-agent sheet gives `<input>` and `<textarea>` `cursor: text`, `<a>`
 `cursor: pointer`, and a `<split>`'s gutters `col-resize` in a row and
 `row-resize` in a column; every other element, buttons included, shows the

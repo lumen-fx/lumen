@@ -16,7 +16,12 @@ use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
 fn build(markup: &str, css: &str) -> App {
-    let dir = std::env::temp_dir().join(format!("lumenc_pointer_events_{}", std::process::id()));
+    // One directory per app: the tests run in parallel, and a shared one
+    // would hand one test the stylesheet another just wrote.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("lumenc_pointer_events_{}_{n}", std::process::id()));
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("main.lmn"), markup).unwrap();
@@ -105,4 +110,20 @@ fn pointer_events_none_lets_the_pointer_through() {
         "a restyle keeps the declared value"
     );
     assert_eq!(hovered_at(&mut app, beside), vec!["under".to_string()]);
+}
+
+/// An element with a box takes the pointer whether or not it paints, so an
+/// unpainted cover over a button hides the button from the pointer, as in a
+/// browser. `pointer-events: none` on the cover lets the pointer through.
+#[test]
+fn an_unpainted_cover_takes_the_pointer_unless_it_lets_it_through() {
+    let markup = r#"<root>
+  <button id="under" width="300" height="200" text="Under"/>
+  <overlay id="cover" class="cover" />
+</root>"#;
+    let at = Vec2::new(150.0, 100.0);
+    let mut app = build(markup, "");
+    assert_eq!(hovered_at(&mut app, at), vec!["cover".to_string()]);
+    let mut app = build(markup, ".cover { pointer-events: none; }");
+    assert_eq!(hovered_at(&mut app, at), vec!["under".to_string()]);
 }

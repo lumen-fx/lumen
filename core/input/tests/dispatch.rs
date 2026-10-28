@@ -940,3 +940,153 @@ fn pointer_events_none_passes_the_pointer_through_until_auto() {
         "beside the child the cover still lets the pointer through"
     );
 }
+
+fn spawn_box(world: &mut World, origin: glam::Vec2, size: glam::Vec2) -> Entity {
+    world
+        .spawn(Transform {
+            absolute: origin,
+            size,
+            baseline_y: None,
+        })
+        .id()
+}
+
+fn clicked(world: &World) -> Vec<Entity> {
+    world
+        .resource::<Messages<ClickEvent>>()
+        .iter_current_update_messages()
+        .map(|c| c.entity)
+        .collect()
+}
+
+/// A box that paints nothing, takes no focus and declares no cursor is still
+/// under the pointer at its own rect, as every box is in a browser: hover and
+/// the click land on it, not on the painted container around it.
+#[test]
+fn an_unpainted_box_takes_the_hover_and_the_click() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let list = spawn_button(
+        &mut app.world,
+        glam::Vec2::ZERO,
+        glam::Vec2::new(200.0, 200.0),
+    );
+    let row = spawn_box(
+        &mut app.world,
+        glam::Vec2::new(0.0, 40.0),
+        glam::Vec2::new(200.0, 30.0),
+    );
+    app.world.entity_mut(row).insert(ChildOf(list));
+    let p = glam::Vec2::new(100.0, 55.0);
+    write_pointer_moved(&mut app.world, p);
+    app.tick();
+    assert!(app.world.get::<Hovered>(row).is_some());
+    assert!(app.world.get::<HoverWithin>(list).is_some());
+    write_pointer_pressed(&mut app.world, p);
+    app.tick();
+    write_pointer_released(&mut app.world, p);
+    app.tick();
+    assert_eq!(clicked(&app.world), vec![row]);
+}
+
+/// A press on a child of a button holds the button in the press chain
+/// (`:active`), and a release over the button's own padding clicks the
+/// button: the nearest element holding both ends of the press. A release
+/// over an unrelated element clicks nothing.
+#[test]
+fn a_press_on_a_child_presses_the_ancestors_and_clicks_the_common_holder() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let button = spawn_button(
+        &mut app.world,
+        glam::Vec2::ZERO,
+        glam::Vec2::new(100.0, 40.0),
+    );
+    let label = spawn_box(
+        &mut app.world,
+        glam::Vec2::new(30.0, 10.0),
+        glam::Vec2::new(40.0, 20.0),
+    );
+    app.world.entity_mut(label).insert(ChildOf(button));
+    let other = spawn_button(
+        &mut app.world,
+        glam::Vec2::new(200.0, 0.0),
+        glam::Vec2::new(100.0, 40.0),
+    );
+    let on_label = glam::Vec2::new(50.0, 20.0);
+    let padding = glam::Vec2::new(5.0, 5.0);
+
+    write_pointer_moved(&mut app.world, on_label);
+    app.tick();
+    write_pointer_pressed(&mut app.world, on_label);
+    app.tick();
+    assert!(app.world.get::<Pressed>(label).is_some());
+    assert!(app.world.get::<Pressed>(button).is_none());
+    assert!(app.world.get::<PressWithin>(label).is_some());
+    assert!(app.world.get::<PressWithin>(button).is_some());
+
+    // Mid-press over the padding: the button is in the capture.
+    write_pointer_moved(&mut app.world, padding);
+    app.tick();
+    assert!(app.world.get::<Hovered>(button).is_some());
+    // Over another button: capture keeps the hover off it.
+    write_pointer_moved(&mut app.world, glam::Vec2::new(250.0, 20.0));
+    app.tick();
+    assert!(app.world.get::<Hovered>(other).is_none());
+
+    write_pointer_moved(&mut app.world, padding);
+    app.tick();
+    write_pointer_released(&mut app.world, padding);
+    app.tick();
+    assert_eq!(clicked(&app.world), vec![button]);
+    app.tick();
+    assert!(app.world.get::<PressWithin>(button).is_none(), "released");
+
+    write_pointer_moved(&mut app.world, on_label);
+    app.tick();
+    write_pointer_pressed(&mut app.world, on_label);
+    app.tick();
+    let away = glam::Vec2::new(250.0, 20.0);
+    write_pointer_moved(&mut app.world, away);
+    app.tick();
+    write_pointer_released(&mut app.world, away);
+    app.tick();
+    assert!(
+        clicked(&app.world).is_empty(),
+        "released over another button"
+    );
+}
+
+/// `pointer-events: none` on a box lets the pointer through to what lies
+/// beneath, however deep the box sits.
+#[test]
+fn pointer_events_none_passes_through_an_unpainted_box() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let under = spawn_button(
+        &mut app.world,
+        glam::Vec2::ZERO,
+        glam::Vec2::new(100.0, 100.0),
+    );
+    // Inside the button, so the cover paints, and sits, over it.
+    let cover = spawn_box(
+        &mut app.world,
+        glam::Vec2::ZERO,
+        glam::Vec2::new(100.0, 100.0),
+    );
+    app.world.entity_mut(cover).insert(ChildOf(under));
+    let p = glam::Vec2::new(50.0, 50.0);
+    write_pointer_moved(&mut app.world, p);
+    app.tick();
+    assert!(
+        app.world.get::<Hovered>(cover).is_some(),
+        "the cover is on top"
+    );
+    app.world
+        .entity_mut(cover)
+        .insert(lumen_core::input::PointerEvents::None);
+    write_pointer_moved(&mut app.world, p);
+    app.tick();
+    assert!(app.world.get::<Hovered>(under).is_some());
+    assert!(app.world.get::<Hovered>(cover).is_none());
+}

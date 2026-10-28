@@ -193,9 +193,13 @@ pub fn apply_navigation(
 /// anchor navigation is prevented so that this system's swap is what the
 /// click ends at. A host holding [`HostFollowsLinks`] follows the link
 /// itself, and the click raises nothing here.
+///
+/// A click on an element inside the anchor (its label, an icon) follows
+/// the nearest anchor at or above it, as in a browser.
 pub fn navigate_on_anchor_click(
     mut clicks: bevy_ecs::message::MessageReader<lumen_core::input::ClickEvent>,
     anchors: Query<&Anchor>,
+    parents: Query<&ChildOf>,
     host_follows: Option<Res<HostFollowsLinks>>,
 ) {
     if host_follows.is_some() {
@@ -203,7 +207,10 @@ pub fn navigate_on_anchor_click(
         return;
     }
     for click in clicks.read() {
-        if let Ok(anchor) = anchors.get(click.entity) {
+        let anchor = std::iter::once(click.entity)
+            .chain(parents.iter_ancestors(click.entity))
+            .find_map(|e| anchors.get(e).ok());
+        if let Some(anchor) = anchor {
             // Honor `event.prevent_default()` from a phase-4 click handler:
             // link navigation is the click default action, so a prevented
             // click does not navigate.

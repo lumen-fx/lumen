@@ -350,24 +350,32 @@ fn topmost_target(
 }
 
 /// Open an [`ActiveDrag`] session and announce [`DragStarted`] when a
-/// drag gesture crosses the threshold on a [`DragSource`] entity. Mirrors
+/// drag gesture crosses the threshold on a [`DragSource`] entity or on an
+/// element inside one. Mirrors
 /// `QDrag::exec` beginning a drag with the source's `QMimeData` /
 /// HTML5 `dragstart` populating `dataTransfer`.
 pub fn begin_in_app_drag(
     mut starts: MessageReader<DragStartEvent>,
     sources: Query<&DragSource>,
+    parents: Query<&ChildOf>,
     mut active: ResMut<ActiveDrag>,
     mut out: MessageWriter<DragStarted>,
 ) {
     for ev in starts.read() {
-        if let Ok(src) = sources.get(ev.entity) {
+        // The gesture starts on the element the press went down on, which
+        // may sit inside the source (a card's title): the source is the
+        // nearest one at or above it, as `draggable` works in a browser.
+        let found = std::iter::once(ev.entity)
+            .chain(parents.iter_ancestors(ev.entity))
+            .find_map(|e| sources.get(e).ok().map(|src| (e, src)));
+        if let Some((source, src)) = found {
             active.0 = Some(ActiveDragData {
-                source: ev.entity,
+                source,
                 payload: src.payload.clone(),
                 effects: src.effects,
             });
             out.write(DragStarted {
-                source: ev.entity,
+                source,
                 payload: src.payload.clone(),
             });
         }
@@ -425,7 +433,9 @@ pub fn finish_in_app_drag(
         let Some(data) = active.0.clone() else {
             continue;
         };
-        if ev.entity != data.source {
+        // The gesture may have started inside the source.
+        if ev.entity != data.source && !parents.iter_ancestors(ev.entity).any(|a| a == data.source)
+        {
             continue;
         }
         if let Some((target, effect)) = topmost_target(

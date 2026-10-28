@@ -4,10 +4,13 @@
 //! - Computes the entity under the cursor each tick.
 //! - Inserts/removes [`Hovered`] on the entity under the pointer, and
 //!   [`HoverWithin`](lumen_core::input::HoverWithin) on it and its ancestors.
-//! - Inserts [`Pressed`] on `PointerPressed` against the hovered entity; removes it and emits [`ClickEvent`] on `PointerReleased` against the same entity.
-//! - Hit-tests via AABB against [`Transform`] for entities carrying [`Transform`] and an
-//!   input-relevant component: [`Visuals`], [`Scroll`], or [`TabIndex`]. Whether the element
-//!   painted a background has no bearing on it.
+//! - Inserts [`Pressed`] on `PointerPressed` against the hovered entity, and
+//!   [`PressWithin`](lumen_core::input::PressWithin) on it and its ancestors;
+//!   removes it and emits [`ClickEvent`] on `PointerReleased` over the same
+//!   entity, inside it, or over one of its ancestors.
+//! - Hit-tests via AABB against the [`Transform`] of every element with a
+//!   box. Whether the element paints, takes focus or declares a cursor has
+//!   no bearing on it; `pointer-events: none` lets the pointer through.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -986,6 +989,13 @@ impl Plugin for KeyDispatchPlugin {
                 .in_set(ClickSet::Producers)
                 .after(dispatch_focused_keys),
         );
+        // A page's browser keeps `:active` itself, and the page's DOM
+        // states read the press target alone (see `lumen_scene::dom`).
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            TickStage::Systems,
+            sync_press_chain.after(activate_focused_on_enter),
+        );
         app.add_systems(
             TickStage::Systems,
             settle_newly_focused_fields
@@ -993,6 +1003,24 @@ impl Plugin for KeyDispatchPlugin {
                 .before(lumen_core::signals::apply_text_bindings),
         );
     }
+}
+
+/// Keep the press chain in step with the presses: put
+/// [`PressWithin`](lumen_core::input::PressWithin) on every [`Pressed`]
+/// element and its ancestors, and take it off everything else. Runs after
+/// the systems that place a press (a pointer press, a held Space key), so
+/// `:active` and the press tint read this tick's press.
+pub fn sync_press_chain(
+    mut commands: Commands,
+    pressed: Query<Entity, With<Pressed>>,
+    parents: Query<&ChildOf>,
+    chain: Query<Entity, With<lumen_core::input::PressWithin>>,
+) {
+    if pressed.is_empty() && chain.is_empty() {
+        return;
+    }
+    let targets: Vec<Entity> = pressed.iter().collect();
+    lumen_core::input::reconcile_chain(&mut commands, &targets, &parents, &chain);
 }
 
 /// Mark a text field that just took focus as having no edit in flight
@@ -1044,7 +1072,10 @@ impl Plugin for InputPlugin {
         app.add_systems(TickStage::Systems, hit_test);
         app.add_systems(
             TickStage::Systems,
-            dispatch_clicks.in_set(ClickSet::Producers).after(hit_test),
+            dispatch_clicks
+                .in_set(ClickSet::Producers)
+                .after(hit_test)
+                .before(sync_press_chain),
         );
         app.add_systems(TickStage::Systems, dispatch_context_menus.after(hit_test));
         // Frameless-window drag: pressing a `<title-bar drag>` region
@@ -1135,25 +1166,20 @@ impl Plugin for InputPlugin {
 /// [`Hovered`] on the hit target and
 /// [`HoverWithin`](lumen_core::input::HoverWithin) on it and its ancestors.
 ///
-/// Scroll-aware: walks the [`ChildOf`] chain for each candidate, accumulating
-/// ancestor [`ScrollOffset`] values, and shifts the candidate's logical AABB
-/// by `-cumulative_offset` so it matches the visual position the renderer
-/// draws at.
+/// Candidate set: every entity with a [`Transform`], the way every element
+/// with a box takes part in a browser's hit testing. Paint, interactivity
+/// and handlers have no bearing on it: a plain row with no background,
+/// cursor or tab stop is hit at its own rect, and so is the label inside a
+/// button. The innermost box under the pointer wins, like a browser's
+/// `event.target`; code that wants the control resolves it by walking
+/// ancestors, and `:hover` and `:active` hold for the whole ancestor chain.
+/// `pointer-events: none` (on the element or inherited from an ancestor)
+/// lets the pointer through to whatever lies beneath.
 ///
-/// Candidate set: anything with a [`Transform`] **and** at least one of
-/// [`Visuals`] (visual button-like surfaces), [`Scroll`] (transparent
-/// scroll containers - still need to receive wheel events),
-/// [`TabIndex`] (anything focusable), or a declared CSS `cursor`
-/// ([`lumen_core::input::Cursor`], so the pointer over a transparent box
-/// shows the cursor it asks for).
-///
-/// Paint never decides participation. An element takes part in hit
-/// testing on its layout rect and its interactivity, the same rule Qt
-/// (a `QWidget` receives mouse events whether or not it fills its rect)
-/// and Slint follow. Keying candidacy on `Visuals` alone made a
-/// `<button>` with no `bg` anywhere - no markup attribute, no CSS rule,
-/// no skin - inert at its own rect, so deleting an app's stylesheet
-/// killed every button in it.
+/// Scroll-aware: the walk carries the ancestors' [`ScrollOffset`] values
+/// down the tree and shifts each box by them, so it matches the visual
+/// position the renderer draws at. A surface root (`WindowOf`) starts its
+/// own scroll and clip context.
 ///
 /// Hidden entities never hit (spec section 17.4): an entity is skipped when it
 /// (or any ancestor) carries `Visible(false)` (render-gate hide, the
@@ -1163,10 +1189,11 @@ impl Plugin for InputPlugin {
 ///
 /// Clipped content never hits either (spec section 15/section 16: clipped = not
 /// hittable): the pointer position must also fall inside the visual
-/// rect of every `overflow: hidden` / `overflow: scroll` ancestor -
-/// see [`point_clipped_by_ancestors`]. Without this, rows scrolled out
-/// of a fixed-height `<scroll>` (painted nowhere) kept hit-shadowing
-/// the widgets laid out below the clip box.
+/// rect of every `overflow: hidden` / `overflow: scroll` ancestor, the
+/// boxes the renderer clips to (a scroll container clips both axes,
+/// `overflow: hidden` the axes it names). Without this, rows scrolled out
+/// of a fixed-height `<scroll>` (painted nowhere) kept hit-shadowing the
+/// widgets laid out below the clip box.
 ///
 /// Disabled entities never hit (spec section 0): an entity is skipped when it
 /// (or any ancestor) carries
@@ -1175,66 +1202,42 @@ impl Plugin for InputPlugin {
 /// already swallowed in [`dispatch_clicks`], this closes the hover
 /// half.
 ///
+/// The walk goes down the tree once from its roots and skips a subtree
+/// whole when it is disabled, hidden, or clipped away at the pointer, so its
+/// cost follows the number of elements that could be under the pointer.
+///
 /// Pointer capture (spec section 0 rules 3-4): while the primary button is
-/// held and a press target is live (an entity carries [`Pressed`]),
-/// the press target owns the pointer. `Hovered` may only sit on the
-/// captured entity (pointer over it -> pressed visual) or on nothing
+/// held and a press target is live (an entity carries [`Pressed`]), the
+/// press owns the pointer. `Hovered` may only sit on the press target, an
+/// ancestor of it or a descendant of it; anywhere else it sits on nothing
 /// (dragged off -> un-pressed visual while capture is retained; see
 /// `lumen_primitives::apply_press_tint`). It never migrates to a
-/// neighbouring widget mid-press, so a drag-across paints no hover
-/// tint on other buttons. Scrollbar / slider drags keep their own
-/// capture FSMs: the bar path below resolves to the pressed scroll
-/// container anyway, and slider drags run off `DragState`, not
+/// neighbouring widget mid-press, so a drag-across paints no hover tint on
+/// other buttons, while a press on a button's label that slides onto the
+/// button's padding keeps the button pressed. Scrollbar / slider drags keep
+/// their own capture FSMs: the bar path below resolves to the pressed
+/// scroll container anyway, and slider drags run off `DragState`, not
 /// `Hovered`.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn hit_test(
     mut commands: Commands,
     pointer: Res<PointerState>,
-    candidates: Query<
-        (Entity, &Transform),
-        Or<(
-            With<lumen_core::components::Visuals>,
-            With<Scroll>,
-            With<TabIndex>,
-            With<lumen_core::input::Cursor>,
-        )>,
-    >,
+    tree: HitTree,
     parents: Query<&ChildOf>,
-    (scrolls, local_parents): (
-        Query<&ScrollOffset>,
-        Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
-    ),
     (currently_hovered, chain): (
         Query<Entity, With<Hovered>>,
         Query<Entity, With<lumen_core::input::HoverWithin>>,
     ),
-    visibles: Query<&lumen_core::components::Visible>,
-    styles: Query<&lumen_core::components::Style>,
-    (disableds, pointer_events): (
-        Query<(), With<lumen_core::components::Disabled>>,
-        Query<&lumen_core::input::PointerEvents>,
-    ),
     pressed_entities: Query<Entity, With<Pressed>>,
-    transforms: Query<&Transform>,
     (scrollbar_ix, partitions): (
         Option<Res<lumen_core::input::ScrollbarInteraction>>,
         Option<Res<lumen_core::window::WindowPartitions>>,
     ),
-    overlay_roots: Query<Entity, With<lumen_core::render_world::OverlayLayer>>,
     overlay_order: Option<Res<lumen_core::render_world::OverlayOpenOrder>>,
     mut others: Option<OtherPointers>,
+    mut stack: Local<Vec<HitFrame>>,
     mut current: Local<Option<Entity>>,
 ) {
-    // Top-layer hit ordering (mirrors the paint bands in
-    // `lumen_core::render_world`): an entity inside an [`OverlayLayer`]
-    // subtree (dialog / dropdown / menu panel / tooltip) hit-tests ABOVE
-    // all normal content, exactly as it paints above it - otherwise a
-    // deeply-nested widget BEHIND a shallow dialog wins the raw-`depth`
-    // tiebreak and clicks fall through the modal (dialog inputs and
-    // dropdowns went dead this way). Among overlays the later-opened one
-    // wins, via the same `OverlayOpenOrder` stamps the extract uses, so a
-    // dropdown panel opened inside a dialog sits above the dialog body.
-    let overlay_set: std::collections::HashSet<Entity> = overlay_roots.iter().collect();
     // Overlay scrollbars sit ABOVE all content (spec section 16.2): while the
     // pointer is over a visible bar - or a thumb drag is in flight
     // (pointer capture; the pointer may be anywhere) - the hit resolves
@@ -1254,75 +1257,9 @@ pub fn hit_test(
     let pointer_window = partitions
         .as_ref()
         .and_then(|p| pointer.window.or(p.primary()));
-    // The topmost hittable entity at `p`.
-    let topmost = |p: Vec2| -> Option<Entity> {
-        {
-            // Winner key: `(overlay_band, overlay_stamp, depth, entity)`,
-            // higher wins - the painter's order restated for hit-testing.
-            let mut best: Option<((u32, u64, u32, u64), Entity)> = None;
-            for (e, t) in &candidates {
-                if let (Some(parts), Some(window)) = (partitions.as_ref(), pointer_window)
-                    && !parts.in_window(e, window)
-                {
-                    continue;
-                }
-                let off = ancestor_scroll(e, &local_parents, &scrolls);
-                let origin = t.absolute - off;
-                if !(p.x >= origin.x
-                    && p.y >= origin.y
-                    && p.x < origin.x + t.size.x
-                    && p.y < origin.y + t.size.y)
-                {
-                    continue;
-                }
-                if hidden_via_ancestors(e, &parents, &visibles, &styles, partitions.as_deref()) {
-                    continue;
-                }
-                if disabled_via_ancestors(e, &parents, &disableds) {
-                    continue;
-                }
-                if passes_pointer_through(e, &parents, &pointer_events) {
-                    continue;
-                }
-                if point_clipped_by_ancestors(p, e, &local_parents, &styles, &transforms, &scrolls)
-                {
-                    continue;
-                }
-                // Depth: count ChildOf hops up to a root. Along the way,
-                // capture the NEAREST [`OverlayLayer`] ancestor (or self)
-                // so overlay content banks above normal content.
-                let mut depth = 0u32;
-                let mut cur = e;
-                let mut overlay_root = if overlay_set.contains(&e) {
-                    Some(e)
-                } else {
-                    None
-                };
-                while let Ok(co) = parents.get(cur) {
-                    depth += 1;
-                    let parent = co.parent();
-                    if overlay_root.is_none() && overlay_set.contains(&parent) {
-                        overlay_root = Some(parent);
-                    }
-                    cur = parent;
-                }
-                let band = overlay_root.is_some() as u32;
-                let stamp = overlay_root
-                    .and_then(|r| {
-                        overlay_order
-                            .as_ref()
-                            .and_then(|oo| oo.stamps.get(&r).copied())
-                    })
-                    .unwrap_or(0);
-                let candidate = ((band, stamp, depth, e.to_bits()), e);
-                match best {
-                    None => best = Some(candidate),
-                    Some(b) if candidate.0 > b.0 => best = Some(candidate),
-                    _ => {}
-                }
-            }
-            best.map(|(_, e)| e)
-        }
+    let scope = HitScope {
+        partitions: partitions.as_deref().zip(pointer_window),
+        overlay_order: overlay_order.as_deref(),
     };
     // A second finger hovers nothing; what is under it is recorded per
     // pointer for the script event driver. Only this tick's pointers are
@@ -1341,24 +1278,29 @@ pub fn hit_test(
         if !seen.is_empty() || !targets.is_empty() {
             targets.clear();
             for (data, p) in seen {
-                targets.set(data.id, topmost(p));
+                targets.set(data.id, tree.topmost(p, &scope, &mut stack));
             }
         }
     }
     let hit = match (bar_target, pointer.position) {
         (Some(target), _) => Some(target),
         (None, None) => None,
-        (None, Some(p)) => topmost(p),
+        (None, Some(p)) => tree.topmost(p, &scope, &mut stack),
     };
 
     // Pointer-capture gate: mid-press, the hover marker is confined to
-    // the pressed entity (over it) or nothing (dragged off). The gate is
-    // inactive on the press tick itself - `Pressed` lands later that
-    // tick via `dispatch_clicks` - so the press still resolves against a
+    // the press target and the elements related to it, its ancestors and
+    // its descendants, or nothing (dragged off). The gate is inactive on
+    // the press tick itself - `Pressed` lands later that tick via
+    // `dispatch_clicks` - so the press still resolves against a
     // freshly-computed hover. Keyboard presses (Space FSM) leave
     // `primary_down` false and never confine the pointer.
     let hit = if pointer.primary_down && !pressed_entities.is_empty() {
-        hit.filter(|h| pressed_entities.contains(*h))
+        hit.filter(|h| {
+            pressed_entities
+                .iter()
+                .any(|p| press_relation(p, *h, &parents).is_some())
+        })
     } else {
         hit
     };
@@ -1383,11 +1325,214 @@ pub fn hit_test(
         commands.entity(next).insert(Hovered);
     }
     // The hover chain follows the hit target: it and its ancestors count as
-    // hovered (CSS `:hover`). Mid-press it is the captured entity and its
-    // ancestors while over it, and nothing while dragged off, because `hit`
-    // already went through the capture gate above.
-    lumen_core::input::reconcile_hover_chain(&mut commands, hit, &parents, &chain);
+    // hovered (CSS `:hover`). Mid-press it is the hit inside the capture
+    // and nothing while dragged off, because `hit` already went through the
+    // capture gate above.
+    lumen_core::input::reconcile_chain(&mut commands, hit.as_slice(), &parents, &chain);
     *current = hit;
+}
+
+/// How a pointer position relates to a press: `pressed` itself, or the
+/// nearer of the two when one is an ancestor of the other. That element is
+/// what a release there clicks, as a browser clicks the nearest common
+/// ancestor of the `pointerdown` and `pointerup` targets. `None` when
+/// neither contains the other: the pointer left the press.
+pub fn press_relation(pressed: Entity, under: Entity, parents: &Query<&ChildOf>) -> Option<Entity> {
+    if pressed == under || parents.iter_ancestors(under).any(|a| a == pressed) {
+        Some(pressed)
+    } else if parents.iter_ancestors(pressed).any(|a| a == under) {
+        Some(under)
+    } else {
+        None
+    }
+}
+
+/// What [`HitTree`] reads of each element on its way down the tree.
+type HitNode = (
+    Option<&'static Transform>,
+    Option<&'static Children>,
+    Option<&'static ScrollOffset>,
+    Option<&'static lumen_core::components::Style>,
+    Option<&'static lumen_core::components::Visible>,
+    Option<&'static lumen_core::input::PointerEvents>,
+    Has<lumen_core::components::Disabled>,
+    Has<lumen_core::render_world::OverlayLayer>,
+    Has<lumen_core::window::WindowOf>,
+);
+
+/// The elements a [`HitTree`] walk starts from: those with no parent that
+/// have a box or children.
+type HitRoots = (Without<ChildOf>, Or<(With<Transform>, With<Children>)>);
+
+/// The element tree [`hit_test`] walks, grouped so the system stays under
+/// the parameter limit.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct HitTree<'w, 's> {
+    roots: Query<'w, 's, Entity, HitRoots>,
+    nodes: Query<'w, 's, HitNode>,
+    surfaces: Query<'w, 's, (), With<lumen_core::window::WindowOf>>,
+    z_indices: Query<'w, 's, &'static lumen_core::components::ZIndex>,
+}
+
+/// Where a [`HitTree`] walk looks: the window the pointer is over when
+/// there are several, and the order overlays opened in.
+struct HitScope<'a> {
+    partitions: Option<(&'a lumen_core::window::WindowPartitions, Entity)>,
+    overlay_order: Option<&'a lumen_core::render_world::OverlayOpenOrder>,
+}
+
+/// One element on the [`HitTree`] walk's stack, with what it inherits from
+/// its ancestors.
+#[derive(Clone, Copy)]
+pub struct HitFrame {
+    entity: Entity,
+    /// The ancestors' scroll offsets, summed up to the surface root.
+    scroll: Vec2,
+    /// An ancestor hides the element (stops at a surface root).
+    hidden: bool,
+    /// The pointer passes through: the nearest declared `pointer-events`.
+    through: bool,
+    /// An ancestor clips the pointer position away.
+    clipped: bool,
+    /// The nearest [`OverlayLayer`](lumen_core::render_world::OverlayLayer)
+    /// at or above the element.
+    overlay: Option<Entity>,
+}
+
+impl HitTree<'_, '_> {
+    /// The topmost hittable entity at `p`. Winner key: `(overlay_band,
+    /// overlay_stamp, rank)`, higher wins, where `rank` is the element's
+    /// place in a pre-order walk of the tree with each child list in
+    /// `z-index` order: the painter's order (`build_parent_map` in
+    /// `lumen_core::render_world`) restated for hit-testing, so what paints
+    /// on top takes the pointer, a later sibling over an earlier one's
+    /// descendants included. Top-layer hit ordering mirrors the paint
+    /// bands in `lumen_core::render_world`: an entity inside an
+    /// [`OverlayLayer`](lumen_core::render_world::OverlayLayer) subtree
+    /// (dialog / dropdown / menu panel / tooltip) hit-tests above all normal
+    /// content, as it paints above it, and among overlays the later-opened
+    /// one wins, via the same `OverlayOpenOrder` stamps the extract uses.
+    fn topmost(&self, p: Vec2, scope: &HitScope, stack: &mut Vec<HitFrame>) -> Option<Entity> {
+        use lumen_core::components::{Display, Overflow};
+        // Pruning a hidden or clipped subtree is exact only when no surface
+        // root below it starts afresh.
+        let single_window = scope.partitions.is_none();
+        let no_surfaces = self.surfaces.is_empty();
+        let mut best: Option<((u32, u64, u32), Entity)> = None;
+        // Roots in entity order and children in document order, each list
+        // pushed reversed so the stack pops them in order.
+        let mut roots: Vec<Entity> = self.roots.iter().collect();
+        roots.sort_by_key(|e| std::cmp::Reverse(e.to_bits()));
+        let any_z = !self.z_indices.is_empty();
+        let mut rank: u32 = 0;
+        stack.clear();
+        stack.extend(roots.into_iter().map(|entity| HitFrame {
+            entity,
+            scroll: Vec2::ZERO,
+            hidden: false,
+            through: false,
+            clipped: false,
+            overlay: None,
+        }));
+        while let Some(f) = stack.pop() {
+            let Ok((t, children, offset, style, visible, events, disabled, overlay, surface)) =
+                self.nodes.get(f.entity)
+            else {
+                continue;
+            };
+            let at = rank;
+            rank = rank.saturating_add(1);
+            if disabled {
+                continue;
+            }
+            let surface_root = scope
+                .partitions
+                .is_some_and(|(parts, _)| parts.is_surface_root(f.entity));
+            let hidden = visible.is_some_and(|v| !v.0)
+                || style.is_some_and(|s| matches!(s.display, Display::None))
+                || (f.hidden && !surface_root);
+            if hidden && single_window {
+                continue;
+            }
+            // A surface root's ancestors neither scroll nor clip it.
+            let (scroll, clipped) = if surface {
+                (Vec2::ZERO, false)
+            } else {
+                (f.scroll, f.clipped)
+            };
+            let through = match events {
+                Some(e) => *e == lumen_core::input::PointerEvents::None,
+                None => f.through,
+            };
+            let overlay = if overlay { Some(f.entity) } else { f.overlay };
+            let mut clips_children = clipped;
+            if let Some(t) = t {
+                let origin = t.absolute - scroll;
+                let inside_x = p.x >= origin.x && p.x < origin.x + t.size.x;
+                let inside_y = p.y >= origin.y && p.y < origin.y + t.size.y;
+                if inside_x
+                    && inside_y
+                    && !hidden
+                    && !through
+                    && !clipped
+                    && scope
+                        .partitions
+                        .is_none_or(|(parts, window)| parts.in_window(f.entity, window))
+                {
+                    let stamp = overlay
+                        .and_then(|r| {
+                            scope
+                                .overlay_order
+                                .and_then(|oo| oo.stamps.get(&r).copied())
+                        })
+                        .unwrap_or(0);
+                    let key = (overlay.is_some() as u32, stamp, at);
+                    if best.is_none_or(|(b, _)| key > b) {
+                        best = Some((key, f.entity));
+                    }
+                }
+                // Clipping here mirrors the renderer: a scroll container
+                // clips both axes, `overflow: hidden` the axes it names.
+                let (clip_x, clip_y) = style
+                    .map(|s| {
+                        (
+                            matches!(s.overflow_x, Overflow::Hidden),
+                            matches!(s.overflow_y, Overflow::Hidden),
+                        )
+                    })
+                    .unwrap_or((false, false));
+                let clip_x = clip_x || offset.is_some();
+                let clip_y = clip_y || offset.is_some();
+                if (clip_x && !inside_x) || (clip_y && !inside_y) {
+                    clips_children = true;
+                }
+            }
+            if clips_children && no_surfaces {
+                continue;
+            }
+            let Some(children) = children else {
+                continue;
+            };
+            let scroll = scroll + offset.map_or(Vec2::ZERO, |o| o.0);
+            let frame = |entity| HitFrame {
+                entity,
+                scroll,
+                hidden,
+                through,
+                clipped: clips_children,
+                overlay,
+            };
+            let from = stack.len();
+            stack.extend(children.iter().rev().map(frame));
+            if any_z {
+                // A higher `z-index` paints later, so it pops later: the
+                // reversed list sorts descending, stable for ties.
+                let z = |e: Entity| self.z_indices.get(e).map_or(0, |z| z.0);
+                stack[from..].sort_by_key(|f| std::cmp::Reverse(z(f.entity)));
+            }
+        }
+        best.map(|(_, e)| e)
+    }
 }
 
 /// The pointers other than the primary one that [`hit_test`] resolves a
@@ -1399,28 +1544,6 @@ pub struct OtherPointers<'w, 's> {
     releases: MessageReader<'w, 's, PointerReleased>,
     cancels: MessageReader<'w, 's, lumen_core::input::PointerCancelled>,
     targets: Option<ResMut<'w, lumen_core::input::PointerTargets>>,
-}
-
-/// Disabled-check for the pointer path (spec section 0: disabled widgets take
-/// no pointer interaction at all). True when `entity` or any ancestor
-/// carries [`Disabled`](lumen_core::components::Disabled) - a disabled
-/// container disables its whole subtree, mirroring Qt's
-/// `QWidget::setEnabled(false)` propagation.
-pub fn disabled_via_ancestors(
-    entity: Entity,
-    parents: &Query<&ChildOf>,
-    disableds: &Query<(), With<lumen_core::components::Disabled>>,
-) -> bool {
-    let mut cur = entity;
-    loop {
-        if disableds.contains(cur) {
-            return true;
-        }
-        match parents.get(cur) {
-            Ok(co) => cur = co.parent(),
-            Err(_) => return false,
-        }
-    }
 }
 
 /// Whether the pointer passes through `entity`: its CSS `pointer-events`, the
@@ -1468,63 +1591,6 @@ pub fn cancel_press_on_escape(
     if flag.0 != cancelled {
         flag.0 = cancelled;
     }
-}
-
-/// Clip-aware pointer test (spec section 15/section 16: visually clipped content is
-/// not hittable). Walks `entity`'s ancestor chain; an ancestor clips
-/// exactly when the renderer emits an `ExtractedClipBox` for it - it
-/// carries a `Scroll` component (detected here via its paired
-/// [`ScrollOffset`]; clips both axes) or its [`Style`] sets
-/// `overflow: hidden` on an axis. For every such ancestor the pointer
-/// position `p` must fall inside the ancestor's visual rect (its
-/// layout rect shifted by the scroll offsets of *its* ancestors - an
-/// ancestor's own scroll offset moves its content, not its own box) on
-/// the clipped axes. Returns `true` when `p` lands outside any clip
-/// rect, i.e. the candidate is visually clipped away at `p` and must
-/// not hit. Mirroring the renderer's rule keeps "hittable" identical
-/// to "painted": rows escaping a fixed-height `<scroll>` used to
-/// hit-shadow the button laid out below the clip box.
-///
-/// Pass a `parents` query filtered `Without<WindowOf>` to stop at a surface
-/// root, which escapes its ancestors' clips.
-pub fn point_clipped_by_ancestors<F: bevy_ecs::query::QueryFilter>(
-    p: Vec2,
-    entity: Entity,
-    parents: &Query<&ChildOf, F>,
-    styles: &Query<&lumen_core::components::Style>,
-    transforms: &Query<&Transform>,
-    scrolls: &Query<&ScrollOffset>,
-) -> bool {
-    use lumen_core::components::Overflow;
-    let mut cur = entity;
-    while let Ok(co) = parents.get(cur) {
-        let anc = co.parent();
-        if let Ok(t) = transforms.get(anc) {
-            let is_scroller = scrolls.contains(anc);
-            let (style_clip_x, style_clip_y) = styles
-                .get(anc)
-                .map(|s| {
-                    (
-                        matches!(s.overflow_x, Overflow::Hidden),
-                        matches!(s.overflow_y, Overflow::Hidden),
-                    )
-                })
-                .unwrap_or((false, false));
-            let clip_x = is_scroller || style_clip_x;
-            let clip_y = is_scroller || style_clip_y;
-            if clip_x || clip_y {
-                let origin = t.absolute - ancestor_scroll(anc, parents, scrolls);
-                if clip_x && !(p.x >= origin.x && p.x < origin.x + t.size.x) {
-                    return true;
-                }
-                if clip_y && !(p.y >= origin.y && p.y < origin.y + t.size.y) {
-                    return true;
-                }
-            }
-        }
-        cur = anc;
-    }
-    false
 }
 
 /// What [`focus_on_press`] reads of an element: whether it has a tab index,
@@ -1799,12 +1865,19 @@ pub fn dispatch_focused_keys(
 }
 
 /// Convert pointer presses/releases on the hovered entity into [`ClickEvent`].
+/// A press marks the hit target [`Pressed`]. A release clicks the press
+/// target when it lands on it or inside it, and the hit target when that is
+/// an ancestor of the press target: the nearest element that holds both
+/// ends, as a browser picks the `click` target. A press on a button's label
+/// released over the button's padding clicks the button; a release over an
+/// unrelated element clicks nothing.
 /// [`Disabled`](lumen_core::components::Disabled) entities neither press
 /// nor click.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_clicks(
     mut commands: Commands,
     pointer: Res<PointerState>,
+    parents: Query<&ChildOf>,
     hovered: Query<Entity, With<Hovered>>,
     pressed: Query<Entity, With<Pressed>>,
     disabled: Query<(), With<lumen_core::components::Disabled>>,
@@ -1849,14 +1922,20 @@ pub fn dispatch_clicks(
         if !release.is_primary() {
             continue;
         }
-        // Click counts if the same entity that was pressed is still hovered.
+        // The click goes to the nearest element holding both the press
+        // target and what the release is over, when one holds the other.
         let still_hovered = hovered.single().ok();
+        let clicked = |pressed_e: Entity| {
+            still_hovered
+                .and_then(|h| press_relation(pressed_e, h, &parents))
+                .filter(|e| !disabled.contains(*e))
+        };
         // Multi-tick path: entities carrying `Pressed` from a previous tick.
         for pressed_e in &pressed {
             commands.entity(pressed_e).remove::<Pressed>();
-            if Some(pressed_e) == still_hovered && !disabled.contains(pressed_e) {
+            if let Some(entity) = clicked(pressed_e) {
                 clicks.write(ClickEvent {
-                    entity: pressed_e,
+                    entity,
                     position: release.position,
                     button: release.button,
                     local: None,
@@ -1873,9 +1952,9 @@ pub fn dispatch_clicks(
                 continue;
             }
             commands.entity(pressed_e).remove::<Pressed>();
-            if Some(pressed_e) == still_hovered && !disabled.contains(pressed_e) {
+            if let Some(entity) = clicked(pressed_e) {
                 clicks.write(ClickEvent {
-                    entity: pressed_e,
+                    entity,
                     position: release.position,
                     button: release.button,
                     local: None,
@@ -2156,7 +2235,10 @@ pub fn text_pointer_to_caret(
         ),
         With<TextEditable>,
     >,
-    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    (parents, tree): (
+        Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+        Query<&ChildOf>,
+    ),
     scrolls: Query<&ScrollOffset>,
     mut last: ResMut<LastTextClick>,
 ) {
@@ -2165,7 +2247,13 @@ pub fn text_pointer_to_caret(
         if !press.is_primary() {
             continue;
         }
-        let Ok(entity) = hovered.single() else {
+        // The press may land on an element inside the field; the field is
+        // the nearest editable at or above it.
+        let Some(entity) = hovered.single().ok().and_then(|hit| {
+            std::iter::once(hit)
+                .chain(tree.iter_ancestors(hit))
+                .find(|e| editables.contains(*e))
+        }) else {
             continue;
         };
         let Ok((t, buf, style, box_style, edit_scroll, shaped, echo, block)) =
@@ -2270,7 +2358,8 @@ pub fn text_pointer_to_caret(
 pub fn text_pointer_drag_select(
     mut moves: MessageReader<PointerMoved>,
     mut presses: MessageReader<PointerPressed>,
-    pressed: Query<Entity, (With<Pressed>, With<TextEditable>)>,
+    // The press chain: a press on an element inside the field holds it.
+    pressed: Query<Entity, (With<lumen_core::input::PressWithin>, With<TextEditable>)>,
     editables: Query<(
         &Transform,
         &TextBuffer,

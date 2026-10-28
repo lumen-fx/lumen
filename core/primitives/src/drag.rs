@@ -136,13 +136,22 @@ impl Plugin for DragPlugin {
 }
 
 /// Generic system: every [`DragMoveEvent`] for an entity carrying the
-/// [`Draggable`] marker adds the delta to its [`Transform::absolute`].
+/// [`Draggable`] marker, or for an element inside one, adds the delta to
+/// the draggable's [`Transform::absolute`].
 pub fn translate_draggable(
     mut moves: MessageReader<DragMoveEvent>,
     mut q: Query<&mut Transform, With<Draggable>>,
+    parents: Query<&ChildOf>,
 ) {
     for ev in moves.read() {
-        if let Ok(mut t) = q.get_mut(ev.entity) {
+        // The drag starts on the element the press went down on, which may
+        // sit inside the draggable (its label, an icon): move the nearest
+        // draggable at or above it.
+        let Some(target) = crate::controls::resolve_control(ev.entity, &parents, |e| q.contains(e))
+        else {
+            continue;
+        };
+        if let Ok(mut t) = q.get_mut(target) {
             t.absolute += ev.delta;
         }
     }

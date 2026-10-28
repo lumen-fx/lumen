@@ -1228,9 +1228,9 @@ pub(crate) mod text_event_tests {
                     move |mut commands: Commands,
                           parents: Query<&ChildOf>,
                           chain: Query<Entity, With<HoverWithin>>| {
-                        lumen_core::input::reconcile_hover_chain(
+                        lumen_core::input::reconcile_chain(
                             &mut commands,
-                            hit,
+                            hit.as_slice(),
                             &parents,
                             &chain,
                         );
