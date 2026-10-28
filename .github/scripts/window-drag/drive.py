@@ -297,6 +297,14 @@ class App:
                 self.proc.kill()
 
 
+def png_size(path):
+    try:
+        head = path.read_bytes()[16:24]
+    except FileNotFoundError:
+        return None
+    return int.from_bytes(head[:4], "big"), int.from_bytes(head[4:], "big")
+
+
 def stacks(layout):
     """Every stack of the layout as (container, panels): `dock` or a window id."""
     out = []
@@ -327,6 +335,18 @@ class Run:
     def __init__(self, inp, app):
         self.inp, self.app = inp, app
         self.failures = []
+
+    def settle(self, done, secs=10):
+        """Wait until `done(layout)` holds or `secs` pass, and return the
+        layout last read: a debug build paints a frame in a good part of a
+        second, and a drop reaches the printed arrangement some frames
+        after the release."""
+        end = time.time() + secs
+        while True:
+            lay = self.app.layout()
+            if (lay and done(lay)) or time.time() > end:
+                return lay
+            time.sleep(0.1)
 
     def check(self, step, ok, detail):
         print(f"{'ok  ' if ok else 'FAIL'} {step}: {detail}", flush=True)
@@ -401,6 +421,12 @@ def main():
             return report(run)
         ox, oy = origin
         app.shot("0-start")
+        # The steps place the pointer in an 800x500 window with room around
+        # it; a window still maximized would put every drop elsewhere.
+        size = png_size(out / "0-start.png")
+        run.check("size", size == (800, 500), f"the main window is {size}")
+        if size != (800, 500):
+            return report(run)
         at = lambda x, y: (ox + x, oy + y)
         first = app.layout()
         center = stack_of(first, "scene")
@@ -408,14 +434,15 @@ def main():
 
         # Reorder: the center's first tab to the end of its strip.
         run.drag(at(280, 15), at(770, 15), lambda: app.shot("1-reorder-preview"))
+        lay = run.settle(lambda l: (stack_of(l, "scene") or ("", []))[1] == ["game", "scene"])
         app.shot("1-reorder")
-        s = stack_of(app.layout(), "scene")
+        s = stack_of(lay, "scene")
         run.check("reorder", s and s[1] == ["game", "scene"], f"center stack {s}")
 
         # Split: the first tab dropped on the stack's right edge.
         run.drag(at(280, 15), at(700, 260), lambda: app.shot("2-split-preview"))
+        lay = run.settle(lambda l: (stack_of(l, "game") or ("", []))[1] == ["game"])
         app.shot("2-split")
-        lay = app.layout()
         g, sc = stack_of(lay, "game"), stack_of(lay, "scene")
         run.check("split", g and sc and g[1] == ["game"] and sc[1] == ["scene"], f"game {g}, scene {sc}")
 
@@ -426,9 +453,13 @@ def main():
         def cancel():
             app.shot("3-escape-preview")
             inp.escape()
-            time.sleep(0.3)
+            # The release must come after the app took the key.
+            time.sleep(1.5)
 
         run.drag(at(36, 15), at(400, 260), cancel)
+        # Nothing should change: give a wrong drop the time a right one
+        # would take to show.
+        time.sleep(3.0)
         app.shot("3-escape")
         moved = [l for l in app.lines()[since:] if l.startswith("dock-drag files ")]
         same = stacks(app.layout()) == stacks(before)
@@ -439,7 +470,7 @@ def main():
         below = oy + 500 + 120 < sh - 4
         end = at(60, 620) if below else (min(ox + 920, sw - 4), oy + 60)
         run.drag(at(36, 15), end)
-        torn = app.wait_line("dock-drag files window", 10, since)
+        torn = app.wait_line("dock-drag files window", 15, since)
         app.shot("4-tear-off")
         app.shot("4-tear-off-window", "files")
         run.check("tear-off", torn, "files is in a window of its own")
@@ -463,9 +494,10 @@ def main():
             at(560, 300),
             lambda: (time.sleep(0.4), app.shot("5-dock-back-preview")),
         )
-        back = app.wait_line("dock-drag files dock", 10, since)
+        back = app.wait_line("dock-drag files dock", 15, since)
+        lay = run.settle(lambda l: (stack_of(l, "files") or ("", []))[0] == "dock")
         app.shot("5-dock-back")
-        where = stack_of(app.layout(), "files")
+        where = stack_of(lay, "files")
         run.check("dock-back", back and where and where[0] == "dock", f"files is in {where}")
     finally:
         app.stop()
