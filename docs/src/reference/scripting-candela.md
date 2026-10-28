@@ -818,7 +818,7 @@ size.
 | `window::set_title(title: string)` | | Ask for a new window title. |
 | `window::dpr()` | `float` | Device pixel ratio. |
 | `window::size()` | `float[]` | `[width, height]` the window has, in logical pixels. |
-| `window::set_size(width: float, height: float)` | | Ask for a new window size, in logical pixels. Both sides must be positive. |
+| `window::set_size(width: float, height: float)` | | Ask for a new window size, in logical pixels. A maximized window is restored first. Both sides must be positive. |
 | `window::close()` | | Close the window. `on_close` runs first and can keep it open; closing the main window ends the app unless `[app] quit = "explicit"`. |
 | `window::location_path()` | `string` | The current page path. |
 | `window::location_query()` | `string` | The query string of the request the document is being rendered for, without the leading `?`. |

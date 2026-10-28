@@ -413,12 +413,27 @@ fn window_setters_apply_headlessly() {
         window: 0,
         title: "Docs".into(),
     });
+    // The window opens maximized; asking for a size restores it.
+    let primary = lumen_core::window::primary_entity(&h.app.world).expect("a primary window");
+    h.app
+        .world
+        .get_mut::<lumen_core::window::Window>(primary)
+        .expect("the primary window")
+        .maximized = true;
     push_external_dom_command(ScriptCommand::WindowSetSize {
         window: 0,
         width: 640.0,
         height: 480.0,
     });
     h.settle();
+    assert!(
+        !h.app
+            .world
+            .get::<lumen_core::window::Window>(primary)
+            .expect("the primary window")
+            .maximized,
+        "a size request restores a maximized window"
+    );
     assert_eq!(lumen_core::window_state::title(), "Docs");
     assert_eq!(lumen_core::window_state::size(), (640.0, 480.0));
     assert_eq!(
