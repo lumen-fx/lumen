@@ -3443,7 +3443,6 @@ mod tests {
             name: "lumen-audio".to_string(),
             source: ModuleSource::Bundled,
             config: toml::Table::new(),
-            tags: Vec::new(),
         }]);
 
         let message = no_modules_archive(&Release::Version("0.0.9".to_string()), linux, &deps);
@@ -4343,7 +4342,6 @@ mod tests {
             name: "canvas".to_string(),
             source: ModuleSource::Bundled,
             config: toml::Table::new(),
-            tags: Vec::new(),
         }]);
         let resolved = crate::package::lpm::Resolved::default();
         let shapes = BTreeMap::from([("canvas".to_string(), Shape::Bundled)]);

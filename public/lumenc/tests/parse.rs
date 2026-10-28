@@ -83,31 +83,33 @@ fn unknown_tag_errors() {
 }
 
 #[test]
-fn an_unknown_tag_names_the_dependencies_key() {
+fn an_unknown_tag_names_the_dependencies_table() {
     // The parser cannot tell a typo from an element a module brings, so the
     // message says what a module-provided tag needs.
     let err = parse_html(r##"<root><nope/></root>"##)
         .expect_err("unknown tag")
         .to_string();
-    assert!(err.contains("tags = [\"nope\"]"), "{err}");
+    assert!(err.contains("unknown tag 'nope'"), "{err}");
     assert!(err.contains("[dependencies]"), "{err}");
 }
 
 #[test]
-fn a_declared_tag_parses_once_its_dependency_is_registered() {
+fn a_module_tag_parses_once_it_is_registered() {
     // The generic mechanism, exercised with a tag no module ships: a tag the
     // parser has never heard of is refused, and the same markup parses after
-    // the `[dependencies]` table that declares it is published.
+    // the tags a module's descriptor declares are published.
     let markup = r##"<root><parse-declared-tag/></root>"##;
     assert!(matches!(
         parse_html(markup),
         Err(lumenc::ParseError::UnknownTag(ref t, _)) if t == "parse-declared-tag"
     ));
 
-    let deps: lumen_modules::DependenciesCfg =
-        toml::from_str("mod-under-test = { bundled = true, tags = [\"parse-declared-tag\"] }")
-            .expect("dependencies table");
-    lumen_modules::register_declared_tags(&deps);
+    let manifest = lumen_modules::manifest::parse_manifest(
+        "mod-under-test",
+        "[module]\ntags = [\"parse-declared-tag\"]\n",
+    )
+    .expect("module descriptor");
+    lumen_modules::register_module_tags(&manifest.tags);
 
     let ir = parse_html(markup).expect("the declared tag parses");
     assert_eq!(ir.root.children[0].tag, "parse-declared-tag");

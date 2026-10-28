@@ -135,11 +135,11 @@ pub use lumen_scene;
 /// [`lumen_script::push_plugin_event`]. Taken through the module SDK so a
 /// module crate depends on `lumen-module` alone.
 pub use lumen_script;
-/// The markup-tag registry: call
-/// [`lumen_widget::register_widget_tag_owned`] from `Plugin::build` and the
-/// parser accepts that element. A module that also has to compile ahead of
-/// time declares the same tag under `[dependencies]`, which is what a build
-/// with no module in it reads.
+/// The markup-tag registry. Every compile reads the tags a module answers for
+/// from the `lumen-module.toml` at the module's root, without loading it; a
+/// module that registers a tag at run time, with
+/// [`lumen_widget::register_widget_tag_owned`] from `Plugin::build`, lists
+/// the same tag there.
 pub use lumen_widget;
 
 /// What a module paints through, behind the `paint` feature:

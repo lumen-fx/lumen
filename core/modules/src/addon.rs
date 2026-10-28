@@ -29,6 +29,11 @@
 //! html = "div"
 //! ```
 //!
+//! An `[[element]]` maps one of the module's tags to the HTML element a page
+//! writes for it. The tags themselves are declared once, in the module's
+//! `lumen-module.toml` (see [`crate::manifest`]), and an element naming a tag
+//! the module does not declare there is refused.
+//!
 //! A web build takes the web half of every dependency and refuses one that
 //! has none; every other build loads the library and never reads `web/`. The
 //! directory is found the same way for every source: under the module's root,
@@ -43,6 +48,8 @@ use std::path::{Component, Path, PathBuf};
 
 use lumen_ir::addon::{Addon, AddonElement, AddonFunction, AddonParam};
 use serde::Deserialize;
+
+use crate::manifest::{MODULE_MANIFEST, read_manifest, validate_tag};
 
 /// The directory a module keeps its web half in, under its root.
 pub const WEB_DIR: &str = "web";
@@ -96,13 +103,27 @@ pub fn web_half(root: &Path) -> Option<PathBuf> {
 ///
 /// The descriptor is missing or does not parse, names a file the web half
 /// does not hold or one outside it, or declares a function, a namespace or an
-/// element this format refuses. Every message names the module.
+/// element this format refuses; or the module's `lumen-module.toml` is missing
+/// or does not declare every element's tag. Every message names the module.
 pub fn read_web_half(name: &str, root: &Path) -> Result<AddonPackage, String> {
     let dir = root.join(WEB_DIR);
     let path = dir.join(ADDON_MANIFEST);
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("the web half of '{name}': read {}: {e}", path.display()))?;
-    parse_addon(name, &dir, &text)
+    let package = parse_addon(name, &dir, &text)?;
+    // A module's tags have one source, its `lumen-module.toml`; an element
+    // here only says what HTML one of them becomes in a page.
+    let declared = read_manifest(name, root)?;
+    for element in &package.addon.elements {
+        if !declared.tags.contains(&element.tag) {
+            return Err(format!(
+                "the web half of '{name}': element `{}` is not a tag the module declares; add \
+                 it to `tags` in its {MODULE_MANIFEST}",
+                element.tag
+            ));
+        }
+    }
+    Ok(package)
 }
 
 /// The script surface and the elements a descriptor's `text` declares, for
@@ -293,7 +314,7 @@ fn parse_descriptor(name: &str, text: &str) -> Result<(Header, Addon), String> {
 
     let mut elements: Vec<AddonElement> = Vec::with_capacity(descriptor.element.len());
     for decl in descriptor.element {
-        crate::validate_tag(name, &decl.tag)?;
+        validate_tag(name, &decl.tag)?;
         if elements.iter().any(|e| e.tag == decl.tag) {
             return Err(fail(format!("element `{}` is declared twice", decl.tag)));
         }
@@ -416,6 +437,11 @@ html = "div"
             std::fs::rename(dir.join(file), web.join(file)).unwrap();
         }
         std::fs::write(web.join(ADDON_MANIFEST), ECHO).unwrap();
+        std::fs::write(
+            dir.join(MODULE_MANIFEST),
+            "[module]\ntags = [\"echo-view\"]\n",
+        )
+        .unwrap();
         assert_eq!(web_half(&dir), Some(web.clone()));
         let package = read_web_half("echo", &dir).unwrap();
         assert_eq!(package.dir, web);
@@ -506,6 +532,40 @@ html = "div"
              \"button\"\nhtml = \"div\"\n",
         );
         assert!(err.contains("built-in tag"), "{err}");
+    }
+
+    #[test]
+    fn an_element_must_name_a_tag_the_module_declares() {
+        let dir = package("undeclared", &["echo.js"]);
+        let web = dir.join(WEB_DIR);
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::rename(dir.join("echo.js"), web.join("echo.js")).unwrap();
+        std::fs::write(
+            web.join(ADDON_MANIFEST),
+            "[addon]\nnamespace = \"echo\"\nmodule = \"echo.js\"\n[[element]]\ntag = \
+             \"echo-view\"\nhtml = \"div\"\n",
+        )
+        .unwrap();
+
+        // No descriptor at all: the module is incomplete, and says so.
+        let err = read_web_half("echo", &dir).unwrap_err();
+        assert!(err.contains("module 'echo'"), "{err}");
+        assert!(err.contains(MODULE_MANIFEST), "{err}");
+
+        // A descriptor that does not declare the element's tag.
+        std::fs::write(dir.join(MODULE_MANIFEST), "[module]\ntags = []\n").unwrap();
+        let err = read_web_half("echo", &dir).unwrap_err();
+        assert!(
+            err.contains("element `echo-view` is not a tag the module declares"),
+            "{err}"
+        );
+
+        std::fs::write(
+            dir.join(MODULE_MANIFEST),
+            "[module]\ntags = [\"echo-view\"]\n",
+        )
+        .unwrap();
+        assert!(read_web_half("echo", &dir).is_ok());
     }
 
     #[test]

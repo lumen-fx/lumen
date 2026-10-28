@@ -31,12 +31,19 @@ fn write(dir: &Path, name: &str, body: &str) {
     std::fs::write(dir.join(name), body).expect("write file");
 }
 
+/// The descriptor every module ships, for a module that brings no markup.
+const MODULE_DESCRIPTOR: &str = "[module]\ntags = []\n";
+
 /// A minimal markup app declaring one path-source module, with the module
-/// library present as a stand-in file.
+/// library present as a stand-in file. A path module's descriptor sits beside
+/// its library, under `modules/`.
 fn write_app(root: &Path, dependencies: &str) -> PathBuf {
     let app = root.join("app");
     std::fs::create_dir_all(&app).expect("app dir");
     write(&app, "src/main.lmn", "<root><label>hi</label></root>\n");
+    if dependencies.contains("path = \"modules/") {
+        write(&app, "modules/lumen-module.toml", MODULE_DESCRIPTOR);
+    }
     write(
         &app,
         "lumen.toml",
@@ -45,12 +52,18 @@ fn write_app(root: &Path, dependencies: &str) -> PathBuf {
     app
 }
 
-/// A stand-in toolchain directory. `dynamic` adds the engine dylib and a
+/// A stand-in toolchain directory, with the data files of the one bundled
+/// module these tests declare. `dynamic` adds the engine dylib and a
 /// hashed libstd beside the launcher and liblumen, the shape a current Unix
 /// release archive has.
 fn write_toolchain(root: &Path, dynamic: bool) -> PathBuf {
     let dir = root.join("toolchain");
     std::fs::create_dir_all(&dir).expect("toolchain dir");
+    write(
+        &dir,
+        "modules/demo-mod/lumen-module.toml",
+        MODULE_DESCRIPTOR,
+    );
     write(&dir, "lumen-launcher", "stub");
     write(&dir, lib_name(), "library");
     if dynamic {
@@ -215,10 +228,16 @@ fn cross() -> Cross {
 
 /// A stand-in toolchain for the cross target, shaped like its release
 /// archive: the launcher, liblumen, the engine dylib, and a hashed libstd,
-/// all under the target platform's spellings.
+/// all under the target platform's spellings, and the bundled module's data
+/// files.
 fn write_cross_toolchain(root: &Path, cross: &Cross) -> PathBuf {
     let dir = root.join("cross-toolchain");
     std::fs::create_dir_all(&dir).expect("toolchain dir");
+    write(
+        &dir,
+        "modules/demo-mod/lumen-module.toml",
+        MODULE_DESCRIPTOR,
+    );
     write(&dir, "lumen-launcher", "stub");
     write(&dir, &format!("liblumen.{}", cross.ext), "library");
     write(&dir, &format!("liblumen_engine.{}", cross.ext), "engine");
@@ -453,10 +472,15 @@ fn a_cross_target_package_never_ships_silently_without_its_modules() {
 }
 
 /// A stand-in Windows toolchain: the launcher and the C library, which is
-/// all a Windows folder carries.
+/// all a Windows folder carries, and the bundled module's data files.
 fn write_windows_toolchain(root: &Path) -> PathBuf {
     let toolchain = root.join("win-toolchain");
     std::fs::create_dir_all(&toolchain).expect("toolchain dir");
+    write(
+        &toolchain,
+        "modules/demo-mod/lumen-module.toml",
+        MODULE_DESCRIPTOR,
+    );
     write(&toolchain, "lumen-launcher.exe", "stub");
     write(&toolchain, "lumen.dll", "library");
     toolchain

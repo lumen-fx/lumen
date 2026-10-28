@@ -138,11 +138,12 @@
       <Files Include="$(var.StageDir)\bin\templates\**" Directory="BINFOLDER" Subdirectory="templates" />
 
       <!--
-        The web halves of the first-party modules, under bin\modules.
-        `lumenc web` reads the web half of a module an app declares with
-        `bundled = true` from modules\<name>\web\ beside its own executable.
-        Harvested like the two trees above: which modules have a web half
-        belongs to std/ in the source tree.
+        The data files of the first-party modules, under bin\modules: each
+        module's lumen-module.toml, which every compile reads for the markup
+        tags a module an app declares with `bundled = true` brings, and the
+        web halves `lumenc web` reads from modules\<name>\web\ beside its own
+        executable. Harvested like the two trees above: which modules there
+        are belongs to std/ in the source tree.
       -->
       <Files Include="$(var.StageDir)\bin\modules\**" Directory="BINFOLDER" Subdirectory="modules" />
 

@@ -161,6 +161,10 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
     let deps = addons::target_deps(&opts.dir, lumen_modules::Target::Desktop, None)
         .map_err(RunError::Plugin)?;
     let resolved = &deps.resolved;
+    // The tags the app's modules declare, read here with everything `lpm`
+    // resolved in hand, so a module the runtime has no root for (one with a
+    // web half and no library) still brings its tags to a run from source.
+    lumen_modules::register_module_tags(&deps.compile.tags);
     opts.resolved_modules = addons::resolved_modules(resolved);
     opts.import_roots = deps.compile.import_roots.clone();
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {

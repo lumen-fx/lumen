@@ -794,23 +794,24 @@ follow, where on a built-in tag it is an error.
 A [runtime module](#runtime-modules) that brings a tag has the same job and
 one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
 and `lumenc package` run the parser on a machine where nothing was opened, so
-the element would be refused however diligently the module registers it. A
-module with a [web half](#a-web-half) declares its elements in the
-descriptor, which every compile reads. Otherwise the app states the claim:
+the element would be refused however diligently the module registers it. So
+the module lists its tags in its [descriptor](#module-descriptor), which every
+compile reads, and an app that declares the module gets them with nothing
+more to write:
 
 ```toml
-[dependencies]
-acme-charts = { bundled = true, tags = ["sparkline"] }
+# lumen-module.toml, at the module's root
+[module]
+tags = ["sparkline"]
 ```
 
 Do both. The module registers its tags from `Plugin::build`
-(`lumen_module::lumen_widget::register_widget_tag_owned`), which is what makes
-a run accept them; the key is what makes a build accept them. Modules install
-before the markup is parsed precisely so the first half works, which means an
-app that forgot the key runs and then fails to build - so a module's
-documentation says to write it. A tag the language already owns is refused
-where it is declared, because a module reinterpreting `<button>` would be
-settled by load order rather than by anything an author wrote.
+(`lumen_module::lumen_widget::register_widget_tag_owned`), which is what a
+process that installs it without compiling anything (an SDK app, say) goes
+by; the descriptor is what every compile goes by. A tag the language already
+owns is refused where it is declared, because a module reinterpreting
+`<button>` would be settled by load order rather than by anything an author
+wrote.
 
 ## Composing the built-in widgets
 
@@ -1328,12 +1329,33 @@ rustflags = ["-C", "prefer-dynamic"]
 target = "x86_64-unknown-linux-gnu"
 ```
 
-Declare the result in the app:
+Copy the built library next to the crate's `lumen-module.toml` and declare it
+in the app by its path without the extension, so each platform's spelling is
+found:
 
 ```toml
 [dependencies]
-shape-tools = { path = "modules/shape-tools/target/x86_64-unknown-linux-gnu/release/shape_tools", config = { units = "mm" } }
+shape-tools = { path = "modules/shape-tools/shape_tools", config = { units = "mm" } }
 ```
+
+### Module descriptor
+
+Every module ships a `lumen-module.toml` at its root, the directory a `path`
+declaration names or the one the library named by it sits in, and the root of
+a published package or of a bundled module's toolchain copy:
+
+```toml
+[module]
+tags = ["shape-view"]
+```
+
+`tags` lists the markup tags the module answers for: lowercase letters,
+digits and dashes, none of them a tag the language owns. A module that brings
+no markup writes `tags = []`. Every compile reads the file before it parses
+the app's markup, without opening the library, so the elements work in a
+build on a machine where the library is not built or cannot load. An app
+declaring a module whose descriptor is missing does not build, and the error
+names the module.
 
 ### A web half
 
@@ -1343,8 +1365,11 @@ carries a web half too: a `web/` directory beside its sources, holding a
 [Web halves of modules](../reference/web-addons.md) is the format. A web
 build takes the web half of every module the app declares; every other build
 loads the library. Every compile, the desktop's and `lumenc check` included,
-reads the descriptor: it declares the module's functions and elements to the
-app's scripts and markup without installing the module. At run time the
+reads the descriptor: it declares the module's functions to the app's scripts
+without installing the module. Its `[[element]]` entries say what HTML each of
+the module's tags becomes in a page; the tags themselves come from the
+module's [descriptor](#module-descriptor), and an element naming a tag it
+does not list is refused. At run time the
 script binds to the functions the loaded library registers, so the two halves
 have to declare the same surface.
 

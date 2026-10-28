@@ -170,10 +170,18 @@ pub fn compute_diagnostics(src: &str) -> Vec<Diagnostic> {
 
 /// Like [`compute_diagnostics`] but, when `self_path` is a real file,
 /// resolves `<include src="..."/>` directives against the filesystem so
-/// missing-include and include-cycle errors become diagnostics. With
+/// missing-include and include-cycle errors become diagnostics, and accepts
+/// the markup tags the modules of the app the file belongs to declare. With
 /// `None`, includes are dropped (the string-only path) so the parser never
 /// chokes on markup that references files the LSP can't see.
 pub fn compute_diagnostics_at(src: &str, self_path: Option<&Path>) -> Vec<Diagnostic> {
+    // The app is the nearest directory holding a `lumen.toml`.
+    if let Some(app_dir) = self_path
+        .and_then(Path::parent)
+        .and_then(|dir| dir.ancestors().find(|d| d.join("lumen.toml").is_file()))
+    {
+        lumenc::compile::register_reachable_module_tags(app_dir);
+    }
     let parsed = match self_path {
         Some(p) => lumenc::parse_html_with_loader(src, p, &lumenc::FsLoader),
         None => lumenc::parse_html(src),
@@ -808,6 +816,31 @@ mod tests {
         let diags = compute_diagnostics(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Unknown tag"));
+    }
+
+    #[test]
+    fn a_tag_a_declared_module_brings_is_not_an_unknown_tag() {
+        let app =
+            std::env::temp_dir().join(format!("lumen-lsp-module-tags-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&app);
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(app.join("widgets")).unwrap();
+        std::fs::write(
+            app.join("lumen.toml"),
+            "[dependencies]\nwidgets = { path = \"widgets\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("widgets/lumen-module.toml"),
+            "[module]\ntags = [\"lsp-module-gauge\"]\n",
+        )
+        .unwrap();
+        let src = "<root><lsp-module-gauge/></root>";
+        let file = app.join("src/main.lmn");
+        std::fs::write(&file, src).unwrap();
+        let diags = compute_diagnostics_at(src, Some(&file));
+        assert!(diags.is_empty(), "{diags:?}");
+        let _ = std::fs::remove_dir_all(&app);
     }
 
     #[test]

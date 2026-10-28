@@ -403,7 +403,6 @@ pub fn with_implied(deps: &DependenciesCfg, modules: &[String]) -> DependenciesC
                 name: module.clone(),
                 source: ModuleSource::Bundled,
                 config: toml::Table::new(),
-                tags: Vec::new(),
             });
         }
     }
@@ -411,7 +410,7 @@ pub fn with_implied(deps: &DependenciesCfg, modules: &[String]) -> DependenciesC
 }
 
 /// The directories `modules/<name>/` is looked for under, in order.
-fn search_roots(lib_dir: Option<&Path>) -> Vec<PathBuf> {
+pub(crate) fn search_roots(lib_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(dir) = lib_dir {
         roots.push(dir.to_path_buf());
@@ -651,7 +650,6 @@ mod tests {
             name: "toy-dev".into(),
             source: ModuleSource::Path("x".into()),
             config: toml::Table::new(),
-            tags: Vec::new(),
         }]);
         let all = with_implied(&declared, &["toy-dev".into(), "old".into()]);
         assert_eq!(all.0.len(), 2);

@@ -37,13 +37,24 @@ fn install(app: &mut App, _config_toml: &str) -> u32 {
 }
 
 /// An app whose markup uses the module's tag and whose config declares the
-/// module without naming the tag: the run path has to accept it on the
-/// strength of the module alone.
+/// module. The module's `lumen-module.toml` declares no tag, so the parse
+/// accepts the element only because the module registered it first.
+///
+/// The module is declared by `path`, to a root holding just that
+/// descriptor: the loader answers the name from the registry the test wrote
+/// to before it looks on disk, and a compile reads the descriptor from the
+/// root.
 fn app_dir() -> std::path::PathBuf {
     let dir =
         std::env::temp_dir().join(format!("lumenc-module-phase-order-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("app dir");
+    std::fs::create_dir_all(dir.join("phase-order")).expect("module root");
+    std::fs::write(
+        dir.join("phase-order/lumen-module.toml"),
+        "[module]\ntags = []\n",
+    )
+    .expect("module descriptor");
     std::fs::write(
         dir.join("src/main.lmn"),
         format!("<root>\n  <{TAG} />\n</root>\n"),
@@ -52,7 +63,7 @@ fn app_dir() -> std::path::PathBuf {
     std::fs::write(
         dir.join("lumen.toml"),
         "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n\n\
-         [dependencies]\nphase-order = { bundled = true }\n",
+         [dependencies]\nphase-order = { path = \"phase-order\" }\n",
     )
     .expect("lumen.toml");
     dir

@@ -371,12 +371,13 @@ A web build takes the web half in place of the library, since a browser
 cannot open one: a site loads it beside the runtime. The descriptor is the
 module's script surface on every target, so every compile, `lumenc check` and
 the desktop builds included, declares its functions to the app's scripts
-under its namespace and its elements to the markup parser. A desktop run
-binds those functions to the ones the loaded library registers.
-A module's root is the directory a `path` source names, the package a
-`version` source resolved to, or the toolchain's copy of a `bundled` one.
+under its namespace; its `[[element]]` entries say what HTML each of the
+module's tags becomes in a page. A desktop run binds those functions to the
+ones the loaded library registers. A module's root is the directory a `path`
+source names, the package a `version` source resolved to, or the toolchain's
+copy of a `bundled` one.
 
-A module without a web half has no descriptor, so a desktop compile
+A module without a web half has no `lumen-addon.toml`, so a desktop compile
 (`lumenc check`, `lumenc build`, `lumenc package`) installs it the way
 `lumenc run` does, with no window, and declares the functions it registers.
 While the program compiles each of them answers the zero of its return type,
@@ -431,21 +432,18 @@ Each entry declares exactly one source:
 |-----|------|--------|
 | `bundled` | `true` | The library ships with the toolchain; the runtime looks beside the running engine (the executable's directory, then `LUMEN_LIB_DIR`, then a `modules/` directory beside either). |
 | `version` | string | A requirement on a [registry package](#registry-packages), in cargo semantics (`"1.2"` means `^1.2`). Every compile path resolves it and downloads what it resolves to; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
-| `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). The module's web half, when it has one, is the `web/` directory under the path itself. |
+| `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). When the path is a directory, that directory is the module's root; otherwise the root is the directory the library is in. The root holds the module's `lumen-module.toml`, and its web half, when it has one, is the `web/` directory under it. |
 | `config` | table | Handed to the library verbatim at install. A web half's JavaScript module receives it as an object, the second argument of its `install`. |
 
-A module that brings a markup element declares it too:
-
-| Key | Type | Effect |
-|-----|------|--------|
-| `tags` | array of strings | Markup tags this module answers for, so the parser accepts them. Lowercase letters, digits, and dashes; a tag the language already owns is refused. |
-
-`lumenc build`, `lumenc check`, and `lumenc package` know an element exists
-because the app said so, because the module's web half declares it, or
-because the module has no web half and registers the tag as the compile
-installs it. A run learns it from the module itself the same way. The key is
-what covers a module the compile cannot install, such as a `path` library
-that is not built yet.
+Declaring a module is all an app writes: the markup tags it brings come with
+it. Every module ships a `lumen-module.toml` at its root that lists them, and
+every compile reads it before it parses the markup, without loading the
+module: `lumenc run`, `build`, `check`, `package`, `web`, and a hot reload
+alike. A bundled module's file ships with the toolchain, beside its web half.
+A declared module whose `lumen-module.toml` cannot be found stops the build
+with an error naming the module. There is no `tags` key on an entry; one left
+in `lumen.toml` is an error saying to remove it. The file's format is in
+[module descriptors](../contributing/plugins.md#module-descriptor).
 
 The table is unordered, so entries load in sorted-name order; where an entry
 sits in the file carries no meaning.

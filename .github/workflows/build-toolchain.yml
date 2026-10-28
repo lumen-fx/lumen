@@ -468,12 +468,13 @@ jobs:
           # (public/lumenc/src/cli/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
-          # The web halves and language descriptors of the first-party
-          # modules, which are text files and the same on every platform.
-          # `lumenc web` reads the web half of a `bundled = true` module from
-          # modules/<name>/web beside its own executable, and every run and
-          # build reads which module runs a script language from
-          # modules/<name>/lumen-language.toml.
+          # The descriptors, web halves and language descriptors of the
+          # first-party modules, which are text files and the same on every
+          # platform. Every compile reads the markup tags a `bundled = true`
+          # module brings from modules/<name>/lumen-module.toml beside its own
+          # executable, `lumenc web` reads the module's web half from
+          # modules/<name>/web, and every run and build reads which module
+          # runs a script language from modules/<name>/lumen-language.toml.
           .github/scripts/stage-module-data.sh dist/bin
           # macOS records the path a dylib was written to, in the dylib and in
           # everything that links it, and an rpath cannot redirect an absolute

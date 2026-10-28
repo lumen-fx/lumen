@@ -234,7 +234,7 @@ fn the_bundled_module_supplies_the_canvas_element_and_its_functions() {
     let dir = write_app(
         f,
         "canvas-bundled",
-        "lumen-canvas = { bundled = true, tags = [\"canvas\"] }\n",
+        "lumen-canvas = { bundled = true }\n",
         "<root><canvas id=\"chart\" width=\"200\" height=\"120\" />\
          <script src=\"main.cdl\" /></root>\n",
         // The drawing space is the element's, so it is known once the
@@ -258,13 +258,11 @@ fn the_bundled_module_supplies_the_canvas_element_and_its_functions() {
     assert!(!stderr.contains("no <canvas> element"), "{stderr}");
 }
 
-/// The module installs before the app's markup is parsed, so the tag it
-/// registers is accepted even when the app never declared it.
-///
-/// `lumenc build` has no module to ask, and takes the element from the
-/// module's web half instead. This is what the run path does on its own.
+/// The app declares the module and nothing more: the tag comes from the
+/// module's own `lumen-module.toml`, and the module installed before the
+/// markup is parsed answers for the element.
 #[test]
-fn the_run_path_accepts_the_tag_the_module_registers() {
+fn the_run_path_accepts_the_tag_the_module_brings() {
     let f = fixtures();
     let dir = write_app(
         f,
@@ -297,7 +295,7 @@ fn a_frame_loop_advances_and_then_parks() {
     let dir = write_app(
         f,
         "canvas-frames",
-        "lumen-canvas = { bundled = true, tags = [\"canvas\"] }\n",
+        "lumen-canvas = { bundled = true }\n",
         "<root><canvas id=\"chart\" width=\"64\" height=\"64\" />\
          <script src=\"main.cdl\" /></root>\n",
         "fn on_ready() {\n\
@@ -323,7 +321,7 @@ fn a_frame_loop_advances_and_then_parks() {
 }
 
 /// Without the module the tag does not exist, so the app refuses to build and
-/// the message names the key that would have declared it.
+/// the message says a module's tag needs the module declared.
 #[test]
 fn without_the_module_the_element_is_an_unknown_tag() {
     let f = fixtures();
@@ -346,7 +344,6 @@ fn without_the_module_the_element_is_an_unknown_tag() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the app must not build");
     assert!(stderr.contains("unknown tag 'canvas'"), "{stderr}");
-    // The message names the key that would have declared the tag. The host
-    // prints it through a `Debug` formatter, so the quotes arrive escaped.
-    assert!(stderr.contains("tags = ["), "{stderr}");
+    // The message names the table that declares the module.
+    assert!(stderr.contains("[dependencies]"), "{stderr}");
 }

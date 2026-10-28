@@ -879,7 +879,6 @@ mod tests {
             name: "echo".to_string(),
             source: ModuleSource::Path(path.to_string()),
             config: toml::Table::new(),
-            tags: Vec::new(),
         };
         let err = resolve(&dir, &dep("echo"), &ResolvedModules::default()).unwrap_err();
         assert!(err.contains("runs only in a browser"), "{err}");

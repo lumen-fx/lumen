@@ -25,15 +25,23 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         opts.parser.take().map(std::sync::Arc::from);
     let dir = opts.dir.clone();
     let cfg = crate::config::LumenToml::load_or_default(&dir).map_err(RunError::Config)?;
-    // The tags this app's modules bring, published before the markup is
-    // parsed. A module registers its own tag when it installs, which covers
-    // the run path; the declaration is what covers a compile, where nothing
-    // is loaded at all.
-    register_declared_tags(&cfg, &[lumen_modules::Target::Desktop], &[]);
     // The dependencies this desktop run loads: its own target table laid over
     // the shared one. Each is a library; a module's web half is a web
     // build's business.
     let dependencies = cfg.dependencies_for(lumen_modules::Target::Desktop);
+    // The tags this app's modules declare in their `lumen-module.toml`,
+    // published before the markup is parsed, whether or not the module's
+    // library loads here. A compiled app was parsed when it was compiled, so
+    // only a run from source reads them. The runtime resolves no registry
+    // package, so a `version` entry is read from the root the compiler
+    // resolved it to, and one it was handed none for is passed over.
+    if opts.artifact.is_none() && opts.artifact_bytes.is_none() {
+        let versions = opts.resolved_modules.roots();
+        let modules = lumen_modules::manifest::without_unresolved(&dependencies, &versions);
+        let tags = lumen_modules::module_tags(&dir, &modules, &versions, None)
+            .map_err(RunError::Plugin)?;
+        lumen_modules::register_module_tags(&tags);
+    }
     // Where this app lives and what it is called, published before anything
     // that resolves a path runs: every path a script names is resolved
     // against these, and a script's `on_start` fires on the first tick.

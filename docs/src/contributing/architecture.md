@@ -223,15 +223,19 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   element is registered as a tag, so a script and its markup run on every
   target.
 
-  Every web half is found at `web/` under the module's root, for any source.
-  The toolchain archive carries the first-party ones as
-  `bin/modules/<name>/web` (`.github/scripts/stage-module-data.sh` stages
-  them, with the language descriptors beside them), and a `lumenc` built from
-  a checkout reads them from `std/` in place. Every compile, the desktop's included, declares the descriptor's
-  functions and elements to the app (`lumenc::addons::target_deps`); a
+  Every web half is found at `web/` under the module's root, for any source,
+  beside the module's `lumen-module.toml`, which every module ships and which
+  lists the markup tags it brings (`lumen_modules::manifest`). The toolchain
+  archive carries the first-party ones as `bin/modules/<name>/`
+  (`.github/scripts/stage-module-data.sh` stages the module descriptors, the
+  web halves and the language descriptors), and a `lumenc` built from a
+  checkout reads them from `std/` in place. Every compile, the run from source
+  and the desktop's included, publishes the tags the declared modules'
+  `lumen-module.toml` files list before it parses, and declares a web half's
+  functions to the app (`lumenc::addons::target_deps`); a
   desktop run then binds those calls to the functions the loaded library
-  registers. A module with no web half has no descriptor, so a desktop
-  compile installs it into a scratch headless app through the module loader
+  registers. A module with no web half has no `lumen-addon.toml` to declare
+  its functions, so a desktop compile installs it into a scratch headless app through the module loader
   and declares what it registers, each body answering the zero of its return
   type (`lumenc::addons::compile_deps`, `lumen_runtime::module_surface`).
   `public/lumenc/tests/std_modules.rs` reads every descriptor, and

@@ -22,8 +22,9 @@ lumen-core = { workspace = true }
 # into.
 lumen-ir = { workspace = true }
 # The tag registry the markup parser consults after its built-in table, which
-# is where a `tags = [..]` declaration lands. Unconditional: a build with no
-# loader still parses the table, and the parse is what has to accept the tag.
+# is where the tags a module's lumen-module.toml declares land. Unconditional:
+# a build with no loader still compiles markup, and the parse is what has to
+# accept the tag.
 lumen-widget = { workspace = true }
 # The one copy of the library-name spellings every by-name probe shares.
 lumen-plugin-abi = { workspace = true }
