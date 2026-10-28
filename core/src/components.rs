@@ -792,6 +792,16 @@ pub struct TextInput {
     pub multiline: bool,
 }
 
+/// Marker: a [`TextInput`] whose text can be selected and copied but not
+/// changed from the keyboard, like an HTML `readonly` field.
+///
+/// - Typing, paste, cut, undo / redo, Backspace / Delete and IME commits
+///   leave the text alone; caret motion, selection and copy still work.
+/// - Scripts and bindings still write [`TextContent`]; only the user's own
+///   edits are refused.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ReadOnly;
+
 /// How a text input *renders* its content - Qt's
 /// [`QLineEdit::EchoMode`](https://doc.qt.io/qt-6/qlineedit.html#EchoMode-enum).
 ///
