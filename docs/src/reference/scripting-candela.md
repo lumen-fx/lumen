@@ -715,7 +715,8 @@ the user picks an option other than the one it holds, with the option's value,
 and a `<radio>` the user chooses raises them on itself, with its `value`.
 A script or a binding that sets any of these raises nothing.
 On a text field, `change` and `submit` come from the commit signal, so they fire
-when the field is committed with Enter.
+when the field is committed with Enter. Leaving a field after an edit that was
+not committed raises `change` without `submit`, just before `blur`.
 
 `contextmenu` fires when the user asks for a context menu: a right click on the
 element under the pointer (on the press, or the release on Windows), the
