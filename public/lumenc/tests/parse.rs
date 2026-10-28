@@ -562,6 +562,44 @@ fn marker_in_tag_position_errors() {
     assert!(matches!(err, lumenc::ParseError::Xml(_)), "{err}");
 }
 
+/// A state pseudo-class on an ancestor compound has no state slot to route
+/// to, so the rule is dropped with a warning instead of styling every
+/// descendant at rest. The issue's repro: only the plain rule reaches either
+/// dot.
+#[test]
+fn css_state_pseudo_on_an_ancestor_never_matches() {
+    use lumenc::layout_ir::BgSpec;
+    let mut ir = parse_html(
+        r##"<root><row>
+            <button class="tool"><column class="dot"/></button>
+            <button class="tool" disabled="true"><column class="dot"/></button>
+        </row></root>"##,
+    )
+    .expect("html");
+    let css = lumenc::parse_css(
+        ".dot { bg: #00ff00; } .tool:disabled .dot { bg: #ff0000; } .tool:hover > .dot { bg: #0000ff; }",
+    )
+    .expect("css");
+    let warnings = lumenc::apply_css(&mut ir, &css).expect("apply");
+    let row = &ir.root.children[0];
+    for tool in &row.children {
+        let dot = &tool.children[0].attrs;
+        assert!(
+            matches!(dot.bg, Some(BgSpec::Solid(c)) if c.g > 0.9 && c.r < 0.1),
+            "{:?}",
+            dot.bg
+        );
+        assert_eq!(dot.hover_bg, None);
+        assert_eq!(dot.disabled_bg, None);
+    }
+    let named: Vec<&str> = warnings.iter().map(|w| w.selector.as_str()).collect();
+    assert_eq!(
+        named,
+        [".tool:disabled .dot", ".tool:hover > .dot"],
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn css_hover_pseudo_routes_to_hover_bg() {
     let mut ir = parse_html(r##"<root><tile class="t" bg="#000000"/></root>"##).expect("html");

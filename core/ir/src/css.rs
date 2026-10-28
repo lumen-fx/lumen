@@ -670,6 +670,7 @@ pub fn apply_css_with_media(
 ) -> Result<Vec<CssWarning>, ParseError> {
     let parents: Vec<ElementRef> = Vec::new();
     let mut warnings = Vec::new();
+    state_pseudo_warnings(css, &mut warnings);
     apply_to_element(
         &mut ir.root,
         css,
@@ -700,6 +701,9 @@ pub struct CssWarning {
 
 impl std::fmt::Display for CssWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.property.is_empty() {
+            return write!(f, "css warning: {} - {}", self.selector, self.message);
+        }
         write!(
             f,
             "css warning: {} {{ {} }} - {}",
@@ -1313,7 +1317,7 @@ fn match_selector(sel: &SelectorBuf, subject: &NodeCtx) -> Option<SubjectPseudo>
                     let k = anc_cursor as usize;
                     anc_cursor -= 1;
                     let ctx = NodeCtx::ancestor(parents, k);
-                    if match_compound(compound, &ctx) {
+                    if match_context_compound(compound, &ctx) {
                         sibs = ctx.siblings;
                         sib_idx = ctx.sibling_index;
                         found = true;
@@ -1331,7 +1335,7 @@ fn match_selector(sel: &SelectorBuf, subject: &NodeCtx) -> Option<SubjectPseudo>
                 let k = anc_cursor as usize;
                 anc_cursor -= 1;
                 let ctx = NodeCtx::ancestor(parents, k);
-                if !match_compound(compound, &ctx) {
+                if !match_context_compound(compound, &ctx) {
                     return None;
                 }
                 sibs = ctx.siblings;
@@ -1359,7 +1363,7 @@ fn match_selector(sel: &SelectorBuf, subject: &NodeCtx) -> Option<SubjectPseudo>
                         text_body: None,
                         is_root: false,
                     };
-                    if match_compound(compound, &ctx) {
+                    if match_context_compound(compound, &ctx) {
                         hit = Some(j);
                         break;
                     }
@@ -1390,6 +1394,54 @@ fn extract_subject_pseudo(c: &CompoundSelector) -> SubjectPseudo {
         }
     }
     sp
+}
+
+/// Match a compound left of the subject: an ancestor or a sibling.
+///
+/// The cascade knows no element's live state, and only the subject's state
+/// pseudo-classes are routed to a state slot the runtime applies while the
+/// state holds. One on an ancestor or sibling has nowhere to go, so in the
+/// cascade it never matches rather than matching at rest
+/// ([`state_pseudo_warnings`] reports the rule). A query knows every
+/// element's state and tests it.
+fn match_context_compound(compound: &CompoundSelector, node: &NodeCtx) -> bool {
+    (node.el.state.is_some() || !has_state_pseudo(compound)) && match_compound(compound, node)
+}
+
+/// Whether `compound` carries a pseudo-class that names a live state.
+fn has_state_pseudo(compound: &CompoundSelector) -> bool {
+    compound.pseudo_classes.iter().any(|p| {
+        matches!(
+            p,
+            PseudoClass::Hover
+                | PseudoClass::Focus
+                | PseudoClass::FocusVisible
+                | PseudoClass::Active
+                | PseudoClass::Disabled
+                | PseudoClass::Checked
+                | PseudoClass::Selected
+                | PseudoClass::DragOver
+        )
+    })
+}
+
+/// One warning per selector that puts a state pseudo-class left of its
+/// subject (`.tool:hover .icon`): the cascade never matches it.
+fn state_pseudo_warnings(css: &Stylesheet, warnings: &mut Vec<CssWarning>) {
+    for rule in &css.rules {
+        for (idx, sel) in rule.selectors.iter().enumerate() {
+            let left = &sel.chain[..sel.chain.len().saturating_sub(1)];
+            if left.iter().any(|(_, c)| has_state_pseudo(c)) {
+                warnings.push(CssWarning {
+                    selector: describe_selector_for_error(&rule.selectors, idx),
+                    property: String::new(),
+                    message: "a state pseudo-class on an ancestor or sibling never \
+                              matches on the desktop; rule ignored there"
+                        .to_string(),
+                });
+            }
+        }
+    }
 }
 
 fn match_compound(compound: &CompoundSelector, node: &NodeCtx) -> bool {
