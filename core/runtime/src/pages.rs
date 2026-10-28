@@ -364,7 +364,9 @@ pub fn assemble(
         attrs.if_eq = Some(page.key.clone());
         attrs.if_mode = IfModeSpec::Render;
         // A page lays out as its `<root>` would: in a column, which an
-        // `<if>` does not take from its tag the way a `<root>` does.
+        // `<if>` does not take from its tag the way a `<root>` does. The
+        // entry's gate takes the entry `<root>`'s layout once the cascade
+        // has resolved it, in [`fit_entry_gate`].
         if !is_entry && attrs.flex.is_none() {
             built_style(&mut attrs, "flex-direction", "column");
         }
@@ -413,6 +415,102 @@ pub fn assemble(
     ir.external_scripts = external_scripts;
 
     Ok(watch)
+}
+
+/// Lay the entry page's gate out the way the entry `<root>` lays out its
+/// children in a single-page app. The root stays the app's root element,
+/// with its own background, border and padding. Every other page's gate
+/// covers the root's padding box (see `apply_ua_style_defaults`), since that
+/// page's own `<root>` attributes ride on it; the entry gate stays in the
+/// root's flow instead, filling its content box, so the root's padding
+/// insets the home page. It takes the direction, gaps, alignment and
+/// wrapping the cascade resolved on the root, so the home page looks the
+/// same with one page as with several.
+///
+/// Runs after the cascade, so a `<root>` laid out by a stylesheet rule
+/// counts as much as one laid out by its attributes. The values are the
+/// gate's markup declarations, which a restyle of the gate rebuilds from.
+#[cfg(feature = "runtime-parse")]
+pub fn fit_entry_gate(ir: &mut LayoutIR, plan: &PagePlan) {
+    use lumen_ir::layout_ir::{AlignContentSpec, FlexAlign, FlexAxis, FlexJustify, FlexWrapSpec};
+    let root = &ir.root.attrs;
+    let length = |px: Option<f32>, pct: Option<f32>| {
+        pct.map(|p| format!("{p}%")).or(px.map(|v| v.to_string()))
+    };
+    let align = |a: FlexAlign| match a {
+        FlexAlign::Start => "start",
+        FlexAlign::End => "end",
+        FlexAlign::Center => "center",
+        FlexAlign::Stretch => "stretch",
+        FlexAlign::Baseline => "baseline",
+    };
+    let mut decls: Vec<(&str, String)> = vec![
+        ("position", "relative".to_string()),
+        ("width", "100%".to_string()),
+        ("height", "100%".to_string()),
+        (
+            "flex-direction",
+            match root.flex.unwrap_or(FlexAxis::Column) {
+                FlexAxis::Row => "row",
+                FlexAxis::Column => "column",
+                FlexAxis::RowReverse => "row-reverse",
+                FlexAxis::ColumnReverse => "column-reverse",
+            }
+            .to_string(),
+        ),
+    ];
+    if let Some(gap) = length(root.gap, root.gap_pct) {
+        decls.push(("gap", gap));
+    }
+    if let Some(gap) = length(root.gap_row, root.gap_row_pct) {
+        decls.push(("row-gap", gap));
+    }
+    if let Some(gap) = length(root.gap_column, root.gap_column_pct) {
+        decls.push(("column-gap", gap));
+    }
+    if let Some(a) = root.align {
+        decls.push(("align-items", align(a).to_string()));
+    }
+    if let Some(j) = root.justify {
+        let j = match j {
+            FlexJustify::Start => "start",
+            FlexJustify::End => "end",
+            FlexJustify::Center => "center",
+            FlexJustify::SpaceBetween => "space-between",
+            FlexJustify::SpaceAround => "space-around",
+            FlexJustify::SpaceEvenly => "space-evenly",
+        };
+        decls.push(("justify-content", j.to_string()));
+    }
+    if let Some(w) = root.flex_wrap {
+        let w = match w {
+            FlexWrapSpec::NoWrap => "nowrap",
+            FlexWrapSpec::Wrap => "wrap",
+            FlexWrapSpec::WrapReverse => "wrap-reverse",
+        };
+        decls.push(("flex-wrap", w.to_string()));
+    }
+    if let Some(c) = root.align_content {
+        let c = match c {
+            AlignContentSpec::Start => "start",
+            AlignContentSpec::End => "end",
+            AlignContentSpec::Center => "center",
+            AlignContentSpec::Stretch => "stretch",
+            AlignContentSpec::SpaceBetween => "space-between",
+            AlignContentSpec::SpaceAround => "space-around",
+            AlignContentSpec::SpaceEvenly => "space-evenly",
+        };
+        decls.push(("align-content", c.to_string()));
+    }
+    let Some(gate) = ir.root.children.iter_mut().find(|g| {
+        g.attrs.if_signal.as_deref() == Some(nav::PATH_SIGNAL)
+            && g.attrs.if_eq.as_deref() == Some(plan.entry_key.as_str())
+    }) else {
+        return;
+    };
+    for (property, value) in decls {
+        built_style(&mut gate.attrs, property, &value);
+    }
 }
 
 /// Merge the fragments every one of the app's `.lmn` files declares into the

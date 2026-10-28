@@ -830,3 +830,70 @@ fn a_page_root_keeps_its_attributes() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The home page's labels' `Transform`s by text, after a few ticks of a headless app
+/// built from `dir` at 400x300.
+fn label_origins(dir: &std::path::Path) -> Vec<(String, glam::Vec2)> {
+    let mut opts = RunOptions::new(dir);
+    opts.hot_reload = false;
+    opts.size = (400, 300);
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 4);
+    let mut q = app
+        .world
+        .query::<(&TextContent, &lumen_core::components::Transform)>();
+    // The page's own labels; the scratch app may mount more around them.
+    let mut out: Vec<(String, glam::Vec2)> = q
+        .iter(&app.world)
+        .filter(|(t, _)| ["First", "Second", "Third"].contains(&t.0.as_str()))
+        .map(|(t, tr)| (t.0.clone(), tr.absolute))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// A home page lays out the same once the app has a second page: the
+/// entry `<root>`'s direction, gap and padding still place its children,
+/// whether they come from its attributes or from a stylesheet rule.
+#[test]
+fn the_home_page_lays_out_the_same_beside_a_second_page() {
+    let _guard = nav_test_guard();
+    for (markup, css) in [
+        (
+            r##"<root gap="20" padding="20" bg="#202020">
+  <label text="First" font-size="24"/>
+  <label text="Second" font-size="24"/>
+  <label text="Third" font-size="24"/>
+</root>"##,
+            "",
+        ),
+        (
+            r#"<root class="home">
+  <label text="First" font-size="24"/>
+  <label text="Second" font-size="24"/>
+  <label text="Third" font-size="24"/>
+</root>"#,
+            ".home { gap: 20px; padding: 20px; align-items: end; }",
+        ),
+    ] {
+        let dir = auto_scratch_dir();
+        for stale in ["layout.lmn", "settings.lmn"] {
+            std::fs::remove_file(dir.join("src").join(stale)).unwrap();
+        }
+        std::fs::write(dir.join("src").join("index.lmn"), markup).unwrap();
+        std::fs::write(dir.join("src").join("main.css"), css).unwrap();
+        let alone = label_origins(&dir);
+        assert_eq!(alone.len(), 3, "{alone:?}");
+        std::fs::write(
+            dir.join("src").join("settings.lmn"),
+            r#"<root><label text="Settings"/></root>"#,
+        )
+        .unwrap();
+        let beside = label_origins(&dir);
+        assert_eq!(alone, beside, "{css}");
+        // Stacked 20 px in, 20 px apart.
+        let ys: Vec<f32> = alone.iter().map(|(_, p)| p.y).collect();
+        assert!(ys.iter().all(|y| *y >= 20.0), "{alone:?}");
+        assert!(ys[0] != ys[1] && ys[1] != ys[2], "{alone:?}");
+    }
+}

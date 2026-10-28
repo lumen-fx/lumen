@@ -601,6 +601,12 @@ pub(crate) fn load_ir(
         }
     }
     ir.combined_stylesheet = Some(combined);
+    if sources.markup.is_none()
+        && let Some(plan) = plan
+        && plan.multipage
+    {
+        crate::pages::fit_entry_gate(&mut ir, plan);
+    }
     // Parse-time lint findings, beside the CSS warnings and on the same
     // terms: advisory, printed once per load, never fatal. Every path
     // that loads markup from source comes through here, so `check` and
