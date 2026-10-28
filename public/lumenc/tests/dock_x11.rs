@@ -23,11 +23,24 @@ use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, MapState, Window};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-/// A child process killed when the test is done with it.
+/// A child process ended when the test is done with it: asked to quit
+/// first, the way a desktop session ends, so it exits through its own close
+/// path (and a run measured for coverage writes its profile); killed if it
+/// does not within ten seconds.
 struct Proc(Child);
 
 impl Drop for Proc {
     fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-TERM", &self.0.id().to_string()])
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.0.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
