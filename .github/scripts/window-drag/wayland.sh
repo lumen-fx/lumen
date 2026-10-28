@@ -52,6 +52,8 @@ CONF
       > "$out/compositor.log" 2>&1 || status=$?
     status=${status:-0}
     comp=
+    # The driver ran inside the session: its steps are in the same log.
+    grep -E '^(ok |FAIL|failed:|every step)' "$out/compositor.log" || true
     ;;
   mutter)
     dbus-run-session -- bash -c "
