@@ -113,10 +113,9 @@ fn doc_blocks() -> Vec<Block> {
 /// Markup tags a runtime module brings, and the module that answers for each.
 ///
 /// A tag outside the language is only accepted when the app declares the
-/// module that provides it, which is the whole point of the `tags` key. A
-/// documentation page showing such an element shows the markup, not the
-/// `lumen.toml` beside it, so the harness supplies the declaration the page's
-/// own prose tells a reader to write.
+/// module that provides it. A documentation page showing such an element
+/// shows the markup, not the `lumen.toml` beside it, so the harness supplies
+/// the declaration the page's own prose tells a reader to write.
 const MODULE_TAGS: &[(&str, &str)] = &[("canvas", "lumen-canvas"), ("dock", "lumen-dock")];
 
 /// The `[dependencies]` table a snippet needs, given the code it ships.
@@ -128,9 +127,7 @@ fn dependencies_for(files: &[(&str, &str)]) -> String {
             .iter()
             .any(|(_, body)| body.contains(&open) || body.contains(&format!("</{tag}>")))
         {
-            table.push_str(&format!(
-                "{module} = {{ bundled = true, tags = [\"{tag}\"] }}\n"
-            ));
+            table.push_str(&format!("{module} = {{ bundled = true }}\n"));
         }
     }
     if table.is_empty() {

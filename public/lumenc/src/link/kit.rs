@@ -907,7 +907,6 @@ mod tests {
                     name: (*name).to_string(),
                     source: lumen_runtime::modules::ModuleSource::Bundled,
                     config: toml::Table::new(),
-                    tags: Vec::new(),
                 })
                 .collect(),
         )

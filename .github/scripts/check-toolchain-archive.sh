@@ -85,6 +85,19 @@ if [ ! -f "$dest/bin/lumen-crash" ] && [ ! -f "$dest/bin/lumen-crash.exe" ]; the
   exit 1
 fi
 
+# So does every first-party module's descriptor, which every compile reads for
+# the markup tags the module brings: without it, an app declaring the module
+# does not compile.
+for descriptor in "$(dirname "$0")"/../../std/*/lumen-module.toml \
+  "$(dirname "$0")"/../../std/*/*/lumen-module.toml; do
+  [ -f "$descriptor" ] || continue
+  name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$(dirname "$descriptor")/Cargo.toml" | head -1)"
+  if [ ! -f "$dest/bin/modules/$name/lumen-module.toml" ]; then
+    echo "the unpacked archive carries no bin/modules/$name/lumen-module.toml" >&2
+    exit 1
+  fi
+done
+
 # So do the web halves of the first-party modules, every one the tree has,
 # each where `lumenc web` looks for the web half of a `bundled = true` module.
 for web in "$(dirname "$0")"/../../std/*/web "$(dirname "$0")"/../../std/*/*/web; do

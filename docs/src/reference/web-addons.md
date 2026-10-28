@@ -12,6 +12,7 @@ shows the app's side. This page is the format a web half is written in.
 
 ```
 echo/
+  lumen-module.toml    the markup tags the module brings
   web/
     lumen-addon.toml   what the web half offers
     echo.js            the JavaScript module
@@ -26,6 +27,11 @@ package on the `lumen` platform, and `bundled = true` names the toolchain's
 own copy, `modules/<name>/`, looked for under `--lib-dir`, beside `lumenc`,
 then under `LUMEN_LIB_DIR`. A `lumenc` built from a checkout also finds the
 crate under its `std/` whose package is `<name>`.
+
+Every module ships a `lumen-module.toml` at its root, a web half or not; it
+lists the markup tags the module brings (see
+[module descriptors](../contributing/plugins.md#module-descriptor)). A
+toolchain's copy of a bundled module carries it beside `web/`.
 
 A module with a library too keeps its sources beside `web/`, as the ones under
 `std/` do: `Cargo.toml` and `src/` build the library a desktop app loads, and
@@ -81,9 +87,12 @@ An unknown key is an error, and every error names the module.
 
 ### [[element]]
 
+What HTML one of the module's tags is written as in a page. The tags
+themselves are declared once, in the module's `lumen-module.toml`.
+
 | Key | Type | Effect |
 |-----|------|--------|
-| `tag` | string | The markup tag. Lowercase letters, digits and dashes; a tag Lumen already has cannot be taken. Required. |
+| `tag` | string | The markup tag, one the module's `lumen-module.toml` lists under `tags`; naming any other is an error. Required. |
 | `html` | string | The HTML element it is written as, such as `div`, `canvas` or a custom element name. Required. |
 | `void` | boolean | True when that element takes no children and no end tag. Default false. |
 | `note` | string | A warning `lumenc web` prints when a page uses the element, for an element that cannot do in a browser what it does on the desktop. |
@@ -261,8 +270,9 @@ running.
 
 A desktop build does not run a web half: it loads the module's library. It
 reads the descriptor, as every compile does, so the app's scripts compile
-against the functions it declares and its markup against the elements; at run
-time those calls bind to the functions the library registers. A
+against the functions it declares, and its markup against the tags the
+module's `lumen-module.toml` lists; at run time those calls bind to the
+functions the library registers. A
 module whose desktop half has nothing to do but say "runs only in a browser"
 still ships a library that says it, so a script calling it runs on every
 target; `lumen_module::BrowserOnly` builds that library's functions from the

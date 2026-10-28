@@ -193,6 +193,7 @@ fn check_names_the_target_a_web_only_call_breaks() {
     for file in [
         "lumen.toml",
         "src/main.lmn",
+        "greet/lumen-module.toml",
         "greet/web/lumen-addon.toml",
         "greet/web/greet.js",
     ] {
@@ -221,6 +222,16 @@ fn check_names_the_target_a_web_only_call_breaks() {
 fn app_with(scratch: &Path, toml: &str) -> PathBuf {
     let app = scratch.join("app");
     std::fs::create_dir_all(app.join("src")).expect("create the app");
+    // The modules these tests declare, each with the descriptor every
+    // module ships and nothing else.
+    for module in ["lib/shapes", "bad"] {
+        std::fs::create_dir_all(app.join(module)).expect("create the module root");
+        std::fs::write(
+            app.join(module).join("lumen-module.toml"),
+            "[module]\ntags = []\n",
+        )
+        .expect("write the module descriptor");
+    }
     std::fs::write(app.join("lumen.toml"), toml).expect("write lumen.toml");
     std::fs::write(
         app.join("src/main.lmn"),

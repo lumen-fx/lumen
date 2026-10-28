@@ -3,10 +3,12 @@
 
 use std::path::PathBuf;
 
+use lumen_modules::MODULE_MANIFEST;
 use lumen_modules::addon::{ADDON_MANIFEST, WEB_DIR, read_web_half};
 
 /// A module root whose web half holds `files` and a descriptor reading
-/// `text`, for one test.
+/// `text`, for one test. The module declares the one tag these tests give an
+/// element.
 fn package(test: &str, files: &[&str], text: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "lumen-modules-addon-descriptor-{}-{test}",
@@ -21,6 +23,11 @@ fn package(test: &str, files: &[&str], text: &str) -> PathBuf {
     }
     std::fs::create_dir_all(&web).expect("mkdir");
     std::fs::write(web.join(ADDON_MANIFEST), text).expect("write the descriptor");
+    std::fs::write(
+        dir.join(MODULE_MANIFEST),
+        "[module]\ntags = [\"echo-view\"]\n",
+    )
+    .expect("write the module descriptor");
     dir
 }
 

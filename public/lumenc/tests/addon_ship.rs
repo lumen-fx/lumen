@@ -4,11 +4,13 @@
 
 use std::path::PathBuf;
 
+use lumen_modules::MODULE_MANIFEST;
 use lumen_modules::addon::{ADDON_MANIFEST, WEB_DIR, read_web_half};
 use lumenc::addons::site::{SITE_DIR, integrity, ship};
 
 /// A module root whose web half holds `files`, each with its own path as its
-/// contents, beside a descriptor reading `descriptor`.
+/// contents, beside a descriptor reading `descriptor`. The module brings no
+/// markup of its own.
 fn package(test: &str, files: &[&str], descriptor: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lumenc-addon-ship-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -19,6 +21,8 @@ fn package(test: &str, files: &[&str], descriptor: &str) -> PathBuf {
         std::fs::write(&path, file).expect("write");
     }
     std::fs::write(web.join(ADDON_MANIFEST), descriptor).expect("write the descriptor");
+    std::fs::write(dir.join(MODULE_MANIFEST), "[module]\ntags = []\n")
+        .expect("write the module descriptor");
     dir
 }
 

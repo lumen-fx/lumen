@@ -65,10 +65,12 @@ The installer downloads them with the toolchain, from the module archive
 published with the same release, and unpacks them into the same tree, so the
 libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
 looks for them. `--no-modules` installs the toolchain without them, and such a
-toolchain runs and builds no script. The web halves of the modules, which
+toolchain runs and builds no script. Each module's `lumen-module.toml`, which
+lists the markup tags it brings, the web halves of the modules, which
 `lumenc web` puts into a site, and the descriptors that say which module runs
 which script language, come with the toolchain itself under
-`~/.lumen/bin/modules`, so a web build does not need the module archive. On
+`~/.lumen/bin/modules`, so a build does not need the module archive to read
+them. On
 Windows there is no module archive: the script hosts are compiled into
 `lumenc.exe` and `lumen.dll`. The
 setup-lumen action installs them the same way on Linux and macOS runners; see
@@ -211,10 +213,11 @@ published, so this command fails until that changes.
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
 [template repository](templates.md) you were going to scaffold from. The same
-goes for the web halves of the first-party
-[modules](../reference/lumen-toml.md#dependencies): a `lumenc web` build of an
-app declaring one wants a release install, or `--lib-dir` naming a directory
-whose `modules/<name>/web/` holds it.
+goes for the data files of the first-party
+[modules](../reference/lumen-toml.md#dependencies): a build of an app
+declaring one wants a release install, or `--lib-dir` naming a directory whose
+`modules/<name>/` holds the module's `lumen-module.toml` and, for a
+`lumenc web` build, its `web/`.
 
 It does not build the [runtime modules](#runtime-modules) either, so the
 capabilities behind [`[dependencies]`](../reference/lumen-toml.md#dependencies)

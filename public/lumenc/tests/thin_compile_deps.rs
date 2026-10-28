@@ -6,9 +6,10 @@
 //!
 //! This is the path `lumenc build` takes for an app it turns into an
 //! artifact, and it links no runtime, so it reads the table itself. What it
-//! has to get right is narrow: publish the tags an app declares before the
-//! markup is parsed, say so when the declaration is wrong, and stay out of
-//! the way when there is nothing to read.
+//! has to get right is narrow: publish the tags each declared module's
+//! `lumen-module.toml` declares before the markup is parsed, say so when a
+//! declaration or a descriptor is wrong or missing, and stay out of the way
+//! when there is nothing to read.
 
 use lumenc::compile::{CompileError, compile_dir_to_lmna};
 
@@ -22,35 +23,44 @@ fn app(case: &str, config: &str, markup: &str) -> std::path::PathBuf {
     dir
 }
 
+/// A module root at `<dir>/widgets` whose descriptor reads `descriptor`.
+fn module(dir: &std::path::Path, descriptor: &str) {
+    std::fs::create_dir_all(dir.join("widgets")).expect("module root");
+    std::fs::write(dir.join("widgets/lumen-module.toml"), descriptor).expect("descriptor");
+}
+
+const DECLARES_WIDGETS: &str =
+    "[app]\nentry = \"main.lmn\"\n\n[dependencies]\nthin-widgets = { path = \"widgets\" }\n";
+
 #[test]
-fn a_declared_tag_is_accepted_by_a_compile_that_loads_no_module() {
-    // The whole reason the key exists: nothing is opened here, so the
-    // declaration is the only thing that can tell the parser the element is
+fn a_tag_the_module_declares_is_accepted_by_a_compile_that_loads_no_module() {
+    // Nothing is opened here, and the app names no tag: the module's own
+    // descriptor is the only thing that can tell the parser the element is
     // real.
     let dir = app(
         "declared",
-        "[app]\nentry = \"main.lmn\"\n\n[dependencies]\n\
-         thin-widgets = { bundled = true, tags = [\"thin-gauge\"] }\n",
+        DECLARES_WIDGETS,
         "<root><thin-gauge /></root>\n",
     );
-    let bytes = compile_dir_to_lmna(&dir).expect("the declared tag parses");
+    module(&dir, "[module]\ntags = [\"thin-gauge\"]\n");
+    let bytes = compile_dir_to_lmna(&dir).expect("the module's tag parses");
     assert!(!bytes.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn a_dependencies_table_that_is_wrong_is_reported_rather_than_ignored() {
-    // A silent miss here surfaces later as an unknown tag with no
-    // explanation, so the compile says what it could not read.
+fn a_tags_key_on_the_dependency_is_refused_with_where_tags_live() {
     let dir = app(
-        "malformed",
+        "app-side-tags",
         "[app]\nentry = \"main.lmn\"\n\n[dependencies]\n\
-         thin-widgets = { bundled = true, tags = \"thin-gauge\" }\n",
+         thin-widgets = { path = \"widgets\", tags = [\"thin-gauge\"] }\n",
         "<root><label text=\"hi\" /></root>\n",
     );
-    let err = compile_dir_to_lmna(&dir).expect_err("the table is wrong");
+    module(&dir, "[module]\ntags = [\"thin-gauge\"]\n");
+    let err = compile_dir_to_lmna(&dir).expect_err("the key is gone");
     assert!(
-        matches!(&err, CompileError::Config(m) if m.contains("array of strings")),
+        matches!(&err, CompileError::Config(m)
+            if m.contains("lumen-module.toml") && m.contains("remove the key")),
         "{err}"
     );
     assert!(err.to_string().starts_with("lumen.toml:"), "{err}");
@@ -58,16 +68,33 @@ fn a_dependencies_table_that_is_wrong_is_reported_rather_than_ignored() {
 }
 
 #[test]
+fn a_module_without_a_descriptor_fails_the_compile_naming_it() {
+    let dir = app(
+        "no-descriptor",
+        DECLARES_WIDGETS,
+        "<root><label text=\"hi\" /></root>\n",
+    );
+    std::fs::create_dir_all(dir.join("widgets")).expect("module root");
+    let err = compile_dir_to_lmna(&dir).expect_err("the descriptor is missing");
+    assert!(
+        matches!(&err, CompileError::Module(m)
+            if m.contains("module 'thin-widgets'") && m.contains("lumen-module.toml")),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_tag_the_language_owns_cannot_be_declared_away_from_it() {
     let dir = app(
         "reserved",
-        "[app]\nentry = \"main.lmn\"\n\n[dependencies]\n\
-         thin-widgets = { bundled = true, tags = [\"button\"] }\n",
+        DECLARES_WIDGETS,
         "<root><label text=\"hi\" /></root>\n",
     );
+    module(&dir, "[module]\ntags = [\"button\"]\n");
     let err = compile_dir_to_lmna(&dir).expect_err("the tag is the language's");
     assert!(
-        matches!(&err, CompileError::Config(m) if m.contains("built-in tag")),
+        matches!(&err, CompileError::Module(m) if m.contains("built-in tag")),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&dir);

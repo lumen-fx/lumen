@@ -3,18 +3,21 @@
 //!
 //! Every `[dependencies]` entry is a module, and every module is found at a
 //! root directory the same way whatever uses it: a `path` source names the
-//! directory, a `version` source is the package `lpm` unpacked, and a
-//! `bundled` one is the toolchain's copy, `modules/<name>/` beside `lumenc`
-//! (or, in a checkout, the crate under `std/` whose package is `<name>`).
-//! A module's web half is the `web/` directory under its root, holding a
-//! `lumen-addon.toml`.
+//! directory (or a library file, whose directory is the root), a `version`
+//! source is the package `lpm` unpacked, and a `bundled` one is the
+//! toolchain's copy, `modules/<name>/` beside `lumenc` (or, in a checkout, the
+//! crate under `std/` whose package is `<name>`); see
+//! [`lumen_modules::module_root`]. The root holds the module's
+//! `lumen-module.toml`, which every build reads for the markup tags the module
+//! brings. A module's web half is the `web/` directory under its root, holding
+//! a `lumen-addon.toml`.
 //!
 //! The descriptor is where a module declares its script surface, and both of
 //! its halves offer that surface, so every compile reads it: the functions it
 //! declares are what the app's scripts compile against, for every target. A
-//! module without a web half has no descriptor, so a compile for any target
-//! but the web installs it the way a run does and declares what it registers
-//! ([`compile_deps`]).
+//! module without a web half has no `lumen-addon.toml`, so a compile for any
+//! target but the web installs it the way a run does and declares what it
+//! registers ([`compile_deps`]).
 //!
 //! Only a web build takes the rest of a web half, and `lumenc web` refuses a
 //! module that has none. Every other build hands the table to the loader,
@@ -27,16 +30,12 @@
 use std::path::{Path, PathBuf};
 
 use lumen_modules::addon::{AddonPackage, read_web_half, web_half};
-use lumen_modules::language::checkout_std_crates;
+pub use lumen_modules::manifest::bundled_module;
 use lumen_modules::{DepCfg, DependenciesCfg, ModuleSource, ResolvedModules, Target};
 use lumen_runtime::CompileDeps;
 use lumen_runtime::app_kind::{self, AppKind};
 
 use crate::package::lpm::Resolved;
-
-/// The directory the toolchain keeps its bundled modules' roots in, inside
-/// each place it keeps its files.
-pub const BUNDLED_MODULE_DIR: &str = "modules";
 
 /// What a build for one target took from outside the app directory.
 #[derive(Debug, Clone)]
@@ -63,8 +62,9 @@ pub struct TargetDeps {
 ///
 /// # Errors
 ///
-/// `lumen.toml` does not parse, a registry requirement does not resolve, or a
-/// web half's descriptor is refused.
+/// `lumen.toml` does not parse, a registry requirement does not resolve, a
+/// module's `lumen-module.toml` cannot be found or is refused, or a web half's
+/// descriptor is refused.
 pub fn target_deps(
     dir: &Path,
     target: Target,
@@ -90,7 +90,22 @@ fn target_deps_reading(
         let linked = self::linked_modules(dir, &deps, lib_dir);
         deps.0.extend(linked);
     }
-    let halves = web_halves(dir, &deps, &resolved, lib_dir)?;
+    // A `version` entry `lpm` sorted as a candela package is a script library,
+    // not a module: it has no descriptor and no web half.
+    let modules = DependenciesCfg(
+        deps.0
+            .iter()
+            .filter(|dep| {
+                !resolved
+                    .candela_roots
+                    .iter()
+                    .any(|(name, _)| *name == dep.name)
+            })
+            .cloned()
+            .collect(),
+    );
+    let tags = lumen_modules::module_tags(dir, &modules, &resolved.roots, lib_dir)?;
+    let halves = web_halves(dir, &modules, &resolved, lib_dir)?;
     let without_web_half = DependenciesCfg(
         deps.0
             .into_iter()
@@ -109,6 +124,7 @@ fn target_deps_reading(
         target,
         import_roots,
         addons,
+        tags,
         ..CompileDeps::new(target)
     };
     Ok(TargetDeps {
@@ -241,7 +257,7 @@ pub fn resolved_modules(resolved: &Resolved) -> ResolvedModules {
 ///
 /// # Errors
 ///
-/// A web half's descriptor is refused.
+/// A module's root cannot be found, or its web half's descriptor is refused.
 pub fn web_halves(
     dir: &Path,
     deps: &DependenciesCfg,
@@ -250,9 +266,7 @@ pub fn web_halves(
 ) -> Result<Vec<AddonPackage>, String> {
     let mut packages = Vec::new();
     for dep in &deps.0 {
-        let Some(root) = module_root(dir, &dep.name, &dep.source, resolved, lib_dir) else {
-            continue;
-        };
+        let root = lumen_modules::module_root(dir, dep, &resolved.roots, lib_dir)?;
         if web_half(&root).is_none() {
             continue;
         }
@@ -261,46 +275,6 @@ pub fn web_halves(
         packages.push(package);
     }
     Ok(packages)
-}
-
-/// The root directory of the module `name`, declared with `source`, when it
-/// is on disk.
-pub fn module_root(
-    dir: &Path,
-    name: &str,
-    source: &ModuleSource,
-    resolved: &Resolved,
-    lib_dir: Option<&Path>,
-) -> Option<PathBuf> {
-    match source {
-        ModuleSource::Path(path) => Some(dir.join(path)),
-        ModuleSource::Version(_) => resolved.roots.get(name).cloned(),
-        ModuleSource::Bundled => bundled_module(name, lib_dir),
-    }
-}
-
-/// The toolchain's own root of the bundled module `name`: `modules/<name>/`
-/// under the `--lib-dir`, the directory holding `lumenc`, then
-/// `LUMEN_LIB_DIR`, and last the crate under `std/` of the source tree this
-/// `lumenc` was built from whose package is `name`, when that tree is still
-/// on disk.
-pub fn bundled_module(name: &str, lib_dir: Option<&Path>) -> Option<PathBuf> {
-    crate::package::cli::search_dirs(lib_dir, true)
-        .into_iter()
-        .map(|root| root.join(BUNDLED_MODULE_DIR).join(name))
-        .find(|root| root.is_dir())
-        .or_else(|| source_tree_module(name))
-}
-
-/// The crate under `std/` whose package is `name`, in the workspace this
-/// crate was compiled in. A release build's tree is gone by the time anyone
-/// runs it, so there this finds nothing and the toolchain's own `modules/`
-/// directory is what answers; a checkout's build finds the modules it was
-/// built beside, edits included.
-fn source_tree_module(name: &str) -> Option<PathBuf> {
-    checkout_std_crates()
-        .into_iter()
-        .find_map(|(package, root)| (package == name).then_some(root))
 }
 
 /// The bundled modules a Rust app links through its `Cargo.toml`, as the
@@ -353,7 +327,6 @@ fn linked_modules(dir: &Path, declared: &DependenciesCfg, lib_dir: Option<&Path>
             name: module,
             source: ModuleSource::Bundled,
             config: toml::Table::new(),
-            tags: Vec::new(),
         });
     }
     linked

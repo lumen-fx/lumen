@@ -826,7 +826,6 @@ mod tests {
             name: "lumen-lua".to_string(),
             source: ModuleSource::Bundled,
             config: toml::Table::new(),
-            tags: Vec::new(),
         }]);
 
         assert_eq!(

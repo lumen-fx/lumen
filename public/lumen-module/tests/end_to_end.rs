@@ -167,14 +167,32 @@ fn fixtures() -> &'static Fixtures {
 
         let scratch = target_dir.join("apps");
         std::fs::create_dir_all(&scratch).expect("scratch dir");
+        // Every module ships a descriptor beside its library; the apps here
+        // name the built libraries where cargo left them, and the stubs below
+        // land in the scratch directory.
+        let module = module.expect("fixture module cdylib built");
+        let plugin = plugin.expect("fixture plugin cdylib built");
+        for dir in [module.parent(), plugin.parent(), Some(scratch.as_path())]
+            .into_iter()
+            .flatten()
+        {
+            write_descriptor(dir);
+        }
         Fixtures {
-            module: module.expect("fixture module cdylib built"),
-            plugin: plugin.expect("fixture plugin cdylib built"),
+            module,
+            plugin,
             host: host.expect("fixture host binary built"),
             lib_dirs,
             scratch,
         }
     })
+}
+
+/// Write the descriptor every module ships, declaring no markup tag, into
+/// `dir`.
+fn write_descriptor(dir: &Path) {
+    std::fs::write(dir.join("lumen-module.toml"), "[module]\ntags = []\n")
+        .expect("module descriptor");
 }
 
 /// Write a minimal app dir: one text element (the host component the module
@@ -193,6 +211,9 @@ fn write_app(f: &Fixtures, case: &str, dependencies: &str) -> PathBuf {
         format!("[dependencies]\n{dependencies}"),
     )
     .expect("config");
+    // The descriptor of a module named under the app's own `modules/`.
+    std::fs::create_dir_all(dir.join("modules")).expect("modules dir");
+    write_descriptor(&dir.join("modules"));
     dir
 }
 
@@ -549,6 +570,7 @@ fn a_version_source_loads_what_the_registry_resolved() {
         std::env::consts::DLL_SUFFIX
     );
     std::fs::copy(&f.module, package.join(&spelling)).expect("stage the package");
+    write_descriptor(&package);
 
     let dir = write_app(
         f,

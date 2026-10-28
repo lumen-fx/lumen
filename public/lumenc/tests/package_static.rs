@@ -852,6 +852,9 @@ fn a_candela_package_and_a_portable_plugin_travel_with_a_static_package() {
     // apart is the export table the platform's own linker wrote.
     let plugins = app.join("plugins");
     std::fs::create_dir_all(&plugins).expect("create plugins dir");
+    // The descriptor every dependency ships beside its library.
+    std::fs::write(plugins.join("lumen-module.toml"), "[module]\ntags = []\n")
+        .expect("write the module descriptor");
     let plugin_source = root.join("plugin.c");
     std::fs::write(&plugin_source, "void lumen_plugin_v1(void) {}\n").expect("write the C file");
     let plugin = plugins.join(host_library("demo-plugin"));

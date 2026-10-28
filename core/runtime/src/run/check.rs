@@ -30,8 +30,8 @@ pub struct CompileDeps {
     pub import_roots: Vec<(String, PathBuf)>,
     /// What the web halves of the modules the app depends on declare. A
     /// module's descriptor is its script surface on every target, so their
-    /// functions are declared to the compile and their elements to the
-    /// parser whatever the target, and the compiled app carries them. The
+    /// functions are declared to the compile whatever the target, and the
+    /// compiled app carries them with each element's HTML mapping. The
     /// functions are declared here and bound, at run time, to whatever the
     /// loaded module registers.
     pub addons: Vec<lumen_ir::addon::Addon>,
@@ -39,6 +39,10 @@ pub struct CompileDeps {
     /// installing each the way a run does ([`module_surface`]). Empty for a
     /// web build, which cannot take such a module.
     pub modules: ModuleSurface,
+    /// The markup tags the modules the app depends on declare, read from
+    /// each one's `lumen-module.toml` ([`lumen_modules::module_tags`]). The
+    /// parser accepts them; nothing is loaded to learn them.
+    pub tags: Vec<String>,
 }
 
 impl CompileDeps {
@@ -49,6 +53,7 @@ impl CompileDeps {
             import_roots: Vec::new(),
             addons: Vec::new(),
             modules: ModuleSurface::default(),
+            tags: Vec::new(),
         }
     }
 }
@@ -200,7 +205,7 @@ pub fn compile_app_with_skin(
     warnings: &mut Vec<String>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
-    register_declared_tags(&cfg, &[deps.target], &deps.addons);
+    lumen_modules::register_module_tags(&deps.tags);
     let stubs = declared_fns(deps)?;
     let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
@@ -455,7 +460,7 @@ pub fn script_exports(
 ///
 /// `check` is for no one target. `targets` holds what was resolved for each
 /// target the app can be built for: the markup is checked once, accepting the
-/// elements of every target's add-ons, and the scripts are compiled once per
+/// tags every target's modules declare, and the scripts are compiled once per
 /// target, each against that target's add-ons, script libraries and
 /// `@cfg(...)` flags, so code written for one target is checked the way that
 /// target's build compiles it.
@@ -469,14 +474,15 @@ pub fn check_app(
     targets: &[CompileDeps],
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
+    for deps in targets {
+        lumen_modules::register_module_tags(&deps.tags);
+    }
     let mut every_addon: Vec<lumen_ir::addon::Addon> = Vec::new();
     for addon in targets.iter().flat_map(|deps| &deps.addons) {
         if !every_addon.iter().any(|a| a.name == addon.name) {
             every_addon.push(addon.clone());
         }
     }
-    let every_target: Vec<lumen_modules::Target> = targets.iter().map(|deps| deps.target).collect();
-    register_declared_tags(&cfg, &every_target, &every_addon);
     let layout = AppLayout::resolve(dir, &cfg)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +

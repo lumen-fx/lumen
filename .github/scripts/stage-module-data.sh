@@ -2,20 +2,24 @@
 # Copy the platform-independent files of every first-party module into a
 # toolchain's bin/ directory, under modules/<name>/:
 #
+#   - the module descriptor, as modules/<name>/lumen-module.toml, which every
+#     compile reads for the markup tags the module brings (see
+#     core/modules/src/manifest.rs);
 #   - the web half, as modules/<name>/web, where `lumenc web` looks for the
 #     web half of a module an app declares with `bundled = true`;
 #   - the language descriptor, as modules/<name>/lumen-language.toml, which is
 #     how `lumenc` and a run from source learn which module runs a script
 #     language (see core/modules/src/language.rs).
 #
-# Both are data, the same on every platform. So they ship in the toolchain
+# All three are data, the same on every platform. So they ship in the toolchain
 # archive, which every platform has and every `lumenc` sits in, and not in the
 # per-platform modules archive, which Windows does not have and an install may
 # skip.
 #
-# The modules come out of the tree: every std/<dir> holding a web half
-# (std/<dir>/web/lumen-addon.toml) or a descriptor (std/<dir>/lumen-language.toml),
-# named by the package in std/<dir>/Cargo.toml, which is the name an app
+# The modules come out of the tree: every std/<dir> holding a module
+# descriptor (std/<dir>/lumen-module.toml, which every module ships), a web
+# half (std/<dir>/web/lumen-addon.toml) or a language descriptor
+# (std/<dir>/lumen-language.toml), named by the package in std/<dir>/Cargo.toml, which is the name an app
 # declares and the loader opens. A crate added under std/ ships its files
 # without this script being touched.
 #
@@ -35,6 +39,20 @@ package_name() {
   fi
   printf '%s' "$name"
 }
+
+modules=0
+for descriptor in std/*/lumen-module.toml std/*/*/lumen-module.toml; do
+  [ -f "$descriptor" ] || continue
+  crate="$(dirname "$descriptor")"
+  name="$(package_name "$crate")"
+  mkdir -p "$dest/modules/$name"
+  cp "$descriptor" "$dest/modules/$name/lumen-module.toml"
+  modules=$((modules + 1))
+done
+if [ "$modules" -eq 0 ]; then
+  echo "stage-module-data.sh: no module under std/ ships a lumen-module.toml" >&2
+  exit 1
+fi
 
 halves=0
 for web in std/*/web std/*/*/web; do
@@ -63,4 +81,4 @@ if [ "$languages" -eq 0 ]; then
   echo "stage-module-data.sh: no module under std/ runs a script language" >&2
   exit 1
 fi
-echo "web halves staged: $halves; language descriptors staged: $languages"
+echo "module descriptors staged: $modules; web halves staged: $halves; language descriptors staged: $languages"

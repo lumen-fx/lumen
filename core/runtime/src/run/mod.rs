@@ -528,25 +528,6 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
     Ok((app, window))
 }
 
-/// Publish the markup tags this app's dependencies declare for the builds of
-/// `targets`, and the elements of `addons`, so the parser accepts them.
-///
-/// Called from every path that reads a config and then parses markup: the run
-/// build, `lumenc check`, and the AOT compile. It is deliberately independent
-/// of whether the modules are loadable here - `lumenc check` on a machine with
-/// no module beside it still has to accept the app's markup, because the
-/// declaration is the app's claim about itself.
-pub(crate) fn register_declared_tags(
-    cfg: &crate::config::LumenToml,
-    targets: &[lumen_modules::Target],
-    addons: &[lumen_ir::addon::Addon],
-) {
-    for target in targets {
-        lumen_modules::register_declared_tags(&cfg.dependencies_for(*target));
-    }
-    lumen_modules::register_addon_elements(addons);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

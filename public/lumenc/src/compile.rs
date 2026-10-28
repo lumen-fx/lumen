@@ -74,6 +74,10 @@ pub enum CompileError {
     /// the declaration is wrong. Today that is the `[dependencies]` table.
     #[error("lumen.toml: {0}")]
     Config(String),
+    /// A module the app declares has no `lumen-module.toml` this compile can
+    /// find, or the one it has is refused. The message names the module.
+    #[error("{0}")]
+    Module(String),
 }
 
 /// Compile `<dir>/src/main.lmn` (+ optional `src/main.css`, `<include>`,
@@ -126,9 +130,9 @@ fn compile_dir(
     let src_dir = resolve_src_dir(dir)?;
     let entry = entry_name(dir);
     // The tags the app's modules bring, published before the parse: a compile
-    // loads no module, so the declaration in `lumen.toml` is the only thing
-    // that can tell the parser those elements exist.
-    register_declared_tags(dir)?;
+    // loads no module, so each module's `lumen-module.toml` is what tells the
+    // parser those elements exist.
+    register_module_tags(dir)?;
     let html_path = src_dir.join(&entry);
     let css_path = src_dir.join("main.css");
 
@@ -512,20 +516,24 @@ fn fallback_locale(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Publish the markup tags the app's dependencies declare for a desktop build:
+/// The modules the app at `dir` declares for a desktop build:
 /// `[dependencies]` with `[target.desktop.dependencies]` laid over it.
 ///
 /// This path links no runtime, so it reads the table itself. A file that is
-/// absent or is not TOML at all leaves the parser with its built-in tags,
-/// which is what the rest of this module does with an unreadable config; a
-/// `[dependencies]` table that is present and wrong is reported, because a
-/// silent miss here surfaces later as an unexplained unknown tag.
-fn register_declared_tags(dir: &Path) -> Result<(), CompileError> {
+/// absent or is not TOML at all declares nothing, which is what the rest of
+/// this module does with an unreadable config; a `[dependencies]` table that
+/// is present and wrong is reported, because a silent miss here surfaces
+/// later as an unexplained unknown tag.
+///
+/// # Errors
+///
+/// The `[dependencies]` or `[target]` table does not parse.
+pub fn desktop_dependencies(dir: &Path) -> Result<lumen_modules::DependenciesCfg, CompileError> {
     let Ok(text) = std::fs::read_to_string(dir.join("lumen.toml")) else {
-        return Ok(());
+        return Ok(lumen_modules::DependenciesCfg::default());
     };
     let Ok(value) = toml::from_str::<toml::Value>(&text) else {
-        return Ok(());
+        return Ok(lumen_modules::DependenciesCfg::default());
     };
     let read = |key: &str| value.get(key).cloned();
     let deps: lumen_modules::DependenciesCfg = read("dependencies")
@@ -538,10 +546,46 @@ fn register_declared_tags(dir: &Path) -> Result<(), CompileError> {
         .transpose()
         .map_err(|e| CompileError::Config(e.to_string()))?
         .unwrap_or_default();
-    lumen_modules::register_declared_tags(
-        &targets.dependencies_for(&deps, lumen_modules::Target::Desktop),
-    );
+    Ok(targets.dependencies_for(&deps, lumen_modules::Target::Desktop))
+}
+
+/// Publish the markup tags the app's modules declare for a desktop build,
+/// each read from its `lumen-module.toml`.
+///
+/// A module whose descriptor cannot be found is reported, naming it. This
+/// path resolves no registry package, so a `version` entry, which may as well
+/// be a script library as a module, has no root to read one from and is
+/// passed over; the loader reports a module of that kind when it cannot open
+/// it.
+fn register_module_tags(dir: &Path) -> Result<(), CompileError> {
+    let versions = Default::default();
+    let deps = lumen_modules::manifest::without_unresolved(&desktop_dependencies(dir)?, &versions);
+    let tags =
+        lumen_modules::module_tags(dir, &deps, &versions, None).map_err(CompileError::Module)?;
+    lumen_modules::register_module_tags(&tags);
     Ok(())
+}
+
+/// Publish the markup tags of every module the app at `dir` declares whose
+/// `lumen-module.toml` is in reach, and pass over the rest.
+///
+/// This is for a tool that reads markup without compiling it, such as an
+/// editor's language server, where a module it cannot find is the compile's
+/// error to report, not a reason to stop recognising every other module's
+/// elements.
+pub fn register_reachable_module_tags(dir: &Path) {
+    let Ok(deps) = desktop_dependencies(dir) else {
+        return;
+    };
+    let versions = Default::default();
+    for dep in &lumen_modules::manifest::without_unresolved(&deps, &versions).0 {
+        let Ok(root) = lumen_modules::module_root(dir, dep, &versions, None) else {
+            continue;
+        };
+        if let Ok(manifest) = lumen_modules::manifest::read_manifest(&dep.name, &root) {
+            lumen_modules::register_module_tags(&manifest.tags);
+        }
+    }
 }
 
 /// Parse a CSS source and extract its `:root { --name: value; ... }`

@@ -47,7 +47,15 @@ pub fn stub_answer(path: &Path, packages: &str) -> PathBuf {
 }
 
 /// One `lumen`-platform package of the resolution, at `dir`, carrying `file`.
+/// The descriptor every module ships is written at the package root unless
+/// the test wrote one of its own, so a compile can read the module's tags.
 pub fn lumen_package(name: &str, version: &str, target: &str, dir: &Path, file: &str) -> String {
+    let descriptor = dir.join("lumen-module.toml");
+    if !descriptor.exists() {
+        std::fs::create_dir_all(dir).expect("the package root is writable");
+        std::fs::write(&descriptor, "[module]\ntags = []\n")
+            .expect("the module descriptor is writable");
+    }
     format!(
         "{{\"name\":\"{name}\",\"version\":\"{version}\",\"platform\":\"lumen\",\
          \"target\":\"{target}\",\"dir\":{},\"files\":[\"{file}\"]}}",
