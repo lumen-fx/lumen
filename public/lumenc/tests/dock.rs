@@ -277,6 +277,28 @@ fn a_panel_pops_out_into_a_window_and_docks_back() {
 }
 
 #[test]
+fn a_move_reaches_the_script_with_no_further_event() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("report-wake", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    ticks(app, 4);
+    call(app, |d| d.detach("game").expect("detach"));
+    // The tick that reports the move runs after scripts heard this tick's
+    // events, so it asks for the next tick, which delivers it: a window
+    // backend parks between events, and nothing else would wake it.
+    let mut ticked = 0;
+    while signal(app, "moved").is_none() && ticked < 6 {
+        assert!(
+            ticked == 0 || lumen_core::tick::work_pending(&app.world),
+            "a reported move waits on nothing"
+        );
+        app.tick();
+        ticked += 1;
+    }
+    assert_eq!(signal(app, "moved").as_deref(), Some("window"));
+}
+
+#[test]
 fn closing_a_window_docks_its_panels_back() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut t = build("close", MARKUP, CANDELA, "");
