@@ -389,6 +389,11 @@ impl WinitDrag {
                     surface: h.surface.as_ptr(),
                     toplevel: window.xdg_toplevel().map(|t| t.as_ptr()),
                     size,
+                    content: wayland::content_origin(
+                        window.inner_size(),
+                        window.outer_size(),
+                        window.scale_factor(),
+                    ),
                 })
             })
             .collect()
@@ -637,6 +642,16 @@ pub mod wayland {
         }
     }
 
+    /// Whether a drag the compositor cancelled with no drop was cancelled by
+    /// the user's Escape: it ended over one of the app's windows, where a
+    /// release would have been a drop (KWin's own Escape), and the user had
+    /// not let go of it. mutter hands the drag to the window that followed
+    /// it as the button goes up, so a release over the desktop ends over one
+    /// of the app's windows too.
+    pub fn compositor_escape(released: bool, over_app: bool) -> bool {
+        !released && over_app
+    }
+
     /// Whether `position` lies inside a surface of `size`, in its own
     /// coordinates.
     pub fn within(position: Vec2, size: Vec2) -> bool {
@@ -654,6 +669,23 @@ pub mod wayland {
         pub toplevel: Option<*mut std::ffi::c_void>,
         /// Its size in logical pixels (surface coordinates).
         pub size: Vec2,
+        /// Where its surface starts in its window geometry, in logical
+        /// pixels: below the title bar winit draws when the compositor
+        /// leaves decorations to the client.
+        pub content: Vec2,
+    }
+
+    /// Where a window's surface starts in its window geometry, from its
+    /// inner and outer size: a client-side frame adds a title bar above the
+    /// surface and equal borders on the other sides.
+    pub fn content_origin(
+        inner: winit::dpi::PhysicalSize<u32>,
+        outer: winit::dpi::PhysicalSize<u32>,
+        scale: f64,
+    ) -> Vec2 {
+        let side = outer.width.saturating_sub(inner.width) as f64 / 2.0;
+        let top = outer.height.saturating_sub(inner.height) as f64 - side;
+        Vec2::new((side / scale) as f32, (top.max(0.0) / scale) as f32)
     }
 
     #[derive(Default)]
@@ -675,6 +707,9 @@ pub mod wayland {
         /// Entered but no motion yet: the enter position is not trusted.
         fresh: bool,
         dropped: bool,
+        /// The user let go of the drag (`dnd_drop_performed`): a cancel
+        /// after it is a release no window took, never an Escape.
+        released: bool,
         cancelled_at: Option<Instant>,
         /// The compositor cancelled the drag over one of the app's windows,
         /// where a release would have been a drop: the compositor's own
@@ -820,7 +855,12 @@ pub mod wayland {
                 return;
             };
             if let Some(top) = self.toplevel(s) {
-                drag.attach(&top, self.grab.x as i32, self.grab.y as i32);
+                // The offset is in the window geometry, which holds a
+                // client-side title bar: on the surface it would put the
+                // pointer on that bar, a surface of its own the compositor
+                // then sends the drag to instead of the window below.
+                let at = self.grab + s.content;
+                drag.attach(&top, at.x.round() as i32, at.y.round() as i32);
             }
         }
 
@@ -917,6 +957,7 @@ pub mod wayland {
             device.start_drag(Some(&src), &origin, None, serial);
             self.state.source = Some(src);
             self.state.dropped = false;
+            self.state.released = false;
             self.state.cancelled_at = None;
             self.state.cancelled_inside = false;
             self.state.over = None;
@@ -1127,11 +1168,12 @@ pub mod wayland {
                 wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished => {
                     if !s.dropped {
                         s.cancelled_at = Some(Instant::now());
-                        s.cancelled_inside = s.under().is_some();
+                        s.cancelled_inside = compositor_escape(s.released, s.under().is_some());
                     } else {
                         s.source = None;
                     }
                 }
+                wl_data_source::Event::DndDropPerformed => s.released = true,
                 // Nothing outside the app takes the private type, so no
                 // data is ever asked for.
                 wl_data_source::Event::Send { fd, .. } => drop(fd),
@@ -1235,6 +1277,58 @@ pub mod wayland {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_release_no_window_took_is_no_escape() {
+        use wayland::compositor_escape;
+        assert!(compositor_escape(false, true));
+        assert!(!compositor_escape(true, true));
+        assert!(!compositor_escape(false, false));
+        assert!(!compositor_escape(true, false));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_wayland_surface_starts_below_a_client_side_title_bar() {
+        use wayland::content_origin;
+        use winit::dpi::PhysicalSize;
+        // No frame: the surface is the window geometry.
+        assert_eq!(
+            content_origin(
+                PhysicalSize::new(800, 500),
+                PhysicalSize::new(800, 500),
+                1.0
+            ),
+            Vec2::ZERO
+        );
+        // A 35 px title bar, at scale 1 and 2.
+        assert_eq!(
+            content_origin(
+                PhysicalSize::new(800, 500),
+                PhysicalSize::new(800, 535),
+                1.0
+            ),
+            Vec2::new(0.0, 35.0)
+        );
+        assert_eq!(
+            content_origin(
+                PhysicalSize::new(1600, 1000),
+                PhysicalSize::new(1600, 1070),
+                2.0
+            ),
+            Vec2::new(0.0, 35.0)
+        );
+        // Borders on the sides and bottom as well as a title bar.
+        assert_eq!(
+            content_origin(
+                PhysicalSize::new(800, 500),
+                PhysicalSize::new(802, 537),
+                1.0
+            ),
+            Vec2::new(1.0, 36.0)
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
