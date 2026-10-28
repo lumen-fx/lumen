@@ -321,7 +321,7 @@ pub(crate) fn hot_reload(world: &mut World) {
             let msg = format!("hot-reload: {e}");
             eprintln!("lumenc {msg}");
             if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
-                banner.0 = Some(msg);
+                banner.0 = Some(ErrorReport::new(msg));
             }
             if let Some(mut s) = world.get_resource_mut::<HotReloadState>() {
                 s.html_mtime = html_now;
@@ -380,6 +380,8 @@ pub(crate) fn hot_reload(world: &mut World) {
     let authored_text = authored_texts(world);
     restore_stateful_components(world, &preserved);
 
+    // A script that does not compile, for the banner once the reload is done.
+    let mut script_failure: Option<ErrorReport> = None;
     {
         // `ScriptHost::replace` preserves the engine, scope, and the
         // signal mirror, so signal values survive across edit-save
@@ -406,6 +408,10 @@ pub(crate) fn hot_reload(world: &mut World) {
             }
             if let Some(Err(e)) = reload(world, &script.source, "<inline>", &script.map) {
                 eprintln!("lumenc hot-reload: {language} script load failed: {e}");
+                // The first failure is the one shown; the rest are on stderr.
+                script_failure.get_or_insert_with(|| {
+                    ErrorReport::from_script(&format!("hot-reload: {language} script"), &e)
+                });
             }
         }
     }
@@ -431,8 +437,10 @@ pub(crate) fn hot_reload(world: &mut World) {
         s.css_import_mtimes = css_import_mtimes;
         s.locale_stamps = locale_now;
     }
+    // The markup and CSS reloaded; the banner shows what is still broken, a
+    // script that did not compile, or nothing.
     if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
-        banner.0 = None;
+        banner.0 = script_failure;
     }
     eprintln!("lumenc: reloaded {}", html_path.display());
 }

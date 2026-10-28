@@ -240,6 +240,9 @@ lumen-os-tray = { workspace = true }
 lumen-os-hotkey = { workspace = true }
 lumen-os-notify = { workspace = true }
 lumen-os-filedialog = { workspace = true }
+# error_banner.rs puts an in-memory clipboard in the app, so a copy test never
+# writes to the desktop's clipboard.
+lumen-os-clipboard = { workspace = true }
 lumen-text-cosmic = { workspace = true }
 # text_geometry_pipeline.rs asserts against the shaped run the layout
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able

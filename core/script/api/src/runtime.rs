@@ -85,8 +85,14 @@ pub fn register_script_commands(world: &mut World) {
 /// prominently - e.g. through the in-window error banner - so a dead
 /// script never masquerades as a healthy app that just ignores clicks.
 /// Absent when the script loaded cleanly.
+///
+/// The first field is the error as printed. The second is the host's error
+/// itself when there was one, so a compile error's file, line and column
+/// reach the banner as numbers rather than as text to pick apart; a failure
+/// that never reached a host (no host for the language, no bytecode) has
+/// none.
 #[derive(Resource, Debug, Clone)]
-pub struct ScriptLoadFailure(pub String);
+pub struct ScriptLoadFailure(pub String, pub Option<ScriptError>);
 
 /// Wall-clock moment the script plugin was installed. Kept for embedders
 /// that want elapsed-since-install (the FFI surface reads it); the
@@ -289,7 +295,8 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                  Run `lumenc check <dir>` to reproduce this error in CI.\n\
                  ================================================================\n"
             );
-            app.world.insert_resource(ScriptLoadFailure(e.to_string()));
+            app.world
+                .insert_resource(ScriptLoadFailure(e.to_string(), Some(e)));
         }
         // Fire on_start once now that the program is loaded. Its signal
         // writes land in the store here, so the tree the app spawns next
