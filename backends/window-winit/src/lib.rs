@@ -620,23 +620,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             return;
         }
         self.renderer.publish(&mut self.app.render_world);
-        // The window asked to open maximized, which a compositor may answer
-        // after the app's first ticks: the app sees the ask, not the state
-        // before the answer, so a size it asks for meanwhile restores the
-        // window rather than being lost to the maximize that lands later.
-        let mut sync = WindowSync::opened(&title, logical);
-        sync.maximized = self.opts.maximized;
-        if let Some(mut wanted) = self
-            .app
-            .world
-            .get_mut::<lumen_core::window::Window>(primary)
-        {
-            wanted.bypass_change_detection().maximized = self.opts.maximized;
-        }
+        let sync = WindowSync::opened(&title, logical);
         self.insert(primary, window, a11y, sync);
-        if !self.opts.maximized {
-            self.follow_platform_state(primary);
-        }
+        self.follow_platform_state(primary);
         self.primary = Some(primary);
         // Windows the app spawned before the loop started open now.
         self.sync_windows(event_loop);
