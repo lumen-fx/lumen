@@ -217,6 +217,13 @@ class Wayland:
         return self.size
 
     def windows(self, pid):
+        if self.compositor == "hyprland":
+            out = {}
+            for c in json.loads(subprocess.check_output(["hyprctl", "clients", "-j"])):
+                if c.get("pid") == pid and c.get("title"):
+                    (x, y), (w, h) = c["at"], c["size"]
+                    out[c["title"]] = (x, y, w, h)
+            return out
         if self.compositor != "sway":
             return {}
         tree = json.loads(subprocess.check_output(["swaymsg", "-t", "get_tree", "-r"]))
