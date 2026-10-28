@@ -1064,23 +1064,21 @@ fn a_changed_style_renames_the_stylesheet_and_leaves_the_rest_alone() {
 
 /// `lumenc web --serve` on `app`, with `extra` flags, until it says where it
 /// listens.
-fn serving(
-    app: &str,
-    scratch: &Path,
-    extra: &[&str],
-) -> (std::process::Child, std::net::SocketAddr) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
-        .arg("web")
-        .arg(repo().join(app))
-        .arg("--out")
-        .arg(scratch.join("site"))
-        .arg("--lib-dir")
-        .arg(runtime_dir(scratch))
-        .args(["--serve", "--port", "0"])
-        .args(extra)
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("running lumenc web --serve");
+fn serving(app: &str, scratch: &Path, extra: &[&str]) -> (Served, std::net::SocketAddr) {
+    let mut child = Served(
+        Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("web")
+            .arg(repo().join(app))
+            .arg("--out")
+            .arg(scratch.join("site"))
+            .arg("--lib-dir")
+            .arg(runtime_dir(scratch))
+            .args(["--serve", "--port", "0"])
+            .args(extra)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("running lumenc web --serve"),
+    );
     match serving_at(&mut child) {
         Some(address) => (child, address),
         None => {
@@ -1413,17 +1411,19 @@ fn a_served_render_answers_every_link_a_document_carries() {
     web("apps/pages-demo", &built, &["--render", "static"]);
 
     let out = scratch.join("site");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
-        .arg("web")
-        .arg(repo().join("apps/pages-demo"))
-        .arg("--out")
-        .arg(&out)
-        .arg("--lib-dir")
-        .arg(runtime_dir(&scratch))
-        .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("running lumenc web --render ssr");
+    let mut child = Served(
+        Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("web")
+            .arg(repo().join("apps/pages-demo"))
+            .arg("--out")
+            .arg(&out)
+            .arg("--lib-dir")
+            .arg(runtime_dir(&scratch))
+            .args(["--render", "ssr", "--serve", "--port", "0"])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("running lumenc web --render ssr"),
+    );
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -1496,17 +1496,19 @@ fn page_of(document: &str) -> Option<String> {
 fn a_served_render_answers_a_path_no_document_stands_for() {
     let scratch = scratch("serve-ssr");
     let out = scratch.join("site");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
-        .arg("web")
-        .arg(repo().join("apps/pages-demo"))
-        .arg("--out")
-        .arg(&out)
-        .arg("--lib-dir")
-        .arg(runtime_dir(&scratch))
-        .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("running lumenc web --render ssr");
+    let mut child = Served(
+        Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("web")
+            .arg(repo().join("apps/pages-demo"))
+            .arg("--out")
+            .arg(&out)
+            .arg("--lib-dir")
+            .arg(runtime_dir(&scratch))
+            .args(["--render", "ssr", "--serve", "--port", "0"])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("running lumenc web --render ssr"),
+    );
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -1535,18 +1537,20 @@ fn a_served_render_answers_a_path_no_document_stands_for() {
 fn a_rendered_site_answers_in_the_locale_the_request_asks_for() {
     let scratch = scratch("serve-ssr-locales");
     let out = scratch.join("site");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
-        .arg("web")
-        .arg(repo().join("apps/pages-demo"))
-        .arg("--out")
-        .arg(&out)
-        .arg("--lib-dir")
-        .arg(runtime_dir(&scratch))
-        .args(["--locale", "en-US", "--locale", "de-DE"])
-        .args(["--render", "ssr", "--serve", "--port", "0"])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("running lumenc web --render ssr");
+    let mut child = Served(
+        Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("web")
+            .arg(repo().join("apps/pages-demo"))
+            .arg("--out")
+            .arg(&out)
+            .arg("--lib-dir")
+            .arg(runtime_dir(&scratch))
+            .args(["--locale", "en-US", "--locale", "de-DE"])
+            .args(["--render", "ssr", "--serve", "--port", "0"])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("running lumenc web --render ssr"),
+    );
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -1801,15 +1805,17 @@ fn a_rendered_site_can_be_asked_for_pages_with_nothing_to_run_them() {
 fn a_rendered_page_with_no_runtime_carries_nothing_to_run() {
     let scratch = scratch("serve-ssr-no-runtime");
     let out = scratch.join("site");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
-        .arg("web")
-        .arg(repo().join("apps/pages-demo"))
-        .arg("--out")
-        .arg(&out)
-        .args(["--render", "ssr", "--no-runtime", "--serve", "--port", "0"])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("running lumenc web --render ssr --no-runtime");
+    let mut child = Served(
+        Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .arg("web")
+            .arg(repo().join("apps/pages-demo"))
+            .arg("--out")
+            .arg(&out)
+            .args(["--render", "ssr", "--no-runtime", "--serve", "--port", "0"])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("running lumenc web --render ssr --no-runtime"),
+    );
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -1888,9 +1894,35 @@ fn a_page_comes_from_a_run_or_from_the_request_and_not_from_both() {
 }
 
 /// Stop a served process and collect it, so a case leaves nothing behind.
-fn stop(mut child: std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+/// A `lumenc web --serve` a test started. Dropping it kills lumenc and
+/// waits for it, so a test that panics between starting the server and
+/// stopping it (a refused connection, a failed assertion) leaves nothing
+/// running; lumenc takes its `lumen-server` down with it.
+struct Served(std::process::Child);
+
+impl std::ops::Deref for Served {
+    type Target = std::process::Child;
+    fn deref(&self) -> &std::process::Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Served {
+    fn deref_mut(&mut self) -> &mut std::process::Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Stop a server a test started.
+fn stop(child: Served) {
+    drop(child);
 }
 
 /// Read the server's log on a thread of its own, and hand back the address it
