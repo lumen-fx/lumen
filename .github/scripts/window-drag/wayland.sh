@@ -28,7 +28,10 @@ CONF
     WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
       sway -c "$work/sway.conf" > "$out/compositor.log" 2>&1 &
     comp=$!
-    for _ in $(seq 1 100); do [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break; sleep 0.1; done
+    for _ in $(seq 1 100); do
+      [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock > /dev/null 2>&1 && break
+      sleep 0.1
+    done
     export WAYLAND_DISPLAY=wayland-1 SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
     status=0
     python3 "$here/drive.py" "$lumenc" "$out" --desktop wayland --compositor sway \
@@ -36,7 +39,7 @@ CONF
     ;;
   kwin)
     build /usr/share/plasma-wayland-protocols/fake-input.xml fake-input "$here/kwin-pointer.c"
-    export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 QT_QPA_PLATFORM=offscreen
+    export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
     dbus-run-session -- kwin_wayland --virtual --width 1280 --height 1024 --socket wayland-kwin \
       --no-lockscreen --exit-with-session \
       "env WAYLAND_DISPLAY=wayland-kwin python3 $here/drive.py $lumenc $out --desktop wayland --compositor kwin --pointer $work/kwin-pointer" \
