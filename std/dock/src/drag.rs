@@ -21,7 +21,9 @@
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
-use lumen_dock_model::{Container, EDGE_BASIS, PanelId, Rect, Side, Target, WindowPlace, Workspace};
+use lumen_dock_model::{
+    Container, EDGE_BASIS, PanelId, Rect, Side, Target, WindowPlace, Workspace,
+};
 use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLive, Length, Style, Transform,
 };
