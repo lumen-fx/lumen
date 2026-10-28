@@ -39,6 +39,10 @@ pub use place::{Monitor, Placement, place, record};
 /// A panel's identity: its element id.
 pub type PanelId = String;
 
+/// The size a stack added along a whole dock's edge takes, in logical
+/// pixels: a side panel's width, or a bottom panel's height.
+pub const EDGE_BASIS: f32 = 280.0;
+
 /// The direction a split lays its children out along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -2230,7 +2234,11 @@ impl Workspace {
             area.root = node;
             return;
         }
-        let new = Child::grow(node, 0.0);
+        let new = Child {
+            basis: Some(EDGE_BASIS),
+            grow: 0.0,
+            node,
+        };
         match &mut area.root {
             Node::Split(split) if split.axis == side.axis() => {
                 if side.before() {
