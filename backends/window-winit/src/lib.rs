@@ -393,7 +393,6 @@ fn run(
         lock: None,
         extensions,
         restoring: HashMap::new(),
-        restored: HashMap::new(),
     };
     event_loop
         .run_app(&mut handler)
@@ -519,20 +518,11 @@ struct WinitHandler {
     /// maximized size meanwhile reads to GNOME as a window asking for the
     /// whole screen, which it maximizes again.
     restoring: HashMap<Entity, std::time::Instant>,
-    /// Windows the app restored from maximized, until when a maximize the
-    /// platform reports on its own is undone once: GNOME maximizes a window
-    /// that first showed at the size of the screen again, after the app
-    /// restored it.
-    restored: HashMap<Entity, std::time::Instant>,
 }
 
 /// How long a restored window waits for the platform's new size before it
 /// paints again anyway.
 const RESTORE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// How long a window the app restored stays restored against a maximize
-/// the platform makes on its own.
-const RESTORE_KEEP: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A pointer lock in effect on a platform window.
 struct AppliedLock {
@@ -1670,7 +1660,8 @@ impl WinitHandler {
             // first, as the window's restore button does.
             if window.is_maximized() {
                 window.set_maximized(false);
-                self.restore_started(entity);
+                self.restoring
+                    .insert(entity, std::time::Instant::now() + RESTORE_WAIT);
             }
             let requested = winit::dpi::LogicalSize::new(size.x as f64, size.y as f64);
             // `Some` means the platform applied the size at once and may
@@ -1686,7 +1677,8 @@ impl WinitHandler {
         }
         if let Some(maximized) = changes.maximized {
             if !maximized && window.is_maximized() {
-                self.restore_started(entity);
+                self.restoring
+                    .insert(entity, std::time::Instant::now() + RESTORE_WAIT);
             }
             window.set_maximized(maximized);
         }
@@ -1695,9 +1687,6 @@ impl WinitHandler {
     /// Take a maximize, restore or fullscreen change the platform reported
     /// for `entity` into its [`lumen_core::window::Window`].
     fn follow_platform_state(&mut self, entity: Entity) {
-        if self.undo_platform_maximize(entity) {
-            return;
-        }
         let Some(os) = self
             .ids
             .get(&entity)
@@ -1718,52 +1707,6 @@ impl WinitHandler {
                 wanted.fullscreen = next.fullscreen;
             }
         }
-    }
-
-    /// The app restored `entity` from maximized: hold its frames for the
-    /// new size, and keep it restored for a while.
-    fn restore_started(&mut self, entity: Entity) {
-        let now = std::time::Instant::now();
-        self.restoring.insert(entity, now + RESTORE_WAIT);
-        self.restored.insert(entity, now + RESTORE_KEEP);
-    }
-
-    /// Undo, once, a maximize the platform reported on its own soon after
-    /// the app restored `entity`. Whether it did.
-    fn undo_platform_maximize(&mut self, entity: Entity) -> bool {
-        let Some(until) = self.restored.get(&entity).copied() else {
-            return false;
-        };
-        let now = std::time::Instant::now();
-        if until <= now {
-            self.restored.remove(&entity);
-            return false;
-        }
-        let platform = self
-            .app
-            .world
-            .get::<WindowRuntime>(entity)
-            .is_some_and(|r| r.maximized);
-        let wanted = self
-            .app
-            .world
-            .get::<lumen_core::window::Window>(entity)
-            .is_some_and(|w| w.maximized);
-        if !platform || wanted {
-            return false;
-        }
-        let Some(window) = self
-            .ids
-            .get(&entity)
-            .and_then(|id| self.windows.get(id))
-            .map(|os| os.window.clone())
-        else {
-            return false;
-        };
-        self.restored.remove(&entity);
-        self.restoring.insert(entity, now + RESTORE_WAIT);
-        window.set_maximized(false);
-        true
     }
 
     /// Raise the windows the app asked to raise.
