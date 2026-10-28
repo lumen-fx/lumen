@@ -13,8 +13,11 @@
 //! under the pointer, so the drag keeps the keyboard.
 //!
 //! On Wayland no client may learn where the pointer is outside its own
-//! surfaces or place its windows, so the drag runs as a `wl_data_device`
-//! drag with a MIME type private to this process ([`wayland`]).
+//! surfaces or place its windows, so once the pointer leaves the window it
+//! pressed, the drag runs as a `wl_data_device` drag with a MIME type
+//! private to this process ([`wayland`]). Until then the window reports the
+//! pointer and keeps the keyboard, so Escape cancels the drag even where
+//! the compositor withholds keys during a data-device drag (wlroots).
 //!
 //! It rides the winit backend's event loop as a
 //! [`LoopExtension`](lumen_window_winit::extension::LoopExtension), and the
@@ -233,7 +236,12 @@ impl WinitDrag {
 
     /// The pointer moved to `p` in `window` during a drag tracked here.
     fn moved(&mut self, cx: &mut LoopCx<'_>, window: Entity, p: Vec2) {
-        if !self.seam.inner.is_active() || self.seam.on_wayland() {
+        #[cfg(target_os = "linux")]
+        if self.seam.wayland.is_some() {
+            self.moved_on_wayland(cx, window, p);
+            return;
+        }
+        if !self.seam.inner.is_active() {
             return;
         }
         let surfaces = self.desktop_surfaces(cx);
@@ -249,9 +257,57 @@ impl WinitDrag {
         }
     }
 
+    /// A drag on Wayland still in the window it began in: the window
+    /// reports the pointer until it leaves, when the data-device drag
+    /// starts.
+    #[cfg(target_os = "linux")]
+    fn moved_on_wayland(&mut self, cx: &mut LoopCx<'_>, window: Entity, p: Vec2) {
+        let surfaces = Self::wayland_surfaces(cx);
+        let Some(w) = self.seam.wayland.as_mut() else {
+            return;
+        };
+        if w.waiting() != Some(window) {
+            return;
+        }
+        let size = surfaces
+            .iter()
+            .find(|s| s.window == window)
+            .map_or(Vec2::ZERO, |s| s.size);
+        if wayland::within(p, size) {
+            cx.app.world.write_message(SurfaceDragEvent::Over {
+                window: Some(window),
+                position: p,
+            });
+            cx.want_frame();
+        } else {
+            w.set_surfaces(&surfaces);
+            w.start(&surfaces);
+            // Off the window: the compositor reports the pointer again
+            // once it is over one of the app's windows.
+            cx.app.world.write_message(SurfaceDragEvent::Over {
+                window: None,
+                position: p,
+            });
+            cx.want_frame();
+        }
+    }
+
     /// The button came up at `p` in `window` during a drag tracked here.
     fn released(&mut self, cx: &mut LoopCx<'_>, window: Entity, p: Vec2) {
-        if !self.seam.inner.is_active() || self.seam.on_wayland() {
+        #[cfg(target_os = "linux")]
+        if let Some(w) = self.seam.wayland.as_mut() {
+            // A drag that never left its window drops where it is.
+            if w.waiting() == Some(window) {
+                w.stop_waiting();
+                cx.app.world.write_message(SurfaceDragEvent::Dropped {
+                    window: Some(window),
+                    position: p,
+                });
+                cx.want_frame();
+            }
+            return;
+        }
+        if !self.seam.inner.is_active() {
             return;
         }
         let surfaces = self.desktop_surfaces(cx);
@@ -557,17 +613,19 @@ pub mod wayland {
 
     /// What a drag the compositor cancelled with no drop comes to, `since`
     /// the cancel: nothing to report when the app ended it itself; a cancel
-    /// when an Escape press reached the app; a drop on no window once the
-    /// grace for that Escape has passed; and `None` while it may still come.
+    /// when the user cancelled it (an Escape press reached the app, or the
+    /// compositor cancelled it over one of the app's windows); a drop on no
+    /// window once the grace for that Escape has passed; and `None` while it
+    /// may still come.
     pub fn after_cancel(
         ended_by_app: bool,
-        escape: bool,
+        cancelled: bool,
         since: Duration,
         position: Vec2,
     ) -> Option<Vec<SurfaceDragEvent>> {
         if ended_by_app {
             Some(Vec::new())
-        } else if escape {
+        } else if cancelled {
             Some(vec![SurfaceDragEvent::Cancelled])
         } else if since >= ESCAPE_GRACE {
             Some(vec![SurfaceDragEvent::Dropped {
@@ -618,6 +676,10 @@ pub mod wayland {
         fresh: bool,
         dropped: bool,
         cancelled_at: Option<Instant>,
+        /// The compositor cancelled the drag over one of the app's windows,
+        /// where a release would have been a drop: the compositor's own
+        /// Escape (KWin's), not a release over the desktop.
+        cancelled_inside: bool,
         events: Vec<SurfaceDragEvent>,
         mime: String,
     }
@@ -658,6 +720,10 @@ pub mod wayland {
         grab: Vec2,
         escape: bool,
         ended_by_app: bool,
+        /// A drag the app began whose data-device drag waits for the
+        /// pointer to leave the window it began in: the source window and
+        /// the window to follow.
+        waiting: Option<(Entity, Option<Entity>)>,
     }
 
     impl WaylandDrag {
@@ -700,6 +766,7 @@ pub mod wayland {
                 grab: Vec2::ZERO,
                 escape: false,
                 ended_by_app: false,
+                waiting: None,
             })
         }
 
@@ -759,7 +826,6 @@ pub mod wayland {
 
         /// Take in a request the app wrote.
         pub fn request(&mut self, request: &SurfaceDragRequest, surfaces: &[Surface]) {
-            let qh = self.queue.handle();
             match *request {
                 SurfaceDragRequest::Begin {
                     source,
@@ -767,54 +833,27 @@ pub mod wayland {
                     grab_offset,
                 } => {
                     self.end();
-                    let (Some(serial), Some(origin)) = (
-                        self.state.press_serial,
-                        surfaces.iter().find(|s| s.window == source),
-                    ) else {
-                        lumen_core::warn_line!(
-                            "lumen-window-winit: a drag across windows needs the press that began it; none is held"
-                        );
-                        self.state.events.push(SurfaceDragEvent::Cancelled);
-                        return;
-                    };
-                    // SAFETY: as in `set_surfaces`.
-                    let Ok(id) = (unsafe {
-                        ObjectId::from_ptr(
-                            wl_surface::WlSurface::interface(),
-                            origin.surface.cast(),
-                        )
-                    }) else {
-                        return;
-                    };
-                    let Ok(origin) = wl_surface::WlSurface::from_id(&self.conn, id) else {
-                        return;
-                    };
-                    let (Some(ddm), Some(device)) =
-                        (self.state.ddm.clone(), self.state.device.clone())
-                    else {
-                        return;
-                    };
-                    let src = ddm.create_data_source(&qh, ());
-                    src.offer(self.state.mime.clone());
-                    src.set_actions(wl_data_device_manager::DndAction::Move);
                     self.grab = grab_offset;
-                    self.drag = self
-                        .state
-                        .tdm
-                        .as_ref()
-                        .map(|m| m.get_xdg_toplevel_drag(&src, &qh, ()));
-                    device.start_drag(Some(&src), &origin, None, serial);
-                    self.state.source = Some(src);
-                    self.state.dropped = false;
-                    self.state.cancelled_at = None;
-                    self.state.over = None;
                     self.escape = false;
                     self.ended_by_app = false;
-                    if let Some(f) = follow {
-                        self.attach(f, surfaces);
+                    // Within its window a drag needs no data device: the
+                    // window keeps the pointer and the keyboard (a wlroots
+                    // compositor gives neither to anyone during one, so
+                    // Escape could not cancel it). It starts one when the
+                    // pointer leaves, or at once when a window follows it.
+                    self.waiting = Some((source, follow));
+                    if follow.is_some() {
+                        self.start(surfaces);
                     }
                 }
-                SurfaceDragRequest::Follow(Some(w)) => self.attach(w, surfaces),
+                SurfaceDragRequest::Follow(Some(w)) => {
+                    if let Some((_, follow)) = &mut self.waiting {
+                        *follow = Some(w);
+                        self.start(surfaces);
+                    } else {
+                        self.attach(w, surfaces);
+                    }
+                }
                 // The protocol has no detach; the window stays with the
                 // drag until it ends. Concealing is the window's own
                 // visibility, which the backend sets.
@@ -827,7 +866,68 @@ pub mod wayland {
             let _ = self.conn.flush();
         }
 
+        /// The window a drag began in while it waits for the pointer to
+        /// leave it.
+        pub fn waiting(&self) -> Option<Entity> {
+            self.waiting.map(|(source, _)| source)
+        }
+
+        /// The waiting drag ended within its window.
+        pub fn stop_waiting(&mut self) {
+            self.waiting = None;
+        }
+
+        /// Start the data-device drag a waiting drag needs now.
+        pub fn start(&mut self, surfaces: &[Surface]) {
+            let qh = self.queue.handle();
+            let Some((source, follow)) = self.waiting.take() else {
+                return;
+            };
+            let (Some(serial), Some(origin)) = (
+                self.state.press_serial,
+                surfaces.iter().find(|s| s.window == source),
+            ) else {
+                lumen_core::warn_line!(
+                    "lumen-window-winit: a drag across windows needs the press that began it; none is held"
+                );
+                self.state.events.push(SurfaceDragEvent::Cancelled);
+                return;
+            };
+            // SAFETY: as in `set_surfaces`.
+            let Ok(id) = (unsafe {
+                ObjectId::from_ptr(wl_surface::WlSurface::interface(), origin.surface.cast())
+            }) else {
+                return;
+            };
+            let Ok(origin) = wl_surface::WlSurface::from_id(&self.conn, id) else {
+                return;
+            };
+            let (Some(ddm), Some(device)) = (self.state.ddm.clone(), self.state.device.clone())
+            else {
+                return;
+            };
+            let src = ddm.create_data_source(&qh, ());
+            src.offer(self.state.mime.clone());
+            src.set_actions(wl_data_device_manager::DndAction::Move);
+            self.drag = self
+                .state
+                .tdm
+                .as_ref()
+                .map(|m| m.get_xdg_toplevel_drag(&src, &qh, ()));
+            device.start_drag(Some(&src), &origin, None, serial);
+            self.state.source = Some(src);
+            self.state.dropped = false;
+            self.state.cancelled_at = None;
+            self.state.cancelled_inside = false;
+            self.state.over = None;
+            if let Some(f) = follow {
+                self.attach(f, surfaces);
+            }
+            let _ = self.conn.flush();
+        }
+
         fn end(&mut self) {
+            self.waiting = None;
             if let Some(d) = self.drag.take() {
                 d.destroy();
             }
@@ -849,7 +949,7 @@ pub mod wayland {
             if let Some(at) = self.state.cancelled_at {
                 let outcome = after_cancel(
                     self.ended_by_app,
-                    self.escape,
+                    self.escape || self.state.cancelled_inside,
                     at.elapsed(),
                     self.state.position,
                 );
@@ -1027,6 +1127,7 @@ pub mod wayland {
                 wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished => {
                     if !s.dropped {
                         s.cancelled_at = Some(Instant::now());
+                        s.cancelled_inside = s.under().is_some();
                     } else {
                         s.source = None;
                     }
