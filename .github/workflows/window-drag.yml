@@ -1,0 +1,147 @@
+name: window drag
+
+# Dragging dock tabs across real windows, with each desktop's own input:
+# X11 (Xvfb and XTest), sway (wlroots, where no window follows the pointer),
+# KWin and mutter (which let a window follow it), Windows (SendInput) and
+# macOS (CGEvent). Each run reorders a tab, splits a stack, cancels a drag
+# with Escape, tears a tab off into a window of its own and docks it back,
+# checks the arrangement the app reports after each, and keeps a screenshot
+# of every step. The suite's own tests run headless; this is the one place a
+# drag meets a platform window manager.
+
+on:
+  push:
+    branches: [feat/dock-drag]
+  pull_request:
+    paths:
+      - std/dock/**
+      - backends/window-winit/**
+      - backends/window-winit-drag/**
+      - capabilities/window-winit-drag/**
+      - core/src/surface_drag.rs
+      - core/src/window_backend.rs
+      - fixtures/dock-drag/**
+      - .github/workflows/window-drag.yml
+      - .github/scripts/window-drag/**
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux (X11, sway, KWin, mutter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - name: Install Linux system dependencies
+        run: .github/scripts/linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: window-drag
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p lumenc --bin lumenc
+      - name: X11 (Xvfb, XTest)
+        run: |
+          pip install --user python-xlib
+          xvfb-run -a -s "-screen 0 1280x1024x24" \
+            python3 .github/scripts/window-drag/drive.py "$PWD/target/debug/lumenc" "$RUNNER_TEMP/drag/x11" --desktop x11
+      - name: Build the Wayland desktops
+        if: success() || failure()
+        run: docker build -t lumen-window-drag .github/scripts/window-drag
+      - name: sway (wlroots)
+        if: success() || failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/drag"
+          docker run --rm -v "$PWD:$PWD" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" lumen-window-drag \
+            .github/scripts/window-drag/wayland.sh sway "$PWD/target/debug/lumenc" "$RUNNER_TEMP/drag/sway"
+      - name: KWin
+        if: success() || failure()
+        run: |
+          docker run --rm -v "$PWD:$PWD" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" lumen-window-drag \
+            .github/scripts/window-drag/wayland.sh kwin "$PWD/target/debug/lumenc" "$RUNNER_TEMP/drag/kwin"
+      - name: mutter
+        if: success() || failure()
+        run: |
+          docker run --rm -v "$PWD:$PWD" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" lumen-window-drag \
+            .github/scripts/window-drag/wayland.sh mutter "$PWD/target/debug/lumenc" "$RUNNER_TEMP/drag/mutter"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-drag-linux
+          path: ${{ runner.temp }}/drag/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows:
+    name: windows (SendInput)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: window-drag
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p lumenc --bin lumenc
+      - name: Drag
+        shell: bash
+        run: python .github/scripts/window-drag/drive.py "$PWD/target/debug/lumenc.exe" "$RUNNER_TEMP/drag/windows" --desktop windows
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-drag-windows
+          path: ${{ runner.temp }}/drag/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos:
+    name: macos (CGEvent)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: window-drag
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p lumenc --bin lumenc
+      - name: Drag
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install pyobjc-framework-Quartz
+          "$RUNNER_TEMP/venv/bin/python" .github/scripts/window-drag/drive.py "$PWD/target/debug/lumenc" "$RUNNER_TEMP/drag/macos" --desktop macos
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-drag-macos
+          path: ${{ runner.temp }}/drag/
+          if-no-files-found: ignore
+          retention-days: 7

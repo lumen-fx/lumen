@@ -2,11 +2,11 @@
   <dock id="editor" label="Editor">
     <dock-split axis="row">
       <dock-stack basis="240">
-        <dock-panel id="files" title="Files"><label text="files"/></dock-panel>
+        <dock-panel id="files" title="Files"><column grow="1" bg="#24384a"><label text="files"/></column></dock-panel>
       </dock-stack>
       <dock-stack center="true">
-        <dock-panel id="scene" title="Scene"><label text="scene"/></dock-panel>
-        <dock-panel id="game" title="Game"><label text="game"/></dock-panel>
+        <dock-panel id="scene" title="Scene"><column grow="1" bg="#20304a"><label text="scene"/></column></dock-panel>
+        <dock-panel id="game" title="Game"><column grow="1" bg="#3a2040"><label text="game"/></column></dock-panel>
       </dock-stack>
     </dock-split>
   </dock>

@@ -1,4 +1,5 @@
-// Says where each panel goes, one line a move, for whoever drives the drag.
+// Says where each panel goes, one line a move, and the whole arrangement
+// after each change, for whoever drives the drag.
 import "lumen.cdl";
 
 fn on_move(ev: int) {
@@ -7,8 +8,24 @@ fn on_move(ev: int) {
     print("dock-drag " + panel + " " + (detail["to"] as string));
 }
 
+// Where the pointer is in its window: a driver puts the pointer at a
+// desktop point and learns where the window is.
+fn on_pointer(ev: int) {
+    print("dock-drag pointer " + string(lumen::event_client_x(ev)) + " " + string(lumen::event_client_y(ev)));
+}
+
+fn on_change(ev: int) {
+    print("dock-drag layout " + dock::save().replace("\n", ""));
+}
+
 fn on_ready() {
+    // The window opens maximized; a driver needs room around it to drag a
+    // tab off it.
+    window::set_size(800.0, 500.0);
     lumen::event_on(lumen::node_get_by_id("editor"), "panelmove", "on_move");
+    lumen::event_on(lumen::node_get_by_id("editor"), "layoutchange", "on_change");
+    lumen::event_on(lumen::node_get_by_id("editor"), "pointermove", "on_pointer");
+    print("dock-drag layout " + dock::save().replace("\n", ""));
     print("dock-drag ready");
 }
 
