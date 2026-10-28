@@ -478,8 +478,11 @@ def main():
 
         # Tear-off: Files past the window's edge.
         since = len(app.lines())
-        below = oy + 500 + 120 < sh - 4
-        end = at(60, 620) if below else (min(ox + 920, sw - 4), oy + 60)
+        # To the right where there is room: a pop-out opens with its tab at
+        # its top-left corner, under the pointer, and the bottom of a screen
+        # may hold the desktop's own dock (macOS).
+        right = sw - (ox + 800) >= 60
+        end = (min(ox + 860, sw - 20), oy + 60) if right else at(60, 620)
         run.drag(at(36, 15), end)
         torn = app.wait_line("dock-drag files window", 15, since)
         app.shot("4-tear-off")
