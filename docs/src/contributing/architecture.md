@@ -819,7 +819,8 @@ the element's text and placed first among its children, as CSS does. The
 engine writes where it landed as the element's `AnonymousTextBox`, and text
 extraction paints the run in that box instead of the content box. A leaf
 carries no such component and takes the unchanged path. Editable fields never
-get one.
+get one, and neither does text that is only white space, which CSS does not
+render beside children.
 
 The engine is a `LayoutEngine` from the `LayoutBackends` registry in
 `lumen-core`. Its capability crate registers it in the `Backends` phase, before
