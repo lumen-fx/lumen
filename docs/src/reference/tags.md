@@ -137,7 +137,8 @@ An element's own text lays out as an item of its own, sized to the words,
 so `justify` places it along the main axis the same way it places a child:
 `justify="center"` on a `<button>` centres its label. It applies on a
 horizontal main axis only, and an authored `text-align` wins where both
-are set.
+are set. Beside element children, text that is only white space takes no
+room, as in CSS.
 
 ### Colour and paint
 

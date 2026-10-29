@@ -1556,7 +1556,13 @@ fn classify_node_context(
         && !text.0.is_empty()
     {
         if !editable && children.is_some_and(lays_out) {
-            return (NodeContext::None, true);
+            // White space alone beside children makes no box, as in CSS,
+            // where such a run "is instead not rendered" (Flexbox 4).
+            let blank = text
+                .0
+                .chars()
+                .all(|c| matches!(c, ' ' | '\t' | '\n' | '\r'));
+            return (NodeContext::None, !blank);
         }
         return (NodeContext::Text(entity), false);
     }

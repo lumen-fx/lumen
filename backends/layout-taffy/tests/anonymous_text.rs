@@ -249,6 +249,19 @@ fn clearing_the_text_drops_the_box() {
 }
 
 #[test]
+fn white_space_alone_beside_a_child_makes_no_box() {
+    let mut s = strip(FlexDirection::Row);
+    s.app.world.get_mut::<TextContent>(s.save).unwrap().0 = " \n\t".into();
+    s.app.tick();
+    assert_eq!(tf(&s.app, s.save).size.x, 4.0 + 16.0 + 4.0);
+    assert_eq!(
+        tf(&s.app, s.icon).absolute.x - tf(&s.app, s.save).absolute.x,
+        4.0
+    );
+    assert!(s.app.world.get::<AnonymousTextBox>(s.save).is_none());
+}
+
+#[test]
 fn a_text_field_keeps_its_text_in_its_own_box() {
     let mut app = app();
     let field = app
