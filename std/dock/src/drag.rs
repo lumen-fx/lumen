@@ -27,7 +27,6 @@ use lumen_dock_model::{
 use lumen_module::lumen_core::components::{
     A11yAnnouncementQueue, A11yLive, Length, Style, Transform,
 };
-use lumen_module::lumen_core::input::PointerEvents;
 use lumen_module::lumen_core::render_world::OverlayLayer;
 use lumen_module::lumen_core::surface_drag::{
     SurfaceDragEvent, SurfaceDragRequest, SurfaceDragSupport,
@@ -694,9 +693,8 @@ fn overlay_host(
         .find(|&k| world.get::<OverlayHost>(k).is_some());
     Some(existing.unwrap_or_else(|| {
         let e = spawn_chrome(world, "column", &["dock-overlay-host"], Some(container));
-        world
-            .entity_mut(e)
-            .insert((OverlayHost, PointerEvents::None));
+        world.entity_mut(e).insert(OverlayHost);
+        set_inline(world, e, "pointer-events", Some("none".into()));
         set_inline(world, e, "position", Some("absolute".into()));
         set_inline(world, e, "inset", Some("0".into()));
         e
@@ -731,9 +729,8 @@ fn place_overlay(world: &mut World, overlay: Entity, host: Entity, (o, s): (Vec2
 /// everything, never under the pointer.
 fn spawn_overlay(world: &mut World, class: &str, title: Option<String>) -> Entity {
     let e = spawn_chrome(world, "column", &[class], None);
-    world
-        .entity_mut(e)
-        .insert((OverlayLayer, PointerEvents::None));
+    world.entity_mut(e).insert(OverlayLayer);
+    set_inline(world, e, "pointer-events", Some("none".into()));
     set_inline(world, e, "position", Some("absolute".into()));
     if let Some(title) = title {
         let el = Element {
@@ -746,11 +743,9 @@ fn spawn_overlay(world: &mut World, class: &str, title: Option<String>) -> Entit
             ..Element::default()
         };
         let label = spawn_subtree(world, &el, Some(e), Placeholders::Resolved);
-        world.entity_mut(label).insert((
-            DockChrome,
-            lumen_module::lumen_core::components::DomHidden,
-            PointerEvents::None,
-        ));
+        world
+            .entity_mut(label)
+            .insert((DockChrome, lumen_module::lumen_core::components::DomHidden));
     }
     hide(world, e);
     e
