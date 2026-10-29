@@ -1,2 +1,2 @@
 [module]
-tags = ["dock", "dock-split", "dock-stack", "dock-panel", "dock-layout", "dock-ref", "dock-window"]
+tags = ["dock", "dock-split", "dock-stack", "dock-panel", "dock-layout", "dock-ref", "dock-window", "dock-sidebar"]
