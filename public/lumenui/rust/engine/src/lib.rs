@@ -226,7 +226,7 @@ pub mod prelude {
 
     // ECS app, its plugin trait, and the tick.
     pub use lumen_core::app::{App as EcsApp, Plugin};
-    pub use lumen_core::tick::{AppSet, FrameTiming, TickStage, WakeDeadline};
+    pub use lumen_core::tick::{AppSet, FrameTiming, LoadsPending, TickStage, WakeDeadline};
 
     // Which renderer draws the app, and on what.
     pub use lumen_core::render_backend::RendererInfo;

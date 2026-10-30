@@ -663,7 +663,10 @@ and the introspection server when `[mcp] simulate` is on. It is the mode
 target's device pixel ratio, an optional tick bound, and the virtual desktop
 the app's windows open on (`monitors`, `positioning`, `toplevel_drag`, as
 `lumenc run --monitors`, `--positioning` and `--toplevel-drag` set them); without a tick bound the run lasts
-until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
+until SIGINT or SIGTERM. Images decode on worker threads, so a run bounded to a
+few ticks can end before they land; `wait_for_loads: true` keeps the run
+ticking past its last tick until nothing the page shows is still loading, for
+up to ten seconds, and the closing frame shows the page complete. The viewport is the window size. `App::run_headless`
 is the cheaper mode that ticks the app and paints nothing.
 
 `App::screenshot` runs the same way and returns the frame the closing tick

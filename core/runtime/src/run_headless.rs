@@ -177,7 +177,17 @@ pub struct HeadlessOptions {
     /// during a drag across windows, as a Wayland compositor with the
     /// toplevel-drag protocol does (`--toplevel-drag`).
     pub toplevel_drag: bool,
+    /// With [`Self::ticks`] set, keep ticking past the last of them until
+    /// nothing the page shows is still loading (an image decoding on a
+    /// worker thread), so the closing frame shows the page complete. Gives
+    /// up after [`LOAD_WAIT_LIMIT`] and ends the run as it stands. Without a
+    /// tick bound it does nothing.
+    pub wait_for_loads: bool,
 }
+
+/// How long a bounded run with [`HeadlessOptions::wait_for_loads`] waits
+/// past its last tick for loads to land.
+pub const LOAD_WAIT_LIMIT: Duration = Duration::from_secs(10);
 
 impl Default for HeadlessOptions {
     fn default() -> Self {
@@ -187,6 +197,7 @@ impl Default for HeadlessOptions {
             monitors: Vec::new(),
             positioning: true,
             toplevel_drag: false,
+            wait_for_loads: false,
         }
     }
 }
@@ -456,6 +467,9 @@ pub fn run_app_headless_rendered(
     );
 
     let mut ticked: u64 = 0;
+    // When the bounded run's last tick found loads still pending, if it
+    // waits for them.
+    let mut load_wait: Option<Instant> = None;
     let mut requests = CloseRequests::default();
     // Deadline anchor for work-paced frames. `Some(d)` = the deadline the
     // frame we just ran was released at; the next frame is due at
@@ -503,7 +517,20 @@ pub fn run_app_headless_rendered(
         if let Some(n) = headless.ticks
             && ticked >= n
         {
-            break;
+            if !headless.wait_for_loads || !lumen_core::tick::loads_pending(&app.world) {
+                break;
+            }
+            let since = *load_wait.get_or_insert_with(Instant::now);
+            if since.elapsed() >= LOAD_WAIT_LIMIT {
+                eprintln!(
+                    "lumenc: still loading {}s after the last tick; ending the run as it stands",
+                    LOAD_WAIT_LIMIT.as_secs()
+                );
+                break;
+            }
+            // The loads finish on other threads; give them the time.
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
         }
 
         // The same check the windowed `present_frame` re-arms the redraw on.

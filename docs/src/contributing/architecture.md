@@ -663,6 +663,13 @@ loop sleeps until it (the windowed backend through `ControlFlow::WaitUntil`,
 the headless loop through a timed park) and ticks once it passes, so a pending
 timer neither polls nor waits for unrelated input.
 
+A third per-tick flag, `LoadsPending` (also in `lumen_core::tick`), says that
+content the page shows is still arriving off the main thread: the asset server
+raises it while an element waits on an image decode. It wakes nothing by
+itself. A bounded headless run with `HeadlessOptions::wait_for_loads` reads it
+after its last tick and keeps ticking until it stays down, so a screenshot
+shows the page the way a browser's `load` event would.
+
 ## The extract step
 
 Extract functions are plain function pointers, not closures, so per-extract

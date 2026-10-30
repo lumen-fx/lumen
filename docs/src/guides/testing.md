@@ -79,6 +79,11 @@ let frame = app::app()
 assert!(frame == Frame::open_png("tests/golden/main.png").unwrap());
 ```
 
+Images decode on worker threads, so three ticks can end before an image has
+landed, and a busy machine makes that more likely. When the view shows
+images, set `wait_for_loads: true`: the run keeps ticking until nothing is
+still loading, and the frame shows them every time.
+
 The `rust` template ships a test like this. The [Rust SDK
 reference](../reference/ffi.md#running-headless) has the details.
 
