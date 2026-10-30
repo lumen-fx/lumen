@@ -317,14 +317,48 @@ impl PointerTargets {
     }
 }
 
+/// The unit a wheel device reported its distance in, as the DOM
+/// `WheelEvent.deltaMode` names it. [`MouseWheel::delta`] is in pixels
+/// whatever this says; it tells a notched wheel (lines) from a touchpad or a
+/// smooth-scrolling wheel (pixels), which an app that zooms on the one and
+/// pans on the other needs to know.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WheelDeltaMode {
+    /// The device reported pixels: a touchpad, or a wheel the platform
+    /// scrolls smoothly. DOM `DOM_DELTA_PIXEL` (`0`).
+    #[default]
+    Pixel,
+    /// The device reported lines: a wheel turning in notches. DOM
+    /// `DOM_DELTA_LINE` (`1`).
+    Line,
+    /// The device reported pages. DOM `DOM_DELTA_PAGE` (`2`).
+    Page,
+}
+
+impl WheelDeltaMode {
+    /// The DOM `deltaMode` number: `0` pixels, `1` lines, `2` pages.
+    #[must_use]
+    pub fn dom_code(self) -> u32 {
+        match self {
+            Self::Pixel => 0,
+            Self::Line => 1,
+            Self::Page => 2,
+        }
+    }
+}
+
 /// Mouse-wheel scroll event. `delta` is in logical pixels and follows the DOM
 /// `WheelEvent` convention: positive y scrolls toward the end of the content
 /// (the wheel turned toward the user), positive x toward the right.
-/// Backends normalise line-based wheel input to pixels with a fixed 32 px/line.
+/// Backends normalise line-based wheel input to pixels with a fixed 32 px/line,
+/// and say in [`Self::delta_mode`] which unit the device reported.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct MouseWheel {
     /// Scroll delta in logical pixels.
     pub delta: Vec2,
+    /// The unit the device reported `delta` in before it was converted to
+    /// pixels.
+    pub delta_mode: WheelDeltaMode,
     /// Cursor position at the moment of the scroll, used for hit-testing.
     pub position: Vec2,
     /// The position relative to the target's border box, when the backend

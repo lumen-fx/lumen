@@ -865,6 +865,12 @@ fn event_fns() -> Vec<ScriptFn> {
             || ScriptValue::F64(event::event_delta().1),
         ),
         accessor(
+            "event_delta_mode",
+            "The unit the wheel reported in: 0 pixels, 1 lines, 2 pages.",
+            T::Int,
+            || ScriptValue::I64(i64::from(event::event_delta_mode().dom_code())),
+        ),
+        accessor(
             "event_pointer_id",
             "The id of the pointer that produced the event.",
             T::Int,

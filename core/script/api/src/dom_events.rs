@@ -789,6 +789,7 @@ pub fn queue_pointer_and_key_events(
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);
         data.delta = (w.delta.x as f64, w.delta.y as f64);
+        data.delta_mode = w.delta_mode;
         queue.push(plain(data, e));
     }
     // keydown targets the entity the input router routed the key to.
@@ -1788,6 +1789,81 @@ pub(crate) mod text_event_tests {
         assert!(
             !event::is_default_prevented("click", target),
             "a cancel is recorded for its own event type only",
+        );
+        event::clear_all_bindings();
+        publish_dom_index(DomIndex::default());
+    }
+
+    /// A wheel event says which unit the device reported in: a wheel that
+    /// turned a notch reads as lines, a touchpad as pixels, and both carry
+    /// their distance in pixels.
+    #[test]
+    fn a_wheel_says_whether_it_moved_in_lines_or_pixels() {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::input::{Hovered, MouseWheel, WheelDeltaMode};
+        use lumen_core::node::{DomIndex, DomRecord, publish_dom_index};
+
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        register_dom_event_messages(&mut world);
+        world.init_resource::<PendingDomEvents>();
+        let canvas = world
+            .spawn((
+                Transform {
+                    absolute: Vec2::ZERO,
+                    size: Vec2::new(200.0, 200.0),
+                    baseline_y: None,
+                },
+                Hovered,
+            ))
+            .id();
+        publish_dom_index(DomIndex::build(vec![DomRecord {
+            entity: canvas,
+            generation: canvas.generation().to_bits(),
+            tag: String::new(),
+            id: None,
+            classes: Vec::new(),
+            parent: None,
+            children: Vec::new(),
+            child_index: 0,
+            sibling_count: 0,
+            doc_order: 0,
+        }]));
+        let node = lumen_core::node::NodeHandle::new(canvas).pack();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&seen);
+        event::register_native_binding(
+            node,
+            "wheel".to_string(),
+            false,
+            Arc::new(move || {
+                let (_, dy) = event::event_delta();
+                sink.lock().unwrap().push(format!(
+                    "{dy} mode={}",
+                    event::event_delta_mode().dom_code()
+                ));
+            }),
+        );
+
+        for (dy, delta_mode) in [(32.0, WheelDeltaMode::Line), (5.0, WheelDeltaMode::Pixel)] {
+            world.write_message(MouseWheel {
+                delta: Vec2::new(0.0, dy),
+                delta_mode,
+                position: Vec2::new(10.0, 10.0),
+                local: None,
+                time_stamp: lumen_core::time::Instant::now(),
+            });
+        }
+        world
+            .run_system_once(queue_pointer_and_key_events)
+            .expect("system ran");
+        deliver_input_events(&mut world);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["32 mode=1".to_string(), "5 mode=0".to_string()],
         );
         event::clear_all_bindings();
         publish_dom_index(DomIndex::default());

@@ -282,6 +282,7 @@ impl Event {
     fn client_y(self) { return lumen::event_client_y(self.handle); }
     fn delta_x(self) { return lumen::event_delta_x(self.handle); }
     fn delta_y(self) { return lumen::event_delta_y(self.handle); }
+    fn delta_mode(self) { return lumen::event_delta_mode(self.handle); }
     fn pointer_id(self) { return lumen::event_pointer_id(self.handle); }
     fn pointer_type(self) { return lumen::event_pointer_type(self.handle); }
     fn is_primary(self) { return lumen::event_is_primary(self.handle); }

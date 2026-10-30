@@ -860,6 +860,7 @@ mod wheel_routing_tests {
             .resource_mut::<Messages<MouseWheel>>()
             .write(MouseWheel {
                 delta: Vec2::new(0.0, dy),
+                delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
                 position: Vec2::new(10.0, 60.0),
                 local: None,
                 time_stamp: lumen_core::time::Instant::now(),

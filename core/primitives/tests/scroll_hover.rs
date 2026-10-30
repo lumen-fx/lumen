@@ -77,6 +77,7 @@ fn scroll_under_stationary_cursor_rehovers_same_tick() {
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, 120.0),
+            delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
             position: glam::Vec2::new(100.0, 50.0),
             local: None,
             time_stamp: lumen_core::time::Instant::now(),

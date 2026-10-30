@@ -1055,6 +1055,7 @@ mod slider_key_tests {
             .resource_mut::<Messages<MouseWheel>>()
             .write(MouseWheel {
                 delta: glam::Vec2::new(0.0, WHEEL_NOTCH_PX * 100.0),
+                delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
                 position: glam::Vec2::ZERO,
                 local: None,
                 time_stamp: lumen_core::time::Instant::now(),

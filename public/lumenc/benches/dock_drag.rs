@@ -327,6 +327,7 @@ fn main() {
         pointer(&mut app, strip, None);
         app.world.write_message(MouseWheel {
             delta: Vec2::new(0.0, delta),
+            delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
             position: strip,
             local: None,
             time_stamp: Instant::now(),

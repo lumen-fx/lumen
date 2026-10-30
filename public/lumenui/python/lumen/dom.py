@@ -644,10 +644,18 @@ class Event:
         return (ev.client_x, ev.client_y) if ev else (0.0, 0.0)
 
     def delta(self) -> tuple[float, float]:
-        """Wheel delta ``(dx, dy)``."""
+        """Wheel delta ``(dx, dy)``, in logical pixels."""
 
         ev = self._ev
         return (ev.delta_x, ev.delta_y) if ev else (0.0, 0.0)
+
+    def delta_mode(self) -> int:
+        """The unit the wheel reported its delta in before it was converted
+        to pixels, the DOM ``deltaMode``: ``0`` pixels (a touchpad), ``1``
+        lines (a wheel turning in notches), ``2`` pages."""
+
+        ev = self._ev
+        return ev.delta_mode if ev else 0
 
     def button(self) -> int:
         """The button for pointer events, the web ``button`` code (0 primary,

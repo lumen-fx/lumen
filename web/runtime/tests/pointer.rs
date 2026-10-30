@@ -227,7 +227,8 @@ fn moves_between_two_frames_arrive_as_one() {
 }
 
 /// A wheel that reports lines is converted to pixels the way the window
-/// backend converts it, so one handler reads the same distance on both.
+/// backend converts it, so one handler reads the same distance on both, and
+/// still says it moved in lines.
 #[wasm_bindgen_test]
 fn a_wheel_reaches_the_handler_in_pixels() {
     let (mut app, host, pad) = boot();
@@ -245,6 +246,7 @@ fn a_wheel_reaches_the_handler_in_pixels() {
     assert_eq!(count(&app, &host, "wheel"), 1);
     assert_eq!(float(&app, &host, "wheel_x"), 30.0);
     assert_eq!(float(&app, &host, "wheel_delta_y"), 96.0);
+    assert_eq!(float(&app, &host, "wheel_delta_mode"), 1.0);
     assert!(
         !wheel.default_prevented(),
         "the page still scrolls: nothing cancels a wheel"

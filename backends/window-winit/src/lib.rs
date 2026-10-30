@@ -39,7 +39,9 @@ pub mod extension;
 mod pointer;
 
 use bevy_ecs::message::{MessageCursor, Messages};
-use lumen_core::input::{CloseReason, PendingFileDrops, WindowFocused, WindowOccluded};
+use lumen_core::input::{
+    CloseReason, PendingFileDrops, WheelDeltaMode, WindowFocused, WindowOccluded,
+};
 use lumen_core::prelude::*;
 use lumen_core::render_world::is_primary_target;
 use lumen_core::text_events::ImeSurroundingResponse;
@@ -930,10 +932,11 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 self.want_frame();
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let v = wheel_delta(delta);
+                let (v, delta_mode) = wheel_delta(delta);
                 let pos = self.pointer_position(entity);
                 self.app.world.write_message(MouseWheel {
                     delta: v,
+                    delta_mode,
                     position: pos,
                     local: None,
                     time_stamp: lumen_core::time::Instant::now(),
@@ -3003,18 +3006,25 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
     }
 }
 
-/// A winit wheel delta as the logical pixels [`MouseWheel`] carries.
+/// A winit wheel delta as the logical pixels [`MouseWheel`] carries, and the
+/// unit the device reported it in.
 ///
 /// Line-based wheel events are normalised at 32 px/line, which matches
 /// GTK/X11's gtk-scroll-lines default for a 16pt line; apps tune
 /// per-container feel through `Scroll::sensitivity` rather than this. winit
 /// reports a wheel turned toward the user as negative, and `MouseWheel`
 /// follows the DOM, where that is positive, so the sign flips.
-fn wheel_delta(delta: MouseScrollDelta) -> glam::Vec2 {
+fn wheel_delta(delta: MouseScrollDelta) -> (glam::Vec2, WheelDeltaMode) {
     const LINE_PX: f32 = 32.0;
-    -match delta {
-        MouseScrollDelta::LineDelta(x, y) => glam::Vec2::new(x * LINE_PX, y * LINE_PX),
-        MouseScrollDelta::PixelDelta(p) => glam::Vec2::new(p.x as f32, p.y as f32),
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (
+            -glam::Vec2::new(x * LINE_PX, y * LINE_PX),
+            WheelDeltaMode::Line,
+        ),
+        MouseScrollDelta::PixelDelta(p) => (
+            -glam::Vec2::new(p.x as f32, p.y as f32),
+            WheelDeltaMode::Pixel,
+        ),
     }
 }
 
@@ -3543,21 +3553,23 @@ mod tests {
     }
 
     /// A wheel turned toward the user scrolls down, which the DOM writes as a
-    /// positive `deltaY`; winit writes it negative.
+    /// positive `deltaY`; winit writes it negative. A notched wheel says it
+    /// moved in lines and a touchpad in pixels, though both arrive in pixels.
     #[test]
     fn a_wheel_toward_the_user_is_a_positive_delta() {
+        use lumen_core::input::WheelDeltaMode;
         use winit::dpi::PhysicalPosition;
         use winit::event::MouseScrollDelta;
 
         assert_eq!(
             wheel_delta(MouseScrollDelta::LineDelta(0.0, -1.0)),
-            glam::Vec2::new(0.0, 32.0)
+            (glam::Vec2::new(0.0, 32.0), WheelDeltaMode::Line)
         );
         assert_eq!(
             wheel_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
                 -5.0, -40.0
             ))),
-            glam::Vec2::new(5.0, 40.0)
+            (glam::Vec2::new(5.0, 40.0), WheelDeltaMode::Pixel)
         );
     }
 

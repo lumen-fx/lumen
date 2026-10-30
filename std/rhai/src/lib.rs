@@ -831,6 +831,9 @@ fn register_dom_events(
     });
     engine.register_fn("delta_x", |_e: &mut Event| -> f64 { ev::event_delta().0 });
     engine.register_fn("delta_y", |_e: &mut Event| -> f64 { ev::event_delta().1 });
+    engine.register_fn("delta_mode", |_e: &mut Event| -> i64 {
+        i64::from(ev::event_delta_mode().dom_code())
+    });
     engine.register_fn("pointer_id", |_e: &mut Event| -> i64 {
         ev::event_pointer().id as i64
     });

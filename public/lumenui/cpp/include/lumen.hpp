@@ -1581,10 +1581,14 @@ public:
     std::pair<double, double> client_position() const {
         return ev_ ? std::make_pair(ev_->client_x, ev_->client_y) : std::make_pair(0.0, 0.0);
     }
-    /// Wheel delta `(dx, dy)`.
+    /// Wheel delta `(dx, dy)`, logical pixels.
     std::pair<double, double> delta() const {
         return ev_ ? std::make_pair(ev_->delta_x, ev_->delta_y) : std::make_pair(0.0, 0.0);
     }
+    /// The unit the wheel reported its delta in before it was converted to
+    /// pixels, the DOM `deltaMode`: `LUMEN_DELTA_PIXEL` (a touchpad),
+    /// `LUMEN_DELTA_LINE` (a wheel turning in notches) or `LUMEN_DELTA_PAGE`.
+    std::uint32_t delta_mode() const noexcept { return ev_ ? ev_->delta_mode : LUMEN_DELTA_PIXEL; }
     /// The button for pointer events, the web `button` code (0 primary, 1
     /// middle, 2 secondary, 3 back, 4 forward, 5 pen eraser, -1 none).
     std::int64_t button() const noexcept { return ev_ ? ev_->button : -1; }

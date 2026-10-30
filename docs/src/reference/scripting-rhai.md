@@ -389,6 +389,7 @@ The handler receives an `Event`:
 | `client_x()` / `client_y()` | `float` | Pointer position in window coordinates. |
 | `movement_x()` / `movement_y()` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `delta_x()` / `delta_y()` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
+| `delta_mode()` | `int` | The unit the wheel reported its delta in, the DOM `deltaMode`: `0` pixels (a touchpad), `1` lines (a wheel turning in notches), `2` pages. The delta itself is in pixels either way. |
 | `position()` | `map` | `x`, `y`, `client_x`, `client_y`. |
 | `modifiers()` | `map` | `shift`, `ctrl`, `alt`, `super`. |
 | `prevent_default()` | | Cancel the default action. |

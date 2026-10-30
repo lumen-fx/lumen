@@ -147,6 +147,7 @@ host "lumen" {
     any event_detail(...);
     float event_delta_x(int);
     float event_delta_y(int);
+    int event_delta_mode(int);
     int event_pointer_id(int);
     string event_pointer_type(int);
     bool event_is_primary(int);

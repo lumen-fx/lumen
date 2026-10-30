@@ -343,6 +343,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, -lumen_primitives::WHEEL_NOTCH_PX),
+            delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
             time_stamp: lumen_core::time::Instant::now(),
@@ -366,6 +367,7 @@ fn wheel_over_slider_steps_value_and_does_not_scroll_ancestor() {
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, lumen_primitives::WHEEL_NOTCH_PX),
+            delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
             position: glam::Vec2::new(110.0, 22.0),
             local: None,
             time_stamp: lumen_core::time::Instant::now(),

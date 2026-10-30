@@ -64,6 +64,9 @@ pub struct EventData {
     pub pointer: lumen_core::input::PointerData,
     /// Wheel scroll delta, logical pixels.
     pub delta: (f64, f64),
+    /// The unit the wheel device reported [`Self::delta`] in, before it was
+    /// converted to pixels.
+    pub delta_mode: lumen_core::input::WheelDeltaMode,
     /// Text value for `input` / `change` events.
     pub value: String,
     /// What a custom event carries ([`crate::dom_events::CustomEvent`]);
@@ -192,6 +195,17 @@ pub fn event_pointer() -> lumen_core::input::PointerData {
 /// `ev.delta()` as `(x, y)`.
 pub fn event_delta() -> (f64, f64) {
     current_cell().read().map(|g| g.delta).unwrap_or((0.0, 0.0))
+}
+
+/// `ev.delta_mode()`: the unit the wheel reported its distance in. Hosts
+/// hand scripts its DOM `deltaMode` number ([`WheelDeltaMode::dom_code`]).
+///
+/// [`WheelDeltaMode::dom_code`]: lumen_core::input::WheelDeltaMode::dom_code
+pub fn event_delta_mode() -> lumen_core::input::WheelDeltaMode {
+    current_cell()
+        .read()
+        .map(|g| g.delta_mode)
+        .unwrap_or_default()
 }
 
 /// `ev.value()`.
