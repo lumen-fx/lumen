@@ -981,11 +981,11 @@ fn extract_menubar(
     let Some(node) = iter.next() else {
         return Ok(None);
     };
-    if iter.next().is_some() {
+    if let Some(second) = iter.next() {
         return Err(ParseError::Xml(
             "duplicate <menubar>: at most one allowed per <root>".to_string(),
         )
-        .at(node.range().start));
+        .at(second.range().start));
     }
     let mut bar = MenuBarSpec::default();
     for menu_node in node.children().filter(|c| c.is_element()) {
