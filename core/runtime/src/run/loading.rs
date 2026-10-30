@@ -455,8 +455,7 @@ pub(crate) fn load_ir(
     // from source instantiates the same fragments a built artifact carries,
     // and so a malformed block fails the load rather than the window.
     let scripted = script_fragments(
-        &html,
-        &html_map,
+        (&html, &html_map),
         html_path,
         dir,
         plan,
@@ -720,8 +719,7 @@ impl Languages<'_> {
 /// path. `dir` is the app root; the script files sit in its `src/`.
 #[cfg(feature = "runtime-parse")]
 fn script_fragments(
-    html: &str,
-    html_map: &lumen_ir::source_map::SourceMap,
+    (html, html_map): (&str, &lumen_ir::source_map::SourceMap),
     html_path: &Path,
     dir: &Path,
     plan: Option<&crate::pages::PagePlan>,

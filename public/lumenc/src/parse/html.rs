@@ -387,7 +387,7 @@ fn collect_declarations(
     let mut known = external.names();
     for node in &declarations {
         let name = node.attribute("name").ok_or_else(|| {
-            ParseError::Xml(format!("<template> requires a name=\"...\" attribute"))
+            ParseError::Xml("<template> requires a name=\"...\" attribute".to_string())
                 .at(node.range().start)
         })?;
         known.insert(name.to_string());
@@ -982,9 +982,9 @@ fn extract_menubar(
         return Ok(None);
     };
     if iter.next().is_some() {
-        return Err(ParseError::Xml(format!(
-            "duplicate <menubar>: at most one allowed per <root>"
-        ))
+        return Err(ParseError::Xml(
+            "duplicate <menubar>: at most one allowed per <root>".to_string(),
+        )
         .at(node.range().start));
     }
     let mut bar = MenuBarSpec::default();
@@ -1000,7 +1000,7 @@ fn extract_menubar(
             .attribute("label")
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                ParseError::Xml(format!("<menu> requires a label=\"...\" attribute"))
+                ParseError::Xml("<menu> requires a label=\"...\" attribute".to_string())
                     .at(menu_node.range().start)
             })?;
         let mut items = Vec::new();
@@ -1011,8 +1011,10 @@ fn extract_menubar(
                         .attribute("id")
                         .map(|s| s.to_string())
                         .ok_or_else(|| {
-                            ParseError::Xml(format!("<menuitem> requires an id=\"...\" attribute"))
-                                .at(child.range().start)
+                            ParseError::Xml(
+                                "<menuitem> requires an id=\"...\" attribute".to_string(),
+                            )
+                            .at(child.range().start)
                         })?;
                     let item_label = child
                         .attribute("label")
@@ -1100,13 +1102,14 @@ fn build_composed_widget(
         // its first child would be silently surprising. Reject so authors
         // get a clear error. Inside one it is an element like any other.
         "tab" if node.parent_element().map(|p| p.tag_name().name()) != Some("tabs") => Err(
-            ParseError::Xml(format!("<tab> may only appear inside <tabs>")).at(node.range().start),
+            ParseError::Xml("<tab> may only appear inside <tabs>".to_string())
+                .at(node.range().start),
         ),
         "dropdown" => build_dropdown(node, tag, src, lint_findings, frag, in_for_body).map(Some),
         // `<option>` outside of `<dropdown>` is meaningless - same
         // rejection rule as `<tab>` outside of `<tabs>`.
         "option" => Err(
-            ParseError::Xml(format!("<option> may only appear inside <dropdown>"))
+            ParseError::Xml("<option> may only appear inside <dropdown>".to_string())
                 .at(node.range().start),
         ),
         "menu" => build_menu(node, src, lint_findings).map(Some),
@@ -1143,10 +1146,11 @@ fn build_tooltip(
     // rejects it: an empty key can never resolve.
     let translatable = match node.attribute("translatable").map(str::trim) {
         Some("") => {
-            return Err(ParseError::Xml(format!(
+            return Err(ParseError::Xml(
                 "<tooltip>: translatable attribute requires a \
                  catalogue key (e.g. \"app-title\")"
-            ))
+                    .to_string(),
+            )
             .at(node.range().start));
         }
         other => other.map(str::to_string),
@@ -1207,7 +1211,7 @@ fn build_dropdown(
         .attribute("bind-value")
         .map(signal_attr_name)
         .ok_or_else(|| {
-            ParseError::Xml(format!("<dropdown> requires bind-value=\"signal-name\""))
+            ParseError::Xml("<dropdown> requires bind-value=\"signal-name\"".to_string())
                 .at(node.range().start)
         })?;
     let open_signal = format!("__dropdown_open:{signal_name}");
@@ -1237,7 +1241,8 @@ fn build_dropdown(
             .attribute("value")
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                ParseError::Xml(format!("<option> requires value=\"...\"")).at(child.range().start)
+                ParseError::Xml("<option> requires value=\"...\"".to_string())
+                    .at(child.range().start)
             })?;
         let label = child
             .attribute("label")
@@ -1379,7 +1384,7 @@ fn build_menu(
     lint_findings: &mut Vec<LintFinding>,
 ) -> Result<Element, ParseError> {
     let menu_id = node.attribute("id").map(|s| s.to_string()).ok_or_else(|| {
-        ParseError::Xml(format!("<menu> requires id=\"...\"")).at(node.range().start)
+        ParseError::Xml("<menu> requires id=\"...\"".to_string()).at(node.range().start)
     })?;
     let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
     for child in node
@@ -1392,7 +1397,7 @@ fn build_menu(
                     .attribute("id")
                     .map(|s| s.to_string())
                     .ok_or_else(|| {
-                        ParseError::Xml(format!("<menuitem> requires id=\"...\""))
+                        ParseError::Xml("<menuitem> requires id=\"...\"".to_string())
                             .at(child.range().start)
                     })?;
                 let label = child
@@ -1530,9 +1535,9 @@ fn synthesize_widget_parts(
     if tag == "checkbox" || tag == "radio" {
         if tag == "radio" {
             let (Some(group), Some(value)) = (&attrs.radio_group, &attrs.radio_value) else {
-                return Err(ParseError::Xml(format!(
-                    "<radio> requires group=\"signal\" and value=\"...\""
-                ))
+                return Err(ParseError::Xml(
+                    "<radio> requires group=\"signal\" and value=\"...\"".to_string(),
+                )
                 .at(node.range().start));
             };
             // `checked="true"` seeds the group signal (first spawned
@@ -1780,7 +1785,7 @@ fn synthesize_widget_parts(
     }
     if tag == "tab" && attrs.tab.as_ref().is_none_or(|t| t.name.is_empty()) {
         return Err(
-            ParseError::Xml(format!("<tab> requires a name=\"...\" attribute"))
+            ParseError::Xml("<tab> requires a name=\"...\" attribute".to_string())
                 .at(node.range().start),
         );
     }
@@ -2011,7 +2016,7 @@ fn build_element(
     if let Some(key) = frag.use_key(node, &tag) {
         if key.is_empty() {
             return Err(
-                ParseError::Xml(format!("<use> requires a template=\"...\" attribute"))
+                ParseError::Xml("<use> requires a template=\"...\" attribute".to_string())
                     .at(node.range().start),
             );
         }
