@@ -12549,6 +12549,7 @@ Used by:
 - lumen-render-wgpu 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-text-cosmic 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-window-winit 0.0.11 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-drag 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-async-tokio-capability 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-devtools-capability 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-http-ureq-capability 0.0.11 - https://github.com/lumen-fx/lumen
@@ -12565,6 +12566,7 @@ Used by:
 - lumen-render-cpu-capability 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-render-gpu-capability 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-window-winit-capability 0.0.11 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-drag-capability 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-core 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-assets 0.0.11 - https://github.com/lumen-fx/lumen
 - lumen-capability 0.0.11 - https://github.com/lumen-fx/lumen
