@@ -3428,7 +3428,7 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
 name = "link-recorder"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "serde_json",
  "sha2",
@@ -3561,7 +3561,7 @@ dependencies = [
 
 [[package]]
 name = "lumen"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "cbindgen",
@@ -3585,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-a11y-accesskit"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-archive"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "flate2",
@@ -3614,7 +3614,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-assets"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
@@ -3631,7 +3631,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-async-tokio"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
@@ -3643,7 +3643,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-async-tokio-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-async-tokio",
  "lumen-capability",
@@ -3651,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-audio"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-assets",
  "lumen-candela-dev",
@@ -3667,14 +3667,14 @@ dependencies = [
 
 [[package]]
 name = "lumen-browser"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-module",
 ]
 
 [[package]]
 name = "lumen-candela"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-host",
  "lumen-module",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-candela-dev"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-candela",
@@ -3699,7 +3699,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-candela-dev-host"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "candela-lang",
@@ -3717,7 +3717,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-candela-host"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "candela-vm",
@@ -3729,7 +3729,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-canvas"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -3749,7 +3749,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability-macros",
  "lumen-core",
@@ -3760,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-capability-macros"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3769,7 +3769,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-cookie"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-dev",
  "lumen-core",
@@ -3782,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-core"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "bevy_tasks",
@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-crash"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "libc",
  "lumen-capability",
@@ -3814,7 +3814,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-crash-report"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -3822,11 +3822,11 @@ dependencies = [
 
 [[package]]
 name = "lumen-devsetup"
-version = "0.0.11"
+version = "0.0.12"
 
 [[package]]
 name = "lumen-devtools"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -3840,7 +3840,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-devtools-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-devtools",
@@ -3848,7 +3848,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-dock"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -3866,7 +3866,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-dock-model"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "proptest",
  "serde",
@@ -3875,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-download"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-dev",
  "lumen-core",
@@ -3891,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-dylib"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -3907,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-fs"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-dev",
  "lumen-core",
@@ -3924,7 +3924,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-html"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-core",
  "lumen-ir",
@@ -3934,7 +3934,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-http-ureq"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-core",
@@ -3944,7 +3944,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-http-ureq-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-http-ureq",
@@ -3952,7 +3952,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-i18n"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "fixed_decimal",
@@ -3968,7 +3968,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-input"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -3980,7 +3980,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-ir"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bincode",
  "lumen-core",
@@ -3993,14 +3993,14 @@ dependencies = [
 
 [[package]]
 name = "lumen-js"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-module",
 ]
 
 [[package]]
 name = "lumen-launcher"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen",
  "lumen-archive",
@@ -4023,7 +4023,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-layout-taffy"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4037,7 +4037,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-layout-taffy-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-layout-taffy",
@@ -4045,7 +4045,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-lsp"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-rhai",
  "lumenc",
@@ -4060,7 +4060,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-lua"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4074,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-mcp"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "base64 0.23.1",
  "bevy_ecs",
@@ -4093,7 +4093,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-mcp-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-mcp",
@@ -4101,7 +4101,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-mcp-server"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "serde",
  "serde_json",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-module"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-assets",
  "lumen-core",
@@ -4136,7 +4136,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-module-fixture"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-module-fixture-host"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-dylib",
  "lumenc",
@@ -4154,7 +4154,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-module-macros"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4163,14 +4163,14 @@ dependencies = [
 
 [[package]]
 name = "lumen-module-registry"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-core",
 ]
 
 [[package]]
 name = "lumen-modules"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "libc",
@@ -4190,7 +4190,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-clipboard"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "arboard",
  "lumen-os-mime",
@@ -4201,7 +4201,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-crash"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "crash-context",
@@ -4219,7 +4219,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-crash-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-crash",
@@ -4227,7 +4227,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-dnd"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4237,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-filedialog"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-capability",
@@ -4251,7 +4251,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-filedialog-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-filedialog",
@@ -4259,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-hotkey"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "global-hotkey",
@@ -4270,7 +4270,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-hotkey-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-hotkey",
@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-launcher"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-capability",
@@ -4289,7 +4289,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-launcher-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-launcher",
@@ -4297,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-lifecycle"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "libc",
@@ -4313,7 +4313,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-lifecycle-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-lifecycle",
@@ -4321,7 +4321,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-menu"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4332,14 +4332,14 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-mime"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "smallvec",
 ]
 
 [[package]]
 name = "lumen-os-notify"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-capability",
@@ -4352,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-notify-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-notify",
@@ -4360,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-power"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "core-foundation 0.10.1",
@@ -4374,7 +4374,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-power-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-power",
@@ -4382,7 +4382,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-tray"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "image",
@@ -4397,7 +4397,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-os-tray-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-os-tray",
@@ -4405,7 +4405,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-paint"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-plugin"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "libloading 0.9.0",
  "lumen-core",
@@ -4438,7 +4438,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-plugin-abi"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bincode",
  "libloading 0.9.0",
@@ -4450,7 +4450,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-plugin-fixture"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-plugin",
  "serde",
@@ -4458,7 +4458,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-portable"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-candela-dev-host",
@@ -4478,7 +4478,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-prerender"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-candela",
@@ -4496,7 +4496,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-primitives"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4508,7 +4508,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-process"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-candela-dev",
@@ -4523,7 +4523,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-render-cpu"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "bevy_tasks",
@@ -4544,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-render-cpu-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-render-cpu",
@@ -4552,7 +4552,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-render-gpu-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-render-wgpu",
@@ -4560,7 +4560,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-render-wgpu"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "bevy_tasks",
@@ -4582,7 +4582,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-rhai"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4596,7 +4596,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-runtime"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "ctrlc",
@@ -4654,7 +4654,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-scene"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-script"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "bincode",
@@ -4692,7 +4692,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-server"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "ctrlc",
  "lumen-ir",
@@ -4707,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-ssr"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
@@ -4725,7 +4725,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-storage"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-dev",
  "lumen-core",
@@ -4737,7 +4737,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-surface"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "ash",
  "bevy_ecs",
@@ -4758,21 +4758,21 @@ dependencies = [
 
 [[package]]
 name = "lumen-surface-protocol"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "lumen-svg"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-module",
 ]
 
 [[package]]
 name = "lumen-text"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4783,7 +4783,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-text-cosmic"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "cosmic-text",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-web"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-core",
  "lumen-html",
@@ -4812,7 +4812,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-web-dom"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
@@ -4833,7 +4833,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-web-http"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "js-sys",
  "lumen-script",
@@ -4845,7 +4845,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-web-runtime"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "js-sys",
@@ -4868,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-websocket"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-candela-dev",
  "lumen-core",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-widget"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4891,7 +4891,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-widget-macros"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "lumen-core",
@@ -4904,7 +4904,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-window-winit"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "ashpd",
  "bevy_ecs",
@@ -4926,7 +4926,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-window-winit-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-window-winit",
@@ -4934,7 +4934,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-window-winit-drag"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "getrandom 0.3.4",
@@ -4952,7 +4952,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-window-winit-drag-capability"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumen-capability",
  "lumen-window-winit-drag",
@@ -4960,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "lumenc"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "base64 0.23.1",
  "bevy_ecs",
@@ -5038,7 +5038,7 @@ dependencies = [
 
 [[package]]
 name = "lumenc-plugin"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "libloading 0.9.0",
  "lumen-ir",
@@ -5052,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "lumenc-plugin-fixture"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "lumenc-plugin",
  "serde",
@@ -5060,7 +5060,7 @@ dependencies = [
 
 [[package]]
 name = "lumenui-engine"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "glam 0.33.3",
  "image",
