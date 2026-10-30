@@ -156,7 +156,8 @@ root {
  * Flat, borderless, fg-alpha fill; disabled = the documented 50 %
  * opacity of the whole control.
  */
-button {
+button,
+menuitem {
   bg: var(--lumen-surface);
   radius: var(--lumen-radius);
   padding: 5 14;
@@ -164,10 +165,10 @@ button {
   text-color: var(--lumen-text);
   transition: bg 150ms ease;
 }
-button:hover { bg: var(--lumen-surface-hover); }
-button:active { bg: var(--lumen-surface-active); }
-button:focus-visible { outline: 2 var(--lumen-focus-ring); }
-button:disabled { bg: var(--lumen-disabled-bg); opacity: 0.5; }
+button:hover, menuitem:hover { bg: var(--lumen-surface-hover); }
+button:active, menuitem:active { bg: var(--lumen-surface-active); }
+button:focus-visible, menuitem:focus-visible { outline: 2 var(--lumen-focus-ring); }
+button:disabled, menuitem:disabled { bg: var(--lumen-disabled-bg); opacity: 0.5; }
 
 /* Suggested-action: bold solid accent [ADW style-classes]. */
 button.primary {
@@ -286,7 +287,7 @@ tile:disabled { opacity: 0.5; }
 .dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
 
 /* === Menus (popovers) === */
-.menu-panel {
+menu {
   transition: opacity 150ms ease;
   bg: var(--lumen-panel);
   radius: var(--lumen-radius-lg);
@@ -294,11 +295,11 @@ tile:disabled { opacity: 0.5; }
   padding: 6;
   popup-gap: var(--lumen-popup-gap);
 }
-.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
-.menu-item:hover { bg: var(--lumen-panel-hover); }
-.menu-item:focus { outline: 2 var(--lumen-focus-ring); }
+menuitem { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
+menuitem:hover { bg: var(--lumen-panel-hover); }
+menuitem:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-accel { text-color: var(--lumen-text-muted); }
-.menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
 /* === Split ===
  * `<split>` keeps its children as the panes and puts a gutter between
@@ -353,7 +354,7 @@ tile:disabled { opacity: 0.5; }
  *   .menubar           (tag=row)
  *     .menubar-menu      (tag=column, one per <menu>)
  *       .menubar-button    (tag=button, the menu's label)
- *       .menu-panel        (the menu, styled as above)
+ *       menu               (the menu, styled as above)
  */
 .menubar { bg: var(--lumen-window-bg); border-bottom: 1px solid var(--lumen-border); padding: 2 4; gap: 2; }
 .menubar-button { bg: var(--lumen-window-bg); text-color: var(--lumen-text); radius: var(--lumen-radius); padding: 0 10; }

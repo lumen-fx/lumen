@@ -94,9 +94,9 @@ pub use switch::{
     register_switch_systems, step_switch_thumb, sync_switch_visuals,
 };
 pub use tabs::{
-    DropdownButton, DropdownOptionButton, DropdownOptionSpec, MenuItemButton, TAB_SELECTED_BG, Tab,
-    TabButtonStyle, TabPicks, TabStrip, TabStripButton, Tabs, TabsPlugin, TabsSet,
-    dispatch_tab_clicks, sync_tab_button_visuals, sync_tabs, tab_label, tab_name,
+    DropdownButton, DropdownOptionButton, DropdownOptionSpec, MenuAccel, MenuItem, MenuItemButton,
+    TAB_SELECTED_BG, Tab, TabButtonStyle, TabPicks, TabStrip, TabStripButton, Tabs, TabsPlugin,
+    TabsSet, dispatch_tab_clicks, sync_tab_button_visuals, sync_tabs, tab_label, tab_name,
 };
 pub use tooltip::{
     HoverStartedAt, TooltipPlugin, TooltipPopup, TooltipSource, cursor_tooltip_origin,

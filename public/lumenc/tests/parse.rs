@@ -1800,6 +1800,16 @@ fn tab_strip_button_spawns_with_tab_button_style_from_css() {
 }
 
 /// Depth-first search for the first descendant (or self) carrying `class`.
+fn find_by_tag<'a>(
+    el: &'a lumenc::layout_ir::Element,
+    tag: &str,
+) -> Option<&'a lumenc::layout_ir::Element> {
+    if el.tag == tag {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_by_tag(c, tag))
+}
+
 fn find_by_class<'a>(
     el: &'a lumenc::layout_ir::Element,
     class: &str,
@@ -1872,12 +1882,11 @@ fn default_skin_applies_to_all_widgets_with_zero_warnings() {
     assert!(dropdown_panel.attrs.bg.is_some());
     assert!(!dropdown_panel.attrs.shadows.is_empty());
 
-    let menu_panel = find_by_class(&ir.root, "menu-panel").expect("menu-panel element present");
+    let menu_panel = find_by_tag(&ir.root, "menu").expect("menu element present");
     assert!(menu_panel.attrs.bg.is_some());
     assert!(!menu_panel.attrs.shadows.is_empty());
 
-    let menu_separator =
-        find_by_class(&ir.root, "menu-separator").expect("menu-separator element present");
+    let menu_separator = find_by_tag(&ir.root, "separator").expect("separator element present");
     assert!(menu_separator.attrs.bg.is_some());
 
     let tab_strip = find_by_class(&ir.root, "tab-strip").expect("tab-strip element present");
@@ -2402,13 +2411,14 @@ fn menu_panel_is_vertical_absolute_overlay() {
         Some("__menu_open:ctx"),
         "menu gate keys on the synthetic open signal"
     );
-    // ...whose single child is the panel overlay.
-    let panel = &if_block.children[0];
-    assert_eq!(panel.tag, "overlay");
-    assert!(
-        panel.attrs.classes.iter().any(|c| c == "menu-panel"),
-        "panel carries .menu-panel for the skin"
+    // ...that mounts with the page, whose single child is the menu itself.
+    assert_eq!(
+        if_block.attrs.if_mode,
+        lumenc::layout_ir::IfModeSpec::Mounted
     );
+    let panel = &if_block.children[0];
+    assert_eq!(panel.tag, "menu");
+    assert_eq!(panel.attrs.id.as_deref(), Some("ctx"));
     assert_eq!(
         panel.attrs.flex,
         Some(FlexAxis::Column),
@@ -2431,13 +2441,26 @@ fn menu_panel_is_vertical_absolute_overlay() {
         Some("__menu_open:ctx"),
         "panel wired into the popup dismissal machinery"
     );
-    // Items keep their synthesized markers.
-    let items: Vec<_> = panel
+    // Items and separators stay the elements they were written as.
+    let rows: Vec<(&str, Option<&str>, Option<&str>)> = panel
         .children
         .iter()
-        .filter(|c| c.attrs.menu_item.is_some())
+        .map(|c| {
+            (
+                c.tag.as_str(),
+                c.attrs.id.as_deref(),
+                c.attrs.text.as_deref(),
+            )
+        })
         .collect();
-    assert_eq!(items.len(), 2, "one MenuItemButton per <menuitem>");
+    assert_eq!(
+        rows,
+        [
+            ("menuitem", Some("copy"), Some("Copy")),
+            ("separator", None, None),
+            ("menuitem", Some("paste"), Some("Paste")),
+        ]
+    );
 }
 
 /// A markup error names the byte of the text it is at, so a caller can point
@@ -2525,25 +2548,73 @@ fn a_structural_mistake_is_placed_at_its_element() {
     }
 }
 
-/// A popup `<menuitem accel>` keeps its accelerator: the item's row holds a
-/// `.menu-accel` part carrying it, and an empty `accel` adds none.
+/// A popup `<menuitem accel>` keeps its accelerator on the item, an empty
+/// `accel` is none, and an item with no label shows its id.
 #[test]
 fn a_popup_menu_item_keeps_its_accel() {
     let ir = parse_with_ua(
         r##"<root>
             <menu id="ctx">
                 <menuitem id="undo" label="Undo" accel="CommandOrControl+Z" />
-                <menuitem id="redo" label="Redo" accel="" />
+                <menuitem id="redo" accel="" />
             </menu>
         </root>"##,
     );
     let panel = &ir.root.children[0].children[0];
     let undo = &panel.children[0];
     assert_eq!(undo.attrs.text.as_deref(), Some("Undo"));
-    let part = &undo.children[0];
-    assert_eq!(part.attrs.classes, vec!["menu-accel".to_string()]);
-    assert_eq!(part.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
-    assert!(panel.children[1].children.is_empty());
+    assert_eq!(undo.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
+    assert_eq!(panel.children[1].attrs.shortcut, None);
+    assert_eq!(panel.children[1].attrs.text.as_deref(), Some("redo"));
+}
+
+/// A `<for>` in a `<menu>` builds its rows from a list: its body is
+/// `<menuitem>` and `<separator>` elements whose strings name the row. A
+/// `<for>` holding anything else, and an item with no id, are refused.
+#[test]
+fn a_menu_builds_rows_from_a_list() {
+    let ir = parse_with_ua(
+        r##"<root>
+            <menu id="window">
+                <menuitem id="reset" label="Reset layout" />
+                <separator />
+                <for each="layouts" key="id">
+                    <menuitem id="layout-{id}" label="{name}" />
+                </for>
+            </menu>
+        </root>"##,
+    );
+    let panel = &ir.root.children[0].children[0];
+    let each = &panel.children[2];
+    assert_eq!(each.tag, "for");
+    assert_eq!(each.attrs.each.as_deref(), Some("layouts"));
+    let row = &each.children[0];
+    assert_eq!(row.tag, "menuitem");
+    assert_eq!(row.attrs.id.as_deref(), Some("layout-{id}"));
+    assert_eq!(row.attrs.text.as_deref(), Some("{name}"));
+    assert!(
+        !row.interpolations.is_empty(),
+        "the row's strings are placeholders"
+    );
+
+    for (markup, at) in [
+        (
+            "<root>\n  <menu id=\"m\"><for each=\"l\"><label/></for></menu>\n</root>",
+            "<label/>",
+        ),
+        (
+            "<root>\n  <menu id=\"m\"><for each=\"l\"><menuitem label=\"x\"/></for></menu>\n</root>",
+            "<menuitem",
+        ),
+        ("<root>\n  <menuitem id=\"x\"/>\n</root>", "<menuitem"),
+    ] {
+        let err = lumenc::parse_html(markup).expect_err(markup);
+        assert_eq!(
+            err.offset(),
+            Some(markup.find(at).unwrap()),
+            "{markup}: {err}"
+        );
+    }
 }
 
 /// RC5 end-to-end (ECS side): a `<dropdown>` inside a `<tab>` body -

@@ -9,6 +9,10 @@
 //! widget. They run when a widget appears or its children change and cost
 //! nothing on a tick where neither happened.
 //!
+//! A `<menuitem>` is kept in step the same way: its text is its `label`
+//! attribute, its shortcut part shows its `accel`, and its click reaches
+//! the menu it sits in under its `id` ([`keep_menu_items`]).
+//!
 //! A tab written in markup also keeps its content unmounted until the tab
 //! first shows, as an `<if mode="hide">` body does; [`mount_shown_tabs`]
 //! mounts it.
@@ -16,15 +20,16 @@
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
-    DirtyLayout, Disabled, LumenAttributes, LumenClasses, StyleDirty, TextContent, Visible,
+    DirtyLayout, Disabled, DomHidden, LumenAttributes, LumenClasses, LumenId, StyleDirty, TabIndex,
+    TextContent, Visible,
 };
 use lumen_core::prelude::{App, TickStage};
 use lumen_ir::layout_ir::{
     Element, SPLIT_PANE_CLASS, TabSpec, split_gutter, tab_button, tab_strip,
 };
 use lumen_primitives::{
-    Split, SplitGutter, SplitPane, SplitSet, Tab, TabStrip, TabStripButton, Tabs, TabsSet,
-    tab_label, tab_name,
+    MenuAccel, MenuItem, MenuItemButton, Split, SplitGutter, SplitPane, SplitSet, Tab, TabStrip,
+    TabStripButton, Tabs, TabsSet, tab_label, tab_name,
 };
 
 use crate::spawn::{BodyChild, Placeholders, spawn_body_child, spawn_subtree};
@@ -49,6 +54,13 @@ pub fn install(app: &mut App) {
             .before(SplitSet)
             .before(TabsSet)
             .run_if(any_with_component::<Split>.or_else(any_with_component::<Tabs>)),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        keep_menu_items
+            .after(crate::dom::apply_dom_commands)
+            .before(lumen_primitives::tabs::dispatch_menu_item_clicks)
+            .run_if(any_with_component::<MenuItem>),
     );
     app.add_systems(
         TickStage::Systems,
@@ -242,6 +254,96 @@ pub fn keep_tab_strip(world: &mut World, set: Entity) {
     if order != children_of(world, strip) {
         world.entity_mut(strip).replace_children(&order);
         world.entity_mut(strip).insert(DirtyLayout);
+    }
+}
+
+/// Queue every `<menuitem>` that appeared, moved, was renamed, or whose
+/// attributes changed.
+#[allow(clippy::type_complexity)]
+pub fn keep_menu_items(
+    items: Query<
+        Entity,
+        (
+            With<MenuItem>,
+            Or<(Changed<LumenAttributes>, Changed<LumenId>, Changed<ChildOf>)>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for item in &items {
+        commands.queue(move |world: &mut World| keep_menu_item(world, item));
+    }
+}
+
+/// Bring the `<menuitem>` `item` in line with its attributes and its place:
+/// its text is its `label`; a part of its own, classed `menu-accel`, shows
+/// its `accel` the way the platform's menus write one, and goes when it has
+/// none; and it answers clicks as the item `id` of the menu it sits in, or
+/// as nothing while it sits in none or has no id. Writes only what differs.
+pub fn keep_menu_item(world: &mut World, item: Entity) {
+    if world.get::<MenuItem>(item).is_none() {
+        return;
+    }
+    let attrs = world.get::<LumenAttributes>(item);
+    let label = attrs.and_then(|a| a.get("label")).map(str::to_string);
+    let accel = attrs
+        .and_then(|a| a.get("accel"))
+        .filter(|a| !a.trim().is_empty())
+        .map(str::to_string);
+    let parent = world.get::<ChildOf>(item).map(ChildOf::parent);
+    let wiring = crate::spawn::menu_open_signal_above(world, parent)
+        .zip(world.get::<LumenId>(item).map(|id| id.0.clone()))
+        .map(|(open_signal, item_id)| MenuItemButton {
+            open_signal,
+            item_id,
+        });
+    let part = children_of(world, item)
+        .into_iter()
+        .find(|&c| world.get::<MenuAccel>(c).is_some());
+
+    let mut e = world.entity_mut(item);
+    if let Some(label) = label
+        && e.get::<TextContent>().map(|t| t.0.as_str()) != Some(label.as_str())
+    {
+        e.insert((TextContent(label), DirtyLayout));
+    }
+    let current = e
+        .get::<MenuItemButton>()
+        .map(|b| (b.open_signal.clone(), b.item_id.clone()));
+    match wiring {
+        Some(b) if current.as_ref() != Some(&(b.open_signal.clone(), b.item_id.clone())) => {
+            e.insert(b);
+        }
+        None if current.is_some() => {
+            e.remove::<MenuItemButton>();
+        }
+        _ => {}
+    }
+    if !e.contains::<TabIndex>() {
+        e.insert(TabIndex(-1));
+    }
+
+    let shown = accel.map(|a| lumen_ir::menu::shortcut_label(&a, cfg!(target_os = "macos")));
+    match (shown, part) {
+        (Some(text), Some(part)) => {
+            let mut p = world.entity_mut(part);
+            if p.get::<TextContent>().map(|t| t.0.as_str()) != Some(text.as_str()) {
+                p.insert((TextContent(text), DirtyLayout));
+            }
+        }
+        (Some(text), None) => {
+            let el = lumen_ir::menu::menu_accel_part(&text);
+            let part = spawn_subtree(world, &el, Some(item), Placeholders::Resolved);
+            world
+                .entity_mut(part)
+                .insert((MenuAccel, DomHidden, StyleDirty));
+            world.entity_mut(item).insert(DirtyLayout);
+        }
+        (None, Some(part)) => {
+            world.entity_mut(part).despawn();
+            world.entity_mut(item).insert(DirtyLayout);
+        }
+        (None, None) => {}
     }
 }
 

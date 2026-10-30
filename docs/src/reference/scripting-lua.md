@@ -558,6 +558,10 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
 
+A menu's items are elements: `get_by_id` finds one before the menu first
+opens, `create("menuitem")` with `append` or `insert_before` adds one, `remove`
+takes one out, and `set_attr` changes its `label`, `accel` and `disabled`.
+
 ## Styling and theming
 
 | Builtin | Behaviour |

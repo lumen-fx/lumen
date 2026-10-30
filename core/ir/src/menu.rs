@@ -1,16 +1,20 @@
 //! The element trees a menu is built from.
 //!
-//! A `<menu id>` popup and an in-window menu bar are the same parts: a panel
-//! of item buttons and separator rules, floating over the page while its
-//! `__menu_open:<id>` signal is set. The parser builds a popup from the
-//! `<menu>` markup an author writes; the runtime builds a whole bar from the
-//! app's `<menubar>` where the platform has no native one. Both build it
-//! here, so the two cannot drift apart.
+//! A `<menu id>` popup and an in-window menu bar are the same parts: a
+//! `menu` element holding `menuitem` and `separator` elements, floating over
+//! the page while its `__menu_open:<id>` signal is set. The parser builds a
+//! popup from the `<menu>` markup an author writes; the runtime builds a
+//! whole bar from the app's `<menubar>` where the platform has no native
+//! one. Both build it here, so the two cannot drift apart.
 //!
-//! Every part carries a class (`menu-panel`, `menu-item`, `menu-accel`,
-//! `menu-separator`, `menubar`, `menubar-menu`, `menubar-button`), so a skin
-//! or an app styles it like any element. The only declarations written here are the ones
-//! that make a panel float: its position and its inset.
+//! The menu and its items stay the elements they were written as, so a
+//! script adds, removes and relabels items with the DOM calls it uses for
+//! any element. The menu is mounted with the page, closed, rather than when
+//! it first opens, so its items are there to find from the start. The bar's
+//! own parts carry a class (`menubar`, `menubar-menu`, `menubar-button`), so
+//! a skin or an app styles it like any element. The only declarations
+//! written here are the ones that make a panel float: its position and its
+//! inset.
 
 use crate::layout_ir::{
     Attributes, DropdownButtonSpec, Element, IfModeSpec, MenuBarSpec, MenuEntrySpec, WidgetRole,
@@ -108,17 +112,47 @@ fn set_built_style(attrs: &mut Attributes, property: &str, value: &str) {
     }
 }
 
-/// The popup for menu `menu_id`: an `<if eq="true" mode="hide">` keyed on
-/// the menu's open signal, around a floating `overlay.menu-panel` of rows.
-///
-/// The panel takes no part in its ancestors' layout. `right` and `bottom`
-/// stay `auto`, so the panel shrink-wraps its items, and the items'
-/// `width: 100%` from the user-agent sheet equalises them to the widest.
-/// The open signal is seeded `false`, so the menu starts closed.
+/// The `menuitem` element for one item: `id` names it to scripts, `label`
+/// is its text, and `accel` the shortcut it shows.
+#[must_use]
+pub fn menu_item(id: &str, label: &str, disabled: bool, accel: Option<&str>) -> Element {
+    let mut item = Element {
+        tag: "menuitem".to_string(),
+        ..Default::default()
+    };
+    item.attrs.id = Some(id.to_string());
+    item.attrs.text = Some(label.to_string());
+    item.attrs.disabled = disabled;
+    item.attrs.shortcut = accel.map(str::to_string);
+    item
+}
+
+/// The part of a menu item that shows its keyboard shortcut, `text`: a
+/// `label.menu-accel`, pushed to the row's far end by the user-agent sheet.
+#[must_use]
+pub fn menu_accel_part(text: &str) -> Element {
+    let mut part = Element {
+        tag: "label".to_string(),
+        ..Default::default()
+    };
+    part.attrs.text = Some(text.to_string());
+    part.attrs.classes = vec!["menu-accel".to_string()];
+    part
+}
+
+/// The `separator` element: a rule between groups of items.
+#[must_use]
+pub fn menu_separator() -> Element {
+    Element {
+        tag: "separator".to_string(),
+        ..Default::default()
+    }
+}
+
+/// The popup for menu `menu_id` holding `rows`. See [`popup_menu_of`].
 #[must_use]
 pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
-    let open_signal = menu_open_signal(menu_id);
-    let body = rows
+    let items = rows
         .iter()
         .map(|row| match row {
             MenuRow::Item {
@@ -126,54 +160,36 @@ pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
                 label,
                 disabled,
                 accel,
-            } => {
-                // Row height and padding are theme metrics on `.menu-item`
-                // in the user-agent sheet.
-                let mut btn = Element {
-                    tag: "button".to_string(),
-                    ..Default::default()
-                };
-                btn.attrs.text = Some(label.clone());
-                btn.attrs.classes = vec!["menu-item".to_string()];
-                btn.attrs.menu_item = Some((open_signal.clone(), id.clone()));
-                btn.attrs.disabled = *disabled;
-                // The shortcut sits after the label, pushed to the row's far
-                // edge by `.menu-accel` in the user-agent sheet.
-                if let Some(accel) = accel {
-                    let mut part = Element {
-                        tag: "label".to_string(),
-                        ..Default::default()
-                    };
-                    part.attrs.text = Some(shortcut_label(accel, false));
-                    part.attrs.shortcut = Some(accel.clone());
-                    part.attrs.classes = vec!["menu-accel".to_string()];
-                    btn.children.push(part);
-                }
-                btn
-            }
-            MenuRow::Separator => {
-                // A rule line, not a gap: `.menu-separator` in the
-                // user-agent sheet keeps it one pixel tall rather than
-                // taking the grow a written `<spacer>` gets.
-                let mut sep = Element {
-                    tag: "spacer".to_string(),
-                    ..Default::default()
-                };
-                sep.attrs.classes = vec!["menu-separator".to_string()];
-                sep
-            }
+            } => menu_item(id, label, *disabled, accel.as_deref()),
+            MenuRow::Separator => menu_separator(),
         })
         .collect();
+    popup_menu_of(menu_id, items)
+}
+
+/// The popup for menu `menu_id` holding `items` (`menuitem`, `separator`,
+/// or a `<for>` building either): an `<if eq="true">` keyed on the menu's
+/// open signal, around a floating `menu` element.
+///
+/// The `<if>` mounts its body with the page and only shows it while the menu
+/// is open, so the menu's items are elements from the start. The panel takes
+/// no part in its ancestors' layout. `right` and `bottom` stay `auto`, so the
+/// panel shrink-wraps its items, and the items' `width: 100%` from the
+/// user-agent sheet equalises them to the widest. The open signal is seeded
+/// `false`, so the menu starts closed.
+#[must_use]
+pub fn popup_menu_of(menu_id: &str, items: Vec<Element>) -> Element {
+    let open_signal = menu_open_signal(menu_id);
     let mut panel = Element {
-        tag: "overlay".to_string(),
-        children: body,
+        tag: "menu".to_string(),
+        children: items,
         ..Default::default()
     };
     set_built_style(&mut panel.attrs, "position", "absolute");
     set_built_style(&mut panel.attrs, "inset", "0 auto auto 0");
-    panel.attrs.classes = vec!["menu-panel".to_string()];
     panel.attrs.id = Some(menu_id.to_string());
-    // Outside-click dismissal and placement key off the open signal.
+    // Outside-click dismissal, placement, and the items' wiring key off the
+    // open signal.
     panel.attrs.popup_panel = Some(open_signal.clone());
 
     let mut if_block = Element {
@@ -183,7 +199,7 @@ pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
     };
     if_block.attrs.if_signal = Some(open_signal.clone());
     if_block.attrs.if_eq = Some("true".to_string());
-    if_block.attrs.if_mode = IfModeSpec::Hide;
+    if_block.attrs.if_mode = IfModeSpec::Mounted;
     if_block.attrs.signal_seed = Some((open_signal, "false".to_string()));
     if_block.attrs.widget = Some(WidgetRole::Menu);
     if_block
@@ -336,26 +352,29 @@ mod tests {
             popup.attrs.if_signal.as_deref(),
             Some("__menu_open:menubar-0")
         );
+        assert_eq!(
+            popup.attrs.if_mode,
+            IfModeSpec::Mounted,
+            "items exist closed"
+        );
         let panel = &popup.children[0];
-        assert_eq!(panel.attrs.classes, vec!["menu-panel"]);
+        assert_eq!(panel.tag, "menu");
         assert_eq!(panel.attrs.id.as_deref(), Some("menubar-0"));
+        assert_eq!(
+            panel.attrs.popup_panel.as_deref(),
+            Some("__menu_open:menubar-0")
+        );
         let rows: Vec<_> = panel
             .children
             .iter()
-            .map(|r| (r.attrs.classes[0].as_str(), r.attrs.menu_item.clone()))
+            .map(|r| (r.tag.as_str(), r.attrs.id.as_deref()))
             .collect();
         assert_eq!(
             rows,
             vec![
-                (
-                    "menu-item",
-                    Some(("__menu_open:menubar-0".to_string(), "open".to_string()))
-                ),
-                ("menu-separator", None),
-                (
-                    "menu-item",
-                    Some(("__menu_open:menubar-0".to_string(), "quit".to_string()))
-                ),
+                ("menuitem", Some("open")),
+                ("separator", None),
+                ("menuitem", Some("quit")),
             ]
         );
     }
@@ -387,18 +406,17 @@ mod tests {
         assert_eq!(shortcut_label("F1", true), "F1");
     }
 
-    /// An item with an accelerator shows it in a `.menu-accel` part after
-    /// its label; the label stays the item's own text, and an item with
-    /// none has no part.
+    /// An item is a `menuitem` element whose text is its label and whose
+    /// accelerator rides on it for the runtime to draw.
     #[test]
-    fn an_item_shows_its_shortcut_beside_its_label() {
+    fn an_item_is_an_element_carrying_its_shortcut() {
         let popup = popup_menu(
             "edit",
             &[
                 MenuRow::Item {
                     id: "undo".to_string(),
                     label: "Undo".to_string(),
-                    disabled: false,
+                    disabled: true,
                     accel: Some("CommandOrControl+Z".to_string()),
                 },
                 MenuRow::Item {
@@ -411,26 +429,24 @@ mod tests {
         );
         let panel = &popup.children[0];
         let undo = &panel.children[0];
+        assert_eq!(undo.tag, "menuitem");
         assert_eq!(undo.attrs.text.as_deref(), Some("Undo"));
-        assert_eq!(undo.children.len(), 1);
-        let part = &undo.children[0];
-        assert_eq!(part.attrs.classes, vec!["menu-accel"]);
-        assert_eq!(part.attrs.text.as_deref(), Some("Ctrl+Z"));
-        assert_eq!(part.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
-        assert!(panel.children[1].children.is_empty());
+        assert!(undo.attrs.disabled);
+        assert_eq!(undo.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
+        assert!(undo.children.is_empty());
+        assert_eq!(panel.children[1].attrs.shortcut, None);
     }
 
-    /// The in-window menu bar's menus show the accelerators their items
-    /// declare, the way an OS menu bar does.
+    /// The in-window menu bar's menus carry the accelerators their items
+    /// declare, the way an OS menu bar shows them.
     #[test]
-    fn the_bar_s_menus_show_their_shortcuts() {
+    fn the_bar_s_menus_carry_their_shortcuts() {
         let bar = in_window_menubar(&spec());
         let panel = &bar.children[0].children[1].children[0];
-        let open = &panel.children[0];
         assert_eq!(
-            open.children[0].attrs.shortcut.as_deref(),
+            panel.children[0].attrs.shortcut.as_deref(),
             Some("CommandOrControl+O")
         );
-        assert!(panel.children[2].children.is_empty(), "quit has none");
+        assert_eq!(panel.children[2].attrs.shortcut, None, "quit has none");
     }
 }

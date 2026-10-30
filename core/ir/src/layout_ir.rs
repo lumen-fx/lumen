@@ -1198,13 +1198,10 @@ pub struct Attributes {
     pub dropdown_button: Option<DropdownButtonSpec>,
     /// Synthesised per `<option>` inside `<dropdown>`: `(value_signal, value, open_signal)`. The runtime attaches a [`lumen_primitives::DropdownOptionButton`] whose click writes the value and closes the panel.
     pub dropdown_option: Option<(String, String, String)>,
-    /// Synthesised per `<menuitem>` inside `<menu>`: `(open_signal, item_id)`. The runtime attaches a [`lumen_primitives::MenuItemButton`] whose click emits `MenuClicked { id: item_id }` and closes the menu.
-    pub menu_item: Option<(String, String)>,
-    /// Synthesised on the part of a menu item that shows its keyboard
-    /// shortcut: the accelerator as the markup wrote it
-    /// (`CommandOrControl+Z`). The element's text is the shortcut as it
-    /// reads off macOS; the spawner rewrites it for the platform the app
-    /// runs on ([`crate::menu::shortcut_label`]).
+    /// `<menuitem accel="...">`: the keyboard shortcut the item shows,
+    /// as the markup wrote it (`CommandOrControl+Z`). The runtime draws it
+    /// in a part of the item's own, written the way the platform's menus
+    /// write one ([`crate::menu::shortcut_label`]).
     pub shortcut: Option<String>,
     /// Synthesised on the floating panel of a `<dropdown>` / `<menu>`:
     /// the open-state signal (`__dropdown_open:*` / `__menu_open:*`).
@@ -2006,6 +2003,11 @@ pub enum IfModeSpec {
     Render,
     /// Mount the body once and toggle `Visible(bool)` for show / hide.
     Hide,
+    /// Mount the body with the block, whatever the signal says, and toggle
+    /// `Visible(bool)` for show / hide. Not written in markup: a `<menu>`
+    /// is built on it, so its items are elements a script reaches before
+    /// the menu first opens.
+    Mounted,
 }
 
 impl From<EasingIr> for lumen_primitives::Easing {

@@ -31,6 +31,9 @@ pub enum IfMode {
     Render,
     /// Mount once; toggle `Visible` on falsy / truthy.
     Hide,
+    /// Mount with the block, open or not; toggle `Visible` on falsy /
+    /// truthy.
+    Mounted,
 }
 
 impl From<lumen_ir::layout_ir::IfModeSpec> for IfMode {
@@ -39,6 +42,7 @@ impl From<lumen_ir::layout_ir::IfModeSpec> for IfMode {
         match s {
             IfModeSpec::Render => IfMode::Render,
             IfModeSpec::Hide => IfMode::Hide,
+            IfModeSpec::Mounted => IfMode::Mounted,
         }
     }
 }
@@ -452,17 +456,16 @@ pub fn renumber_document_order(
 /// The spawner calls this once per element, and
 /// [`crate::i18n::retranslate_on_locale_change`] calls it again for every
 /// element that kept its [`AuthoredStrings`] when the app changes locale.
-/// The text an element shows once its strings are resolved: a menu item's
-/// shortcut part reads the way this platform's menus write one, anything
-/// else what the strings say.
-fn shown_text(attrs: &Attributes, strings: &TranslatedStrings) -> Option<String> {
-    match &attrs.shortcut {
-        Some(accel) => Some(lumen_ir::menu::shortcut_label(
-            accel,
-            cfg!(target_os = "macos"),
-        )),
-        None => strings.text.clone(),
+/// The open signal of the menu `from` or one of its ancestors is, if any.
+pub fn menu_open_signal_above(world: &World, from: Option<Entity>) -> Option<String> {
+    let mut at = from;
+    while let Some(e) = at {
+        if let Some(panel) = world.get::<lumen_primitives::PopupPanel>(e) {
+            return Some(panel.open_signal.clone());
+        }
+        at = world.get::<ChildOf>(e).map(ChildOf::parent);
     }
+    None
 }
 
 /// One rule, asked twice.
@@ -705,7 +708,14 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         &authored,
         el.attrs.format.as_deref(),
     );
-    let text = shown_text(&el.attrs, &strings);
+    let text = strings.text.clone();
+    // A menu item is wired to the menu it sits in, which is spawned before
+    // it.
+    let menu_signal = if el.tag == "menuitem" {
+        menu_open_signal_above(world, parent)
+    } else {
+        None
+    };
     // Every style component, from the one computation a restyle runs too.
     // The parent is spawned before its children, so its `Scroll` marker is
     // already in place.
@@ -1016,18 +1026,30 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             open_signal: open_signal.clone(),
         });
     }
-    if let Some((open_signal, item_id)) = &el.attrs.menu_item {
-        entity.insert(lumen_primitives::MenuItemButton {
-            open_signal: open_signal.clone(),
-            item_id: item_id.clone(),
-        });
+    // A `<menuitem>`. Its label and shortcut are attributes, as a script
+    // that builds one sets them; the scene draws the shortcut part and
+    // keeps the item in step when they change.
+    if el.tag == "menuitem" {
+        let mut attrs = lumen_core::components::LumenAttributes::default();
+        if let Some(label) = &el.attrs.text {
+            attrs.set("label", label.clone());
+        }
+        if let Some(accel) = &el.attrs.shortcut {
+            attrs.set("accel", accel.clone());
+        }
+        entity.insert((lumen_primitives::MenuItem, attrs));
+        if let (Some(open_signal), Some(item_id)) = (menu_signal, &el.attrs.id) {
+            entity.insert(lumen_primitives::MenuItemButton {
+                open_signal,
+                item_id: item_id.clone(),
+            });
+        }
     }
     // A popup row is clicked whether or not a skin gives it a background,
     // so it is a pointer target either way. `tab-index="-1"` is that: in
     // reach of the pointer and of the popup's own arrow-key navigation,
     // out of the Tab chain, as a `QComboBox` or `QMenu` row is.
-    if (el.attrs.dropdown_option.is_some() || el.attrs.menu_item.is_some())
-        && el.attrs.tab_index.is_none()
+    if (el.attrs.dropdown_option.is_some() || el.tag == "menuitem") && el.attrs.tab_index.is_none()
     {
         entity.insert(TabIndex(-1));
     }
@@ -1501,11 +1523,12 @@ pub fn reconcile_if_blocks(
                     marker.currently_mounted = false;
                 }
             }
-            IfMode::Hide => {
-                // First-time mount happens on the first truthy tick:
-                // spawn the subtree once; subsequent toggles only flip
-                // visibility state.
-                if now_truthy && !marker.currently_mounted {
+            IfMode::Hide | IfMode::Mounted => {
+                // `Hide` mounts on the first truthy tick, `Mounted` on the
+                // first tick whatever the signal says: spawn the subtree
+                // once; subsequent toggles only flip visibility state.
+                let mount = now_truthy || marker.mode == IfMode::Mounted;
+                if mount && !marker.currently_mounted {
                     for tmpl in &marker.body {
                         spawn_body_child(
                             &mut commands,
@@ -2619,12 +2642,11 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
         }
         if changes.strings {
             let authored = AuthoredStrings::from(&*attrs);
-            let mut strings = resolve_strings(
+            let strings = resolve_strings(
                 world.get_resource::<lumen_core::i18n::AppI18n>(),
                 &authored,
                 attrs.format.as_deref(),
             );
-            strings.text = shown_text(&attrs, &strings);
             if world.get::<AuthoredStrings>(entity).is_some() {
                 world.entity_mut(entity).insert(authored);
             }

@@ -128,7 +128,7 @@ pub const KNOWN_TAGS: &[&str] = &[
     // Dropdown widget. `<dropdown bind-value="signal">` + `<option value="x" label="X"/>` children collapse to a header button plus an absolutely-positioned options panel.
     "dropdown",
     "option",
-    // Menu widget. `<menu id="m">` + `<menuitem id label/>` + `<separator/>` children collapse to an absolute-positioned panel toggled via `__menu_open:<id>`. `<menu>` inside a `<menubar>` is consumed earlier by `extract_menubar`.
+    // Menu widget. `<menu id="m">` holding `<menuitem id label/>`, `<separator/>` and `<for>` children stays a `menu` element, floating and shown while `__menu_open:<id>` is set. `<menu>` inside a `<menubar>` is consumed earlier by `extract_menubar`.
     "menu",
     "menuitem",
     "separator",
@@ -1112,7 +1112,20 @@ fn build_composed_widget(
             ParseError::Xml("<option> may only appear inside <dropdown>".to_string())
                 .at(node.range().start),
         ),
-        "menu" => build_menu(node, src, lint_findings).map(Some),
+        "menu" => build_menu(
+            node,
+            script_buf,
+            external_scripts,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+            depth,
+        )
+        .map(Some),
+        // A menu's rows, written in it or in a `<for>` in it, are elements
+        // of their own; anywhere else these are a mistake.
+        "menuitem" | "separator" if in_menu(node) => Ok(None),
         "menuitem" | "separator" => Err(ParseError::Xml(format!(
             "<{tag}> may only appear inside <menu> or <menubar>"
         ))
@@ -1375,57 +1388,83 @@ fn build_dropdown(
     })
 }
 
-/// `<menu id="m">` collapses into an `<if eq="true">` keyed on `__menu_open:m`.
-/// Body becomes an `<overlay class="menu-panel">` carrying one button per `<menuitem>` and a thin spacer per `<separator>`.
-/// `<menubar>`-nested `<menu>` blocks are extracted upstream by `extract_menubar` and never reach `build_element`.
+/// `<menu id="m">` becomes a floating `menu` element behind an `<if>` keyed
+/// on `__menu_open:m`, holding its `<menuitem>` and `<separator>` elements,
+/// and any `<for>` that builds them from a list, as they were written.
+/// `<menubar>`-nested `<menu>` blocks are extracted upstream by
+/// `extract_menubar` and never reach `build_element`.
+#[allow(clippy::too_many_arguments)]
 fn build_menu(
     node: roxmltree::Node,
+    script_buf: &mut InlineScripts,
+    external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
 ) -> Result<Element, ParseError> {
     let menu_id = node.attribute("id").map(|s| s.to_string()).ok_or_else(|| {
         ParseError::Xml("<menu> requires id=\"...\"".to_string()).at(node.range().start)
     })?;
-    let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
+    let mut items = Vec::new();
     for child in node
         .children()
         .filter(|c| c.is_element() && c.tag_name().name() != "script")
     {
-        match child.tag_name().name() {
-            "menuitem" => {
-                let item_id = child
-                    .attribute("id")
-                    .map(|s| s.to_string())
-                    .ok_or_else(|| {
-                        ParseError::Xml("<menuitem> requires id=\"...\"".to_string())
-                            .at(child.range().start)
-                    })?;
-                let label = child
-                    .attribute("label")
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| item_id.clone());
-                rows.push(lumen_ir::menu::MenuRow::Item {
-                    id: item_id,
-                    label,
-                    disabled: bool_attribute_of(child, "disabled", src, lint_findings),
-                    accel: child
-                        .attribute("accel")
-                        .filter(|a| !a.trim().is_empty())
-                        .map(str::to_string),
-                });
-            }
-            "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),
-            other => {
-                return Err(ParseError::Xml(format!(
-                    "<menu> child must be <menuitem> or <separator>, got <{}>",
-                    other
-                ))
-                .at(child.range().start));
-            }
-        }
+        check_menu_row(child, false)?;
+        items.push(
+            build_element(
+                child,
+                script_buf,
+                external_scripts,
+                src,
+                lint_findings,
+                frag,
+                in_for_body || child.tag_name().name() == "for",
+                depth + 1,
+            )
+            .map_err(|e| e.at(child.range().start))?,
+        );
     }
     // The popup an in-window menu bar builds its menus from too.
-    Ok(lumen_ir::menu::popup_menu(&menu_id, &rows))
+    Ok(lumen_ir::menu::popup_menu_of(&menu_id, items))
+}
+
+/// Refuse what a menu cannot hold: anything but `<menuitem>`,
+/// `<separator>`, or (directly in the menu) a `<for>` whose rows are those,
+/// and an item with no `id`.
+fn check_menu_row(node: roxmltree::Node, in_for: bool) -> Result<(), ParseError> {
+    match node.tag_name().name() {
+        "menuitem" if node.attribute("id").is_none() => Err(ParseError::Xml(
+            "<menuitem> requires id=\"...\"".to_string(),
+        )
+        .at(node.range().start)),
+        "menuitem" | "separator" => Ok(()),
+        "for" if !in_for => node
+            .children()
+            .filter(|c| c.is_element())
+            .try_for_each(|c| check_menu_row(c, true)),
+        other => Err(ParseError::Xml(format!(
+            "<menu> child must be <menuitem>, <separator> or <for>, got <{other}>"
+        ))
+        .at(node.range().start)),
+    }
+}
+
+/// Whether `node` is a row of a `<menu>` outside a menu bar: written in it,
+/// or in a `<for>` written in it.
+fn in_menu(node: roxmltree::Node) -> bool {
+    let is_menu = |n: Option<roxmltree::Node>| {
+        n.is_some_and(|n| {
+            n.tag_name().name() == "menu"
+                && n.parent_element().map(|p| p.tag_name().name()) != Some("menubar")
+        })
+    };
+    let parent = node.parent_element();
+    is_menu(parent)
+        || (parent.is_some_and(|p| p.tag_name().name() == "for")
+            && is_menu(parent.and_then(|p| p.parent_element())))
 }
 
 /// Collapse `<date-picker>` and `<time-picker>` into a validated `<input>` with a built-in pattern that enforces the shape.
@@ -1885,6 +1924,7 @@ fn apply_authored_attributes(
         let off = a.range_value().start;
         match a.name() {
             "text" => text_off = Some(off),
+            "label" if tag == "menuitem" => text_off = Some(off),
             "placeholder" => placeholder_off = Some(off),
             "src" => src_off = Some(off),
             "id" => id_off = Some(off),
@@ -2130,6 +2170,10 @@ fn build_element(
         frag,
         in_for_body,
     )?;
+    // A menu item with no label shows its id.
+    if tag == "menuitem" && attrs.text.is_none() {
+        attrs.text = attrs.id.clone();
+    }
 
     // Recurse into children. When the current element is a `<for>`,
     // flip `in_for_body` on so descendants get row-aware
@@ -2481,6 +2525,12 @@ fn apply_attribute(
             let mut spec = attrs.tab.take().unwrap_or_default();
             spec.label = value.to_string();
             attrs.tab = Some(spec);
+        }
+        // `<menuitem label accel>`: the item's text, and the shortcut it
+        // shows beside it.
+        "label" if tag == "menuitem" => attrs.text = Some(value.to_string()),
+        "accel" if tag == "menuitem" => {
+            attrs.shortcut = Some(value.to_string()).filter(|a| !a.trim().is_empty());
         }
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
         "height" => attrs.height = Some(parse_length(tag, name, value)?),

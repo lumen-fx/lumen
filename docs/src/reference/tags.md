@@ -971,7 +971,7 @@ the root's top edge and the root keeps its height clear above the content,
 so the root's `justify` and `align` place the content as they would without
 it. Its parts carry the classes `menubar` (the bar), `menubar-menu` (one
 per menu), and `menubar-button` (the menu's label), and the menus are the
-`.menu-panel` popups described below. While one of its menus is open,
+`menu` popups described below. While one of its menus is open,
 moving the pointer to another button opens that menu instead.
 
 ### `<menu>`, `<menuitem>`, and `<separator>`
@@ -983,17 +983,35 @@ are `<menuitem>` and `<separator>`.
 | --- | --- | --- |
 | `<menu>` | `label` | Required inside `<menubar>`. Menu title. |
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
-| `<menuitem>` | `id` | Required. Identifies the item to scripts. |
+| `<menuitem>` | `id` | Required. Identifies the item to scripts and to `on_menu`. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
 | `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus. A popup menu only shows it. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by
-the signal `__menu_open:m`. It expands to a floating panel of buttons
-with the classes `menu-panel`, `menu-item`, and `menu-separator`, and it
-dismisses on an outside click. An item with an `accel` holds a `menu-accel`
-label with the shortcut, written the way the platform's menus write one
-(`Ctrl+Z`, or the Command symbol and `Z` on macOS).
+the signal `__menu_open:m`. It floats over the page and dismisses on an
+outside click. The menu, its items and its separators stay `menu`,
+`menuitem` and `separator` elements, so a stylesheet selects them by tag and
+a script reaches them like any element: they exist from the first frame,
+before the menu first opens, and an item a script creates and appends works
+like one the markup wrote. Its `label`, `accel` and `disabled` attributes
+can change at run time. A menu item is pressed and sized like a button, so a
+skin's `button` rules reach it too. An item with an `accel` holds a
+`menu-accel` label with the shortcut, written the way the platform's menus
+write one (`Ctrl+Z`, or the Command symbol and `Z` on macOS).
+
+A `<for>` written in a `<menu>` builds items from a list signal: its body is
+`<menuitem>` and `<separator>` elements, and its rows follow the list.
+
+```html
+<menu id="window">
+  <menuitem id="reset-layout" label="Reset layout"/>
+  <separator/>
+  <for each="layouts" key="id">
+    <menuitem id="layout-{id}" label="{name}"/>
+  </for>
+</menu>
+```
 
 `<menuitem>` and `<separator>` outside a menu are an error.
 
