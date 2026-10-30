@@ -376,10 +376,13 @@ back, `4` forward, `5` pen eraser, `-1` none), the modifier flags `shift`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`,
 `buttons` (a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16`
 forward, `32` eraser), `pointer_type` (`LUMEN_POINTER_MOUSE`,
-`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), `is_primary`, and `movement_x` /
+`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), `is_primary`, `movement_x` /
 `movement_y`, how far the pointer moved since its previous move (the device's
-motion under a pointer lock). The struct is borrowed for the call; copy
-anything you keep.
+motion under a pointer lock), and `delta_mode`, the unit a wheel reported its
+delta in (`LUMEN_DELTA_PIXEL` for a touchpad, `LUMEN_DELTA_LINE` for a wheel
+turning in notches, `LUMEN_DELTA_PAGE`); `delta_x` and `delta_y` are in
+pixels either way. The struct is borrowed for the call; copy anything you
+keep.
 
 | Function | Behaviour |
 | --- | --- |
@@ -391,7 +394,7 @@ anything you keep.
 | `LumenNode lumen_pointer_lock_element(void)` | The element holding the pointer lock, or `0`. |
 
 The C++, Python, and Rust SDKs expose the same readings on their `Event`
-(`code()` and `movement()` included), the capture and lock calls on their
+(`code()`, `movement()` and `delta_mode()` included), the capture and lock calls on their
 `Node`, and `exit_pointer_lock` / `pointer_lock_element` beside their
 document functions.
 

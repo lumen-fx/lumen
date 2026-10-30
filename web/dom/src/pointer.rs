@@ -49,7 +49,7 @@ use lumen_core::components::Disabled;
 use lumen_core::input::{
     HoverWithin, Hovered, MouseWheel, PointerButton, PointerCancelled, PointerData, PointerKind,
     PointerLeft, PointerMoved, PointerPressed, PointerReleased, PointerState, PointerTargets,
-    reconcile_chain,
+    WheelDeltaMode, reconcile_chain,
 };
 use lumen_core::time::Instant;
 use wasm_bindgen::JsCast;
@@ -105,6 +105,8 @@ enum PointerInput {
         position: Vec2,
         /// Scroll distance in pixels, positive down and right.
         delta: Vec2,
+        /// The unit the browser reported the distance in.
+        delta_mode: WheelDeltaMode,
         /// When the browser saw it.
         time_stamp: Instant,
     },
@@ -209,6 +211,15 @@ fn pointer_of(event: &Event) -> PointerData {
 /// window backend normalises to.
 const PIXELS_PER_LINE: f64 = 32.0;
 
+/// The unit a wheel event reported its distance in.
+fn wheel_delta_mode(event: &WheelEvent) -> WheelDeltaMode {
+    match event.delta_mode() {
+        WheelEvent::DOM_DELTA_LINE => WheelDeltaMode::Line,
+        WheelEvent::DOM_DELTA_PAGE => WheelDeltaMode::Page,
+        _ => WheelDeltaMode::Pixel,
+    }
+}
+
 /// A wheel event's distance in pixels, whatever unit the browser reported it
 /// in.
 fn wheel_delta(event: &WheelEvent) -> Vec2 {
@@ -304,6 +315,7 @@ pub(crate) fn listen(document: &Document) -> Result<(), JsValue> {
                 hit: hit_of(&event),
                 position: position_of(wheel),
                 delta: wheel_delta(wheel),
+                delta_mode: wheel_delta_mode(wheel),
                 time_stamp: event_time(&event),
             });
         }
@@ -547,6 +559,7 @@ pub fn drain_pointer_events(
             PointerInput::Wheel {
                 position,
                 delta,
+                delta_mode,
                 time_stamp,
                 ..
             } => {
@@ -554,6 +567,7 @@ pub fn drain_pointer_events(
                 state.position = Some(position);
                 writers.wheels.write(MouseWheel {
                     delta,
+                    delta_mode,
                     position,
                     local: local(position),
                     time_stamp,

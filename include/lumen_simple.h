@@ -150,8 +150,12 @@
  [`lumen_exit_pointer_lock`] and [`lumen_pointer_lock_element`] join the
  node surface. The fields before the new ones keep their offsets; additive,
  so a minor bump.
+
+ 0.19 told a notched wheel from a touchpad: [`LumenEvent`] gains
+ `delta_mode` at its end, the DOM `deltaMode` of the unit the wheel
+ reported in. Additive, so a minor bump.
  */
-#define LUMEN_ABI_MINOR 18
+#define LUMEN_ABI_MINOR 19
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).

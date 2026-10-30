@@ -670,9 +670,20 @@ impl Event {
         ev::event_pointer()
     }
 
-    /// Wheel delta `(dx, dy)`.
+    /// Wheel delta `(dx, dy)`, logical pixels.
     pub fn delta(&self) -> (f64, f64) {
         ev::event_delta()
+    }
+
+    /// The unit the wheel reported [`Self::delta`] in before it was
+    /// converted to pixels: [`WheelDeltaMode::Line`] for a wheel turning in
+    /// notches, [`WheelDeltaMode::Pixel`] for a touchpad. The DOM
+    /// `WheelEvent.deltaMode`.
+    ///
+    /// [`WheelDeltaMode::Line`]: lumen_core::input::WheelDeltaMode::Line
+    /// [`WheelDeltaMode::Pixel`]: lumen_core::input::WheelDeltaMode::Pixel
+    pub fn delta_mode(&self) -> lumen_core::input::WheelDeltaMode {
+        ev::event_delta_mode()
     }
 
     /// Modifier state `(shift, ctrl, alt, super)`.

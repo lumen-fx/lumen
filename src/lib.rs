@@ -223,7 +223,11 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// [`lumen_exit_pointer_lock`] and [`lumen_pointer_lock_element`] join the
 /// node surface. The fields before the new ones keep their offsets; additive,
 /// so a minor bump.
-pub const LUMEN_ABI_MINOR: u32 = 18;
+///
+/// 0.19 told a notched wheel from a touchpad: [`LumenEvent`] gains
+/// `delta_mode` at its end, the DOM `deltaMode` of the unit the wheel
+/// reported in. Additive, so a minor bump.
+pub const LUMEN_ABI_MINOR: u32 = 19;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -3729,6 +3733,10 @@ pub struct LumenEvent {
     pub movement_x: f64,
     /// How far the pointer moved down since its previous move (ABI 0.18).
     pub movement_y: f64,
+    /// The unit a wheel reported its delta in before it was converted to
+    /// pixels, the DOM `deltaMode`: `0` pixels, `1` lines, `2` pages
+    /// (ABI 0.19).
+    pub delta_mode: u32,
 }
 
 /// C callback invoked when a bound event fires. `event` is borrowed for the
@@ -3789,6 +3797,7 @@ fn current_lumen_event() -> LumenEvent {
         is_primary: pointer.is_primary as u8,
         movement_x: f64::from(pointer.movement.x),
         movement_y: f64::from(pointer.movement.y),
+        delta_mode: event::event_delta_mode().dom_code(),
     }
 }
 

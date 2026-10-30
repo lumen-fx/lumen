@@ -193,6 +193,13 @@ means under the user's layout and its `code` is where the key sits (`KeyW`,
 `ShiftLeft`), named after the US layout; bind a game's movement keys by
 `code`, so they stay put on every layout.
 
+A `wheel` event's `delta_x` and `delta_y` are always in logical pixels, a
+wheel's notches converted at 32 pixels a line. Its `delta_mode` says what the
+device reported, with the DOM `deltaMode` numbers: `1` for a wheel turning in
+notches (lines), `0` for a touchpad or a smooth-scrolling wheel (pixels), `2`
+for pages. A canvas that zooms on a wheel and pans on a touchpad tells the two
+apart by it.
+
 Pointer events come from the mouse, a pen, or a finger, and carry what the
 device reports under the web's names: `pointer_id`, `pointer_type` (`"mouse"`,
 `"pen"`, or `"touch"`), `is_primary`, `buttons`, `pressure`,

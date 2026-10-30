@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 18
+ABI_MINOR = 19
 ABI_PATCH = 0
 
 
@@ -310,6 +310,7 @@ class LumenEvent(ctypes.Structure):
         ("is_primary", ctypes.c_uint8),
         ("movement_x", ctypes.c_double),
         ("movement_y", ctypes.c_double),
+        ("delta_mode", ctypes.c_uint32),
     ]
 
 

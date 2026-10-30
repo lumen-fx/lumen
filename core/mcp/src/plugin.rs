@@ -575,6 +575,7 @@ fn drain_simulate_queue(
                 let at = glam::Vec2::new(x, y);
                 let event = MouseWheel {
                     delta: glam::Vec2::new(dx, dy),
+                    delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
                     position: at,
                     local: None,
                     time_stamp: lumen_core::time::Instant::now(),
