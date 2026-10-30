@@ -45,7 +45,7 @@
   flex-direction: row;
 }
 
-:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for, .lm-dropdown, .lm-tabs) {
+:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for, .lm-dropdown, .lm-tabs, .lm-menu) {
   flex-direction: column;
 }
 
@@ -133,7 +133,7 @@
 /* Controls come with a browser look Lumen does not have: their own font,
    their own fill, their own border, and text centred where Lumen starts
    it at the edge. */
-:where(.lm-button, .lm-toggle, .lm-switch, .lm-input, .lm-textarea, .lm-slider) {
+:where(.lm-button, .lm-menuitem, .lm-toggle, .lm-switch, .lm-input, .lm-textarea, .lm-slider) {
   font: inherit;
   color: inherit;
   text-align: inherit;

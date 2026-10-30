@@ -762,7 +762,9 @@ anything inside it. `detail()` is what the event carries, and
   `set_style`, `append`, `rect`, `computed_style_of`, `on(event, f)` and the
   rest).
 - Menus and pages: `open_menu(id)`, `open_menu_at(id, x, y)`,
-  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`.
+  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`. A menu's items are
+  `Node`s like any element, there before the menu first opens: add, remove
+  and relabel them with the DOM surface above.
 - The app's own state: `resource::<T>()` and `resource_mut::<T>()` over the
   resources inserted with `App::insert_resource`, and `resource_scope` to
   change one alongside the rest of the app.

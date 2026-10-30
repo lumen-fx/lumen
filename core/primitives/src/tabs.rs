@@ -609,6 +609,17 @@ pub fn dispatch_dropdown_clicks(
     }
 }
 
+/// A `<menuitem>` element: what a script that builds an item creates. Its
+/// `label`, `accel` and `id` are attributes, and the scene keeps the item's
+/// text, shortcut part and [`MenuItemButton`] in step with them.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct MenuItem;
+
+/// The part of a [`MenuItem`] that shows its keyboard shortcut, built by
+/// the scene from the item's `accel` attribute.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct MenuAccel;
+
 /// `<menu>` item marker. Clicks emit [`MenuClicked`] with the item id and close the menu by writing the open signal to `"false"`.
 #[derive(Component, Clone, Debug)]
 pub struct MenuItemButton {

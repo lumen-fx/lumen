@@ -280,7 +280,7 @@ fn emit_element(
         "if" => match element.attrs.if_mode {
             // A hidden branch stays in the document, so the runtime has
             // something to show when the signal turns true.
-            IfModeSpec::Hide => hidden = !branch_taken(element, walk.signals),
+            IfModeSpec::Hide | IfModeSpec::Mounted => hidden = !branch_taken(element, walk.signals),
             IfModeSpec::Render => children_are_content = branch_taken(element, walk.signals),
         },
         // `<dialog open="signal">` is an `<if mode="hide">` that is also a

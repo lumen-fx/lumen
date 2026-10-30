@@ -146,8 +146,8 @@ pub const VOID_ELEMENTS: &[&str] = &[
 /// Every IR tag [`html_tag_for`] answers for.
 ///
 /// The tags a Lumen author writes that are not here are the ones the parser
-/// resolves before the IR exists: a `<menu>` is already a panel of buttons
-/// behind a branch by then.
+/// resolves before the IR exists: a `<tooltip>` is already the element it
+/// wraps by then.
 pub const MAPPED_TAGS: &[&str] = &[
     "root",
     "column",
@@ -178,6 +178,9 @@ pub const MAPPED_TAGS: &[&str] = &[
     "split",
     "tabs",
     "tab",
+    "menu",
+    "menuitem",
+    "separator",
 ];
 
 /// Prefix of the class an element carries for its tag.
@@ -289,6 +292,26 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
         // A tab set is boxes too: its strip of buttons, then the tabs, all
         // of them in the document, the hidden ones marked hidden.
         "tabs" | "tab" => HtmlTag::plain("div"),
+        // A menu is a floating box of items, each a button a screen reader
+        // reads as a menu item, with a rule between groups.
+        "menu" => HtmlTag {
+            name: "div",
+            fixed: &[("role", "menu")],
+            void: false,
+            control: None,
+        },
+        "menuitem" => HtmlTag {
+            name: "button",
+            fixed: &[("type", "button"), ("role", "menuitem")],
+            void: false,
+            control: None,
+        },
+        "separator" => HtmlTag {
+            name: "div",
+            fixed: &[("role", "separator")],
+            void: false,
+            control: None,
+        },
         _ => return None,
     };
     Some(tag)
@@ -368,7 +391,7 @@ mod tests {
 
     #[test]
     fn a_tag_the_parser_resolves_away_has_no_mapping() {
-        for tag in ["menu", "date-picker", "tooltip"] {
+        for tag in ["date-picker", "tooltip"] {
             assert_eq!(html_tag_for(tag), None);
         }
     }

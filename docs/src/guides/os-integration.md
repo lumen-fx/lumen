@@ -56,8 +56,9 @@ on("menu", "file-open", "handle_open");
 Linux desktops have no native menu bar, so there the same markup is drawn in
 the window: a bar along the top with one button per menu. Its items reach
 `on_menu` the same way, and their `accel` shortcuts work while the window has
-focus. The skin styles it, and an app can restyle the `.menubar`,
-`.menubar-button` and `.menu-panel` classes like any other element.
+focus. The skin styles it, and an app can restyle the `.menubar` and
+`.menubar-button` classes and the `menu` and `menuitem` tags like any other
+element.
 
 To draw the bar in the window on macOS and Windows too, so an app with its
 own theme looks the same everywhere, set the `menubar` key in `lumen.toml`:
@@ -96,12 +97,45 @@ fn on_ready() {
 ```
 
 Bind element events from `on_ready`, which runs once the tree is mounted;
-`on_start` runs before that, when a lookup finds nothing. Menu items are not
-elements, so they route by id with `on("menu", ...)`.
+`on_start` runs before that, when a lookup finds nothing. A picked item routes
+by its id with `on("menu", ...)`, the same way a menu bar item does.
 
 `close_menu(id)` closes it; picking an item closes it for you. Items reach the
 same `on_menu` handler as the native bar. Style the panel and its rows with the
-`.menu-panel`, `.menu-item`, and `.menu-separator` classes.
+`menu`, `menuitem` and `separator` tags.
+
+The menu and its items are elements from the first frame, so a menu that lists
+something the app keeps, recent files or saved layouts, changes with the DOM
+calls you use for any element:
+
+```rust
+import "lumen.cdl";
+
+fn add_layout(id: string, name: string) {
+    let item = create("menuitem");
+    item.set_id("layout-" + id);
+    item.set_attr("label", name);
+    get_by_id("window").append(item);
+}
+
+fn rename_layout(id: string, name: string) {
+    get_by_id("layout-" + id).set_attr("label", name);
+}
+
+fn main() {}
+```
+
+Or keep the items in a list signal and let a `<for>` in the menu build them:
+
+```html
+<menu id="window">
+  <menuitem id="reset-layout" label="Reset layout"/>
+  <separator/>
+  <for each="layouts" key="id">
+    <menuitem id="layout-{id}" label="{name}"/>
+  </for>
+</menu>
+```
 
 An item's `accel` shows its shortcut at the end of the row, written the way the
 platform's menus write one: `Ctrl+Z` on Linux and Windows, the Command symbol

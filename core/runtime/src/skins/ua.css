@@ -30,7 +30,7 @@
    `scroll="x"` attribute turns it horizontal and lays its children out in
    a row. The web target keeps its own copy of these in
    web/src/reset.css. */
-column, scroll, root, overlay, for, dialog, dropdown, tabs { flex-direction: column; }
+column, scroll, root, overlay, for, dialog, dropdown, tabs, menu { flex-direction: column; }
 row, title-bar, checkbox, radio, progress, split { flex-direction: row; }
 scroll    { scroll: y; }
 spacer    { grow: 1; }
@@ -44,8 +44,8 @@ root      { width: 100%; height: 100%; }
 title-bar { width: 100%; height: 32; }
 
 /* Tap-size floor only; width and height come from the measured label +
-   author padding. */
-button { min-height: 36; }
+   author padding. A menu item is pressed like a button and sized like one. */
+button, menuitem { min-height: 36; }
 
 /* The text buffer starts empty (no measurable content), so a bare
    `<input>` / `<textarea>` needs a usable floor. Minimums, not fixed
@@ -98,11 +98,11 @@ progress { width: 100%; height: 6; }
 :where(tabs, .tab-strip) { width: 100%; }
 :where(.tab-strip) { gap: 4; }
 :where(.tab-btn) { height: 36; grow: 1; padding: 0 12; }
-:where(.menu-panel) { min-width: 160; }
-:where(.menu-item) { height: 28; width: 100%; padding: 0 12; }
+:where(menu) { min-width: 160; }
+:where(menuitem) { height: 28; width: 100%; padding: 0 12; }
 /* An item's shortcut fills the rest of the row and sits at its far end. */
 :where(.menu-accel) { grow: 1; text-align: end; padding: 0 0 0 24; }
-:where(.menu-separator) { height: 1; width: 100%; }
+:where(separator) { height: 1; width: 100%; }
 /* The in-window menu bar (a platform with no native one): a full-width row
    of compact buttons, each over its menu. The button's height floor is its
    own, not a push button's. */
@@ -149,9 +149,6 @@ progress { width: 100%; height: 6; }
    This is the look a skinless app's tooltip has. The pointer passes
    through it, as through a browser's `title` tooltip. */
 :where(.tooltip) { bg: #1a1f29f2; text-color: #f0f2f7; radius: 6; padding: 8; font-size: 13; pointer-events: none; }
-/* A separator is a rule line, not a gap: it keeps its pixel rather than
-   taking the grow `spacer` gives the tag it is spelled with. */
-.menu-separator { grow: 0; }
 /* The error banner shown across the top of the window when a markup or
    CSS file stops parsing or a script does not load: the report in a read-only
    `textarea.lumen-error-text` the user can select from, and a
