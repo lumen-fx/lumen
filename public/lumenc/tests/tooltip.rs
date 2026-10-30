@@ -153,6 +153,17 @@ fn the_pointer_passes_through_an_open_tooltip() {
         "",
     );
     let popup = hover_until_open(&mut app, "save");
+    // A whole-document restyle while the popup is open re-derives its
+    // components from the cascade; the pass-through has to survive it.
+    StyleVersion::bump(&mut app.world);
+    for _ in 0..2 {
+        app.tick();
+    }
+    assert_eq!(
+        app.world.get::<lumen_core::input::PointerEvents>(popup),
+        Some(&lumen_core::input::PointerEvents::None),
+        "the restyled popup still lets the pointer through"
+    );
     let corner = app.world.get::<Transform>(popup).unwrap().absolute;
     let onto = corner + Vec2::splat(2.0);
     let save = rect(&mut app, "save");
