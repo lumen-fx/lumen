@@ -374,7 +374,10 @@ thing being waited for rather than on a queue of your own, so the claim
 retires when that thing settles or leaves the tree and the app can park. If
 the next change is due at a known instant rather than every frame, call
 `WakeDeadline::request(at)` each tick instead; the loop sleeps until then
-rather than ticking at frame rate.
+rather than ticking at frame rate. Content that arrives off the main thread (a
+decode, a download) also raises `LoadsPending` while an element still waits on
+it, keyed the same way, so a headless run with `wait_for_loads` holds its
+closing frame until the content is in.
 
 Together:
 

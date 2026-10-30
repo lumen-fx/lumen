@@ -496,6 +496,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
                 monitors,
                 positioning,
                 toplevel_drag,
+                wait_for_loads: false,
             },
         )
     } else {

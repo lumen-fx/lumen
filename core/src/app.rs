@@ -321,6 +321,9 @@ impl App {
         // Per-tick "tick again no later than" request, reset alongside
         // `AnimationsActive` and read by the loop to sleep until it.
         world.insert_resource(crate::tick::WakeDeadline::default());
+        // Per-tick "content is still arriving" flag, reset alongside them;
+        // a run that must show the page complete ticks until it stays down.
+        world.insert_resource(crate::tick::LoadsPending::default());
         // Per-extract-phase memo of the hierarchy-derived maps the extract
         // fns would otherwise each rebuild identically (parent map, scroll
         // offsets, opacities, hidden set, clip rects). Populated by the
@@ -447,6 +450,7 @@ impl App {
             crate::render_world::reset_animations_active,
         );
         s.add_systems(TickStage::Input, crate::tick::reset_wake_deadline);
+        s.add_systems(TickStage::Input, crate::tick::reset_loads_pending);
         // `window.size()` / `window.dpr()` read a process-wide cache that
         // scripts reach without a world; keep it on the live viewports. At
         // the start of the tick for a backend's write between ticks, and at

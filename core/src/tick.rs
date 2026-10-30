@@ -283,6 +283,52 @@ pub fn reset_wake_deadline(deadline: Res<WakeDeadline>) {
     deadline.clear();
 }
 
+/// Per-tick "content the page shows is still arriving" flag: an image still
+/// decoding on a worker thread, say.
+///
+/// The counterpart of a browser document that has not reached its `load`:
+/// what is on screen is not yet everything the page asked for. A driver
+/// whose content arrives off the main thread raises it every tick while any
+/// element still waits on it, keyed on the element so the claim goes away
+/// with it, and [`reset_loads_pending`] clears it at the top of every tick.
+/// A run that has to show a page complete (a screenshot in a test) ticks
+/// until it stays down.
+///
+/// Interior-mutable so drivers can raise it through a shared `Res`.
+#[derive(Resource, Debug, Default)]
+pub struct LoadsPending(std::sync::atomic::AtomicBool);
+
+impl LoadsPending {
+    /// Raise the flag: something the page shows is still loading.
+    pub fn request(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a driver raised the flag since the last [`Self::clear`].
+    pub fn get(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Lower the flag. Called by [`reset_loads_pending`] at tick start.
+    pub fn clear(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Clears [`LoadsPending`] at the top of every tick (registered in
+/// [`TickStage::Input`], chained before the `Systems` stage where drivers
+/// raise it), so the flag says what the last tick saw.
+pub fn reset_loads_pending(loads: Res<LoadsPending>) {
+    loads.clear();
+}
+
+/// Whether the last tick left content still loading ([`LoadsPending`]).
+pub fn loads_pending(world: &World) -> bool {
+    world
+        .get_resource::<LoadsPending>()
+        .is_some_and(LoadsPending::get)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
