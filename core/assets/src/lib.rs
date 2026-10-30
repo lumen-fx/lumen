@@ -38,8 +38,8 @@ use lumen_core::components::Visuals;
 use lumen_core::input::CursorImage;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{BackgroundClip, opacity_model, parent_scroll_offsets};
-#[cfg(debug_assertions)]
 use lumen_core::tick::LoadsPending;
+#[cfg(debug_assertions)]
 use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::Entry as MapEntry;
