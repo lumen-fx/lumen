@@ -304,7 +304,6 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .menu-item:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-accel { text-color: var(--lumen-text-muted); }
-.menu-item:hover .menu-accel { text-color: var(--lumen-on-accent); }
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
 /* === Split ===
