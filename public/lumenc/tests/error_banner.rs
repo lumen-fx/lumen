@@ -215,3 +215,119 @@ fn the_report_can_be_selected_and_copied_but_not_edited() {
     assert_eq!(text_of(&app, field), report, "the report is read-only");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Tick a hot-reloading app until its banner shows a report, and return it.
+fn reported(app: &mut App) -> lumenc::run::ErrorReport {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(report) = app.world.resource::<ErrorBanner>().0.clone() {
+            return report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the edit never raised the banner"
+        );
+        app.tick();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// A markup or CSS error found on a hot reload names the file and line it is
+/// on, an included or imported file's own included: the line after an
+/// `<include>` is a line of the file that wrote it, not of the spliced text.
+#[test]
+fn a_markup_or_css_error_names_its_file_and_line() {
+    let dir =
+        std::env::temp_dir().join(format!("lumenc_error_banner_place_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(src.join("parts")).unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[render]\nbackend = \"cpu\"\n\n[runtime]\nhot_reload = true\n",
+    )
+    .unwrap();
+    let main = src.join("main.lmn");
+    let part = src.join("parts").join("side.lmn");
+    let css = src.join("main.css");
+    let theme = src.join("theme.css");
+    let markup = "<root>\n  <include src=\"parts/side.lmn\"/>\n  <label text=\"main\"/>\n</root>\n";
+    std::fs::write(&main, markup).unwrap();
+    std::fs::write(
+        &part,
+        "<column>\n  <label text=\"a\"/>\n  <label text=\"b\"/>\n</column>\n",
+    )
+    .unwrap();
+    std::fs::write(&css, "@import \"theme.css\";\n\nlabel { font-size: 14; }\n").unwrap();
+    std::fs::write(&theme, "column {\n  gap: 4;\n}\n").unwrap();
+    let opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    for _ in 0..4 {
+        app.tick();
+    }
+    assert!(app.world.resource::<ErrorBanner>().0.is_none());
+
+    // A later mtime than the first write, on any filesystem clock.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // An element the included file does not close: the parser trips on
+    // line 4 of that file, at `</column>`.
+    std::fs::write(
+        &part,
+        "<column>\n  <label text=\"a\">\n  <label text=\"b\"/>\n</column>\n",
+    )
+    .unwrap();
+    let report = reported(&mut app);
+    let place = report
+        .location
+        .clone()
+        .unwrap_or_else(|| panic!("no place: {report}"));
+    assert!(place.file.ends_with("side.lmn"), "{report}");
+    assert_eq!(place.line, 4, "{report}");
+    assert_eq!(report.source_line.as_deref(), Some("</column>"), "{report}");
+    assert!(
+        !report.message.contains(" at 4:"),
+        "the place is not repeated: {report}"
+    );
+
+    // Mended; then a tag nobody knows in the entry file, two lines below the
+    // include, which brought in four.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&part, "<column>\n  <label text=\"a\"/>\n</column>\n").unwrap();
+    std::fs::write(
+        &main,
+        markup.replace("<label text=\"main\"/>", "<lable text=\"main\"/>"),
+    )
+    .unwrap();
+    app.world.resource_mut::<ErrorBanner>().0 = None;
+    let report = reported(&mut app);
+    let place = report
+        .location
+        .clone()
+        .unwrap_or_else(|| panic!("no place: {report}"));
+    assert!(place.file.ends_with("main.lmn"), "{report}");
+    assert_eq!((place.line, place.col), (3, 3), "{report}");
+    assert_eq!(
+        report.source_line.as_deref(),
+        Some("  <lable text=\"main\"/>")
+    );
+
+    // Mended; then a declaration with no value in the imported sheet, after
+    // a comment that holds a line of its own.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&main, markup).unwrap();
+    std::fs::write(
+        &theme,
+        "/* spacing\n   between labels */\ncolumn {\n  gap 4;\n}\n",
+    )
+    .unwrap();
+    app.world.resource_mut::<ErrorBanner>().0 = None;
+    let report = reported(&mut app);
+    let place = report
+        .location
+        .clone()
+        .unwrap_or_else(|| panic!("no place: {report}"));
+    assert!(place.file.ends_with("theme.css"), "{report}");
+    assert_eq!((place.line, place.col), (4, 3), "{report}");
+    assert_eq!(report.source_line.as_deref(), Some("  gap 4;"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

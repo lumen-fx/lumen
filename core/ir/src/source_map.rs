@@ -1,9 +1,10 @@
-//! Where each line of a concatenated script came from.
+//! Where each line of a concatenated text came from.
 //!
 //! A language's program is every script file it owns plus the inline
-//! `<script>` blocks, joined in source order into one text. A compiler reports
-//! a line of that text; the map turns it back into the file the author wrote
-//! and the line in it.
+//! `<script>` blocks, joined in source order into one text. Markup is its
+//! entry file with every `<include>` spliced in, and a stylesheet its file
+//! with every `@import` ahead of it. A parser reports a line of that text;
+//! the map turns it back into the file the author wrote and the line in it.
 
 use serde::{Deserialize, Serialize};
 
@@ -123,6 +124,118 @@ impl SourceMap {
     }
 }
 
+/// An error a parser raised, and the place in the text it was given that the
+/// error names, once a [`SourceMap`] has said which file that is.
+///
+/// Displays as `file:line:col: message` when it knows its file and line, and
+/// as the message alone otherwise.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceError {
+    /// What went wrong, without its place.
+    pub message: String,
+    /// The file the place is in, once a map has named it.
+    pub file: Option<String>,
+    /// The 1-based line of the place, `0` when the error names none.
+    pub line: u32,
+    /// The 1-based column of the place, in characters, `0` when unknown.
+    pub col: u32,
+}
+
+impl SourceError {
+    /// An error that names no place.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Place the error at byte `offset` of `text`, the text the parser was
+    /// given.
+    #[must_use]
+    pub fn at_offset(mut self, text: &str, offset: usize) -> Self {
+        (self.line, self.col) = line_col(text, offset);
+        self
+    }
+
+    /// Name the file and the line in it that `map` says the error's line of
+    /// the concatenated text was read from. A piece the map names no file
+    /// for (text that was never a file) leaves the error with its line in
+    /// that text and no file. An error with no line, or one the map does not
+    /// reach, is returned as it was.
+    #[must_use]
+    pub fn placed_with(mut self, map: &SourceMap) -> Self {
+        if self.line > 0
+            && let Some((file, line)) = map.locate(self.line)
+        {
+            self.file = (!file.is_empty()).then(|| file.to_owned());
+            self.line = line;
+        }
+        self
+    }
+
+    /// `(file, line, col)` when the error knows the file it is in.
+    pub fn place(&self) -> Option<(&str, u32, u32)> {
+        match &self.file {
+            Some(file) if self.line > 0 => Some((file, self.line, self.col)),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.place() {
+            Some((file, line, col)) if col > 0 => {
+                write!(f, "{file}:{line}:{col}: {}", self.message)
+            }
+            Some((file, line, _)) => write!(f, "{file}:{line}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+impl std::error::Error for SourceError {}
+
+impl From<String> for SourceError {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
+}
+
+/// The 1-based line and character column byte offset `offset` of `text` is
+/// at.
+pub fn line_col(text: &str, offset: usize) -> (u32, u32) {
+    let mut end = offset.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let before = &text[..end];
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    (
+        line_at(text, end),
+        before[line_start..].chars().count() as u32 + 1,
+    )
+}
+
+/// The byte offset of 1-based line `line`, character column `col`, of
+/// `text`. A place past the end of its line, or of the text, clamps to it.
+pub fn offset_of(text: &str, line: u32, col: u32) -> usize {
+    let mut start = 0;
+    for _ in 1..line {
+        match text[start..].find('\n') {
+            Some(i) => start += i + 1,
+            None => return text.len(),
+        }
+    }
+    let line_text = &text[start..text[start..].find('\n').map_or(text.len(), |i| start + i)];
+    start
+        + line_text
+            .char_indices()
+            .nth(col.saturating_sub(1) as usize)
+            .map_or(line_text.len(), |(i, _)| i)
+}
+
 /// The 1-based line byte offset `offset` of `text` is on.
 pub fn line_at(text: &str, offset: usize) -> u32 {
     let end = offset.min(text.len());
@@ -136,6 +249,41 @@ pub fn line_at(text: &str, offset: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A byte offset reads as a line and a character column and back, a
+    /// column past a multibyte character included.
+    #[test]
+    fn offsets_and_lines_convert_both_ways() {
+        let text = "ab\nc\u{e9}d\n\nend";
+        assert_eq!(line_col(text, 0), (1, 1));
+        assert_eq!(line_col(text, 3), (2, 1));
+        let d = text.find('d').unwrap();
+        assert_eq!(line_col(text, d), (2, 3));
+        assert_eq!(offset_of(text, 2, 3), d);
+        assert_eq!(offset_of(text, 4, 1), text.find("end").unwrap());
+        assert_eq!(offset_of(text, 9, 1), text.len(), "past the end clamps");
+        assert_eq!(line_col(text, text.len() + 5), (4, 4));
+    }
+
+    /// An error placed in a concatenated text names the file and the line
+    /// the map says it came from, and says so when displayed; text that was
+    /// never a file keeps its own line and names no file.
+    #[test]
+    fn an_error_is_placed_through_the_map() {
+        let mut text = String::new();
+        let mut map = SourceMap::default();
+        map.append(&mut text, "a1\na2", "main.lmn", 1);
+        map.append(&mut text, "b1\nb2", "part.lmn", 10);
+        let e = SourceError::new("bad").at_offset(&text, text.find("b2").unwrap());
+        assert_eq!((e.line, e.col), (4, 1));
+        let placed = e.clone().placed_with(&map);
+        assert_eq!(placed.place(), Some(("part.lmn", 11, 1)));
+        assert_eq!(placed.to_string(), "part.lmn:11:1: bad");
+        let loose = e.placed_with(&SourceMap::whole(""));
+        assert_eq!(loose.place(), None);
+        assert_eq!((loose.line, loose.to_string()), (4, "bad".to_string()));
+        assert_eq!(SourceError::from("plain".to_string()).to_string(), "plain");
+    }
 
     #[test]
     fn appended_pieces_locate_back_to_their_files() {

@@ -41,6 +41,11 @@ pub fn diagnostic_from_error(src: &str, err: &ParseError) -> Diagnostic {
             },
             msg.clone(),
         ),
+        // The parser named the place; it beats any scan for the text.
+        ParseError::At { offset, error } => (
+            byte_range(src, *offset, offset + 1),
+            diagnostic_from_error(src, error).message,
+        ),
     };
     Diagnostic {
         range,

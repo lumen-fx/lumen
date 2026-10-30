@@ -21,7 +21,7 @@ pub enum ParseError {
     Xml(String),
     /// Unknown tag name (not in the supported set).
     #[error(
-        "unknown tag '{0}' at position {1}; a tag a module brings is accepted once the \
+        "unknown tag '{0}'; a tag a module brings is accepted once the \
          module is declared under [dependencies]"
     )]
     UnknownTag(String, usize),
@@ -42,6 +42,50 @@ pub enum ParseError {
     /// carries the include-site position and, for cycles, the full chain.
     #[error("{0}")]
     Include(String),
+    /// Another error, at a byte offset into the text that was parsed.
+    /// Displays as the error it wraps: the place is for the caller to name,
+    /// in the file the text came from.
+    #[error("{error}")]
+    At {
+        /// Byte offset into the parsed text.
+        offset: usize,
+        /// What went wrong there.
+        error: Box<ParseError>,
+    },
+}
+
+impl ParseError {
+    /// This error, placed at byte `offset` of the parsed text. An error that
+    /// already knows its place keeps it.
+    #[must_use]
+    pub fn at(self, offset: usize) -> Self {
+        match self {
+            Self::At { .. } | Self::UnknownTag(..) => self,
+            error => Self::At {
+                offset,
+                error: Box::new(error),
+            },
+        }
+    }
+
+    /// The byte offset into the parsed text the error names, if it names
+    /// one.
+    #[must_use]
+    pub fn offset(&self) -> Option<usize> {
+        match self {
+            Self::At { offset, .. } | Self::UnknownTag(_, offset) => Some(*offset),
+            _ => None,
+        }
+    }
+
+    /// The error without its place.
+    #[must_use]
+    pub fn unplaced(&self) -> &ParseError {
+        match self {
+            Self::At { error, .. } => error.unplaced(),
+            other => other,
+        }
+    }
 }
 
 /// serde adapter for [`Attributes::dir`]. `lumen-core` carries no serde

@@ -110,6 +110,27 @@ impl PagePlan {
             && self.pages.iter().any(|p| same_file(&p.path, path))
     }
 
+    /// [`Self::explain_page_error`] for an error that names its place. The
+    /// entry file is parsed from text the loader already spliced, so its
+    /// place is found through `entry_map`; any other page names its own.
+    pub fn explain_placed(
+        &self,
+        path: &Path,
+        error: lumen_ir::source_map::SourceError,
+        entry_map: &lumen_ir::source_map::SourceMap,
+    ) -> lumen_ir::source_map::SourceError {
+        let mut error = if path == self.entry_file && !entry_map.is_empty() {
+            error.placed_with(entry_map)
+        } else {
+            error
+        };
+        if error.file.is_none() {
+            error.message = format!("{}: {}", path.display(), error.message);
+        }
+        error.message = self.explain_page_error(path, error.message);
+        error
+    }
+
     /// Say why `path` failed to parse on its own when the directory scan is
     /// what made it a page, so an error about a fragment kept beside the
     /// entry names the cause and the fix. Any other file's error is left as
@@ -316,8 +337,8 @@ pub fn assemble(
     plan: &PagePlan,
     fragments: &FragmentTable,
     parser: &dyn crate::source_parser::SourceParser,
-    entry_markup: &str,
-) -> Result<Vec<PathBuf>, String> {
+    (entry_markup, entry_map): (&str, &lumen_ir::source_map::SourceMap),
+) -> Result<Vec<PathBuf>, lumen_ir::source_map::SourceError> {
     let mut gates: Vec<Element> = Vec::new();
     let mut script_source = String::new();
     let mut script_map = lumen_ir::source_map::SourceMap::default();
@@ -336,12 +357,7 @@ pub fn assemble(
         };
         let pir = parser
             .parse_html_with_loader(&raw, &page.path, fragments)
-            .map_err(|e| {
-                plan.explain_page_error(
-                    &page.path,
-                    format!("parse page {}: {e}", page.path.display()),
-                )
-            })?;
+            .map_err(|e| plan.explain_placed(&page.path, e, entry_map))?;
 
         // A synthetic `<if>` gate keyed on the reserved active-page signal.
         //
@@ -524,8 +540,10 @@ pub fn fit_entry_gate(ir: &mut LayoutIR, plan: &PagePlan) {
 pub fn collect_fragments(
     plan: &PagePlan,
     parser: &dyn crate::source_parser::SourceParser,
-    entry_markup: Option<&str>,
-) -> Result<FragmentTable, String> {
+    entry: Option<(&str, &lumen_ir::source_map::SourceMap)>,
+) -> Result<FragmentTable, lumen_ir::source_map::SourceError> {
+    let entry_markup = entry.map(|(markup, _)| markup);
+    let entry_map = entry.map(|(_, map)| map);
     let mut table = FragmentTable::new();
     for path in &plan.fragment_files {
         // Same substitution as `assemble`: the entry's declarations come
@@ -538,7 +556,10 @@ pub fn collect_fragments(
         };
         let declared = parser
             .collect_fragments(&src, path)
-            .map_err(|e| plan.explain_page_error(path, format!("parse {}: {e}", path.display())))?;
+            .map_err(|e| match entry_map {
+                Some(map) => plan.explain_placed(path, e, map),
+                None => plan.explain_placed(path, e, &lumen_ir::source_map::SourceMap::default()),
+            })?;
         table
             .merge(declared)
             .map_err(|e| format!("{}: {e}", path.display()))?;

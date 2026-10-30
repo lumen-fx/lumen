@@ -318,10 +318,9 @@ pub(crate) fn hot_reload(world: &mut World) {
     ) {
         Ok(v) => v,
         Err(e) => {
-            let msg = format!("hot-reload: {e}");
-            eprintln!("lumenc {msg}");
+            eprintln!("lumenc hot-reload: {e}");
             if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
-                banner.0 = Some(ErrorReport::new(msg));
+                banner.0 = Some(ErrorReport::from_run_error("hot-reload", &e));
             }
             if let Some(mut s) = world.get_resource_mut::<HotReloadState>() {
                 s.html_mtime = html_now;

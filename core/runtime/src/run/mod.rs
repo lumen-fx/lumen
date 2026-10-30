@@ -351,12 +351,14 @@ pub enum RunError {
     /// Required input file missing or unreadable.
     #[error("read {0}: {1}")]
     Read(PathBuf, std::io::Error),
-    /// Markup failed to parse.
+    /// Markup failed to parse. The error names the file and line when it
+    /// knows them.
     #[error("parse main.lmn: {0}")]
-    ParseHtml(String),
-    /// CSS failed to parse.
+    ParseHtml(lumen_ir::source_map::SourceError),
+    /// CSS failed to parse. The error names the file and line when it knows
+    /// them.
     #[error("parse main.css: {0}")]
-    ParseCss(String),
+    ParseCss(lumen_ir::source_map::SourceError),
     /// CSS application failed.
     #[error("apply CSS: {0}")]
     ApplyCss(String),

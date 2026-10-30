@@ -79,7 +79,9 @@ fn label_text_from_body() {
 #[test]
 fn unknown_tag_errors() {
     let r = parse_html(r##"<root><nope/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::UnknownTag(t, _)) if t == "nope"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::UnknownTag(t, _)) if t == "nope")
+    );
 }
 
 #[test]
@@ -147,7 +149,9 @@ fn no_module_can_claim_a_tag_the_language_owns() {
 #[test]
 fn bad_color_errors() {
     let r = parse_html(r##"<root><tile bg="not-hex"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg")
+    );
 }
 
 #[test]
@@ -180,7 +184,9 @@ fn theme_tag_is_now_unknown() {
     // + `var(--foo)`. Any leftover authoring of `<theme>` errors as an
     // unknown tag.
     let r = parse_html(r##"<root><theme bg="#000"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::UnknownTag(t, _)) if t == "theme"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::UnknownTag(t, _)) if t == "theme")
+    );
 }
 
 #[test]
@@ -561,7 +567,10 @@ fn marker_in_tag_position_errors() {
            </root>"##,
     )
     .expect_err("a marker in tag position is not markup");
-    assert!(matches!(err, lumenc::ParseError::Xml(_)), "{err}");
+    assert!(
+        matches!(err.unplaced(), lumenc::ParseError::Xml(_)),
+        "{err}"
+    );
 }
 
 /// A state pseudo-class on an ancestor compound has no state slot to route
@@ -650,7 +659,7 @@ fn binding_to_a_fragment_argument_is_rejected() {
         r##"<root><scroll bind-scroll="$arg.offset"/></root>"##,
     ] {
         let err = parse_html(markup).expect_err("a `$arg.` binding is refused");
-        let lumenc::ParseError::BadAttribute { reason, .. } = err else {
+        let lumenc::ParseError::BadAttribute { reason, .. } = err.unplaced() else {
             panic!("expected a bad-attribute error, got {err:?}");
         };
         assert!(
@@ -2431,6 +2440,23 @@ fn menu_panel_is_vertical_absolute_overlay() {
     assert_eq!(items.len(), 2, "one MenuItemButton per <menuitem>");
 }
 
+/// A markup error names the byte of the text it is at, so a caller can point
+/// at the line: malformed XML where the parser stopped, a bad attribute at
+/// the attribute, a structural mistake at the element that made it.
+#[test]
+fn a_markup_error_names_its_place() {
+    let at = |src: &str| lumenc::parse_html(src).unwrap_err();
+    let src = "<root>\n  <column>\n</root>";
+    let err = at(src);
+    assert_eq!(err.offset(), Some(src.find("</root>").unwrap()), "{err}");
+    assert!(!err.to_string().contains(" at 3:"), "{err}");
+    let src = "<root>\n  <column gap=\"wide\"/>\n</root>";
+    assert_eq!(at(src).offset(), Some(src.find("gap=").unwrap()));
+    let src = "<root>\n  <column>\n    <menu id=\"m\"><menuitem label=\"x\"/></menu>\n  </column>\n</root>";
+    let err = at(src);
+    assert_eq!(err.offset(), Some(src.find("<menuitem").unwrap()), "{err}");
+}
+
 /// A popup `<menuitem accel>` keeps its accelerator: the item's row holds a
 /// `.menu-accel` part carrying it, and an empty `accel` adds none.
 #[test]
@@ -3753,9 +3779,13 @@ fn bg_attribute_takes_an_image_and_a_fit() {
 #[test]
 fn bg_image_errors_are_reported() {
     let r = parse_html(r##"<root><tile bg="url()"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg")
+    );
     let r = parse_html(r##"<root><tile bg-fit="tile"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg-fit"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg-fit")
+    );
 
     let mut ir = parse_html(r##"<root><tile class="t" /></root>"##).expect("html");
     let css = lumenc::parse_css(".t:hover { bg: url(a.png); }").expect("css");

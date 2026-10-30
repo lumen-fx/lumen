@@ -41,7 +41,7 @@ fn length_px_inline_attribute_rejects_non_numeric() {
     // Malformed case for the "length px" shape, inline-attribute side.
     let r = parse_html(r##"<root><toggle knob-inset="wide"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "knob-inset"
     ));
 }
@@ -61,7 +61,7 @@ fn progress_chunk_inline_attribute_via_chunk_shorthand() {
 fn progress_chunk_inline_attribute_rejects_out_of_range() {
     let r = parse_html(r##"<root><progress chunk="1.5"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "chunk"
     ));
 }
@@ -107,7 +107,7 @@ fn duration_inline_attribute_rejects_missing_unit() {
     // Malformed case for the "duration" shape, inline-attribute side.
     let r = parse_html(r##"<root><input caret-blink="500"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "caret-blink"
     ));
 }
@@ -123,7 +123,7 @@ fn password_character_inline_attribute_rejects_multiple_characters() {
     // Malformed case for the "single character" shape, inline-attribute side.
     let r = parse_html(r##"<root><input password-character="**"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "password-character"
     ));
 }
@@ -161,7 +161,7 @@ fn line_height_inline_attribute_rejects_negative() {
     // Malformed case for the "unitless-vs-px" shape, inline-attribute side.
     let r = parse_html(r##"<root><label line-height="-1"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "line-height"
     ));
 }
@@ -206,7 +206,7 @@ fn color_inline_attribute_rejects_non_hex() {
     // Malformed case for the "colour" shape, inline-attribute side.
     let r = parse_html(r##"<root><scroll scrollbar-track-hover="blue"/></root>"##);
     assert!(matches!(
-        r,
+        r.as_ref().map_err(|e| e.unplaced()),
         Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "scrollbar-track-hover"
     ));
 }
