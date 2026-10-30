@@ -1,6 +1,7 @@
 # Rebuild every `.lmna` artifact and every compiler plugin
 
-The compiled-app format moved on: a menu item carries the keyboard shortcut it
+The compiled-app format moved on: a `<menu>` keeps its `menu`, `menuitem`
+and `separator` elements, and a menu item carries the keyboard shortcut it
 shows. The runtime refuses an artifact written by an earlier toolchain.
 
 This affects you if you load a precompiled app (`lumenc run --artifact`, a
