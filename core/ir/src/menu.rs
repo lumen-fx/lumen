@@ -7,9 +7,9 @@
 //! app's `<menubar>` where the platform has no native one. Both build it
 //! here, so the two cannot drift apart.
 //!
-//! Every part carries a class (`menu-panel`, `menu-item`, `menu-separator`,
-//! `menubar`, `menubar-menu`, `menubar-button`), so a skin or an app styles
-//! it like any element. The only declarations written here are the ones
+//! Every part carries a class (`menu-panel`, `menu-item`, `menu-accel`,
+//! `menu-separator`, `menubar`, `menubar-menu`, `menubar-button`), so a skin
+//! or an app styles it like any element. The only declarations written here are the ones
 //! that make a panel float: its position and its inset.
 
 use crate::layout_ir::{
@@ -27,9 +27,68 @@ pub enum MenuRow {
         label: String,
         /// Unclickable, skipped by arrow navigation, `:disabled`-styled.
         disabled: bool,
+        /// The keyboard shortcut the row shows beside its label, as the
+        /// markup wrote it (`CommandOrControl+Z`). Shown only: binding it is
+        /// the menu bar's business, or the app's.
+        accel: Option<String>,
     },
     /// A rule between groups of items.
     Separator,
+}
+
+/// An accelerator (`CommandOrControl+Shift+S`, `Alt+F4`) as a menu shows it.
+///
+/// Off macOS it reads the way Windows and Linux menus write one: modifiers
+/// and the key joined by `+`, `CommandOrControl` as `Ctrl`, the logo key as
+/// `Super`. On macOS it is the modifier symbols in the system's order
+/// (Control, Option, Shift, Command) followed by the key, so
+/// `CommandOrControl+Shift+S` reads as Shift-Command-S. A single-letter key
+/// is upper-cased; anything this does not know is kept as written.
+#[must_use]
+pub fn shortcut_label(accel: &str, mac: bool) -> String {
+    let mut parts: Vec<&str> = accel.split('+').map(str::trim).collect();
+    let key = parts.pop().unwrap_or_default();
+    let key = if key.chars().count() == 1 {
+        key.to_uppercase()
+    } else {
+        key.to_string()
+    };
+    // Control, Alt/Option, Shift, Super/Command: the order macOS draws its
+    // symbols in.
+    let mut held = [false; 4];
+    let mut unknown = Vec::new();
+    for part in parts {
+        match part.to_ascii_lowercase().as_str() {
+            "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" => {
+                held[if mac { 3 } else { 0 }] = true;
+            }
+            "control" | "ctrl" => held[0] = true,
+            "alt" | "option" => held[1] = true,
+            "shift" => held[2] = true,
+            "super" | "cmd" | "command" | "meta" => held[3] = true,
+            _ => unknown.push(part),
+        }
+    }
+    if mac {
+        const SYMBOLS: [&str; 4] = ["\u{2303}", "\u{2325}", "\u{21e7}", "\u{2318}"];
+        let mut out: String = unknown.concat();
+        for (on, symbol) in held.iter().zip(SYMBOLS) {
+            if *on {
+                out.push_str(symbol);
+            }
+        }
+        out.push_str(&key);
+        return out;
+    }
+    const NAMES: [&str; 4] = ["Ctrl", "Alt", "Shift", "Super"];
+    let mut out: Vec<&str> = held
+        .iter()
+        .zip(NAMES)
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+    out.extend(unknown);
+    out.push(&key);
+    out.join("+")
 }
 
 /// The reserved signal holding the open state of menu `menu_id`.
@@ -66,6 +125,7 @@ pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
                 id,
                 label,
                 disabled,
+                accel,
             } => {
                 // Row height and padding are theme metrics on `.menu-item`
                 // in the user-agent sheet.
@@ -77,6 +137,18 @@ pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
                 btn.attrs.classes = vec!["menu-item".to_string()];
                 btn.attrs.menu_item = Some((open_signal.clone(), id.clone()));
                 btn.attrs.disabled = *disabled;
+                // The shortcut sits after the label, pushed to the row's far
+                // edge by `.menu-accel` in the user-agent sheet.
+                if let Some(accel) = accel {
+                    let mut part = Element {
+                        tag: "label".to_string(),
+                        ..Default::default()
+                    };
+                    part.attrs.text = Some(shortcut_label(accel, false));
+                    part.attrs.shortcut = Some(accel.clone());
+                    part.attrs.classes = vec!["menu-accel".to_string()];
+                    btn.children.push(part);
+                }
                 btn
             }
             MenuRow::Separator => {
@@ -145,10 +217,15 @@ pub fn in_window_menubar(spec: &MenuBarSpec) -> Element {
                 .items
                 .iter()
                 .map(|entry| match entry {
-                    MenuEntrySpec::Item { id, label, .. } => MenuRow::Item {
+                    MenuEntrySpec::Item {
+                        id,
+                        label,
+                        accelerator,
+                    } => MenuRow::Item {
                         id: id.clone(),
                         label: label.clone(),
                         disabled: false,
+                        accel: accelerator.clone(),
                     },
                     MenuEntrySpec::Separator => MenuRow::Separator,
                 })
@@ -281,5 +358,79 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A shortcut reads the way the platform's menus write one: `Ctrl+`
+    /// names off macOS, the modifier symbols in the system's order on it.
+    #[test]
+    fn a_shortcut_reads_the_platform_s_way() {
+        assert_eq!(shortcut_label("CommandOrControl+z", false), "Ctrl+Z");
+        assert_eq!(
+            shortcut_label("Shift+CmdOrCtrl+S", false),
+            "Ctrl+Shift+S",
+            "modifiers in one order whatever order they were written in"
+        );
+        assert_eq!(shortcut_label("Alt+F4", false), "Alt+F4");
+        assert_eq!(
+            shortcut_label("Super+Option+Space", false),
+            "Alt+Super+Space"
+        );
+        assert_eq!(shortcut_label("CommandOrControl+Z", true), "\u{2318}Z");
+        assert_eq!(
+            shortcut_label("Shift+CommandOrControl+S", true),
+            "\u{21e7}\u{2318}S"
+        );
+        assert_eq!(
+            shortcut_label("Control+Alt+Delete", true),
+            "\u{2303}\u{2325}Delete"
+        );
+        assert_eq!(shortcut_label("F1", true), "F1");
+    }
+
+    /// An item with an accelerator shows it in a `.menu-accel` part after
+    /// its label; the label stays the item's own text, and an item with
+    /// none has no part.
+    #[test]
+    fn an_item_shows_its_shortcut_beside_its_label() {
+        let popup = popup_menu(
+            "edit",
+            &[
+                MenuRow::Item {
+                    id: "undo".to_string(),
+                    label: "Undo".to_string(),
+                    disabled: false,
+                    accel: Some("CommandOrControl+Z".to_string()),
+                },
+                MenuRow::Item {
+                    id: "prefs".to_string(),
+                    label: "Preferences".to_string(),
+                    disabled: false,
+                    accel: None,
+                },
+            ],
+        );
+        let panel = &popup.children[0];
+        let undo = &panel.children[0];
+        assert_eq!(undo.attrs.text.as_deref(), Some("Undo"));
+        assert_eq!(undo.children.len(), 1);
+        let part = &undo.children[0];
+        assert_eq!(part.attrs.classes, vec!["menu-accel"]);
+        assert_eq!(part.attrs.text.as_deref(), Some("Ctrl+Z"));
+        assert_eq!(part.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
+        assert!(panel.children[1].children.is_empty());
+    }
+
+    /// The in-window menu bar's menus show the accelerators their items
+    /// declare, the way an OS menu bar does.
+    #[test]
+    fn the_bar_s_menus_show_their_shortcuts() {
+        let bar = in_window_menubar(&spec());
+        let panel = &bar.children[0].children[1].children[0];
+        let open = &panel.children[0];
+        assert_eq!(
+            open.children[0].attrs.shortcut.as_deref(),
+            Some("CommandOrControl+O")
+        );
+        assert!(panel.children[2].children.is_empty(), "quit has none");
     }
 }

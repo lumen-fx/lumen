@@ -306,6 +306,7 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
  * A standalone `<menu id>` desugars to:
  *   .menu-panel     (tag=overlay, absolute-positioned)
  *     .menu-item      (tag=button, one per <menuitem>)
+ *       .menu-accel     (tag=label, the item's `accel`, when it has one)
  *     .menu-separator (tag=spacer, one per <separator>)
  *
  * `<menu>` nested inside `<menubar>` is native OS chrome on macOS and
@@ -326,6 +327,7 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .menu-item:hover   { bg: var(--lumen-panel-hover); }
 .menu-item:focus   { outline: 2 var(--lumen-accent); }
 .menu-item:disabled { text-color: var(--lumen-text-muted); }
+.menu-accel        { text-color: var(--lumen-text-muted); }
 
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 

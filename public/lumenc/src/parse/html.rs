@@ -1407,6 +1407,10 @@ fn build_menu(
                     id: item_id,
                     label,
                     disabled: bool_attribute_of(child, "disabled", src, lint_findings),
+                    accel: child
+                        .attribute("accel")
+                        .filter(|a| !a.trim().is_empty())
+                        .map(str::to_string),
                 });
             }
             "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),

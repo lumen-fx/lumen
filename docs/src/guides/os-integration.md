@@ -103,6 +103,13 @@ elements, so they route by id with `on("menu", ...)`.
 same `on_menu` handler as the native bar. Style the panel and its rows with the
 `.menu-panel`, `.menu-item`, and `.menu-separator` classes.
 
+An item's `accel` shows its shortcut at the end of the row, written the way the
+platform's menus write one: `Ctrl+Z` on Linux and Windows, the Command symbol
+followed by `Z` on macOS. A popup menu only shows the shortcut; bind the key
+yourself, on `document_node()`, as for any app-wide shortcut. The menu bar's
+menus show their shortcuts the same way, and run them too. The `.menu-accel`
+class styles the shortcut.
+
 ### Context menus
 
 A right click raises the `contextmenu` event on the element under the

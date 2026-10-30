@@ -985,13 +985,15 @@ are `<menuitem>` and `<separator>`.
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
 | `<menuitem>` | `id` | Required. Identifies the item to scripts. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
-| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`. Menubar menus only. The in-window bar runs it while the window has focus. |
+| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus. A popup menu only shows it. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by
 the signal `__menu_open:m`. It expands to a floating panel of buttons
 with the classes `menu-panel`, `menu-item`, and `menu-separator`, and it
-dismisses on an outside click.
+dismisses on an outside click. An item with an `accel` holds a `menu-accel`
+label with the shortcut, written the way the platform's menus write one
+(`Ctrl+Z`, or the Command symbol and `Z` on macOS).
 
 `<menuitem>` and `<separator>` outside a menu are an error.
 

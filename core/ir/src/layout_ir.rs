@@ -1156,6 +1156,12 @@ pub struct Attributes {
     pub dropdown_option: Option<(String, String, String)>,
     /// Synthesised per `<menuitem>` inside `<menu>`: `(open_signal, item_id)`. The runtime attaches a [`lumen_primitives::MenuItemButton`] whose click emits `MenuClicked { id: item_id }` and closes the menu.
     pub menu_item: Option<(String, String)>,
+    /// Synthesised on the part of a menu item that shows its keyboard
+    /// shortcut: the accelerator as the markup wrote it
+    /// (`CommandOrControl+Z`). The element's text is the shortcut as it
+    /// reads off macOS; the spawner rewrites it for the platform the app
+    /// runs on ([`crate::menu::shortcut_label`]).
+    pub shortcut: Option<String>,
     /// Synthesised on the floating panel of a `<dropdown>` / `<menu>`:
     /// the open-state signal (`__dropdown_open:*` / `__menu_open:*`).
     /// The runtime attaches a [`lumen_primitives::PopupPanel`] so the
