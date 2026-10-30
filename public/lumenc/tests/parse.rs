@@ -2431,6 +2431,27 @@ fn menu_panel_is_vertical_absolute_overlay() {
     assert_eq!(items.len(), 2, "one MenuItemButton per <menuitem>");
 }
 
+/// A popup `<menuitem accel>` keeps its accelerator: the item's row holds a
+/// `.menu-accel` part carrying it, and an empty `accel` adds none.
+#[test]
+fn a_popup_menu_item_keeps_its_accel() {
+    let ir = parse_with_ua(
+        r##"<root>
+            <menu id="ctx">
+                <menuitem id="undo" label="Undo" accel="CommandOrControl+Z" />
+                <menuitem id="redo" label="Redo" accel="" />
+            </menu>
+        </root>"##,
+    );
+    let panel = &ir.root.children[0].children[0];
+    let undo = &panel.children[0];
+    assert_eq!(undo.attrs.text.as_deref(), Some("Undo"));
+    let part = &undo.children[0];
+    assert_eq!(part.attrs.classes, vec!["menu-accel".to_string()]);
+    assert_eq!(part.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
+    assert!(panel.children[1].children.is_empty());
+}
+
 /// RC5 end-to-end (ECS side): a `<dropdown>` inside a `<tab>` body -
 /// i.e. mounted through the reconciler template path - opens on a
 /// header click, and an option click commits the value and closes the

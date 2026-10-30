@@ -452,6 +452,19 @@ pub fn renumber_document_order(
 /// The spawner calls this once per element, and
 /// [`crate::i18n::retranslate_on_locale_change`] calls it again for every
 /// element that kept its [`AuthoredStrings`] when the app changes locale.
+/// The text an element shows once its strings are resolved: a menu item's
+/// shortcut part reads the way this platform's menus write one, anything
+/// else what the strings say.
+fn shown_text(attrs: &Attributes, strings: &TranslatedStrings) -> Option<String> {
+    match &attrs.shortcut {
+        Some(accel) => Some(lumen_ir::menu::shortcut_label(
+            accel,
+            cfg!(target_os = "macos"),
+        )),
+        None => strings.text.clone(),
+    }
+}
+
 /// One rule, asked twice.
 pub fn resolve_strings(
     i18n: Option<&lumen_core::i18n::AppI18n>,
@@ -692,7 +705,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         &authored,
         el.attrs.format.as_deref(),
     );
-    let text = strings.text.clone();
+    let text = shown_text(&el.attrs, &strings);
     // Every style component, from the one computation a restyle runs too.
     // The parent is spawned before its children, so its `Scroll` marker is
     // already in place.
@@ -2606,11 +2619,12 @@ fn apply_row_patches(world: &mut World, patches: Vec<RowPatch>) {
         }
         if changes.strings {
             let authored = AuthoredStrings::from(&*attrs);
-            let strings = resolve_strings(
+            let mut strings = resolve_strings(
                 world.get_resource::<lumen_core::i18n::AppI18n>(),
                 &authored,
                 attrs.format.as_deref(),
             );
+            strings.text = shown_text(&attrs, &strings);
             if world.get::<AuthoredStrings>(entity).is_some() {
                 world.entity_mut(entity).insert(authored);
             }

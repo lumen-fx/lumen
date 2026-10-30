@@ -100,6 +100,8 @@ progress { width: 100%; height: 6; }
 :where(.tab-btn) { height: 36; grow: 1; padding: 0 12; }
 :where(.menu-panel) { min-width: 160; }
 :where(.menu-item) { height: 28; width: 100%; padding: 0 12; }
+/* An item's shortcut fills the rest of the row and sits at its far end. */
+:where(.menu-accel) { grow: 1; text-align: end; padding: 0 0 0 24; }
 :where(.menu-separator) { height: 1; width: 100%; }
 /* The in-window menu bar (a platform with no native one): a full-width row
    of compact buttons, each over its menu. The button's height floor is its
