@@ -258,8 +258,8 @@ The tag push starts `release.yml` again, this time as the release itself:
    alone.
 
 5. Goes on to the four channels a release feeds, each in the workflow that
-   owns it and each checked out at the tag: `publish.yml` for the language
-   registries, `publish-packages.yml` for the OS package managers,
+   owns it and each checked out at the tag: `publish.yml` for crates.io (the
+   PyPI upload is a job of `release.yml` itself), `publish-packages.yml` for the OS package managers,
    `publish-extensions.yml` for the editor marketplaces, and `site-rebuild.yml`
    for the docs site. They appear as jobs of the release run rather than as
    runs of their own.
@@ -502,9 +502,10 @@ nothing here has to publish a per-release link.
 ## Publishing to the package registries
 
 The toolchain install channel above is one way to get Lumen; the language
-registries are the other. `.github/workflows/publish.yml` covers them.
+registries are the other. `.github/workflows/publish.yml` covers crates.io.
 `release.yml` calls it once the release is published, and it can also be
-started by hand from the Actions tab, where it defaults to a dry run.
+started by hand from the Actions tab, where it defaults to a dry run. The PyPI
+upload is a job in `release.yml` itself; the section on PyPI below says why.
 
 | Package   | Registry  | What it is                   |
 | --------- | --------- | ---------------------------- |
@@ -610,20 +611,27 @@ Each of those exits 2 and takes its job red with it. A publish that starts and
 then fails partway exits 1, and the crates before the failure are already on
 the registry.
 
-The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
-publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
-`.github/workflows/publish.yml`. Without its credential a leg verifies and
-uploads nothing, which is not a failure.
+The crates.io jobs need a `CRATES_IO_TOKEN` secret, listed at the top of
+`.github/workflows/publish.yml`. Without it they verify and upload nothing,
+which is not a failure.
 
-The PyPI leg needs one thing settled before `PYPI_PUBLISH_ENABLED` is turned
-on. A trusted publisher is registered against a workflow filename, and PyPI
-matches that name against the file the publishing job is defined in, which is
-`publish.yml`; its documentation also lists a workflow started by another
-workflow as unsupported. So register the publisher for `publish.yml`, turn the
-variable on, and cut a release to see whether the upload is accepted. If PyPI
-rejects the identity, move the upload step up into `release.yml` and change the
-registered filename to match. Nothing has gone to PyPI yet, so there is no
-working registration to lose either way.
+### PyPI
+
+The `lumenui on PyPI` job in `release.yml` builds the wheel and the sdist and
+uploads them through PyPI's trusted publishing, so no API token is stored. It
+needs a trusted publisher on pypi.org for project `lumenui` (owner `lumen-fx`,
+repository `lumen`, workflow `release.yml`, environment `pypi`) and the
+repository variable `PYPI_PUBLISH_ENABLED` set to `true`; without the variable
+it builds and checks the artifacts and uploads nothing.
+
+The job sits in `release.yml` and not in `publish.yml` because PyPI cannot
+accept an upload from a called workflow: it matches the publisher on the file
+that defines the job, while the upload's attestation names the workflow that
+started the run. With the job in a called file those are two different names,
+and PyPI refuses the upload whichever one is registered.
+
+A failed upload is re-run from the release run's page. A version already on
+PyPI ends the job without failing it.
 
 ## Publishing to the package managers
 
