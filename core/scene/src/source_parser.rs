@@ -16,6 +16,7 @@ use bevy_ecs::prelude::Resource;
 use lumen_ir::css::Stylesheet;
 use lumen_ir::fragment::FragmentTable;
 use lumen_ir::layout_ir::{LayoutIR, ScriptRefs};
+use lumen_ir::source_map::{SourceError, SourceMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,48 +26,57 @@ use std::sync::Arc;
 /// resolver, and the real-filesystem `FsLoader`.
 ///
 /// Errors are surfaced as `String` (rendered from the front-end's own error
-/// types) so the trait carries no dependency on the parser's error model.
+/// types) so the trait carries no dependency on the parser's error model. The
+/// two parses also say where in their text the error is ([`SourceError`]),
+/// and the two splicers hand back which file each line of their result came
+/// from ([`SourceMap`]), so the caller can name the line the author wrote.
 pub trait SourceParser: Send + Sync {
     /// Parse markup text (with `<include>` directives already spliced away)
     /// into a [`LayoutIR`], instantiating any of `fragments` it names.
-    fn parse_html(&self, src: &str, fragments: &FragmentTable) -> Result<LayoutIR, String>;
+    /// An error names its line and column in `src`.
+    fn parse_html(&self, src: &str, fragments: &FragmentTable) -> Result<LayoutIR, SourceError>;
 
-    /// Parse CSS text into a [`Stylesheet`].
-    fn parse_css(&self, src: &str) -> Result<Stylesheet, String>;
+    /// Parse CSS text into a [`Stylesheet`]. An error names its line and
+    /// column in `src`.
+    fn parse_css(&self, src: &str) -> Result<Stylesheet, SourceError>;
 
     /// Resolve `<include src="...">` directives in `src` against
     /// `self_path`'s directory (real filesystem). Every resolved file path is
-    /// appended to `out` so the hot-reload watcher can poll it.
+    /// appended to `out` so the hot-reload watcher can poll it. Returns the
+    /// spliced text and the file each of its lines was read from.
     fn resolve_includes(
         &self,
         src: &str,
         self_path: &Path,
         out: &mut Vec<PathBuf>,
-    ) -> Result<String, String>;
+    ) -> Result<(String, SourceMap), String>;
 
     /// Resolve `@import "..."` directives in `src` against `self_path`.
-    /// Every imported file path is appended to `out`.
+    /// Every imported file path is appended to `out`. Returns the combined
+    /// sheet and the file each of its lines was read from.
     fn resolve_css_imports(
         &self,
         src: &str,
         self_path: &Path,
         out: &mut Vec<PathBuf>,
-    ) -> Result<String, String>;
+    ) -> Result<(String, SourceMap), String>;
 
     /// Parse markup, resolving `<include>` directives against `self_path`'s
     /// directory via the real-filesystem loader (the file-based-pages
     /// assembly path).
+    /// An error names the file it is in, `self_path` or one it includes.
     fn parse_html_with_loader(
         &self,
         src: &str,
         self_path: &Path,
         fragments: &FragmentTable,
-    ) -> Result<LayoutIR, String>;
+    ) -> Result<LayoutIR, SourceError>;
 
     /// Read the fragments `src` declares, without building its tree. An app
     /// collects these from every one of its `.lmn` files so a fragment
-    /// declared in one is usable from all of them.
-    fn collect_fragments(&self, src: &str, self_path: &Path) -> Result<FragmentTable, String>;
+    /// declared in one is usable from all of them. An error names the file
+    /// it is in, `self_path` or one it includes.
+    fn collect_fragments(&self, src: &str, self_path: &Path) -> Result<FragmentTable, SourceError>;
 
     /// Build the fragments the markup blocks of one script declare. The
     /// blocks are what the script's language read out of `src` (candela's
@@ -85,8 +95,9 @@ pub trait SourceParser: Send + Sync {
     /// Read the `<script>` elements `src` names, without building its tree.
     /// Markup names a script component by writing the function as a tag, so
     /// the scripts are read before the tree and their blocks are in the table
-    /// the parse instantiates against.
-    fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, String>;
+    /// the parse instantiates against. An error names the file it is in,
+    /// `self_path` or one it includes.
+    fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, SourceError>;
 
     /// Expand the use sites the fragment bodies hold against each other, so
     /// every body is the whole subtree it stands for. An artifact carries the

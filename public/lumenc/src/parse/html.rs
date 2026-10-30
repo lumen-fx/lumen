@@ -201,6 +201,19 @@ pub fn parse_html_with_loader(
     parse_markup(src, self_path, Some(loader), &FragmentTable::new()).map(|p| p.ir)
 }
 
+/// A `roxmltree` error as a [`ParseError`] placed where it happened in
+/// `text`, the text that was parsed, with the position taken out of its
+/// message.
+fn xml_error(e: &roxmltree::Error, text: &str) -> ParseError {
+    let pos = e.pos();
+    let message = e.to_string();
+    let message = message
+        .strip_suffix(&format!(" at {}:{}", pos.row, pos.col))
+        .unwrap_or(&message)
+        .to_string();
+    ParseError::Xml(message).at(lumen_ir::source_map::offset_of(text, pos.row, pos.col))
+}
+
 /// Parse markup that may instantiate fragments declared elsewhere.
 ///
 /// `external` holds those fragments; an app collects them from every one of
@@ -217,7 +230,7 @@ pub fn parse_markup(
     let mut included_files = Vec::new();
     let spliced =
         crate::parse::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
-    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| xml_error(&e, &spliced))?;
     let mut script_source = InlineScripts::new(self_path);
     let mut external_scripts = Vec::new();
     let mut lint_findings: Vec<LintFinding> = Vec::new();
@@ -258,7 +271,8 @@ pub fn parse_markup(
         },
         false,
         0,
-    )?;
+    )
+    .map_err(|e| e.at(doc.root_element().range().start))?;
     crate::parse::fragments::inline(&mut root, &fragments, &mut lint_findings)?;
     // Lines were counted in the spliced markup; an error names the file the
     // author wrote, which has no include bodies in it.
@@ -301,7 +315,7 @@ pub fn collect_script_refs(
     let mut included_files = Vec::new();
     let spliced =
         crate::parse::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
-    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| xml_error(&e, &spliced))?;
     let mut refs = ScriptRefs::default();
     for node in doc.descendants() {
         if !node.is_element() || node.tag_name().name() != "script" {
@@ -332,7 +346,7 @@ pub fn collect_fragments(
     let mut included_files = Vec::new();
     let spliced =
         crate::parse::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
-    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| xml_error(&e, &spliced))?;
     let mut script_source = InlineScripts::new(self_path);
     let mut external_scripts = Vec::new();
     let mut lint_findings = Vec::new();
@@ -373,10 +387,8 @@ fn collect_declarations(
     let mut known = external.names();
     for node in &declarations {
         let name = node.attribute("name").ok_or_else(|| {
-            ParseError::Xml(format!(
-                "<template> at byte {} requires a name=\"...\" attribute",
-                node.range().start
-            ))
+            ParseError::Xml(format!("<template> requires a name=\"...\" attribute"))
+                .at(node.range().start)
         })?;
         known.insert(name.to_string());
     }
@@ -971,27 +983,25 @@ fn extract_menubar(
     };
     if iter.next().is_some() {
         return Err(ParseError::Xml(format!(
-            "duplicate <menubar> at byte {}: at most one allowed per <root>",
-            node.range().start
-        )));
+            "duplicate <menubar>: at most one allowed per <root>"
+        ))
+        .at(node.range().start));
     }
     let mut bar = MenuBarSpec::default();
     for menu_node in node.children().filter(|c| c.is_element()) {
         if menu_node.tag_name().name() != "menu" {
             return Err(ParseError::Xml(format!(
-                "<menubar> child at byte {} must be <menu>, got <{}>",
-                menu_node.range().start,
+                "<menubar> child must be <menu>, got <{}>",
                 menu_node.tag_name().name()
-            )));
+            ))
+            .at(menu_node.range().start));
         }
         let label = menu_node
             .attribute("label")
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<menu> at byte {} requires a label=\"...\" attribute",
-                    menu_node.range().start
-                ))
+                ParseError::Xml(format!("<menu> requires a label=\"...\" attribute"))
+                    .at(menu_node.range().start)
             })?;
         let mut items = Vec::new();
         for child in menu_node.children().filter(|c| c.is_element()) {
@@ -1001,10 +1011,8 @@ fn extract_menubar(
                         .attribute("id")
                         .map(|s| s.to_string())
                         .ok_or_else(|| {
-                            ParseError::Xml(format!(
-                                "<menuitem> at byte {} requires an id=\"...\" attribute",
-                                child.range().start
-                            ))
+                            ParseError::Xml(format!("<menuitem> requires an id=\"...\" attribute"))
+                                .at(child.range().start)
                         })?;
                     let item_label = child
                         .attribute("label")
@@ -1020,10 +1028,10 @@ fn extract_menubar(
                 "separator" => items.push(MenuEntrySpec::Separator),
                 other => {
                     return Err(ParseError::Xml(format!(
-                        "<menu> child at byte {} must be <menuitem> or <separator>, got <{}>",
-                        child.range().start,
+                        "<menu> child must be <menuitem> or <separator>, got <{}>",
                         other
-                    )));
+                    ))
+                    .at(child.range().start));
                 }
             }
         }
@@ -1091,24 +1099,21 @@ fn build_composed_widget(
         // `<tab>` outside of `<tabs>` is meaningless - collapsing it to
         // its first child would be silently surprising. Reject so authors
         // get a clear error. Inside one it is an element like any other.
-        "tab" if node.parent_element().map(|p| p.tag_name().name()) != Some("tabs") => {
-            Err(ParseError::Xml(format!(
-                "<tab> at byte {} may only appear inside <tabs>",
-                node.range().start
-            )))
-        }
+        "tab" if node.parent_element().map(|p| p.tag_name().name()) != Some("tabs") => Err(
+            ParseError::Xml(format!("<tab> may only appear inside <tabs>")).at(node.range().start),
+        ),
         "dropdown" => build_dropdown(node, tag, src, lint_findings, frag, in_for_body).map(Some),
         // `<option>` outside of `<dropdown>` is meaningless - same
         // rejection rule as `<tab>` outside of `<tabs>`.
-        "option" => Err(ParseError::Xml(format!(
-            "<option> at byte {} may only appear inside <dropdown>",
-            node.range().start
-        ))),
+        "option" => Err(
+            ParseError::Xml(format!("<option> may only appear inside <dropdown>"))
+                .at(node.range().start),
+        ),
         "menu" => build_menu(node, src, lint_findings).map(Some),
         "menuitem" | "separator" => Err(ParseError::Xml(format!(
-            "<{tag}> at byte {} may only appear inside <menu> or <menubar>",
-            node.range().start
-        ))),
+            "<{tag}> may only appear inside <menu> or <menubar>"
+        ))
+        .at(node.range().start)),
         "date-picker" | "time-picker" => {
             build_picker(node, tag, src, lint_findings, frag, in_for_body).map(Some)
         }
@@ -1139,10 +1144,10 @@ fn build_tooltip(
     let translatable = match node.attribute("translatable").map(str::trim) {
         Some("") => {
             return Err(ParseError::Xml(format!(
-                "<tooltip> at byte {}: translatable attribute requires a \
-                 catalogue key (e.g. \"app-title\")",
-                node.range().start
-            )));
+                "<tooltip>: translatable attribute requires a \
+                 catalogue key (e.g. \"app-title\")"
+            ))
+            .at(node.range().start));
         }
         other => other.map(str::to_string),
     };
@@ -1153,16 +1158,16 @@ fn build_tooltip(
         .filter(|c| c.is_element() && c.tag_name().name() != "script");
     let Some(child) = child_nodes.next() else {
         return Err(ParseError::Xml(format!(
-            "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element",
-            node.range().start
-        )));
+            "<tooltip text=\"{text}\"> must wrap exactly one trigger element"
+        ))
+        .at(node.range().start));
     };
     if child_nodes.next().is_some() {
         return Err(ParseError::Xml(format!(
-            "<tooltip text=\"{text}\"> at byte {} must wrap exactly one trigger element \
-             (got >1)",
-            node.range().start
-        )));
+            "<tooltip text=\"{text}\"> must wrap exactly one trigger element \
+             (got >1)"
+        ))
+        .at(node.range().start));
     }
     let mut elem = build_element(
         child,
@@ -1173,7 +1178,8 @@ fn build_tooltip(
         frag,
         in_for_body,
         depth + 1,
-    )?;
+    )
+    .map_err(|e| e.at(child.range().start))?;
     elem.attrs.tooltip = Some(crate::layout_ir::TooltipSpec {
         text,
         translatable,
@@ -1201,10 +1207,8 @@ fn build_dropdown(
         .attribute("bind-value")
         .map(signal_attr_name)
         .ok_or_else(|| {
-            ParseError::Xml(format!(
-                "<dropdown> at byte {} requires bind-value=\"signal-name\"",
-                node.range().start
-            ))
+            ParseError::Xml(format!("<dropdown> requires bind-value=\"signal-name\""))
+                .at(node.range().start)
         })?;
     let open_signal = format!("__dropdown_open:{signal_name}");
     // An authored `placeholder` means "start with nothing picked":
@@ -1224,19 +1228,16 @@ fn build_dropdown(
     {
         if child.tag_name().name() != "option" {
             return Err(ParseError::Xml(format!(
-                "<dropdown> child at byte {} must be <option>, got <{}>",
-                child.range().start,
+                "<dropdown> child must be <option>, got <{}>",
                 child.tag_name().name()
-            )));
+            ))
+            .at(child.range().start));
         }
         let value = child
             .attribute("value")
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                ParseError::Xml(format!(
-                    "<option> at byte {} requires value=\"...\"",
-                    child.range().start
-                ))
+                ParseError::Xml(format!("<option> requires value=\"...\"")).at(child.range().start)
             })?;
         let label = child
             .attribute("label")
@@ -1378,10 +1379,7 @@ fn build_menu(
     lint_findings: &mut Vec<LintFinding>,
 ) -> Result<Element, ParseError> {
     let menu_id = node.attribute("id").map(|s| s.to_string()).ok_or_else(|| {
-        ParseError::Xml(format!(
-            "<menu> at byte {} requires id=\"...\"",
-            node.range().start
-        ))
+        ParseError::Xml(format!("<menu> requires id=\"...\"")).at(node.range().start)
     })?;
     let mut rows: Vec<lumen_ir::menu::MenuRow> = Vec::new();
     for child in node
@@ -1394,10 +1392,8 @@ fn build_menu(
                     .attribute("id")
                     .map(|s| s.to_string())
                     .ok_or_else(|| {
-                        ParseError::Xml(format!(
-                            "<menuitem> at byte {} requires id=\"...\"",
-                            child.range().start
-                        ))
+                        ParseError::Xml(format!("<menuitem> requires id=\"...\""))
+                            .at(child.range().start)
                     })?;
                 let label = child
                     .attribute("label")
@@ -1416,10 +1412,10 @@ fn build_menu(
             "separator" => rows.push(lumen_ir::menu::MenuRow::Separator),
             other => {
                 return Err(ParseError::Xml(format!(
-                    "<menu> child at byte {} must be <menuitem> or <separator>, got <{}>",
-                    child.range().start,
+                    "<menu> child must be <menuitem> or <separator>, got <{}>",
                     other
-                )));
+                ))
+                .at(child.range().start));
             }
         }
     }
@@ -1442,10 +1438,8 @@ fn build_picker(
         .attribute("bind-value")
         .map(signal_attr_name)
         .ok_or_else(|| {
-            ParseError::Xml(format!(
-                "<{tag}> at byte {} requires bind-value=\"signal-name\"",
-                node.range().start
-            ))
+            ParseError::Xml(format!("<{tag}> requires bind-value=\"signal-name\""))
+                .at(node.range().start)
         })?;
     // The generated field is an `<input>`, so the attributes written on
     // the picker (`class`, `tab-index`, `required`, sizing, ...) reach it
@@ -1537,9 +1531,9 @@ fn synthesize_widget_parts(
         if tag == "radio" {
             let (Some(group), Some(value)) = (&attrs.radio_group, &attrs.radio_value) else {
                 return Err(ParseError::Xml(format!(
-                    "<radio> at byte {} requires group=\"signal\" and value=\"...\"",
-                    node.range().start
-                )));
+                    "<radio> requires group=\"signal\" and value=\"...\""
+                ))
+                .at(node.range().start));
             };
             // `checked="true"` seeds the group signal (first spawned
             // checked member wins; the runtime falls back to the first
@@ -1774,10 +1768,10 @@ fn synthesize_widget_parts(
         for child in children.iter() {
             if child.tag != "tab" {
                 return Err(ParseError::Xml(format!(
-                    "<tabs> at byte {} may hold only <tab> children, got <{}>",
-                    node.range().start,
+                    "<tabs> may hold only <tab> children, got <{}>",
                     child.tag
-                )));
+                ))
+                .at(node.range().start));
             }
             let spec = child.attrs.tab.clone().unwrap_or_default();
             strip.children.push(tab_button(&spec, child.attrs.disabled));
@@ -1785,10 +1779,10 @@ fn synthesize_widget_parts(
         children.insert(0, strip);
     }
     if tag == "tab" && attrs.tab.as_ref().is_none_or(|t| t.name.is_empty()) {
-        return Err(ParseError::Xml(format!(
-            "<tab> at byte {} requires a name=\"...\" attribute",
-            node.range().start
-        )));
+        return Err(
+            ParseError::Xml(format!("<tab> requires a name=\"...\" attribute"))
+                .at(node.range().start),
+        );
     }
 
     // `<split>`: the children stay the panes, each marked `.split-pane`,
@@ -1911,7 +1905,9 @@ fn apply_authored_attributes(
             // Reborrow: the sink outlives every attribute in the loop.
             lint_findings: &mut *lint_findings,
         };
-        let applied = apply_attribute(tag, a.name(), a.value(), attrs, &mut ctx)?;
+        // An attribute's error is placed at the attribute.
+        let applied = apply_attribute(tag, a.name(), a.value(), attrs, &mut ctx)
+            .map_err(|e| e.at(a.range().start))?;
         // Which surface set a value is not recoverable from the fields
         // `apply_attribute` just wrote, and a target that ranks a rule above
         // an attribute needs to know. Record the styling ones under the
@@ -2005,19 +2001,19 @@ fn build_element(
 ) -> Result<Element, ParseError> {
     if depth > MAX_ELEMENT_DEPTH {
         return Err(ParseError::Xml(format!(
-            "element nesting exceeded depth {MAX_ELEMENT_DEPTH} at byte {} (too deeply nested)",
-            node.range().start
-        )));
+            "element nesting exceeded depth {MAX_ELEMENT_DEPTH} (too deeply nested)"
+        ))
+        .at(node.range().start));
     }
     let tag = node.tag_name().name().to_string();
     // A use site stands in for the fragment it names until the tree is
     // inlined, so it never reaches the tag vocabulary below.
     if let Some(key) = frag.use_key(node, &tag) {
         if key.is_empty() {
-            return Err(ParseError::Xml(format!(
-                "<use> at byte {} requires a template=\"...\" attribute",
-                node.range().start
-            )));
+            return Err(
+                ParseError::Xml(format!("<use> requires a template=\"...\" attribute"))
+                    .at(node.range().start),
+            );
         }
         return build_fragment_use(
             node,
@@ -2241,16 +2237,21 @@ fn build_children(
                 }
                 continue;
             }
-            children.push(build_element(
-                child,
-                script_buf,
-                external_scripts,
-                src,
-                lint_findings,
-                frag,
-                in_for_body,
-                depth + 1,
-            )?);
+            // An error inside the child that names no place of its own is
+            // placed at the child.
+            children.push(
+                build_element(
+                    child,
+                    script_buf,
+                    external_scripts,
+                    src,
+                    lint_findings,
+                    frag,
+                    in_for_body,
+                    depth + 1,
+                )
+                .map_err(|e| e.at(child.range().start))?,
+            );
         }
     }
     Ok(())

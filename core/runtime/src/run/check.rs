@@ -522,7 +522,7 @@ pub fn check_app(
     // Parse-time lint findings already went to stderr from `load_ir`,
     // which every compile path shares.
     if let Some(misplaced) = misplaced_element(&ir.root, &every_addon, &mut Vec::new()) {
-        return Err(RunError::ParseHtml(misplaced));
+        return Err(RunError::ParseHtml(misplaced.into()));
     }
     let has_script = !ir.script_source.trim().is_empty() || !ir.external_scripts.is_empty();
     // RC6: compile the app's scripts with the same engine settings
