@@ -2457,6 +2457,74 @@ fn a_markup_error_names_its_place() {
     assert_eq!(err.offset(), Some(src.find("<menuitem").unwrap()), "{err}");
 }
 
+/// Each structural mistake is placed at the element that made it, so the
+/// error points at the line holding it rather than at the top of the file.
+#[test]
+fn a_structural_mistake_is_placed_at_its_element() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "<root>\n  <template><label/></template>\n</root>",
+            "<template>",
+        ),
+        (
+            "<root>\n  <menubar><menu label=\"A\"/></menubar>\n  <menubar/>\n</root>",
+            "<menubar/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <column/>\n  </menubar>\n</root>",
+            "<column/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu><menuitem id=\"a\"/></menu>\n  </menubar>\n</root>",
+            "<menu>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu label=\"A\"><menuitem/></menu>\n  </menubar>\n</root>",
+            "<menuitem/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu label=\"A\"><label/></menu>\n  </menubar>\n</root>",
+            "<label/>",
+        ),
+        ("<root>\n  <option value=\"a\"/>\n</root>", "<option"),
+        ("<root>\n  <separator/>\n</root>", "<separator/>"),
+        (
+            "<root>\n  <tooltip text=\"t\"></tooltip>\n</root>",
+            "<tooltip",
+        ),
+        (
+            "<root>\n  <tooltip text=\"t\"><label/><label/></tooltip>\n</root>",
+            "<tooltip",
+        ),
+        (
+            "<root>\n  <dropdown><option value=\"a\"/></dropdown>\n</root>",
+            "<dropdown>",
+        ),
+        (
+            "<root>\n  <dropdown bind-value=\"v\"><label/></dropdown>\n</root>",
+            "<label/>",
+        ),
+        (
+            "<root>\n  <dropdown bind-value=\"v\"><option/></dropdown>\n</root>",
+            "<option/>",
+        ),
+        (
+            "<root>\n  <menu id=\"m\"><label/></menu>\n</root>",
+            "<label/>",
+        ),
+        ("<root>\n  <date-picker/>\n</root>", "<date-picker/>"),
+        ("<root>\n  <use/>\n</root>", "<use/>"),
+    ];
+    for (markup, at) in cases {
+        let err = lumenc::parse_html(markup).expect_err(markup);
+        assert_eq!(
+            err.offset(),
+            Some(markup.find(at).unwrap()),
+            "{markup}: {err}"
+        );
+    }
+}
+
 /// A popup `<menuitem accel>` keeps its accelerator: the item's row holds a
 /// `.menu-accel` part carrying it, and an empty `accel` adds none.
 #[test]
