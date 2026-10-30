@@ -28,18 +28,18 @@
         "machine, so an Arm64 machine gets the native build instead of the x64",
         "one it would otherwise run under emulation."
     ],
-    "version": "0.0.10",
+    "version": "0.0.11",
     "description": "Toolchain for Lumen, a markup-first UI framework for native desktop apps",
     "homepage": "https://lumenfx.dev",
     "license": "MPL-2.0",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.10/lumen-windows-x86_64.zip",
-            "hash": "30a2d3866d41c79499a0dd2f18e917b5e9419039b5237c77d40398915d9f8c6c"
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.11/lumen-windows-x86_64.zip",
+            "hash": "49c1dc88a5d8e381fb7b9b1723459b61082e52c7ae5094144254f09b69760773"
         },
         "arm64": {
-            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.10/lumen-windows-aarch64.zip",
-            "hash": "bc735bd7c0610f6d6035fb7cb757fef6d17ba76fd10da5b0dbf5e2b9c96ad53a"
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.11/lumen-windows-aarch64.zip",
+            "hash": "5a7c693e370979320bfea60c4a0a0031ba1c22fcc872a0b7488a465cfab7862e"
         }
     },
     "extract_dir": "bin",
