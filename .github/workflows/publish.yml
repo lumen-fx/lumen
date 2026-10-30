@@ -1,10 +1,10 @@
 name: publish
 
-# Publishes the Lumen packages to the language registries: `lumenui` on PyPI
-# (the Python SDK), and on crates.io the Rust SDK (`lumenui` and its
+# Publishes the Lumen crates to crates.io: the Rust SDK (`lumenui` and its
 # `lumenui-<name>` module crates) and `lumenc`. This is a different channel
 # from the toolchain archives people install with install.sh; both go out for
-# the same release, and release.yml starts both.
+# the same release, and release.yml starts both. The Python SDK goes to PyPI
+# from release.yml itself; its `pypi` job says why it cannot live here.
 #
 # release.yml calls this once the release is published, off the tag it was cut
 # from. Waiting on `release: published` instead would never fire: release.yml
@@ -17,28 +17,9 @@ name: publish
 # caller is release.yml, which fires on `v*` tags while the nightly publishes
 # onto a tag named `nightly`.
 #
-# Owner setup. The two registry credentials are checked separately, and a leg
-# without its credential verifies instead of uploading.
-#
-#   CRATES_IO_TOKEN         repository secret. A crates.io API token with
-#                           publish-new and publish-update scope. With it the
-#                           crates.io jobs publish; without it, they verify.
-#   PYPI_PUBLISH_ENABLED    repository variable, set to "true" once the PyPI
-#                           trusted publisher below is registered. Without it
-#                           the PyPI job builds and checks the artifacts and
-#                           uploads nothing.
-#   PyPI trusted publisher  on pypi.org, for project `lumenui`, owner
-#                           `lumen-fx`, repository `lumen`, environment `pypi`.
-#                           This replaces a long-lived API token: the job mints
-#                           a short-lived one from its OIDC identity. PyPI
-#                           matches the registered workflow filename against
-#                           the file that defines the publishing job, which is
-#                           this one, and its documentation lists a workflow
-#                           started by another workflow as unsupported. So
-#                           confirm an upload is accepted before leaving
-#                           PYPI_PUBLISH_ENABLED on; if PyPI rejects the
-#                           identity, the upload step moves into release.yml
-#                           and the registration names release.yml instead.
+# Owner setup: CRATES_IO_TOKEN, a repository secret holding a crates.io API
+# token with publish-new and publish-update scope. With it the crates.io jobs
+# publish; without it, they verify instead of uploading.
 #
 # Every registry job is an ordinary re-runnable step: it skips a version that
 # is already published, so a leg that failed halfway is fixed by running the
@@ -84,8 +65,8 @@ permissions:
   contents: read
 
 # Governs a run started from the Actions tab. A call from release.yml is part
-# of that workflow's run and is covered by its group instead, so the two jobs
-# that reach a registry carry a lock of their own below.
+# of that workflow's run and is covered by its group instead, so the jobs that
+# reach the registry carry a lock of their own below.
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
@@ -106,7 +87,6 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
       crates_io: ${{ steps.mode.outputs.crates_io }}
-      pypi: ${{ steps.mode.outputs.pypi }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,7 +129,6 @@ jobs:
         id: mode
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-          PYPI_PUBLISH_ENABLED: ${{ vars.PYPI_PUBLISH_ENABLED }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
         run: |
           dry_run=false
@@ -164,74 +143,6 @@ jobs:
             echo "crates_io=false" >> "$GITHUB_OUTPUT"
             echo "::notice::CRATES_IO_TOKEN is not set, so the crates.io job runs as a dry run"
           fi
-
-          if [ "$PYPI_PUBLISH_ENABLED" = "true" ]; then
-            echo "pypi=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "pypi=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::PYPI_PUBLISH_ENABLED is not true, so the PyPI job uploads nothing"
-          fi
-
-  # The Python SDK. The distribution is pure Python: it wraps the C ABI with
-  # ctypes and loads liblumen from wherever the machine has it, so one
-  # py3-none-any wheel serves every platform and there is no build matrix.
-  pypi:
-    name: lumenui on PyPI
-    needs: preflight
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: pypi
-    concurrency:
-      group: publish-pypi
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      # Trusted publishing: the job proves its identity to PyPI with a
-      # short-lived OIDC token instead of carrying an API token. A called
-      # workflow can only narrow what its caller granted, so release.yml grants
-      # this on the job that calls here.
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build the sdist and the wheel
-        working-directory: public/lumenui/python
-        run: |
-          python -m pip install --upgrade build twine
-          python -m build
-          python -m twine check dist/*
-
-      # A version already on PyPI cannot be replaced, and re-running the
-      # workflow after a partial release is normal, so a version that is
-      # already there ends this job rather than failing it.
-      - name: Check the version is not on PyPI yet
-        id: pypi_state
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          code="$(curl -fsS -o /dev/null -w '%{http_code}' \
-            "https://pypi.org/pypi/lumenui/$VERSION/json" || true)"
-          if [ "$code" = "200" ]; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::lumenui $VERSION is already on PyPI"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload to PyPI
-        if: >-
-          needs.preflight.outputs.pypi == 'true' &&
-          needs.preflight.outputs.dry_run == 'false' &&
-          steps.pypi_state.outputs.published == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: public/lumenui/python/dist
 
   # The Rust SDK: `lumenui` and the `lumenui-<name>` module crates, in
   # dependency order. tools/release/publish-crates.py `--sdk` generates the
