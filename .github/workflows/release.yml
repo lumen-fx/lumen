@@ -78,6 +78,7 @@ on:
 # with a deploy key instead, for the reasons the bump job's comment gives, so
 # their tokens stay read-only; the cut's jobs add actions: read to see `ci`
 # runs. build-toolchain.yml declares its own read-only token for the builds.
+# id-token: write goes to the PyPI upload alone, for trusted publishing.
 permissions:
   contents: read
 
@@ -489,7 +490,8 @@ jobs:
               --generate-notes
           fi
 
-  # The four channels a release feeds, each in the file that owns it. They run
+  # The four channels a release feeds, each in the file that owns it, and the
+  # PyPI upload after them, which cannot live in a file of its own. They run
   # alongside each other and alongside the bump, off the tag this run was
   # started by: a called workflow sees the caller's ref, so `actions/checkout`
   # in any of them lands on the commit that was tagged.
@@ -502,14 +504,81 @@ jobs:
     name: registries
     needs: release
     uses: ./.github/workflows/publish.yml
-    # The PyPI leg proves its identity to PyPI with an OIDC token. A called
-    # workflow can only narrow the permissions its caller granted, so the grant
-    # is made here; `contents: read` is listed too, because naming any
-    # permission drops the rest to none and the jobs check the repository out.
+    secrets: inherit
+
+  # The Python SDK on PyPI. The distribution is pure Python: it wraps the C ABI
+  # with ctypes and loads liblumen from wherever the machine has it, so one
+  # py3-none-any wheel serves every platform and there is no build matrix.
+  #
+  # This job lives here rather than beside the crates.io jobs in publish.yml
+  # because PyPI's trusted publishing cannot take an upload from a called
+  # workflow: it matches the publisher on the file that defines the job, while
+  # the upload's attestation names the workflow that started the run, and the
+  # two disagree whenever they are different files. Here both are release.yml.
+  #
+  # Owner setup, both on the PyPI side and in this repository:
+  #
+  #   PyPI trusted publisher  on pypi.org, for project `lumenui`: owner
+  #                           `lumen-fx`, repository `lumen`, workflow
+  #                           `release.yml`, environment `pypi`. The job mints
+  #                           a short-lived token from its OIDC identity
+  #                           instead of carrying an API token.
+  #   PYPI_PUBLISH_ENABLED    repository variable, "true" to upload. Without it
+  #                           the job builds and checks the artifacts and
+  #                           uploads nothing.
+  #
+  # A failed upload is re-run from this run's page; a version already on PyPI
+  # ends the job instead of failing it, so a re-run is always safe.
+  pypi:
+    name: lumenui on PyPI
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
     permissions:
       contents: read
       id-token: write
-    secrets: inherit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the sdist and the wheel
+        working-directory: public/lumenui/python
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Check the version is not on PyPI yet
+        id: pypi_state
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ENABLED: ${{ vars.PYPI_PUBLISH_ENABLED }}
+        run: |
+          if [ "$ENABLED" != "true" ]; then
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PYPI_PUBLISH_ENABLED is not true, so the PyPI job uploads nothing"
+            exit 0
+          fi
+          code="$(curl -fsS -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/lumenui/$VERSION/json" || true)"
+          if [ "$code" = "200" ]; then
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::lumenui $VERSION is already on PyPI"
+          else
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to PyPI
+        if: steps.pypi_state.outputs.upload == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: public/lumenui/python/dist
 
   packages:
     name: package managers
