@@ -21,6 +21,21 @@ use lumen_primitives::{MenuAccel, MenuItem, MenuItemButton};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
+/// The DOM index a script looks elements up in is process-global
+/// (`lumen_core::node`), and every app's tick publishes its own. Two of these
+/// apps ticking at once in one test process would answer each other's
+/// lookups, so each test holds this for as long as its app lives, and starts
+/// from an empty index.
+static DOM_INDEX_ISOLATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn isolate() -> std::sync::MutexGuard<'static, ()> {
+    let guard = DOM_INDEX_ISOLATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    lumen_core::node::publish_dom_index(lumen_core::node::DomIndex::default());
+    guard
+}
+
 fn build(markup: &str, script: Option<&str>) -> App {
     static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -120,6 +135,7 @@ fn click(app: &mut App, id: &str) -> Vec<String> {
 /// the skin's dimmer text color. The item keeps its label as its own text.
 #[test]
 fn a_popup_menu_item_shows_its_shortcut() {
+    let _isolated = isolate();
     let mut app = build(
         r#"<root>
   <menu id="edit">
@@ -176,6 +192,7 @@ fn a_popup_menu_item_shows_its_shortcut() {
 /// `remove`. An item it adds is clicked like one the markup wrote.
 #[test]
 fn a_script_changes_a_menu_s_items() {
+    let _isolated = isolate();
     let mut app = build(
         r#"<root>
   <menu id="file">
@@ -241,6 +258,7 @@ fn main() {}
 /// A row is clicked under the id its record gave it.
 #[test]
 fn a_menu_lists_rows_from_a_signal() {
+    let _isolated = isolate();
     let mut app = build(
         r#"<root>
   <menu id="window">
