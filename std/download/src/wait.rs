@@ -347,25 +347,67 @@ mod tests {
         (transport, waits)
     }
 
+    /// A server that never sends, and a user who cancels while the third
+    /// slice of the wait is running. The cancel comes from inside the wait
+    /// rather than from a timer on another thread, so when it lands does not
+    /// depend on how fast the machine schedules either thread.
+    #[derive(Debug)]
+    struct CancelledMidWait {
+        buffers: LazyBuffers,
+        waits: Arc<Mutex<u32>>,
+        control: Control,
+    }
+
+    impl Transport for CancelledMidWait {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+            let mut waits = self.waits.lock().unwrap();
+            *waits += 1;
+            if *waits == 3 {
+                assert!(
+                    self.control.cancel(),
+                    "the cancel found the transfer running"
+                );
+            }
+            Err(ureq::Error::Timeout(timeout.reason))
+        }
+        fn is_open(&mut self) -> bool {
+            true
+        }
+    }
+
+    /// A wait on a server that never answers is taken in slices, and a cancel
+    /// ends it at the end of the slice it lands in, however long the wait
+    /// would otherwise run.
     #[test]
     fn a_cancel_ends_a_wait_on_a_server_that_never_answers() {
         let control = Control::default();
-        let (mut transport, waits) = silent(Duration::NotHappening, control.clone());
-        let canceller = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(60));
-            control.cancel()
-        });
-        let started = std::time::Instant::now();
+        let waits = Arc::new(Mutex::new(0));
+        let mut transport = WaitTransport {
+            inner: Box::new(CancelledMidWait {
+                buffers: LazyBuffers::new(64, 64),
+                waits: waits.clone(),
+                control: control.clone(),
+            }),
+            limit: Duration::NotHappening,
+            control,
+            poll: std::time::Duration::from_millis(10),
+            heard_from: false,
+        };
         let err = transport
             .await_input(wait(Duration::NotHappening))
             .expect_err("a cancelled wait fails");
-        assert!(
-            canceller.join().unwrap(),
-            "the cancel found the transfer running"
-        );
         assert!(err.to_string().contains("cancelled"), "{err}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
-        assert!(*waits.lock().unwrap() > 1, "the wait was taken in slices");
+        assert_eq!(
+            *waits.lock().unwrap(),
+            3,
+            "the wait was taken in slices and stopped at the one the cancel landed in"
+        );
     }
 
     #[test]
