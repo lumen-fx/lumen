@@ -1511,13 +1511,13 @@ pub fn reconcile_if_blocks(
                     if let Ok((specs, cur)) = fade_targets.get(parent_id)
                         && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
                     {
-                        commands.entity(parent_id).insert(bundle);
+                        commands.entity(parent_id).try_insert(bundle);
                     }
                     marker.currently_mounted = true;
                 } else if !now_truthy && marker.currently_mounted {
                     if let Some(kids) = children {
                         for child in kids.iter() {
-                            commands.entity(child).despawn();
+                            commands.entity(child).try_despawn();
                         }
                     }
                     marker.currently_mounted = false;
@@ -1553,9 +1553,11 @@ pub fn reconcile_if_blocks(
             continue;
         }
         marker.applied_visible = Some(now_truthy);
+        // `try_`: a block inside the body of another that closed this tick
+        // is despawned with that body before these commands run.
         commands
             .entity(parent_id)
-            .insert(lumen_core::components::Visible(now_truthy));
+            .try_insert(lumen_core::components::Visible(now_truthy));
         // Entering transition on show (mount-direction only - hide stays
         // instant; CSS can't run removal transitions without JS either).
         // Check the `<if>` entity itself (e.g. `<dialog>`) and its mounted
@@ -1571,7 +1573,7 @@ pub fn reconcile_if_blocks(
                 if let Ok((specs, cur)) = fade_targets.get(target)
                     && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
                 {
-                    commands.entity(target).insert(bundle);
+                    commands.entity(target).try_insert(bundle);
                 }
             }
         }
@@ -2789,6 +2791,11 @@ pub(crate) fn spawn_body_child(
 ) {
     let el = el.clone();
     commands.queue(move |world: &mut World| {
+        // A block inside the body of another that closed this tick is gone
+        // by now, and a body mounted under it would be left with no parent.
+        if world.get_entity(parent).is_err() {
+            return;
+        }
         let id = spawn_subtree(world, &el, Some(parent), placeholders);
         match kind {
             // A gated body carries the attributes the load-time cascade
