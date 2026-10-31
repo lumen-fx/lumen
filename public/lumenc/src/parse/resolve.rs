@@ -546,6 +546,8 @@ mod tests {
     /// was read from: the entry before the include, each line of the
     /// included file and of a file it includes in turn, and the entry again
     /// after the include.
+    /// An included file is named by the path it was read from, with the
+    /// platform's separators; the entry by the path it was given.
     #[test]
     fn spliced_lines_map_back_to_their_files() {
         let loader = mock(&[
@@ -565,8 +567,12 @@ mod tests {
         .unwrap();
         let line_of = |needle: &str| line_at(&text, text.find(needle).unwrap());
         let main = Path::new("app/main.lmn").display().to_string();
-        let side = Path::new("app/side.lmn").display().to_string();
-        let deep = Path::new("app/deep.lmn").display().to_string();
+        let side = normalize_path(&Path::new("app").join("side.lmn"))
+            .display()
+            .to_string();
+        let deep = normalize_path(&Path::new("app").join("deep.lmn"))
+            .display()
+            .to_string();
         assert_eq!(map.locate(line_of("<root>")), Some((main.as_str(), 1)));
         assert_eq!(map.locate(line_of("<b/>")), Some((deep.as_str(), 2)));
         assert_eq!(map.locate(line_of("</column>")), Some((side.as_str(), 3)));
@@ -589,7 +595,9 @@ mod tests {
         .unwrap();
         let line_of = |needle: &str| line_at(&text, text.find(needle).unwrap());
         let main = Path::new("app/main.css").display().to_string();
-        let theme = Path::new("app/theme.css").display().to_string();
+        let theme = normalize_path(&Path::new("app").join("theme.css"))
+            .display()
+            .to_string();
         assert_eq!(map.locate(line_of(".b")), Some((theme.as_str(), 2)));
         assert_eq!(map.locate(line_of(".c")), Some((main.as_str(), 3)));
     }
