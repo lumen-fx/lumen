@@ -28,7 +28,7 @@ concurrency:
 jobs:
   check:
     name: migration note
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # The notes are read from the pull request's own tree; nothing in it is

@@ -77,8 +77,8 @@ name: build-toolchain
 # Target coverage - every leg here builds natively for its own target, no
 # cross-compilation:
 #
-#   linux-x86_64    ubuntu-24.04, the image ci.yml's ubuntu-latest names
-#                   today, pinned: the lumen-server in this leg's archive is
+#   linux-x86_64    ubuntu-24.04, the image ci.yml's Linux leg runs on,
+#                   pinned: the lumen-server in this leg's archive is
 #                   the one the container image carries, and its base has to
 #                   ship a glibc at least as new as the one it links against
 #                   (see web/server/Dockerfile). ubuntu-latest moving to a
@@ -155,7 +155,7 @@ jobs:
   # release.yml can name the commits in the release body.
   templates:
     name: resolve the templates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       revs: ${{ steps.resolve.outputs.revs }}
@@ -931,7 +931,7 @@ jobs:
   # wanting.
   web:
     name: build (web)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

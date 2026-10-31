@@ -48,7 +48,7 @@ jobs:
   # matrix never expands it, and the required test contexts would wait
   # forever (the same trap the python sdk jobs hit).
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
@@ -81,7 +81,7 @@ jobs:
 
   fmt:
     name: fmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # apps/music/*.ogg is the only LFS content in the repo. The audio test
@@ -105,7 +105,7 @@ jobs:
   # error anyone catches first.
   engine-graph:
     name: engine graph
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -123,7 +123,7 @@ jobs:
 
   clippy:
     name: clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -148,12 +148,18 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     needs: changes
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner || matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
+        # `os` names the job, and `test (ubuntu-latest)` is a required
+        # check, so the label stays while the Linux leg runs on a pinned
+        # image: on ubuntu-26.04 lavapipe crashes the wgpu tests.
         os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            runner: ubuntu-24.04
     steps:
       - if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v4
@@ -391,7 +397,7 @@ jobs:
   wasm:
     name: wasm
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - if: needs.changes.outputs.rust == 'true'
@@ -429,7 +435,7 @@ jobs:
   web:
     name: web
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       # The size a page pays for the runtime, with room to move above the

@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       vscode: ${{ steps.areas.outputs.vscode }}
@@ -106,7 +106,7 @@ jobs:
     name: vscode extension
     needs: changes
     if: needs.changes.outputs.vscode == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -132,7 +132,7 @@ jobs:
     name: jetbrains plugin
     needs: changes
     if: needs.changes.outputs.jetbrains == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
@@ -156,7 +156,7 @@ jobs:
   jetbrains-verifier:
     name: jetbrains plugin verifier
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
       run:
@@ -183,7 +183,7 @@ jobs:
     name: tree-sitter grammar
     needs: changes
     if: needs.changes.outputs.treesitter == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
@@ -211,7 +211,7 @@ jobs:
     name: zed extension
     needs: changes
     if: needs.changes.outputs.zed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -238,7 +238,7 @@ jobs:
     name: release scripts
     needs: changes
     if: needs.changes.outputs.release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -290,7 +290,7 @@ jobs:
     name: python sdk (3.9)
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -313,7 +313,7 @@ jobs:
     name: python sdk (3.13)
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -335,7 +335,7 @@ jobs:
     name: cpp sdk
     needs: changes
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

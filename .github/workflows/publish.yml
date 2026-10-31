@@ -100,7 +100,7 @@ jobs:
   # the jobs below gate on them.
   preflight:
     name: preconditions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -178,7 +178,7 @@ jobs:
   pypi:
     name: lumenui on PyPI
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: pypi
     concurrency:
@@ -247,7 +247,7 @@ jobs:
   crates-io-sdk:
     name: lumenui on crates.io
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     concurrency:
       group: publish-crates-io
@@ -313,7 +313,7 @@ jobs:
     name: lumenc on crates.io
     needs: [preflight, crates-io-sdk]
     if: always() && needs.preflight.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 350
     concurrency:
       group: publish-crates-io

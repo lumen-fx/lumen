@@ -68,7 +68,7 @@ jobs:
     # broken target still lets every other archive reach the prerelease. The
     # collect step below fails the run when nothing at all was built.
     if: always() && github.repository == 'lumen-fx/lumen'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write

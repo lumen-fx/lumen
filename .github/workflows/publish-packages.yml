@@ -97,7 +97,7 @@ concurrency:
 jobs:
   release:
     name: resolve the release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
@@ -141,7 +141,7 @@ jobs:
     name: rewrite the manifests
     needs: release
     if: needs.release.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -188,7 +188,7 @@ jobs:
     name: aur
     needs: [release, prepare]
     if: needs.release.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
       group: publish-packages-aur
@@ -245,7 +245,7 @@ jobs:
     name: homebrew
     needs: [release, prepare]
     if: needs.release.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
       group: publish-packages-homebrew
@@ -317,7 +317,7 @@ jobs:
     name: scoop
     needs: [release, prepare]
     if: needs.release.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
       group: publish-packages-scoop
