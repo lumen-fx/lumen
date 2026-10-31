@@ -47,7 +47,7 @@ permissions:
 jobs:
   image:
     name: push the server image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # packages: write is what lets the built-in token push to GHCR, and it is
     # granted to this job alone.

@@ -83,7 +83,7 @@ permissions:
 jobs:
   plan:
     name: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -109,7 +109,7 @@ jobs:
           # release was built on.
           runner_for() {
             case "$1" in
-              linux-x86_64) echo ubuntu-latest ;;
+              linux-x86_64) echo ubuntu-24.04 ;;
               linux-aarch64) echo ubuntu-24.04-arm ;;
               macos-x86_64) echo macos-26-intel ;;
               macos-aarch64) echo macos-latest ;;
@@ -305,7 +305,7 @@ jobs:
     name: release
     needs: [plan, build]
     if: inputs.publish && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write

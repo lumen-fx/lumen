@@ -104,7 +104,7 @@ jobs:
   preflight:
     name: check what is being released
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -214,7 +214,7 @@ jobs:
   licenses:
     name: regenerate the third-party licenses
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
@@ -284,7 +284,7 @@ jobs:
   tag:
     name: tag the release
     needs: [preflight, licenses]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The ci wait below gives up after two hours.
     timeout-minutes: 140
     permissions:
@@ -368,7 +368,7 @@ jobs:
   version:
     name: tag matches the workspace version
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.compare.outputs.version }}
@@ -422,7 +422,7 @@ jobs:
     # A tag that disagrees with Cargo.toml publishes nothing at all, which is
     # why the version guard is a gate here and not one more build leg.
     if: always() && needs.version.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -601,7 +601,7 @@ jobs:
   bump:
     name: move main to the next version
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

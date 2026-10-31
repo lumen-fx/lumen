@@ -62,7 +62,7 @@ jobs:
   # macro and everything above it on the next host run.
   coverage:
     name: llvm-cov
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       # apps/music/*.ogg is the only LFS content in the repo, and the audio test
@@ -112,7 +112,7 @@ jobs:
   # compiles its profiling runtime with the runner's clang.
   browser:
     name: llvm-cov (browser)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -150,7 +150,7 @@ jobs:
   upload:
     name: upload
     needs: [coverage, browser]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       # Codecov maps the report's paths onto the files of this checkout.
