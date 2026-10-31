@@ -38,6 +38,7 @@ use lumen_core::components::Visuals;
 use lumen_core::input::CursorImage;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{BackgroundClip, opacity_model, parent_scroll_offsets};
+use lumen_core::tick::LoadsPending;
 #[cfg(debug_assertions)]
 use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -1680,7 +1681,8 @@ pub fn extract_mask_groups(main: &mut World, render: &mut World) {
 }
 
 /// Keeps the frame loop scheduled while an element is still waiting on the
-/// content it named.
+/// content it named, and reports the wait as [`LoadsPending`] so a run that
+/// must show the page complete can hold its last frame for it.
 ///
 /// An event-driven loop parks the moment a tick leaves no work behind, and a
 /// parked loop runs no system. An `<image>` that enters the tree late in a
@@ -1716,12 +1718,16 @@ pub fn keep_frame_loop_awake_for_assets(
         ),
     >,
     active: Option<Res<AnimationsActive>>,
+    loads: Option<Res<LoadsPending>>,
 ) {
-    let Some(active) = active else {
+    if waiting.is_empty() {
         return;
-    };
-    if !waiting.is_empty() {
+    }
+    if let Some(active) = active {
         active.request();
+    }
+    if let Some(loads) = loads {
+        loads.request();
     }
 }
 
@@ -2420,13 +2426,15 @@ mod tests {
 
     /// An `<image>` that enters the tree late in a tick is looked up on the
     /// next one, and an event-driven loop only runs that next tick if the
-    /// tick it just finished said work was left. The claim retires as soon
-    /// as the entity has its payload, so the app still parks.
+    /// tick it just finished said work was left. The same wait reads as a
+    /// load still pending. Both claims retire as soon as the entity has its
+    /// payload, so the app still parks and counts as loaded.
     #[test]
     fn an_unresolved_image_holds_the_frame_loop_open() {
         use bevy_ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.insert_resource(AnimationsActive::default());
+        world.insert_resource(LoadsPending::default());
         let e = world.spawn(ImageSource(PathBuf::from("probe.png"))).id();
 
         world
@@ -2436,8 +2444,13 @@ mod tests {
             world.resource::<AnimationsActive>().get(),
             "a source with no verdict yet needs another tick"
         );
+        assert!(
+            lumen_core::tick::loads_pending(&world),
+            "and the page is still loading"
+        );
 
         world.resource::<AnimationsActive>().clear();
+        world.resource::<LoadsPending>().clear();
         world
             .entity_mut(e)
             .insert(LoadedImage(make_image_data(64).into()));
@@ -2448,6 +2461,7 @@ mod tests {
             !world.resource::<AnimationsActive>().get(),
             "every image holds its payload, so the app parks"
         );
+        assert!(!lumen_core::tick::loads_pending(&world), "and is loaded");
     }
 
     /// The claim belongs to the element, not to the pipeline. A page swap

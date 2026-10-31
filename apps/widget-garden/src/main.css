@@ -213,7 +213,7 @@
 
 /* R4.2 menu panel. Free-floating overlay; size by intrinsic content
    via the option buttons. */
-.menu-panel {
+menu {
   bg: var(--surface);
   radius: var(--radius-sm);
   shadow: 0 6 18 #00000088;
@@ -222,18 +222,18 @@
   inset: 48 -1 -1 24;
 }
 
-.menu-item {
+menuitem {
   bg: var(--surface);
   hover-bg: var(--surface-3);
   text-color: var(--text);
   text-align: start;
 }
 
-.menu-item:disabled {
+menuitem:disabled {
   text-color: var(--text-dim);
 }
 
-.menu-separator {
+separator {
   bg: var(--border);
   height: 1;
   margin: 4 0;

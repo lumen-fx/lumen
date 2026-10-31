@@ -54,6 +54,7 @@ fn wheel_step(app: &mut App) -> bool {
         .resource_mut::<Messages<MouseWheel>>()
         .write(MouseWheel {
             delta: glam::Vec2::new(0.0, 32.0),
+            delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
             position: glam::Vec2::new(100.0, 50.0),
             local: None,
             time_stamp: lumen_core::time::Instant::now(),

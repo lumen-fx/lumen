@@ -654,6 +654,7 @@ through the accessors below:
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
 | `lumen::event_movement_x(ev: int)` / `lumen::event_movement_y(ev: int)` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
+| `lumen::event_delta_mode(ev: int)` | `int` | The unit the wheel reported its delta in, the DOM `deltaMode`: `0` pixels (a touchpad), `1` lines (a wheel turning in notches), `2` pages. The delta itself is in pixels either way. |
 | `lumen::event_shift(ev: int)` / `_ctrl` / `_alt` / `_super` | `bool` | Modifier state. |
 | `lumen::event_prevent_default(ev: int)` | | Cancel the default action. |
 | `lumen::event_stop_propagation(ev: int)` | | Stop the event reaching further elements. |
@@ -793,7 +794,7 @@ writes.
 
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `code`,
 `value`, `detail`, `button`, `x`, `y`, `client_x`, `client_y`, `movement_x`,
-`movement_y`, `delta_x`, `delta_y`,
+`movement_y`, `delta_x`, `delta_y`, `delta_mode`,
 `pointer_id`, `pointer_type`, `is_primary`, `buttons`, `pressure`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`, `shift`,
 `ctrl`, `alt`, `super_key`, `prevent_default`, `stop_propagation`,
@@ -901,6 +902,10 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::close_menu(id: string)` | Close menu `id`. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
+
+A menu's items are elements: `get_by_id` finds one before the menu first
+opens, `create("menuitem")` with `append` or `insert_before` adds one, `remove`
+takes one out, and `set_attr` changes its `label`, `accel` and `disabled`.
 
 ## Styling and theming
 

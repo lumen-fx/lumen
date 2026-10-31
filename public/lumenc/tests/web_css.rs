@@ -23,9 +23,11 @@ use lumenc::parse::html::KNOWN_TAGS;
 use lumenc::parse_css;
 
 /// Tags with nothing to reset. A `<tile>` and a `<div>` are plain boxes
-/// with no default of their own, and an `<if>` takes the same direction
-/// every element does, so the rule that covers every element covers them.
-const NO_DEFAULTS: &[&str] = &["tile", "div", "if"];
+/// with no default of their own, and an `<if>` and a menu's `<separator>`
+/// take the same direction every element does, so the rule that covers
+/// every element covers them. A separator's rule-line metrics are user-agent
+/// sheet rules, which reach the page through its stylesheet.
+const NO_DEFAULTS: &[&str] = &["tile", "div", "if", "separator"];
 
 fn skins() -> Vec<(String, String)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

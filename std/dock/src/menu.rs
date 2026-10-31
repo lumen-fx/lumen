@@ -291,6 +291,7 @@ pub fn open(world: &mut World, panel: String, at: Vec2) {
             id: a.item_id().to_string(),
             label: a.text(),
             disabled: false,
+            accel: None,
         })
         .collect();
     let (_, items) = open_popup(world, container, MENU_ID, &rows, at);

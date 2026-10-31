@@ -376,10 +376,13 @@ back, `4` forward, `5` pen eraser, `-1` none), the modifier flags `shift`,
 `tangential_pressure`, `tilt_x`, `tilt_y`, `twist`, `width`, `height`,
 `buttons` (a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16`
 forward, `32` eraser), `pointer_type` (`LUMEN_POINTER_MOUSE`,
-`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), `is_primary`, and `movement_x` /
+`LUMEN_POINTER_PEN`, `LUMEN_POINTER_TOUCH`), `is_primary`, `movement_x` /
 `movement_y`, how far the pointer moved since its previous move (the device's
-motion under a pointer lock). The struct is borrowed for the call; copy
-anything you keep.
+motion under a pointer lock), and `delta_mode`, the unit a wheel reported its
+delta in (`LUMEN_DELTA_PIXEL` for a touchpad, `LUMEN_DELTA_LINE` for a wheel
+turning in notches, `LUMEN_DELTA_PAGE`); `delta_x` and `delta_y` are in
+pixels either way. The struct is borrowed for the call; copy anything you
+keep.
 
 | Function | Behaviour |
 | --- | --- |
@@ -391,7 +394,7 @@ anything you keep.
 | `LumenNode lumen_pointer_lock_element(void)` | The element holding the pointer lock, or `0`. |
 
 The C++, Python, and Rust SDKs expose the same readings on their `Event`
-(`code()` and `movement()` included), the capture and lock calls on their
+(`code()`, `movement()` and `delta_mode()` included), the capture and lock calls on their
 `Node`, and `exit_pointer_lock` / `pointer_lock_element` beside their
 document functions.
 
@@ -660,7 +663,10 @@ and the introspection server when `[mcp] simulate` is on. It is the mode
 target's device pixel ratio, an optional tick bound, and the virtual desktop
 the app's windows open on (`monitors`, `positioning`, `toplevel_drag`, as
 `lumenc run --monitors`, `--positioning` and `--toplevel-drag` set them); without a tick bound the run lasts
-until SIGINT or SIGTERM. The viewport is the window size. `App::run_headless`
+until SIGINT or SIGTERM. Images decode on worker threads, so a run bounded to a
+few ticks can end before they land; `wait_for_loads: true` keeps the run
+ticking past its last tick until nothing the page shows is still loading, for
+up to ten seconds, and the closing frame shows the page complete. The viewport is the window size. `App::run_headless`
 is the cheaper mode that ticks the app and paints nothing.
 
 `App::screenshot` runs the same way and returns the frame the closing tick
@@ -756,7 +762,9 @@ anything inside it. `detail()` is what the event carries, and
   `set_style`, `append`, `rect`, `computed_style_of`, `on(event, f)` and the
   rest).
 - Menus and pages: `open_menu(id)`, `open_menu_at(id, x, y)`,
-  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`.
+  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`. A menu's items are
+  `Node`s like any element, there before the menu first opens: add, remove
+  and relabel them with the DOM surface above.
 - The app's own state: `resource::<T>()` and `resource_mut::<T>()` over the
   resources inserted with `App::insert_resource`, and `resource_scope` to
   change one alongside the rest of the app.

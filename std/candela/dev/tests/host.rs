@@ -557,3 +557,52 @@ fn main() {}
     let after = host.call("on_ready", &[]).expect("a later probe answers");
     let _ = after.found;
 }
+
+/// A function that calls itself from inside a loop keeps its own locals when
+/// the inner call returns: the loop counter, the parameter and the
+/// accumulator all read the outer call's values again. A tree walk written
+/// the obvious way (list a directory, recurse into each subdirectory) relies
+/// on it.
+#[test]
+fn a_call_recursing_inside_a_loop_keeps_its_own_locals() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+fn walk(depth: int) -> string {
+    let out = "";
+    let i = 0;
+    while i < 2 {
+        out = out + string(depth) + ":" + string(i) + " ";
+        if depth < 1 { out = out + walk(depth + 1); }
+        i = i + 1;
+    }
+    return out;
+}
+fn each(depth: int) -> string {
+    let out = "";
+    for n in [10, 20] {
+        out = out + string(depth) + ":" + string(n) + " ";
+        if depth < 1 { out = out + each(depth + 1); }
+    }
+    return out;
+}
+fn walk_from_top() -> string { return walk(0); }
+fn each_from_top() -> string { return each(0); }
+fn main() {}
+"#,
+    );
+
+    let walked = host.call("walk_from_top", &[]).expect("walk ok");
+    assert_eq!(
+        walked.ret,
+        Some(ScriptValue::Str("0:0 1:0 1:1 0:1 1:0 1:1 ".to_owned()))
+    );
+    let each = host.call("each_from_top", &[]).expect("each ok");
+    assert_eq!(
+        each.ret,
+        Some(ScriptValue::Str(
+            "0:10 1:10 1:20 0:20 1:10 1:20 ".to_owned()
+        ))
+    );
+}

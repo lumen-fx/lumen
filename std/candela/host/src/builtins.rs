@@ -1855,6 +1855,15 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Vertical wheel delta.",
     },
     BuiltinFn {
+        name: "event_delta_mode",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "int",
+        doc: "The unit the wheel reported in: 0 pixels, 1 lines, 2 pages.",
+    },
+    BuiltinFn {
         name: "event_shift",
         params: &[BuiltinParam {
             name: "ev",

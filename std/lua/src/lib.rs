@@ -419,6 +419,9 @@ impl UserData for LuaEvent {
         methods.add_method("client_y", |_, _this, ()| Ok(ev::event_position_client().1));
         methods.add_method("delta_x", |_, _this, ()| Ok(ev::event_delta().0));
         methods.add_method("delta_y", |_, _this, ()| Ok(ev::event_delta().1));
+        methods.add_method("delta_mode", |_, _this, ()| {
+            Ok(ev::event_delta_mode().dom_code())
+        });
         methods.add_method("pointer_id", |_, _this, ()| Ok(ev::event_pointer().id));
         methods.add_method("pointer_type", |_, _this, ()| {
             Ok(ev::event_pointer().kind.as_str())

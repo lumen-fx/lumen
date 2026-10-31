@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 18u
+#define LUMEN_API_VERSION_MINOR 19u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -428,7 +428,16 @@ typedef struct LumenEvent {
        the raw device motion under a pointer lock. */
     double movement_x;
     double movement_y;
+    /* ABI 0.19: the unit the wheel reported delta_x / delta_y in before
+       they were converted to pixels, the DOM deltaMode:
+       LUMEN_DELTA_PIXEL / _LINE / _PAGE. */
+    uint32_t delta_mode;
 } LumenEvent;
+
+/* LumenEvent.delta_mode values (ABI 0.19), the DOM WheelEvent.deltaMode. */
+#define LUMEN_DELTA_PIXEL 0u
+#define LUMEN_DELTA_LINE 1u
+#define LUMEN_DELTA_PAGE 2u
 
 /* LumenEvent.pointer_type values (ABI 0.15). */
 #define LUMEN_POINTER_MOUSE 0u

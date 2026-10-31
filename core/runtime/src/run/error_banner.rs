@@ -2,7 +2,8 @@
 //!
 //! A markup or CSS file that stops parsing on a hot reload, and a script that
 //! does not load, are reported here as well as on stderr, so the failure is
-//! visible where the author is looking. The banner holds the whole report in
+//! visible where the author is looking. A markup or CSS error names the file
+//! it is in, an `<include>`d or `@import`ed one included. The banner holds the whole report in
 //! a read-only text field, which the user can select from and copy, and a
 //! Copy button that puts the whole report on the clipboard. When the error
 //! names a place in a file, the report reads `file:line:col` and shows that
@@ -131,6 +132,22 @@ impl ErrorReport {
             }),
             other => Self::new(format!("{context}: {other}")),
         }
+    }
+
+    /// The report for an app that failed to load, prefixed with `context`. A
+    /// markup or CSS error that knows its file and line points at it.
+    pub fn from_run_error(context: &str, error: &super::RunError) -> Self {
+        use super::RunError;
+        if let RunError::ParseHtml(e) | RunError::ParseCss(e) = error
+            && let Some((file, line, col)) = e.place()
+        {
+            return Self::new(format!("{context}: {}", e.message)).at(ErrorLocation {
+                file: file.to_owned(),
+                line,
+                col,
+            });
+        }
+        Self::new(format!("{context}: {error}"))
     }
 
     /// The report for a script that failed to load at startup.

@@ -388,6 +388,7 @@ The handler receives an `Event`:
 | `client_x()` / `client_y()` | number | Pointer position in window coordinates. |
 | `movement_x()` / `movement_y()` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `delta_x()` / `delta_y()` | number | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
+| `delta_mode()` | integer | The unit the wheel reported its delta in, the DOM `deltaMode`: `0` pixels (a touchpad), `1` lines (a wheel turning in notches), `2` pages. The delta itself is in pixels either way. |
 | `position()` | table | `x`, `y`, `client_x`, `client_y`. |
 | `modifiers()` | table | `shift`, `ctrl`, `alt`, `super`. |
 | `prevent_default()` | | Cancel the default action. |
@@ -556,6 +557,10 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `close_menu(id)` | Close menu `id`. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
+
+A menu's items are elements: `get_by_id` finds one before the menu first
+opens, `create("menuitem")` with `append` or `insert_before` adds one, `remove`
+takes one out, and `set_attr` changes its `label`, `accel` and `disabled`.
 
 ## Styling and theming
 

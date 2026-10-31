@@ -79,7 +79,9 @@ fn label_text_from_body() {
 #[test]
 fn unknown_tag_errors() {
     let r = parse_html(r##"<root><nope/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::UnknownTag(t, _)) if t == "nope"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::UnknownTag(t, _)) if t == "nope")
+    );
 }
 
 #[test]
@@ -147,7 +149,9 @@ fn no_module_can_claim_a_tag_the_language_owns() {
 #[test]
 fn bad_color_errors() {
     let r = parse_html(r##"<root><tile bg="not-hex"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg")
+    );
 }
 
 #[test]
@@ -180,7 +184,9 @@ fn theme_tag_is_now_unknown() {
     // + `var(--foo)`. Any leftover authoring of `<theme>` errors as an
     // unknown tag.
     let r = parse_html(r##"<root><theme bg="#000"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::UnknownTag(t, _)) if t == "theme"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::UnknownTag(t, _)) if t == "theme")
+    );
 }
 
 #[test]
@@ -561,7 +567,10 @@ fn marker_in_tag_position_errors() {
            </root>"##,
     )
     .expect_err("a marker in tag position is not markup");
-    assert!(matches!(err, lumenc::ParseError::Xml(_)), "{err}");
+    assert!(
+        matches!(err.unplaced(), lumenc::ParseError::Xml(_)),
+        "{err}"
+    );
 }
 
 /// A state pseudo-class on an ancestor compound has no state slot to route
@@ -650,7 +659,7 @@ fn binding_to_a_fragment_argument_is_rejected() {
         r##"<root><scroll bind-scroll="$arg.offset"/></root>"##,
     ] {
         let err = parse_html(markup).expect_err("a `$arg.` binding is refused");
-        let lumenc::ParseError::BadAttribute { reason, .. } = err else {
+        let lumenc::ParseError::BadAttribute { reason, .. } = err.unplaced() else {
             panic!("expected a bad-attribute error, got {err:?}");
         };
         assert!(
@@ -1791,6 +1800,16 @@ fn tab_strip_button_spawns_with_tab_button_style_from_css() {
 }
 
 /// Depth-first search for the first descendant (or self) carrying `class`.
+fn find_by_tag<'a>(
+    el: &'a lumenc::layout_ir::Element,
+    tag: &str,
+) -> Option<&'a lumenc::layout_ir::Element> {
+    if el.tag == tag {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_by_tag(c, tag))
+}
+
 fn find_by_class<'a>(
     el: &'a lumenc::layout_ir::Element,
     class: &str,
@@ -1863,12 +1882,11 @@ fn default_skin_applies_to_all_widgets_with_zero_warnings() {
     assert!(dropdown_panel.attrs.bg.is_some());
     assert!(!dropdown_panel.attrs.shadows.is_empty());
 
-    let menu_panel = find_by_class(&ir.root, "menu-panel").expect("menu-panel element present");
+    let menu_panel = find_by_tag(&ir.root, "menu").expect("menu element present");
     assert!(menu_panel.attrs.bg.is_some());
     assert!(!menu_panel.attrs.shadows.is_empty());
 
-    let menu_separator =
-        find_by_class(&ir.root, "menu-separator").expect("menu-separator element present");
+    let menu_separator = find_by_tag(&ir.root, "separator").expect("separator element present");
     assert!(menu_separator.attrs.bg.is_some());
 
     let tab_strip = find_by_class(&ir.root, "tab-strip").expect("tab-strip element present");
@@ -2393,13 +2411,14 @@ fn menu_panel_is_vertical_absolute_overlay() {
         Some("__menu_open:ctx"),
         "menu gate keys on the synthetic open signal"
     );
-    // ...whose single child is the panel overlay.
-    let panel = &if_block.children[0];
-    assert_eq!(panel.tag, "overlay");
-    assert!(
-        panel.attrs.classes.iter().any(|c| c == "menu-panel"),
-        "panel carries .menu-panel for the skin"
+    // ...that mounts with the page, whose single child is the menu itself.
+    assert_eq!(
+        if_block.attrs.if_mode,
+        lumenc::layout_ir::IfModeSpec::Mounted
     );
+    let panel = &if_block.children[0];
+    assert_eq!(panel.tag, "menu");
+    assert_eq!(panel.attrs.id.as_deref(), Some("ctx"));
     assert_eq!(
         panel.attrs.flex,
         Some(FlexAxis::Column),
@@ -2422,13 +2441,180 @@ fn menu_panel_is_vertical_absolute_overlay() {
         Some("__menu_open:ctx"),
         "panel wired into the popup dismissal machinery"
     );
-    // Items keep their synthesized markers.
-    let items: Vec<_> = panel
+    // Items and separators stay the elements they were written as.
+    let rows: Vec<(&str, Option<&str>, Option<&str>)> = panel
         .children
         .iter()
-        .filter(|c| c.attrs.menu_item.is_some())
+        .map(|c| {
+            (
+                c.tag.as_str(),
+                c.attrs.id.as_deref(),
+                c.attrs.text.as_deref(),
+            )
+        })
         .collect();
-    assert_eq!(items.len(), 2, "one MenuItemButton per <menuitem>");
+    assert_eq!(
+        rows,
+        [
+            ("menuitem", Some("copy"), Some("Copy")),
+            ("separator", None, None),
+            ("menuitem", Some("paste"), Some("Paste")),
+        ]
+    );
+}
+
+/// A markup error names the byte of the text it is at, so a caller can point
+/// at the line: malformed XML where the parser stopped, a bad attribute at
+/// the attribute, a structural mistake at the element that made it.
+#[test]
+fn a_markup_error_names_its_place() {
+    let at = |src: &str| lumenc::parse_html(src).unwrap_err();
+    let src = "<root>\n  <column>\n</root>";
+    let err = at(src);
+    assert_eq!(err.offset(), Some(src.find("</root>").unwrap()), "{err}");
+    assert!(!err.to_string().contains(" at 3:"), "{err}");
+    let src = "<root>\n  <column gap=\"wide\"/>\n</root>";
+    assert_eq!(at(src).offset(), Some(src.find("gap=").unwrap()));
+    let src = "<root>\n  <column>\n    <menu id=\"m\"><menuitem label=\"x\"/></menu>\n  </column>\n</root>";
+    let err = at(src);
+    assert_eq!(err.offset(), Some(src.find("<menuitem").unwrap()), "{err}");
+}
+
+/// Each structural mistake is placed at the element that made it, so the
+/// error points at the line holding it rather than at the top of the file.
+#[test]
+fn a_structural_mistake_is_placed_at_its_element() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "<root>\n  <template><label/></template>\n</root>",
+            "<template>",
+        ),
+        (
+            "<root>\n  <menubar><menu label=\"A\"/></menubar>\n  <menubar/>\n</root>",
+            "<menubar/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <column/>\n  </menubar>\n</root>",
+            "<column/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu><menuitem id=\"a\"/></menu>\n  </menubar>\n</root>",
+            "<menu>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu label=\"A\"><menuitem/></menu>\n  </menubar>\n</root>",
+            "<menuitem/>",
+        ),
+        (
+            "<root>\n  <menubar>\n    <menu label=\"A\"><label/></menu>\n  </menubar>\n</root>",
+            "<label/>",
+        ),
+        ("<root>\n  <option value=\"a\"/>\n</root>", "<option"),
+        ("<root>\n  <separator/>\n</root>", "<separator/>"),
+        (
+            "<root>\n  <tooltip text=\"t\"></tooltip>\n</root>",
+            "<tooltip",
+        ),
+        (
+            "<root>\n  <tooltip text=\"t\"><label/><label/></tooltip>\n</root>",
+            "<tooltip",
+        ),
+        (
+            "<root>\n  <dropdown><option value=\"a\"/></dropdown>\n</root>",
+            "<dropdown>",
+        ),
+        (
+            "<root>\n  <dropdown bind-value=\"v\"><label/></dropdown>\n</root>",
+            "<label/>",
+        ),
+        (
+            "<root>\n  <dropdown bind-value=\"v\"><option/></dropdown>\n</root>",
+            "<option/>",
+        ),
+        (
+            "<root>\n  <menu id=\"m\"><label/></menu>\n</root>",
+            "<label/>",
+        ),
+        ("<root>\n  <date-picker/>\n</root>", "<date-picker/>"),
+        ("<root>\n  <use/>\n</root>", "<use/>"),
+    ];
+    for (markup, at) in cases {
+        let err = lumenc::parse_html(markup).expect_err(markup);
+        assert_eq!(
+            err.offset(),
+            Some(markup.find(at).unwrap()),
+            "{markup}: {err}"
+        );
+    }
+}
+
+/// A popup `<menuitem accel>` keeps its accelerator on the item, an empty
+/// `accel` is none, and an item with no label shows its id.
+#[test]
+fn a_popup_menu_item_keeps_its_accel() {
+    let ir = parse_with_ua(
+        r##"<root>
+            <menu id="ctx">
+                <menuitem id="undo" label="Undo" accel="CommandOrControl+Z" />
+                <menuitem id="redo" accel="" />
+            </menu>
+        </root>"##,
+    );
+    let panel = &ir.root.children[0].children[0];
+    let undo = &panel.children[0];
+    assert_eq!(undo.attrs.text.as_deref(), Some("Undo"));
+    assert_eq!(undo.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
+    assert_eq!(panel.children[1].attrs.shortcut, None);
+    assert_eq!(panel.children[1].attrs.text.as_deref(), Some("redo"));
+}
+
+/// A `<for>` in a `<menu>` builds its rows from a list: its body is
+/// `<menuitem>` and `<separator>` elements whose strings name the row. A
+/// `<for>` holding anything else, and an item with no id, are refused.
+#[test]
+fn a_menu_builds_rows_from_a_list() {
+    let ir = parse_with_ua(
+        r##"<root>
+            <menu id="window">
+                <menuitem id="reset" label="Reset layout" />
+                <separator />
+                <for each="layouts" key="id">
+                    <menuitem id="layout-{id}" label="{name}" />
+                </for>
+            </menu>
+        </root>"##,
+    );
+    let panel = &ir.root.children[0].children[0];
+    let each = &panel.children[2];
+    assert_eq!(each.tag, "for");
+    assert_eq!(each.attrs.each.as_deref(), Some("layouts"));
+    let row = &each.children[0];
+    assert_eq!(row.tag, "menuitem");
+    assert_eq!(row.attrs.id.as_deref(), Some("layout-{id}"));
+    assert_eq!(row.attrs.text.as_deref(), Some("{name}"));
+    assert!(
+        !row.interpolations.is_empty(),
+        "the row's strings are placeholders"
+    );
+
+    for (markup, at) in [
+        (
+            "<root>\n  <menu id=\"m\"><for each=\"l\"><label/></for></menu>\n</root>",
+            "<label/>",
+        ),
+        (
+            "<root>\n  <menu id=\"m\"><for each=\"l\"><menuitem label=\"x\"/></for></menu>\n</root>",
+            "<menuitem",
+        ),
+        ("<root>\n  <menuitem id=\"x\"/>\n</root>", "<menuitem"),
+    ] {
+        let err = lumenc::parse_html(markup).expect_err(markup);
+        assert_eq!(
+            err.offset(),
+            Some(markup.find(at).unwrap()),
+            "{markup}: {err}"
+        );
+    }
 }
 
 /// RC5 end-to-end (ECS side): a `<dropdown>` inside a `<tab>` body -
@@ -3732,9 +3918,13 @@ fn bg_attribute_takes_an_image_and_a_fit() {
 #[test]
 fn bg_image_errors_are_reported() {
     let r = parse_html(r##"<root><tile bg="url()"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg")
+    );
     let r = parse_html(r##"<root><tile bg-fit="tile"/></root>"##);
-    assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg-fit"));
+    assert!(
+        matches!(r.as_ref().map_err(|e| e.unplaced()), Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg-fit")
+    );
 
     let mut ir = parse_html(r##"<root><tile class="t" /></root>"##).expect("html");
     let css = lumenc::parse_css(".t:hover { bg: url(a.png); }").expect("css");

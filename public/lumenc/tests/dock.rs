@@ -2668,6 +2668,7 @@ fn a_crowded_strip_scrolls_and_lists_its_tabs() {
     hover(app, first);
     app.world.write_message(lumen_core::input::MouseWheel {
         delta: glam::Vec2::new(0.0, 120.0),
+        delta_mode: lumen_core::input::WheelDeltaMode::Pixel,
         position: at,
         local: None,
         time_stamp: std::time::Instant::now(),

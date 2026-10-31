@@ -62,25 +62,49 @@ use crate::layout_ir::{Attributes, DisplaySpec, Element, FlexAlign, LayoutIR, Tr
 const MAX_NEST_DEPTH: u32 = 32;
 
 /// Parse a CSS source string into a [`Stylesheet`].
+///
+/// An error names the byte of `src` it is at ([`ParseError::offset`]): the
+/// start of the rule it is in, or of the declaration it is about.
 pub fn parse_css(src: &str) -> Result<Stylesheet, ParseError> {
-    let cleaned = strip_comments(src);
+    let (cleaned, removed) = strip_comments(src);
     let mut input = cleaned.as_str();
     let mut rules = Vec::new();
     let mut at_rules = Vec::new();
     let mut next_order = 0usize;
     parse_rule_list(
         &mut input,
+        cleaned.as_str(),
         None,
         &mut rules,
         &mut at_rules,
         &mut next_order,
         0,
-    )?;
+    )
+    .map_err(|e| match e {
+        // The parser counted in the text with the comments taken out; put
+        // them back.
+        ParseError::At { offset, error } => ParseError::At {
+            offset: offset
+                + removed
+                    .iter()
+                    .take_while(|(at, _)| *at <= offset)
+                    .map(|(_, len)| len)
+                    .sum::<usize>(),
+            error,
+        },
+        e => e,
+    })?;
     Ok(Stylesheet { rules, at_rules })
+}
+
+/// Byte offset of `part`, a slice of `whole`, from the start of `whole`.
+fn offset_in(whole: &str, part: &str) -> usize {
+    (part.as_ptr() as usize).saturating_sub(whole.as_ptr() as usize)
 }
 
 fn parse_rule_list(
     input: &mut &str,
+    base: &str,
     media: Option<&MediaQuery>,
     out: &mut Vec<Rule>,
     at_out: &mut Vec<AtRule>,
@@ -90,39 +114,49 @@ fn parse_rule_list(
     if depth > MAX_NEST_DEPTH {
         return Err(ParseError::Xml(format!(
             "css: @media nesting exceeded depth {MAX_NEST_DEPTH}"
-        )));
+        ))
+        .at(offset_in(base, input)));
     }
     loop {
         *input = input.trim_start();
         if input.is_empty() {
             break;
         }
+        let start = offset_in(base, input);
         if let Some(rest) = input.strip_prefix("@media") {
             let mut after = rest.trim_start();
             // Find the `{` that opens the @media body.
             let brace = after
                 .find('{')
-                .ok_or_else(|| ParseError::Xml("css: @media missing '{'".into()))?;
+                .ok_or_else(|| ParseError::Xml("css: @media missing '{'".into()).at(start))?;
             let prelude = after[..brace].trim();
             after = &after[brace + 1..];
-            let mq = parse_media_query(prelude).map_err(ParseError::Xml)?;
+            let mq = parse_media_query(prelude).map_err(|e| ParseError::Xml(e).at(start))?;
             // Slice the brace-balanced body.
             let close = find_matching_brace(after)
-                .ok_or_else(|| ParseError::Xml("css: @media missing '}'".into()))?;
+                .ok_or_else(|| ParseError::Xml("css: @media missing '}'".into()).at(start))?;
             let body = &after[..close];
             *input = &after[close + 1..];
             let mut body_str = body;
-            parse_rule_list(&mut body_str, Some(&mq), out, at_out, next_order, depth + 1)?;
+            parse_rule_list(
+                &mut body_str,
+                base,
+                Some(&mq),
+                out,
+                at_out,
+                next_order,
+                depth + 1,
+            )?;
             continue;
         }
         if input.starts_with('@') {
-            if let Some(mut at_rule) = take_at_rule(input)? {
+            if let Some(mut at_rule) = take_at_rule(input).map_err(|e| e.at(start))? {
                 at_rule.media = media.cloned();
                 at_out.push(at_rule);
             }
             continue;
         }
-        let rule = parse_rule(input, media, *next_order)?;
+        let rule = parse_rule(input, base, media, *next_order).map_err(|e| e.at(start))?;
         *next_order += 1;
         out.push(rule);
     }
@@ -216,6 +250,7 @@ fn find_matching_brace(s: &str) -> Option<usize> {
 
 fn parse_rule(
     input: &mut &str,
+    base: &str,
     media: Option<&MediaQuery>,
     source_order: usize,
 ) -> Result<Rule, ParseError> {
@@ -236,9 +271,10 @@ fn parse_rule(
         if chunk.is_empty() {
             continue;
         }
-        let colon = chunk
-            .find(':')
-            .ok_or_else(|| ParseError::Xml(format!("css: declaration without ':' in '{chunk}'")))?;
+        let colon = chunk.find(':').ok_or_else(|| {
+            ParseError::Xml(format!("css: declaration without ':' in '{chunk}'"))
+                .at(offset_in(base, chunk))
+        })?;
         let name = chunk[..colon].trim().to_string();
         let mut value = chunk[colon + 1..].trim().to_string();
         let important = if let Some(stripped) = strip_trailing_important(&value) {
@@ -279,12 +315,16 @@ fn strip_trailing_important(value: &str) -> Option<String> {
     }
 }
 
-fn strip_comments(src: &str) -> String {
+/// `src` without its `/* ... */` comments, and where each one was taken
+/// out: `(offset in the result, bytes removed)`, ascending.
+fn strip_comments(src: &str) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(src.len());
+    let mut removed = Vec::new();
     let bytes = src.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            let from = i;
             i += 2;
             while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
                 i += 1;
@@ -292,6 +332,7 @@ fn strip_comments(src: &str) -> String {
             // Step past the closing `*/`. The legacy `min`-clamped
             // expression is replaced with a saturating bump.
             i = (i + 2).min(bytes.len());
+            removed.push((out.len(), i - from));
             continue;
         }
         // `i` sits on a UTF-8 char boundary here (comment markers `/`, `*`
@@ -305,7 +346,7 @@ fn strip_comments(src: &str) -> String {
         out.push(ch);
         i += ch.len_utf8();
     }
-    out
+    (out, removed)
 }
 
 fn split_top_level_semicolons(s: &str) -> Vec<&str> {
@@ -1828,12 +1869,26 @@ mod invalidation_tests {
 mod bughunt_tests {
     use super::*;
 
+    /// A parse error names the byte of the source it is at, counted with the
+    /// comments the parser took out: a declaration with no `:` at its own
+    /// start, a rule with no `}` at the rule.
+    #[test]
+    fn a_css_error_names_its_place_in_the_source() {
+        let src = "/* a\n   comment */\n.a { gap: 1; }\n.b {\n  gap 2;\n}\n";
+        let err = parse_css(src).unwrap_err();
+        assert_eq!(err.offset(), Some(src.find("gap 2").unwrap()), "{err}");
+        let src = ".a { gap: 1; }\n/* x */ .b { gap: 2;\n";
+        let err = parse_css(src).unwrap_err();
+        assert_eq!(err.offset(), Some(src.find(".b").unwrap()), "{err}");
+        assert!(err.to_string().contains("missing '}'"), "{err}");
+    }
+
     #[test]
     fn strip_comments_preserves_non_ascii() {
         // The old `bytes[i] as char` Latin-1 cast shredded every multibyte
         // scalar; walking chars keeps `caf\u{e9}` / `->` / emoji intact.
         let src = ".x { content: \"caf\u{e9} -> \u{4e16}\u{754c} \u{1f680}\"; }";
-        let out = strip_comments(src);
+        let (out, _) = strip_comments(src);
         assert_eq!(
             out, src,
             "no comments to strip, non-ASCII must survive verbatim"
@@ -1842,7 +1897,7 @@ mod bughunt_tests {
 
     #[test]
     fn strip_comments_non_ascii_around_comment() {
-        let out = strip_comments("caf\u{e9}/* x */\u{4e16}\u{754c}");
+        let (out, _) = strip_comments("caf\u{e9}/* x */\u{4e16}\u{754c}");
         assert_eq!(out, "caf\u{e9}\u{4e16}\u{754c}");
     }
 

@@ -158,11 +158,16 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`crate::layout_ir::WidgetPart`] gains the tab strip and its buttons, and
 /// [`crate::layout_ir::WidgetRole`] loses `Tabs`.
 ///
+/// `22`: a `<menu>` keeps its `menu`, `menuitem` and `separator` elements:
+/// [`crate::layout_ir::Attributes`] loses `menu_item` and gains `shortcut`,
+/// a menu item's accelerator, and [`crate::layout_ir::IfModeSpec`] gains
+/// `Mounted`.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 21;
+pub const FORMAT_VERSION: u16 = 22;
 
 /// The navigable page set of a compiled multi-page app.
 ///

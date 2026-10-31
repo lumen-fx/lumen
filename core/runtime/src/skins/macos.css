@@ -163,7 +163,8 @@ root {
  * no-hover; press darkens the bezel ~6%. Focus halo is keyboard-only
  * (full-keyboard-access semantics).
  */
-button {
+button,
+menuitem {
   bg: var(--lumen-surface);
   radius: var(--lumen-radius-sm);
   padding: 2 12;
@@ -171,10 +172,10 @@ button {
   text-color: var(--lumen-text);
   shadow: var(--lumen-shadow-raised);
 }
-button:hover { bg: var(--lumen-surface-hover); }
-button:active { bg: var(--lumen-surface-active); }
-button:focus-visible { outline: 4 var(--lumen-focus-ring); }
-button:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+button:hover, menuitem:hover { bg: var(--lumen-surface-hover); }
+button:active, menuitem:active { bg: var(--lumen-surface-active); }
+button:focus-visible, menuitem:focus-visible { outline: 4 var(--lumen-focus-ring); }
+button:disabled, menuitem:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
 
 /* Default / primary button: flat accent fill + white text (one per view). */
 button.primary { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
@@ -291,7 +292,7 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
 
 /* === Menus === */
-.menu-panel {
+menu {
   transition: opacity 120ms ease;
   bg: var(--lumen-panel);
   radius: var(--lumen-radius);
@@ -300,10 +301,11 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   padding: 5 0;
   popup-gap: var(--lumen-popup-gap);
 }
-.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); min-height: 22; disabled-opacity: var(--lumen-disabled-opacity); }
-.menu-item:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
-.menu-item:focus { outline: 2 var(--lumen-focus-ring); }
-.menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+menuitem { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); min-height: 22; disabled-opacity: var(--lumen-disabled-opacity); }
+menuitem:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
+menuitem:focus { outline: 2 var(--lumen-focus-ring); }
+.menu-accel { text-color: var(--lumen-text-muted); }
+separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
 /* === Split ===
  * `<split>` keeps its children as the panes and puts a gutter between
@@ -358,7 +360,7 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
  *   .menubar           (tag=row)
  *     .menubar-menu      (tag=column, one per <menu>)
  *       .menubar-button    (tag=button, the menu's label)
- *       .menu-panel        (the menu, styled as above)
+ *       menu               (the menu, styled as above)
  */
 .menubar { bg: var(--lumen-window-bg); border-bottom: 1px solid var(--lumen-border); padding: 2 4; gap: 2; }
 .menubar-button { bg: var(--lumen-window-bg); text-color: var(--lumen-text); radius: var(--lumen-radius-sm); padding: 0 10; }

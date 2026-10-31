@@ -21,7 +21,7 @@ pub enum ParseError {
     Xml(String),
     /// Unknown tag name (not in the supported set).
     #[error(
-        "unknown tag '{0}' at position {1}; a tag a module brings is accepted once the \
+        "unknown tag '{0}'; a tag a module brings is accepted once the \
          module is declared under [dependencies]"
     )]
     UnknownTag(String, usize),
@@ -42,6 +42,50 @@ pub enum ParseError {
     /// carries the include-site position and, for cycles, the full chain.
     #[error("{0}")]
     Include(String),
+    /// Another error, at a byte offset into the text that was parsed.
+    /// Displays as the error it wraps: the place is for the caller to name,
+    /// in the file the text came from.
+    #[error("{error}")]
+    At {
+        /// Byte offset into the parsed text.
+        offset: usize,
+        /// What went wrong there.
+        error: Box<ParseError>,
+    },
+}
+
+impl ParseError {
+    /// This error, placed at byte `offset` of the parsed text. An error that
+    /// already knows its place keeps it.
+    #[must_use]
+    pub fn at(self, offset: usize) -> Self {
+        match self {
+            Self::At { .. } | Self::UnknownTag(..) => self,
+            error => Self::At {
+                offset,
+                error: Box::new(error),
+            },
+        }
+    }
+
+    /// The byte offset into the parsed text the error names, if it names
+    /// one.
+    #[must_use]
+    pub fn offset(&self) -> Option<usize> {
+        match self {
+            Self::At { offset, .. } | Self::UnknownTag(_, offset) => Some(*offset),
+            _ => None,
+        }
+    }
+
+    /// The error without its place.
+    #[must_use]
+    pub fn unplaced(&self) -> &ParseError {
+        match self {
+            Self::At { error, .. } => error.unplaced(),
+            other => other,
+        }
+    }
 }
 
 /// serde adapter for [`Attributes::dir`]. `lumen-core` carries no serde
@@ -1154,8 +1198,11 @@ pub struct Attributes {
     pub dropdown_button: Option<DropdownButtonSpec>,
     /// Synthesised per `<option>` inside `<dropdown>`: `(value_signal, value, open_signal)`. The runtime attaches a [`lumen_primitives::DropdownOptionButton`] whose click writes the value and closes the panel.
     pub dropdown_option: Option<(String, String, String)>,
-    /// Synthesised per `<menuitem>` inside `<menu>`: `(open_signal, item_id)`. The runtime attaches a [`lumen_primitives::MenuItemButton`] whose click emits `MenuClicked { id: item_id }` and closes the menu.
-    pub menu_item: Option<(String, String)>,
+    /// `<menuitem accel="...">`: the keyboard shortcut the item shows,
+    /// as the markup wrote it (`CommandOrControl+Z`). The runtime draws it
+    /// in a part of the item's own, written the way the platform's menus
+    /// write one ([`crate::menu::shortcut_label`]).
+    pub shortcut: Option<String>,
     /// Synthesised on the floating panel of a `<dropdown>` / `<menu>`:
     /// the open-state signal (`__dropdown_open:*` / `__menu_open:*`).
     /// The runtime attaches a [`lumen_primitives::PopupPanel`] so the
@@ -1956,6 +2003,11 @@ pub enum IfModeSpec {
     Render,
     /// Mount the body once and toggle `Visible(bool)` for show / hide.
     Hide,
+    /// Mount the body with the block, whatever the signal says, and toggle
+    /// `Visible(bool)` for show / hide. Not written in markup: a `<menu>`
+    /// is built on it, so its items are elements a script reaches before
+    /// the menu first opens.
+    Mounted,
 }
 
 impl From<EasingIr> for lumen_primitives::Easing {

@@ -22,6 +22,7 @@
 //!   directory.
 
 use crate::layout_ir::ParseError;
+use lumen_ir::source_map::{SourceMap, SourcePiece, line_at};
 use std::path::{Component, Path, PathBuf};
 
 /// Abstracts reading a file's UTF-8 contents so string-only callers can
@@ -153,8 +154,40 @@ pub fn resolve_includes(
     loader: Option<&dyn FileLoader>,
     out_files: &mut Vec<PathBuf>,
 ) -> Result<String, ParseError> {
+    resolve_includes_mapped(src, self_path, loader, out_files).map(|(text, _)| text)
+}
+
+/// [`resolve_includes`], with the map of which file each line of the
+/// spliced text was read from, so an error a parse of it raises can name
+/// the line of the file the author wrote. The entry file is named by
+/// `self_path` as given; an empty path names no file.
+pub fn resolve_includes_mapped(
+    src: &str,
+    self_path: &Path,
+    loader: Option<&dyn FileLoader>,
+    out_files: &mut Vec<PathBuf>,
+) -> Result<(String, SourceMap), ParseError> {
     let mut chain = vec![normalize_path(self_path)];
-    resolve_includes_inner(src, self_path, loader, out_files, &mut chain)
+    let mut map = SourceMap::default();
+    let text = resolve_includes_inner(src, self_path, loader, out_files, &mut chain, &mut map)?;
+    Ok((text, map))
+}
+
+/// The name a source map files `path` under: as the path was given, or
+/// nothing for an anonymous string.
+fn map_name(path: &Path) -> String {
+    path.display().to_string()
+}
+
+/// Record that `out`, from its end onward, holds `file` from line
+/// `first_line`. A line two files share is the later one's.
+fn mark(map: &mut SourceMap, out: &str, file: &str, first_line: u32) {
+    let at = line_at(out, out.len());
+    map.pieces.push(SourcePiece {
+        at,
+        file: file.to_owned(),
+        first_line,
+    });
 }
 
 fn resolve_includes_inner(
@@ -163,9 +196,12 @@ fn resolve_includes_inner(
     loader: Option<&dyn FileLoader>,
     out_files: &mut Vec<PathBuf>,
     chain: &mut Vec<PathBuf>,
+    map: &mut SourceMap,
 ) -> Result<String, ParseError> {
     let base_dir = self_path.parent().unwrap_or_else(|| Path::new(""));
     let mut out = String::with_capacity(src.len());
+    let me = map_name(self_path);
+    mark(map, &out, &me, 1);
     let mut i = 0usize;
     while let Some(rel) = src[i..].find("<include") {
         let start = i + rel;
@@ -232,10 +268,27 @@ fn resolve_includes_inner(
                 })?;
                 out_files.push(target.clone());
                 chain.push(target.clone());
-                let resolved =
-                    resolve_includes_inner(&body, &target, Some(loader), out_files, chain)?;
+                let mut inner = SourceMap::default();
+                let resolved = resolve_includes_inner(
+                    &body,
+                    &target,
+                    Some(loader),
+                    out_files,
+                    chain,
+                    &mut inner,
+                )?;
                 chain.pop();
+                // The included file's lines land from the line the tag was
+                // on; the file goes on after it, on the line the tag ended.
+                let shift = line_at(&out, out.len()) - 1;
+                for piece in inner.pieces {
+                    map.pieces.push(SourcePiece {
+                        at: piece.at + shift,
+                        ..piece
+                    });
+                }
                 out.push_str(&resolved);
+                mark(map, &out, &me, line_at(src, consumed_end));
             }
         }
 
@@ -261,8 +314,21 @@ pub fn resolve_css_imports(
     loader: &dyn FileLoader,
     out_files: &mut Vec<PathBuf>,
 ) -> Result<String, ParseError> {
+    resolve_css_imports_mapped(src, self_path, loader, out_files).map(|(text, _)| text)
+}
+
+/// [`resolve_css_imports`], with the map of which file each line of the
+/// combined sheet was read from.
+pub fn resolve_css_imports_mapped(
+    src: &str,
+    self_path: &Path,
+    loader: &dyn FileLoader,
+    out_files: &mut Vec<PathBuf>,
+) -> Result<(String, SourceMap), ParseError> {
     let mut chain = vec![normalize_path(self_path)];
-    resolve_css_imports_inner(src, self_path, loader, out_files, &mut chain)
+    let mut map = SourceMap::default();
+    let text = resolve_css_imports_inner(src, self_path, loader, out_files, &mut chain, &mut map)?;
+    Ok((text, map))
 }
 
 fn resolve_css_imports_inner(
@@ -271,6 +337,7 @@ fn resolve_css_imports_inner(
     loader: &dyn FileLoader,
     out_files: &mut Vec<PathBuf>,
     chain: &mut Vec<PathBuf>,
+    map: &mut SourceMap,
 ) -> Result<String, ParseError> {
     let base_dir = self_path.parent().unwrap_or_else(|| Path::new(""));
     let mut imported = String::new();
@@ -316,8 +383,17 @@ fn resolve_css_imports_inner(
             })?;
             out_files.push(target.clone());
             chain.push(target.clone());
-            let resolved = resolve_css_imports_inner(&body, &target, loader, out_files, chain)?;
+            let mut inner = SourceMap::default();
+            let resolved =
+                resolve_css_imports_inner(&body, &target, loader, out_files, chain, &mut inner)?;
             chain.pop();
+            let shift = line_at(&imported, imported.len()) - 1;
+            for piece in inner.pieces {
+                map.pieces.push(SourcePiece {
+                    at: piece.at + shift,
+                    ..piece
+                });
+            }
             imported.push_str(&resolved);
             if !imported.ends_with('\n') {
                 imported.push('\n');
@@ -338,6 +414,14 @@ fn resolve_css_imports_inner(
         )));
     }
 
+    // The file's own rules follow what it imported, from the line they
+    // start on in it.
+    mark(
+        map,
+        &imported,
+        &map_name(self_path),
+        line_at(src, src.len() - rest.len()),
+    );
     let mut combined = imported;
     combined.push_str(rest);
     Ok(combined)
@@ -456,6 +540,66 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    /// Every line of the spliced markup maps back to the file and line it
+    /// was read from: the entry before the include, each line of the
+    /// included file and of a file it includes in turn, and the entry again
+    /// after the include.
+    /// An included file is named by the path it was read from, with the
+    /// platform's separators; the entry by the path it was given.
+    #[test]
+    fn spliced_lines_map_back_to_their_files() {
+        let loader = mock(&[
+            (
+                "app/side.lmn",
+                "<column>\n<include src=\"deep.lmn\"/>\n</column>\n",
+            ),
+            ("app/deep.lmn", "<a/>\n<b/>\n"),
+        ]);
+        let mut files = Vec::new();
+        let (text, map) = resolve_includes_mapped(
+            "<root>\n  <include src=\"side.lmn\"/>\n  <label/>\n</root>\n",
+            Path::new("app/main.lmn"),
+            Some(&loader),
+            &mut files,
+        )
+        .unwrap();
+        let line_of = |needle: &str| line_at(&text, text.find(needle).unwrap());
+        let main = Path::new("app/main.lmn").display().to_string();
+        let side = normalize_path(&Path::new("app").join("side.lmn"))
+            .display()
+            .to_string();
+        let deep = normalize_path(&Path::new("app").join("deep.lmn"))
+            .display()
+            .to_string();
+        assert_eq!(map.locate(line_of("<root>")), Some((main.as_str(), 1)));
+        assert_eq!(map.locate(line_of("<b/>")), Some((deep.as_str(), 2)));
+        assert_eq!(map.locate(line_of("</column>")), Some((side.as_str(), 3)));
+        assert_eq!(map.locate(line_of("<label/>")), Some((main.as_str(), 3)));
+        assert_eq!(map.locate(line_of("</root>")), Some((main.as_str(), 4)));
+    }
+
+    /// An imported sheet's lines map to it, and the importing file's own
+    /// rules to the lines they are on in it.
+    #[test]
+    fn combined_sheet_lines_map_back_to_their_files() {
+        let loader = mock(&[("app/theme.css", ".a { gap: 1; }\n.b { gap: 2; }\n")]);
+        let mut files = Vec::new();
+        let (text, map) = resolve_css_imports_mapped(
+            "@import \"theme.css\";\n\n.c { gap: 3; }\n",
+            Path::new("app/main.css"),
+            &loader,
+            &mut files,
+        )
+        .unwrap();
+        let line_of = |needle: &str| line_at(&text, text.find(needle).unwrap());
+        let main = Path::new("app/main.css").display().to_string();
+        let theme = normalize_path(&Path::new("app").join("theme.css"))
+            .display()
+            .to_string();
+        assert_eq!(map.locate(line_of(".b")), Some((theme.as_str(), 2)));
+        assert_eq!(map.locate(line_of(".c")), Some((main.as_str(), 3)));
     }
 
     #[test]

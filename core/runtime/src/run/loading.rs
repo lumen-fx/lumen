@@ -289,6 +289,23 @@ pub(crate) fn load_ir(
             e
         }
     };
+    // The same for an error that names its place: in rewritten text the
+    // place is in no file, so it is said in the message instead.
+    let place = |e: lumen_ir::source_map::SourceError, map: &lumen_ir::source_map::SourceMap| {
+        if markup_transformed {
+            let at = if e.line > 0 {
+                format!(" at {}:{}", e.line, e.col)
+            } else {
+                String::new()
+            };
+            lumen_ir::source_map::SourceError::new(format!(
+                "(in the markup as rewritten by compiler plugins) {}{at}",
+                e.message
+            ))
+        } else {
+            e.placed_with(map)
+        }
+    };
     let css_raw = match sources.css {
         Some(src) => Some(src.to_string()),
         None => read_optional(css_path)?,
@@ -306,13 +323,21 @@ pub(crate) fn load_ir(
     // equal specificity). Kept out of `parse_css` so that entry stays a
     // pure string->Stylesheet used by tests and the LSP.
     let mut css_import_paths: Vec<PathBuf> = Vec::new();
-    let css = match &css_raw {
-        Some(src) => Some(
-            parser
+    let (css, css_map) = match &css_raw {
+        Some(src) => {
+            let (text, map) = parser
                 .resolve_css_imports(src, css_path, &mut css_import_paths)
-                .map_err(RunError::ParseCss)?,
-        ),
-        None => None,
+                .map_err(|e| RunError::ParseCss(e.into()))?;
+            (Some(text), map)
+        }
+        None => (None, lumen_ir::source_map::SourceMap::default()),
+    };
+    // A stylesheet handed in as a string is no file on disk; its errors
+    // name the line of that string only.
+    let css_map = if sources.css.is_some() {
+        lumen_ir::source_map::SourceMap::whole("")
+    } else {
+        css_map
     };
     let css_import_mtimes: Vec<Option<SystemTime>> =
         css_import_paths.iter().map(|p| mtime(p)).collect();
@@ -365,9 +390,16 @@ pub(crate) fn load_ir(
     // to the main file *and* every included fragment.
     let mut include_paths: Vec<PathBuf> = Vec::new();
     let written = html.clone();
-    let html = parser
+    let (html, html_map) = parser
         .resolve_includes(&html, html_path, &mut include_paths)
-        .map_err(|e| RunError::ParseHtml(attribute(e)))?;
+        .map_err(|e| RunError::ParseHtml(attribute(e).into()))?;
+    // Markup handed in as a string is no file on disk; its errors name the
+    // line of that string only.
+    let html_map = if sources.markup.is_some() {
+        lumen_ir::source_map::SourceMap::whole("")
+    } else {
+        html_map
+    };
     let mut include_mtimes: Vec<Option<SystemTime>> =
         include_paths.iter().map(|p| mtime(p)).collect();
     // A fragment the entry includes, kept directly in `src/`, is also a page
@@ -412,7 +444,7 @@ pub(crate) fn load_ir(
     // file and hot-reloading picks the new body up.
     let mut fragments = match plan {
         Some(plan) if sources.markup.is_none() && plan.multipage => {
-            crate::pages::collect_fragments(plan, parser, Some(&html))
+            crate::pages::collect_fragments(plan, parser, Some((&html, &html_map)))
                 .map_err(RunError::ParseHtml)?
         }
         _ => lumen_ir::fragment::FragmentTable::new(),
@@ -423,7 +455,7 @@ pub(crate) fn load_ir(
     // from source instantiates the same fragments a built artifact carries,
     // and so a malformed block fails the load rather than the window.
     let scripted = script_fragments(
-        &html,
+        (&html, &html_map),
         html_path,
         dir,
         plan,
@@ -439,12 +471,12 @@ pub(crate) fn load_ir(
     // `<template>` in the directory, not only the ones the entry page reached.
     let mut declared = match plan {
         Some(plan) if sources.markup.is_none() => {
-            crate::pages::collect_fragments(plan, parser, Some(&html))
+            crate::pages::collect_fragments(plan, parser, Some((&html, &html_map)))
                 .map_err(RunError::ParseHtml)?
         }
         _ => parser
             .collect_fragments(&html, html_path)
-            .map_err(|e| RunError::ParseHtml(attribute(e)))?,
+            .map_err(|e| RunError::ParseHtml(place(e, &html_map)))?,
     };
     declared
         .merge(scripted)
@@ -457,11 +489,13 @@ pub(crate) fn load_ir(
     // declaration came from, so a contested name is reported against both.
     let declared = parser
         .link_fragments(declared)
-        .map_err(RunError::ParseHtml)?;
+        .map_err(|e| RunError::ParseHtml(e.into()))?;
     // Includes are already spliced away, so the string-only parser suffices.
+    // The error names a line of the spliced text; the map turns it into the
+    // file it was read from.
     let mut ir = parser
         .parse_html(&html, &fragments)
-        .map_err(|e| RunError::ParseHtml(attribute(e)))?;
+        .map_err(|e| RunError::ParseHtml(place(e, &html_map)))?;
     // The parse saw spliced markup with no path; the inline blocks were
     // written in the entry file, at the lines it has.
     ir.script_map.name_unnamed(&html_path.display().to_string());
@@ -480,7 +514,7 @@ pub(crate) fn load_ir(
         && let Some(plan) = plan
         && plan.multipage
     {
-        let extra = crate::pages::assemble(&mut ir, plan, &fragments, parser, &html)
+        let extra = crate::pages::assemble(&mut ir, plan, &fragments, parser, (&html, &html_map))
             .map_err(RunError::ParseHtml)?;
         // Watch + mtime-track every page file so editing any page hot-reloads.
         for p in extra {
@@ -561,9 +595,12 @@ pub(crate) fn load_ir(
     let ua_rule_count = combined_rules.len();
     if let Some(name) = ir.skin.clone() {
         let skin_src = crate::skins::lookup(&name).ok_or_else(|| {
-            RunError::ParseCss(format!(
-                "unknown skin '{name}' - supported: \"auto\", \"default\", \"macos\", \"windows\", \"linux\""
-            ))
+            RunError::ParseCss(
+                format!(
+                    "unknown skin '{name}' - supported: \"auto\", \"default\", \"macos\", \"windows\", \"linux\""
+                )
+                .into(),
+            )
         })?;
         let sheet = parser.parse_css(skin_src).map_err(RunError::ParseCss)?;
         for mut rule in sheet.rules {
@@ -579,7 +616,9 @@ pub(crate) fn load_ir(
     }
     let skin_rule_count = combined_rules.len();
     if let Some(css_src) = &css {
-        let sheet = parser.parse_css(css_src).map_err(RunError::ParseCss)?;
+        let sheet = parser
+            .parse_css(css_src)
+            .map_err(|e| RunError::ParseCss(e.placed_with(&css_map)))?;
         for mut rule in sheet.rules {
             // Author origin is the parser default; the source-order bump
             // keeps author rules ordered after UA + skin rules within the
@@ -680,7 +719,7 @@ impl Languages<'_> {
 /// path. `dir` is the app root; the script files sit in its `src/`.
 #[cfg(feature = "runtime-parse")]
 fn script_fragments(
-    html: &str,
+    (html, html_map): (&str, &lumen_ir::source_map::SourceMap),
     html_path: &Path,
     dir: &Path,
     plan: Option<&crate::pages::PagePlan>,
@@ -726,10 +765,16 @@ fn script_fragments(
         // rewrite it); errors in it get the same attribution the other
         // markup errors carry.
         let refs = parser.script_refs(src, path).map_err(|e| {
-            RunError::ParseHtml(if entry_transformed && path == html_path {
-                format!("(in the markup as rewritten by compiler plugins) {e}")
-            } else {
+            RunError::ParseHtml(if path != html_path {
                 e
+            } else if entry_transformed {
+                lumen_ir::source_map::SourceError::new(format!(
+                    "(in the markup as rewritten by compiler plugins) {}",
+                    e.message
+                ))
+            } else {
+                // The entry is handed over spliced; its map names the file.
+                e.placed_with(html_map)
             })
         })?;
         let externals: Vec<&str> = refs.external.iter().map(String::as_str).collect();
@@ -795,7 +840,7 @@ pub(crate) fn source_languages(
         let mut included = Vec::new();
         let src = parser
             .resolve_includes(&src, &path, &mut included)
-            .unwrap_or(src);
+            .map_or(src, |(text, _)| text);
         let Ok(refs) = parser.script_refs(&src, &path) else {
             continue;
         };

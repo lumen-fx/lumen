@@ -154,15 +154,15 @@
  * timing (see lumen-primitives::hover) - 130 ms ease reads as crisp
  * without feeling instant.
  */
-button          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 16; text-color: var(--lumen-text); transition: bg 130ms ease; }
+button, menuitem          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 16; text-color: var(--lumen-text); transition: bg 130ms ease; }
 /* Dialog default button (`<button default="true">` gains the class at
  * parse time): Qt's default-button ring - Enter anywhere in the open
  * dialog activates it. */
 button.default  { border: 2px solid var(--lumen-accent); }
-button:hover    { bg: var(--lumen-surface-hover); }
-button:active   { bg: var(--lumen-surface-active); }
-button:focus    { outline: 2 var(--lumen-accent); }
-button:disabled { bg: var(--lumen-disabled-bg); }
+button:hover, menuitem:hover    { bg: var(--lumen-surface-hover); }
+button:active, menuitem:active   { bg: var(--lumen-surface-active); }
+button:focus, menuitem:focus    { outline: 2 var(--lumen-accent); }
+button:disabled, menuitem:disabled { bg: var(--lumen-disabled-bg); }
 
 /* === Inputs ===
  * Real borders (R-css-flex): a resting 1px hairline so fields read as
@@ -303,16 +303,17 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
 .dropdown-option:disabled { text-color: var(--lumen-text-muted); }
 
 /* === Menu (R4.2) ===
- * A standalone `<menu id>` desugars to:
- *   .menu-panel     (tag=overlay, absolute-positioned)
- *     .menu-item      (tag=button, one per <menuitem>)
- *     .menu-separator (tag=spacer, one per <separator>)
+ * A standalone `<menu id>` keeps its elements:
+ *   menu            (absolute-positioned, shown while open)
+ *     menuitem      (one per <menuitem>; pressed and sized like a button)
+ *       .menu-accel (tag=label, the item's `accel`, when it has one)
+ *     separator     (one per <separator>)
  *
  * `<menu>` nested inside `<menubar>` is native OS chrome on macOS and
  * Windows. Elsewhere the runtime draws the bar in the window; its parts
  * are styled under "Menu bar" below.
  */
-.menu-panel {
+menu {
   transition: opacity 120ms ease;
   bg: var(--lumen-panel);
   radius: var(--lumen-radius-sm);
@@ -322,12 +323,13 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   popup-gap: var(--lumen-popup-gap);
 }
 
-.menu-item        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
-.menu-item:hover   { bg: var(--lumen-panel-hover); }
-.menu-item:focus   { outline: 2 var(--lumen-accent); }
-.menu-item:disabled { text-color: var(--lumen-text-muted); }
+menuitem        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
+menuitem:hover   { bg: var(--lumen-panel-hover); }
+menuitem:focus   { outline: 2 var(--lumen-accent); }
+menuitem:disabled { text-color: var(--lumen-text-muted); }
+.menu-accel        { text-color: var(--lumen-text-muted); }
 
-.menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
 
 /* === Split ===
  * `<split>` keeps its children as the panes and puts a gutter between
@@ -382,7 +384,7 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
  *   .menubar           (tag=row)
  *     .menubar-menu      (tag=column, one per <menu>)
  *       .menubar-button    (tag=button, the menu's label)
- *       .menu-panel        (the menu, styled as above)
+ *       menu               (the menu, styled as above)
  */
 .menubar { bg: var(--lumen-panel); border-bottom: 1px solid var(--lumen-border); padding: 2 4; gap: 2; }
 .menubar-button { bg: var(--lumen-panel); text-color: var(--lumen-text); radius: var(--lumen-radius-sm); padding: 0 10; }
