@@ -159,6 +159,12 @@ impl Transport for WaitTransport {
     fn is_open(&mut self) -> bool {
         self.inner.is_open()
     }
+
+    // ureq reads this off the outermost transport, and refuses an `https`
+    // request on one that says no, so it is the wrapped transport's answer.
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
 }
 
 #[cfg(test)]
@@ -192,6 +198,45 @@ mod tests {
         fn is_open(&mut self) -> bool {
             true
         }
+    }
+
+    /// A transport that says it is encrypted, as the rustls layer does.
+    #[derive(Debug)]
+    struct Secure(LazyBuffers);
+
+    impl Transport for Secure {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.0
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
+            Ok(false)
+        }
+        fn is_open(&mut self) -> bool {
+            true
+        }
+        fn is_tls(&self) -> bool {
+            true
+        }
+    }
+
+    /// ureq asks the outermost transport whether the connection is
+    /// encrypted and refuses an `https` request when it says no, so the
+    /// wrapper answers for the transport it wraps.
+    #[test]
+    fn the_wrapper_says_the_connection_it_wraps_is_encrypted() {
+        let transport = WaitTransport {
+            inner: Box::new(Secure(LazyBuffers::new(64, 64))),
+            limit: Duration::NotHappening,
+            control: Control::default(),
+            poll: POLL,
+            heard_from: false,
+        };
+        assert!(transport.is_tls());
+        let (plain, _) = idle(100, false);
+        assert!(!plain.is_tls());
     }
 
     /// A transport over [`Recording`] whose slice is longer than any wait the
