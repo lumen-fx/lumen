@@ -423,9 +423,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             // instead of whichever host's system happened to run first.
             app.add_systems(
                 TickStage::Systems,
-                collect_fetch_replies
-                    .after(drain_fetch_commands)
-                    .before(ScriptSet::Fetch),
+                collect_fetch_replies.before(ScriptSet::Fetch),
             );
             app.add_systems(
                 TickStage::Systems,
@@ -441,9 +439,25 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 TickStage::Systems,
                 clear_plugin_events.after(ScriptSet::PluginEvents),
             );
+            // After every set that calls into a host, for the reason the
+            // frame request is: a request a handler sent this system ran
+            // past would sit unsent while an idle app parks, since nothing
+            // but its own reply would wake the loop. A timer, a click, and
+            // a reply's own handler chaining the next request all send one.
             app.add_systems(
                 TickStage::Systems,
-                drain_fetch_commands.after(ScriptSet::Tick),
+                drain_fetch_commands
+                    .after(ScriptSet::Tick)
+                    .after(ScriptSet::Dispatch)
+                    .after(ScriptSet::Derivations)
+                    .after(ScriptSet::Frame)
+                    .after(ScriptSet::Timers)
+                    .after(ScriptSet::Fetch)
+                    .after(ScriptSet::PluginEvents)
+                    .after(ScriptSet::Ready)
+                    .after(ScriptSet::Fill)
+                    .after(ScriptSet::DomInput)
+                    .after(ScriptSet::DomState),
             );
             // The clipboard builtins, answered by whichever clipboard backend
             // the assembly installed. After every set that runs script code,

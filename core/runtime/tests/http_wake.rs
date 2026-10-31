@@ -149,3 +149,131 @@ fn main() {{}}
     server.join().expect("server thread");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A local server that answers every request at once and reports each path
+/// it was asked for.
+fn answering_server() -> (u16, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local server");
+    let port = listener.local_addr().expect("local addr").port();
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                }
+            }
+            let line = String::from_utf8_lossy(&request);
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            let _ = tx.send(path);
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi");
+        }
+    });
+    (port, rx)
+}
+
+/// A request a timer handler sends, or a reply's handler sends on, goes out
+/// on the tick that ran the handler. An app that parks after that tick has
+/// nothing else to wake it, so a request left for the next tick would wait
+/// until something unrelated ticked the app.
+#[test]
+fn a_request_from_a_handler_goes_out_on_the_tick_that_sent_it() {
+    let (port, asked) = answering_server();
+    let dir = std::env::temp_dir().join(format!("lumen_http_send_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp app dir");
+    let source = format!(
+        r#"import "lumen.cdl";
+
+fn on_start() {{
+    lumen::set_timeout("go", 0);
+}}
+
+fn on_timer(name: string) {{
+    lumen::http({{"url": "http://127.0.0.1:{port}/first", "tag": "first"}});
+    lumen::signal_set("sent", "first");
+}}
+
+fn on_http(tag: string, response: any) {{
+    if tag == "first" {{
+        lumen::http({{"url": "http://127.0.0.1:{port}/second", "tag": "second"}});
+        lumen::signal_set("sent", "second");
+    }}
+}}
+
+fn main() {{}}
+"#
+    );
+    let bytes = artifact::serialize(&CompiledApp {
+        ir: LayoutIR {
+            root: Element {
+                tag: "root".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            module: "lumen-candela-dev".to_string(),
+            source,
+            bytecode: None,
+            source_map: Default::default(),
+        }],
+        ..Default::default()
+    })
+    .expect("serialize artifact");
+    let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
+    opts.bounded = true;
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
+    let woken = Arc::new(Woken::default());
+    let hook = Arc::clone(&woken);
+    app.world
+        .insert_resource(EventLoopWaker(Arc::new(move || hook.wake())));
+    let sent = |app: &lumen_core::app::App| match app
+        .world
+        .resource::<PropertyStore>()
+        .get(&PropertyKey::global("sent"))
+    {
+        Some(PropertyValue::Str(s)) => s.to_string(),
+        _ => String::new(),
+    };
+
+    // Tick until the timer's handler has run, then no more.
+    for _ in 0..20 {
+        if sent(&app) == "first" {
+            break;
+        }
+        app.tick();
+    }
+    assert_eq!(sent(&app), "first", "the timer fired");
+    assert_eq!(
+        asked.recv_timeout(Duration::from_secs(10)).as_deref(),
+        Ok("/first"),
+        "the timer's request went out without another tick"
+    );
+
+    // The reply wakes the loop; the tick it runs delivers it, and the
+    // handler's own request goes out on that tick too.
+    assert!(
+        woken.wait(Duration::from_secs(10)),
+        "the reply woke the loop"
+    );
+    for _ in 0..20 {
+        if sent(&app) == "second" {
+            break;
+        }
+        app.tick();
+    }
+    assert_eq!(sent(&app), "second", "the reply reached its handler");
+    assert_eq!(
+        asked.recv_timeout(Duration::from_secs(10)).as_deref(),
+        Ok("/second"),
+        "the reply handler's request went out without another tick"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
