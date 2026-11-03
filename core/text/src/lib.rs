@@ -328,6 +328,47 @@ pub trait TextShaper {
         }
     }
 
+    /// Min-content measure, in the same `(width, height, baseline)` shape
+    /// as [`Self::measure_with_baseline`]: the width is the paragraph's
+    /// widest unbreakable piece under `opts.wrap` (the longest word for
+    /// [`WrapMode::Word`], the widest glyph for [`WrapMode::Glyph`]), and
+    /// the height is the paragraph wrapped at that width. CSS calls this
+    /// width min-content; a flex item's automatic minimum size is built on
+    /// it, so a wrapping label in a crowded row shrinks to its longest word
+    /// instead of keeping its one-line width. `opts.width` is ignored.
+    ///
+    /// Text that does not wrap measures its single line. The default
+    /// shapes at zero width to find the widest piece, then measures
+    /// at that width; a backend whose [`Self::shape`] returns `None` keeps
+    /// the one-line measure.
+    fn measure_min_content(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        opts: &ShapeOptions,
+    ) -> (f32, f32, f32) {
+        if opts.wrap != WrapMode::None {
+            let probe = ShapeOptions {
+                width: Some(0.0),
+                max_lines: None,
+                ..opts.clone()
+            };
+            if let Some(run) = self.shape(text, size_px, probe) {
+                let at = ShapeOptions {
+                    width: Some(run.width),
+                    ..opts.clone()
+                };
+                let (_, h, baseline) = self.measure_with_baseline(text, size_px, &at);
+                return (run.width, h, baseline);
+            }
+        }
+        let line = ShapeOptions {
+            width: None,
+            ..opts.clone()
+        };
+        self.measure_with_baseline(text, size_px, &line)
+    }
+
     /// Number of entries the backend currently holds in its shape cache.
     /// `0` for a backend that caches nothing.
     fn cache_len(&self) -> usize {
