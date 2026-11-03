@@ -85,18 +85,18 @@ fn copy_image_to_clipboard(path: &str) {
     let img = match image::open(&resolved) {
         Ok(i) => i.to_rgba8(),
         Err(e) => {
-            eprintln!("lumenc: copy_image '{}': {e}", resolved.display());
+            eprintln!("lumen-runtime: copy_image '{}': {e}", resolved.display());
             return;
         }
     };
     let (w, h) = (img.width(), img.height());
     let rgba = img.into_raw();
     let Some(clip) = ClipboardHost::try_new() else {
-        eprintln!("lumenc: copy_image: no clipboard backend");
+        eprintln!("lumen-runtime: copy_image: no clipboard backend");
         return;
     };
     if !clip.set_rgba8_image(w, h, rgba) {
-        eprintln!("lumenc: copy_image: clipboard backend rejected image");
+        eprintln!("lumen-runtime: copy_image: clipboard backend rejected image");
     }
 }
 
@@ -104,20 +104,23 @@ fn copy_image_to_clipboard(path: &str) {
 /// PNG to `path` (app-relative when relative).
 fn save_clipboard_image(path: &str) {
     let Some(clip) = ClipboardHost::try_new() else {
-        eprintln!("lumenc: save_clipboard_image: no clipboard backend");
+        eprintln!("lumen-runtime: save_clipboard_image: no clipboard backend");
         return;
     };
     let Some((w, h, rgba)) = clip.get_rgba8_image() else {
-        eprintln!("lumenc: save_clipboard_image: clipboard has no image");
+        eprintln!("lumen-runtime: save_clipboard_image: clipboard has no image");
         return;
     };
     let resolved = lumen_core::app_paths::resolve(path);
     let Some(img) = image::RgbaImage::from_raw(w, h, rgba) else {
-        eprintln!("lumenc: save_clipboard_image: bad rgba dims {w}x{h}");
+        eprintln!("lumen-runtime: save_clipboard_image: bad rgba dims {w}x{h}");
         return;
     };
     if let Err(e) = img.save(&resolved) {
-        eprintln!("lumenc: save_clipboard_image '{}': {e}", resolved.display());
+        eprintln!(
+            "lumen-runtime: save_clipboard_image '{}': {e}",
+            resolved.display()
+        );
     }
 }
 

@@ -457,7 +457,7 @@ pub fn run_app_headless_rendered(
     }
 
     eprintln!(
-        "lumenc: headless mode - no window; {}x{} logical @ dpr {dpr}{}",
+        "lumen-runtime: headless mode - no window; {}x{} logical @ dpr {dpr}{}",
         window.options.size.0,
         window.options.size.1,
         match headless.ticks {
@@ -523,7 +523,7 @@ pub fn run_app_headless_rendered(
             let since = *load_wait.get_or_insert_with(Instant::now);
             if since.elapsed() >= LOAD_WAIT_LIMIT {
                 eprintln!(
-                    "lumenc: still loading {}s after the last tick; ending the run as it stands",
+                    "lumen-runtime: still loading {}s after the last tick; ending the run as it stands",
                     LOAD_WAIT_LIMIT.as_secs()
                 );
                 break;
@@ -669,7 +669,7 @@ fn first_offscreen(
             Ok(()) => {
                 if !failures.is_empty() {
                     eprintln!(
-                        "lumenc: {}; rendering with the '{}' backend",
+                        "lumen-runtime: {}; rendering with the '{}' backend",
                         failures.join("; "),
                         backend.name
                     );

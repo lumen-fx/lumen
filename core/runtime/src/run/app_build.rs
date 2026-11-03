@@ -596,7 +596,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         // mtime polling behind `LUMEN_HOT_RELOAD_POLL` or on watcher
         // init failure.
         let driver = if std::env::var_os("LUMEN_HOT_RELOAD_POLL").is_some() {
-            eprintln!("lumenc: hot reload using mtime polling (LUMEN_HOT_RELOAD_POLL set)");
+            eprintln!("lumen-runtime: hot reload using mtime polling (LUMEN_HOT_RELOAD_POLL set)");
             HotReloadDriver::Poll
         } else {
             let flag = std::sync::Arc::new(HotReloadFlag::default());
@@ -607,7 +607,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 },
                 Err(e) => {
                     eprintln!(
-                        "lumenc: hot-reload file watcher init failed ({e}); \
+                        "lumen-runtime: hot-reload file watcher init failed ({e}); \
                          falling back to mtime polling"
                     );
                     HotReloadDriver::Poll

@@ -218,7 +218,7 @@ pub fn discover(src_dir: &Path, cfg: &LumenToml) -> PagePlan {
         } else {
             for f in &missing {
                 eprintln!(
-                    "lumenc: [pages] include: no file at {}; skipping it (that page is not navigable)",
+                    "lumen-runtime: [pages] include: no file at {}; skipping it (that page is not navigable)",
                     f.path.display()
                 );
             }

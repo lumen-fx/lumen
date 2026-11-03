@@ -83,7 +83,7 @@ impl Drop for ProfileGuard {
             && let Err(e) = rewrite_chrome_names(&path)
         {
             eprintln!(
-                "lumenc: failed to rewrite chrome trace names ({}): {e}",
+                "lumen-runtime: failed to rewrite chrome trace names ({}): {e}",
                 path.display()
             );
         }
@@ -220,7 +220,7 @@ pub fn install(mode: ProfileMode) -> Result<ProfileGuard, String> {
                 .try_init()
                 .map_err(|e| format!("install chrome subscriber: {e}"))?;
             eprintln!(
-                "lumenc: chrome profiler writing to {} - open in chrome://tracing or https://ui.perfetto.dev",
+                "lumen-runtime: chrome profiler writing to {} - open in chrome://tracing or https://ui.perfetto.dev",
                 path.display()
             );
             Ok(ProfileGuard {
@@ -239,7 +239,7 @@ pub fn install(mode: ProfileMode) -> Result<ProfileGuard, String> {
                 .with(tracing_tracy::TracyLayer::default())
                 .try_init()
                 .map_err(|e| format!("install tracy subscriber: {e}"))?;
-            eprintln!("lumenc: tracy profiler active - launch `tracy-profiler` to connect");
+            eprintln!("lumen-runtime: tracy profiler active - launch `tracy-profiler` to connect");
             Ok(ProfileGuard {
                 chrome: None,
                 chrome_path: None,
@@ -265,7 +265,7 @@ pub fn install(mode: ProfileMode) -> Result<ProfileGuard, String> {
                 )
                 .try_init()
                 .map_err(|e| format!("install stderr subscriber: {e}"))?;
-            eprintln!("lumenc: stderr profiler active - one line per system span");
+            eprintln!("lumen-runtime: stderr profiler active - one line per system span");
             Ok(ProfileGuard {
                 chrome: None,
                 chrome_path: None,
