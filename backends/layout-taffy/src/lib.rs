@@ -1261,13 +1261,26 @@ pub fn sync_layout(
                                     weight: t.weight,
                                     line_height: Some(line_h),
                                 };
-                                let (w, h, baseline) =
-                                    shaper.measure_with_baseline(&t.text, t.size_px, &opts);
+                                // A min-content probe with no width of its
+                                // own (taffy sizing a flex item's automatic
+                                // minimum, a min-content track, ...) gets
+                                // the longest word, as CSS does; a wrapping
+                                // label in a crowded row then shrinks and
+                                // wraps instead of keeping its one-line
+                                // width.
+                                let min_content = known.width.is_none()
+                                    && matches!(available.width, AvailableSpace::MinContent)
+                                    && t.wrap != WrapMode::None;
+                                let (w, h, baseline) = if min_content {
+                                    shaper.measure_min_content(&t.text, t.size_px, &opts)
+                                } else {
+                                    shaper.measure_with_baseline(&t.text, t.size_px, &opts)
+                                };
                                 // Remember the exact height so that once this
                                 // paragraph scrolls back out of view the lazy
                                 // path returns the real value - the extent
                                 // only ever refines, never snaps shorter.
-                                if let Some(mw) = max_width {
+                                if let Some(mw) = max_width.filter(|_| !min_content) {
                                     memo.record(*entity, &t.text, mw, h);
                                 }
                                 measured_baselines.insert(*entity, baseline);

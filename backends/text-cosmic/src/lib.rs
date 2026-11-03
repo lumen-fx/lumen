@@ -142,6 +142,17 @@ pub struct CosmicShaper {
     buffer: Buffer,
     last_metrics: Metrics,
     cache: LruCache<ShapeKey, Arc<ShapedRun>>,
+    /// Min-content measures, `(width, height, baseline)` per text and
+    /// shape parameters (width left out: the measure ignores it). Kept
+    /// apart from [`Self::cache`] so the zero-width layouts that find a
+    /// paragraph's longest word never evict the runs that get painted.
+    min_content: LruCache<ShapeKey, (f32, f32, f32)>,
+    /// What [`Self::buffer`] holds shaped right now, when it holds a
+    /// paragraph [`Self::shape`] or [`Self::measure_min_content`] set.
+    /// Wrapping and width change only the line layout, so a min-content
+    /// measure of the paragraph just shaped relays it out instead of
+    /// shaping it again.
+    buffer_holds: Option<BufferContent>,
     /// Persistent `font_id -> (bytes, face index, id hash)` cache.
     ///
     /// `fontdb::with_face_data` hands out a borrowed byte slice, so
@@ -178,6 +189,25 @@ pub struct CosmicShaper {
     /// doing so leaves results correct and only shows up here, as a
     /// reshape on every repeat.
     shape_misses: u64,
+}
+
+/// The inputs that decide how [`CosmicShaper::buffer`]'s text is shaped,
+/// as opposed to how its lines are laid out.
+#[derive(Clone, Debug, PartialEq)]
+struct BufferContent {
+    text: String,
+    family: FamilyChoice,
+    weight: u16,
+    metrics: Metrics,
+}
+
+impl BufferContent {
+    fn is(&self, text: &str, family: &FamilyChoice, weight: u16, metrics: Metrics) -> bool {
+        self.text == text
+            && self.family == *family
+            && self.weight == weight
+            && self.metrics == metrics
+    }
 }
 
 /// Resolved CSS `font-family` list: either one of the CSS generic
@@ -280,6 +310,8 @@ impl CosmicShaper {
             buffer,
             last_metrics: metrics,
             cache: LruCache::new(NonZeroUsize::new(SHAPE_CACHE_CAP).unwrap()),
+            min_content: LruCache::new(NonZeroUsize::new(SHAPE_CACHE_CAP).unwrap()),
+            buffer_holds: None,
             font_bytes: std::collections::HashMap::new(),
             coords_cache: std::collections::HashMap::new(),
             family_cache: std::collections::HashMap::new(),
@@ -467,9 +499,24 @@ impl CosmicShaper {
         coords
     }
 
+    /// Record that [`Self::buffer`] now holds `text` shaped with these
+    /// inputs, reusing the previous record's string allocation.
+    fn note_buffer(&mut self, text: &str, family: FamilyChoice, weight: u16, metrics: Metrics) {
+        let mut held = self.buffer_holds.take().map(|b| b.text).unwrap_or_default();
+        held.clear();
+        held.push_str(text);
+        self.buffer_holds = Some(BufferContent {
+            text: held,
+            family,
+            weight,
+            metrics,
+        });
+    }
+
     /// Force-drop the result cache. Mostly useful for tests.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
+        self.min_content.clear();
     }
 }
 
@@ -582,6 +629,7 @@ impl TextShaper for CosmicShaper {
     fn set_capacity(&mut self, entries: usize) {
         if let Some(cap) = NonZeroUsize::new(entries) {
             self.cache.resize(cap);
+            self.min_content.resize(cap);
         }
     }
 
@@ -593,10 +641,92 @@ impl TextShaper for CosmicShaper {
             return false;
         }
         self.cache.clear();
+        self.min_content.clear();
+        self.buffer_holds = None;
         self.family_cache.clear();
         self.weight_cache.clear();
         self.family_name_cache.clear();
         true
+    }
+
+    /// Shapes the paragraph once and lays it out twice: at zero width,
+    /// where every line holds one unbreakable piece and the widest line is
+    /// the min-content width, then at that width for the height. Results
+    /// are memoised apart from the shape cache.
+    fn measure_min_content(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        opts: &ShapeOptions,
+    ) -> (f32, f32, f32) {
+        let opts = ShapeOptions {
+            width: None,
+            ..opts.clone()
+        };
+        if text.is_empty() || opts.wrap == WrapMode::None {
+            return self.measure_with_baseline(text, size_px, &opts);
+        }
+        let family_choice = match &opts.family {
+            Some(raw) => self.resolve_family(raw),
+            None => FamilyChoice::SansSerif,
+        };
+        let weight = self.snap_weight(&family_choice, opts.weight.clamp(1, 1000));
+        let params = ShapeParams::new(size_px, &opts, weight);
+        let probe = ShapeKeyRef {
+            text,
+            params: params.clone(),
+        };
+        if let Some(&hit) = self.min_content.get(&probe as &dyn ShapeKeyLike) {
+            return hit;
+        }
+
+        let line_height = opts.resolved_line_height(size_px).max(1.0);
+        let metrics = Metrics::new(size_px, opts.resolved_line_height(size_px));
+        if metrics != self.last_metrics {
+            self.buffer.set_metrics(metrics);
+            self.last_metrics = metrics;
+        }
+        let wrap = match opts.wrap {
+            WrapMode::Glyph => Wrap::Glyph,
+            _ => Wrap::Word,
+        };
+        let attrs = Attrs::new()
+            .family(family_choice.as_family())
+            .weight(cosmic_text::Weight(weight));
+        let shaped = self
+            .buffer_holds
+            .as_ref()
+            .is_some_and(|b| b.is(text, &family_choice, weight, metrics));
+        let width = {
+            let mut bb = self.buffer.borrow_with(&mut self.font_system);
+            bb.set_wrap(wrap);
+            bb.set_size(Some(0.0), None);
+            if !shaped {
+                bb.set_text(text, &attrs, Shaping::Advanced, None);
+            }
+            bb.shape_until_scroll(false);
+            let width = bb.layout_runs().map(|r| r.line_w).fold(0.0f32, f32::max);
+            // Relayout only: the lines keep their shaping across a resize.
+            bb.set_size(Some(width), None);
+            bb.shape_until_scroll(false);
+            width
+        };
+        if !shaped {
+            self.note_buffer(text, family_choice, weight, metrics);
+        }
+        let mut rows = self.buffer.layout_runs().count().max(1);
+        if let Some(cap) = opts.max_lines {
+            rows = rows.min(cap.max(1) as usize);
+        }
+        let measured = (width, rows as f32 * line_height, line_height * 0.8);
+        self.min_content.put(
+            ShapeKey {
+                text: Arc::from(text),
+                params,
+            },
+            measured,
+        );
+        measured
     }
 
     fn shape(&mut self, text: &str, size_px: f32, opts: ShapeOptions) -> Option<ShapedRun> {
@@ -660,6 +790,7 @@ impl TextShaper for CosmicShaper {
             bb.set_text(text, &attrs, Shaping::Advanced, None);
             bb.shape_until_scroll(false);
         }
+        self.note_buffer(text, family_choice.clone(), weight, metrics);
 
         // W5.6: walk layout runs and chunk glyphs into maximal
         // `(font_id, BiDi level)` segments in source order. cosmic-text
@@ -763,6 +894,7 @@ impl TextShaper for CosmicShaper {
         // elided string never exceeds the box (the previous append-only
         // pass could push the `...` past the clip edge on a full line).
         if truncated && !segs.is_empty() {
+            self.buffer_holds = None;
             {
                 let mut bb = self.buffer.borrow_with(&mut self.font_system);
                 bb.set_wrap(Wrap::None);
@@ -1130,6 +1262,46 @@ mod tests {
         assert!(
             h >= 16.0,
             "shaped text must report >=1 line height, got {h}"
+        );
+    }
+
+    /// Min-content width is the longest word, not the whole line and not
+    /// zero, and the height is the paragraph wrapped at that width.
+    #[test]
+    fn min_content_is_the_longest_word() {
+        let mut shaper = CosmicShaper::new();
+        let line = ShapeOptions::default();
+        let (word, line_h, _) = shaper.measure_with_baseline("extraordinarily", 16.0, &line);
+        let (whole, _, _) =
+            shaper.measure_with_baseline("an extraordinarily wide label", 16.0, &line);
+        let wrap = ShapeOptions {
+            wrap: WrapMode::Word,
+            ..ShapeOptions::default()
+        };
+        let (w, h, _) = shaper.measure_min_content("an extraordinarily wide label", 16.0, &wrap);
+        assert!(
+            (w - word).abs() < 0.5,
+            "min-content {w} should be the longest word's {word}"
+        );
+        assert!(
+            w < whole,
+            "min-content {w} must be under the line's {whole}"
+        );
+        assert!(
+            h >= 2.0 * line_h - 0.5,
+            "the paragraph wraps at its min-content width (h={h})"
+        );
+        let (nowrap, _, _) =
+            shaper.measure_min_content("an extraordinarily wide label", 16.0, &line);
+        assert_eq!(nowrap, whole, "text that does not wrap keeps its line");
+        // The measure above relaid out the paragraph the line measure had
+        // just shaped; a shaper that never shaped it must agree.
+        let fresh =
+            CosmicShaper::new().measure_min_content("an extraordinarily wide label", 16.0, &wrap);
+        assert_eq!(
+            (fresh.0, fresh.1),
+            (w, h),
+            "reusing the shaped buffer changes nothing"
         );
     }
 

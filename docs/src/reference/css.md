@@ -436,12 +436,16 @@ that minimum is the smaller of the element's own content and its
 authored `width` / `height`: a box with nothing in it shrinks to
 nothing, a box holding a 250px child stops at 250px, and a box whose
 child is wider than its authored width still stops at that width.
+Text that wraps counts as wide as its longest word, so a `grow: 1`
+label beside a button on a narrow row shrinks and wraps instead of
+pushing the button out; that holds through a wrapper such as a
+`<column grow="1">`. Text that does not wrap counts its whole line.
 
 Two properties change it:
 
 - `min-width: 0` / `min-height: 0` drops the floor entirely, so the
   element shrinks past its content and the content overflows. This is
-  what a long unbreakable label usually wants.
+  what a long label that does not wrap usually wants.
 - `shrink: 0` takes the element off the shrinking list, so it keeps its
   authored size and the line overflows instead.
 

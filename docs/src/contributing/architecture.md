@@ -844,7 +844,9 @@ shaping options in, a shaped run out, segmented by font and bidi level.
 Measuring is on the same trait, so a text leaf's intrinsic size and its
 painted glyphs always come from one backend; the default measure shapes the
 run and reports its width, height, and first-line baseline, and a backend that
-can answer more cheaply overrides it. The cosmic-text implementation caches
+can answer more cheaply overrides it. The min-content measure reports the
+widest unbreakable piece of wrapping text, its longest word, which layout uses
+for a flex item's automatic minimum size. The cosmic-text implementation caches
 results, since the same label reshapes every frame otherwise.
 
 The app holds one shaper per world, as the non-send `ShaperService` resource.
