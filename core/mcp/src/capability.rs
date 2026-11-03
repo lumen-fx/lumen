@@ -78,7 +78,7 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
         && !app.world.contains_resource::<McpListening>()
     {
         lumen_core::warn_line!(
-            "lumenc: MCP server off; set [mcp] port in lumen.toml to a port other than {p}"
+            "lumen-mcp: MCP server off; set [mcp] port in lumen.toml to a port other than {p}"
         );
         return;
     }
@@ -108,7 +108,7 @@ pub fn install(app: &mut App, env: &CapabilityEnv) {
 /// fragment ready to drop into a Claude Code `.mcp.json`.
 fn print_help_snippet(port: Option<u16>, simulate_enabled: bool, issues_enabled: bool) {
     let Some(port) = port else {
-        println!("lumenc: MCP server disabled");
+        println!("lumen-mcp: MCP server disabled");
         return;
     };
     let sim = if simulate_enabled {
@@ -121,7 +121,7 @@ fn print_help_snippet(port: Option<u16>, simulate_enabled: bool, issues_enabled:
     } else {
         "off - set [mcp] issues = true in lumen.toml to let lumen_framework_status list open issues"
     };
-    println!("lumenc: MCP server on 127.0.0.1:{port} (simulate: {sim})");
+    println!("lumen-mcp: MCP server on 127.0.0.1:{port} (simulate: {sim})");
     println!("        issue lookup: {issues}");
     println!("        try: lumenc snapshot --port {port}");
     println!("        Claude Code config snippet (drop into .mcp.json under \"mcpServers\"):");

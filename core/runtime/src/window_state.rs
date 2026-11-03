@@ -103,18 +103,18 @@ fn save_to(path: &Path, state: &WindowState) {
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        eprintln!("lumenc: window-state mkdir failed: {e}");
+        eprintln!("lumen-runtime: window-state mkdir failed: {e}");
         return;
     }
     let body = match toml::to_string_pretty(state) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("lumenc: window-state serialize failed: {e}");
+            eprintln!("lumen-runtime: window-state serialize failed: {e}");
             return;
         }
     };
     if let Err(e) = std::fs::write(path, body) {
-        eprintln!("lumenc: window-state write failed: {e}");
+        eprintln!("lumen-runtime: window-state write failed: {e}");
     }
 }
 

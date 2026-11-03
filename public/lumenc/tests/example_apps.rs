@@ -54,8 +54,8 @@ const TICKS: &str = "6";
 /// runtime prints while an app is starting means the app got less than it
 /// asked for.
 const ALLOWED_STDERR: &[&str] = &[
-    "lumenc: headless mode - no window;",
-    "lumenc: no clipboard backend; clipboard builtins are inert",
+    "lumen-runtime: headless mode - no window;",
+    "lumen-runtime: no clipboard backend; clipboard builtins are inert",
     "lumen-os-hotkey: no X11 display",
     "[script] ",
     "info  ",

@@ -411,7 +411,7 @@ pub(crate) fn load_ir(
     {
         for page in plan.included_pages(&include_paths) {
             eprintln!(
-                "lumenc: {} is included by {} and is also a page, because every .lmn file \
+                "lumen-runtime: {} is included by {} and is also a page, because every .lmn file \
                  directly in {} is one; move it into a subfolder, such as {}, to keep it a \
                  fragment only",
                 page.path.display(),

@@ -195,7 +195,7 @@ pub(crate) fn register_core(app: &mut App) -> Result<(), RunError> {
     // absent and the clipboard builtins no-op with a warning.
     match ClipboardHost::try_new() {
         Some(host) => app.world.insert_non_send(host),
-        None => eprintln!("lumenc: no clipboard backend; clipboard builtins are inert"),
+        None => eprintln!("lumen-runtime: no clipboard backend; clipboard builtins are inert"),
     }
     Ok(())
 }

@@ -128,7 +128,7 @@ fn apply_lifecycle_commands(
             ScriptCommand::ClearRecentFiles => recent_files.clear(),
             ScriptCommand::SetAutostart { on } => {
                 if !autostart.set_enabled(*on) {
-                    eprintln!("lumenc: set_autostart({on}): platform helper failed");
+                    eprintln!("lumen-os-lifecycle: set_autostart({on}): platform helper failed");
                 }
             }
             ScriptCommand::QueryAutostart { tag } => match autostart.is_enabled() {
@@ -140,7 +140,7 @@ fn apply_lifecycle_commands(
                 // "disabled", so the query goes unanswered rather than
                 // reporting a state nobody observed.
                 None => eprintln!(
-                    "lumenc: query_autostart({tag}): could not resolve the autostart location"
+                    "lumen-os-lifecycle: query_autostart({tag}): could not resolve the autostart location"
                 ),
             },
             _ => {}

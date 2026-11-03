@@ -175,7 +175,7 @@ pub(crate) fn reload_catalogues(world: &mut World, dir: &Path) {
         .write()
         .load_dir(&locale_dir(dir), catalogue_reader(world))
     {
-        eprintln!("lumenc hot-reload: locale catalogue failed to load: {e}");
+        eprintln!("lumen-runtime: hot-reload: locale catalogue failed to load: {e}");
     }
 }
 

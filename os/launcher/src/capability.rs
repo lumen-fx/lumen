@@ -65,6 +65,6 @@ fn apply_launcher_commands(mut events: MessageReader<ScriptCommandEvent>, launch
 /// there is nothing useful to report.
 fn report_launch(result: &OpenResult, builtin: &str, target: &str) {
     if let OpenResult::Failed(msg) = result {
-        eprintln!("lumenc: {builtin}('{target}'): {msg}");
+        eprintln!("lumen-os-launcher: {builtin}('{target}'): {msg}");
     }
 }

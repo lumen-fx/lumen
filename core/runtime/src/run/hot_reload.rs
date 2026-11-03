@@ -318,7 +318,7 @@ pub(crate) fn hot_reload(world: &mut World) {
     ) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("lumenc hot-reload: {e}");
+            eprintln!("lumen-runtime: hot-reload: {e}");
             if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
                 banner.0 = Some(ErrorReport::from_run_error("hot-reload", &e));
             }
@@ -406,7 +406,7 @@ pub(crate) fn hot_reload(world: &mut World) {
                 continue;
             }
             if let Some(Err(e)) = reload(world, &script.source, "<inline>", &script.map) {
-                eprintln!("lumenc hot-reload: {language} script load failed: {e}");
+                eprintln!("lumen-runtime: hot-reload: {language} script load failed: {e}");
                 // The first failure is the one shown; the rest are on stderr.
                 script_failure.get_or_insert_with(|| {
                     ErrorReport::from_script(&format!("hot-reload: {language} script"), &e)
@@ -441,7 +441,7 @@ pub(crate) fn hot_reload(world: &mut World) {
     if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
         banner.0 = script_failure;
     }
-    eprintln!("lumenc: reloaded {}", html_path.display());
+    eprintln!("lumen-runtime: reloaded {}", html_path.display());
 }
 
 /// Per-entity state that survives a hot reload. Keyed by `LumenId.0`
