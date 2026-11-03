@@ -107,3 +107,60 @@ fn dom_query_read_side_headless() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A headless app whose tree is a root with one button carrying `id`.
+fn app_with_button(id: &str) -> (lumen_core::prelude::App, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("lumen_dom_query_{}_{id}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ir = LayoutIR {
+        root: el("root", None, &[], vec![el("button", Some(id), &[], vec![])]),
+        ..Default::default()
+    };
+    let bytes = artifact::serialize(&CompiledApp {
+        ir,
+        ..Default::default()
+    })
+    .expect("serialize fixture artifact");
+    let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
+    opts.bounded = true;
+    let (app, _window) = build_headless_app(opts).expect("build headless app");
+    (app, dir)
+}
+
+/// Two apps ticking at once in one process each look elements up in their
+/// own tree, never in the one the other app published last.
+#[test]
+fn concurrent_apps_each_query_their_own_tree() {
+    use std::sync::{Arc, Barrier};
+
+    let published = Arc::new(Barrier::new(2));
+    let run = |own: &'static str, other: &'static str| {
+        let published = Arc::clone(&published);
+        std::thread::spawn(move || {
+            let (mut app, dir) = app_with_button(own);
+            for _ in 0..3 {
+                app.tick();
+            }
+            // Both apps have published their tree before either looks.
+            published.wait();
+            app.tick();
+            let found = (
+                node_query::run_get_by_id(own).is_some(),
+                node_query::run_get_by_id(other).is_some(),
+                node_query::run_query(&format!("#{own}"))
+                    .map(|q| q.len())
+                    .ok(),
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            found
+        })
+    };
+    let a = run("only-in-a", "only-in-b");
+    let b = run("only-in-b", "only-in-a");
+    for (name, handle) in [("a", a), ("b", b)] {
+        let (own, other, query) = handle.join().expect("app thread");
+        assert!(own, "app {name} finds its own element");
+        assert!(!other, "app {name} does not see the other app's element");
+        assert_eq!(query, Some(1), "app {name} queries its own tree");
+    }
+}

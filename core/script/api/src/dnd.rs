@@ -23,6 +23,7 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::components::LumenId;
+use lumen_core::node::AppDom;
 use lumen_core::warn_line;
 use lumen_os_dnd::{DragStarted, DropAccepted};
 
@@ -33,10 +34,12 @@ use crate::runtime::{ScriptCommandEvent, prefix, route_event_two_args};
 /// signal drives the next reconcile - no per-frame polling.
 pub fn dispatch_drops_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<DropAccepted>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let target_id = ids.get(ev.target).map(|i| i.0.as_str()).unwrap_or("");
         let payload = ev.payload.text().unwrap_or_default();
@@ -52,10 +55,12 @@ pub fn dispatch_drops_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// `on_drag_start(source_id, payload)`.
 pub fn dispatch_drag_start_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<DragStarted>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let source_id = ids.get(ev.source).map(|i| i.0.as_str()).unwrap_or("");
         let payload = ev.payload.text().unwrap_or_default();

@@ -2051,11 +2051,15 @@ pub fn dispatch_context_menus(
     hovered: Query<Entity, With<Hovered>>,
     tracker: Res<FocusTracker>,
     transforms: Query<&Transform>,
-    mut presses: MessageReader<PointerPressed>,
-    mut releases: MessageReader<PointerReleased>,
+    (mut presses, mut releases): (
+        MessageReader<PointerPressed>,
+        MessageReader<PointerReleased>,
+    ),
     mut keys: MessageReader<KeyPressed>,
     mut out: MessageWriter<ContextMenuEvent>,
+    dom: Option<Res<AppDom>>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     let document = || lumen_core::node::dom_index_snapshot().document();
     let pointer: Vec<Vec2> = if CONTEXT_MENU_ON_RELEASE {
         presses.read().for_each(drop);

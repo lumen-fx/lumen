@@ -31,6 +31,7 @@ use lumen_core::input::{
     ClickEvent, ContextMenuEvent, DoubleClickEvent, LongPressEvent, MenuClicked, Modifiers,
     ModifiersState, PointerButton,
 };
+use lumen_core::node::AppDom;
 use lumen_core::tick::{AppSet, TickStage};
 use lumen_primitives::{SliderChanged, ToggleChanged};
 use lumen_scene::spawn::ForMarker;
@@ -374,6 +375,7 @@ pub(crate) fn row_of(world: &World, entity: Entity) -> Option<Row> {
 /// handlers are taken out of the world for the call and put back after,
 /// with any a handler registered meanwhile.
 pub(crate) fn dispatch_handlers(world: &mut World) {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     let pending = std::mem::take(&mut world.resource_mut::<PendingEvents>().0);
     let ready_due = {
         let handlers = world.resource::<Handlers>();

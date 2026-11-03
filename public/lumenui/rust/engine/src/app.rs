@@ -1005,8 +1005,11 @@ mod tests {
     }
 
     /// Edit `#clicks` from a system that runs after the DOM commands of the
-    /// tick were collected.
-    fn late_dom_editor(mut clicks: MessageReader<ClickEvent>) {
+    /// tick were collected. The system enters its app's DOM: the tests here
+    /// run several apps at once, so a lookup on a worker thread could not
+    /// tell which app asks.
+    fn late_dom_editor(mut clicks: MessageReader<ClickEvent>, dom: Res<lumen_core::node::AppDom>) {
+        let _dom = dom.enter();
         if clicks.read().count() > 0
             && let Some(label) = crate::dom::Node::get_by_id("clicks")
         {

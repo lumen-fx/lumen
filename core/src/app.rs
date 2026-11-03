@@ -297,6 +297,9 @@ impl App {
         world.insert_resource(receiver);
         // Strongly-typed custom command registry (see `App::register_command`).
         world.insert_resource(CommandRegistry::default());
+        // The DOM this app publishes for its scripts, its own and no other
+        // app's.
+        world.insert_resource(crate::node::AppDom::default());
         // Foundation property store; legacy `Signals` writes mirror here via `mirror_signals_to_property_store`.
         world.insert_resource(PropertyStore::default());
         // Per-tick frame clock; updated by `App::tick` before each main schedule run.
@@ -725,8 +728,14 @@ impl App {
     /// set) `clear_extracted`, every extract fn, the extract schedule, and the render schedule.
     /// When [`FrameDirty`] is unset, returns after the main schedule; the previous frame's extracted entities remain in
     /// the render world for the backend's next `RedrawRequested`.
+    ///
+    /// The app's [`crate::node::AppDom`] is installed on the calling thread first and left there, so a DOM lookup
+    /// made on this thread, inside the tick or after it, reads this app's tree.
     pub fn tick(&mut self) {
         ensure_task_pool(self.desired_threads);
+        if let Some(dom) = self.world.get_resource::<crate::node::AppDom>() {
+            crate::node::install_dom(dom.clone());
+        }
         if let Some(mut tick) = self.world.get_resource_mut::<crate::tick::Tick>() {
             tick.advance();
         }

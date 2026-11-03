@@ -592,8 +592,10 @@ extern "C" {
  const char *lumen_status_message(LumenStatus status) ;
 
 /*
- Run a CSS selector against the current DOM snapshot, writing the
- matches (document order) into `*out_list`. On success the caller owns
+ Run a CSS selector against the current DOM snapshot of the app the
+ calling thread ticks (inside a callback, the app that fired it; on any
+ other thread, the process's only app), writing the matches (document
+ order) into `*out_list`. On success the caller owns
  the list and must release it with [`lumen_nodelist_free`]. A bad
  selector returns [`LumenStatus::ErrCss`]. Thread-safe.
  */

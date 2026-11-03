@@ -88,7 +88,7 @@ pub mod prelude {
     };
     pub use crate::nav::{NavOp, navigate as nav_navigate, request as nav_request};
     pub use crate::node::{
-        DomIndex, DomRecord, NodeHandle, NodeHandles, dom_index_snapshot, intern_node,
+        AppDom, DomIndex, DomRecord, NodeHandle, NodeHandles, dom_index_snapshot, intern_node,
         publish_dom_index, resolve_node,
     };
     pub use crate::node_ir::{Affine2, ClipShape, DrawEntry, Node, transform_extracted_to_nodes};

@@ -35,8 +35,7 @@ use lumen_core::components::{
 };
 use lumen_core::input::{ClickSet, FocusVisible, Focused, HoverWithin, PointerState};
 use lumen_core::node::{
-    DomIndex, DomRecord, DomStates, ElementState, NodeHandle, is_reserved_token, publish_dom_index,
-    publish_dom_states,
+    AppDom, DomIndex, DomRecord, DomStates, ElementState, NodeHandle, is_reserved_token,
 };
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
@@ -198,8 +197,9 @@ fn install_dom_events(app: &mut App) {
     );
 }
 
-/// Rebuild the [`DomIndex`] snapshot from the live tree and publish it for
-/// cross-thread readers (script hosts, the C-ABI).
+/// Rebuild the [`DomIndex`] snapshot from the live tree and publish it into
+/// the app's [`AppDom`] for the readers that hold no world (script hosts, the
+/// C-ABI).
 ///
 /// Every spawned element carries a [`LumenTag`], so the query walks all
 /// selector-reachable entities; a parent or child that is not itself tagged,
@@ -242,6 +242,7 @@ pub fn build_dom_index(
         RemovedComponents<Children>,
         RemovedComponents<lumen_core::components::DomHidden>,
     ),
+    dom: Res<AppDom>,
     mut built: Local<bool>,
 ) {
     use std::collections::HashSet;
@@ -297,7 +298,7 @@ pub fn build_dom_index(
             doc_order: 0,
         });
     }
-    publish_dom_index(DomIndex::build(records));
+    dom.publish_index(DomIndex::build(records));
 }
 
 /// The marker `:active` reads: the press chain on the desktop. A page's
@@ -367,6 +368,7 @@ pub fn build_dom_states(
         RemovedComponents<DropHovered>,
     ),
     pointer: Option<Res<PointerState>>,
+    dom: Res<AppDom>,
     mut last_primary_down: Local<Option<bool>>,
 ) {
     let removals = removed.0.read().count()
@@ -398,7 +400,7 @@ pub fn build_dom_states(
             (entity, s)
         },
     );
-    publish_dom_states(DomStates::new(states));
+    dom.publish_states(DomStates::new(states));
 }
 
 /// Commands gathered this tick, in issue order, for [`apply_dom_commands`].

@@ -640,6 +640,7 @@ pub fn reload_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     uri: &str,
     map: &lumen_ir::source_map::SourceMap,
 ) -> Option<Result<(), ScriptError>> {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     world
         .get_resource_mut::<H>()
         .map(|mut host| host.replace(source, uri).map_err(|e| e.relocate(uri, map)))
@@ -661,8 +662,10 @@ pub fn reload_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// `clear_property_store_dirty` empties the dirty queue in `A11ySync`.
 pub fn tick_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for c in host.drain_commands() {
         events.write(ScriptCommandEvent(c));
     }
@@ -693,6 +696,7 @@ pub fn tick_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// which is exactly what a reader would not notice.
 pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     pending: Query<(Entity, &lumen_core::components::PendingFill)>,
     // Function names already complained about, so a tree that keeps spawning
     // the same unfillable use site says it once. One host fills, so this
@@ -701,6 +705,7 @@ pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut commands: Commands,
     mut events: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     if !H::FILLS_COMPONENTS {
         return;
     }
@@ -796,9 +801,11 @@ pub struct OnReadyFired(pub std::collections::HashSet<&'static str>);
 /// so those mutations apply on the same first tick.
 pub fn fire_on_ready<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut fired: ResMut<OnReadyFired>,
     mut events: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     if !fired.0.insert(host.lang()) {
         return;
     }
@@ -820,8 +827,10 @@ pub fn fire_on_ready<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// pinned by [`ScriptHost::mirror_sync_str`].
 pub fn sync_signals_into_host<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     store: Res<lumen_core::property_store::PropertyStore>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     // Idle-tick fast path: nothing was written to the store this tick,
     // so the host-local mirror is already current. The dirty queue is
     // only cleared in A11ySync (after this system runs at the top of
@@ -869,10 +878,12 @@ pub fn sync_signals_into_host<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// no-op.
 pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut store: ResMut<lumen_core::property_store::PropertyStore>,
     arrays: Option<Res<lumen_core::signals::ArraySignals>>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     /// Upper bound on in-tick cascade waves. Real dependency chains are
     /// shallow (2-3); the bound only exists to break derivation cycles.
     const MAX_DERIVATION_PASSES: usize = 32;
@@ -1090,9 +1101,11 @@ pub fn retire_due_timers(mut timers: ResMut<TimerRegistry>, mut due_out: ResMut<
 /// running several languages the timer reaches whichever host declared it.
 pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     due: Res<DueTimers>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for name in &due.0 {
         if let Err(e) = route_event(&mut *host, "timer", "on_timer", name, &mut out) {
             warn_line!("{}: on_timer({name}) failed: {e}", prefix(host.lang()));
@@ -1167,9 +1180,11 @@ pub fn retire_frame_request(
 /// running several languages the callback reaches whichever host declared it.
 pub fn fire_frame_callbacks<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     due: Res<DueFrame>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     let Some(dt) = due.0 else {
         return;
     };
@@ -1498,9 +1513,11 @@ pub fn clear_fetch_replies(mut pending: ResMut<PendingFetchReplies>) {
 /// structured map for every completed request.
 pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     pending: Res<PendingFetchReplies>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for outcome in &pending.0 {
         match outcome.style {
             DeliveryStyle::Fetch => {
@@ -1647,9 +1664,11 @@ pub fn clear_plugin_events(mut pending: ResMut<PendingPluginEvents>) {
 /// key rides as the handler's first argument ahead of the event's own.
 pub fn fire_plugin_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     pending: Res<PendingPluginEvents>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for event in &pending.0 {
         let PluginEvent::Call {
             event,
@@ -1882,12 +1901,14 @@ fn collect_ordered_unique(items: impl IntoIterator<Item = Entity>) -> Vec<Entity
 /// very tick the click fired.
 pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
     (ids, parents): (Query<&LumenId>, Query<&ChildOf>),
     mut out: MessageWriter<ScriptCommandEvent>,
     partitions: Option<Res<lumen_core::window::WindowPartitions>>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     // Ordered, deduped list in first-seen message order. Iterating a
     // `HashSet` directly gives a nondeterministic dispatch order when two
     // entities are double-clicked in one tick, which violates the
@@ -1935,10 +1956,12 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
 /// the same tick or they are silently dropped at exit.
 pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut msgs: ResMut<bevy_ecs::message::Messages<lumen_core::input::CloseRequest>>,
     mut cursor: Local<bevy_ecs::message::MessageCursor<lumen_core::input::CloseRequest>>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     // Veto responses (`vetoed: true`) circulate on the same bus; only
     // genuine backend-emitted requests trigger the hook.
     let requests: Vec<_> = cursor
@@ -1981,10 +2004,12 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// `on("toggle", "<id>", "<fn>")`.
 pub fn dispatch_toggle_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<lumen_primitives::ToggleChanged>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
         if let Err(e) = route_event_id_bool(
@@ -2004,10 +2029,12 @@ pub fn dispatch_toggle_to_script<H: ScriptHost + Resource<Mutability = Mutable>>
 /// (f64), with per-id handler routing via `on("slider", "<id>", "<fn>")`.
 pub fn dispatch_slider_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<lumen_primitives::SliderChanged>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
         if let Err(e) = route_event_id_f64(
@@ -2026,10 +2053,12 @@ pub fn dispatch_slider_to_script<H: ScriptHost + Resource<Mutability = Mutable>>
 /// Forward [`LongPressEvent`] as `on_long_press(id)`.
 pub fn dispatch_long_press_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<LongPressEvent>,
     (ids, parents): (Query<&LumenId>, Query<&ChildOf>),
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let id_str = pointer_route_id(&*host, "long_press", ev.entity, &ids, &parents);
         if let Err(e) = route_event(&mut *host, "long_press", "on_long_press", id_str, &mut out) {
@@ -2041,10 +2070,12 @@ pub fn dispatch_long_press_to_script<H: ScriptHost + Resource<Mutability = Mutab
 /// Forward [`FileDropped`] as `on_file_dropped(id, path)`.
 pub fn dispatch_file_drops_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<FileDropped>,
     ids: Query<&LumenId>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
         let path_str = ev.path.to_string_lossy().to_string();
@@ -2066,9 +2097,11 @@ pub fn dispatch_file_drops_to_script<H: ScriptHost + Resource<Mutability = Mutab
 /// first.
 pub fn dispatch_menu_clicks_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<lumen_core::input::MenuClicked>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         if let Err(e) = route_event(&mut *host, "menu", "on_menu", &ev.id, &mut out) {
             warn_line!("{}: on_menu failed: {e}", prefix(host.lang()));
@@ -2083,9 +2116,11 @@ pub fn dispatch_menu_clicks_to_script<H: ScriptHost + Resource<Mutability = Muta
 /// emitter guarantees exactly one message per open->close cycle.
 pub fn dispatch_dialog_closes_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut events: MessageReader<lumen_core::input::DialogClosed>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     for ev in events.read() {
         let (event_name, fallback) = if ev.accepted {
             ("dialog_accepted", "on_dialog_accepted")
@@ -2106,12 +2141,14 @@ pub fn dispatch_dialog_closes_to_script<H: ScriptHost + Resource<Mutability = Mu
 /// are one change to the script, not two.
 pub fn dispatch_text_input_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
+    dom: Option<Res<AppDom>>,
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
     ids: Query<&LumenId>,
     fields: Query<crate::dom_events::FieldText>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     use lumen_core::text_events::AppliedKind;
 
     let mut fired: Vec<Entity> = Vec::new();

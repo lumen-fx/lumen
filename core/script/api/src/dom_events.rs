@@ -288,6 +288,7 @@ fn drain_into<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World)
 
 /// Deliver the pointer, click, wheel and key events read this tick.
 pub fn deliver_input_events(world: &mut World) {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     // Fresh per-tick prevented-default set for whoever runs a default
     // action (the anchor-nav executor, a page's context menu).
     event::clear_prevented_defaults();
@@ -316,6 +317,7 @@ pub fn deliver_input_events(world: &mut World) {
 
 /// Deliver the focus, hover, edit, commit and scroll events read this tick.
 pub fn deliver_state_events(world: &mut World) {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
         return;
     };
@@ -352,6 +354,7 @@ pub fn queue_custom_events(
 /// Deliver the custom events queued this tick, and report each one with a
 /// [`CustomEventDelivered`].
 pub fn deliver_custom_events(world: &mut World) {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
         return;
     };
@@ -653,7 +656,9 @@ pub fn queue_pointer_and_key_events(
     transforms: Query<&Transform>,
     hovered: Query<Entity, With<Hovered>>,
     focused: Query<Entity, With<Focused>>,
+    dom: Option<Res<AppDom>>,
 ) {
+    let _dom = dom.as_deref().map(AppDom::enter);
     let queue = &mut pending.input;
     let hovered_entity = hovered.iter().next();
     let focused_entity = focused.iter().next();
