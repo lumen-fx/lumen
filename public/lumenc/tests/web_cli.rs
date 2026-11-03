@@ -1156,8 +1156,10 @@ fn a_sigterm_to_lumenc_stops_the_server_it_started() {
 #[test]
 fn a_killed_lumenc_leaves_no_server_behind() {
     let scratch = scratch("serve-sigkill");
-    let (child, address) = serving("apps/pages-demo", &scratch, &["--render", "ssr"]);
-    stop(child);
+    let (mut child, address) = serving("apps/pages-demo", &scratch, &["--render", "ssr"]);
+    // lumenc alone: the guard would take the server down itself.
+    let _ = child.kill();
+    let _ = child.wait();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while TcpStream::connect(address).is_ok() {
         assert!(
@@ -1166,6 +1168,39 @@ fn a_killed_lumenc_leaves_no_server_behind() {
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+/// A case that panics while it serves takes lumenc and its server down as it
+/// unwinds, so nothing outlives the test still listening or holding what the
+/// test process had open.
+#[cfg(unix)]
+#[test]
+fn a_case_that_panics_while_serving_leaves_nothing_running() {
+    let scratch = scratch("serve-panic");
+    let (child, address) = serving("apps/pages-demo", &scratch, &[]);
+    let lumenc = child.id();
+    let servers = children(lumenc);
+    assert!(
+        !servers.is_empty(),
+        "lumenc {lumenc} is serving on {address} with no server process of its own"
+    );
+    let failed = std::thread::spawn(move || {
+        let _served = child;
+        panic!("a failed assertion while the server runs");
+    })
+    .join();
+    assert!(failed.is_err(), "the case was meant to panic");
+
+    for pid in std::iter::once(lumenc).chain(servers) {
+        assert!(
+            !alive(pid),
+            "process {pid} outlived the case that started it"
+        );
+    }
+    assert!(
+        TcpStream::connect(address).is_err(),
+        "the server still answers on {address} after the case ended"
+    );
 }
 
 /// Wait for `child` to exit, for up to `within`.
@@ -1893,11 +1928,15 @@ fn a_page_comes_from_a_run_or_from_the_request_and_not_from_both() {
     assert!(stderr.contains("prerender `run`"), "{stderr}");
 }
 
-/// Stop a served process and collect it, so a case leaves nothing behind.
-/// A `lumenc web --serve` a test started. Dropping it kills lumenc and
-/// waits for it, so a test that panics between starting the server and
-/// stopping it (a refused connection, a failed assertion) leaves nothing
-/// running; lumenc takes its `lumen-server` down with it.
+/// A `lumenc web --serve` a test started. Dropping it kills the
+/// `lumen-server` lumenc started and lumenc itself, and waits for both, so a
+/// test that panics between starting the server and stopping it (a refused
+/// connection, a failed assertion) leaves nothing running and nothing holding
+/// what the test process had open.
+///
+/// The server is killed here rather than left to notice lumenc is gone: it
+/// drains when its parent exits, and a drain still holds the port and every
+/// descriptor it inherited after the test has moved on.
 struct Served(std::process::Child);
 
 impl std::ops::Deref for Served {
@@ -1914,10 +1953,83 @@ impl std::ops::DerefMut for Served {
 }
 
 impl Drop for Served {
+    #[cfg(unix)]
     fn drop(&mut self) {
+        let lumenc = self.0.id();
+        // Stopped first, so lumenc starts no server between the look for one
+        // and its own end. A lumenc that has exited already is sent nothing.
+        let running = matches!(self.0.try_wait(), Ok(None));
+        if running {
+            signal("STOP", &[lumenc]);
+        }
+        let servers = if running {
+            children(lumenc)
+        } else {
+            Vec::new()
+        };
+        signal("KILL", &servers);
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+        // The servers were lumenc's, so whatever adopts them reaps them; this
+        // waits until it has, which is when the last of them is gone.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while servers.iter().any(|&pid| alive(pid)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// `taskkill /T` ends lumenc and every process it started.
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &self.0.id().to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+/// The processes `parent` started that are still running.
+#[cfg(unix)]
+fn children(parent: u32) -> Vec<u32> {
+    Command::new("pgrep")
+        .args(["-P", &parent.to_string()])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|pid| pid.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Send `signal` (a name `kill` takes, such as `KILL`) to each of `pids`.
+#[cfg(unix)]
+fn signal(signal: &str, pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .args(pids.iter().map(u32::to_string))
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Whether `pid` still names a process. One that has exited and is waiting
+/// to be reaped still counts.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Stop a server a test started.
