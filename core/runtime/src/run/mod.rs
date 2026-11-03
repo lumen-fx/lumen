@@ -189,6 +189,11 @@ pub struct RunOptions {
     /// builds: set by the rendered headless run, which picks the result up
     /// from [`crate::run_headless`]'s side of the build.
     pub(crate) offscreen_prestart: Option<(u32, u32)>,
+    /// The app gets no platform window: set by [`build_headless_app`]. Such
+    /// a run takes its size from [`Self::size`] / `[window] size` alone and
+    /// neither reads nor writes the `[window] remember_state` file, so a
+    /// headless run never depends on how big the app's last window was.
+    pub(crate) windowless: bool,
 }
 
 impl RunOptions {
@@ -224,6 +229,7 @@ impl RunOptions {
             resolved_modules: crate::modules::ResolvedModules::default(),
             import_roots: Vec::new(),
             offscreen_prestart: None,
+            windowless: false,
         }
     }
 
@@ -515,7 +521,8 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 /// offscreen-render mode), and the golden-image screenshot suite
 /// (`public/lumenc/tests/golden.rs`), which installs an offscreen renderer
 /// on top and reads the framebuffer back.
-pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
+pub fn build_headless_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
+    opts.windowless = true;
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;

@@ -39,7 +39,7 @@ headless app costs nothing.
 
 | Flag | Effect |
 |------|--------|
-| `--size WxH` | Logical viewport size. Defaults to `[window] size`, then `960x720`. |
+| `--size WxH` | Logical viewport size. Defaults to `[window] size`, then `960x720`. A size saved by `[window] remember_state` never applies. |
 | `--dpr N` | Scales the render target. Screenshot pixels are the logical size times this. Defaults to 1. |
 | `--ticks N` | Runs exactly N ticks back to back, then exits 0. |
 
