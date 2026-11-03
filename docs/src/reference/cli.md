@@ -44,7 +44,7 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 |------|-------|---------|--------|
 | `--profile` | `chrome`, `tracy`, `stderr` | `[profile] mode`, else off | Installs the tracing profiler. `chrome` writes `lumen-trace.json` in the current directory; `tracy` connects to a running `tracy-profiler`; `stderr` prints per-system spans live. |
 | `--headless` | - | off | Runs the whole pipeline (layout, rendering on the app's `[render] backend`, scripting, MCP, screenshots) with no window. Subsystems that only make sense for a person at a window stay idle; the audio module, for one, opens no output device. |
-| `--size` | `WxH` | `[window] size`, else `960x720` | Logical viewport size. Requires `--headless`. Zero dimensions are rejected. |
+| `--size` | `WxH` | `[window] size`, else `960x720` | Logical viewport size. Requires `--headless`. Zero dimensions are rejected. A size saved by `[window] remember_state` never applies to a headless run. |
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
 | `--monitors` | comma-separated `WxH[@SCALE]` | one 1920x1080 monitor at `--dpr` | The virtual desktop the app's windows open on, monitors laid out left to right; `@SCALE` defaults to 1. A window takes the scale of the monitor it lands on, and the primary window opens on the first, so `--dpr` is ignored. Requires `--headless`. |

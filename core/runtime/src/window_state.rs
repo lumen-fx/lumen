@@ -1,6 +1,7 @@
 //! Per-app window-state persistence.
 //!
 //! Opt-in via `[window] remember_state = true` in `lumen.toml`.
+//! A headless run has no platform window and never reads or writes it.
 //! Stores `(position, size, maximized)` at
 //! `<state_dir>/<app-id>/window-state.toml` between runs (`state_dir`
 //! follows the XDG / macOS / Windows conventions:
@@ -15,7 +16,7 @@
 //! committed state.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// On-disk shape. Logical pixels for `size` so HiDPI machines don't
 /// see the app come back at half-size; `position` is in physical
@@ -78,10 +79,13 @@ fn state_dir() -> Option<PathBuf> {
 /// when the file doesn't exist or fails to parse (corrupted state
 /// shouldn't brick the app - just discard).
 pub fn load(app_id: &str) -> WindowState {
-    let Some(path) = state_path(app_id) else {
-        return WindowState::default();
-    };
-    match std::fs::read_to_string(&path) {
+    state_path(app_id)
+        .map(|p| load_from(&p))
+        .unwrap_or_default()
+}
+
+fn load_from(path: &Path) -> WindowState {
+    match std::fs::read_to_string(path) {
         Ok(src) => toml::from_str(&src).unwrap_or_default(),
         Err(_) => WindowState::default(),
     }
@@ -90,9 +94,12 @@ pub fn load(app_id: &str) -> WindowState {
 /// Save `state` for `app_id`. Best-effort: creates parent directories
 /// on the fly; logs to stderr on failure and returns.
 pub fn save(app_id: &str, state: &WindowState) {
-    let Some(path) = state_path(app_id) else {
-        return;
-    };
+    if let Some(path) = state_path(app_id) {
+        save_to(&path, state);
+    }
+}
+
+fn save_to(path: &Path, state: &WindowState) {
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -106,7 +113,7 @@ pub fn save(app_id: &str, state: &WindowState) {
             return;
         }
     };
-    if let Err(e) = std::fs::write(&path, body) {
+    if let Err(e) = std::fs::write(path, body) {
         eprintln!("lumenc: window-state write failed: {e}");
     }
 }
@@ -117,14 +124,17 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips() {
-        let app_id = "lumenc-window-state-test";
+        // A temp path, never the user's own state directory.
+        let dir = std::env::temp_dir().join(format!("lumen-window-state-{}", std::process::id()));
+        let path = dir.join("lumen").join("app").join("window-state.toml");
         let state = WindowState {
             position: Some([100, 200]),
             size: Some([1024, 768]),
             maximized: false,
         };
-        save(app_id, &state);
-        let loaded = load(app_id);
+        save_to(&path, &state);
+        let loaded = load_from(&path);
+        let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(loaded.position, Some([100, 200]));
         assert_eq!(loaded.size, Some([1024, 768]));
         assert!(!loaded.maximized);

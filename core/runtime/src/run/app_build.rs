@@ -657,7 +657,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let mut maximized = true;
     let mut start_position: Option<(i32, i32)> = None;
     let mut on_close_state: Option<Box<dyn FnOnce(WindowGeometry) + Send>> = None;
-    if cfg.window.remember_state.unwrap_or(false) {
+    // Saved window state belongs to the app's real window: a headless run
+    // keeps the size it was asked for and leaves the saved state alone.
+    if cfg.window.remember_state.unwrap_or(false) && !opts.windowless {
         let prev = crate::window_state::load(&app_id);
         if let Some([w, h]) = prev.size {
             size = (w, h);
