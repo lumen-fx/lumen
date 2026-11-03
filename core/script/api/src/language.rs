@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use bevy_ecs::component::Mutable;
 use bevy_ecs::prelude::{Resource, World};
+use lumen_core::node::AppDom;
 use lumen_core::prelude::App;
 use lumen_core::warn_line;
 use lumen_ir::fragment::FragmentComponent;
@@ -154,6 +155,7 @@ fn call_of<H>(world: &mut World, name: &str) -> Result<Option<ScriptValue>, Scri
 where
     H: ScriptHost + Resource<Mutability = Mutable>,
 {
+    let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     let Some(mut host) = world.get_resource_mut::<H>() else {
         return Err(ScriptError::Runtime("no script is loaded".to_owned()));
     };

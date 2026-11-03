@@ -20,16 +20,14 @@ use lumen_core::prelude::App;
 use lumenc::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
 
-/// The DOM index and the external command bus are process-global, so the
-/// headless apps here run one at a time.
+/// The external command bus is process-global, so the headless apps here run
+/// one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn isolate() -> std::sync::MutexGuard<'static, ()> {
-    let guard = SERIAL
+    SERIAL
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    lumen_core::node::publish_dom_index(lumen_core::node::DomIndex::default());
-    guard
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn fixture() -> PathBuf {

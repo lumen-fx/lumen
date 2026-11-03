@@ -219,6 +219,8 @@ pub mod prelude {
 
     // The element tree: node handles and query results.
     pub use crate::dom::{self, Listener, Node, NodeQuery};
+    // The app's published tree, which a system enters to look elements up.
+    pub use lumen_core::node::AppDom;
 
     // OS: native file dialogs and the clipboard.
     pub use crate::clipboard::{Clipboard, RgbaImage};

@@ -294,7 +294,10 @@ window is restored to take a new size.
 
 `LumenNode` is an opaque packed handle; `0` means "no node". Reads resolve
 against a snapshot rebuilt each tick, so a handle to a removed element reads as
-invalid.
+invalid. The snapshot belongs to the app the calling thread ticks: inside a
+callback, the app that fired it; after `lumen_app_run_headless` returns, the
+app it ran. Any other thread reads the process's only app, and an empty tree
+while several apps run in one process.
 
 | Function | Behaviour |
 | --- | --- |
@@ -847,6 +850,21 @@ resize through `SplitResized`, picks a `<tabs>`' tab through `TabPicks`, and
 raises an element event of its own with a `CustomEvent` message. See
 [Composing the built-in widgets](../contributing/plugins.md#composing-the-built-in-widgets)
 and [Raising element events](../contributing/plugins.md#raising-element-events).
+
+A system that looks elements up (`dom::get_by_id`, `dom::query`, `Node`
+traversal) takes `Res<AppDom>` and holds `dom.enter()` while it runs, so the
+lookup reads its own app's tree. A system that does not reads the tree of the
+process's only app, and an empty tree while several apps run in one process,
+such as the tests of a test binary.
+
+```rust
+fn mark_done(mut clicks: MessageReader<ClickEvent>, dom: Res<AppDom>) {
+    let _dom = dom.enter();
+    if clicks.read().count() > 0 && let Some(label) = dom::get_by_id("status") {
+        label.set_text("done");
+    }
+}
+```
 
 ### Debug and release builds
 

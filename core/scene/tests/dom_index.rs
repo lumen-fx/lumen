@@ -7,16 +7,19 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::Schedule;
 use lumen_core::components::{DomHidden, LumenClasses, LumenId, LumenTag};
-use lumen_core::node::dom_index_snapshot;
+use lumen_core::node::{AppDom, DomIndex};
 use lumen_scene::dom::build_dom_index;
+use std::sync::Arc;
 
-/// The index is process-global, so the cases here run one at a time.
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The index the world's [`AppDom`] holds.
+fn dom_index(world: &World) -> Arc<DomIndex> {
+    world.resource::<AppDom>().index()
+}
 
 #[test]
 fn dom_hidden_subtree_never_reaches_the_index() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut world = World::new();
+    world.init_resource::<AppDom>();
 
     // A tooling root spawned FIRST (lower entity bits), then the app root.
     let tool_root = world
@@ -41,7 +44,7 @@ fn dom_hidden_subtree_never_reaches_the_index() {
     schedule.add_systems(build_dom_index);
     schedule.run(&mut world);
 
-    let index = dom_index_snapshot();
+    let index = dom_index(&world);
     assert_eq!(
         index.roots(),
         &[app_root],
@@ -60,8 +63,8 @@ fn dom_hidden_subtree_never_reaches_the_index() {
 /// and an element going, publish again.
 #[test]
 fn the_index_is_rebuilt_only_when_what_it_holds_changes() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut world = World::new();
+    world.init_resource::<AppDom>();
     let root = world
         .spawn((LumenTag("root".into()), LumenId("app".into())))
         .id();
@@ -70,12 +73,12 @@ fn the_index_is_rebuilt_only_when_what_it_holds_changes() {
     schedule.add_systems(build_dom_index);
 
     schedule.run(&mut world);
-    let first = dom_index_snapshot();
+    let first = dom_index(&world);
     assert!(first.record(child).is_some());
     schedule.run(&mut world);
     schedule.run(&mut world);
     assert!(
-        std::sync::Arc::ptr_eq(&first, &dom_index_snapshot()),
+        Arc::ptr_eq(&first, &dom_index(&world)),
         "idle ticks publish no new index"
     );
 
@@ -83,8 +86,8 @@ fn the_index_is_rebuilt_only_when_what_it_holds_changes() {
         .entity_mut(child)
         .insert(LumenClasses(vec!["hot".into()]));
     schedule.run(&mut world);
-    let classed = dom_index_snapshot();
-    assert!(!std::sync::Arc::ptr_eq(&first, &classed));
+    let classed = dom_index(&world);
+    assert!(!Arc::ptr_eq(&first, &classed));
     assert_eq!(
         classed.record(child).map(|r| r.classes.clone()),
         Some(vec!["hot".to_string()])
@@ -93,7 +96,7 @@ fn the_index_is_rebuilt_only_when_what_it_holds_changes() {
     world.entity_mut(child).despawn();
     schedule.run(&mut world);
     assert!(
-        dom_index_snapshot().record(child).is_none(),
+        dom_index(&world).record(child).is_none(),
         "a despawned element leaves the index"
     );
 }

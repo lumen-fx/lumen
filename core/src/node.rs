@@ -5,7 +5,7 @@
 //! `Entity` plus its generation, so a stale handle resolves to nothing
 //! instead of aliasing a recycled entity. [`DomIndex`] is an immutable
 //! per-tick snapshot of the selector-reachable tree that the runtime
-//! rebuilds each frame and publishes into a process-shared cache; script
+//! rebuilds each frame and publishes into the app's own [`AppDom`]; script
 //! hosts and the C-ABI read that snapshot without touching the live world.
 //!
 //! Selector matching itself lives in `lumen-ir` (the cascade matcher) and
@@ -15,9 +15,10 @@
 
 use bevy_ecs::entity::{Entities, Entity};
 use bevy_ecs::resource::Resource;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
 /// Opaque handle to a live element: an [`Entity`] plus the generation it
 /// carried when the handle was minted. Resolving a handle validates the
@@ -437,32 +438,169 @@ impl DomIndex {
 }
 
 // ---------------------------------------------------------------------------
-// Process-shared snapshot cache
+// The app's published DOM
 // ---------------------------------------------------------------------------
 
-static DOM_INDEX_CACHE: OnceLock<RwLock<Arc<DomIndex>>> = OnceLock::new();
-
-fn dom_index_cache() -> &'static RwLock<Arc<DomIndex>> {
-    DOM_INDEX_CACHE.get_or_init(|| RwLock::new(Arc::new(DomIndex::default())))
+/// What one app's tick publishes for its scripts: the [`DomIndex`] and the
+/// [`DomStates`] beside it.
+#[derive(Debug, Default)]
+struct DomCell {
+    index: RwLock<Arc<DomIndex>>,
+    states: RwLock<Arc<DomStates>>,
 }
 
-/// Publish a freshly-built snapshot for cross-thread readers. The runtime
-/// calls this each tick from `build_dom_index`, before event dispatch, so
-/// a query issued inside a handler sees the current tree.
-pub fn publish_dom_index(index: DomIndex) {
-    if let Ok(mut guard) = dom_index_cache().write() {
-        *guard = Arc::new(index);
+/// One app's published DOM, held as a resource of the app's main world.
+///
+/// Every [`crate::app::App`] carries its own, so two apps in one process
+/// never read each other's tree. Clones share the same snapshot.
+///
+/// Script hosts and the C-ABI hold no `&World` when a script asks for an
+/// element, so the lookup free functions ([`dom_index_snapshot`],
+/// [`dom_states_snapshot`]) read the `AppDom` installed on the calling
+/// thread. [`crate::app::App::tick`] installs the app's own on the thread
+/// that ticks it, and a system that may run a script on a worker thread
+/// enters it with [`AppDom::enter`] for the length of its run.
+///
+/// A thread with none installed, such as a worker running a system that
+/// did not enter one, reads the process's only app. With several apps
+/// alive it cannot tell which one asks, and reads an empty tree rather
+/// than another app's.
+#[derive(Resource, Clone, Debug)]
+pub struct AppDom(Arc<DomCell>);
+
+impl Default for AppDom {
+    fn default() -> Self {
+        let cell = Arc::new(DomCell::default());
+        if let Ok(mut live) = live_doms().lock() {
+            live.retain(|dom| dom.strong_count() > 0);
+            live.push(Arc::downgrade(&cell));
+        }
+        Self(cell)
     }
 }
 
-/// Read the current snapshot. Returns a cheap `Arc` clone so the caller
-/// drops the lock immediately. Script hosts and the C-ABI read here; they
-/// hold no `&World` at call time.
+/// Every [`AppDom`] still held somewhere, for a thread with none installed.
+/// Weak, so the list keeps no app's tree alive.
+fn live_doms() -> &'static Mutex<Vec<Weak<DomCell>>> {
+    static LIVE: OnceLock<Mutex<Vec<Weak<DomCell>>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// The process's one live [`AppDom`], when there is exactly one.
+fn only_live_dom() -> Option<AppDom> {
+    let mut live = live_doms().lock().ok()?;
+    live.retain(|dom| dom.strong_count() > 0);
+    match live.as_slice() {
+        [only] => only.upgrade().map(AppDom),
+        _ => None,
+    }
+}
+
+impl AppDom {
+    /// Publish a freshly-built index. The runtime does this each tick from
+    /// `build_dom_index`, before event dispatch, so a query issued inside a
+    /// handler sees the current tree.
+    pub fn publish_index(&self, index: DomIndex) {
+        if let Ok(mut guard) = self.0.index.write() {
+            *guard = Arc::new(index);
+        }
+    }
+
+    /// Publish the live element states, as [`Self::publish_index`] does the
+    /// tree.
+    pub fn publish_states(&self, states: DomStates) {
+        if let Ok(mut guard) = self.0.states.write() {
+            *guard = Arc::new(states);
+        }
+    }
+
+    /// The current index. A cheap `Arc` clone, so the lock is dropped at
+    /// once.
+    pub fn index(&self) -> Arc<DomIndex> {
+        self.0
+            .index
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| Arc::new(DomIndex::default()))
+    }
+
+    /// The current element states.
+    pub fn states(&self) -> Arc<DomStates> {
+        self.0
+            .states
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| Arc::new(DomStates::default()))
+    }
+
+    /// Install this DOM on the calling thread until the returned scope is
+    /// dropped, then put back whatever was installed before.
+    pub fn enter(&self) -> DomScope {
+        DomScope(Some(install_dom(self.clone())))
+    }
+}
+
+thread_local! {
+    /// The DOM the lookups on this thread read.
+    static CURRENT_DOM: RefCell<Option<AppDom>> = const { RefCell::new(None) };
+}
+
+/// Install `dom` on the calling thread for good, and give back whatever was
+/// there. [`crate::app::App::tick`] does this, so a lookup made on the
+/// thread that ticks an app, during the tick or between ticks, reads that
+/// app's tree.
+pub fn install_dom(dom: AppDom) -> Option<AppDom> {
+    CURRENT_DOM.with(|current| current.borrow_mut().replace(dom))
+}
+
+/// The DOM installed on the calling thread, if any.
+pub fn current_dom() -> Option<AppDom> {
+    CURRENT_DOM.with(|current| current.borrow().clone())
+}
+
+/// An [`AppDom`] installed on a thread by [`AppDom::enter`]. Dropping it
+/// puts back what was installed before.
+#[derive(Debug)]
+#[must_use = "the DOM is uninstalled when the scope is dropped"]
+pub struct DomScope(Option<Option<AppDom>>);
+
+impl Drop for DomScope {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0.take() {
+            CURRENT_DOM.with(|current| *current.borrow_mut() = previous);
+        }
+    }
+}
+
+/// The DOM installed on the calling thread, installing a fresh one when
+/// there is none.
+fn current_dom_or_install() -> AppDom {
+    CURRENT_DOM.with(|current| {
+        current
+            .borrow_mut()
+            .get_or_insert_with(AppDom::default)
+            .clone()
+    })
+}
+
+/// Publish `index` into the DOM installed on the calling thread, installing
+/// a fresh one there when there is none. For an embedder or a test that
+/// builds its own index; an app's tick publishes through its [`AppDom`].
+pub fn publish_dom_index(index: DomIndex) {
+    current_dom_or_install().publish_index(index);
+}
+
+/// The index of the DOM installed on the calling thread, or of the
+/// process's only app when none is; empty otherwise. Script hosts and the
+/// C-ABI read here.
 pub fn dom_index_snapshot() -> Arc<DomIndex> {
-    dom_index_cache()
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_else(|_| Arc::new(DomIndex::default()))
+    lookup_dom().map_or_else(|| Arc::new(DomIndex::default()), |dom| dom.index())
+}
+
+/// The DOM a lookup on the calling thread reads: the one installed here, or
+/// else the process's only app.
+fn lookup_dom() -> Option<AppDom> {
+    current_dom().or_else(only_live_dom)
 }
 
 // ---------------------------------------------------------------------------
@@ -524,26 +662,16 @@ impl DomStates {
     }
 }
 
-static DOM_STATES_CACHE: OnceLock<RwLock<Arc<DomStates>>> = OnceLock::new();
-
-fn dom_states_cache() -> &'static RwLock<Arc<DomStates>> {
-    DOM_STATES_CACHE.get_or_init(|| RwLock::new(Arc::new(DomStates::default())))
-}
-
-/// Publish the live element states for cross-thread readers, as
+/// Publish `states` into the DOM installed on the calling thread, as
 /// [`publish_dom_index`] does the tree.
 pub fn publish_dom_states(states: DomStates) {
-    if let Ok(mut guard) = dom_states_cache().write() {
-        *guard = Arc::new(states);
-    }
+    current_dom_or_install().publish_states(states);
 }
 
-/// Read the current element states.
+/// The element states of the DOM a lookup on the calling thread reads, as
+/// [`dom_index_snapshot`] finds it.
 pub fn dom_states_snapshot() -> Arc<DomStates> {
-    dom_states_cache()
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_else(|_| Arc::new(DomStates::default()))
+    lookup_dom().map_or_else(|| Arc::new(DomStates::default()), |dom| dom.states())
 }
 
 #[cfg(test)]
@@ -668,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn global_cache_round_trips() {
+    fn thread_dom_round_trips() {
         let mut w = World::new();
         let root = w.spawn_empty().id();
         publish_dom_index(DomIndex::build(vec![rec(
@@ -680,5 +808,45 @@ mod tests {
             &[],
         )]));
         assert_eq!(dom_index_snapshot().get_by_id("r"), Some(root));
+    }
+
+    #[test]
+    fn each_app_dom_answers_for_its_own_tree() {
+        let mut w = World::new();
+        let a_root = w.spawn_empty().id();
+        let b_root = w.spawn_empty().id();
+        let a = AppDom::default();
+        let b = AppDom::default();
+        a.publish_index(DomIndex::build(vec![rec(
+            a_root,
+            "root",
+            Some("r"),
+            &[],
+            None,
+            &[],
+        )]));
+        b.publish_index(DomIndex::build(vec![rec(
+            b_root,
+            "root",
+            Some("r"),
+            &[],
+            None,
+            &[],
+        )]));
+        {
+            let _a = a.enter();
+            assert_eq!(dom_index_snapshot().get_by_id("r"), Some(a_root));
+            {
+                let _b = b.enter();
+                assert_eq!(dom_index_snapshot().get_by_id("r"), Some(b_root));
+            }
+            assert_eq!(dom_index_snapshot().get_by_id("r"), Some(a_root));
+        }
+        // With two apps alive, a thread neither is installed on reads
+        // neither tree.
+        let none = std::thread::spawn(|| dom_index_snapshot().get_by_id("r"))
+            .join()
+            .unwrap();
+        assert_eq!(none, None);
     }
 }
