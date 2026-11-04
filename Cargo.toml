@@ -576,7 +576,7 @@ sha1 = "0.10"
 md-5 = "0.10"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-zip = { version = "6", default-features = false, features = ["deflate"] }
+zip = { version = "9.3", default-features = false, features = ["deflate"] }
 
 # OS clipboard for text-input copy/cut/paste. Cross-platform: Wayland, X11,
 # macOS, Windows. We instantiate one Clipboard per process at plugin init.

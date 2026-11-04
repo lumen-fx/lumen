@@ -1003,6 +1003,8 @@ before the refused one stay on disk, so a destination that took a failed
 extraction is one to discard rather than keep using. Symbolic and hard links
 are skipped, because a link inside the destination can point outside it once
 extraction is over; `count` is the files written, so it leaves them out.
+A zip entry holding more bytes than its headers declare ends the extraction
+the same way, before any of its bytes are written.
 Existing files are overwritten and missing parent directories are created.
 
 Four extractions run at once by default; a fifth is refused until one

@@ -204,7 +204,10 @@ fn unzip<R: Read + Seek>(
         let mut member = archive
             .by_index(i)
             .map_err(|e| format!("cannot read the archive: {e}"))?;
-        let name = member.name().to_string();
+        let name = member
+            .name()
+            .map_err(|e| format!("cannot read the archive: {e}"))?
+            .into_owned();
         let relative = guarded(&name)?;
         if member.is_symlink() {
             out.links_skipped += 1;

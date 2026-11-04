@@ -165,6 +165,52 @@ pub fn truncated_zip(path: &Path) -> std::io::Result<()> {
     std::fs::write(path, &bytes[..bytes.len() / 2])
 }
 
+/// The body of the entry in [`understated_zip`], longer than its headers say.
+pub const UNDERSTATED_BODY: &[u8] = b"this entry holds more bytes than it declares";
+
+/// The uncompressed size the headers of [`understated_zip`] declare.
+pub const UNDERSTATED_SIZE: u32 = 4;
+
+/// A zip whose one stored entry, `top.txt`, holds [`UNDERSTATED_BODY`] while
+/// both its local and its central header declare [`UNDERSTATED_SIZE`] bytes:
+/// an archive that writes more to disk than it admits to.
+pub fn understated_zip(path: &Path) -> std::io::Result<()> {
+    let mut whole = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut whole);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("top.txt", options).map_err(other)?;
+        writer.write_all(UNDERSTATED_BODY)?;
+        writer.finish().map_err(other)?;
+    }
+    let mut bytes = whole.into_inner();
+    // The uncompressed size sits 22 bytes into a local header and 24 bytes
+    // into a central one.
+    rewrite_u32(&mut bytes, b"PK\x03\x04", 22, UNDERSTATED_SIZE)?;
+    rewrite_u32(&mut bytes, b"PK\x01\x02", 24, UNDERSTATED_SIZE)?;
+    std::fs::write(path, bytes)
+}
+
+/// Overwrite the little-endian `u32` at `offset` past the first `signature`.
+fn rewrite_u32(
+    bytes: &mut [u8],
+    signature: &[u8],
+    offset: usize,
+    value: u32,
+) -> std::io::Result<()> {
+    let start = bytes
+        .windows(signature.len())
+        .position(|w| w == signature)
+        .ok_or_else(|| std::io::Error::other("the header signature is missing"))?
+        + offset;
+    bytes
+        .get_mut(start..start + 4)
+        .ok_or_else(|| std::io::Error::other("the header is cut short"))?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
 /// One tar member, written with the mode and size a builder needs set first.
 fn append<W: Write>(builder: &mut tar::Builder<W>, name: &str, body: &[u8]) -> std::io::Result<()> {
     let mut header = tar::Header::new_gnu();

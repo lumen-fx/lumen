@@ -39,5 +39,5 @@ tar = "0.4"
 # Pure-Rust decoders, so building an app needs no C compiler for them.
 ruzstd = "0.8"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-zip = { version = "6", default-features = false, features = ["deflate"] }
+zip = { version = "9.3", default-features = false, features = ["deflate"] }
 serde_json = "1"
