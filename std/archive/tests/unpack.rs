@@ -255,6 +255,31 @@ fn a_truncated_archive_reports_an_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An entry holding more bytes than its headers declare stops the extraction
+/// instead of writing past the size it admitted to.
+#[test]
+fn an_entry_larger_than_it_declares_stops_the_extraction() {
+    let dir = scratch("understated");
+    let src = dir.join("understated.zip");
+    let dest = dir.join("out");
+    testkit::understated_zip(&src).expect("fixture");
+
+    let error = unpack::extract(&src, &dest, None)
+        .expect_err("an entry larger than it declares cannot unpack");
+    assert!(
+        error.contains("declared uncompressed size"),
+        "the error names the size the entry broke: {error}"
+    );
+    let written = std::fs::read(dest.join("top.txt")).unwrap_or_default();
+    assert!(
+        written.len() <= testkit::UNDERSTATED_SIZE as usize,
+        "no more than the declared size reached the disk: {} bytes",
+        written.len()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file that is no archive at all is refused before anything is created.
 #[test]
 fn a_file_that_is_no_archive_is_refused() {

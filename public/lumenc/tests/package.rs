@@ -607,7 +607,13 @@ fn the_zip_holds_the_folder() {
     let bytes = std::fs::read(&archive).expect("read the archive");
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("read as a zip");
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).expect("member").name().to_string())
+        .map(|i| {
+            zip.by_index(i)
+                .expect("member")
+                .name()
+                .expect("member name")
+                .into_owned()
+        })
         .collect();
     // Forward slashes whatever platform wrote the archive: a member named with
     // a backslash unpacks elsewhere as one file with a slash in its name.
