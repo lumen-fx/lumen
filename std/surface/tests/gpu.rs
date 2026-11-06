@@ -1,12 +1,15 @@
 //! `<surface>` on the renderers, end to end: an in-process producer through
-//! the loopback, the reference producer in C in another process through the
-//! Unix transport, and the CPU renderer, which cannot show shared frames.
+//! the loopback, a reference producer in another process through the
+//! platform's transport, and the CPU renderer, which cannot show shared
+//! frames.
 //!
 //! The GPU cases skip themselves, saying why, on a machine with no GPU
-//! adapter, like every GPU suite in the tree. The C producer is compiled with
-//! the system C compiler against the protocol crate's static library and
-//! Vulkan; its headers come from the system (`libvulkan-dev`), or from
-//! `VULKAN_INCLUDE` when set.
+//! adapter, like every GPU suite in the tree. On Linux the producer in
+//! another process is the C reference producer, compiled with the system C
+//! compiler against the protocol crate's static library and Vulkan; its
+//! headers come from the system (`libvulkan-dev`), or from `VULKAN_INCLUDE`
+//! when set. On Windows (Direct3D 12) and macOS (Metal) it is the Rust one in
+//! `producer/`, run by starting this test binary again.
 
 use bevy_ecs::message::Messages;
 use lumen_core::app::App;
@@ -347,21 +350,66 @@ fn a_hidden_surface_keeps_the_size_it_wants() {
     app.tick();
 }
 
-/// The reference producer in C, through the Unix transport and Vulkan memory
-/// export: the cross-process path this build ships on Linux.
-#[cfg(target_os = "linux")]
+#[cfg(any(windows, target_os = "macos"))]
+mod producer;
+
+/// A reference producer in another process, through the platform's
+/// transport: the C one with Vulkan memory export over a Unix socket on
+/// Linux, the Rust one with Direct3D 12 shared handles over a named pipe on
+/// Windows, and with IOSurfaces over a socket and Mach ports on macOS.
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 mod cross_process {
     use super::*;
     use lumen_core::input::{
         Focused, Hovered, Key, KeyCode, KeyPressed, Modifiers, PointerData, PointerMoved,
     };
     use std::io::{BufRead, BufReader};
-    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
 
+    /// The Rust producer, when this process was started to be it: runs it
+    /// and exits with its code. Otherwise there is nothing to do.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn the_producer() {
+        if std::env::var_os(super::producer::ENV).is_some() {
+            std::process::exit(super::producer::run());
+        }
+    }
+
+    /// The command that starts a producer: this test binary again, running
+    /// only `the_producer`.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn producer_command() -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+        command
+            .args([
+                "--exact",
+                "cross_process::the_producer",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(super::producer::ENV, "1");
+        command
+    }
+
+    /// The command that starts a producer: the C reference producer.
+    #[cfg(target_os = "linux")]
+    fn producer_command() -> Command {
+        Command::new(reference_producer())
+    }
+
+    /// What a producer prints after a buffer's number to give its identity,
+    /// the one the consumer reads from the handle it received.
+    #[cfg(target_os = "linux")]
+    const IDENTITY: &str = "inode ";
+    #[cfg(target_os = "macos")]
+    const IDENTITY: &str = "surface ";
+
     /// Build the reference producer, once per test process.
-    fn reference_producer() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    fn reference_producer() -> std::path::PathBuf {
+        use std::path::{Path, PathBuf};
         static BUILT: Mutex<Option<PathBuf>> = Mutex::new(None);
         let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(path) = built.as_ref() {
@@ -412,7 +460,7 @@ mod cross_process {
 
     impl Running {
         fn start(endpoint: &str, env: &[(&str, &str)]) -> Self {
-            let mut child = Command::new(reference_producer())
+            let mut child = producer_command()
                 .env("LUMEN_SURFACE", endpoint)
                 .envs(env.iter().copied())
                 .stdout(Stdio::piped())
@@ -444,16 +492,24 @@ mod cross_process {
             Self { child, log }
         }
 
-        /// The inode of each buffer of generation `g`, as the producer saw its
-        /// own export.
-        fn inodes(&self, generation: u32) -> Vec<u64> {
-            let prefix = format!("lsp-reference: buffer {generation}.");
+        /// Whether the producer printed a line containing `text`.
+        #[cfg(windows)]
+        fn said(&self, text: &str) -> bool {
+            self.log.lock().unwrap().iter().any(|l| l.contains(text))
+        }
+
+        /// The identity of each buffer of generation `g` (an inode on
+        /// Linux, an IOSurface id on macOS), as the producer saw its own
+        /// export.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        fn identities(&self, generation: u32) -> Vec<u64> {
+            let prefix = format!("buffer {generation}.");
             self.log
                 .lock()
                 .unwrap()
                 .iter()
-                .filter_map(|l| l.strip_prefix(&prefix))
-                .filter_map(|rest| rest.split("inode ").nth(1)?.trim().parse().ok())
+                .filter_map(|l| Some(&l[l.find(&prefix)?..]))
+                .filter_map(|rest| rest.split(IDENTITY).nth(1)?.trim().parse().ok())
                 .collect()
         }
     }
@@ -466,10 +522,11 @@ mod cross_process {
     }
 
     /// The reference producer in another process renders into the surface
-    /// through the Unix transport: its buffers are the ones the consumer
-    /// imported (the same inodes on both sides), input reaches it and comes back
-    /// in its frames, a resize brings a new ring, and a crash leaves the last
-    /// frame up until a new producer takes over.
+    /// through the platform's transport: its buffers are the ones the
+    /// consumer imported (the same inodes on Linux, the same IOSurfaces on
+    /// macOS; Windows handles have no identity to compare), input reaches it
+    /// and comes back in its frames, a resize brings a new ring, and a crash
+    /// leaves the last frame up until a new producer takes over.
     #[test]
     fn a_producer_in_another_process_shows_with_no_copy() {
         let _serial = serial();
@@ -481,8 +538,15 @@ mod cross_process {
         let e = spawn_surface(&mut app, "game", (0.0, 0.0), (W as f32, H as f32));
         app.tick();
         let endpoint = Surfaces.endpoint("game").expect("registered");
+        let named = if cfg!(windows) {
+            ";adapter=dx:"
+        } else if cfg!(target_os = "macos") {
+            ";adapter=mtl:"
+        } else {
+            ";adapter=vk:"
+        };
         assert!(
-            endpoint.contains(";adapter=vk:"),
+            endpoint.contains(named),
             "the endpoint names the GPU: {endpoint}"
         );
         let first = Running::start(&endpoint, &[]);
@@ -502,17 +566,25 @@ mod cross_process {
         assert_eq!(surface.frame().unwrap().size, (W, H));
 
         // The consumer holds the producer's own buffers.
-        let imported: Vec<u64> = surface
-            .buffer_identities()
-            .iter()
-            .map(|(_, ino)| *ino)
-            .collect();
-        let exported = first.inodes(1);
-        assert!(!exported.is_empty());
-        assert_eq!(
-            imported, exported,
-            "the consumer imported the producer's buffers"
-        );
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let imported: Vec<u64> = surface
+                .buffer_identities()
+                .iter()
+                .map(|(_, id)| *id)
+                .collect();
+            let exported = first.identities(1);
+            assert!(!exported.is_empty());
+            assert_eq!(
+                imported, exported,
+                "the consumer imported the producer's buffers"
+            );
+        }
+        // Shared resource handles have no identity both processes can read;
+        // the producer saying its ring was accepted, and the frames above,
+        // are what shows the consumer holds its images.
+        #[cfg(windows)]
+        assert!(first.said(&format!("ring 1 is {W}x{H}")));
 
         // A pointer move over the surface moves the square there.
         app.world.entity_mut(e).insert(Hovered);

@@ -1,5 +1,6 @@
-# The Lumen surface protocol: the wire format, the endpoint string, the Unix
-# transport and both roles of a session that shows another process's GPU
+# The Lumen surface protocol: the wire format, the endpoint string, the
+# transports (Unix sockets, Mach ports beside them on macOS, Windows named
+# pipes) and both roles of a session that shows another process's GPU
 # frames in a Lumen `<surface>`. It names no graphics API and no Lumen crate,
 # so an engine depends on it (or links its C ABI) without taking any of
 # Lumen. The specification is SPEC.md beside this file.
@@ -24,3 +25,21 @@ crate-type = ["lib", "staticlib", "cdylib"]
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+# IOSurface ports travel in Mach messages beside the socket.
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = "0.6"
+
+# The named-pipe transport, its current-user DACL, and the handle copies.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Performance",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

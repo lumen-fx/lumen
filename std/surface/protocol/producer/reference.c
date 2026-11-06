@@ -102,8 +102,9 @@ static void open_gpu(Gpu *g, const char *endpoint) {
     ici.pApplicationInfo = &app;
     CHECK(vkCreateInstance(&ici, NULL, &g->instance), "vkCreateInstance");
 
-    uint8_t want_device[16], want_driver[16];
-    int want = lsp_endpoint_adapter(endpoint, want_device, want_driver) == LSP_OK;
+    LspAdapter want_adapter;
+    int want = lsp_endpoint_adapter(endpoint, &want_adapter) == LSP_OK &&
+               want_adapter.api == LSP_API_VULKAN;
 
     uint32_t count = 0;
     CHECK(vkEnumeratePhysicalDevices(g->instance, &count, NULL), "vkEnumeratePhysicalDevices");
@@ -120,8 +121,8 @@ static void open_gpu(Gpu *g, const char *endpoint) {
         VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         p2.pNext = &id;
         vkGetPhysicalDeviceProperties2(devices[i], &p2);
-        int match = !want || (memcmp(id.deviceUUID, want_device, 16) == 0 &&
-                              memcmp(id.driverUUID, want_driver, 16) == 0);
+        int match = !want || (memcmp(id.deviceUUID, want_adapter.device_uuid, 16) == 0 &&
+                              memcmp(id.driverUUID, want_adapter.driver_uuid, 16) == 0);
         if (match) {
             g->physical = devices[i];
             memcpy(g->device_uuid, id.deviceUUID, 16);
@@ -274,7 +275,7 @@ static int make_ring(Gpu *g, LspProducer *p, Ring *ring, uint32_t generation, ui
         }
         buffers[i].alloc_size = req.size;
         buffers[i].memory_type = type;
-        buffers[i].fd = fd;
+        buffers[i].handle = (uint64_t)fd;
 
         VkImageViewCreateInfo vci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vci.image = s->image;
@@ -312,7 +313,7 @@ static int make_ring(Gpu *g, LspProducer *p, Ring *ring, uint32_t generation, ui
     ring_desc.buffers = buffers;
     LspStatus st = lsp_offer_buffers(p, &ring_desc);
     /* The consumer holds its own duplicates now. */
-    for (uint32_t i = 0; i < count; i++) close(buffers[i].fd);
+    for (uint32_t i = 0; i < count; i++) close((int)buffers[i].handle);
     if (st != LSP_OK) {
         char msg[256];
         lsp_last_error(msg, sizeof msg);

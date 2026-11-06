@@ -3,6 +3,8 @@
 //!
 //! ```text
 //! v1;transport=unix:/run/user/1000/lumen-surface-1000/4242-9f3c0a1b2c3d.sock;channel=scene;token=4be1...;adapter=vk:<device uuid>:<driver uuid>;adapter-name=AMD Radeon RX 6800 XT
+//! v1;transport=pipe:\\.\pipe\lumen-surface-4242-9f3c0a1b2c3d;channel=scene;token=4be1...;adapter=dx:<luid>
+//! v1;transport=unix:/var/folders/.../4242-9f3c0a1b2c3d.sock;mach=dev.lumenfx.surface.4242-9f3c0a1b2c3d;channel=scene;token=4be1...;adapter=mtl:<registry id>
 //! ```
 //!
 //! Fields are `key=value`, separated by `;`, after a leading version. A
@@ -20,8 +22,22 @@ pub const ENV: &str = "LUMEN_SURFACE";
 /// How the producer reaches the consumer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Transport {
-    /// A Unix stream socket at this path (Linux, macOS).
+    /// A Unix stream socket at this path, OS handles passed as file
+    /// descriptors with the frames (Linux).
     Unix(PathBuf),
+    /// A Unix stream socket at `path` for the messages, and the Mach
+    /// bootstrap service `service` the producer sends its IOSurface ports to
+    /// (macOS). The endpoint string spells it `transport=unix:<path>` and
+    /// `mach=<service>`.
+    UnixMach {
+        /// The socket.
+        path: PathBuf,
+        /// The bootstrap service name.
+        service: String,
+    },
+    /// A named pipe, `\\.\pipe\...`; the consumer copies each handle out of
+    /// the producer's process (Windows).
+    Pipe(String),
 }
 
 /// The GPU the consumer renders on, which the producer should pick before
@@ -34,6 +50,18 @@ pub enum AdapterHint {
         device_uuid: [u8; 16],
         /// `VkPhysicalDeviceIDProperties::driverUUID`.
         driver_uuid: [u8; 16],
+    },
+    /// A Direct3D 12 adapter: its LUID, `LowPart` then `HighPart`, each
+    /// little-endian (`dx:<16 hex digits>`).
+    D3d12 {
+        /// `DXGI_ADAPTER_DESC1::AdapterLuid` as bytes.
+        luid: [u8; 8],
+    },
+    /// A Metal device: its `registryID` (`mtl:<16 hex digits>`, the number
+    /// most significant digit first).
+    Metal {
+        /// `MTLDevice.registryID`.
+        registry_id: u64,
     },
 }
 
@@ -122,15 +150,26 @@ impl fmt::Display for Endpoint {
             Transport::Unix(path) => {
                 write!(f, ";transport=unix:{}", escape(&path.to_string_lossy()))?
             }
+            Transport::UnixMach { path, service } => write!(
+                f,
+                ";transport=unix:{};mach={}",
+                escape(&path.to_string_lossy()),
+                escape(service)
+            )?,
+            Transport::Pipe(name) => write!(f, ";transport=pipe:{}", escape(name))?,
         }
         write!(f, ";channel={}", escape(&self.channel))?;
         write!(f, ";token={}", hex(&self.token))?;
-        if let Some(AdapterHint::Vulkan {
-            device_uuid,
-            driver_uuid,
-        }) = &self.adapter
-        {
-            write!(f, ";adapter=vk:{}:{}", hex(device_uuid), hex(driver_uuid))?;
+        match &self.adapter {
+            Some(AdapterHint::Vulkan {
+                device_uuid,
+                driver_uuid,
+            }) => write!(f, ";adapter=vk:{}:{}", hex(device_uuid), hex(driver_uuid))?,
+            Some(AdapterHint::D3d12 { luid }) => write!(f, ";adapter=dx:{}", hex(luid))?,
+            Some(AdapterHint::Metal { registry_id }) => {
+                write!(f, ";adapter=mtl:{registry_id:016x}")?
+            }
+            None => {}
         }
         if let Some(name) = &self.adapter_name {
             write!(f, ";adapter-name={}", escape(name))?;
@@ -154,7 +193,7 @@ impl FromStr for Endpoint {
             None => return Err(EndpointError("empty".into())),
         }
         let (mut transport, mut channel, mut token) = (None, None, None);
-        let (mut adapter, mut adapter_name) = (None, None);
+        let (mut adapter, mut adapter_name, mut mach) = (None, None, None);
         for field in fields.filter(|f| !f.is_empty()) {
             let (key, value) = field
                 .split_once('=')
@@ -166,6 +205,9 @@ impl FromStr for Endpoint {
                         Some(("unix", path)) => {
                             transport = Some(Transport::Unix(PathBuf::from(path)));
                         }
+                        Some(("pipe", name)) => {
+                            transport = Some(Transport::Pipe(name.to_string()));
+                        }
                         _ => {
                             return Err(EndpointError(format!(
                                 "transport `{value}` is not one this build speaks"
@@ -173,6 +215,7 @@ impl FromStr for Endpoint {
                         }
                     }
                 }
+                "mach" => mach = Some(unescape(value)?),
                 "channel" => channel = Some(unescape(value)?),
                 "token" => {
                     token =
@@ -189,6 +232,16 @@ impl FromStr for Endpoint {
                             driver_uuid: unhex(driver)
                                 .ok_or_else(|| EndpointError("a bad driver uuid".into()))?,
                         }),
+                        (Some("dx"), Some(luid), None) => Some(AdapterHint::D3d12 {
+                            luid: unhex(luid)
+                                .ok_or_else(|| EndpointError("a bad adapter luid".into()))?,
+                        }),
+                        (Some("mtl"), Some(id), None) => Some(AdapterHint::Metal {
+                            registry_id: (id.len() == 16)
+                                .then(|| u64::from_str_radix(id, 16).ok())
+                                .flatten()
+                                .ok_or_else(|| EndpointError("a bad registry id".into()))?,
+                        }),
                         // An adapter in a form this build does not read is a
                         // hint it cannot use, not an error.
                         _ => None,
@@ -198,8 +251,13 @@ impl FromStr for Endpoint {
                 _ => {}
             }
         }
+        let transport = match (transport, mach) {
+            (Some(Transport::Unix(path)), Some(service)) => Transport::UnixMach { path, service },
+            (Some(transport), _) => transport,
+            (None, _) => return Err(EndpointError("no transport".into())),
+        };
         Ok(Endpoint {
-            transport: transport.ok_or_else(|| EndpointError("no transport".into()))?,
+            transport,
             channel: channel.ok_or_else(|| EndpointError("no channel".into()))?,
             token: token.ok_or_else(|| EndpointError("no token".into()))?,
             adapter,
@@ -242,10 +300,50 @@ mod tests {
         assert!("v1;channel=a".parse::<Endpoint>().is_err());
         let token = hex(&[7; 16]);
         let e: Endpoint =
-            format!("v1;transport=unix:/x;channel=a;token={token};future=1;adapter=dx:1")
+            format!("v1;transport=unix:/x;channel=a;token={token};future=1;adapter=gl:1")
                 .parse()
                 .expect("parses");
         assert_eq!(e.adapter, None);
         assert_eq!(e.token, [7; 16]);
+        assert!(
+            format!("v1;transport=unix:/x;channel=a;token={token};adapter=dx:12")
+                .parse::<Endpoint>()
+                .is_err(),
+            "a cut-off LUID"
+        );
+    }
+
+    /// The Windows and macOS transports and adapter forms survive the
+    /// string too.
+    #[test]
+    fn other_transports_round_trip() {
+        let pipe = Endpoint {
+            transport: Transport::Pipe(r"\\.\pipe\lumen-surface-1-ab".into()),
+            adapter: Some(AdapterHint::D3d12 {
+                luid: [1, 2, 3, 4, 5, 6, 7, 8],
+            }),
+            ..endpoint()
+        };
+        let s = pipe.to_string();
+        assert!(
+            s.contains(r";transport=pipe:\\.\pipe\lumen-surface-1-ab;"),
+            "{s}"
+        );
+        assert!(s.contains(";adapter=dx:0102030405060708"), "{s}");
+        assert_eq!(s.parse::<Endpoint>(), Ok(pipe));
+        let mach = Endpoint {
+            transport: Transport::UnixMach {
+                path: "/tmp/lumen-surface-501/1-ab.sock".into(),
+                service: "dev.lumenfx.surface.1-ab".into(),
+            },
+            adapter: Some(AdapterHint::Metal {
+                registry_id: 0x1000_0000_0000_0abc,
+            }),
+            ..endpoint()
+        };
+        let s = mach.to_string();
+        assert!(s.contains(";mach=dev.lumenfx.surface.1-ab;"), "{s}");
+        assert!(s.contains(";adapter=mtl:1000000000000abc"), "{s}");
+        assert_eq!(s.parse::<Endpoint>(), Ok(mach));
     }
 }

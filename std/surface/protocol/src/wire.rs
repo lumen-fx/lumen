@@ -13,8 +13,10 @@ use std::fmt;
 
 /// The protocol's major version. A peer on another major is refused.
 pub const MAJOR: u16 = 1;
-/// The protocol's minor version. Minors add messages and capability bits.
-pub const MINOR: u16 = 0;
+/// The protocol's minor version. Minors add messages, capability bits and
+/// enumeration values: 1 adds Direct3D 12 and Metal buffers and the BGRA
+/// format.
+pub const MINOR: u16 = 1;
 
 /// The largest frame, header included.
 pub const MAX_FRAME: usize = 64 * 1024;
@@ -62,6 +64,10 @@ pub enum Format {
     /// 8-bit RGBA holding sRGB-encoded colour: `VK_FORMAT_R8G8B8A8_SRGB`,
     /// `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB`.
     Rgba8Srgb = 1,
+    /// 8-bit BGRA holding sRGB-encoded colour:
+    /// `MTLPixelFormatBGRA8Unorm_sRGB` on an IOSurface of pixel format
+    /// `'BGRA'`.
+    Bgra8Srgb = 2,
 }
 
 impl Format {
@@ -70,9 +76,19 @@ impl Format {
         1 << (self as u32)
     }
 
+    /// The format a ring has on `api`: RGBA on Vulkan and Direct3D 12,
+    /// BGRA on Metal, where IOSurface and Metal agree on it.
+    pub fn for_api(api: Api) -> Self {
+        match api {
+            Api::Vulkan | Api::D3d12 => Format::Rgba8Srgb,
+            Api::Metal => Format::Bgra8Srgb,
+        }
+    }
+
     fn from_u32(n: u32) -> Result<Self, WireError> {
         match n {
             1 => Ok(Format::Rgba8Srgb),
+            2 => Ok(Format::Bgra8Srgb),
             other => Err(WireError::Value("format", u64::from(other))),
         }
     }
@@ -280,7 +296,7 @@ pub struct Reject {
 /// One buffer of a ring.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BufferDesc {
-    /// Allocation size in bytes.
+    /// Allocation size in bytes (Vulkan; D3D12 and Metal may leave it 0).
     pub alloc_size: u64,
     /// The memory type index the exporter allocated from (Vulkan).
     pub memory_type: u32,
@@ -291,8 +307,9 @@ pub struct BufferDesc {
     /// DRM format modifier, for a dma-buf export; 0 otherwise.
     pub modifier: u64,
     /// Linux: the index of this buffer's descriptor among those the frame
-    /// carries. Windows: the producer's handle value. macOS: the index of
-    /// its port.
+    /// carries. Windows: the producer's handle value, which the consumer
+    /// copies out of the producer's process. macOS: the index of its port
+    /// among those the Mach message for the ring carries.
     pub handle: u64,
 }
 
@@ -308,7 +325,8 @@ pub struct Buffers {
     /// Pixel format.
     pub format: Format,
     /// Usage bits the images were made with, in the API's own terms (Vulkan
-    /// `VkImageUsageFlags`); the importer makes its images with the same.
+    /// `VkImageUsageFlags`, Direct3D 12 `D3D12_RESOURCE_FLAGS`, Metal
+    /// `MTLTextureUsage`); the importer checks or repeats them.
     pub usage: u32,
     /// [`BUFFER_DEDICATED`] and later bits.
     pub flags: u32,

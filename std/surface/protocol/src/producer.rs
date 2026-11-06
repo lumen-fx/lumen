@@ -12,14 +12,13 @@
 //! waits for its own GPU, then calls [`Producer::frame_ready`]. Nothing here
 //! touches a graphics API.
 
-use crate::endpoint::{Endpoint, Transport};
-use crate::unix::{Connection, Received, Receiver, Sender, TransportError};
+use crate::endpoint::Endpoint;
+use crate::transport::{Connection, RawHandle, Received, Receiver, Sender, TransportError};
 use crate::wire::{
     AdapterId, Api, Buffers, ByeReason, FrameReady, InputEvent, MAJOR, MINOR, Message, Pacing,
     Reject, Welcome,
 };
 use std::collections::{HashMap, VecDeque};
-use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
 /// How long [`Producer::connect`] and [`Producer::offer_buffers`] wait for
@@ -187,9 +186,8 @@ impl Producer {
         let endpoint: Endpoint = endpoint
             .parse()
             .map_err(|e: crate::endpoint::EndpointError| ProducerError::Endpoint(e.to_string()))?;
-        let Transport::Unix(path) = &endpoint.transport;
-        let connection =
-            Connection::connect(path).map_err(|e| ProducerError::Transport(e.into()))?;
+        let connection = Connection::connect(&endpoint.transport)
+            .map_err(|e| ProducerError::Transport(e.into()))?;
         let (sender, mut receiver) = connection.split();
         sender.send(
             &Message::Hello(crate::wire::Hello {
@@ -242,9 +240,14 @@ impl Producer {
         &self.welcome
     }
 
-    /// Hand the consumer a new ring, the buffers' OS handles in `fds` (one
-    /// per buffer, in order). Waits for the consumer to import it, for as
-    /// long as the consumer keeps talking (see [`ANSWER_TIMEOUT`]). The ring
+    /// Hand the consumer a new ring, the buffers' OS handles in `handles`
+    /// (one per buffer, in order): file descriptors on Linux, NT handles on
+    /// Windows, IOSurface Mach ports on macOS. The caller keeps its own
+    /// handles; each buffer's [`BufferDesc::handle`](crate::wire::BufferDesc)
+    /// is filled in here as the transport needs it. Waits for the consumer
+    /// to import the ring, for as long as the consumer keeps talking (see
+    /// [`ANSWER_TIMEOUT`]); on Windows the handles must stay open until then,
+    /// since the consumer copies them out of this process. The ring
     /// replaces the previous one for new frames; slots of older rings come
     /// back as the consumer stops showing them.
     ///
@@ -253,12 +256,19 @@ impl Producer {
     /// The ring is empty or larger than the consumer takes, the consumer
     /// refused it (also queued as [`ProducerEvent::BuffersRejected`]), or
     /// the session ended.
-    pub fn offer_buffers(&mut self, buffers: Buffers, fds: &[RawFd]) -> Result<(), ProducerError> {
+    pub fn offer_buffers(
+        &mut self,
+        mut buffers: Buffers,
+        handles: &[RawHandle],
+    ) -> Result<(), ProducerError> {
         let count = buffers.buffers.len();
-        if count == 0 || count != fds.len() {
+        if count == 0 || count != handles.len() {
             return Err(ProducerError::Misuse(
-                "a ring needs one descriptor for each of at least one buffer",
+                "a ring needs one handle for each of at least one buffer",
             ));
+        }
+        for (i, (desc, handle)) in buffers.buffers.iter_mut().zip(handles).enumerate() {
+            desc.handle = handle_field(i, *handle);
         }
         let generation = buffers.generation;
         if self.rings.contains_key(&generation) {
@@ -266,7 +276,7 @@ impl Producer {
                 "that ring generation was offered already",
             ));
         }
-        self.sender.send(&Message::Buffers(buffers), fds)?;
+        self.sender.send(&Message::Buffers(buffers), handles)?;
         loop {
             match self.receiver.recv(Some(ANSWER_TIMEOUT))? {
                 Received::Message(Message::BuffersAccepted { generation: g }, _)
@@ -540,6 +550,21 @@ impl Producer {
         }
         Ok(())
     }
+}
+
+/// What a ring's `BufferDesc::handle` holds for buffer `index`: the handle
+/// value itself on Windows, where the consumer copies it out of this
+/// process; elsewhere the buffer's place among the handles that travel with
+/// the ring.
+#[cfg(windows)]
+fn handle_field(_index: usize, handle: RawHandle) -> u64 {
+    handle as usize as u64
+}
+
+/// See the Windows variant.
+#[cfg(not(windows))]
+fn handle_field(index: usize, _handle: RawHandle) -> u64 {
+    index as u64
 }
 
 /// When a frame's work happened, monotonic nanoseconds; 0 for unknown.

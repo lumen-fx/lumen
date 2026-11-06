@@ -43,10 +43,17 @@ and a producer already running can be handed the endpoint any other way.
 The producer speaks the Lumen surface protocol. It allocates a small ring of
 GPU images, exports them, and hands them over once; from then on it renders
 into an image the surface has given back, waits for its own GPU to finish, and
-announces the frame. Each image changes hands with a Vulkan queue family
-ownership transfer, in one fixed layout; the specification's "Ownership and
-layout" section says which barriers each side records. The specification is
+announces the frame. The specification is
 [`std/surface/protocol/SPEC.md`](https://github.com/lumen-fx/lumen/blob/main/std/surface/protocol/SPEC.md).
+
+The producer renders with the graphics API your app's renderer uses on that
+platform, and exports its images the way the specification says for it:
+
+| Platform | API | Images | Format |
+| --- | --- | --- | --- |
+| Linux | Vulkan | memory exported as `OPAQUE_FD`; each image changes hands with a queue family ownership transfer ("Ownership and layout") | RGBA |
+| Windows | Direct3D 12 | committed resources on a shared heap with `ALLOW_SIMULTANEOUS_ACCESS`, exported with `CreateSharedHandle` | RGBA |
+| macOS | Metal | IOSurfaces, sent as the ports `IOSurfaceCreateMachPort` gives | BGRA |
 
 - A Rust engine depends on the `lumen-surface-protocol` crate, which carries
   the connection, the handshake and the bookkeeping, and does its own GPU
@@ -55,7 +62,9 @@ layout" section says which barriers each side records. The specification is
   `lumen_surface_protocol.h`.
   [`producer/reference.c`](https://github.com/lumen-fx/lumen/blob/main/std/surface/protocol/producer/reference.c)
   is a complete producer in plain C and Vulkan: it is the shortest path to
-  your own.
+  your own on Linux.
+  [`tests/producer/mod.rs`](https://github.com/lumen-fx/lumen/blob/main/std/surface/tests/producer/mod.rs)
+  is the same producer in Rust for Direct3D 12 and Metal.
 
 The producer must render on the same GPU as your app. The endpoint string
 names it, and a producer started on another one is refused with the reason.
@@ -117,10 +126,9 @@ engine presents the textures it renders there. See
 
 - Shared frames need the GPU renderer. Under the CPU renderer a surface is
   `unsupported`, and in a web build it is a placeholder.
-- Surfaces work on Linux, with Vulkan on both sides of a producer in
-  another process. On Windows a surface has no endpoint, so only an engine
-  in your app can feed it, and on macOS a producer in another process is
-  refused.
+- A producer in another process renders with the same API as your app's
+  renderer: Vulkan on Linux, Direct3D 12 on Windows, Metal on macOS. A
+  producer on another API is refused with the reason `api`.
 - The frame is shown as it is: opaque, upright and unblended. Clipping by an
   ancestor and content painted over the surface work; under an `opacity`
   below 1 or a `mask-image` the frame is not drawn, and `surfaceerror` says

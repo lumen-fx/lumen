@@ -9,7 +9,9 @@
 //! explicit reserved fields; those an engine fills begin with `struct_size`
 //! so a later minor version can grow them.
 
+use crate::endpoint::AdapterHint;
 use crate::producer::{FrameTimes, Producer, ProducerError, ProducerEvent, ProducerHello, Slot};
+use crate::transport::raw_handle;
 use crate::wire::{AdapterId, Api, BufferDesc, Buffers, ByeReason, Format, InputEvent};
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
@@ -40,8 +42,15 @@ pub const LSP_ERR_PANIC: LspStatus = 8;
 
 /// `LspHello::api`: Vulkan.
 pub const LSP_API_VULKAN: u16 = 1;
-/// `LspBuffers::format`: 8-bit RGBA holding sRGB-encoded colour.
+/// `LspHello::api`: Direct3D 12.
+pub const LSP_API_D3D12: u16 = 2;
+/// `LspHello::api`: Metal.
+pub const LSP_API_METAL: u16 = 3;
+/// `LspBuffers::format`: 8-bit RGBA holding sRGB-encoded colour (Vulkan,
+/// Direct3D 12).
 pub const LSP_FORMAT_RGBA8_SRGB: u32 = 1;
+/// `LspBuffers::format`: 8-bit BGRA holding sRGB-encoded colour (Metal).
+pub const LSP_FORMAT_BGRA8_SRGB: u32 = 2;
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -88,7 +97,7 @@ pub struct LspProducer {
 pub struct LspHello {
     /// `sizeof(LspHello)`.
     pub struct_size: u32,
-    /// `LSP_API_VULKAN`.
+    /// `LSP_API_VULKAN`, `LSP_API_D3D12` or `LSP_API_METAL`.
     pub api: u16,
     /// Zero.
     pub reserved0: u16,
@@ -96,11 +105,12 @@ pub struct LspHello {
     pub caps: u32,
     /// Zero.
     pub reserved1: u32,
-    /// Vulkan `deviceUUID`.
+    /// Vulkan `deviceUUID`; zero elsewhere.
     pub device_uuid: [u8; 16],
-    /// Vulkan `driverUUID`.
+    /// Vulkan `driverUUID`; zero elsewhere.
     pub driver_uuid: [u8; 16],
-    /// Direct3D adapter LUID; zero elsewhere.
+    /// Direct3D adapter LUID, `LowPart` then `HighPart`, little-endian;
+    /// zero elsewhere.
     pub luid: [u8; 8],
     /// Metal `registryID`; zero elsewhere.
     pub registry_id: u64,
@@ -110,6 +120,26 @@ pub struct LspHello {
     pub device: u32,
     /// Engine name and version, NUL-terminated; may be null.
     pub engine: *const c_char,
+}
+
+/// The consumer's GPU, as an endpoint string names it: the fields of
+/// `api`'s form are set, the rest zero.
+#[repr(C)]
+pub struct LspAdapter {
+    /// Set to `sizeof(LspAdapter)` by the library.
+    pub struct_size: u32,
+    /// `LSP_API_VULKAN`, `LSP_API_D3D12` or `LSP_API_METAL`.
+    pub api: u16,
+    /// Zero.
+    pub reserved0: u16,
+    /// Vulkan `deviceUUID`.
+    pub device_uuid: [u8; 16],
+    /// Vulkan `driverUUID`.
+    pub driver_uuid: [u8; 16],
+    /// Direct3D adapter LUID, `LowPart` then `HighPart`, little-endian.
+    pub luid: [u8; 8],
+    /// Metal `registryID`.
+    pub registry_id: u64,
 }
 
 /// What the consumer said when it welcomed the producer.
@@ -133,7 +163,7 @@ pub struct LspWelcome {
     pub height: u32,
     /// Device pixels per logical pixel where frames show.
     pub scale: f32,
-    /// Format bits the consumer takes: `1 << LSP_FORMAT_RGBA8_SRGB`.
+    /// Format bits the consumer takes: `1 << LSP_FORMAT_*`.
     pub formats: u32,
     /// Zero.
     pub reserved1: u32,
@@ -145,9 +175,9 @@ pub struct LspWelcome {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LspBuffer {
-    /// Allocation size in bytes.
+    /// Allocation size in bytes (Vulkan; 0 elsewhere).
     pub alloc_size: u64,
-    /// Memory type index the allocation came from.
+    /// Memory type index the allocation came from (Vulkan; 0 elsewhere).
     pub memory_type: u32,
     /// Offset of the image in the allocation.
     pub offset: u32,
@@ -157,11 +187,12 @@ pub struct LspBuffer {
     pub reserved0: u32,
     /// DRM format modifier, 0 when not a dma-buf export.
     pub modifier: u64,
-    /// The exported file descriptor (Vulkan `OPAQUE_FD`). The library sends
-    /// a duplicate; the caller keeps its own.
-    pub fd: i32,
-    /// Zero.
-    pub reserved1: u32,
+    /// The buffer's exported handle, which the caller keeps: on Linux the
+    /// file descriptor `vkGetMemoryFdKHR` returned (`OPAQUE_FD`); on Windows
+    /// the NT handle `ID3D12Device::CreateSharedHandle` returned, as a
+    /// number, kept open until the ring is answered; on macOS the Mach send
+    /// right `IOSurfaceCreateMachPort` returned.
+    pub handle: u64,
 }
 
 /// A ring to offer. `struct_size` is `sizeof(LspBuffers)`.
@@ -175,9 +206,10 @@ pub struct LspBuffers {
     pub width: u32,
     /// Height in texture pixels.
     pub height: u32,
-    /// `LSP_FORMAT_RGBA8_SRGB`.
+    /// `LSP_FORMAT_RGBA8_SRGB`, or `LSP_FORMAT_BGRA8_SRGB` on Metal.
     pub format: u32,
-    /// `VkImageUsageFlags` the images were made with.
+    /// What the images were made for, in the API's terms:
+    /// `VkImageUsageFlags`, `D3D12_RESOURCE_FLAGS` or `MTLTextureUsage`.
     pub usage: u32,
     /// `LSP_BUFFER_DEDICATED` when each buffer is a dedicated allocation.
     pub flags: u32,
@@ -400,8 +432,8 @@ pub unsafe extern "C" fn lsp_connect(
         };
         let api = match hello.api {
             LSP_API_VULKAN => Api::Vulkan,
-            2 => Api::D3d12,
-            3 => Api::Metal,
+            LSP_API_D3D12 => Api::D3d12,
+            LSP_API_METAL => Api::Metal,
             _ => {
                 set_error("lsp_connect: unknown api");
                 return LSP_ERR_ARG;
@@ -481,8 +513,8 @@ fn with_producer(p: *mut LspProducer, f: impl FnOnce(&mut LspProducer) -> LspSta
     })
 }
 
-/// Offer a ring and wait for the consumer to import it. The descriptors are
-/// duplicated into the consumer; the caller keeps its own.
+/// Offer a ring and wait for the consumer to import it. The handles are
+/// copied into the consumer; the caller keeps its own.
 ///
 /// # Safety
 ///
@@ -508,36 +540,46 @@ pub unsafe extern "C" fn lsp_offer_buffers(
             set_error("lsp_offer_buffers: a bad ring description");
             return LSP_ERR_ARG;
         }
-        if b.format != LSP_FORMAT_RGBA8_SRGB {
-            set_error("lsp_offer_buffers: unknown format");
-            return LSP_ERR_ARG;
-        }
+        let format = match b.format {
+            LSP_FORMAT_RGBA8_SRGB => Format::Rgba8Srgb,
+            LSP_FORMAT_BGRA8_SRGB => Format::Bgra8Srgb,
+            _ => {
+                set_error("lsp_offer_buffers: unknown format");
+                return LSP_ERR_ARG;
+            }
+        };
         // SAFETY: `count` entries by contract.
         let list = unsafe { std::slice::from_raw_parts(b.buffers, b.count as usize) };
+        let Some(handles) = list
+            .iter()
+            .map(|d| raw_handle(d.handle))
+            .collect::<Option<Vec<_>>>()
+        else {
+            set_error("lsp_offer_buffers: a buffer's handle is not one this platform has");
+            return LSP_ERR_ARG;
+        };
         let descs = list
             .iter()
-            .enumerate()
-            .map(|(i, d)| BufferDesc {
+            .map(|d| BufferDesc {
                 alloc_size: d.alloc_size,
                 memory_type: d.memory_type,
                 offset: d.offset,
                 row_pitch: d.row_pitch,
                 modifier: d.modifier,
-                handle: i as u64,
+                handle: 0,
             })
             .collect();
-        let fds: Vec<i32> = list.iter().map(|d| d.fd).collect();
         match p.producer.offer_buffers(
             Buffers {
                 generation: b.generation,
                 width: b.width,
                 height: b.height,
-                format: Format::Rgba8Srgb,
+                format,
                 usage: b.usage,
                 flags: b.flags,
                 buffers: descs,
             },
-            &fds,
+            &handles,
         ) {
             Ok(()) => LSP_OK,
             Err(ProducerError::Misuse(m)) if m.contains("refused") => {
@@ -897,24 +939,22 @@ pub unsafe extern "C" fn lsp_close(p: *mut LspProducer) {
     }));
 }
 
-/// Read the consumer's GPU from an endpoint string: the Vulkan device and
-/// driver UUIDs to pick a physical device by before making the producer's
-/// own device. `LSP_ERR_ARG` when the string names none (the consumer's
-/// renderer had not started when it was made); `LSP_ERR_ENDPOINT` when it
-/// does not parse.
+/// Read the consumer's GPU from an endpoint string, to pick the producer's
+/// adapter by before making its device: the Vulkan device and driver UUIDs,
+/// the Direct3D 12 adapter LUID, or the Metal registry id, by `out->api`.
+/// `LSP_ERR_ARG` when the string names none (the consumer's renderer had not
+/// started when it was made); `LSP_ERR_ENDPOINT` when it does not parse.
 ///
 /// # Safety
 ///
-/// `endpoint` is a NUL-terminated string; `device_uuid` and `driver_uuid`
-/// point at 16 writable bytes each.
+/// `endpoint` is a NUL-terminated string; `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lsp_endpoint_adapter(
     endpoint: *const c_char,
-    device_uuid: *mut u8,
-    driver_uuid: *mut u8,
+    out: *mut LspAdapter,
 ) -> LspStatus {
     guard(|| {
-        if endpoint.is_null() || device_uuid.is_null() || driver_uuid.is_null() {
+        if endpoint.is_null() || out.is_null() {
             set_error("lsp_endpoint_adapter: a null argument");
             return LSP_ERR_ARG;
         }
@@ -927,23 +967,40 @@ pub unsafe extern "C" fn lsp_endpoint_adapter(
                 return LSP_ERR_ENDPOINT;
             }
         };
+        let mut adapter = LspAdapter {
+            struct_size: std::mem::size_of::<LspAdapter>() as u32,
+            api: 0,
+            reserved0: 0,
+            device_uuid: [0; 16],
+            driver_uuid: [0; 16],
+            luid: [0; 8],
+            registry_id: 0,
+        };
         match parsed.adapter {
-            Some(crate::endpoint::AdapterHint::Vulkan {
-                device_uuid: device,
-                driver_uuid: driver,
+            Some(AdapterHint::Vulkan {
+                device_uuid,
+                driver_uuid,
             }) => {
-                // SAFETY: 16 writable bytes each, by contract.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(device.as_ptr(), device_uuid, 16);
-                    std::ptr::copy_nonoverlapping(driver.as_ptr(), driver_uuid, 16);
-                }
-                LSP_OK
+                adapter.api = LSP_API_VULKAN;
+                adapter.device_uuid = device_uuid;
+                adapter.driver_uuid = driver_uuid;
+            }
+            Some(AdapterHint::D3d12 { luid }) => {
+                adapter.api = LSP_API_D3D12;
+                adapter.luid = luid;
+            }
+            Some(AdapterHint::Metal { registry_id }) => {
+                adapter.api = LSP_API_METAL;
+                adapter.registry_id = registry_id;
             }
             None => {
                 set_error("the endpoint names no GPU");
-                LSP_ERR_ARG
+                return LSP_ERR_ARG;
             }
         }
+        // SAFETY: non-null and writable by contract.
+        unsafe { *out = adapter };
+        LSP_OK
     })
 }
 
@@ -1022,5 +1079,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<LspSlot>(), 8);
         assert_eq!(std::mem::size_of::<LspFrame>(), 56);
         assert_eq!(std::mem::size_of::<LspEvent>(), 136);
+        assert_eq!(std::mem::size_of::<LspAdapter>(), 56);
     }
 }

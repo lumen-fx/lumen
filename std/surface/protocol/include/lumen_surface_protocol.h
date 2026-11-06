@@ -11,7 +11,8 @@
  *
  *   LspProducer *p = lsp_connect(getenv("LUMEN_SURFACE"), &hello, &welcome, &st);
  *   // allocate welcome.ring_pref images of welcome.width x welcome.height,
- *   // export each, then:
+ *   // export each (a Vulkan OPAQUE_FD on Linux, a D3D12 shared NT handle on
+ *   // Windows, an IOSurface Mach port on macOS), then:
  *   lsp_offer_buffers(p, &ring);
  *   for (;;) {
  *       LspEvent ev;
@@ -40,37 +41,40 @@
 extern "C" {
 #endif
 
-/* The protocol version this header describes: major 1, minor 0. */
+/* The protocol version this header describes: major 1, minor 1. */
 #define LSP_VERSION_MAJOR 1u
-#define LSP_VERSION_MINOR 0u
+#define LSP_VERSION_MINOR 1u
 
 typedef uint32_t LspStatus;
 #define LSP_OK 0u
 #define LSP_ERR_ARG 1u        /* a null, too small or out-of-range argument */
 #define LSP_ERR_ENDPOINT 2u   /* the endpoint string does not parse */
-#define LSP_ERR_IO 3u         /* the socket failed */
+#define LSP_ERR_IO 3u         /* the connection failed */
 #define LSP_ERR_REJECTED 4u   /* the consumer refused the producer or a ring */
 #define LSP_ERR_TIMEOUT 5u    /* nothing came in time */
 #define LSP_ERR_CLOSED 6u     /* the session is over */
 #define LSP_ERR_MISUSE 7u     /* a call broke the protocol's rules */
 #define LSP_ERR_PANIC 8u      /* an internal failure; do not use the producer again */
 
-#define LSP_API_VULKAN 1u
-#define LSP_FORMAT_RGBA8_SRGB 1u /* VK_FORMAT_R8G8B8A8_SRGB */
+#define LSP_API_VULKAN 1u        /* Linux */
+#define LSP_API_D3D12 2u         /* Windows */
+#define LSP_API_METAL 3u         /* macOS */
+#define LSP_FORMAT_RGBA8_SRGB 1u /* VK_FORMAT_R8G8B8A8_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB */
+#define LSP_FORMAT_BGRA8_SRGB 2u /* MTLPixelFormatBGRA8Unorm_sRGB on a 'BGRA' IOSurface */
 #define LSP_BUFFER_DEDICATED 1u  /* each buffer is a dedicated allocation */
 
 typedef struct LspProducer LspProducer;
 
 typedef struct LspHello {
     uint32_t struct_size;   /* sizeof(LspHello) */
-    uint16_t api;           /* LSP_API_VULKAN */
+    uint16_t api;           /* LSP_API_* */
     uint16_t reserved0;
     uint32_t caps;          /* 0 in version 1 */
     uint32_t reserved1;
-    uint8_t device_uuid[16]; /* VkPhysicalDeviceIDProperties::deviceUUID */
-    uint8_t driver_uuid[16]; /* VkPhysicalDeviceIDProperties::driverUUID */
-    uint8_t luid[8];        /* 0 on Vulkan */
-    uint64_t registry_id;   /* 0 on Vulkan */
+    uint8_t device_uuid[16]; /* Vulkan: VkPhysicalDeviceIDProperties::deviceUUID */
+    uint8_t driver_uuid[16]; /* Vulkan: VkPhysicalDeviceIDProperties::driverUUID */
+    uint8_t luid[8];        /* D3D12: the adapter LUID, LowPart then HighPart, little-endian */
+    uint64_t registry_id;   /* Metal: MTLDevice.registryID */
     uint32_t vendor;        /* PCI vendor id */
     uint32_t device;        /* PCI device id */
     const char *engine;     /* "name version", may be NULL */
@@ -92,14 +96,18 @@ typedef struct LspWelcome {
 } LspWelcome;
 
 typedef struct LspBuffer {
-    uint64_t alloc_size;    /* VkMemoryRequirements::size of the image */
-    uint32_t memory_type;   /* the memory type index it was allocated from */
+    uint64_t alloc_size;    /* Vulkan: VkMemoryRequirements::size of the image; else 0 */
+    uint32_t memory_type;   /* Vulkan: the memory type index it was allocated from; else 0 */
     uint32_t offset;        /* 0 for a dedicated allocation */
     uint32_t row_pitch;     /* 0 for optimal tiling */
     uint32_t reserved0;
     uint64_t modifier;      /* 0 for OPAQUE_FD */
-    int32_t fd;             /* vkGetMemoryFdKHR(OPAQUE_FD); the caller keeps it */
-    uint32_t reserved1;
+    /* The exported handle; the caller keeps it. Linux: the file descriptor
+     * vkGetMemoryFdKHR(OPAQUE_FD) returned. Windows: the NT handle
+     * ID3D12Device::CreateSharedHandle returned, kept open until
+     * lsp_offer_buffers returns (the consumer copies it out of this process).
+     * macOS: the send right IOSurfaceCreateMachPort returned. */
+    uint64_t handle;
 } LspBuffer;
 
 typedef struct LspBuffers {
@@ -107,8 +115,8 @@ typedef struct LspBuffers {
     uint32_t generation;    /* 1 for the first ring, one more for each new one */
     uint32_t width;
     uint32_t height;
-    uint32_t format;        /* LSP_FORMAT_RGBA8_SRGB */
-    uint32_t usage;         /* the VkImageUsageFlags the images were made with */
+    uint32_t format;        /* LSP_FORMAT_RGBA8_SRGB; LSP_FORMAT_BGRA8_SRGB on Metal */
+    uint32_t usage;         /* VkImageUsageFlags, D3D12_RESOURCE_FLAGS or MTLTextureUsage */
     uint32_t flags;         /* LSP_BUFFER_DEDICATED */
     uint32_t count;         /* 2 to 4 */
     const LspBuffer *buffers;
@@ -125,7 +133,8 @@ typedef struct LspFrame {
     uint32_t slot;
     uint32_t meta_len;      /* at most 4096 */
     const uint8_t *meta;    /* bytes the consumer's app reads with the frame */
-    uint64_t t_sim;         /* CLOCK_MONOTONIC nanoseconds, 0 if unknown */
+    uint64_t t_sim;         /* monotonic nanoseconds (CLOCK_MONOTONIC; Windows:
+                             * QueryPerformanceCounter), 0 if unknown */
     uint64_t t_submit;
     uint64_t t_gpu_done;    /* 0 takes the moment of the call */
     uint64_t input_seq;     /* newest input applied; 0 takes the newest read */
@@ -173,7 +182,7 @@ typedef struct LspEvent {
     uint32_t struct_size;
     uint32_t kind;          /* LSP_EVENT_* */
     uint64_t seq;           /* input sequence number */
-    uint64_t time;          /* input time, CLOCK_MONOTONIC nanoseconds */
+    uint64_t time;          /* input time, monotonic nanoseconds */
     uint32_t input_kind;    /* LSP_INPUT_* */
     uint32_t width;         /* resize */
     uint32_t height;
@@ -200,6 +209,18 @@ typedef struct LspEvent {
     uint64_t data_len;
 } LspEvent;
 
+/* The consumer's GPU as an endpoint string names it: the fields of api's
+ * form are set, the rest 0. */
+typedef struct LspAdapter {
+    uint32_t struct_size;   /* written by the library */
+    uint16_t api;           /* LSP_API_* */
+    uint16_t reserved0;
+    uint8_t device_uuid[16]; /* Vulkan */
+    uint8_t driver_uuid[16]; /* Vulkan */
+    uint8_t luid[8];        /* D3D12, LowPart then HighPart, little-endian */
+    uint64_t registry_id;   /* Metal */
+} LspAdapter;
+
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(void *) != 8 || sizeof(LspHello) == 80, "LspHello layout");
 _Static_assert(sizeof(void *) != 8 || sizeof(LspWelcome) == 40, "LspWelcome layout");
@@ -207,6 +228,7 @@ _Static_assert(sizeof(LspBuffer) == 40, "LspBuffer layout");
 _Static_assert(sizeof(void *) != 8 || sizeof(LspBuffers) == 40, "LspBuffers layout");
 _Static_assert(sizeof(void *) != 8 || sizeof(LspFrame) == 56, "LspFrame layout");
 _Static_assert(sizeof(void *) != 8 || sizeof(LspEvent) == 136, "LspEvent layout");
+_Static_assert(sizeof(LspAdapter) == 56, "LspAdapter layout");
 #endif
 
 /* The protocol version the library speaks: major << 16 | minor. */
@@ -224,8 +246,8 @@ LspProducer *lsp_connect(const char *endpoint, const LspHello *hello, LspWelcome
 
 /* Offer a ring and wait for the consumer to import it, for as long as the
  * consumer keeps sending (it pings while its GPU prepares the images);
- * LSP_ERR_TIMEOUT after 5 s in which it sent nothing. The descriptors are
- * duplicated; the caller keeps its own. */
+ * LSP_ERR_TIMEOUT after 5 s in which it sent nothing. The handles are
+ * duplicated into the consumer; the caller keeps its own. */
 LspStatus lsp_offer_buffers(LspProducer *p, const LspBuffers *buffers);
 
 /* Wait at most timeout_ms for a slot to render into: free, and in paced mode
@@ -256,10 +278,11 @@ LspStatus lsp_send_user(LspProducer *p, const uint8_t *bytes, uint32_t len);
 /* End the session and free the producer. NULL is ignored. */
 void lsp_close(LspProducer *p);
 
-/* The consumer's GPU from an endpoint string: the Vulkan deviceUUID and
- * driverUUID (16 bytes each) to pick a physical device by before making the
- * producer's device. LSP_ERR_ARG when the string names none. */
-LspStatus lsp_endpoint_adapter(const char *endpoint, uint8_t *device_uuid, uint8_t *driver_uuid);
+/* The consumer's GPU from an endpoint string, to pick the producer's adapter
+ * by before making its device: the Vulkan device and driver UUIDs, the D3D12
+ * adapter LUID (IDXGIFactory4::EnumAdapterByLuid) or the Metal registry id,
+ * by out->api. LSP_ERR_ARG when the string names none. */
+LspStatus lsp_endpoint_adapter(const char *endpoint, LspAdapter *out);
 
 /* The DOM code name ("KeyW", "ShiftLeft") of a key code; a static string. */
 const char *lsp_key_code_name(uint16_t code);

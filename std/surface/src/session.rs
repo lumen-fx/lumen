@@ -211,7 +211,7 @@ pub struct Shared {
     token: [u8; 16],
     /// Where producers connect; `None` on a platform with no transport,
     /// where only an in-process producer feeds the surface.
-    path: Option<std::path::PathBuf>,
+    transport: Option<Transport>,
     adapter_hint: Mutex<Option<(AdapterHint, String)>>,
     /// Where the element showed in the last frame painted, in logical
     /// pixels: `x, y, width, height`. `None` when it was not drawn.
@@ -219,7 +219,8 @@ pub struct Shared {
     /// The last reason a draw of the surface was refused, so each is
     /// reported once.
     refused: Mutex<Option<&'static str>>,
-    /// The OS identity (device and inode) of each handle of the newest ring.
+    /// The OS identity of each handle of the newest ring (see
+    /// [`Shared::buffer_identities`]).
     buffers: Mutex<Vec<(u64, u64)>>,
     inner: Mutex<Inner>,
     /// Wakes the app when something happened; set once a window backend
@@ -237,7 +238,7 @@ impl Shared {
     /// The endpoint string a producer connects with, or `None` on a
     /// platform with no transport for one.
     pub fn endpoint(&self) -> Option<String> {
-        let path = self.path.clone()?;
+        let transport = self.transport.clone()?;
         let hint = self
             .adapter_hint
             .lock()
@@ -245,7 +246,7 @@ impl Shared {
             .clone();
         Some(
             Endpoint {
-                transport: Transport::Unix(path),
+                transport,
                 channel: self.channel.clone(),
                 token: self.token,
                 adapter: hint.as_ref().map(|(h, _)| *h),
@@ -260,10 +261,12 @@ impl Shared {
         *self.adapter_hint.lock().unwrap_or_else(|e| e.into_inner()) = hint;
     }
 
-    /// The OS identity of each shared buffer of the ring in use: the device
-    /// and inode of the handle the producer sent. The producer's own handles
-    /// to the same buffers have the same identity, which is how a test (or a
-    /// person) sees that frames are shared rather than copied.
+    /// The OS identity of each shared buffer of the ring in use: on Linux the
+    /// device and inode of the handle the producer sent, on macOS zero and
+    /// the IOSurface's global id; empty on Windows, whose shared-resource
+    /// handles have no identity readable across processes. The producer's own
+    /// handles to the same buffers have the same identity, which is how a
+    /// test (or a person) sees that frames are shared rather than copied.
     pub fn buffer_identities(&self) -> Vec<(u64, u64)> {
         self.buffers
             .lock()
@@ -601,7 +604,7 @@ pub fn start<B: Backend>(id: &str, channel: &str, backend: Arc<B>) -> std::io::R
         id: id.to_string(),
         channel: channel.to_string(),
         token,
-        path: listener.as_ref().map(|l| l.path().to_path_buf()),
+        transport: listener.as_ref().map(Listener::transport),
         adapter_hint: Mutex::new(None),
         placement: Mutex::new(None),
         refused: Mutex::new(None),
@@ -741,9 +744,10 @@ fn serve<B: Backend>(
             sender: sender.clone(),
             session,
         });
+        let api = expected.api.expect("checked: a device");
         Welcome {
             session,
-            api: expected.api.expect("checked: a device"),
+            api,
             pacing: inner.pacing,
             ring_min: 2,
             ring_max: lumen_surface_protocol::wire::MAX_RING as u8,
@@ -751,7 +755,7 @@ fn serve<B: Backend>(
             width: wanted.width,
             height: wanted.height,
             scale: wanted.scale,
-            formats: Format::Rgba8Srgb.bit(),
+            formats: Format::for_api(api).bit(),
             caps: 0,
         }
     };
@@ -1142,7 +1146,7 @@ fn housekeeping(
 }
 
 /// The OS identity of a shared buffer's handle: its device and inode.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn identity(handle: &Handle) -> Option<(u64, u64)> {
     use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
@@ -1151,8 +1155,16 @@ fn identity(handle: &Handle) -> Option<(u64, u64)> {
     Some((meta.dev(), meta.ino()))
 }
 
-/// The OS identity of a shared buffer's handle.
-#[cfg(not(unix))]
+/// The OS identity of a shared buffer's handle: the global id of the
+/// IOSurface its port names.
+#[cfg(target_os = "macos")]
 fn identity(handle: &Handle) -> Option<(u64, u64)> {
-    match *handle {}
+    let surface = objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(handle.as_raw())?;
+    Some((0, u64::from(surface.id())))
+}
+
+/// A shared buffer's handle has no identity readable across processes.
+#[cfg(not(unix))]
+fn identity(_handle: &Handle) -> Option<(u64, u64)> {
+    None
 }
