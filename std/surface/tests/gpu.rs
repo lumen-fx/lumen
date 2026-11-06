@@ -452,6 +452,14 @@ mod cross_process {
         out
     }
 
+    /// Print a line the producer printed on this process's standard error,
+    /// past the test harness's capture: the other process's own account of
+    /// a run shows in the log of a passing test too.
+    fn show(line: &str) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), "{line}");
+    }
+
     /// A running reference producer and what it printed.
     struct Running {
         child: Child,
@@ -472,7 +480,7 @@ mod cross_process {
             let sink = log.clone();
             std::thread::spawn(move || {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    eprintln!("{line}");
+                    show(&line);
                     sink.lock().unwrap().push(line);
                 }
             });
@@ -480,7 +488,7 @@ mod cross_process {
             let stdout = child.stdout.take().unwrap();
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    eprintln!("producer: {line}");
+                    show(&format!("producer: {line}"));
                     if line.contains("Validation Error") || line.contains("Validation Warning") {
                         VALIDATION
                             .lock()
