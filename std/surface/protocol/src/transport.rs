@@ -1,23 +1,35 @@
 //! The transport a session runs over, whichever the platform has.
 //!
-//! On Unix it is the [`unix`](crate::unix) stream socket, with handles passed
-//! as file descriptors. A platform with no transport yet builds the same
-//! names, so a consumer compiles everywhere: a listener there does not bind,
-//! failing with [`io::ErrorKind::Unsupported`], so no connection is made.
+//! - Linux: the [`unix`](crate::unix) stream socket, with handles passed as
+//!   file descriptors alongside the frames that name them.
+//! - macOS: the same socket for the messages; the IOSurface ports a ring
+//!   names travel in a Mach message to a bootstrap service the consumer
+//!   checked in ([`mach`](crate::mach)).
+//! - Windows: a [`pipe`](crate::pipe), a named pipe only the current user can
+//!   open; the consumer copies each handle a ring names out of the
+//!   producer's process.
+//!
+//! A platform with none of these builds the same names, so a consumer
+//! compiles everywhere: a listener there does not bind, failing with
+//! [`io::ErrorKind::Unsupported`], so no connection is made.
+//!
+//! Every platform's transport has the same shape: a [`Listener`] the
+//! consumer binds and names in its endpoint string, a [`Connection`] a
+//! producer opens to it, split into a [`Sender`] (cloneable, each frame
+//! written whole) and a [`Receiver`] that returns each message with the OS
+//! handles it carries, as [`Handle`]s this process owns.
 
 use crate::wire::{Message, WireError};
 use std::io;
 
-/// An OS handle to shared memory, as it arrives with a frame: a file
-/// descriptor on Unix.
+#[cfg(windows)]
+pub use crate::pipe::{
+    Connection, Handle, Listener, RawHandle, Receiver, Sender, random_bytes, raw_handle,
+};
 #[cfg(unix)]
-pub type Handle = std::os::fd::OwnedFd;
-/// An OS handle as a sender attaches it, borrowed for the call.
-#[cfg(unix)]
-pub type RawHandle = std::os::fd::RawFd;
-
-#[cfg(unix)]
-pub use crate::unix::{Connection, Listener, Receiver, Sender, random_bytes};
+pub use crate::unix::{
+    Connection, Handle, Listener, RawHandle, Receiver, Sender, random_bytes, raw_handle,
+};
 
 /// What went wrong on a connection.
 #[derive(Debug)]
@@ -67,17 +79,17 @@ pub enum Received {
     Closed,
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub use none::*;
 
-/// The names of a transport, on a platform that has none yet. Nothing here
-/// can connect: a listener does not bind, so no connection is ever made.
-#[cfg(not(unix))]
+/// The names of a transport, on a platform that has none. Nothing here can
+/// connect: a listener does not bind, so no connection is ever made.
+#[cfg(not(any(unix, windows)))]
 mod none {
     use super::{Received, TransportError};
+    use crate::endpoint::Transport;
     use crate::wire::Message;
     use std::io;
-    use std::path::Path;
     use std::time::Duration;
 
     /// No handle can arrive.
@@ -87,10 +99,15 @@ mod none {
     #[derive(Clone, Copy, Debug)]
     pub enum RawHandle {}
 
+    /// No handle can be attached.
+    pub fn raw_handle(_value: u64) -> Option<RawHandle> {
+        None
+    }
+
     fn unsupported() -> io::Error {
         io::Error::new(
             io::ErrorKind::Unsupported,
-            "the surface protocol has no transport on this platform yet",
+            "the surface protocol has no transport on this platform",
         )
     }
 
@@ -103,8 +120,11 @@ mod none {
         Err(unsupported())
     }
 
+    /// No value: nothing here is ever made.
+    enum Never {}
+
     /// A listener. None binds.
-    pub struct Listener(());
+    pub struct Listener(Never);
 
     impl Listener {
         /// # Errors
@@ -114,9 +134,9 @@ mod none {
             Err(unsupported())
         }
 
-        /// Where the listener is: nowhere.
-        pub fn path(&self) -> &Path {
-            Path::new("")
+        /// Where the listener is; never called, as none binds.
+        pub fn transport(&self) -> Transport {
+            match self.0 {}
         }
 
         /// No connection ever arrives.
@@ -125,24 +145,24 @@ mod none {
         ///
         /// None.
         pub fn accept(&self, _timeout: Option<Duration>) -> io::Result<Option<Connection>> {
-            Ok(None)
+            match self.0 {}
         }
     }
 
     /// A connection. None is made.
-    pub struct Connection(());
+    pub struct Connection(Never);
 
     impl Connection {
         /// # Errors
         ///
         /// Always [`io::ErrorKind::Unsupported`].
-        pub fn connect(_path: &Path) -> io::Result<Self> {
+        pub fn connect(_transport: &Transport) -> io::Result<Self> {
             Err(unsupported())
         }
 
         /// The two halves.
         pub fn split(self) -> (Sender, Receiver) {
-            (Sender(()), Receiver(()))
+            match self.0 {}
         }
     }
 

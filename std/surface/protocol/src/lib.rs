@@ -13,7 +13,9 @@
 //! - [`endpoint`]: the one-line string that tells a producer where to
 //!   connect;
 //! - [`keys`]: the key-code table key inputs are numbered from;
-//! - [`unix`]: the Unix-socket transport, descriptors passed with frames;
+//! - [`transport`]: the platform's transport: [`unix`] sockets (with
+//!   descriptors on Linux, Mach ports beside them on macOS) or Windows named
+//!   pipes;
 //! - [`producer`]: the producer's bookkeeping (pacing, slot reuse, events);
 //! - [`consumer`]: the consumer's handshake checks;
 //! - [`ffi`]: the producer role as a C ABI (`lumen_surface_protocol.h`), for
@@ -26,10 +28,14 @@
 
 pub mod consumer;
 pub mod endpoint;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod ffi;
 pub mod keys;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+pub mod mach;
+#[cfg(windows)]
+pub mod pipe;
+#[cfg(any(unix, windows))]
 pub mod producer;
 pub mod transport;
 #[cfg(unix)]
@@ -38,7 +44,7 @@ pub mod wire;
 
 /// Now on the machine's monotonic clock, in nanoseconds: the clock every
 /// timestamp in the protocol is on, the same for both processes
-/// (`CLOCK_MONOTONIC` on Linux).
+/// (`CLOCK_MONOTONIC` on Linux and macOS).
 #[cfg(unix)]
 pub fn monotonic_ns() -> u64 {
     let mut ts = libc::timespec {
@@ -54,10 +60,28 @@ pub fn monotonic_ns() -> u64 {
         .saturating_add(ts.tv_nsec as u64)
 }
 
+/// Now on the machine's monotonic clock, in nanoseconds: the clock every
+/// timestamp in the protocol is on, the same for both processes
+/// (`QueryPerformanceCounter` on Windows).
+#[cfg(windows)]
+pub fn monotonic_ns() -> u64 {
+    use windows_sys::Win32::System::Performance::{
+        QueryPerformanceCounter, QueryPerformanceFrequency,
+    };
+    let (mut count, mut frequency) = (0i64, 0i64);
+    // SAFETY: each call writes one i64; neither fails on Windows XP or later.
+    unsafe {
+        QueryPerformanceCounter(&mut count);
+        QueryPerformanceFrequency(&mut frequency);
+    }
+    let ns = (count.max(0) as u128) * 1_000_000_000 / (frequency.max(1) as u128);
+    u64::try_from(ns).unwrap_or(u64::MAX)
+}
+
 /// Now on a clock that only moves forward, in nanoseconds. A platform with no
-/// transport yet has no clock shared with another process, so this one
-/// counts from the first call.
-#[cfg(not(unix))]
+/// transport has no clock shared with another process, so this one counts
+/// from the first call.
+#[cfg(not(any(unix, windows)))]
 pub fn monotonic_ns() -> u64 {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let start = *START.get_or_init(std::time::Instant::now);

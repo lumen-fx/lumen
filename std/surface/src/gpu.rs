@@ -58,16 +58,18 @@ pub fn publish(context: &GpuContext, textures: &GpuTextures) -> bool {
 
 /// The device's identity and the hint a producer picks its GPU by.
 pub fn adapter_hint(gpu: &Gpu) -> Option<(AdapterHint, String)> {
-    match gpu.adapter {
-        Some((Api::Vulkan, id)) => Some((
-            AdapterHint::Vulkan {
-                device_uuid: id.device_uuid,
-                driver_uuid: id.driver_uuid,
-            },
-            gpu.context.info.name.clone(),
-        )),
-        _ => None,
-    }
+    let (api, id) = gpu.adapter?;
+    let hint = match api {
+        Api::Vulkan => AdapterHint::Vulkan {
+            device_uuid: id.device_uuid,
+            driver_uuid: id.driver_uuid,
+        },
+        Api::D3d12 => AdapterHint::D3d12 { luid: id.luid },
+        Api::Metal => AdapterHint::Metal {
+            registry_id: id.registry_id,
+        },
+    };
+    Some((hint, gpu.context.info.name.clone()))
 }
 
 /// What a session imports into and presents through: the renderer's device
@@ -129,6 +131,14 @@ fn identify(context: &GpuContext) -> Option<(Api, AdapterId)> {
     if context.info.backend == wgpu::Backend::Vulkan {
         return vulkan::identify(context).map(|id| (Api::Vulkan, id));
     }
+    #[cfg(windows)]
+    if context.info.backend == wgpu::Backend::Dx12 {
+        return dx12::identify(context).map(|id| (Api::D3d12, id));
+    }
+    #[cfg(target_os = "macos")]
+    if context.info.backend == wgpu::Backend::Metal {
+        return metal::identify(context).map(|id| (Api::Metal, id));
+    }
     let _ = context;
     None
 }
@@ -137,14 +147,276 @@ fn identify(context: &GpuContext) -> Option<(Api, AdapterId)> {
 fn import(
     context: &GpuContext,
     buffers: &Buffers,
-    fds: Vec<Handle>,
+    handles: Vec<Handle>,
 ) -> Result<Imported<wgpu::Texture>, String> {
     #[cfg(target_os = "linux")]
     if context.info.backend == wgpu::Backend::Vulkan {
-        return vulkan::import(context, buffers, fds);
+        return vulkan::import(context, buffers, handles);
     }
-    let _ = (context, buffers, fds);
-    Err("this build imports shared frames only from Vulkan".into())
+    #[cfg(windows)]
+    if context.info.backend == wgpu::Backend::Dx12 {
+        return dx12::import(context, buffers, handles);
+    }
+    #[cfg(target_os = "macos")]
+    if context.info.backend == wgpu::Backend::Metal {
+        return metal::import(context, buffers, handles);
+    }
+    let _ = (context, buffers, handles);
+    Err(format!(
+        "this build imports shared frames from Vulkan on Linux, Direct3D 12 on Windows and \
+         Metal on macOS, not from {:?}",
+        context.info.backend
+    ))
+}
+
+/// The checks every importer makes before touching the GPU: the ring's
+/// format is the one its API's rings have, and its size fits the device.
+fn check_ring(context: &GpuContext, buffers: &Buffers, api: Api) -> Result<(), String> {
+    let want = lumen_surface_protocol::wire::Format::for_api(api);
+    if buffers.format != want {
+        return Err(format!(
+            "a {api:?} ring is {want:?}, not {:?}",
+            buffers.format
+        ));
+    }
+    if buffers.width == 0 || buffers.height == 0 {
+        return Err("the buffers have no area".into());
+    }
+    let max = context.device.limits().max_texture_dimension_2d;
+    if buffers.width > max || buffers.height > max {
+        return Err(format!("the buffers are larger than {max} pixels a side"));
+    }
+    Ok(())
+}
+
+/// The texture an imported image becomes: sampled only, one mip, one layer.
+fn frame_descriptor(
+    buffers: &Buffers,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureDescriptor<'static> {
+    wgpu::TextureDescriptor {
+        label: Some("lumen surface frame"),
+        size: wgpu::Extent3d {
+            width: buffers.width,
+            height: buffers.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    }
+}
+
+#[cfg(windows)]
+mod dx12 {
+    //! Direct3D 12 import: each buffer is a committed resource the producer
+    //! made on a shared heap and exported as an NT handle, which the
+    //! transport has copied into this process. `OpenSharedHandle` gives a
+    //! resource that aliases the producer's allocation, wrapped as a texture
+    //! on the renderer's device.
+    //!
+    //! The resources are made with `ALLOW_SIMULTANEOUS_ACCESS`: each decays
+    //! to `COMMON` after every command list that used it and is promoted
+    //! implicitly on first use, so two devices that each track state on
+    //! their own agree on it at every hand-over, with no barrier between
+    //! the processes. The frame messages order the two GPUs' work: each side
+    //! finishes its work on an image before handing it over.
+
+    use super::*;
+    use std::os::windows::io::AsRawHandle;
+    use wgpu::hal::api::Dx12;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Direct3D12::{
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
+        ID3D12Resource,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+
+    pub(super) fn identify(context: &GpuContext) -> Option<AdapterId> {
+        // SAFETY: the hal device is only read here.
+        let hal = unsafe { context.device.as_hal::<Dx12>() }?;
+        // SAFETY: a plain query on a live device.
+        let luid = unsafe { hal.raw_device().GetAdapterLuid() };
+        let mut bytes = [0u8; 8];
+        bytes[..4].copy_from_slice(&luid.LowPart.to_le_bytes());
+        bytes[4..].copy_from_slice(&luid.HighPart.to_le_bytes());
+        Some(AdapterId {
+            luid: bytes,
+            vendor: context.info.vendor,
+            device: context.info.device,
+            ..AdapterId::default()
+        })
+    }
+
+    pub(super) fn import(
+        context: &GpuContext,
+        buffers: &Buffers,
+        handles: Vec<Handle>,
+    ) -> Result<Imported<wgpu::Texture>, String> {
+        check_ring(context, buffers, Api::D3d12)?;
+        // SAFETY: the hal device outlives the calls below.
+        let hal = unsafe { context.device.as_hal::<Dx12>() }
+            .ok_or("the renderer's device is not Direct3D 12")?;
+        let device = hal.raw_device().clone();
+        drop(hal);
+        let mut textures = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let mut resource: Option<ID3D12Resource> = None;
+            // SAFETY: an NT handle this process owns; the resource keeps
+            // the allocation alive on its own, so the handle closes after.
+            unsafe { device.OpenSharedHandle(HANDLE(handle.as_raw_handle()), &mut resource) }
+                .map_err(|e| format!("OpenSharedHandle: {e}"))?;
+            drop(handle);
+            let resource = resource.ok_or("OpenSharedHandle gave no resource")?;
+            // SAFETY: a plain query on a live resource.
+            let desc = unsafe { resource.GetDesc() };
+            if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                || desc.Width != u64::from(buffers.width)
+                || desc.Height != buffers.height
+                || desc.DepthOrArraySize != 1
+                || desc.MipLevels != 1
+                || desc.SampleDesc.Count != 1
+                || desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+            {
+                return Err("a buffer is not a single 2D image of the ring's size and \
+                     DXGI_FORMAT_R8G8B8A8_UNORM_SRGB"
+                    .into());
+            }
+            if !desc
+                .Flags
+                .contains(D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
+            {
+                return Err(
+                    "a buffer was not made with D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS"
+                        .into(),
+                );
+            }
+            let descriptor = frame_descriptor(buffers, wgpu::TextureFormat::Rgba8UnormSrgb);
+            // SAFETY: the resource matches the descriptor, checked above.
+            let hal_texture = unsafe {
+                wgpu::hal::dx12::Device::texture_from_raw(
+                    resource,
+                    descriptor.format,
+                    descriptor.dimension,
+                    descriptor.size,
+                    1,
+                    1,
+                )
+            };
+            // SAFETY: the hal texture was made for this device.
+            textures.push(unsafe {
+                context
+                    .device
+                    .create_texture_from_hal::<Dx12>(hal_texture, &descriptor)
+            });
+        }
+        Ok(Imported::now(textures))
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod metal {
+    //! Metal import: each buffer is an IOSurface whose Mach port the
+    //! transport received. `IOSurfaceLookupFromMachPort` finds the surface,
+    //! and a texture made on the renderer's device with
+    //! `newTextureWithDescriptor:iosurface:plane:` shares its memory with
+    //! the producer's. The frame messages order the two GPUs' work: each
+    //! side's command buffers on an image have completed before it hands
+    //! the image over.
+
+    use super::*;
+    use objc2_io_surface::IOSurfaceRef;
+    use objc2_metal::{
+        MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    };
+    use wgpu::hal::api::Metal;
+
+    /// The IOSurface pixel format of a ring's buffers: `'BGRA'`.
+    const PIXEL_FORMAT_BGRA: u32 = u32::from_be_bytes(*b"BGRA");
+
+    pub(super) fn identify(context: &GpuContext) -> Option<AdapterId> {
+        // SAFETY: the hal device is only read here.
+        let hal = unsafe { context.device.as_hal::<Metal>() }?;
+        Some(AdapterId {
+            registry_id: hal.raw_device().registryID(),
+            vendor: context.info.vendor,
+            device: context.info.device,
+            ..AdapterId::default()
+        })
+    }
+
+    pub(super) fn import(
+        context: &GpuContext,
+        buffers: &Buffers,
+        handles: Vec<Handle>,
+    ) -> Result<Imported<wgpu::Texture>, String> {
+        check_ring(context, buffers, Api::Metal)?;
+        // SAFETY: the hal device outlives the calls below.
+        let hal = unsafe { context.device.as_hal::<Metal>() }
+            .ok_or("the renderer's device is not Metal")?;
+        let device = hal.raw_device().clone();
+        drop(hal);
+        let (width, height) = (buffers.width as usize, buffers.height as usize);
+        let mut textures = Vec::with_capacity(handles.len());
+        for port in handles {
+            let surface = IOSurfaceRef::lookup_from_mach_port(port.as_raw())
+                .ok_or("IOSurfaceLookupFromMachPort found no surface for a buffer's port")?;
+            if surface.width() != width
+                || surface.height() != height
+                || surface.pixel_format() != PIXEL_FORMAT_BGRA
+            {
+                return Err("a buffer is not a 'BGRA' IOSurface of the ring's size".into());
+            }
+            // SAFETY: plain descriptor setup.
+            let descriptor = unsafe {
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    MTLPixelFormat::BGRA8Unorm_sRGB,
+                    width,
+                    height,
+                    false,
+                )
+            };
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            // An IOSurface texture cannot be private: shared on Apple
+            // silicon's unified memory, managed on a Mac with its own VRAM.
+            descriptor.setStorageMode(if cfg!(target_arch = "aarch64") {
+                MTLStorageMode::Shared
+            } else {
+                MTLStorageMode::Managed
+            });
+            let texture = device
+                .newTextureWithDescriptor_iosurface_plane(&descriptor, &surface, 0)
+                .ok_or("newTextureWithDescriptor:iosurface:plane: failed")?;
+            let wgpu_descriptor = frame_descriptor(buffers, wgpu::TextureFormat::Bgra8UnormSrgb);
+            // SAFETY: the texture matches the descriptor: one 2D level and
+            // layer of the ring's size in BGRA8Unorm_sRGB.
+            let hal_texture = unsafe {
+                wgpu::hal::metal::Device::texture_from_raw(
+                    texture,
+                    wgpu_descriptor.format,
+                    MTLTextureType::Type2D,
+                    1,
+                    1,
+                    wgpu::hal::CopyExtent {
+                        width: buffers.width,
+                        height: buffers.height,
+                        depth: 1,
+                    },
+                )
+            };
+            // SAFETY: the hal texture was made for this device.
+            textures.push(unsafe {
+                context
+                    .device
+                    .create_texture_from_hal::<Metal>(hal_texture, &wgpu_descriptor)
+            });
+        }
+        Ok(Imported::now(textures))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -156,7 +428,7 @@ mod vulkan {
 
     use super::*;
     use ash::vk;
-    use lumen_surface_protocol::wire::{BUFFER_DEDICATED, Format};
+    use lumen_surface_protocol::wire::BUFFER_DEDICATED;
     use std::os::fd::IntoRawFd;
     use wgpu::hal::api::Vulkan;
 
@@ -192,19 +464,12 @@ mod vulkan {
         buffers: &Buffers,
         fds: Vec<Handle>,
     ) -> Result<Imported<wgpu::Texture>, String> {
-        let Format::Rgba8Srgb = buffers.format;
+        check_ring(context, buffers, Api::Vulkan)?;
         let usage = vk::ImageUsageFlags::from_raw(buffers.usage);
         if !usage.contains(REQUIRED_USAGE) {
             return Err(
                 "the buffers were not made for sampling (VK_IMAGE_USAGE_SAMPLED_BIT)".into(),
             );
-        }
-        if buffers.width == 0 || buffers.height == 0 {
-            return Err("the buffers have no area".into());
-        }
-        let max = context.device.limits().max_texture_dimension_2d;
-        if buffers.width > max || buffers.height > max {
-            return Err(format!("the buffers are larger than {max} pixels a side"));
         }
         // SAFETY: the hal device outlives the calls below, which only use
         // it through the guard.
@@ -319,16 +584,7 @@ mod vulkan {
             let texture = unsafe {
                 context.device.create_texture_from_hal::<Vulkan>(
                     hal_texture,
-                    &wgpu::TextureDescriptor {
-                        label: Some("lumen surface frame"),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    },
+                    &frame_descriptor(buffers, wgpu::TextureFormat::Rgba8UnormSrgb),
                 )
             };
             textures.push(texture);

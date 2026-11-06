@@ -1,11 +1,13 @@
-//! The Unix transport: a stream socket in a private per-user directory, with
-//! file descriptors passed alongside the frames that name them.
+//! The Unix transport: a stream socket in a private per-user directory.
 //!
-//! Frames are written whole with one `sendmsg` each; a frame that carries
-//! descriptors attaches them to that call, so they arrive with the frame's
-//! first bytes. The reader keeps the descriptors that arrived in order and
-//! hands a frame the ones it says it carries.
+//! Frames are written whole with one `sendmsg` each. On Linux a frame that
+//! carries handles attaches them as file descriptors to that call, so they
+//! arrive with the frame's first bytes; the reader keeps the descriptors that
+//! arrived in order and hands a frame the ones it says it carries. On macOS
+//! the handles are IOSurface Mach ports, which travel beside the socket in a
+//! Mach message ([`crate::mach`]).
 
+use crate::endpoint::Transport;
 pub use crate::transport::{Received, TransportError};
 use crate::wire::{FLAG_HANDLES, Message, WireError};
 use std::collections::VecDeque;
@@ -17,6 +19,34 @@ use std::time::Duration;
 
 /// The most descriptors one frame carries.
 pub const MAX_FDS: usize = 8;
+
+/// An OS handle to shared memory, as it arrives with a frame: a file
+/// descriptor.
+#[cfg(not(target_os = "macos"))]
+pub type Handle = OwnedFd;
+/// An OS handle as a sender attaches it, borrowed for the call: a file
+/// descriptor the caller keeps.
+#[cfg(not(target_os = "macos"))]
+pub type RawHandle = RawFd;
+/// An OS handle to shared memory, as it arrives with a frame: a Mach send
+/// right (an IOSurface's port).
+#[cfg(target_os = "macos")]
+pub type Handle = crate::mach::Port;
+/// An OS handle as a sender attaches it, borrowed for the call: a Mach send
+/// right the caller keeps.
+#[cfg(target_os = "macos")]
+pub type RawHandle = crate::mach::RawPort;
+
+/// The handle a C caller passes as a number, or `None` when the number
+/// cannot be one.
+pub fn raw_handle(value: u64) -> Option<RawHandle> {
+    RawHandle::try_from(value).ok()
+}
+
+/// How long a reader waits for a ring's Mach ports once its `Buffers` frame
+/// is in. The producer sends them first, so they are normally there.
+#[cfg(target_os = "macos")]
+const PORTS_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn cvt(r: libc::c_int) -> io::Result<libc::c_int> {
     if r < 0 {
@@ -151,10 +181,13 @@ pub fn random_bytes() -> io::Result<[u8; 16]> {
     Ok(out)
 }
 
-/// A socket a consumer listens on. The socket file goes with it.
+/// A socket a consumer listens on. The socket file goes with it, and on
+/// macOS the bootstrap service ring ports arrive on.
 pub struct Listener {
     fd: OwnedFd,
     path: PathBuf,
+    #[cfg(target_os = "macos")]
+    service: Arc<crate::mach::Service>,
 }
 
 impl Listener {
@@ -183,15 +216,34 @@ impl Listener {
             ))?;
             cvt(libc::listen(fd.as_raw_fd(), 4))?;
         }
+        #[cfg(target_os = "macos")]
+        let service = Arc::new(crate::mach::Service::check_in(&format!(
+            "dev.lumenfx.surface.{}.{}",
+            std::process::id(),
+            crate::endpoint::hex(&random_bytes()?[..6])
+        ))?);
         Ok(Self {
             fd,
             path: path.to_path_buf(),
+            #[cfg(target_os = "macos")]
+            service,
         })
     }
 
     /// Where the socket is.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Where a producer reaches this listener, for its endpoint string.
+    pub fn transport(&self) -> Transport {
+        #[cfg(target_os = "macos")]
+        return Transport::UnixMach {
+            path: self.path.clone(),
+            service: self.service.name().to_string(),
+        };
+        #[cfg(not(target_os = "macos"))]
+        Transport::Unix(self.path.clone())
     }
 
     /// Take the next connection, waiting at most `timeout`. A connection from
@@ -204,7 +256,19 @@ impl Listener {
         if peer_uid(&fd).is_some_and(|uid| uid != current_uid()) {
             return Ok(None);
         }
-        Ok(Some(Connection::from_fd(fd)))
+        #[cfg(target_os = "macos")]
+        let link = match peer_pid(&fd) {
+            Some(pid) => Link::Consumer {
+                service: self.service.clone(),
+                pid,
+            },
+            None => Link::None,
+        };
+        Ok(Some(Connection {
+            fd,
+            #[cfg(target_os = "macos")]
+            link,
+        }))
     }
 }
 
@@ -274,27 +338,79 @@ fn peer_uid(fd: &OwnedFd) -> Option<u32> {
     (r == 0).then_some(uid)
 }
 
+/// The process id of the other end of a connected socket.
+#[cfg(target_os = "macos")]
+fn peer_pid(fd: &OwnedFd) -> Option<i32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: LOCAL_PEERPID fills a pid_t of the given length.
+    let r = unsafe {
+        libc::getsockopt(
+            fd.as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut len,
+        )
+    };
+    (r == 0).then_some(pid)
+}
+
+/// Where a connection's ring ports come from or go to (macOS).
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+enum Link {
+    /// The consumer's end: ports arrive on the listener's service, from the
+    /// process on the other end of the socket.
+    Consumer {
+        service: Arc<crate::mach::Service>,
+        pid: i32,
+    },
+    /// The producer's end: ports go to the consumer's service.
+    Producer(Arc<crate::mach::Port>),
+    /// Neither: no handles cross.
+    None,
+}
+
 /// The writing half of a connection. Clones share the socket; each frame is
 /// written whole under a lock, so threads may send at once.
 #[derive(Clone)]
 pub struct Sender {
     fd: Arc<Mutex<OwnedFd>>,
+    #[cfg(target_os = "macos")]
+    link: Link,
 }
 
 impl Sender {
-    /// Write `message`, with `fds` attached when it carries handles.
+    /// Write `message`, with `handles` passed along when it carries them:
+    /// on Linux as descriptors attached to the frame, on macOS as ports in a
+    /// Mach message sent just before it.
     ///
     /// # Errors
     ///
-    /// The message does not encode, or the socket failed (the other side
-    /// went away).
-    pub fn send(&self, message: &Message, fds: &[RawFd]) -> Result<(), TransportError> {
+    /// The message does not encode, the handles cannot go (too many, or on
+    /// macOS no service to send them to), or the socket failed (the other
+    /// side went away).
+    pub fn send(&self, message: &Message, handles: &[RawHandle]) -> Result<(), TransportError> {
         let frame = message.encode()?;
-        if fds.len() > MAX_FDS {
+        if handles.len() > MAX_FDS {
             return Err(TransportError::Wire(WireError::TooLarge("the handle list")));
         }
         let fd = self.fd.lock().unwrap_or_else(|e| e.into_inner());
-        send_all(fd.as_raw_fd(), &frame, fds, false)?;
+        #[cfg(target_os = "macos")]
+        {
+            if !handles.is_empty() {
+                let (Message::Buffers(buffers), Link::Producer(to)) = (message, &self.link) else {
+                    return Err(TransportError::Io(io::Error::other(
+                        "handles travel only with a ring, to a consumer's Mach service",
+                    )));
+                };
+                crate::mach::send_ports(to, buffers.generation, handles)?;
+            }
+            send_all(fd.as_raw_fd(), &frame, &[], false)?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        send_all(fd.as_raw_fd(), &frame, handles, false)?;
         Ok(())
     }
 
@@ -306,10 +422,15 @@ impl Sender {
     /// # Errors
     ///
     /// As [`Self::send`], plus the would-block case.
-    pub fn try_send(&self, message: &Message, fds: &[RawFd]) -> Result<(), TransportError> {
+    pub fn try_send(&self, message: &Message, handles: &[RawHandle]) -> Result<(), TransportError> {
+        if !handles.is_empty() {
+            return Err(TransportError::Io(io::Error::other(
+                "a ring's handles are sent with `send`",
+            )));
+        }
         let frame = message.encode()?;
         let fd = self.fd.lock().unwrap_or_else(|e| e.into_inner());
-        send_all(fd.as_raw_fd(), &frame, fds, true)?;
+        send_all(fd.as_raw_fd(), &frame, &[], true)?;
         Ok(())
     }
 }
@@ -378,6 +499,8 @@ pub struct Receiver {
     raw: RawFd,
     buffer: Vec<u8>,
     fds: VecDeque<OwnedFd>,
+    #[cfg(target_os = "macos")]
+    link: Link,
 }
 
 impl Receiver {
@@ -394,15 +517,8 @@ impl Receiver {
                 let Some(message) = message else {
                     continue;
                 };
-                let wanted = match (&message, flags & FLAG_HANDLES != 0) {
-                    (Message::Buffers(b), true) => b.buffers.len(),
-                    _ => 0,
-                };
-                if self.fds.len() < wanted {
-                    return Err(TransportError::MissingHandles);
-                }
-                let fds = self.fds.drain(..wanted).collect();
-                return Ok(Received::Message(message, fds));
+                let handles = self.handles_for(&message, flags & FLAG_HANDLES != 0)?;
+                return Ok(Received::Message(message, handles));
             }
             if !wait_readable(self.raw, timeout)? {
                 return Ok(Received::Timeout);
@@ -411,6 +527,42 @@ impl Receiver {
                 return Ok(Received::Closed);
             }
         }
+    }
+
+    /// The handles a message that says it carries them brought.
+    #[cfg(not(target_os = "macos"))]
+    fn handles_for(
+        &mut self,
+        message: &Message,
+        carries: bool,
+    ) -> Result<Vec<Handle>, TransportError> {
+        let wanted = match (message, carries) {
+            (Message::Buffers(b), true) => b.buffers.len(),
+            _ => 0,
+        };
+        if self.fds.len() < wanted {
+            return Err(TransportError::MissingHandles);
+        }
+        Ok(self.fds.drain(..wanted).collect())
+    }
+
+    /// The handles a message that says it carries them brought: the ports
+    /// the process on the other end sent for the ring.
+    #[cfg(target_os = "macos")]
+    fn handles_for(
+        &mut self,
+        message: &Message,
+        carries: bool,
+    ) -> Result<Vec<Handle>, TransportError> {
+        // Descriptors have no meaning here; drop any that came.
+        self.fds.clear();
+        let (Message::Buffers(b), true) = (message, carries) else {
+            return Ok(Vec::new());
+        };
+        let Link::Consumer { service, pid } = &self.link else {
+            return Err(TransportError::MissingHandles);
+        };
+        service.take(*pid, b.generation, b.buffers.len(), PORTS_TIMEOUT)
     }
 
     /// Read what the socket holds. Returns `false` at end of stream.
@@ -487,15 +639,35 @@ impl Receiver {
 /// One connection, before it is split into its halves.
 pub struct Connection {
     fd: OwnedFd,
+    #[cfg(target_os = "macos")]
+    link: Link,
 }
 
 impl Connection {
-    fn from_fd(fd: OwnedFd) -> Self {
-        Self { fd }
-    }
-
-    /// Connect to a listener at `path`.
-    pub fn connect(path: &Path) -> io::Result<Self> {
+    /// Connect to the listener `transport` names.
+    ///
+    /// # Errors
+    ///
+    /// The transport is not one this platform speaks, the socket failed, or
+    /// (macOS) the consumer's Mach service is not there.
+    pub fn connect(transport: &Transport) -> io::Result<Self> {
+        let (path, service) = match transport {
+            Transport::Unix(path) => (path, None),
+            Transport::UnixMach { path, service } => (path, Some(service)),
+            Transport::Pipe(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "a named pipe is a Windows transport",
+                ));
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let link = match service {
+            Some(name) => Link::Producer(Arc::new(crate::mach::look_up(name)?)),
+            None => Link::None,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = service;
         let fd = stream_socket()?;
         let (addr, len) = sockaddr(path)?;
         // SAFETY: a valid socket and a sockaddr_un of the stated length.
@@ -506,7 +678,11 @@ impl Connection {
                 len,
             ))?;
         }
-        Ok(Self { fd })
+        Ok(Self {
+            fd,
+            #[cfg(target_os = "macos")]
+            link,
+        })
     }
 
     /// The two halves.
@@ -514,12 +690,18 @@ impl Connection {
         let raw = self.fd.as_raw_fd();
         let fd = Arc::new(Mutex::new(self.fd));
         (
-            Sender { fd: fd.clone() },
+            Sender {
+                fd: fd.clone(),
+                #[cfg(target_os = "macos")]
+                link: self.link.clone(),
+            },
             Receiver {
                 fd,
                 raw,
                 buffer: Vec::new(),
                 fds: VecDeque::new(),
+                #[cfg(target_os = "macos")]
+                link: self.link,
             },
         )
     }
@@ -529,13 +711,14 @@ impl Connection {
 mod tests {
     use super::*;
     use crate::wire::{BufferDesc, Buffers, Format};
+    #[cfg(not(target_os = "macos"))]
     use std::io::{Read, Seek, Write};
 
     fn pair() -> (Sender, Receiver, Sender, Receiver, Listener) {
         let dir = std::env::temp_dir().join(format!("lsp-test-{}", random_hex()));
         std::fs::create_dir_all(&dir).unwrap();
         let listener = Listener::bind(&dir.join("s.sock")).unwrap();
-        let client = Connection::connect(listener.path()).unwrap();
+        let client = Connection::connect(&listener.transport()).unwrap();
         let server = listener
             .accept(Some(Duration::from_secs(5)))
             .unwrap()
@@ -551,6 +734,7 @@ mod tests {
 
     /// Frames cross in order; descriptors arrive with the frame that names
     /// them and read the same file.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn frames_and_descriptors_cross() {
         let (client, _cr, _ss, mut server, _l) = pair();
@@ -606,6 +790,42 @@ mod tests {
         assert!(matches!(server.recv(timeout).unwrap(), Received::Closed));
     }
 
+    /// A ring's ports cross beside its frame, to the consumer's service, and
+    /// arrive as rights to the same ports.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn frames_and_ports_cross() {
+        let (client, _cr, _ss, mut server, _l) = pair();
+        let ports = [crate::mach::tests::port(), crate::mach::tests::port()];
+        let buffers = Buffers {
+            generation: 1,
+            width: 4,
+            height: 4,
+            format: Format::Bgra8Srgb,
+            usage: 0,
+            flags: 0,
+            buffers: vec![BufferDesc::default(); 2],
+        };
+        client.send(&Message::Ping(1), &[]).unwrap();
+        client
+            .send(&Message::Buffers(buffers.clone()), &ports)
+            .unwrap();
+        let timeout = Some(Duration::from_secs(5));
+        assert!(matches!(
+            server.recv(timeout).unwrap(),
+            Received::Message(Message::Ping(1), _)
+        ));
+        let Received::Message(Message::Buffers(got), got_ports) = server.recv(timeout).unwrap()
+        else {
+            panic!("buffers")
+        };
+        assert_eq!(got, buffers);
+        assert_eq!(
+            got_ports.iter().map(|p| p.as_raw()).collect::<Vec<_>>(),
+            ports.to_vec()
+        );
+    }
+
     /// A wait under a millisecond sleeps rather than returning at once, so
     /// a reader waiting out a deadline does not spin through its last
     /// millisecond; no wait is still no wait.
@@ -625,6 +845,7 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_micros(500));
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn tempfile_with(bytes: &[u8]) -> std::fs::File {
         let path = std::env::temp_dir().join(format!("lsp-fd-{}", random_hex()));
         let mut f = std::fs::OpenOptions::new()

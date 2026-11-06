@@ -1,18 +1,20 @@
-//! A surface session against a producer over the Unix transport, with
-//! no GPU: the consumer's backend records what it would import and show, and
-//! the producer is the protocol crate's own. Everything about the session
-//! (handshake, refusals, pacing, slot reuse, resize generations, stalls,
-//! input, crashes and reconnects) runs here on any Unix machine.
+//! A surface session against a producer over the platform's transport (a
+//! Unix socket, with Mach ports beside it on macOS, or a Windows named pipe),
+//! with no GPU: the consumer's backend records what it would import and
+//! show, and the producer is the protocol crate's own. Everything about the
+//! session (handshake, refusals, pacing, slot reuse, resize generations,
+//! stalls, input, crashes and reconnects) runs here on Linux, macOS and
+//! Windows alike.
 
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use lumen_surface::protocol::producer::{FrameTimes, Producer, ProducerEvent, ProducerHello};
+use lumen_surface::protocol::transport::{Handle, RawHandle};
 use lumen_surface::protocol::wire::{
     AdapterId, Api, BUFFER_DEDICATED, BufferDesc, Buffers, ByeReason, Format, InputEvent,
     RejectReason,
 };
 use lumen_surface::session::{self, Backend, Happened, Imported, Shared, SurfaceStateKind, Wanted};
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,8 +55,8 @@ impl Backend for Recorder {
         self.generation.load(Ordering::SeqCst)
     }
 
-    fn import(&self, buffers: &Buffers, fds: Vec<OwnedFd>) -> Result<Imported<(u32, u32)>, String> {
-        assert_eq!(fds.len(), buffers.buffers.len(), "a descriptor per buffer");
+    fn import(&self, buffers: &Buffers, fds: Vec<Handle>) -> Result<Imported<(u32, u32)>, String> {
+        assert_eq!(fds.len(), buffers.buffers.len(), "a handle per buffer");
         std::thread::sleep(*self.import_blocks.lock().unwrap());
         self.imported
             .lock()
@@ -116,12 +118,75 @@ fn wait_happened(
     });
 }
 
-/// A ring of `n` buffers whose descriptors are open files: the consumer
-/// side here imports nothing, it only needs a descriptor per buffer.
-fn ring(generation: u32, size: (u32, u32), n: usize) -> (Buffers, Vec<std::fs::File>) {
-    let files: Vec<std::fs::File> = (0..n)
-        .map(|_| std::fs::File::open("/dev/null").unwrap())
-        .collect();
+/// An OS handle of the kind the platform's transport carries, standing in
+/// for a buffer's: the consumer side here imports nothing, it only needs a
+/// handle per buffer to cross. A file on Linux and Windows.
+#[cfg(not(target_os = "macos"))]
+struct Placeholder(std::fs::File);
+
+#[cfg(not(target_os = "macos"))]
+impl Placeholder {
+    fn new() -> Self {
+        Self(std::fs::File::open(if cfg!(windows) { "NUL" } else { "/dev/null" }).unwrap())
+    }
+
+    fn raw(&self) -> RawHandle {
+        #[cfg(unix)]
+        return std::os::fd::AsRawFd::as_raw_fd(&self.0);
+        #[cfg(windows)]
+        std::os::windows::io::AsRawHandle::as_raw_handle(&self.0)
+    }
+}
+
+/// On macOS a Mach port this process holds the receive right and a send
+/// right to.
+#[cfg(target_os = "macos")]
+struct Placeholder(mach2::port::mach_port_t);
+
+#[cfg(target_os = "macos")]
+impl Placeholder {
+    fn new() -> Self {
+        use mach2::mach_port::{mach_port_allocate, mach_port_insert_right};
+        use mach2::message::MACH_MSG_TYPE_MAKE_SEND;
+        use mach2::port::{MACH_PORT_NULL, MACH_PORT_RIGHT_RECEIVE};
+        use mach2::traps::mach_task_self;
+        let mut name = MACH_PORT_NULL;
+        // SAFETY: plain port allocation in this task.
+        unsafe {
+            assert_eq!(
+                mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &mut name),
+                0
+            );
+            assert_eq!(
+                mach_port_insert_right(mach_task_self(), name, name, MACH_MSG_TYPE_MAKE_SEND),
+                0
+            );
+        }
+        Self(name)
+    }
+
+    fn raw(&self) -> RawHandle {
+        self.0
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Placeholder {
+    fn drop(&mut self) {
+        use mach2::mach_port::{mach_port_deallocate, mach_port_mod_refs};
+        use mach2::port::MACH_PORT_RIGHT_RECEIVE;
+        use mach2::traps::mach_task_self;
+        // SAFETY: the rights `new` made, released once.
+        unsafe {
+            mach_port_deallocate(mach_task_self(), self.0);
+            mach_port_mod_refs(mach_task_self(), self.0, MACH_PORT_RIGHT_RECEIVE, -1);
+        }
+    }
+}
+
+/// A ring of `n` buffers, a placeholder handle each.
+fn ring(generation: u32, size: (u32, u32), n: usize) -> (Buffers, Vec<Placeholder>) {
+    let files: Vec<Placeholder> = (0..n).map(|_| Placeholder::new()).collect();
     (
         Buffers {
             generation,
@@ -144,7 +209,7 @@ fn ring(generation: u32, size: (u32, u32), n: usize) -> (Buffers, Vec<std::fs::F
 
 fn offer(producer: &mut Producer, generation: u32, size: (u32, u32), n: usize) {
     let (buffers, files) = ring(generation, size, n);
-    let fds: Vec<i32> = files.iter().map(|f| f.as_raw_fd()).collect();
+    let fds: Vec<RawHandle> = files.iter().map(Placeholder::raw).collect();
     producer
         .offer_buffers(buffers, &fds)
         .expect("the ring is accepted");
@@ -701,12 +766,11 @@ mod c_abi {
         assert!(last_error().contains("token"), "{}", last_error());
 
         // The adapter the endpoint names, once the consumer knows it.
-        let (mut device, mut driver) = ([0u8; 16], [0u8; 16]);
+        // SAFETY: LspAdapter is plain data; all-zero is a valid value.
+        let mut adapter: LspAdapter = unsafe { std::mem::zeroed() };
         let plain = CString::new(endpoint.clone()).unwrap();
-        // SAFETY: 16 writable bytes each.
-        let st = unsafe {
-            lsp_endpoint_adapter(plain.as_ptr(), device.as_mut_ptr(), driver.as_mut_ptr())
-        };
+        // SAFETY: a writable adapter.
+        let st = unsafe { lsp_endpoint_adapter(plain.as_ptr(), &mut adapter) };
         assert_eq!(st, LSP_ERR_ARG, "no GPU named yet");
         shared.set_adapter_hint(Some((
             lumen_surface::protocol::endpoint::AdapterHint::Vulkan {
@@ -717,18 +781,24 @@ mod c_abi {
         )));
         let named = CString::new(shared.endpoint().unwrap()).unwrap();
         // SAFETY: as above.
-        let st = unsafe {
-            lsp_endpoint_adapter(named.as_ptr(), device.as_mut_ptr(), driver.as_mut_ptr())
-        };
+        let st = unsafe { lsp_endpoint_adapter(named.as_ptr(), &mut adapter) };
         assert_eq!(st, LSP_OK);
-        assert_eq!((device, driver), (ADAPTER.device_uuid, ADAPTER.driver_uuid));
+        assert_eq!(adapter.api, LSP_API_VULKAN);
+        assert_eq!(
+            (adapter.device_uuid, adapter.driver_uuid),
+            (ADAPTER.device_uuid, ADAPTER.driver_uuid)
+        );
+        assert_eq!(
+            adapter.struct_size as usize,
+            std::mem::size_of::<LspAdapter>()
+        );
 
         // SAFETY: valid arguments.
         let p = unsafe { lsp_connect(named.as_ptr(), &hello(&engine), &mut w, &mut status) };
         assert!(!p.is_null(), "{}", last_error());
         assert_eq!((w.width, w.height), (64, 48));
 
-        // A ring of three, the descriptors open files.
+        // A ring of three, placeholder handles.
         let (buffers, files) = ring(1, (64, 48), 3);
         let descs: Vec<LspBuffer> = buffers
             .buffers
@@ -741,8 +811,7 @@ mod c_abi {
                 row_pitch: 0,
                 reserved0: 0,
                 modifier: 0,
-                fd: f.as_raw_fd(),
-                reserved1: 0,
+                handle: f.raw() as usize as u64,
             })
             .collect();
         let offer = LspBuffers {

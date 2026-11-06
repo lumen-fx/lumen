@@ -46,6 +46,22 @@ bevy_ecs = { workspace = true }
 ash = "0.38"
 libc = { workspace = true }
 
+# The Direct3D 12 importer: `OpenSharedHandle` on the renderer's device. The
+# same `windows` release wgpu-hal uses, so the device wgpu hands out is this
+# crate's type.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
+# The Metal importer: IOSurfaces looked up from their ports, wrapped as
+# textures on the renderer's device. The objc2-metal release wgpu-hal uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-io-surface = "0.3"
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+
 [features]
 default = ["engine-dylib"]
 # The shared engine, and the probe-and-install pair a loader looks up after
@@ -63,3 +79,20 @@ lumen-script = { workspace = true }
 lumen-candela-dev = { workspace = true }
 lumen-text = { workspace = true }
 lumen-text-cosmic = { workspace = true }
+# Drives the Rust reference producer's device requests.
+pollster = "1.0"
+
+# The session tests stand Mach ports in for IOSurface ports; the reference
+# producer makes IOSurfaces and releases their ports.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mach2 = "0.6"
+objc2-core-foundation = "0.3"
+
+# The reference producer exports its resources (`CreateSharedHandle`).
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }

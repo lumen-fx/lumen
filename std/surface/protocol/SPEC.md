@@ -1,4 +1,4 @@
-# The Lumen surface protocol, version 1
+# The Lumen surface protocol, version 1.1
 
 The Lumen surface protocol lets a renderer in one process (the producer: a
 game, an engine, a video decoder) show its frames in a `<surface>` element of
@@ -13,8 +13,10 @@ implements it for both roles, in Rust and as a C library
 (`include/lumen_surface_protocol.h`), and Lumen's tests hold the two
 together. An engine may speak the protocol from this document alone.
 
-Version 1 covers Linux and Vulkan. The layouts reserve room for Direct3D 12
-and Metal, which a later minor version adds.
+Version 1.1 covers three platforms, each with its own graphics API and
+transport: Linux with Vulkan over a Unix socket, Windows with Direct3D 12 over
+a named pipe, and macOS with Metal over a Unix socket with Mach ports beside
+it. Everything but the transport and the buffers is the same on all three.
 
 ## Roles and connection
 
@@ -25,22 +27,38 @@ convention the producer reads it from the environment variable
 
 ```text
 v1;transport=unix:/run/user/1000/lumen-surface-1000/4242-9f3c0b.sock;channel=scene;token=4be1...;adapter=vk:<device uuid>:<driver uuid>;adapter-name=AMD Radeon RX 6800 XT
+v1;transport=pipe:\\.\pipe\lumen-surface-4242-9f3c0b1d2e3f;channel=scene;token=4be1...;adapter=dx:<luid>;adapter-name=...
+v1;transport=unix:/var/folders/.../lumen-surface-501/4242-9f3c0b.sock;mach=dev.lumenfx.surface.4242.1d2e3f4a5b6c;channel=scene;token=4be1...;adapter=mtl:<registry id>;adapter-name=Apple M2
 ```
 
 - The first field is the version, `v1`. Other fields are `key=value`,
   separated by `;`. A value escapes `%`, `;` and `=` as `%25`, `%3B` and
   `%3D`. A producer skips keys it does not know.
-- `transport=unix:<path>`: a Unix stream socket. The consumer keeps it in a
-  directory only its user can open (`$XDG_RUNTIME_DIR/lumen-surface-<uid>`,
-  or the temporary directory when there is no runtime directory) and refuses
-  connections from other users.
+- `transport=unix:<path>` (Linux, macOS): a Unix stream socket. The consumer
+  keeps it in a directory only its user can open
+  (`$XDG_RUNTIME_DIR/lumen-surface-<uid>`, or the temporary directory when
+  there is no runtime directory) and refuses connections from other users.
+- `mach=<service>` (macOS): the Mach bootstrap service, in the user's
+  bootstrap namespace, that the producer sends a ring's IOSurface ports to
+  (see "Buffers on Metal"). Present with every macOS socket.
+- `transport=pipe:<name>` (Windows): a named pipe,
+  `\\.\pipe\lumen-surface-<pid>-<12 hex digits>`. Its DACL grants the
+  current user, and nobody else, access; it refuses remote clients. Open it
+  with `CreateFileW` (`GENERIC_READ | GENERIC_WRITE`, `OPEN_EXISTING`), in
+  byte mode, and retry while it answers `ERROR_PIPE_BUSY`.
 - `channel`: which surface the producer feeds. One process feeding two
   surfaces connects twice, once per channel.
 - `token`: 32 hex digits, a 128-bit secret the producer's `Hello` must carry.
-- `adapter=vk:<device uuid>:<driver uuid>`: the consumer's GPU, as Vulkan's
-  `VkPhysicalDeviceIDProperties` names it, 32 hex digits each. A producer
-  picks this device before it creates its own, so the two can share memory.
-  Present once the consumer's renderer has started.
+- `adapter`: the consumer's GPU. A producer picks this device before it
+  creates its own, so the two can share memory. Present once the consumer's
+  renderer has started. One form per API:
+  - `vk:<device uuid>:<driver uuid>`: Vulkan's
+    `VkPhysicalDeviceIDProperties`, 32 hex digits each;
+  - `dx:<luid>`: the Direct3D 12 adapter LUID (`ID3D12Device::GetAdapterLuid`,
+    `IDXGIFactory4::EnumAdapterByLuid`), 16 hex digits: the bytes of
+    `LowPart` then `HighPart`, each little-endian;
+  - `mtl:<registry id>`: Metal's `MTLDevice.registryID`, 16 hex digits, most
+    significant first.
 - `adapter-name`: the same GPU by name, for a person or a setting that picks
   an adapter by name.
 
@@ -62,8 +80,9 @@ Every message is a frame:
 - Bodies are fixed layouts with explicit `reserved` fields (always zero),
   followed by variable parts. A variable part (`str`, `bytes`) is a `u32`
   length and that many bytes. Strings are UTF-8 without a terminator.
-- Timestamps are nanoseconds on the machine's monotonic clock
-  (`CLOCK_MONOTONIC` on Linux), which both processes read.
+- Timestamps are nanoseconds on the machine's monotonic clock, which both
+  processes read: `CLOCK_MONOTONIC` on Linux and macOS,
+  `QueryPerformanceCounter` scaled to nanoseconds on Windows.
 - An unknown `type` without bit 1 set ends the session.
 
 ## Messages
@@ -98,8 +117,12 @@ Every message is a frame:
 Enumerations:
 
 - `api`: 1 Vulkan, 2 Direct3D 12, 3 Metal.
-- `format`: 1 `RGBA8_SRGB` (`VK_FORMAT_R8G8B8A8_SRGB`). `Welcome.formats` has
-  bit `1 << format` set for each format the consumer takes.
+- `format`: 1 `RGBA8_SRGB` (`VK_FORMAT_R8G8B8A8_SRGB`,
+  `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB`), 2 `BGRA8_SRGB`
+  (`MTLPixelFormatBGRA8Unorm_sRGB` on an IOSurface of pixel format `'BGRA'`).
+  A ring is `RGBA8_SRGB` on Vulkan and Direct3D 12 and `BGRA8_SRGB` on Metal.
+  `Welcome.formats` has bit `1 << format` set for each format the consumer
+  takes.
 - `pacing`: 0 paced, 1 free.
 - `Reject.reason`: 1 token, 2 version, 3 api, 4 adapter, 5 channel,
   6 unsupported (the consumer has no GPU to import into), 7 busy (another
@@ -145,7 +168,9 @@ bits: 1 shift, 2 control, 4 alt, 8 meta.
 1. P sends `Hello` with the token from the endpoint string, the channel, the
    API it renders with, and its GPU.
 2. C checks the token, the major version, the channel, the API and the GPU
-   (device and driver UUIDs on Vulkan). Any mismatch is answered with
+   (device and driver UUIDs on Vulkan, the adapter LUID on Direct3D 12, the
+   registry id on Metal; `Hello.adapter` fields an API does not have are
+   zero). Any mismatch is answered with
    `Reject`, which carries the consumer's own GPU so the producer can say
    which one to start on; then the consumer closes the connection. Otherwise
    C answers `Welcome`: the frame size it wants, the pacing, the ring sizes it
@@ -223,6 +248,73 @@ The waits are what order the two GPUs' work: each side finishes its barriers
 before the message that hands the image over, so no semaphore crosses the
 processes.
 
+### Buffers on Direct3D 12
+
+Each buffer is a committed resource the producer creates with
+`ID3D12Device::CreateCommittedResource` on a `D3D12_HEAP_TYPE_DEFAULT` heap
+with `D3D12_HEAP_FLAG_SHARED`, in state `D3D12_RESOURCE_STATE_COMMON`:
+
+- `D3D12_RESOURCE_DIMENSION_TEXTURE2D`, `width` x `height`, one array layer,
+  one mip level, one sample, `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB`,
+  `D3D12_TEXTURE_LAYOUT_UNKNOWN`;
+- flags `D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS` and whatever the
+  producer draws with (`ALLOW_RENDER_TARGET`, `ALLOW_UNORDERED_ACCESS`);
+  `Buffers.usage` is these `D3D12_RESOURCE_FLAGS`.
+
+The producer exports each with `ID3D12Device::CreateSharedHandle`
+(`GENERIC_ALL`, no name) and puts the handle's value in the buffer's `handle`.
+The handle does not travel: the consumer copies it out of the producer's
+process with `DuplicateHandle` (`DUPLICATE_SAME_ACCESS`), from the process the
+pipe names as its client (`GetNamedPipeClientProcessId`), and opens it with
+`ID3D12Device::OpenSharedHandle`. So the producer keeps every handle open until
+`BuffersAccepted` or `BuffersRejected` for its ring has arrived, and may close
+them then; the consumer's resources keep the memory alive. Nothing is named,
+so no other process can open the frames. `alloc_size`, `memory_type`,
+`offset`, `row_pitch` and `modifier` are zero, and so is `Buffers.flags`.
+
+Both sides must run on the same adapter, which the handshake checks by LUID.
+
+`ALLOW_SIMULTANEOUS_ACCESS` is what lets two devices that each track resource
+state on their own agree on it: such a resource decays to `COMMON` after every
+`ExecuteCommandLists` that used it and is promoted implicitly on its next use,
+so no barrier crosses the processes, and the image is never compressed. The
+order of the two GPUs' work comes from the messages, as on every API: each
+side waits for its GPU to finish its work on an image before the message that
+hands the image over.
+
+### Buffers on Metal
+
+Each buffer is an IOSurface the producer creates with `IOSurfaceCreate`:
+`width` x `height`, 4 bytes per element, pixel format `'BGRA'`
+(`0x42475241`), no other plane. The producer draws into it through a texture
+made with `-[MTLDevice newTextureWithDescriptor:iosurface:plane:]`
+(`MTLPixelFormatBGRA8Unorm_sRGB`, plane 0); `Buffers.usage` is that texture's
+`MTLTextureUsage`, and must include `MTLTextureUsageShaderRead`. The consumer
+makes its own texture on the same IOSurface the same way.
+
+A Mach port cannot travel over a Unix socket, so a ring's buffers go beside
+it. Before it sends `Buffers`, the producer looks up the endpoint's `mach`
+service (`bootstrap_look_up`) and sends it one Mach message carrying, in
+buffer order, a send right per buffer from `IOSurfaceCreateMachPort`:
+
+- a complex message (`MACH_MSGH_BITS_COMPLEX`), one port descriptor per
+  buffer with disposition `MACH_MSG_TYPE_COPY_SEND`;
+- after the descriptors, three `u32`s: `0x4c535052` (`'LSPR'`), the ring's
+  `generation`, and the number of ports.
+
+Each buffer's `handle` is its index among the ports. The consumer receives the
+message with an audit trailer and takes it as the ring's only when the sender's
+process id there is the process at the other end of the socket
+(`LOCAL_PEERPID`) and the generation matches; it finds each surface with
+`IOSurfaceLookupFromMachPort`. Rings from any other process are ignored. The
+producer may release its own send rights once the message is sent. The
+consumer keeps the IOSurfaces alive on its own. `alloc_size`, `memory_type`,
+`offset`, `row_pitch`, `modifier` and `Buffers.flags` are zero.
+
+Both sides should run on the same GPU, which the handshake checks by registry
+id. Each side waits for its command buffers on an image to complete before the
+message that hands the image over; no event crosses the processes.
+
 ### Frames
 
 - P renders into a free slot of the newest generation, waits until its GPU
@@ -296,9 +388,15 @@ reports what took effect with a `lock` input. Escape always ends a lock.
 ## Versions
 
 The major version changes when a message's layout does. A consumer refuses a
-producer on another major. Minor versions add message types and capability
-bits; a message of a type the receiver does not know is skipped when its
-sender set flag bit 1, and ends the session otherwise.
+producer on another major. Minor versions add message types, capability bits
+and enumeration values; a message of a type the receiver does not know is
+skipped when its sender set flag bit 1, and ends the session otherwise.
+
+- 1.0: Linux, Vulkan.
+- 1.1: Windows with Direct3D 12 over a named pipe, macOS with Metal over a
+  Unix socket and Mach ports; the `BGRA8_SRGB` format; the `dx` and `mtl`
+  adapter forms and the `pipe` transport and `mach` key of the endpoint
+  string.
 
 ## Key codes
 
