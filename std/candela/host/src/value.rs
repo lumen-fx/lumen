@@ -44,6 +44,14 @@ pub fn candela_value_to_script(v: &Value) -> ScriptValue {
                 .map(|(k, val)| (k.clone(), candela_value_to_script(val)))
                 .collect(),
         ),
+        // The host value has no struct of its own, so a struct is the record
+        // of its fields, the shape a map already has on the host side.
+        Value::Struct { fields, .. } => ScriptValue::Map(
+            fields
+                .iter()
+                .map(|(k, val)| (k.clone(), candela_value_to_script(val)))
+                .collect(),
+        ),
         // An enum travels out of a script only (candela refuses one as a call
         // argument), and the host value has no variant of its own, so it
         // arrives externally tagged, the shape a JSON reader already expects: a
