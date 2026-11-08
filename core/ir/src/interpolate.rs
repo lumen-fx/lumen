@@ -171,11 +171,19 @@ pub fn substitute_attrs(
         out.style_role.as_mut(),
         out.placeholder.as_mut(),
         out.drag_payload.as_mut(),
+        out.tooltip.as_mut().map(|tooltip| &mut tooltip.text),
     ]
     .into_iter()
     .flatten()
     .chain(out.classes.iter_mut())
-    {
+    // A custom widget reads its props out of the attributes it was written
+    // with, so those take the row's values the way built-in text does.
+    .chain(
+        out.widget_attributes
+            .iter_mut()
+            .flatten()
+            .map(|(_, value)| value),
+    ) {
         substitute(text);
     }
     // `class` is a whitespace-separated list once the values are in, as in
@@ -204,10 +212,18 @@ pub fn carries_placeholder(attrs: &Attributes) -> bool {
         attrs.style_role.as_ref(),
         attrs.placeholder.as_ref(),
         attrs.drag_payload.as_ref(),
+        attrs.tooltip.as_ref().map(|tooltip| &tooltip.text),
     ]
     .into_iter()
     .flatten()
     .chain(attrs.classes.iter())
+    .chain(
+        attrs
+            .widget_attributes
+            .iter()
+            .flatten()
+            .map(|(_, value)| value),
+    )
     .any(|text| text.contains('{'))
 }
 
@@ -596,6 +612,55 @@ mod tests {
             out.classes,
             ["row", "a", "b"],
             "split on whitespace, empties dropped"
+        );
+    }
+
+    /// A tooltip's body is text like a label's, so a row field in it, or
+    /// two of them in one value, resolves against the row.
+    #[test]
+    fn a_tooltip_body_resolves_against_the_row() {
+        let store = PropertyStore::default();
+        let row = item(&[("source", "net"), ("text", "timed out")]);
+        let attrs = Attributes {
+            tooltip: Some(crate::layout_ir::TooltipSpec {
+                text: "{row.source}: {row.text}".to_string(),
+                translatable: None,
+                delay_ms: None,
+                offset: None,
+            }),
+            ..Attributes::default()
+        };
+        assert!(carries_placeholder(&attrs));
+        let scope = Scope::new(&store).with_row(&row, 0);
+        let out = substitute_attrs(&attrs, &[], &scope).expect("the body resolves");
+        let tooltip = out.tooltip.expect("the tooltip survives");
+        assert_eq!(tooltip.text, "net: timed out");
+    }
+
+    /// A custom widget reads its props out of the attributes it was written
+    /// with, so a row field in one reaches the widget resolved.
+    #[test]
+    fn a_custom_widget_attribute_resolves_against_the_row() {
+        let store = PropertyStore::default();
+        let row = item(&[("name", "alpha")]);
+        let attrs = Attributes {
+            widget_attributes: Some(vec![
+                ("greeting".to_string(), "hi {row.name}".to_string()),
+                ("size".to_string(), "3".to_string()),
+            ]),
+            ..Attributes::default()
+        };
+        assert!(carries_placeholder(&attrs));
+        let scope = Scope::new(&store).with_row(&row, 0);
+        let out = substitute_attrs(&attrs, &[], &scope).expect("the prop resolves");
+        assert_eq!(
+            out.widget_attributes.as_deref(),
+            Some(
+                &[
+                    ("greeting".to_string(), "hi alpha".to_string()),
+                    ("size".to_string(), "3".to_string()),
+                ][..]
+            )
         );
     }
 

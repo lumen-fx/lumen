@@ -56,7 +56,8 @@ list do not see it. Text fields (`<input>`, `<textarea>`) are the exception;
 their text always fills the field.
 
 `{...}` placeholders are substituted in `text`, `placeholder`, `src`,
-`id`, `class`, `style`, and `drag-payload`:
+`id`, `class`, `style`, `drag-payload`, a `<tooltip>`'s `text`, and every
+attribute of a custom widget's tag:
 
 | Placeholder | Resolves to |
 | --- | --- |
