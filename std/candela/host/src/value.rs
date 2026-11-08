@@ -4,7 +4,7 @@
 //! structured value round-trips across a host call, a derivation recompute, and
 //! the signal mirror without being flattened to text.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use candela_vm::Value;
 use lumen_script::ScriptValue;
@@ -20,12 +20,25 @@ pub fn script_value_to_candela(v: &ScriptValue) -> Value {
         ScriptValue::Array(items) => {
             Value::Array(items.iter().map(script_value_to_candela).collect())
         }
-        ScriptValue::Map(m) => Value::Map(
+        ScriptValue::Map(m) => Value::Map(candela_map(
             m.iter()
-                .map(|(k, val)| (k.clone(), script_value_to_candela(val)))
-                .collect(),
-        ),
+                .map(|(k, val)| (k.clone(), script_value_to_candela(val))),
+        )),
     }
+}
+
+/// Build a candela map from its entries, the last of a repeated key winning.
+///
+/// Inserted one entry at a time rather than collected: collecting sorts the
+/// entries first, and each call site would link its own copy of that sort.
+pub(crate) fn candela_map(
+    entries: impl IntoIterator<Item = (String, Value)>,
+) -> BTreeMap<String, Value> {
+    let mut map = BTreeMap::new();
+    for (key, value) in entries {
+        map.insert(key, value);
+    }
+    map
 }
 
 /// Marshal a candela [`Value`] back into a [`ScriptValue`].

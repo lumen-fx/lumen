@@ -392,12 +392,11 @@ pub fn popup_nav_lifecycle(
     if nav.0.is_some() {
         return;
     }
-    let mut open_panels: Vec<(Entity, &PopupPanel)> = panels
+    let Some((panel_e, panel)) = panels
         .iter()
         .filter(|(_, p)| store.get_global_bool(&p.open_signal) == Some(true))
-        .collect();
-    open_panels.sort_by_key(|(e, _)| *e);
-    let Some((panel_e, panel)) = open_panels.into_iter().next() else {
+        .min_by_key(|(e, _)| *e)
+    else {
         return;
     };
     let prev_focus = tracker.0;

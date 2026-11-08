@@ -17,7 +17,7 @@ use lumen_script::{
     Credentials, ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, with_call_scratch,
 };
 
-use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
+use crate::value::{array_to_rows, candela_map, candela_value_to_script, script_value_to_candela};
 
 /// The candela host namespace every Lumen builtin is registered under. Scripts
 /// reach a builtin as `lumen::<name>(...)` after declaring it in a
@@ -500,12 +500,11 @@ fn as_declared(ty: &ScriptTy, value: &ScriptValue) -> Value {
                 .map(|item| as_declared(inner, item))
                 .collect(),
         ),
-        ScriptTy::Map(inner) => Value::Map(
+        ScriptTy::Map(inner) => Value::Map(candela_map(
             entries(value)
                 .into_iter()
-                .map(|(k, v)| (k, as_declared(inner, &v)))
-                .collect(),
-        ),
+                .map(|(k, v)| (k, as_declared(inner, &v))),
+        )),
         // Never a typed return (see `typed_signature`); the value goes back
         // as the map it is.
         ScriptTy::Any | ScriptTy::Dynamic | ScriptTy::Struct(_) => script_value_to_candela(value),
@@ -790,12 +789,11 @@ fn register_runtime_state<S: HostFnSink>(engine: &mut S) {
                         ),
                         (
                             "declarations".to_owned(),
-                            Value::Map(
+                            Value::Map(candela_map(
                                 rule.declarations
                                     .into_iter()
-                                    .map(|(k, v)| (k, Value::String(v)))
-                                    .collect(),
-                            ),
+                                    .map(|(k, v)| (k, Value::String(v))),
+                            )),
                         ),
                     ]))
                 })

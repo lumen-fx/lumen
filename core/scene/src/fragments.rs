@@ -145,11 +145,12 @@ pub fn instance_body(fragment: &Fragment) -> Result<&Element, FragmentFault> {
 /// something the fragment does not declare is kept, so a body written
 /// against a wider parameter list than its declaration still resolves.
 pub fn bind_args(fragment: &Fragment, args: &[(String, String)]) -> BTreeMap<String, String> {
-    let mut bound: BTreeMap<String, String> = fragment
-        .params
-        .iter()
-        .map(|p| (p.name.clone(), p.default.clone().unwrap_or_default()))
-        .collect();
+    // Inserted rather than collected: collecting sorts first, and that sort
+    // is code of its own in every binary that links this.
+    let mut bound = BTreeMap::new();
+    for p in &fragment.params {
+        bound.insert(p.name.clone(), p.default.clone().unwrap_or_default());
+    }
     for (name, value) in args {
         bound.insert(name.clone(), value.clone());
     }

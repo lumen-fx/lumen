@@ -52,11 +52,13 @@ fn to_json_value(value: &ScriptValue) -> serde_json::Value {
         ScriptValue::Map(fields) => {
             let mut keys: Vec<&String> = fields.keys().collect();
             keys.sort();
-            serde_json::Value::Object(
-                keys.into_iter()
-                    .map(|key| (key.clone(), to_json_value(&fields[key])))
-                    .collect(),
-            )
+            // Inserted rather than collected: collecting sorts the entries
+            // again, and that sort is code of its own in every binary.
+            let mut object = serde_json::Map::new();
+            for key in keys {
+                object.insert(key.clone(), to_json_value(&fields[key]));
+            }
+            serde_json::Value::Object(object)
         }
     }
 }
