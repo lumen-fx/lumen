@@ -19,12 +19,12 @@
 use crate::layout_ir::{
     Attributes, BgSpec, CursorSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
     ImageRenderingSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError,
-    PositionSpec, Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec,
-    TextWrapSpec, TrackSizeSpec, TransitionIr, TransitionPropertyIr,
+    PlaceholderStyle, PositionSpec, Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec,
+    TextAlignSpec, TextWrapSpec, TrackSizeSpec, TransitionIr, TransitionPropertyIr,
 };
 use crate::values::{
-    bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_inset_edges,
-    parse_inset_term, parse_length,
+    bad, parse_bg, parse_color, parse_edges, parse_f32, parse_font_weight, parse_i32,
+    parse_inset_edges, parse_inset_term, parse_length,
 };
 use lumen_core::node::ElementState;
 use std::rc::Rc;
@@ -3287,30 +3287,27 @@ fn apply_placeholder_declaration(
     value: &str,
     attrs: &mut Attributes,
 ) -> Result<bool, ParseError> {
-    if !matches!(
-        name,
-        "text-color" | "opacity" | "font-size" | "font-weight" | "font-family"
-    ) {
-        return Err(crate::values::bad(
-            ctx,
-            name,
-            value,
-            "::placeholder takes color, opacity, font-size, font-weight and font-family; \
-             declaration ignored"
-                .into(),
-        ));
+    // Each value is parsed before the style is created, so a declaration
+    // that fails to parse leaves the element as it was.
+    fn style(attrs: &mut Attributes) -> &mut PlaceholderStyle {
+        attrs.placeholder_style.get_or_insert_with(Default::default)
     }
-    let mut parsed = Attributes::default();
-    if !apply_declaration(ctx, name, value, &mut parsed)? {
-        return Ok(false);
-    }
-    let style = attrs.placeholder_style.get_or_insert_with(Default::default);
     match name {
-        "text-color" => style.text_color = parsed.text_color,
-        "opacity" => style.opacity = parsed.opacity,
-        "font-size" => style.font_size = parsed.font_size,
-        "font-weight" => style.font_weight = parsed.font_weight,
-        _ => style.font_family = parsed.font_family,
+        "text-color" => style(attrs).text_color = Some(parse_color(ctx, name, value)?),
+        "opacity" => style(attrs).opacity = Some(parse_opacity(ctx, name, value)?),
+        "font-size" => style(attrs).font_size = Some(parse_f32(ctx, name, value)?),
+        "font-weight" => style(attrs).font_weight = Some(parse_font_weight(ctx, name, value)?),
+        "font-family" => style(attrs).font_family = Some(value.trim().to_string()),
+        _ => {
+            return Err(bad(
+                ctx,
+                name,
+                value,
+                "::placeholder takes color, opacity, font-size, font-weight and font-family; \
+                 declaration ignored"
+                    .into(),
+            ));
+        }
     }
     Ok(true)
 }
@@ -3691,6 +3688,11 @@ fn border_shorthand_to_paint(
         }
         _ => None,
     }
+}
+
+/// `opacity`: a number, clamped to 0..=1 as CSS clamps it.
+fn parse_opacity(ctx: &str, name: &str, value: &str) -> Result<f32, ParseError> {
+    Ok(parse_f32(ctx, name, value)?.clamp(0.0, 1.0))
 }
 
 /// Returns `Ok(true)` when the property is known, `Ok(false)` when it
@@ -4276,10 +4278,7 @@ fn apply_declaration(
         "max-width" => attrs.max_width = Some(parse_length(ctx, name, value)?),
         "max-height" => attrs.max_height = Some(parse_length(ctx, name, value)?),
         "aspect-ratio" => attrs.aspect_ratio = Some(parse_f32(ctx, name, value)?),
-        "opacity" => {
-            let v = parse_f32(ctx, name, value)?;
-            attrs.opacity = Some(v.clamp(0.0, 1.0));
-        }
+        "opacity" => attrs.opacity = Some(parse_opacity(ctx, name, value)?),
         // CSS-authored replacement for the runtime's generic
         // `:disabled` dimming fallback - the amount used when the
         // author set neither `disabled-bg` nor an explicit

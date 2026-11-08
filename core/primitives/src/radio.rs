@@ -31,6 +31,7 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{Color, DocumentOrder, Selected, Visuals};
 use lumen_core::style_overrides::{StyleOverrides, StyleOwner};
+use std::cmp::Ordering;
 
 use crate::held::{hold_fill, release_fill};
 use lumen_core::input::ControlInput;
@@ -177,6 +178,13 @@ pub fn dispatch_radio_clicks(
     }
 }
 
+/// Order a group's members as the markup does, by document order then entity.
+/// A named function rather than a closure per call site, so the sorts that
+/// share a member type share one copy of the sort code.
+fn by_document_order<V>(a: &(u32, Entity, V, bool), b: &(u32, Entity, V, bool)) -> Ordering {
+    a.0.cmp(&b.0).then(a.1.cmp(&b.1))
+}
+
 /// Mirror each group's signal onto the [`Selected`] marker, and
 /// enforce exactly-one-selected: a group whose signal is unset (or
 /// empty) gets its first enabled member (markup order) selected and
@@ -205,7 +213,7 @@ pub fn sync_radio_selected(
         ));
     }
     for (group, mut members) in groups {
-        members.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        members.sort_by(by_document_order);
         let current = store.get_global_str(group);
         let value_known = current
             .as_deref()
@@ -256,7 +264,7 @@ pub fn sync_radio_tab_index(
         ));
     }
     for (group, mut members) in groups {
-        members.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        members.sort_by(by_document_order);
         let current = store.get_global_str(&group);
         let holder = members
             .iter()
@@ -315,7 +323,7 @@ pub fn radio_group_keys(
             )
         })
         .collect();
-    members.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    members.sort_by(by_document_order);
     let Some(current_index) = members.iter().position(|(_, e, ..)| *e == current) else {
         keys.read().for_each(drop);
         return;
