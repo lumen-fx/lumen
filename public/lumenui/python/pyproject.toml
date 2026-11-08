@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 name = "lumenui"
 description = "Python SDK for the Lumen UI framework, over its C ABI via ctypes"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MPL-2.0"
 authors = [{ name = "Lumen contributors" }]
 keywords = ["lumen", "ui", "gui", "ctypes", "ffi"]
