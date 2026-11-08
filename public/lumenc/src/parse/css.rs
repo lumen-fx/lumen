@@ -11,7 +11,7 @@
 //! rule        := selector_list "{" declaration* "}"
 //! selector_list := compound (combinator compound)* ("," compound (combinator compound)*)*
 //! combinator  := " " | ">" | "+" | "~"
-//! compound    := tag? ("." class | "#" id | ":" pseudo_class)*
+//! compound    := tag? ("." class | "#" id | ":" pseudo_class)* ("::" "placeholder")?
 //! pseudo_class:= "hover" | "focus" | "focus-visible" | "active"
 //!              | "disabled" | "checked" | "selected"
 //!              | "first-child" | "last-child"
@@ -55,8 +55,8 @@ use crate::layout_ir::{Attributes, DisplaySpec, Element, FlexAlign, LayoutIR, Tr
 // Top-level parser
 // ---------------------------------------------------------------------------
 
-/// Maximum nesting depth for recursive CSS constructs (`@media` blocks and
-/// `:not()`/`:is()`/`:where()` selector lists). Past this, the parser returns
+/// Maximum nesting depth for `@media` blocks (selector lists have the same
+/// cap, in `lumen_ir::css::parse_selector_list`). Past this, the parser returns
 /// a `ParseError` rather than recursing further - the recursion is unbounded
 /// on hostile input and a stack overflow is a SIGSEGV, not a catchable panic.
 const MAX_NEST_DEPTH: u32 = 32;
@@ -258,7 +258,7 @@ fn parse_rule(
         .find('{')
         .ok_or_else(|| ParseError::Xml("css: rule missing '{'".into()))?;
     let selector_src = input[..brace].trim();
-    let selectors = parse_selector_list_local(selector_src, 0).map_err(ParseError::Xml)?;
+    let selectors = parse_selector_list(selector_src).map_err(ParseError::Xml)?;
     let after = &input[brace + 1..];
     let close = find_matching_brace(after)
         .ok_or_else(|| ParseError::Xml("css: rule missing '}'".into()))?;
@@ -386,346 +386,6 @@ fn split_top_level_semicolons(s: &str) -> Vec<&str> {
     }
     out.push(&s[start..]);
     out
-}
-
-// ---------------------------------------------------------------------------
-// Selector parser (Selectors-4 subset)
-// ---------------------------------------------------------------------------
-
-fn parse_selector_list_local(src: &str, depth: u32) -> Result<Vec<SelectorBuf>, String> {
-    if depth > MAX_NEST_DEPTH {
-        return Err(format!(
-            "css: selector nesting (:not/:is/:where) exceeded depth {MAX_NEST_DEPTH}"
-        ));
-    }
-    let trimmed = src.trim();
-    if trimmed.is_empty() {
-        return Err("css: empty selector".into());
-    }
-    let mut out = Vec::new();
-    for piece in split_top_level_commas(trimmed) {
-        let p = piece.trim();
-        if p.is_empty() {
-            return Err("css: empty selector in list".into());
-        }
-        out.push(parse_selector(p, depth)?);
-    }
-    Ok(out)
-}
-
-fn split_top_level_commas(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let bytes = s.as_bytes();
-    let mut depth: i32 = 0;
-    let mut start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => depth -= 1,
-            b',' if depth == 0 => {
-                out.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    out.push(&s[start..]);
-    out
-}
-
-fn parse_selector(src: &str, depth: u32) -> Result<SelectorBuf, String> {
-    let tokens = tokenize_selector(src)?;
-    if tokens.is_empty() {
-        return Err(format!("css: empty selector '{src}'"));
-    }
-    let mut chain: Vec<(Combinator, CompoundSelector)> = Vec::new();
-    let mut pending = Combinator::Subject;
-    let mut i = 0usize;
-    loop {
-        while matches!(tokens.get(i), Some(SelTok::Whitespace)) {
-            i += 1;
-        }
-        if i >= tokens.len() {
-            break;
-        }
-        let (compound, consumed) = read_compound(&tokens[i..], depth)?;
-        if compound.is_empty() {
-            return Err(format!("css: empty compound in '{src}'"));
-        }
-        chain.push((pending, compound));
-        i += consumed;
-        let mut ws_seen = false;
-        while matches!(tokens.get(i), Some(SelTok::Whitespace)) {
-            ws_seen = true;
-            i += 1;
-        }
-        if i >= tokens.len() {
-            break;
-        }
-        pending = match tokens.get(i) {
-            Some(SelTok::ChildCombinator) => {
-                i += 1;
-                Combinator::Child
-            }
-            Some(SelTok::AdjacentSibling) => {
-                i += 1;
-                Combinator::AdjacentSibling
-            }
-            Some(SelTok::GeneralSibling) => {
-                i += 1;
-                Combinator::GeneralSibling
-            }
-            _ if ws_seen => Combinator::Descendant,
-            _ => Combinator::Descendant,
-        };
-        while matches!(tokens.get(i), Some(SelTok::Whitespace)) {
-            i += 1;
-        }
-    }
-    if chain.is_empty() {
-        return Err(format!("css: empty selector '{src}'"));
-    }
-    Ok(SelectorBuf { chain })
-}
-
-#[derive(Debug, Clone)]
-enum SelTok {
-    Whitespace,
-    Tag(String),
-    Class(String),
-    Id(String),
-    Pseudo(String, Option<String>),
-    ChildCombinator,
-    AdjacentSibling,
-    GeneralSibling,
-}
-
-fn tokenize_selector(src: &str) -> Result<Vec<SelTok>, String> {
-    let bytes = src.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        match c {
-            b' ' | b'\t' | b'\n' | b'\r' => {
-                out.push(SelTok::Whitespace);
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-                    i += 1;
-                }
-            }
-            b'>' => {
-                out.push(SelTok::ChildCombinator);
-                i += 1;
-            }
-            b'+' => {
-                out.push(SelTok::AdjacentSibling);
-                i += 1;
-            }
-            b'~' => {
-                out.push(SelTok::GeneralSibling);
-                i += 1;
-            }
-            b'.' => {
-                i += 1;
-                let s = read_ident(bytes, &mut i)?;
-                out.push(SelTok::Class(s));
-            }
-            b'#' => {
-                i += 1;
-                let s = read_ident(bytes, &mut i)?;
-                out.push(SelTok::Id(s));
-            }
-            b':' => {
-                i += 1;
-                if i < bytes.len() && bytes[i] == b':' {
-                    return Err(format!(
-                        "css: pseudo-elements not supported (got '::') in '{src}'"
-                    ));
-                }
-                let name = read_ident(bytes, &mut i)?;
-                let args = if i < bytes.len() && bytes[i] == b'(' {
-                    let close = find_matching_paren(&src[i..])
-                        .ok_or_else(|| format!("css: unterminated '(' in pseudo ':{name}'"))?;
-                    let inner = src[i + 1..i + close].to_string();
-                    i += close + 1;
-                    Some(inner)
-                } else {
-                    None
-                };
-                out.push(SelTok::Pseudo(name, args));
-            }
-            b'*' => {
-                out.push(SelTok::Tag("*".into()));
-                i += 1;
-            }
-            _ if is_ident_start(c) => {
-                let s = read_ident(bytes, &mut i)?;
-                out.push(SelTok::Tag(s));
-            }
-            other => {
-                return Err(format!(
-                    "css: unexpected char '{}' in selector '{src}'",
-                    other as char
-                ));
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn is_ident_start(c: u8) -> bool {
-    c.is_ascii_alphabetic() || c == b'_' || c == b'-'
-}
-
-fn is_ident_cont(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'_' || c == b'-'
-}
-
-fn read_ident(bytes: &[u8], i: &mut usize) -> Result<String, String> {
-    let start = *i;
-    while *i < bytes.len() && is_ident_cont(bytes[*i]) {
-        *i += 1;
-    }
-    if *i == start {
-        return Err(format!("css: expected identifier at byte {start}"));
-    }
-    Ok(std::str::from_utf8(&bytes[start..*i])
-        .map_err(|e| format!("css: non-utf8 selector: {e}"))?
-        .to_string())
-}
-
-fn find_matching_paren(s: &str) -> Option<usize> {
-    // `s` starts with `(`. Returns the byte index of the matching `)`.
-    let bytes = s.as_bytes();
-    let mut depth: i32 = 0;
-    for (i, &c) in bytes.iter().enumerate() {
-        match c {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn read_compound(toks: &[SelTok], depth: u32) -> Result<(CompoundSelector, usize), String> {
-    let mut out = CompoundSelector::default();
-    let mut i = 0;
-    while i < toks.len() {
-        match &toks[i] {
-            SelTok::Tag(t) => {
-                if out.tag.is_some() || !out.classes.is_empty() || out.id.is_some() {
-                    // Tag must be first per Selectors-4; ambiguous
-                    // compound - bail.
-                    break;
-                }
-                out.tag = if t == "*" { None } else { Some(t.clone()) };
-                i += 1;
-            }
-            SelTok::Class(c) => {
-                out.classes.push(c.clone());
-                i += 1;
-            }
-            SelTok::Id(id) => {
-                out.id = Some(id.clone());
-                i += 1;
-            }
-            SelTok::Pseudo(name, args) => {
-                let p = parse_pseudo(name, args.as_deref(), depth)?;
-                out.pseudo_classes.push(p);
-                i += 1;
-            }
-            _ => break,
-        }
-    }
-    Ok((out, i))
-}
-
-fn parse_pseudo(name: &str, args: Option<&str>, depth: u32) -> Result<PseudoClass, String> {
-    match name {
-        "hover" => no_args(name, args).map(|_| PseudoClass::Hover),
-        "focus" => no_args(name, args).map(|_| PseudoClass::Focus),
-        "focus-visible" => no_args(name, args).map(|_| PseudoClass::FocusVisible),
-        "active" => no_args(name, args).map(|_| PseudoClass::Active),
-        "disabled" => no_args(name, args).map(|_| PseudoClass::Disabled),
-        "checked" => no_args(name, args).map(|_| PseudoClass::Checked),
-        "selected" => no_args(name, args).map(|_| PseudoClass::Selected),
-        "drag-over" => no_args(name, args).map(|_| PseudoClass::DragOver),
-        "root" => no_args(name, args).map(|_| PseudoClass::Root),
-        "first-child" => no_args(name, args).map(|_| PseudoClass::FirstChild),
-        "last-child" => no_args(name, args).map(|_| PseudoClass::LastChild),
-        "only-child" => no_args(name, args).map(|_| PseudoClass::OnlyChild),
-        "empty" => no_args(name, args).map(|_| PseudoClass::Empty),
-        "nth-child" => {
-            let a = args.ok_or_else(|| "css: :nth-child requires '(an+b)'".to_string())?;
-            Ok(PseudoClass::NthChild(parse_anb(a)?))
-        }
-        "is" => {
-            let a = args.ok_or_else(|| "css: :is requires '(selector-list)'".to_string())?;
-            Ok(PseudoClass::Is(parse_selector_list_local(a, depth + 1)?))
-        }
-        "where" => {
-            let a = args.ok_or_else(|| "css: :where requires '(selector-list)'".to_string())?;
-            Ok(PseudoClass::Where(parse_selector_list_local(a, depth + 1)?))
-        }
-        "not" => {
-            let a = args.ok_or_else(|| "css: :not requires '(selector-list)'".to_string())?;
-            Ok(PseudoClass::Not(parse_selector_list_local(a, depth + 1)?))
-        }
-        other => Err(format!(
-            "css: unknown pseudo-class ':{other}' (supported: :hover, :focus, :focus-visible, :active, :disabled, :checked, :selected, :drag-over, :root, :first-child, :last-child, :only-child, :empty, :nth-child, :is, :where, :not)"
-        )),
-    }
-}
-
-fn no_args(name: &str, args: Option<&str>) -> Result<(), String> {
-    if args.is_some() {
-        Err(format!("css: ':{name}' takes no arguments"))
-    } else {
-        Ok(())
-    }
-}
-
-fn parse_anb(src: &str) -> Result<AnB, String> {
-    let s = src.trim().to_ascii_lowercase();
-    match s.as_str() {
-        "odd" => return Ok(AnB { a: 2, b: 1 }),
-        "even" => return Ok(AnB { a: 2, b: 0 }),
-        _ => {}
-    }
-    if let Some(idx) = s.find('n') {
-        let a_part = s[..idx].trim();
-        let b_part = s[idx + 1..].trim();
-        let a = if a_part.is_empty() || a_part == "+" {
-            1
-        } else if a_part == "-" {
-            -1
-        } else {
-            a_part
-                .parse::<i32>()
-                .map_err(|e| format!("css: bad :nth-child a-coefficient '{a_part}': {e}"))?
-        };
-        let b = if b_part.is_empty() {
-            0
-        } else {
-            let bp = b_part.replace(' ', "");
-            bp.parse::<i32>()
-                .map_err(|e| format!("css: bad :nth-child b-coefficient '{b_part}': {e}"))?
-        };
-        Ok(AnB { a, b })
-    } else {
-        let b = s
-            .parse::<i32>()
-            .map_err(|e| format!("css: bad :nth-child '{s}': {e}"))?;
-        Ok(AnB { a: 0, b })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,6 +1328,95 @@ mod cascade_tests {
     fn pseudo_elements_rejected() {
         let r = parse_css(".x::before { bg: #fff; }");
         assert!(r.is_err(), "::pseudo-element must be a hard parse error");
+    }
+
+    /// A `::placeholder` rule styles the hint an empty field shows and
+    /// leaves the field's own text alone.
+    #[test]
+    fn a_placeholder_rule_styles_the_hint_not_the_field() {
+        let mut ir =
+            parse_html(r#"<root><input class="name" placeholder="Name" /></root>"#).expect("html");
+        let css = parse_css(
+            ".name { color: #ffffff; } \
+             .name::placeholder { color: #808080; opacity: 0.5; font-size: 12; \
+             font-weight: bold; font-family: serif; }",
+        )
+        .expect("css");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let attrs = &ir.root.children[0].attrs;
+        let field = attrs.text_color.expect("the field keeps its color");
+        assert!(field.r > 0.99, "the field's text stays white");
+        let hint = attrs
+            .placeholder_style
+            .as_deref()
+            .expect("the hint is styled");
+        let color = hint.text_color.expect("color");
+        assert!((color.r - 0.5).abs() < 0.01, "{color:?}");
+        assert_eq!(hint.opacity, Some(0.5));
+        assert_eq!(hint.font_size, Some(12.0));
+        assert_eq!(hint.font_weight, Some(700));
+        assert_eq!(hint.font_family.as_deref(), Some("serif"));
+    }
+
+    /// A pseudo-element counts like a tag, so `input::placeholder` outranks
+    /// `::placeholder` whatever their order.
+    #[test]
+    fn a_placeholder_rule_weighs_like_a_tag() {
+        let mut ir = parse_html(r#"<root><input placeholder="Name" /></root>"#).expect("html");
+        let css =
+            parse_css("input::placeholder { color: #ff0000; } ::placeholder { color: #0000ff; }")
+                .expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        let hint = ir.root.children[0]
+            .attrs
+            .placeholder_style
+            .as_deref()
+            .expect("styled");
+        assert!(hint.text_color.expect("color").r > 0.99);
+        assert_eq!(
+            selector_to_css(&css.rules[0].selectors[0]),
+            "input::placeholder"
+        );
+    }
+
+    /// The pseudo-element takes the text properties a browser applies to it
+    /// and Lumen draws; anything else is reported and dropped.
+    #[test]
+    fn a_placeholder_rule_reports_a_property_it_cannot_take() {
+        let mut ir = parse_html(r#"<root><input placeholder="Name" /></root>"#).expect("html");
+        let css = parse_css("input::placeholder { padding: 4; color: #ff0000; }").expect("css");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].property, "padding");
+        assert!(ir.root.children[0].attrs.padding.is_none());
+    }
+
+    /// A state with the pseudo-element has no slot on the desktop; the
+    /// stylesheet says so once and the hint keeps its resting style.
+    #[test]
+    fn a_state_placeholder_rule_is_reported_and_left_out() {
+        let mut ir = parse_html(r#"<root><input placeholder="Name" /></root>"#).expect("html");
+        let css = parse_css("input:focus::placeholder { color: #ff0000; }").expect("css");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert!(
+            warnings.iter().any(|w| w.message.contains("::placeholder")),
+            "{warnings:?}"
+        );
+        assert!(ir.root.children[0].attrs.placeholder_style.is_none());
+    }
+
+    #[test]
+    fn a_misplaced_pseudo_element_is_a_parse_error() {
+        for src in [
+            "input::placeholder.x { color: #fff; }",
+            "input::placeholder:hover { color: #fff; }",
+            "input::placeholder .x { color: #fff; }",
+            ":is(input::placeholder) { color: #fff; }",
+            "input::placeholder::placeholder { color: #fff; }",
+        ] {
+            assert!(parse_css(src).is_err(), "{src} must not parse");
+        }
     }
 
     #[test]

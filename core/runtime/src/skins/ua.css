@@ -58,6 +58,12 @@ input, textarea { min-height: 24; min-width: 160; }
 input, textarea { cursor: text; }
 a { cursor: pointer; }
 
+/* The hint an empty field shows is dimmed, the way a browser draws it, so
+   it does not read as a typed value. A skin names the color with the
+   `--lumen-placeholder` token; a skinless app gets the gray Safari uses.
+   An app restyles it with its own `::placeholder` rule. */
+:where(input, textarea)::placeholder { text-color: var(--lumen-placeholder, #a9a9a9); }
+
 /* No text to measure - the track is a fixed theme metric. */
 toggle { height: 36; min-width: 96; }
 /* Compact pill track (iOS / Material switch proportions), narrower

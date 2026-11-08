@@ -65,6 +65,8 @@
   /* Text */
   --lumen-text: #ffffff;
   --lumen-text-muted: #a9b8c9;
+  /* The hint an empty field shows (`::placeholder`). */
+  --lumen-placeholder: var(--lumen-text-muted);
   /* Text-selection highlight. The fill is opaque so it reads on any
      field colour an app authors, not just on this skin's own surface,
      and the glyphs are redrawn in the paired foreground on top of it.

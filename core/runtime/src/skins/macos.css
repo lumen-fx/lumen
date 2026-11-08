@@ -45,6 +45,8 @@
 
   --lumen-text: #000000d9;
   --lumen-text-muted: #00000080;
+  /* The hint an empty field shows (`::placeholder`). */
+  --lumen-placeholder: var(--lumen-text-muted);
   --lumen-text-disabled: #00000040;
   --lumen-disabled-bg: #f5f5f5;
 

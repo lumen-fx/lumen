@@ -17,9 +17,10 @@
 use crate::app::App;
 use crate::components::{
     AnonymousTextBox, CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, Display, EchoMode, Fill,
-    FlexDirection, FlexJustify, ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style,
-    TextAlign, TextBlockOrigin, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle,
-    Transform, Visible, Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
+    FlexDirection, FlexJustify, ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter,
+    PlaceholderStyle, Style, TextAlign, TextBlockOrigin, TextContent, TextInput, TextInputPaint,
+    TextInputScroll, TextStyle, Transform, Visible, Visuals, resolve_line_height,
+    text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use crate::node_ir::{Node, transform_extracted_to_nodes};
@@ -2905,7 +2906,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
         Option<&'a Style>,
         Option<&'a TextInputScroll>,
         Option<&'a EchoMode>,
-        Option<&'a TextInputPaint>,
+        (Option<&'a TextInputPaint>, Option<&'a PlaceholderStyle>),
         Option<&'a TextBlockOrigin>,
         Option<&'a CaretWidth>,
         Option<&'a PasswordCharacter>,
@@ -2927,15 +2928,14 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 style,
                 edit_scroll,
                 echo,
-                paint,
+                (paint, placeholder_style),
                 block_origin,
                 caret_width,
                 password_char,
                 anon,
             )| {
                 let ts = ts.cloned().unwrap_or_default();
-                let size_px = ts.size_px;
-                let line_height_px = resolve_line_height(ts.line_height, size_px);
+                let line_height_px = resolve_line_height(ts.line_height, ts.size_px);
                 let caret_width_px = caret_width.map(|w| w.0).unwrap_or(CARET_WIDTH_PX);
                 let mask_char = password_char.map(|c| c.0).unwrap_or(PASSWORD_MASK_CHAR);
                 let preedit = ime.map(|i| i.preedit.as_str()).unwrap_or("");
@@ -2946,6 +2946,22 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                     Some(i) if text.0.is_empty() && preedit.is_empty() => i.placeholder.as_str(),
                     _ => "",
                 };
+                // A showing placeholder takes what its `::placeholder` rules
+                // set, in the line box the field's own text keeps.
+                let hint = placeholder_style.filter(|_| !placeholder.is_empty());
+                let size_px = hint.and_then(|h| h.size_px).unwrap_or(ts.size_px);
+                let fill = match hint {
+                    Some(h) => {
+                        let mut c = h.color.unwrap_or(ts.color);
+                        c.a *= h.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+                        c
+                    }
+                    None => ts.color,
+                };
+                let family = hint
+                    .and_then(|h| h.family.clone())
+                    .or_else(|| ts.family.clone());
+                let weight = hint.and_then(|h| h.weight).unwrap_or(ts.weight);
                 if input.is_none() && text.0.is_empty() && preedit.is_empty() {
                     return None;
                 }
@@ -3051,7 +3067,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                         origin: Vec2::new(t.absolute.x + text_left, baseline_y) - off - edit_off,
                         text: combined,
                         size_px,
-                        fill: alpha.apply(ts.color),
+                        fill: alpha.apply(fill),
                         caret,
                         selection,
                         selection_color: ts.selection_color.map(|c| alpha.apply(c)),
@@ -3063,8 +3079,8 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                         align,
                         wrap: ts.wrap,
                         max_lines: ts.max_lines,
-                        family: ts.family.clone(),
-                        weight: ts.weight,
+                        family,
+                        weight,
                         line_height_px,
                         caret_width_px,
                         order: paint_order_of(e, &parents, &mut depth_cache),

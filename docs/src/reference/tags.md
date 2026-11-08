@@ -587,7 +587,7 @@ an initial value.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `placeholder` | text | Shown while the field is empty. Accepts `{...}` placeholders. `translatable` on the same element resolves it through `<key>.placeholder`. |
+| `placeholder` | text | Shown while the field is empty, dimmed so it does not read as a value; a `::placeholder` rule restyles it ([CSS](css.md#pseudo-elements)). Accepts `{...}` placeholders. `translatable` on the same element resolves it through `<key>.placeholder`. |
 | `multiline` | boolean | Accept newlines. Defaults to false. |
 | `pattern` | text | The value is valid only if it contains this literal substring. Not a regex. Values starting with `shape:` are reserved for the built-in checks `<date-picker>` and `<time-picker>` attach. |
 | `required` | boolean | The value is valid only if it is non-empty. |
