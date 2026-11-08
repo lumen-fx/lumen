@@ -1,7 +1,7 @@
 # Lumen Python SDK
 
 [![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
-![python](https://img.shields.io/badge/python-3.9%2B-blue)
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
 [![docs](https://img.shields.io/badge/docs-reference%2Fffi-blue)](https://docs.lumenfx.dev/reference/ffi/)
 [![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
 
@@ -186,7 +186,7 @@ completion for `Model` fields, `Signal[T]`, and the `App` methods.
 
 ## Requirements
 
-- Python 3.9+ (stdlib `ctypes` only).
+- Python 3.10+ (stdlib `ctypes` only).
 - The Lumen C library, `liblumen`, built as a shared library.
 - `App.run()` opens an OS window and a GPU surface. For CI or a no-display
   environment, `App.run_headless(ticks)` drives the full app (scripts,

@@ -286,8 +286,8 @@ jobs:
 
   # Two literal jobs, not a matrix: a skipped matrix job never expands, so
   # its per-version required contexts would wait forever on unrelated PRs.
-  python-sdk-39:
-    name: python sdk (3.9)
+  python-sdk-310:
+    name: python sdk (3.10)
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-24.04
@@ -300,10 +300,10 @@ jobs:
         with:
           lfs: false
 
-      # 3.9 is the floor pyproject.toml claims.
+      # 3.10 is the floor pyproject.toml claims.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - run: python -m compileall -q lumen examples tests
 
