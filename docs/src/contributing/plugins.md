@@ -782,7 +782,9 @@ struct Gauge {
 carrying `Gauge { label: "fuel", level: 7 }`, which the widget's systems find
 with `Query<&Gauge>`. Attributes the markup vocabulary also knows, such as
 `width` or `id`, take effect on the element and reach `spawn` too. A `{...}`
-placeholder in a widget's attribute reaches `spawn` as written, unresolved.
+placeholder in a widget's attribute is resolved before `spawn` sees it, the
+way an element's text is: inside a `<for>` row it reads the row's record, and
+a row whose record changes the value builds its widget again.
 Outside markup, spawn the entity first and hand it to `spawn` yourself:
 `Gauge::spawn(world.spawn_empty().id(), &attrs, world)`. A tag registered by
 name alone (`register_widget_tag`, or a runtime module's

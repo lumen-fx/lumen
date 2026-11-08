@@ -2462,8 +2462,8 @@ fn diff_rows(
 /// component each one lands on.
 #[derive(Clone, Copy, Debug, Default)]
 struct RowStringChanges {
-    /// `text` or `placeholder`, which reach the element through
-    /// [`resolve_strings`].
+    /// `text`, `placeholder` or a tooltip's body, which reach the element
+    /// through [`resolve_strings`].
     strings: bool,
     id: bool,
     classes: bool,
@@ -2475,7 +2475,9 @@ struct RowStringChanges {
 impl RowStringChanges {
     fn between(old: &Attributes, new: &Attributes) -> Self {
         Self {
-            strings: old.text != new.text || old.placeholder != new.placeholder,
+            strings: old.text != new.text
+                || old.placeholder != new.placeholder
+                || old.tooltip.as_ref().map(|t| &t.text) != new.tooltip.as_ref().map(|t| &t.text),
             id: old.id != new.id,
             classes: old.classes != new.classes,
             src: old.src != new.src,
@@ -2507,6 +2509,7 @@ fn use_args_differ(old: &Element, new: &Element) -> bool {
 fn same_resolution(old: &Element, new: &Element) -> bool {
     !RowStringChanges::between(&old.attrs, &new.attrs).any()
         && !use_args_differ(old, new)
+        && old.attrs.widget_attributes == new.attrs.widget_attributes
         && old.children.len() == new.children.len()
         && old
             .children
@@ -2537,7 +2540,9 @@ fn plan_row_element(
     if !new.tag.is_empty() && lookup.tags.get(entity).map(|t| &*t.0) != Ok(new.tag.as_str()) {
         return false;
     }
-    if use_args_differ(old, new) {
+    // A custom widget built its component from the attributes it was
+    // written with; new values mean building it again, with the row.
+    if use_args_differ(old, new) || old.attrs.widget_attributes != new.attrs.widget_attributes {
         return false;
     }
     let changes = RowStringChanges::between(&old.attrs, &new.attrs);
