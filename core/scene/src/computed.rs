@@ -13,7 +13,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::world::EntityWorldMut;
 use lumen_core::components::{
     CaretWidth, Color, Fill, ImageFit, ImageRendering, Length, Opacity, PasswordCharacter,
-    ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
+    PlaceholderStyle, ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
 };
 use lumen_core::input::{Cursor, CursorImageRef, CursorKeyword, PointerEvents, ScrollbarStyle};
 use lumen_core::style_overrides::{StyleOverrides, StyleValues};
@@ -127,6 +127,8 @@ pub struct ComputedStyle {
     pub pointer_events: Option<PointerEvents>,
     /// Caret and selected-glyph paint of a text field.
     pub input_paint: Option<TextInputPaint>,
+    /// What the `::placeholder` rules set for a text field's hint.
+    pub placeholder: Option<PlaceholderStyle>,
     /// Caret width of a text field.
     pub caret_width: Option<CaretWidth>,
     /// Mask character of a text field.
@@ -319,6 +321,16 @@ impl ComputedStyle {
                 caret_color: attrs.caret_color.map(Into::into),
                 selection_foreground: attrs.selection_text_color.map(Into::into),
             }),
+            placeholder: is_input
+                .then_some(attrs.placeholder_style.as_deref())
+                .flatten()
+                .map(|p| PlaceholderStyle {
+                    color: p.text_color.map(Into::into),
+                    opacity: p.opacity,
+                    size_px: p.font_size,
+                    weight: p.font_weight,
+                    family: p.font_family.as_deref().map(Into::into),
+                }),
             // Each component's own `Default` carries the runtime's
             // fallback when neither markup nor CSS set one.
             caret_width: is_input.then(|| attrs.caret_width.map(CaretWidth).unwrap_or_default()),
@@ -446,6 +458,7 @@ impl ComputedStyle {
         insert_some(ent, self.cursor);
         insert_some(ent, self.pointer_events);
         insert_some(ent, self.input_paint);
+        insert_some(ent, self.placeholder);
         insert_some(ent, self.caret_width);
         insert_some(ent, self.password_character);
         insert_some(ent, self.track);
@@ -654,6 +667,7 @@ impl ComputedStyle {
         put(ent, self.cursor);
         put(ent, self.pointer_events);
         put(ent, self.input_paint);
+        put(ent, self.placeholder);
         put(ent, self.caret_width);
         put(ent, self.password_character);
         put(ent, self.track);

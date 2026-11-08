@@ -85,6 +85,19 @@ fn a_state_property_becomes_a_rule_of_its_own_beside_the_one_it_came_from() {
     );
 }
 
+/// A field's `::placeholder` rule is the browser's own, so the browser
+/// styles the hint it draws.
+#[test]
+fn a_placeholder_rule_is_emitted_as_the_browsers_own() {
+    assert_eq!(
+        css(vec![rule(
+            "input.search::placeholder",
+            &[("text-color", "#8a8f98"), ("font-size", "12")]
+        )]),
+        ":where(.lm-input).search::placeholder {\n  color: #8a8f98;\n  font-size: 12px;\n}\n"
+    );
+}
+
 #[test]
 fn a_state_selector_keeps_matching_what_lumen_matched() {
     assert_eq!(

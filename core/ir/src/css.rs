@@ -383,6 +383,16 @@ pub struct CompoundSelector {
     pub classes: Vec<String>,
     /// Required pseudo-classes (each is a [`PseudoClass`]).
     pub pseudo_classes: Vec<PseudoClass>,
+    /// The pseudo-element the compound ends in, which only the subject
+    /// compound of a selector can carry.
+    pub pseudo_element: Option<PseudoElement>,
+}
+
+/// A part of an element a selector can style apart from the element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PseudoElement {
+    /// `::placeholder` - the hint an empty `<input>` / `<textarea>` shows.
+    Placeholder,
 }
 
 impl CompoundSelector {
@@ -396,6 +406,9 @@ impl CompoundSelector {
             spec = spec.add(p.specificity());
         }
         if self.tag.is_some() {
+            spec.c += 1;
+        }
+        if self.pseudo_element.is_some() {
             spec.c += 1;
         }
         spec
@@ -1207,6 +1220,8 @@ struct SubjectPseudo {
     checked: bool,
     selected: bool,
     drag_over: bool,
+    /// The rule styles the element's `::placeholder`, not the element.
+    placeholder: bool,
 }
 
 impl SubjectPseudo {
@@ -1393,6 +1408,7 @@ fn extract_subject_pseudo(c: &CompoundSelector) -> SubjectPseudo {
             _ => {}
         }
     }
+    sp.placeholder = c.pseudo_element == Some(PseudoElement::Placeholder);
     sp
 }
 
@@ -1431,6 +1447,19 @@ fn state_pseudo_warnings(css: &Stylesheet, warnings: &mut Vec<CssWarning>) {
     for rule in &css.rules {
         for (idx, sel) in rule.selectors.iter().enumerate() {
             let left = &sel.chain[..sel.chain.len().saturating_sub(1)];
+            if sel
+                .chain
+                .last()
+                .is_some_and(|(_, c)| c.pseudo_element.is_some() && has_state_pseudo(c))
+            {
+                warnings.push(CssWarning {
+                    selector: describe_selector_for_error(&rule.selectors, idx),
+                    property: String::new(),
+                    message: "a state pseudo-class with ::placeholder does not apply on the \
+                              desktop; rule ignored there"
+                        .to_string(),
+                });
+            }
             if left.iter().any(|(_, c)| has_state_pseudo(c)) {
                 warnings.push(CssWarning {
                     selector: describe_selector_for_error(&rule.selectors, idx),
@@ -1513,16 +1542,15 @@ fn matches_pseudo(p: &PseudoClass, node: &NodeCtx) -> bool {
 // Public query surface (read side of the dynamic DOM API)
 // ---------------------------------------------------------------------------
 
-/// Parse a CSS selector list (`"#save, .row > .cell"`) into the same
-/// [`SelectorBuf`] chain the stylesheet front-end builds. The runtime
-/// query engine (`query(sel)`) calls this so a script selector runs
-/// through the one selector grammar Lumen already speaks; there is no
-/// second engine.
+/// Parse a CSS selector list (`"#save, .row > .cell"`) into a
+/// [`SelectorBuf`] chain. The stylesheet front-end parses every rule's
+/// selector through this, and the runtime query engine (`query(sel)`)
+/// parses a script's, so both speak one selector grammar.
 ///
-/// The grammar is the Selectors-4 subset the CSS parser accepts:
-/// tag / `#id` / `.class` / pseudo-classes, descendant / `>` / `+` / `~`
-/// combinators, and `:is()` / `:where()` / `:not()` / `:nth-child()`
-/// nesting. Errors return a message string.
+/// The grammar is the Selectors-4 subset Lumen implements: tag / `#id` /
+/// `.class` / pseudo-classes, descendant / `>` / `+` / `~` combinators,
+/// `:is()` / `:where()` / `:not()` / `:nth-child()` nesting, and a
+/// trailing `::placeholder`. Errors return a message string.
 pub fn parse_selector_list(src: &str) -> Result<Vec<SelectorBuf>, String> {
     sel_parse_list(src, 0)
 }
@@ -1553,12 +1581,23 @@ pub fn selector_matches(
         text_body: subject.text.as_deref(),
         is_root,
     };
+    // A pseudo-element is a part of an element, not an element, so a query
+    // for one finds nothing, as `querySelector` does.
+    if sel
+        .chain
+        .last()
+        .is_some_and(|(_, c)| c.pseudo_element.is_some())
+    {
+        return false;
+    }
     match_selector(sel, &ctx).is_some()
 }
 
-/// Selector-nesting depth cap for `:is()` / `:where()` / `:not()`,
-/// mirroring the CSS parser's own guard.
-const SELECTOR_MAX_NEST_DEPTH: u32 = 8;
+/// Selector-nesting depth cap for `:is()` / `:where()` / `:not()`. Past
+/// it the parser returns an error rather than recursing further: the
+/// recursion is unbounded on hostile input, and a stack overflow is a
+/// SIGSEGV, not a catchable panic.
+const SELECTOR_MAX_NEST_DEPTH: u32 = 32;
 
 fn sel_parse_list(src: &str, depth: u32) -> Result<Vec<SelectorBuf>, String> {
     if depth > SELECTOR_MAX_NEST_DEPTH {
@@ -1601,8 +1640,24 @@ fn sel_parse_one(src: &str, depth: u32) -> Result<SelectorBuf, String> {
             && compound.id.is_none()
             && compound.classes.is_empty()
             && compound.pseudo_classes.is_empty()
+            && compound.pseudo_element.is_none()
         {
             return Err(format!("css: empty compound in '{src}'"));
+        }
+        if compound.pseudo_element.is_some() {
+            if depth > 0 {
+                return Err(format!(
+                    "css: a pseudo-element cannot sit inside :is(), :where() or :not() in '{src}'"
+                ));
+            }
+            if tokens[i + consumed..]
+                .iter()
+                .any(|t| !matches!(t, SelTok::Whitespace))
+            {
+                return Err(format!(
+                    "css: a pseudo-element ends its selector; nothing may follow it in '{src}'"
+                ));
+            }
         }
         chain.push((pending, compound));
         i += consumed;
@@ -1647,6 +1702,7 @@ enum SelTok {
     Class(String),
     Id(String),
     Pseudo(String, Option<String>),
+    PseudoElement(PseudoElement),
     ChildCombinator,
     AdjacentSibling,
     GeneralSibling,
@@ -1690,9 +1746,19 @@ fn sel_tokenize(src: &str) -> Result<Vec<SelTok>, String> {
             b':' => {
                 i += 1;
                 if i < bytes.len() && bytes[i] == b':' {
-                    return Err(format!(
-                        "css: pseudo-elements not supported (got '::') in '{src}'"
-                    ));
+                    i += 1;
+                    let name = sel_read_ident(bytes, &mut i)?;
+                    match name.as_str() {
+                        "placeholder" => {
+                            out.push(SelTok::PseudoElement(PseudoElement::Placeholder))
+                        }
+                        other => {
+                            return Err(format!(
+                                "css: pseudo-element '::{other}' not supported (supported: ::placeholder) in '{src}'"
+                            ));
+                        }
+                    }
+                    continue;
                 }
                 let name = sel_read_ident(bytes, &mut i)?;
                 let args = if i < bytes.len() && bytes[i] == b'(' {
@@ -1768,6 +1834,11 @@ fn sel_read_compound(toks: &[SelTok], depth: u32) -> Result<(CompoundSelector, u
     let mut out = CompoundSelector::default();
     let mut i = 0;
     while i < toks.len() {
+        if out.pseudo_element.is_some()
+            && matches!(toks[i], SelTok::Tag(_) | SelTok::Class(_) | SelTok::Id(_))
+        {
+            return Err("css: a pseudo-element ends its compound; write it last".to_string());
+        }
         match &toks[i] {
             SelTok::Tag(t) => {
                 if out.tag.is_some() || !out.classes.is_empty() || out.id.is_some() {
@@ -1785,8 +1856,20 @@ fn sel_read_compound(toks: &[SelTok], depth: u32) -> Result<(CompoundSelector, u
                 i += 1;
             }
             SelTok::Pseudo(name, args) => {
+                if out.pseudo_element.is_some() {
+                    return Err(format!(
+                        "css: ':{name}' after a pseudo-element; write the pseudo-class first"
+                    ));
+                }
                 let p = sel_parse_pseudo(name, args.as_deref(), depth)?;
                 out.pseudo_classes.push(p);
+                i += 1;
+            }
+            SelTok::PseudoElement(element) => {
+                if out.pseudo_element.is_some() {
+                    return Err("css: one pseudo-element per selector".to_string());
+                }
+                out.pseudo_element = Some(*element);
                 i += 1;
             }
             _ => break,
@@ -1931,6 +2014,9 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     }
     if inline.selection_text_color.is_some() {
         target.selection_text_color = inline.selection_text_color;
+    }
+    if inline.placeholder_style.is_some() {
+        target.placeholder_style = inline.placeholder_style.clone();
     }
     if inline.hover_bg.is_some() {
         target.hover_bg = inline.hover_bg;
@@ -2914,6 +3000,16 @@ fn write_compound(out: &mut String, c: &CompoundSelector, spelling: &Spelling<'_
             write_pseudo(out, p, spelling);
         }
     }
+    if let Some(element) = c.pseudo_element {
+        out.push_str(pseudo_element_text(element));
+    }
+}
+
+/// How a pseudo-element is written, which is the same on both targets.
+fn pseudo_element_text(element: PseudoElement) -> &'static str {
+    match element {
+        PseudoElement::Placeholder => "::placeholder",
+    }
 }
 
 fn write_pseudo(out: &mut String, p: &PseudoClass, spelling: &Spelling<'_>) {
@@ -3147,6 +3243,9 @@ fn describe_selector_for_error(sels: &[SelectorBuf], idx: usize) -> String {
             out.push(':');
             out.push_str(pseudo_name(p));
         }
+        if let Some(element) = c.pseudo_element {
+            out.push_str(pseudo_element_text(element));
+        }
     }
     if out.is_empty() {
         out = "*".into();
@@ -3176,6 +3275,46 @@ fn pseudo_name(p: &PseudoClass) -> &'static str {
     }
 }
 
+/// Apply one declaration of a `::placeholder` rule to the element's
+/// placeholder style.
+///
+/// The properties are the text ones a browser applies to the pseudo-element
+/// and Lumen draws: `color`, `opacity` and the font properties. The value is
+/// read the way the same property on the element reads it.
+fn apply_placeholder_declaration(
+    ctx: &str,
+    name: &str,
+    value: &str,
+    attrs: &mut Attributes,
+) -> Result<bool, ParseError> {
+    if !matches!(
+        name,
+        "text-color" | "opacity" | "font-size" | "font-weight" | "font-family"
+    ) {
+        return Err(crate::values::bad(
+            ctx,
+            name,
+            value,
+            "::placeholder takes color, opacity, font-size, font-weight and font-family; \
+             declaration ignored"
+                .into(),
+        ));
+    }
+    let mut parsed = Attributes::default();
+    if !apply_declaration(ctx, name, value, &mut parsed)? {
+        return Ok(false);
+    }
+    let style = attrs.placeholder_style.get_or_insert_with(Default::default);
+    match name {
+        "text-color" => style.text_color = parsed.text_color,
+        "opacity" => style.opacity = parsed.opacity,
+        "font-size" => style.font_size = parsed.font_size,
+        "font-weight" => style.font_weight = parsed.font_weight,
+        _ => style.font_family = parsed.font_family,
+    }
+    Ok(true)
+}
+
 /// Route a CSS declaration to the correct [`Attributes`] field based on
 /// the subject compound's matched pseudo state.
 /// Returns `Ok(true)` when the declaration was recognised (applied or
@@ -3189,6 +3328,14 @@ fn apply_decl_for_pseudo(
     attrs: &mut Attributes,
 ) -> Result<bool, ParseError> {
     let name = canonical_property_name(name);
+    if pseudo.placeholder {
+        // A state rule for the placeholder has no slot to go to; the
+        // stylesheet reports it once (see `state_pseudo_warnings`).
+        if pseudo.any() {
+            return Ok(true);
+        }
+        return apply_placeholder_declaration(ctx, name, value, attrs);
+    }
     if !pseudo.any() {
         return apply_declaration(ctx, name, value, attrs);
     }
@@ -5092,6 +5239,7 @@ mod cascade_origin_tests {
                 id: None,
                 classes: Vec::new(),
                 pseudo_classes: vec![PseudoClass::Hover],
+                pseudo_element: None,
             }),
             Origin::UserAgent,
             0,
@@ -5103,6 +5251,7 @@ mod cascade_origin_tests {
                 id: None,
                 classes: vec!["editor".to_string()],
                 pseudo_classes: Vec::new(),
+                pseudo_element: None,
             }),
             Origin::Author,
             1,
@@ -5154,6 +5303,7 @@ mod cascade_origin_tests {
                 id: None,
                 classes: Vec::new(),
                 pseudo_classes: Vec::new(),
+                pseudo_element: None,
             }),
             Origin::Author,
             0,
@@ -5164,6 +5314,7 @@ mod cascade_origin_tests {
                 id: None,
                 classes: vec!["editor".to_string()],
                 pseudo_classes: Vec::new(),
+                pseudo_element: None,
             }),
             Origin::Author,
             1,
@@ -5548,6 +5699,7 @@ mod skin_token_property_tests {
                             id: None,
                             classes: Vec::new(),
                             pseudo_classes: Vec::new(),
+                            pseudo_element: None,
                         },
                     )],
                 }],
@@ -5674,6 +5826,7 @@ mod root_vars_tests {
                         id: None,
                         classes: Vec::new(),
                         pseudo_classes: vec![PseudoClass::Root],
+                        pseudo_element: None,
                     },
                 )],
             }],

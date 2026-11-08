@@ -163,11 +163,16 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// a menu item's accelerator, and [`crate::layout_ir::IfModeSpec`] gains
 /// `Mounted`.
 ///
+/// `23`: [`crate::css::CompoundSelector`] gains `pseudo_element`, the
+/// `::placeholder` a selector can end in, and
+/// [`crate::layout_ir::Attributes`] gains `placeholder_style`, what the
+/// `::placeholder` rules matching an element set.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 22;
+pub const FORMAT_VERSION: u16 = 23;
 
 /// The navigable page set of a compiled multi-page app.
 ///

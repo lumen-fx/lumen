@@ -630,6 +630,23 @@ pub struct TooltipSpec {
     pub offset: Option<f32>,
 }
 
+/// The text style of a field's placeholder, from the `::placeholder` rules
+/// that match the field. Each value left unset is the field's own, as the
+/// pseudo-element inherits from the element it belongs to.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlaceholderStyle {
+    /// `color`.
+    pub text_color: Option<Rgba>,
+    /// `opacity`, applied to the placeholder text alone.
+    pub opacity: Option<f32>,
+    /// `font-size` in logical pixels.
+    pub font_size: Option<f32>,
+    /// `font-weight` (1-1000).
+    pub font_weight: Option<u16>,
+    /// `font-family` as authored.
+    pub font_family: Option<String>,
+}
+
 /// Synthesised `<dropdown>` header payload: the open signal plus the
 /// full option list mirrored from the `<option>` children (markup
 /// order), so the runtime header component can run keyboard
@@ -747,6 +764,10 @@ pub struct Attributes {
     /// unset => selected glyphs keep their normal fill. Only meaningful on
     /// `<input>` / `<textarea>`.
     pub selection_text_color: Option<Rgba>,
+    /// What a `::placeholder` rule set for the hint an empty `<input>` /
+    /// `<textarea>` shows. `None` = no rule styles it, and the hint paints
+    /// with the field's own text style.
+    pub placeholder_style: Option<Box<PlaceholderStyle>>,
     /// `scroll` axis.
     pub scroll: Option<ScrollAxisSpec>,
     /// `sensitivity` (scroll containers only).

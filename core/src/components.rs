@@ -2600,6 +2600,24 @@ pub struct TextInputPaint {
     pub selection_foreground: Option<Color>,
 }
 
+/// How an empty text field draws its placeholder: what the `::placeholder`
+/// rules matching the field set. Each value left unset is the field's own
+/// [`TextStyle`] value, as the pseudo-element inherits from its field.
+/// Absent => the placeholder draws in the field's text style.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct PlaceholderStyle {
+    /// Fill color.
+    pub color: Option<Color>,
+    /// Opacity of the placeholder text alone, in [0, 1].
+    pub opacity: Option<f32>,
+    /// Font size in logical pixels.
+    pub size_px: Option<f32>,
+    /// CSS `font-weight` (1-1000).
+    pub weight: Option<u16>,
+    /// CSS `font-family` fallback chain as authored.
+    pub family: Option<std::sync::Arc<str>>,
+}
+
 /// RGBA color, each channel in [0, 1].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {

@@ -155,6 +155,7 @@ mod tests {
                         id: None,
                         classes: Vec::new(),
                         pseudo_classes: vec![PseudoClass::Root],
+                        pseudo_element: None,
                     },
                 )],
             }],

@@ -191,6 +191,7 @@ mod tests {
                             id: None,
                             classes: vec!["menubar-button".to_string()],
                             pseudo_classes: Vec::new(),
+                            pseudo_element: None,
                         },
                     )],
                 }],

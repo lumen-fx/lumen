@@ -19,7 +19,7 @@ rule          := selector_list "{" declaration* "}"
 selector_list := selector ("," selector)*
 selector      := compound (combinator compound)*
 combinator    := " " | ">" | "+" | "~"
-compound      := tag? ("." class | "#" id | ":" pseudo_class)*
+compound      := tag? ("." class | "#" id | ":" pseudo_class)* ("::" pseudo_element)?
 declaration   := ident ":" value "!important"? ";"
 ```
 
@@ -50,7 +50,8 @@ that loads is registered under the rule's `font-family`. `local()` entries and
 ignored. Any other at-rule is skipped with a warning along with its whole
 block, and the rest of the stylesheet applies.
 
-Pseudo-elements (`::before` and friends) are a parse error, not a warning.
+`::placeholder` is the one pseudo-element Lumen implements. Any other
+(`::before` and friends) is a parse error, not a warning.
 
 ## Selectors
 
@@ -134,13 +135,41 @@ selectors, each of which may use combinators. The element being tested is
 the subject of every argument, so `.row:not(.list > .row)` matches a
 `.row` that is not a child of a `.list`.
 
+### Pseudo-elements
+
+`::placeholder` styles the hint an empty `<input>` or `<textarea>` shows
+in place of a value. It goes at the end of the selector, after any
+pseudo-classes: `input.search::placeholder`. A rule for it styles the hint
+and nothing else; the field's own text is untouched.
+
+| Property | Applies to the hint |
+| --- | --- |
+| `color` (`text-color`) | Its fill. |
+| `opacity` | The hint alone, not the field. |
+| `font-size`, `font-weight`, `font-family` | Its font. The line box stays the field's. |
+
+Each property no rule sets is the field's own value. Any other property in
+a `::placeholder` rule is dropped with a warning. A state pseudo-class
+written with it, as in `input:focus::placeholder`, is reported and has no
+effect on the desktop; the web target emits it as written and the browser
+applies it.
+
+The hint is dimmed by default, as in a browser, so it does not read as a
+typed value. The built-in skins color it with the `--lumen-placeholder`
+token, which follows `--lumen-text-muted`; a skinless app gets `#a9a9a9`.
+Set `--lumen-placeholder` in your `:root` to retint every hint, or write a
+`::placeholder` rule for one field.
+
+`::placeholder` matches nothing in a script's `query()`, as in
+`querySelector`.
+
 ### Specificity
 
 Specificity is the triple `(a, b, c)` compared lexicographically:
 
 - `a` counts `#id` selectors.
 - `b` counts classes and pseudo-classes.
-- `c` counts tag names.
+- `c` counts tag names and pseudo-elements.
 
 `:is()` and `:not()` take the specificity of their most specific
 argument. `:where()` contributes nothing.
@@ -851,8 +880,8 @@ The four states no browser selector covers are mirrored onto attributes:
 
 `:checked` and `:disabled` keep the browser's own state beside the
 mirror, because a `<checkbox>` is a real checkbox there and a `<toggle>`
-is a button. Every other selector, `:hover` and the structural
-pseudo-classes included, is emitted as written.
+is a button. Every other selector, `:hover`, the structural
+pseudo-classes and `::placeholder` included, is emitted as written.
 
 Rules are written out in the order Lumen's cascade puts them in, so where
 the browser cannot tell two rules apart it picks the one Lumen picks.
