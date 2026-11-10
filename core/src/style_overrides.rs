@@ -792,6 +792,11 @@ pub fn write_on(ent: &mut EntityWorldMut<'_>, values: &StyleValues) {
         }
         None => {}
     }
+    // Only motion holds a transform or an outline color, and a page's
+    // browser plays its motion itself.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     match values.transform_change(ent.get::<ElementTransform>()) {
         Some(Some(t)) => {
             ent.insert(t);

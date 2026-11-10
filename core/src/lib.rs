@@ -23,6 +23,7 @@ pub mod nav;
 pub mod net_capture;
 pub mod node;
 pub mod node_ir;
+pub mod order;
 pub mod output;
 pub mod palette;
 pub mod plugin_events;

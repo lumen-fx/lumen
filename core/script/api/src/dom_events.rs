@@ -786,7 +786,7 @@ pub fn queue_pointer_and_key_events(
             step: Some(PointerStep::Cancel),
         });
     }
-    queue[start..].sort_by_key(|q| q.data.pointer.order);
+    lumen_core::order::sort_by_rank(&mut queue[start..], |q| q.data.pointer.order);
     for w in wheels.read() {
         let Some(e) = hovered_entity else { continue };
         let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);

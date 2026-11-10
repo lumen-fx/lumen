@@ -492,6 +492,10 @@ pub fn tick_now(ent: &EntityWorldMut<'_>) -> Instant {
 /// when it declares `transition: opacity`: from fully transparent to its own
 /// opacity. What `<if>` and `<for>` give an element they mount.
 pub fn fade_in_on_mount(ent: &mut EntityWorldMut<'_>) {
+    // A page's browser fades its own elements in, from the stylesheet.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let now = tick_now(ent);
     // An opacity its starting style gives it already sets where the fade
     // starts.

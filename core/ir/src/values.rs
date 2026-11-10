@@ -493,7 +493,7 @@ fn parse_radial_gradient(
         };
         stops.push((offset, color));
     }
-    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    lumen_core::order::sort_by_rank(&mut stops, |s| lumen_core::order::float_rank(s.0));
     Ok((1.0, stops))
 }
 
@@ -554,7 +554,7 @@ fn parse_conic_gradient(
         };
         stops.push((offset, color));
     }
-    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    lumen_core::order::sort_by_rank(&mut stops, |s| lumen_core::order::float_rank(s.0));
     Ok((from_deg, stops))
 }
 
@@ -613,7 +613,7 @@ fn parse_linear_gradient(
         };
         stops.push((offset, color));
     }
-    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    lumen_core::order::sort_by_rank(&mut stops, |s| lumen_core::order::float_rank(s.0));
     Ok((angle_deg, stops))
 }
 

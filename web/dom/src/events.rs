@@ -133,22 +133,6 @@ enum PendingEvent {
     /// A drag left the document entirely, so every drop target's hover
     /// marker clears regardless of which one it landed on last.
     DragCancelled,
-    /// The browser ran a CSS animation on the node at this path to one of
-    /// its events: `animationstart`, `animationiteration`, `animationend`
-    /// or `animationcancel`. Raised on the element as the custom event the
-    /// desktop raises, carrying the same detail.
-    Animation {
-        /// Node path of the element the animation runs on.
-        path: String,
-        /// The event's type.
-        kind: String,
-        /// `AnimationEvent.animationName`.
-        animation_name: String,
-        /// `AnimationEvent.elapsedTime`, in seconds.
-        elapsed: f64,
-        /// `AnimationEvent.pseudoElement`.
-        pseudo_element: String,
-    },
     /// A key the browser did not already act on for the element it landed
     /// on. No path: the key bus is global on the desktop too, and what is
     /// routed at an entity is routed off `FocusTracker`, which the focus
@@ -196,6 +180,13 @@ thread_local! {
     /// tick. Their own queue because what they need from the world is a
     /// different set of things entirely.
     static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+
+    /// CSS animation events since the last tick: the node path of the
+    /// element, and the custom event the desktop raises for it, still to be
+    /// aimed at the element's entity. Their own queue because all they need
+    /// from the world is that entity.
+    static ANIMATIONS: RefCell<Vec<(String, lumen_script::CustomEvent)>> =
+        const { RefCell::new(Vec::new()) };
 
     /// Runs the app's next tick at once, answering false when the app is
     /// already in the middle of one. Installed by whoever drives the app's
@@ -932,6 +923,20 @@ fn modifiers_of(event: &KeyboardEvent) -> Modifiers {
     }
 }
 
+/// Raise the CSS animation events the browser delivered since the last
+/// tick on their elements.
+pub fn drain_animation_events(
+    table: NonSend<crate::NodeTable>,
+    mut customs: MessageWriter<lumen_script::CustomEvent>,
+) {
+    for (path, mut raised) in ANIMATIONS.with_borrow_mut(std::mem::take) {
+        if let Some(entity) = table.entity_at(&path) {
+            raised.target = entity;
+            customs.write(raised);
+        }
+    }
+}
+
 /// Push `event` onto the queue.
 fn queue(event: PendingEvent) {
     QUEUE.with_borrow_mut(|queue| queue.push(event));
@@ -1162,13 +1167,11 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                 let Some(animation) = event.dyn_ref::<web_sys::AnimationEvent>() else {
                     return;
                 };
-                queue(PendingEvent::Animation {
-                    path,
-                    kind: event.type_(),
-                    animation_name: animation.animation_name(),
-                    elapsed: f64::from(animation.elapsed_time()),
-                    pseudo_element: animation.pseudo_element(),
-                });
+                let raised = lumen_script::CustomEvent::new(Entity::PLACEHOLDER, event.type_())
+                    .with("animation_name", animation.animation_name())
+                    .with("elapsed_time", f64::from(animation.elapsed_time()))
+                    .with("pseudo_element", animation.pseudo_element());
+                ANIMATIONS.with_borrow_mut(|queue| queue.push((path, raised)));
             }) as Box<dyn FnMut(Event)>),
         )?;
     }
@@ -1303,10 +1306,7 @@ pub fn drain_dom_events(
         MessageWriter<ControlInput>,
         Query<&mut ColorInput>,
     ),
-    (mut presses, mut customs): (
-        MessageWriter<KeyPressed>,
-        MessageWriter<lumen_script::CustomEvent>,
-    ),
+    mut presses: MessageWriter<KeyPressed>,
     mut releases: MessageWriter<KeyReleased>,
     mut modifiers_state: ResMut<ModifiersState>,
     mut texts: Query<&mut TextContent>,
@@ -1325,23 +1325,6 @@ pub fn drain_dom_events(
     let mut focus = focus;
     for event in pending {
         match event {
-            PendingEvent::Animation {
-                path,
-                kind,
-                animation_name,
-                elapsed,
-                pseudo_element,
-            } => {
-                let Some(entity) = table.entity_at(&path) else {
-                    continue;
-                };
-                customs.write(
-                    lumen_script::CustomEvent::new(entity, kind)
-                        .with("animation_name", animation_name)
-                        .with("elapsed_time", elapsed)
-                        .with("pseudo_element", pseudo_element),
-                );
-            }
             PendingEvent::Click {
                 hit,
                 position,

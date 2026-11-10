@@ -173,6 +173,7 @@ impl Plugin for WebDomPlugin {
             (
                 events::drain_dom_events,
                 events::drain_dismissed_dialogs,
+                events::drain_animation_events,
                 pointer::drain_pointer_events,
             )
                 .after(bevy_ecs::message::message_update_system)

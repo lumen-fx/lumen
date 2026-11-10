@@ -1529,9 +1529,7 @@ pub fn reconcile_if_blocks(
                         for child in kids.iter() {
                             // Gone at once, or held while an exit the
                             // stylesheet gives it runs.
-                            commands.queue(move |world: &mut World| {
-                                crate::style_sheet::begin_leaving(world, child);
-                            });
+                            commands.queue(crate::style_sheet::BeginLeaving(child));
                         }
                     }
                     marker.currently_mounted = false;
@@ -1595,7 +1593,9 @@ pub fn reconcile_if_blocks(
                     );
                 }
                 // Shown again, it enters the tree as CSS sees it, from
-                // `display: none`: its starting style applies.
+                // `display: none`: its starting style applies. A page's
+                // browser applies it there.
+                #[cfg(not(target_arch = "wasm32"))]
                 commands.queue(move |world: &mut World| {
                     if world
                         .get_resource::<crate::style_sheet::EntryExitStyles>()
@@ -2245,9 +2245,7 @@ pub fn reconcile_for_blocks(
             }
         }
         for &child in &diff.dropped {
-            commands.queue(move |world: &mut World| {
-                crate::style_sheet::begin_leaving(world, child);
-            });
+            commands.queue(crate::style_sheet::BeginLeaving(child));
         }
 
         // Cascade-once-per-template (spec section 15.3): a virtualized
