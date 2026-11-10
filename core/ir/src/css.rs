@@ -4833,7 +4833,8 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
         } else {
             parse_easing(ctx, name, &easing_terms.join(" "))?
         };
-        let Some(duration_ms) = duration_ms else {
+        // A spring with no duration runs for as long as it takes to settle.
+        let Some(duration_ms) = duration_ms.or_else(|| easing.settle_ms()) else {
             return Err(bad(
                 ctx,
                 name,
@@ -5005,6 +5006,38 @@ pub fn parse_easing(ctx: &str, name: &str, raw: &str) -> Result<EasingIr, ParseE
             ));
         }
         return Ok(EasingIr::Steps(n, pos));
+    }
+    if let Some(inside) = call("spring") {
+        let nums: Vec<f32> = inside
+            .split([',', ' '])
+            .filter(|t| !t.trim().is_empty())
+            .map(num)
+            .collect::<Result<_, _>>()?;
+        if nums.len() > 4 {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                "spring() takes up to four numbers: mass, stiffness, damping, velocity".into(),
+            ));
+        }
+        let at = |i: usize, default: f32| nums.get(i).copied().unwrap_or(default);
+        let (mass, stiffness, damping, velocity) =
+            (at(0, 1.0), at(1, 100.0), at(2, 10.0), at(3, 0.0));
+        if mass <= 0.0 || stiffness <= 0.0 || damping < 0.0 {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                "a spring needs a positive mass and stiffness and a damping of zero or more".into(),
+            ));
+        }
+        return Ok(EasingIr::Spring {
+            mass,
+            stiffness,
+            damping,
+            velocity,
+        });
     }
     if let Some(inside) = call("linear") {
         let mut stops: Vec<(f32, Vec<f32>)> = Vec::new();
@@ -5297,6 +5330,24 @@ mod transition_tests {
             parse_transition("ctx", "transition", "transform 1s linear(0, 0.5 50%, 1)").unwrap();
         assert_eq!(out[0].property, TransitionPropertyIr::Transform);
         assert!(matches!(out[0].easing, EasingIr::Points(_)));
+    }
+
+    #[test]
+    fn a_spring_with_no_duration_runs_until_it_settles() {
+        let out = parse_transition("ctx", "transition", "transform spring(1 100 10)").unwrap();
+        let settle = EasingIr::Spring {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 10.0,
+            velocity: 0.0,
+        }
+        .settle_ms()
+        .unwrap();
+        assert_eq!(out[0].duration_ms, settle);
+        let out = parse_transition("ctx", "transition", "transform 300ms spring()").unwrap();
+        assert_eq!(out[0].duration_ms, 300, "an authored duration wins");
+        assert!(parse_easing("ctx", "t", "spring(0 100 10)").is_err());
+        assert!(parse_easing("ctx", "t", "spring(1, 2, 3, 4, 5)").is_err());
     }
 
     #[test]

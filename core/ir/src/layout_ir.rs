@@ -1678,6 +1678,59 @@ pub enum EasingIr {
     Steps(u32, StepPositionIr),
     /// `linear(...)`: `(input, output)` stops with every input resolved.
     Points(Vec<(f32, f32)>),
+    /// `spring(mass stiffness damping velocity)`: a mass on a spring,
+    /// released toward the end value.
+    Spring {
+        /// The mass.
+        mass: f32,
+        /// The spring's stiffness.
+        stiffness: f32,
+        /// How much it is damped.
+        damping: f32,
+        /// The velocity it starts with, in full travels per second.
+        velocity: f32,
+    },
+}
+
+impl EasingIr {
+    /// For a spring: the `linear()` curve that traces it, as CSS writes it,
+    /// and the milliseconds it takes to settle. `None` for any other curve.
+    pub fn spring_as_linear(&self) -> Option<(String, u32)> {
+        let EasingIr::Spring {
+            mass,
+            stiffness,
+            damping,
+            velocity,
+        } = *self
+        else {
+            return None;
+        };
+        let (stops, settle) = lumen_core::motion::spring_curve(mass, stiffness, damping, velocity);
+        let body: Vec<String> = stops
+            .iter()
+            .map(|s| format!("{} {}%", s.output, (s.input * 1000.0).round() / 10.0))
+            .collect();
+        Some((
+            format!("linear({})", body.join(", ")),
+            (settle * 1000.0).round() as u32,
+        ))
+    }
+
+    /// For a spring, the milliseconds it takes to settle: the duration an
+    /// entry that names a spring and no duration runs for.
+    pub fn settle_ms(&self) -> Option<u32> {
+        let EasingIr::Spring {
+            mass,
+            stiffness,
+            damping,
+            velocity,
+        } = *self
+        else {
+            return None;
+        };
+        let (_, settle) = lumen_core::motion::spring_curve(mass, stiffness, damping, velocity);
+        Some((settle * 1000.0).round() as u32)
+    }
 }
 
 /// Parsed `shadow=` / `box-shadow=` value. Authors may stack multiple
@@ -2140,6 +2193,16 @@ impl From<&EasingIr> for lumen_core::motion::Easing {
                     .iter()
                     .map(|&(input, output)| LinearStop { input, output })
                     .collect(),
+            ),
+            EasingIr::Spring {
+                mass,
+                stiffness,
+                damping,
+                velocity,
+            } => E::Points(
+                lumen_core::motion::spring_curve(*mass, *stiffness, *damping, *velocity)
+                    .0
+                    .into(),
             ),
         }
     }

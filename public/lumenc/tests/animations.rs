@@ -406,3 +406,33 @@ fn a_frame_setting_two_properties_blends_each() {
         Some(vec![lumen_core::transform::TransformFn::Scale(0.65, 0.65)])
     );
 }
+
+#[test]
+fn a_spring_plays_for_its_settle_time_and_overshoots() {
+    let mut h = Harness::new(
+        r#"<root><tile id="t" class="p" width="40" height="40"/></root>"#,
+        "@keyframes pop { from { scale: 0 } to { scale: 1 } }\n\
+         .p { animation: pop spring(1 100 10) forwards; }",
+    );
+    let t = h.by_id("t");
+    let duration = h.app.world.get::<RunningAnimations>(t).unwrap().0[0]
+        .spec
+        .duration_ms;
+    assert!(duration > 300, "the settle time: {duration}ms");
+    let scale = |h: &Harness| {
+        h.app
+            .world
+            .get::<ElementTransform>(t)
+            .map_or(1.0, |x| x.scale.0)
+    };
+    // An underdamped spring passes its target before it settles.
+    let peak = (1..20)
+        .map(|k| {
+            h.at(t, u64::from(duration) * k / 20);
+            scale(&h)
+        })
+        .fold(0.0f32, f32::max);
+    assert!(peak > 1.05, "it overshoots: {peak}");
+    h.at(t, u64::from(duration));
+    assert!(near(scale(&h), 1.0));
+}
