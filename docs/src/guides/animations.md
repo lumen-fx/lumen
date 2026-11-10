@@ -214,6 +214,17 @@ An animated value outranks the element's rules, its state rules and its inline
 style, as in CSS. An `!important` declaration outranks the animation, and a
 transition that starts while it runs plays over it.
 
+An animation can follow a scroll position instead of the clock: a reading
+progress bar, or a card that fades in as it scrolls into view.
+
+```css
+.progress { animation: grow linear both; animation-timeline: scroll(root); }
+.card     { animation: reveal linear both; animation-timeline: view(); }
+```
+
+It moves only when the scroll does, and draws nothing in between. See
+[`animation-timeline`](../reference/css.md#animations) for the forms.
+
 Each animation raises events on its element that a script can bind:
 `animationstart`, `animationiteration`, `animationend` and `animationcancel`.
 See [scripting](scripting.md#handling-events) for what they carry.

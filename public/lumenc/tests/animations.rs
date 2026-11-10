@@ -547,3 +547,45 @@ fn a_dropped_row_leaves_after_its_exit_and_the_rest_stay_in_order() {
     assert!(h.find("b").is_none());
     assert!(h.find("a").is_some() && h.find("c").is_some());
 }
+
+#[test]
+fn a_scroll_timeline_follows_the_scroll_and_asks_for_no_frames() {
+    let mut h = Harness::new(
+        r#"<root><scroll id="s" class="port"><column id="content" class="content"><tile id="bar" class="bar" width="40" height="10"/><tile class="gap" width="10" height="400"/><tile id="v" class="seen" width="40" height="100"/></column></scroll></root>"#,
+        "@keyframes reveal { from { opacity: 0; } to { opacity: 1; } }\n\
+         .port { height: 200px; width: 300px; scrollbar-width: none; }\n\
+         .content { height: 1200px; flex-shrink: 0; }\n\
+         .bar { animation: reveal linear both; animation-timeline: scroll(nearest); }\n\
+         .gap { flex-shrink: 0; }\n\
+         .seen { flex-shrink: 0; animation: reveal linear both; animation-timeline: view(); }",
+    );
+    let s = h.by_id("s");
+    let bar = h.by_id("bar");
+    let v = h.by_id("v");
+    // Let the overlay scrollbar's own fade-out run its course first.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while h.app.world.resource::<AnimationsActive>().get() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        h.ticks(1);
+    }
+    assert!(near(h.opacity(bar), 0.0), "at the top: {}", h.opacity(bar));
+    assert!(near(h.opacity(v), 0.0), "below the view: {}", h.opacity(v));
+    h.ticks(2);
+    assert!(
+        !h.app.world.resource::<AnimationsActive>().get(),
+        "a scroll timeline asks for no frames"
+    );
+    // Halfway down the 1000px the content scrolls.
+    h.app
+        .world
+        .get_mut::<lumen_core::input::ScrollOffset>(s)
+        .unwrap()
+        .0
+        .y = 500.0;
+    h.ticks(2);
+    assert!(near(h.opacity(bar), 0.5), "halfway: {}", h.opacity(bar));
+    // The 100px box laid out at 410px sits 90px under the top of a 200px
+    // view scrolled to 500: past halfway through crossing it.
+    let seen = h.opacity(v);
+    assert!(seen > 0.5 && seen < 1.0, "crossing the view: {seen}");
+}
