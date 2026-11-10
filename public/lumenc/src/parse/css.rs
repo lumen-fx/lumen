@@ -6,6 +6,7 @@
 //! ```text
 //! stylesheet  := (at_rule | rule)*
 //! at_rule     := "@media" media_query "{" (at_rule | rule)* "}"
+//!              | "@starting-style" "{" (at_rule | rule)* "}"
 //!              | "@keyframes" prelude "{" <verbatim> "}"
 //!              | "@font-face" "{" <verbatim> "}"
 //! rule        := selector_list "{" declaration* "}"
@@ -147,6 +148,34 @@ fn parse_rule_list(
             let mut body_str = body;
             parse_rule_list(
                 &mut body_str,
+                base,
+                Some(&mq),
+                out,
+                at_out,
+                next_order,
+                depth + 1,
+            )?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("@starting-style") {
+            // The rules inside are an element's starting style: the values
+            // it transitions from as it enters the tree. They carry a marker
+            // in their media query that the ordinary cascade never matches.
+            let after = rest.trim_start();
+            let after = after.strip_prefix('{').ok_or_else(|| {
+                ParseError::Xml("css: @starting-style missing '{'".into()).at(start)
+            })?;
+            let close = find_matching_brace(after).ok_or_else(|| {
+                ParseError::Xml("css: @starting-style missing '}'".into()).at(start)
+            })?;
+            let mut body = &after[..close];
+            *input = &after[close + 1..];
+            let mut mq = media.cloned().unwrap_or(MediaQuery {
+                features: Vec::new(),
+            });
+            mq.features.push(MediaFeature::StartingStyle);
+            parse_rule_list(
+                &mut body,
                 base,
                 Some(&mq),
                 out,
@@ -1704,6 +1733,48 @@ mod bughunt_tests {
             face.body.contains(r#"src: url("x.woff2")"#),
             "body: {}",
             face.body
+        );
+    }
+
+    #[test]
+    fn a_starting_style_block_marks_its_rules_and_the_cascade_skips_them() {
+        let css = parse_css(
+            r#"
+            .a { opacity: 1; }
+            @starting-style { .a { opacity: 0; } }
+            @media (max-width: 500px) { @starting-style { .a { opacity: 0.5; } } }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(css.rules.len(), 3);
+        assert!(css.has_starting_style());
+        assert!(
+            css.rules[1]
+                .media
+                .as_ref()
+                .is_some_and(|m| m.features == [MediaFeature::StartingStyle])
+        );
+        assert_eq!(
+            css.rules[2].media.as_ref().map(|m| m.features.len()),
+            Some(2),
+            "nested in @media, it keeps the query"
+        );
+        let mut ir = crate::layout_ir::LayoutIR {
+            root: Element {
+                tag: "tile".into(),
+                attrs: Box::new(Attributes {
+                    classes: vec!["a".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        apply_css(&mut ir, &css).unwrap();
+        assert_eq!(
+            ir.root.attrs.opacity,
+            Some(1.0),
+            "starting rules take no part"
         );
     }
 

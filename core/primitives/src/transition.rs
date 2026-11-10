@@ -171,6 +171,12 @@ impl TransitionSpecs {
     }
 }
 
+/// What an element entering the tree resolved to with its `@starting-style`
+/// rules applied: the values its transitions start from. Set by the restyle
+/// that first resolves it and taken by the commit that follows.
+#[derive(Component, Clone, Debug, Default)]
+pub struct StartingStyle(pub StyleValues);
+
 /// The [`StyleOverrides`] layer running transitions hold their properties
 /// in, at rank 80: above keyframe animations, which CSS orders below
 /// transitions, and above every normal declaration.
@@ -487,6 +493,14 @@ pub fn tick_now(ent: &EntityWorldMut<'_>) -> Instant {
 /// opacity. What `<if>` and `<for>` give an element they mount.
 pub fn fade_in_on_mount(ent: &mut EntityWorldMut<'_>) {
     let now = tick_now(ent);
+    // An opacity its starting style gives it already sets where the fade
+    // starts.
+    if ent
+        .get::<ActiveTransitions>()
+        .is_some_and(|a| a.on(StyleFields::OPACITY).is_some())
+    {
+        return;
+    }
     let Some(spec) = ent
         .get::<TransitionSpecs>()
         .and_then(|s| s.for_field(StyleFields::OPACITY))

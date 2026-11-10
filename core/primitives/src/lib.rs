@@ -102,8 +102,8 @@ pub use tooltip::{
     HoverStartedAt, TooltipPlugin, TooltipPopup, TooltipSource, cursor_tooltip_origin,
 };
 pub use transition::{
-    ActiveTransitions, RunningTransition, Transition, TransitionHolder, TransitionPlugin,
-    TransitionProperty, TransitionSpec, TransitionSpecs, cancel_transition, fade_in_on_mount,
-    start_transition, tick_now,
+    ActiveTransitions, RunningTransition, StartingStyle, Transition, TransitionHolder,
+    TransitionPlugin, TransitionProperty, TransitionSpec, TransitionSpecs, cancel_transition,
+    fade_in_on_mount, start_transition, tick_now,
 };
 pub use validation::{ValidationPlugin, apply_validation, evaluate, matches_pattern};

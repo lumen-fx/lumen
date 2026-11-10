@@ -125,12 +125,42 @@ with `set_style` to tween it.
 .dropdown-panel { transition: opacity 120ms ease; }
 ```
 
-This is entry only, and opacity only. The tree that exists at startup does not
-fade in, nodes a script spawns do not fade in, and a transition on `bg` does
-not fade a background in.
+For anything more, give it a starting style. The rules inside
+`@starting-style` say what an element looks like the moment it enters, and its
+transitions run from there to its own styles, as in a browser:
 
-Nothing animates on the way out. Hiding or removing an element is immediate, in
-the same way CSS alone cannot animate a removal.
+```css
+.toast {
+  translate: 0 0;
+  opacity: 1;
+  transition: translate 200ms ease-out, opacity 200ms;
+}
+
+@starting-style {
+  .toast { translate: 0 24px; opacity: 0; }
+}
+```
+
+A starting style applies to an element mounted by `<if>` or `<for>`, one a
+script adds to the tree, an `<if mode="hide">` body shown again, and the whole
+document on its first frame.
+
+**Leaving.** An element `<if>` or `<for>` takes away first gains the class
+`leaving`. If the stylesheet styles that class, the element stays where it is,
+showing that style, until an animation the class started has run, and goes
+then:
+
+```css
+@keyframes slide-out { to { translate: 0 24px; opacity: 0; } }
+
+.toast.leaving { animation: slide-out 200ms ease-in forwards; }
+```
+
+Give the exit `forwards`, so its last frame holds until the element goes. The
+`<for>` list carries on without the row while it leaves, and an `<if>` block
+stays shown until its body has gone. A stylesheet that never names `leaving`
+removes elements at once, as it always did. An `<if mode="hide">` body still
+hides at once.
 
 ## Interrupting one
 

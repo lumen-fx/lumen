@@ -456,6 +456,40 @@ fn computed_mode_puts_the_resolved_values_on_the_elements() {
     );
 }
 
+#[test]
+fn a_starting_style_rule_is_written_inside_its_block() {
+    let mut start = rule(".toast", &[("opacity", "0")]);
+    start.media = Some(MediaQuery {
+        features: vec![MediaFeature::StartingStyle],
+    });
+    start.source_order = 1;
+    let mut both = rule(".panel", &[("opacity", "0")]);
+    both.media = Some(MediaQuery {
+        features: vec![
+            MediaFeature::PrefersReducedMotion(MotionPreference::NoPreference),
+            MediaFeature::StartingStyle,
+        ],
+    });
+    both.source_order = 2;
+    let emitted = rules_css(&Stylesheet {
+        rules: vec![start, both],
+        ..Default::default()
+    });
+    assert!(
+        emitted.contains("@starting-style {\n"),
+        "a bare block: {emitted}"
+    );
+    assert!(
+        emitted.contains("@media (prefers-reduced-motion: no-preference) {\n@starting-style {\n"),
+        "one inside the other: {emitted}"
+    );
+    assert_eq!(
+        emitted.matches('{').count(),
+        emitted.matches('}').count(),
+        "every block closes: {emitted}"
+    );
+}
+
 fn keyframes(prelude: &str, body: &str, media: Option<MediaQuery>) -> AtRule {
     AtRule {
         name: "keyframes".to_string(),

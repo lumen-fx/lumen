@@ -24,7 +24,9 @@ use lumen_ir::animation::{
 };
 use lumen_primitives::state_style::{StateMarkers, active_states};
 use lumen_primitives::transition::{MotionComponents, live_of, write_motion_values};
-use lumen_scene::style_sheet::{AnimationDeclarations, ImportantFields, StateAnimations};
+use lumen_scene::style_sheet::{
+    AnimationDeclarations, HoldRemoval, ImportantFields, Leaving, StateAnimations,
+};
 use lumen_script::CustomEvent;
 
 use crate::keyframes::{Frame, KeyframeSet, Keyframes};
@@ -215,6 +217,7 @@ pub fn reconcile_animations(
             Option<&StateAnimations>,
             Option<&mut RunningAnimations>,
             Markers,
+            Has<Leaving>,
         ),
         Or<(
             With<AnimationDeclarations>,
@@ -231,6 +234,7 @@ pub fn reconcile_animations(
         states,
         running,
         (hovered, focused, focus_visible, pressed, drag_over, disabled),
+        leaving,
     ) in &mut q
     {
         let markers = StateMarkers {
@@ -249,8 +253,20 @@ pub fn reconcile_animations(
         };
         let Some(mut running) = running else {
             if !wanted.is_empty() {
-                let list = wanted.into_iter().map(|a| Running::new(a, now)).collect();
-                commands.entity(entity).try_insert(RunningAnimations(list));
+                let list: Vec<Running> = wanted.into_iter().map(|a| Running::new(a, now)).collect();
+                // An exit that starts as the element starts to leave holds
+                // it from this tick on; the sampler lets go when it ends.
+                let exit = leaving
+                    && list
+                        .iter()
+                        .any(|r| r.timing().end_time().is_finite() && r.paused_at.is_none());
+                if exit {
+                    commands
+                        .entity(entity)
+                        .try_insert((RunningAnimations(list), HoldRemoval));
+                } else {
+                    commands.entity(entity).try_insert(RunningAnimations(list));
+                }
             }
             continue;
         };
@@ -488,12 +504,44 @@ pub fn sample_animations(
         Option<&Transform>,
         Option<&ImportantFields>,
         Option<&lumen_primitives::Interaction>,
+        (Option<&Leaving>, Has<HoldRemoval>),
         MotionComponents,
     )>,
 ) {
     let now = tick.now;
-    for (entity, mut running, mut overrides, layout, important, interaction, mut written) in &mut q
+    for (
+        entity,
+        mut running,
+        mut overrides,
+        layout,
+        important,
+        interaction,
+        (leaving, held_in_tree),
+        mut written,
+    ) in &mut q
     {
+        // An element leaving the tree stays while an animation its leaving
+        // started still runs: its exit.
+        let exiting = leaving.is_some_and(|l| {
+            running.0.iter().any(|r| {
+                let timing = r.timing();
+                r.start >= l.at
+                    && timing.end_time().is_finite()
+                    && r.paused_at.is_none()
+                    && timing.sample(r.local(now)).phase != Phase::After
+            })
+        });
+        match (exiting, held_in_tree) {
+            (true, false) => {
+                commands.entity(entity).try_insert(HoldRemoval);
+            }
+            (false, true) => {
+                commands.entity(entity).try_remove::<HoldRemoval>();
+                // The tick that removes it.
+                anim.request();
+            }
+            _ => {}
+        }
         if running.0.is_empty() {
             let out = overrides.release::<AnimationHolder>();
             write_motion_values(&mut commands, entity, &mut written, &out);

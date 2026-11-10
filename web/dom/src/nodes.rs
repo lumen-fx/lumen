@@ -626,6 +626,68 @@ pub fn release_dead_nodes(
     }
 }
 
+/// Keep a leaving element in the page while a CSS animation its leaving
+/// started runs on it: the browser plays the exit the `leaving` class gives
+/// it, and the element goes once that animation has finished.
+///
+/// The browser lists an element's running animations in
+/// `getAnimations()`; one with an end (not `infinite`) that has not finished
+/// holds the element. Read every tick a leaving element is on the page,
+/// after its class reaches it, so an animation the class starts is seen the
+/// tick it starts.
+pub fn hold_leaving_while_animating(
+    table: NonSend<NodeTable>,
+    mut commands: Commands,
+    leaving: Query<
+        (Entity, Has<lumen_scene::style_sheet::HoldRemoval>),
+        With<lumen_scene::style_sheet::Leaving>,
+    >,
+) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::JsValue;
+    // Read through reflection: `getAnimations` is behind web-sys's unstable
+    // APIs, and every browser the target supports has it.
+    let get = |of: &JsValue, key: &str| js_sys::Reflect::get(of, &key.into()).ok();
+    let call = |of: &JsValue, method: &str| {
+        get(of, method)
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .and_then(|f| f.call0(of).ok())
+    };
+    for (entity, held) in &leaving {
+        let Some(element) = table.by_entity.get(&entity) else {
+            continue;
+        };
+        let running = call(element.as_ref(), "getAnimations")
+            .and_then(|list| list.dyn_into::<js_sys::Array>().ok())
+            .is_some_and(|list| {
+                list.iter().any(|animation| {
+                    let finished = get(&animation, "playState")
+                        .and_then(|s| s.as_string())
+                        .is_some_and(|s| s == "finished");
+                    let ends = get(&animation, "effect")
+                        .and_then(|effect| call(&effect, "getComputedTiming"))
+                        .and_then(|timing| get(&timing, "endTime"))
+                        .and_then(|end| end.as_f64())
+                        .is_some_and(f64::is_finite);
+                    !finished && ends
+                })
+            });
+        match (running, held) {
+            (true, false) => {
+                commands
+                    .entity(entity)
+                    .try_insert(lumen_scene::style_sheet::HoldRemoval);
+            }
+            (false, true) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<lumen_scene::style_sheet::HoldRemoval>();
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy_ecs::system::RunSystemOnce;

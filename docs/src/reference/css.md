@@ -35,8 +35,8 @@ importing file wins.
 `@media` blocks nest up to 32 levels, as do `:is()`, `:where()`, and
 `:not()` arguments.
 
-`@import`, `@media`, `@font-face` and `@keyframes` are the at-rules Lumen
-implements. `@keyframes` and `@font-face` are kept as authored and handed to
+`@import`, `@media`, `@starting-style`, `@font-face` and `@keyframes` are the
+at-rules Lumen implements. `@keyframes` and `@font-face` are kept as authored and handed to
 the web target, which writes them back out; the desktop reads them too (see
 [Animations](#animations) for `@keyframes`). A `url()` inside a kept block
 names a file relative to the app directory, the same place an `<image src>`
@@ -770,7 +770,20 @@ its color while its widths stay the same, and a gradient background switches
 at the midpoint rather than blending.
 
 A running transition outranks every rule and inline style, as in CSS: the
-cascade's new value shows once it ends. A state that a widget paints itself
+cascade's new value shows once it ends.
+
+The rules inside an `@starting-style` block give an element entering the tree
+the values its transitions start from: one `<if>` or `<for>` mounts, one a
+script inserts, an `<if mode="hide">` body shown again, and every element on
+the document's first frame. They take part in nothing else. A block nests
+inside `@media` and may hold `@media`; the web target writes it out as
+authored.
+
+An element `<if>` or `<for>` removes first gains the class `leaving`. When the
+stylesheet names that class anywhere, the element stays in the tree with it
+until every finite animation it started has ended, then goes; see
+[the animations guide](../guides/animations.md). A stylesheet that never names
+it gets the element removed at once. A state that a widget paints itself
 (a hover or press tint, a checked toggle) takes the property over from a
 transition.
 

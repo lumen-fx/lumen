@@ -436,3 +436,114 @@ fn a_spring_plays_for_its_settle_time_and_overshoots() {
     h.at(t, u64::from(duration));
     assert!(near(scale(&h), 1.0));
 }
+
+impl Harness {
+    fn set_signal(&mut self, name: &str, value: &str) {
+        self.app
+            .world
+            .resource_mut::<lumen_core::property_store::PropertyStore>()
+            .set_global_str(name, value);
+        self.ticks(3);
+    }
+
+    fn find(&mut self, id: &str) -> Option<Entity> {
+        let mut q = self.app.world.query::<(Entity, &LumenId)>();
+        q.iter(&self.app.world)
+            .find(|(_, l)| l.0 == id)
+            .map(|(e, _)| e)
+    }
+}
+
+#[test]
+fn an_entering_element_transitions_from_its_starting_style() {
+    let mut h = Harness::new(
+        r#"<root><if signal="open"><tile id="p" class="panel" width="40" height="40"/></if></root>"#,
+        ".panel { opacity: 1; translate: 0 0; transition: opacity 1s linear, translate 1s linear; }\n\
+         @starting-style { .panel { opacity: 0.2; translate: 0 30px; } }",
+    );
+    assert!(h.find("p").is_none());
+    h.set_signal("open", "true");
+    let p = h.find("p").expect("mounted");
+    let active = h
+        .app
+        .world
+        .get::<lumen_primitives::ActiveTransitions>(p)
+        .expect("entering transitions");
+    let opacity = active
+        .on(lumen_core::style_overrides::StyleFields::OPACITY)
+        .expect("an opacity transition");
+    assert_eq!(
+        opacity.from.opacity,
+        Some(Some(0.2)),
+        "from the starting style"
+    );
+    assert!(
+        active
+            .on(lumen_core::style_overrides::StyleFields::TRANSFORM)
+            .is_some(),
+        "the translate transitions too"
+    );
+    assert!(h.opacity(p) < 0.5, "shows near its start: {}", h.opacity(p));
+}
+
+#[test]
+fn a_leaving_element_plays_its_exit_before_it_goes() {
+    let mut h = Harness::new(
+        r#"<root><if signal="open"><tile id="t" class="toast" width="40" height="40"/></if></root>"#,
+        "@keyframes out { to { opacity: 0; } }\n\
+         .toast.leaving { animation: out 1s linear forwards; }",
+    );
+    h.set_signal("open", "true");
+    let t = h.find("t").expect("mounted");
+    h.set_signal("open", "false");
+    assert_eq!(h.find("t"), Some(t), "held in place while its exit runs");
+    assert!(
+        h.app
+            .world
+            .get::<lumen_core::components::LumenClasses>(t)
+            .is_some_and(|c| c.has("leaving"))
+    );
+    assert_eq!(h.running(t), 1, "the exit runs");
+    h.at(t, 500);
+    assert!(near(h.opacity(t), 0.5), "halfway out: {}", h.opacity(t));
+    h.resume_from(t, 1100);
+    h.ticks(3);
+    assert!(h.find("t").is_none(), "gone once the exit has run");
+}
+
+#[test]
+fn a_dropped_row_leaves_after_its_exit_and_the_rest_stay_in_order() {
+    let mut h = Harness::new(
+        r#"<root><for each="items" key="id"><tile id="{row.id}" class="row" width="40" height="10"/></for></root>"#,
+        "@keyframes out { to { opacity: 0; } }\n\
+         .row.leaving { animation: out 1s linear forwards; }",
+    );
+    let set = |h: &mut Harness, ids: &[&str]| {
+        let rows = ids
+            .iter()
+            .map(|id| std::collections::HashMap::from([("id".to_string(), id.to_string())]))
+            .collect::<Vec<_>>();
+        h.app
+            .world
+            .resource_mut::<lumen_core::signals::ArraySignals>()
+            .set("items", rows);
+        h.ticks(3);
+    };
+    set(&mut h, &["a", "b", "c"]);
+    let b = h.find("b").expect("row b");
+    set(&mut h, &["a", "c"]);
+    assert_eq!(
+        h.find("b"),
+        Some(b),
+        "the dropped row stays while it leaves"
+    );
+    set(&mut h, &["a", "c", "d"]);
+    assert!(
+        h.find("d").is_some(),
+        "the list keeps reconciling around it"
+    );
+    h.resume_from(b, 1100);
+    h.ticks(3);
+    assert!(h.find("b").is_none());
+    assert!(h.find("a").is_some() && h.find("c").is_some());
+}

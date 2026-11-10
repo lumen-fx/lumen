@@ -197,6 +197,7 @@ impl Plugin for WebDomPlugin {
                 nodes::release_dead_nodes,
                 project::project_text,
                 project::project_classes,
+                nodes::hold_leaving_while_animating,
                 project::project_attributes,
                 project::project_inline_style,
                 split::project_split_basis,

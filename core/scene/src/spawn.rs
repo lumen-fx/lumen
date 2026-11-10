@@ -1477,9 +1477,16 @@ pub fn reconcile_if_blocks(
         &mut lumen_core::style_overrides::StyleOverrides,
     )>,
     fade_targets: bevy_ecs::system::Query<Option<&lumen_primitives::TransitionSpecs>>,
+    (exits, leaving): (
+        Option<bevy_ecs::system::Res<crate::style_sheet::EntryExitStyles>>,
+        bevy_ecs::system::Query<(), With<crate::style_sheet::Leaving>>,
+    ),
     mut commands: bevy_ecs::system::Commands,
 ) {
+    let exit_styled = exits.is_some_and(|e| e.leaving);
     for (parent_id, mut marker, children) in markers.iter_mut() {
+        // Children on their way out keep the block shown until they go.
+        let mut exiting = children.is_some_and(|kids| kids.iter().any(|k| leaving.contains(k)));
         let value: Option<std::sync::Arc<str>> = store.get_global_str(&marker.signal_name);
         let value_str: Option<&str> = value.as_deref();
         let now_truthy = match &marker.eq {
@@ -1517,9 +1524,14 @@ pub fn reconcile_if_blocks(
                     }
                     marker.currently_mounted = true;
                 } else if !now_truthy && marker.currently_mounted {
+                    exiting |= exit_styled && children.is_some_and(|k| !k.is_empty());
                     if let Some(kids) = children {
                         for child in kids.iter() {
-                            commands.entity(child).try_despawn();
+                            // Gone at once, or held while an exit the
+                            // stylesheet gives it runs.
+                            commands.queue(move |world: &mut World| {
+                                crate::style_sheet::begin_leaving(world, child);
+                            });
                         }
                     }
                     marker.currently_mounted = false;
@@ -1551,15 +1563,18 @@ pub fn reconcile_if_blocks(
         // background over the active one. D5: applied only on a
         // transition. The unconditional per-tick re-insert kept
         // Changed<Visible> (and thus FrameDirty) permanently hot.
-        if marker.applied_visible == Some(now_truthy) {
+        // A `Render` block whose body is still leaving stays shown until it
+        // has gone, so its exit can be seen.
+        let shown = now_truthy || (marker.mode == IfMode::Render && exiting);
+        if marker.applied_visible == Some(shown) {
             continue;
         }
-        marker.applied_visible = Some(now_truthy);
+        marker.applied_visible = Some(shown);
         // `try_`: a block inside the body of another that closed this tick
         // is despawned with that body before these commands run.
         commands
             .entity(parent_id)
-            .try_insert(lumen_core::components::Visible(now_truthy));
+            .try_insert(lumen_core::components::Visible(shown));
         // Entering transition on show (mount-direction only - hide stays
         // instant; CSS can't run removal transitions without JS either).
         // Check the `<if>` entity itself (e.g. `<dialog>`) and its mounted
@@ -1579,6 +1594,19 @@ pub fn reconcile_if_blocks(
                         },
                     );
                 }
+                // Shown again, it enters the tree as CSS sees it, from
+                // `display: none`: its starting style applies.
+                commands.queue(move |world: &mut World| {
+                    if world
+                        .get_resource::<crate::style_sheet::EntryExitStyles>()
+                        .is_some_and(|s| s.starting_style)
+                    {
+                        crate::style_sheet::mark_entering(world, target);
+                        if let Ok(mut e) = world.get_entity_mut(target) {
+                            e.insert(lumen_core::components::StyleDirty);
+                        }
+                    }
+                });
             }
         }
         // section 17.4: hide releases the block's layout space via
@@ -1586,7 +1614,7 @@ pub fn reconcile_if_blocks(
         // Changed<Style> -> DirtyLayout, so siblings reflow on this same
         // tick's LayoutSync.
         if let Ok((mut style, mut overrides)) = styles.get_mut(parent_id) {
-            let out = if now_truthy {
+            let out = if shown {
                 overrides.release::<IfMarker>()
             } else {
                 let live = Live {
@@ -2043,7 +2071,10 @@ pub fn reconcile_for_blocks(
     >,
     styles: bevy_ecs::system::Query<&lumen_core::components::Style>,
     stylesheet: Option<bevy_ecs::system::Res<LumenStylesheet>>,
-    policy: Option<bevy_ecs::system::Res<ScenePolicy>>,
+    (policy, leaving): (
+        Option<bevy_ecs::system::Res<ScenePolicy>>,
+        bevy_ecs::system::Query<(), With<crate::style_sheet::Leaving>>,
+    ),
 ) {
     let policy = policy.map(|p| *p).unwrap_or_default();
     // Nothing wrote an array since the last pass, so every mounted row
@@ -2173,7 +2204,10 @@ pub fn reconcile_for_blocks(
         let marker = &mut *marker;
 
         let body_len = marker.body.len();
-        let kids: Vec<Entity> = children.map(|c| c.iter().collect()).unwrap_or_default();
+        // A row on its way out is no row any more, whatever the tree says.
+        let kids: Vec<Entity> = children
+            .map(|c| c.iter().filter(|&k| !leaving.contains(k)).collect())
+            .unwrap_or_default();
         let row_template = RowTemplate {
             body: &marker.body,
             store: &store,
@@ -2211,7 +2245,9 @@ pub fn reconcile_for_blocks(
             }
         }
         for &child in &diff.dropped {
-            commands.entity(child).despawn();
+            commands.queue(move |world: &mut World| {
+                crate::style_sheet::begin_leaving(world, child);
+            });
         }
 
         // Cascade-once-per-template (spec section 15.3): a virtualized
@@ -2837,6 +2873,7 @@ pub(crate) fn spawn_body_child(
         // despawn) are intentionally NOT implemented - CSS itself can't
         // express them without JS, and holding despawns hostage to
         // animations would complicate every reconciler.
+        crate::style_sheet::mark_entering(world, id);
         lumen_primitives::fade_in_on_mount(&mut world.entity_mut(id));
     });
 }
@@ -2878,6 +2915,11 @@ fn sort_rows(world: &mut World, parent: Entity, body_len: usize, row_order: &[us
     else {
         return;
     };
+    // Rows on their way out keep where they are; only the live rows sort.
+    let kids: Vec<Entity> = kids
+        .into_iter()
+        .filter(|&k| world.get::<crate::style_sheet::Leaving>(k).is_none())
+        .collect();
     // Something else touched the child list, so the per-row slices no
     // longer line up. Leave it to the next reconcile, which rebuilds the
     // block on the same mismatch.
