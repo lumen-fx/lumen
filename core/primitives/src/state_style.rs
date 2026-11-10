@@ -288,6 +288,7 @@ pub fn apply_state_visuals(
                 visuals: vis.as_deref(),
                 text: text.as_deref(),
                 opacity,
+                ..Live::default()
             };
             overrides.hold::<StatePatched>(values, &live)
         };

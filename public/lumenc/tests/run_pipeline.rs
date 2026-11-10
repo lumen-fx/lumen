@@ -991,7 +991,7 @@ mod feel_wave_tests {
         );
         assert!(
             app.world
-                .get::<lumen_primitives::OpacityTransition>(dialog)
+                .get::<lumen_primitives::ActiveTransitions>(dialog)
                 .is_some(),
             "opacity tween active right after open"
         );
@@ -999,14 +999,14 @@ mod feel_wave_tests {
         std::thread::sleep(std::time::Duration::from_millis(90));
         app.tick();
         app.tick();
-        let done = app.world.get::<Opacity>(dialog).map(|o| o.0).unwrap();
+        let done = app.world.get::<Opacity>(dialog).map_or(1.0, |o| o.0);
         assert!(
             (done - 1.0).abs() < 1e-4,
             "fade settles at full opacity (got {done})"
         );
         assert!(
             app.world
-                .get::<lumen_primitives::OpacityTransition>(dialog)
+                .get::<lumen_primitives::ActiveTransitions>(dialog)
                 .is_none(),
             "tween retires once done"
         );

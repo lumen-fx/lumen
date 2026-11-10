@@ -301,7 +301,7 @@ in-app switch for anything heavily animated or low-contrast.
 | edges | 1 to 4 terms in top-right-bottom-left rotation; each `<n>`, `<n>px`, or `<n>%`. |
 | border width | `thin` (1px), `medium` (3px), `thick` (5px), or a px length. Percentages are rejected. |
 | duration | `<n>ms` or `<n>s`. |
-| easing | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(a, b, c, d)`. |
+| easing | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(a, b, c, d)`, `steps(n[, <position>])`, `step-start`, `step-end`, `linear(<stop>, ...)`. The named curves are the cubic Beziers CSS defines. A `steps()` position is `jump-start` (`start`), `jump-end` (`end`, the default), `jump-none` or `jump-both`; a `linear()` stop is an output with up to two input percentages. |
 | track size | `<n>`, `<n>px`, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(<min>, <max>)`. |
 
 ### Gradients
@@ -752,10 +752,25 @@ The same swaps are reachable as plain properties, which is often shorter:
 | `transition-timing-function` | comma-separated easings | `ease` |
 
 Animatable properties: `opacity`, `background-color` (`background`,
-`bg`), `color` (`text-color`), and `border-color`. `all` stands for all
-four. Any other name in a transition list is ignored with a warning;
-layout properties are deliberately excluded so a transition never re-runs
-layout every frame.
+`bg`), `color` (`text-color`), `border-color`, `box-shadow` (`shadow`),
+`border-radius` (`radius`), `outline-color`, and the transforms:
+`transform`, `translate`, `rotate` and `scale`. `all` stands for every one.
+Any other name in a transition list is ignored with a warning; layout
+properties are deliberately excluded so a transition never re-runs layout
+every frame.
+
+Colors blend with premultiplied alpha, as CSS does, so a fade from
+`transparent` keeps its hue. Shadow lists blend shadow by shadow, the
+shorter list padded with transparent shadows; a shadow that is `inset` on
+one side only switches at the midpoint. Transform lists blend function by
+function when they match in kind, and otherwise as matrices. A border blends
+its color while its widths stay the same, and a gradient background switches
+at the midpoint rather than blending.
+
+A running transition outranks every rule and inline style, as in CSS: the
+cascade's new value shows once it ends. A state that a widget paints itself
+(a hover or press tint, a checked toggle) takes the property over from a
+transition.
 
 An entry that names no easing gets `ease`. A second duration in an entry
 is a delay, which Lumen warns about and ignores: a transition always

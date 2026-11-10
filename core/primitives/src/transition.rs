@@ -1,109 +1,35 @@
-//! Generic per-property tween primitive.
+//! CSS transitions: the `transition` declarations an element carries and the
+//! driver that tweens a property from where it shows to where the cascade
+//! moved it.
 //!
-//! `Transition<T>` carries a start value, end value, start instant,
-//! duration, and easing. Querying [`Transition::sample`] returns the
-//! interpolated value at any wall-clock instant; once
-//! [`Transition::done`] is true the transition can be retired.
+//! A running transition holds its property in
+//! [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) under
+//! [`TransitionHolder`], at the rank CSS gives transitions: above every
+//! normal declaration and above keyframe animations. Each tick the driver
+//! samples every running transition through the shared value math in
+//! [`lumen_core::motion`] and holds the blend; when one ends it lets go and
+//! the property shows what the cascade says now.
 //!
-//! The crate ships the primitive plus a [`Lerp`] impl for [`f32`] and
-//! [`Color`] - concrete property bridges (CSS `transition: opacity` ->
-//! `Transition<f32>` driving [`Opacity`], CSS `transition: bg` ->
-//! `Transition<Color>` driving [`Visuals.fill`]) live in the CSS
-//! application layer, not here.
-//!
-//! Designed for the markup-driven CSS `transition:` shorthand
-//! (Transitions Level 1 spec). Hover/press tints in [`crate::hover`]
-//! keep their bespoke state machine - their bidirectional snap-on-state-
-//! flip semantics don't fit a one-shot transition.
+//! [`Transition`] is the bare tween primitive, for motion that is not a CSS
+//! transition (the switch thumb slide).
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Color, Fill, Opacity, Visuals};
+use bevy_ecs::world::EntityWorldMut;
+use lumen_core::components::{Opacity, OutlineColor, TextStyle, Transform, Visible, Visuals};
+use lumen_core::motion::{Easing, Interpolate};
 use lumen_core::prelude::{Tick, TickStage};
+use lumen_core::render_world::AnimationsActive;
+use lumen_core::style_overrides::{Live, StyleFields, StyleOverrides, StyleOwner, StyleValues};
 use lumen_core::time::{Duration, Instant};
+use lumen_core::transform::ElementTransform;
 
-/// Tween-able value. Implementations should return a linear interpolation
-/// between `self` and `other` at fraction `t` in `[0, 1]`. Implementations
-/// are free to assume `t` is already easing-adjusted by [`Easing::apply`].
-pub trait Lerp: Copy + PartialEq {
-    /// Linear interpolation between `self` (at `t = 0`) and `other` (at
-    /// `t = 1`).
-    fn lerp(self, other: Self, t: f32) -> Self;
-}
-
-impl Lerp for f32 {
-    fn lerp(self, other: Self, t: f32) -> Self {
-        self + (other - self) * t
-    }
-}
-
-impl Lerp for Color {
-    fn lerp(self, other: Self, t: f32) -> Self {
-        Color {
-            r: self.r.lerp(other.r, t),
-            g: self.g.lerp(other.g, t),
-            b: self.b.lerp(other.b, t),
-            a: self.a.lerp(other.a, t),
-        }
-    }
-}
-
-/// Easing curve sampled by [`Easing::apply`]. The curves match common
-/// CSS / native-control timings:
+/// One-shot tween between two values of an interpolable type, for motion
+/// that is not a CSS transition.
 ///
-/// - `Linear` - uniform speed; not common in UI but useful for tests.
-/// - `EaseIn` - cubic ease-in (slow start).
-/// - `EaseOut` - cubic ease-out (fast start, slow settle); matches the
-///   Cocoa AppKit / Material 3 short-transition curve.
-/// - `EaseInOut` - cubic ease-in-out.
-/// - `CubicBezier(p1x, p1y, p2x, p2y)` - CSS `cubic-bezier(...)` form.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Easing {
-    /// `f(t) = t`.
-    Linear,
-    /// `f(t) = t^3`.
-    EaseIn,
-    /// `f(t) = 1 - (1 - t)^3`.
-    EaseOut,
-    /// `f(t) = 0.5*(2t)^3` for `t < 0.5`, mirrored above.
-    EaseInOut,
-    /// CSS `cubic-bezier(p1x, p1y, p2x, p2y)`. Anchors are implicit
-    /// `(0, 0)` and `(1, 1)`.
-    CubicBezier(f32, f32, f32, f32),
-}
-
-impl Easing {
-    /// Map a linear progress `t` in `[0, 1]` through the curve.
-    pub fn apply(self, t: f32) -> f32 {
-        let t = t.clamp(0.0, 1.0);
-        match self {
-            Easing::Linear => t,
-            Easing::EaseIn => t * t * t,
-            Easing::EaseOut => {
-                let inv = 1.0 - t;
-                1.0 - inv * inv * inv
-            }
-            Easing::EaseInOut => {
-                if t < 0.5 {
-                    4.0 * t * t * t
-                } else {
-                    let inv = -2.0 * t + 2.0;
-                    1.0 - inv * inv * inv * 0.5
-                }
-            }
-            Easing::CubicBezier(p1x, p1y, p2x, p2y) => cubic_bezier(p1x, p1y, p2x, p2y, t),
-        }
-    }
-}
-
-/// One-shot transition between two values of a tween-able type.
-///
-/// Use [`Transition::new`] to construct or `From<(T, T, Duration)>` for
-/// the common linear case. [`Transition::sample`] returns the eased value
-/// at any instant; [`Transition::done`] returns `true` once elapsed time
-/// has met or exceeded `duration` so the caller can despawn the component
-/// and stop tweening.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct Transition<T: Lerp + Send + Sync + 'static> {
+/// [`Transition::sample`] returns the eased value at any instant;
+/// [`Transition::done`] is true once `duration` has passed.
+#[derive(Component, Clone, Debug)]
+pub struct Transition<T: Interpolate + Clone + Send + Sync + 'static> {
     /// Value at `start`.
     pub from: T,
     /// Value at `start + duration`.
@@ -116,9 +42,8 @@ pub struct Transition<T: Lerp + Send + Sync + 'static> {
     pub easing: Easing,
 }
 
-impl<T: Lerp + Send + Sync + 'static> Transition<T> {
-    /// Construct a transition that starts at `now()` and runs over
-    /// `duration` with `easing`.
+impl<T: Interpolate + Clone + Send + Sync + 'static> Transition<T> {
+    /// A transition that starts now and runs over `duration` with `easing`.
     pub fn new(from: T, to: T, duration: Duration, easing: Easing) -> Self {
         Self {
             from,
@@ -129,21 +54,16 @@ impl<T: Lerp + Send + Sync + 'static> Transition<T> {
         }
     }
 
-    /// Linear fraction of total `duration` elapsed at `now`, clamped to
-    /// `[0, 1]`. Zero-duration transitions report `1` immediately so they
-    /// surface their `to` value without dividing by zero.
+    /// Linear fraction of `duration` elapsed at `now`, clamped to `[0, 1]`.
+    /// A zero-length transition reports `1` at once.
     pub fn progress(&self, now: Instant) -> f32 {
-        if self.duration.is_zero() {
-            return 1.0;
-        }
-        let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
-        (elapsed / self.duration.as_secs_f32()).clamp(0.0, 1.0)
+        progress(self.start, self.duration, now)
     }
 
     /// Eased value at `now`.
     pub fn sample(&self, now: Instant) -> T {
         let t = self.easing.apply(self.progress(now));
-        self.from.lerp(self.to, t)
+        self.from.interpolate(&self.to, t)
     }
 
     /// `true` once the transition has met or exceeded `duration`.
@@ -152,56 +72,67 @@ impl<T: Lerp + Send + Sync + 'static> Transition<T> {
     }
 }
 
-impl<T: Lerp + Send + Sync + 'static> From<(T, T, Duration)> for Transition<T> {
-    /// Convenience: `(from, to, duration).into()` builds a
-    /// [`Easing::Linear`] transition starting at `now()`.
-    fn from((from, to, duration): (T, T, Duration)) -> Self {
-        Self::new(from, to, duration, Easing::Linear)
+fn progress(start: Instant, duration: Duration, now: Instant) -> f32 {
+    if duration.is_zero() {
+        return 1.0;
     }
+    let elapsed = now.saturating_duration_since(start).as_secs_f32();
+    (elapsed / duration.as_secs_f32()).clamp(0.0, 1.0)
 }
 
-/// Property identifier for a [`TransitionSpec`].
+/// A property a `transition` declaration can name.
 ///
-/// The v1 animatable set is colors + opacity - geometry-free visual
-/// properties only. Layout properties (`width`, `height`, padding, ...)
-/// are deliberately not transitionable: animating them would re-run
-/// layout every frame; the CSS parser warns and drops them.
+/// Paint properties only: animating a layout property would run layout every
+/// frame, so the CSS parser warns about one and drops it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionProperty {
-    /// CSS `opacity`; driven by [`step_opacity_transitions`] against the [`Opacity`] component.
+    /// CSS `opacity`.
     Opacity,
-    /// CSS `background-color`; driven by [`step_background_transitions`]
-    /// against the solid [`Visuals::fill`]. Also parameterises the
-    /// hover / press tint tweens in [`crate::hover`] (duration + easing).
+    /// CSS `background-color` (`background`, `bg`), a solid fill. Also
+    /// times the hover and press tints in [`crate::hover`].
     BackgroundColor,
-    /// CSS `color` / `text-color`; driven by
-    /// [`step_text_color_transitions`] against `TextStyle::color`.
+    /// CSS `color` (`text-color`).
     TextColor,
-    /// CSS `border-color`; driven by [`step_border_color_transitions`]
-    /// against `Visuals::border.color`.
+    /// CSS `border-color`.
     BorderColor,
+    /// CSS `box-shadow` (`shadow`).
+    BoxShadow,
+    /// CSS `border-radius` (`radius`).
+    BorderRadius,
+    /// CSS `outline-color`: the focus outline's color.
+    OutlineColor,
+    /// CSS `transform`.
+    Transform,
+    /// CSS `translate`.
+    Translate,
+    /// CSS `rotate`.
+    Rotate,
+    /// CSS `scale`.
+    Scale,
 }
 
 impl TransitionProperty {
-    /// Parse a CSS property name into a recognised [`TransitionProperty`].
-    /// Unknown names return `None`; callers should warn and ignore.
-    pub fn from_css(name: &str) -> Option<Self> {
-        match name {
-            "opacity" => Some(Self::Opacity),
-            "background-color" | "background" | "bg" => Some(Self::BackgroundColor),
-            "color" | "text-color" => Some(Self::TextColor),
-            "border-color" => Some(Self::BorderColor),
-            _ => None,
+    /// The held field the property lives in. The transform family shares
+    /// one.
+    pub fn field(self) -> StyleFields {
+        match self {
+            TransitionProperty::Opacity => StyleFields::OPACITY,
+            TransitionProperty::BackgroundColor => StyleFields::FILL,
+            TransitionProperty::TextColor => StyleFields::TEXT_COLOR,
+            TransitionProperty::BorderColor => StyleFields::BORDER,
+            TransitionProperty::BoxShadow => StyleFields::SHADOWS,
+            TransitionProperty::BorderRadius => StyleFields::RADIUS,
+            TransitionProperty::OutlineColor => StyleFields::OUTLINE_COLOR,
+            TransitionProperty::Transform
+            | TransitionProperty::Translate
+            | TransitionProperty::Rotate
+            | TransitionProperty::Scale => StyleFields::TRANSFORM,
         }
     }
 }
 
-/// Author-declared transition. CSS shorthand
-/// `transition: opacity 200ms ease-out` lands as one of these per
-/// comma-separated entry. The runtime stores all specs for an entity in
-/// a [`TransitionSpecs`] component and consults them when a relevant
-/// property changes (e.g. on a class flip).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Author-declared transition: one entry of a `transition` list.
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransitionSpec {
     /// Which property this spec applies to.
     pub property: TransitionProperty,
@@ -216,377 +147,394 @@ pub struct TransitionSpec {
 pub struct TransitionSpecs(pub Vec<TransitionSpec>);
 
 impl TransitionSpecs {
-    /// Look up the last spec matching `property`. Earlier duplicates are
-    /// overridden - CSS Transitions Level 1 / Cascade 5 mandate
-    /// last-declaration-wins per property when authors list the same
-    /// property twice in a `transition:` shorthand or across multiple
-    /// rule blocks of equal specificity.
+    /// The last spec naming `property`: the last declaration wins, as CSS
+    /// orders a property listed twice.
     pub fn for_property(&self, property: TransitionProperty) -> Option<&TransitionSpec> {
         self.0.iter().rev().find(|s| s.property == property)
     }
+
+    /// The spec that times a change to `field`, with a non-zero duration.
+    /// For the transform family the `transform` list's own spec wins over an
+    /// individual property's.
+    pub fn for_field(&self, field: StyleFields) -> Option<&TransitionSpec> {
+        let mut found = None;
+        for s in self.0.iter().rev() {
+            if s.property.field() != field || s.duration.is_zero() {
+                continue;
+            }
+            if s.property == TransitionProperty::Transform {
+                return Some(s);
+            }
+            found = found.or(Some(s));
+        }
+        found
+    }
 }
 
-/// Active [`Transition<f32>`] driving an entity's [`Opacity`]. Spawned
-/// when a class flip changes the resolved opacity and the entity carries
-/// a matching [`TransitionSpec`]. The driver removes this component
-/// when the transition completes.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct OpacityTransition(pub Transition<f32>);
+/// The [`StyleOverrides`] layer running transitions hold their properties
+/// in, at rank 80: above keyframe animations, which CSS orders below
+/// transitions, and above every normal declaration.
+pub struct TransitionHolder;
 
-/// Active [`Transition<Color>`] driving an entity's solid
-/// [`Visuals::fill`] (CSS `transition: background-color`). Started by
-/// the restyle path (theme / class flips) when the computed background
-/// changes; hover / press pseudo-class tints keep their own FSM in
-/// [`crate::hover`] (which reads the same [`TransitionSpecs`] for
-/// duration + easing).
-#[derive(Component, Clone, Copy, Debug)]
-pub struct BackgroundTransition(pub Transition<Color>);
+impl StyleOwner for TransitionHolder {
+    const RANK: u8 = 80;
+}
 
-/// Active [`Transition<Color>`] driving `TextStyle::color`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct TextColorTransition(pub Transition<Color>);
+/// The rank below which a holder is not a motion but a runtime system's own
+/// state (a tint, a checked fill): a property such a holder covers is that
+/// system's to animate, and a transition on it is dropped.
+pub const MOTION_RANK: u8 = 70;
 
-/// Active [`Transition<Color>`] driving `Visuals::border.color`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct BorderColorTransition(pub Transition<Color>);
+/// One property group a running transition moves.
+#[derive(Clone, Debug)]
+pub struct RunningTransition {
+    /// The field it holds.
+    pub field: StyleFields,
+    /// Where it started: what showed when the cascade moved the property.
+    pub from: StyleValues,
+    /// Where it ends: what the cascade says.
+    pub to: StyleValues,
+    /// When it started.
+    pub start: Instant,
+    /// How long it runs.
+    pub duration: Duration,
+    /// Its timing function.
+    pub easing: Easing,
+}
 
-/// CSS-retarget rule: when a transition re-triggers mid-flight, the new
-/// tween starts from the CURRENT interpolated value (the live component
-/// value the previous driver tick wrote), never the old endpoint. This
-/// helper builds that tween; equal endpoints return `None` (equal-value
-/// writes are no-ops, no zombie transitions).
-pub fn retarget<T: Lerp + Send + Sync + 'static>(
-    current: T,
-    to: T,
+impl RunningTransition {
+    /// The value at `now`, for an element whose border box is `size`.
+    pub fn sample(&self, now: Instant, size: glam::Vec2) -> StyleValues {
+        let t = self.easing.apply(progress(self.start, self.duration, now));
+        self.from.interpolate(&self.to, t, size)
+    }
+
+    /// Whether it has run its course at `now`.
+    pub fn done(&self, now: Instant) -> bool {
+        progress(self.start, self.duration, now) >= 1.0
+    }
+}
+
+/// The transitions running on an element. Present only while one runs.
+#[derive(Component, Clone, Debug, Default)]
+pub struct ActiveTransitions(pub Vec<RunningTransition>);
+
+impl ActiveTransitions {
+    /// The running transition on `field`, if any.
+    pub fn on(&self, field: StyleFields) -> Option<&RunningTransition> {
+        self.0.iter().find(|r| r.field == field)
+    }
+}
+
+/// The value a transform transition starts from: `from`, with the parts of
+/// the transform `spec` does not name already at `to`'s, since only the
+/// named property tweens and a change to the others snaps.
+fn transform_start(spec: TransitionProperty, from: &StyleValues, to: &StyleValues) -> StyleValues {
+    let (Some(from_t), Some(to_t)) = (&from.transform, &to.transform) else {
+        return from.clone();
+    };
+    let none = ElementTransform::default();
+    let mut start = from_t.clone().unwrap_or_default();
+    let target = to_t.as_ref().unwrap_or(&none);
+    if spec != TransitionProperty::Transform {
+        start.functions = target.functions.clone();
+    }
+    if spec != TransitionProperty::Translate {
+        start.translate = target.translate;
+    }
+    if spec != TransitionProperty::Rotate {
+        start.rotate = target.rotate;
+    }
+    if spec != TransitionProperty::Scale {
+        start.scale = target.scale;
+    }
+    start.origin = target.origin;
+    StyleValues {
+        transform: Some(Some(start)),
+        ..from.clone()
+    }
+}
+
+/// Start a transition of `field` on an element: from `from`, what shows
+/// now, to `to`, what the cascade says, timed by `spec` and starting at
+/// `now`. Holds `from` at once, so the frame the cascade moved shows no
+/// jump. A transition already running on the field is replaced.
+pub fn start_transition(
+    ent: &mut EntityWorldMut<'_>,
+    field: StyleFields,
+    from: StyleValues,
+    to: StyleValues,
     spec: &TransitionSpec,
-) -> Option<Transition<T>> {
-    if current == to {
-        return None;
+    now: Instant,
+) {
+    let from = if field == StyleFields::TRANSFORM {
+        transform_start(spec.property, &from, &to)
+    } else {
+        from
     }
-    Some(Transition::new(current, to, spec.duration, spec.easing))
+    .restricted(field);
+    let running = RunningTransition {
+        field,
+        from: from.clone(),
+        to: to.restricted(field),
+        start: now,
+        duration: spec.duration,
+        easing: spec.easing.clone(),
+    };
+    let mut active = ent.take::<ActiveTransitions>().unwrap_or_default();
+    active.0.retain(|r| r.field != field);
+    let others = active
+        .0
+        .iter()
+        .fold(StyleFields::empty(), |f, r| f | r.field);
+    active.0.push(running);
+    ent.insert(active);
+    // The other running transitions keep the values they hold; the new one
+    // joins at its start.
+    let mut held = ent
+        .get::<StyleOverrides>()
+        .and_then(|o| o.held_by::<TransitionHolder>())
+        .cloned()
+        .unwrap_or_default()
+        .restricted(others);
+    held.overlay(&from);
+    lumen_core::style_overrides::hold_on::<TransitionHolder>(ent, held);
 }
 
-/// Sample every active [`OpacityTransition`] and write the result into
-/// the entity's [`Opacity`]. When the transition is done, snap to the
-/// final value and despawn the transition component.
+/// Stop the transition of `field` on an element, if one runs, and let the
+/// property show what the cascade says.
+pub fn cancel_transition(ent: &mut EntityWorldMut<'_>, field: StyleFields) {
+    let Some(mut active) = ent.get_mut::<ActiveTransitions>() else {
+        return;
+    };
+    let before = active.0.len();
+    active.0.retain(|r| r.field != field);
+    if active.0.len() == before {
+        return;
+    }
+    if active.0.is_empty() {
+        ent.remove::<ActiveTransitions>();
+        lumen_core::style_overrides::release_on::<TransitionHolder>(ent);
+        return;
+    }
+    let left = active
+        .0
+        .iter()
+        .fold(StyleFields::empty(), |f, r| f | r.field);
+    let kept = ent
+        .get::<StyleOverrides>()
+        .and_then(|o| o.held_by::<TransitionHolder>())
+        .cloned()
+        .unwrap_or_default()
+        .restricted(left);
+    lumen_core::style_overrides::hold_on::<TransitionHolder>(ent, kept);
+}
+
+/// The components a transition writes, read and written in place.
+type Written = (
+    Option<&'static mut Visuals>,
+    Option<&'static mut TextStyle>,
+    Option<&'static mut Opacity>,
+    Option<&'static mut ElementTransform>,
+    Option<&'static mut OutlineColor>,
+);
+
+type WrittenItem<'w, 's> = <Written as bevy_ecs::query::QueryData>::Item<'w, 's>;
+
+/// Lay `v` onto the components in `w`, inserting or removing through
+/// `commands` the ones a value adds or takes away. Shared by every holder
+/// that drives the motion components from a system.
+pub fn write_motion_values(
+    commands: &mut Commands,
+    entity: Entity,
+    w: &mut WrittenItem<'_, '_>,
+    v: &StyleValues,
+) {
+    if let Some(vis) = w.0.as_mut() {
+        v.write_visuals(vis);
+    }
+    if let Some(text) = w.1.as_mut() {
+        v.write_text(text);
+    }
+    match (v.opacity, w.2.as_mut()) {
+        (Some(Some(o)), Some(cur)) => {
+            if cur.0 != o {
+                cur.0 = o;
+            }
+        }
+        (Some(Some(o)), None) => {
+            commands.entity(entity).try_insert(Opacity(o));
+        }
+        (Some(None), Some(_)) => {
+            commands.entity(entity).try_remove::<Opacity>();
+        }
+        _ => {}
+    }
+    match (&v.transform, w.3.as_mut()) {
+        (Some(Some(x)), Some(cur)) => {
+            if **cur != *x {
+                **cur = x.clone();
+            }
+        }
+        (Some(Some(x)), None) => {
+            commands.entity(entity).try_insert(x.clone());
+        }
+        (Some(None), Some(_)) => {
+            commands.entity(entity).try_remove::<ElementTransform>();
+        }
+        _ => {}
+    }
+    match (v.outline_color, w.4.as_mut()) {
+        (Some(Some(c)), Some(cur)) => {
+            if cur.0 != c {
+                cur.0 = c;
+            }
+        }
+        (Some(Some(c)), None) => {
+            commands.entity(entity).try_insert(OutlineColor(c));
+        }
+        (Some(None), Some(_)) => {
+            commands.entity(entity).try_remove::<OutlineColor>();
+        }
+        _ => {}
+    }
+}
+
+/// The live values in `w`, for a holder taking a field nobody held yet.
+pub fn live_of<'a>(w: &'a WrittenItem<'_, '_>) -> Live<'a> {
+    Live {
+        style: None,
+        visuals: w.0.as_deref(),
+        text: w.1.as_deref(),
+        opacity: w.2.as_deref(),
+        transform: w.3.as_deref(),
+        outline_color: w.4.as_deref(),
+    }
+}
+
+/// The query data [`write_motion_values`] writes through.
+pub type MotionComponents = Written;
+
+/// Sample every running transition and hold the blend.
 ///
-/// Hidden entities (`Visible(false)`) tick no animations (CSS: a
-/// `display: none` subtree has no transitions): the tween completes
-/// instantly - snap to the target value, drop the component, no
-/// self-scheduled frame.
-pub fn step_opacity_transitions(
-    mut commands: Commands,
-    tick: Res<Tick>,
-    anim: Res<lumen_core::render_world::AnimationsActive>,
-    mut q: Query<(
-        Entity,
-        &OpacityTransition,
-        &mut Opacity,
-        Option<&lumen_core::components::Visible>,
-    )>,
-) {
-    let now = tick.now;
-    for (entity, tween, mut opacity, visible) in &mut q {
-        let hidden = visible.is_some_and(|v| !v.0);
-        let next = if hidden {
-            tween.0.to
-        } else {
-            tween.0.sample(now)
-        };
-        if opacity.0 != next {
-            opacity.0 = next;
-        }
-        if hidden || tween.0.done(now) {
-            commands.entity(entity).remove::<OpacityTransition>();
-        } else {
-            // Transition still running - keep the loop awake so it advances
-            // without waiting for an unrelated OS event.
-            anim.request();
-        }
-    }
-}
-
-/// Sample every active [`BackgroundTransition`] into the entity's solid
-/// [`Visuals::fill`]. Gradient fills are never animated (the component
-/// is dropped on sight). A fill some runtime system holds in
-/// [`StyleOverrides`](lumen_core::style_overrides::StyleOverrides) (a hover
-/// or press tint, a toggle's state) is that system's to paint, so the
-/// restyle tween is retired rather than left to fight over the colour.
+/// A transition whose property a runtime system's own state now covers (a
+/// hover tint, a checked fill) is dropped: that system animates it. A
+/// hidden element (`Visible(false)` on itself) runs no transitions, as CSS
+/// runs none in a `display: none` subtree: they finish at once. While one
+/// runs the loop is kept awake.
 #[allow(clippy::type_complexity)]
-pub fn step_background_transitions(
+pub fn step_transitions(
     mut commands: Commands,
     tick: Res<Tick>,
-    anim: Res<lumen_core::render_world::AnimationsActive>,
+    anim: Res<AnimationsActive>,
     mut q: Query<(
         Entity,
-        &BackgroundTransition,
-        &mut Visuals,
-        Option<&lumen_core::components::Visible>,
-        Option<&lumen_core::style_overrides::StyleOverrides>,
+        &mut ActiveTransitions,
+        &mut StyleOverrides,
+        Option<&Transform>,
+        Option<&Visible>,
+        Written,
     )>,
 ) {
-    use lumen_core::style_overrides::StyleFields;
     let now = tick.now;
-    for (entity, tween, mut vis, visible, overrides) in &mut q {
-        if overrides.is_some_and(|o| o.held().contains(StyleFields::FILL)) {
-            commands.entity(entity).remove::<BackgroundTransition>();
+    for (entity, mut active, mut overrides, layout, visible, mut written) in &mut q {
+        let hidden = visible.is_some_and(|v| !v.0);
+        let covered = overrides.held_below(MOTION_RANK);
+        active
+            .0
+            .retain(|r| !hidden && !r.done(now) && !covered.intersects(r.field));
+        if active.0.is_empty() {
+            let out = overrides.release::<TransitionHolder>();
+            write_motion_values(&mut commands, entity, &mut written, &out);
+            commands.entity(entity).try_remove::<ActiveTransitions>();
             continue;
         }
-        let hidden = visible.is_some_and(|v| !v.0);
-        let next = if hidden {
-            tween.0.to
-        } else {
-            tween.0.sample(now)
-        };
-        match vis.fill.as_mut() {
-            Some(Fill::Solid(slot)) => {
-                if *slot != next {
-                    *slot = next;
-                }
-            }
-            _ => {
-                commands.entity(entity).remove::<BackgroundTransition>();
-                continue;
-            }
+        let size = layout.map_or(glam::Vec2::ZERO, |t| t.size);
+        let mut held = StyleValues::default();
+        for r in &active.0 {
+            held.overlay(&r.sample(now, size));
         }
-        if hidden || tween.0.done(now) {
-            commands.entity(entity).remove::<BackgroundTransition>();
-        } else {
-            anim.request();
-        }
+        let out = overrides.hold::<TransitionHolder>(held, &live_of(&written));
+        write_motion_values(&mut commands, entity, &mut written, &out);
+        anim.request();
     }
 }
 
-/// Sample every active [`TextColorTransition`] into `TextStyle::color`.
-pub fn step_text_color_transitions(
-    mut commands: Commands,
-    tick: Res<Tick>,
-    anim: Res<lumen_core::render_world::AnimationsActive>,
-    mut q: Query<(
-        Entity,
-        &TextColorTransition,
-        &mut lumen_core::components::TextStyle,
-        Option<&lumen_core::components::Visible>,
-    )>,
-) {
-    let now = tick.now;
-    for (entity, tween, mut style, visible) in &mut q {
-        let hidden = visible.is_some_and(|v| !v.0);
-        let next = if hidden {
-            tween.0.to
-        } else {
-            tween.0.sample(now)
-        };
-        if style.color != next {
-            style.color = next;
-        }
-        if hidden || tween.0.done(now) {
-            commands.entity(entity).remove::<TextColorTransition>();
-        } else {
-            anim.request();
-        }
-    }
-}
-
-/// Sample every active [`BorderColorTransition`] into
-/// `Visuals::border.color`. A border removed mid-flight retires the
-/// tween (nothing left to paint).
-pub fn step_border_color_transitions(
-    mut commands: Commands,
-    tick: Res<Tick>,
-    anim: Res<lumen_core::render_world::AnimationsActive>,
-    mut q: Query<(
-        Entity,
-        &BorderColorTransition,
-        &mut Visuals,
-        Option<&lumen_core::components::Visible>,
-    )>,
-) {
-    let now = tick.now;
-    for (entity, tween, mut vis, visible) in &mut q {
-        let hidden = visible.is_some_and(|v| !v.0);
-        let next = if hidden {
-            tween.0.to
-        } else {
-            tween.0.sample(now)
-        };
-        match vis.border.as_mut() {
-            Some(border) => {
-                if border.color != next {
-                    border.color = next;
-                }
-            }
-            None => {
-                commands.entity(entity).remove::<BorderColorTransition>();
-                continue;
-            }
-        }
-        if hidden || tween.0.done(now) {
-            commands.entity(entity).remove::<BorderColorTransition>();
-        } else {
-            anim.request();
-        }
-    }
-}
-
-/// Plugin: registers every per-property transition driver in
-/// `TickStage::Systems`. Add via `App::add_plugin(TransitionPlugin)` once;
-/// subsequent additions are no-ops as long as the same instance is reused.
+/// Plugin: the transition driver, in `TickStage::Systems`.
 pub struct TransitionPlugin;
 
 impl lumen_core::prelude::Plugin for TransitionPlugin {
     fn build(self, app: &mut lumen_core::prelude::App) {
-        app.add_systems(TickStage::Systems, step_opacity_transitions);
-        // Background tween runs after the hover/press tint systems so
-        // its owns-the-fill check observes this tick's snapshots.
+        // After the hover and press tints, so a tint that took a property
+        // this tick drops the transition on it before it paints.
         app.add_systems(
             TickStage::Systems,
-            step_background_transitions.after(crate::hover::apply_press_tint),
+            step_transitions.after(crate::hover::apply_press_tint),
         );
-        app.add_systems(TickStage::Systems, step_text_color_transitions);
-        app.add_systems(TickStage::Systems, step_border_color_transitions);
     }
 }
 
-/// Sample a CSS-style cubic Bezier `(0, 0) - (p1x, p1y) - (p2x, p2y) -
-/// (1, 1)` at fraction `t`. The Bezier parametric form is sampled by
-/// Newton-Raphson - three iterations + a bisection fallback - to invert
-/// `x(s) -> s` then evaluate `y(s)`. Matches CSS Transitions Level 1.
-fn cubic_bezier(p1x: f32, p1y: f32, p2x: f32, p2y: f32, t: f32) -> f32 {
-    let ax = 3.0 * p1x - 3.0 * p2x + 1.0;
-    let bx = -6.0 * p1x + 3.0 * p2x;
-    let cx = 3.0 * p1x;
-    let ay = 3.0 * p1y - 3.0 * p2y + 1.0;
-    let by = -6.0 * p1y + 3.0 * p2y;
-    let cy = 3.0 * p1y;
-    let bx_t = |s: f32| ((ax * s + bx) * s + cx) * s;
-    let dbx_t = |s: f32| (3.0 * ax * s + 2.0 * bx) * s + cx;
-    let by_t = |s: f32| ((ay * s + by) * s + cy) * s;
-    let mut s = t;
-    for _ in 0..3 {
-        let x = bx_t(s) - t;
-        let dx = dbx_t(s);
-        if dx.abs() < 1e-6 {
-            break;
-        }
-        s -= x / dx;
-        s = s.clamp(0.0, 1.0);
+/// The instant the tick being run started at, which every motion samples
+/// against; the wall clock when no tick runs.
+pub fn tick_now(ent: &EntityWorldMut<'_>) -> Instant {
+    ent.world()
+        .get_resource::<Tick>()
+        .map_or_else(Instant::now, |t| t.now)
+}
+
+/// Start the opacity transition an element mounting into the tree takes
+/// when it declares `transition: opacity`: from fully transparent to its own
+/// opacity. What `<if>` and `<for>` give an element they mount.
+pub fn fade_in_on_mount(ent: &mut EntityWorldMut<'_>) {
+    let now = tick_now(ent);
+    let Some(spec) = ent
+        .get::<TransitionSpecs>()
+        .and_then(|s| s.for_field(StyleFields::OPACITY))
+        .cloned()
+    else {
+        return;
+    };
+    let target = ent.get::<Opacity>().map(|o| o.0);
+    if target.unwrap_or(1.0) <= 0.0 {
+        return;
     }
-    // Bisection if Newton drifted; rare in practice for the standard CSS
-    // ease curves which are well-conditioned.
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-    for _ in 0..16 {
-        let x = bx_t(s) - t;
-        if x.abs() < 1e-4 {
-            break;
-        }
-        if x < 0.0 {
-            lo = s;
-        } else {
-            hi = s;
-        }
-        s = 0.5 * (lo + hi);
-    }
-    by_t(s)
+    start_transition(
+        ent,
+        StyleFields::OPACITY,
+        StyleValues {
+            opacity: Some(Some(0.0)),
+            ..StyleValues::default()
+        },
+        StyleValues {
+            opacity: Some(target),
+            ..StyleValues::default()
+        },
+        &spec,
+        now,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::components::{Color, Fill};
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
     }
 
     #[test]
-    fn linear_easing_is_identity() {
-        assert!(approx(Easing::Linear.apply(0.0), 0.0));
-        assert!(approx(Easing::Linear.apply(0.5), 0.5));
-        assert!(approx(Easing::Linear.apply(1.0), 1.0));
-    }
-
-    #[test]
-    fn ease_in_starts_slow_ends_fast() {
-        let mid = Easing::EaseIn.apply(0.5);
-        // t^3 at 0.5 = 0.125 - well below the linear midpoint.
-        assert!(mid < 0.2);
-        assert!(approx(Easing::EaseIn.apply(0.0), 0.0));
-        assert!(approx(Easing::EaseIn.apply(1.0), 1.0));
-    }
-
-    #[test]
-    fn ease_out_starts_fast_ends_slow() {
-        let mid = Easing::EaseOut.apply(0.5);
-        // 1 - (1 - 0.5)^3 = 0.875 - well above the linear midpoint.
-        assert!(mid > 0.8);
-        assert!(approx(Easing::EaseOut.apply(0.0), 0.0));
-        assert!(approx(Easing::EaseOut.apply(1.0), 1.0));
-    }
-
-    #[test]
-    fn ease_in_out_passes_through_midpoint() {
-        assert!(approx(Easing::EaseInOut.apply(0.5), 0.5));
-        // First half resembles ease-in.
-        assert!(Easing::EaseInOut.apply(0.25) < 0.25);
-        // Second half resembles ease-out.
-        assert!(Easing::EaseInOut.apply(0.75) > 0.75);
-    }
-
-    #[test]
-    fn cubic_bezier_matches_linear_anchors() {
-        // (0.25, 0.1, 0.25, 1.0) is the classic CSS ease curve. Endpoints
-        // must still pin at 0 and 1.
-        assert!(approx(
-            Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).apply(0.0),
-            0.0
-        ));
-        assert!(approx(
-            Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).apply(1.0),
-            1.0
-        ));
-        // Midpoint of CSS ease is above 0.5.
-        let mid = Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).apply(0.5);
-        assert!(mid > 0.5 && mid < 1.0);
-    }
-
-    #[test]
-    fn transition_samples_linearly() {
+    fn transition_samples_linearly_and_clamps() {
         let t = Transition::<f32>::new(0.0, 10.0, Duration::from_millis(100), Easing::Linear);
-        let halfway = t.start + Duration::from_millis(50);
-        assert!(approx(t.sample(halfway), 5.0));
-        let done = t.start + Duration::from_millis(100);
-        assert!(approx(t.sample(done), 10.0));
-        assert!(t.done(done));
-    }
-
-    #[test]
-    fn transition_clamps_after_duration() {
-        let t = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(100), Easing::Linear);
-        let after = t.start + Duration::from_millis(200);
-        assert!(approx(t.sample(after), 1.0));
-        assert!(t.done(after));
-    }
-
-    #[test]
-    fn transition_zero_duration_is_instant() {
-        // Zero-duration transitions must not divide-by-zero; they jump
-        // straight to `to`.
-        let t = Transition::<f32>::new(0.0, 1.0, Duration::ZERO, Easing::Linear);
-        assert!(approx(t.sample(t.start), 1.0));
-        assert!(t.done(t.start));
-    }
-
-    #[test]
-    fn from_tuple_builds_linear_transition() {
-        let t: Transition<f32> = (0.0, 10.0, Duration::from_millis(100)).into();
-        assert_eq!(t.easing, Easing::Linear);
         assert!(approx(t.sample(t.start + Duration::from_millis(50)), 5.0));
+        assert!(approx(t.sample(t.start + Duration::from_millis(200)), 10.0));
+        assert!(t.done(t.start + Duration::from_millis(100)));
+        let zero = Transition::<f32>::new(0.0, 1.0, Duration::ZERO, Easing::Linear);
+        assert!(approx(zero.sample(zero.start), 1.0));
     }
 
     #[test]
     fn for_property_returns_last_declaration() {
-        // CSS cascade-5: last declaration wins for a duplicated property.
         let specs = TransitionSpecs(vec![
             TransitionSpec {
                 property: TransitionProperty::Opacity,
@@ -596,146 +544,136 @@ mod tests {
             TransitionSpec {
                 property: TransitionProperty::Opacity,
                 duration: Duration::from_millis(500),
-                easing: Easing::EaseOut,
+                easing: Easing::EASE_OUT,
             },
         ]);
         let chosen = specs.for_property(TransitionProperty::Opacity).unwrap();
         assert_eq!(chosen.duration, Duration::from_millis(500));
-        assert_eq!(chosen.easing, Easing::EaseOut);
+        assert_eq!(chosen.easing, Easing::EASE_OUT);
     }
 
-    #[test]
-    fn retarget_starts_from_current_value_and_skips_noops() {
-        let spec = TransitionSpec {
-            property: TransitionProperty::BackgroundColor,
-            duration: Duration::from_millis(200),
+    fn world() -> World {
+        let mut world = World::new();
+        world.insert_resource(Tick::default());
+        world.insert_resource(AnimationsActive::default());
+        world
+    }
+
+    fn spec(property: TransitionProperty, ms: u64) -> TransitionSpec {
+        TransitionSpec {
+            property,
+            duration: Duration::from_millis(ms),
             easing: Easing::Linear,
-        };
-        let red = Color::rgb(1.0, 0.0, 0.0);
-        let blue = Color::rgb(0.0, 0.0, 1.0);
-        // Mid-flight current value (e.g. half-way between old endpoints).
-        let mid = red.lerp(blue, 0.5);
-        let t = retarget(mid, blue, &spec).expect("differing values start a tween");
-        // CSS retarget rule: the new tween starts from the CURRENT
-        // interpolated value, not either old endpoint.
-        assert_eq!(t.sample(t.start), mid);
-        assert_eq!(t.sample(t.start + Duration::from_millis(200)), blue);
-        // Equal-value writes are no-ops - no zombie transitions.
-        assert!(retarget(blue, blue, &spec).is_none());
+        }
     }
 
-    #[test]
-    fn background_driver_writes_solid_fill_and_retires() {
-        use bevy_ecs::system::RunSystemOnce;
-        let mut world = bevy_ecs::world::World::new();
-        world.insert_resource(Tick::default());
-        world.insert_resource(lumen_core::render_world::AnimationsActive::default());
-        let from = Color::rgb(0.0, 0.0, 0.0);
-        let to = Color::rgb(1.0, 1.0, 1.0);
-        let e = world
-            .spawn((
-                Visuals {
-                    fill: Some(Fill::Solid(from)),
-                    radius: 0.0,
-                    corner_radii: None,
-                    shadows: Vec::new(),
-                    border: None,
-                },
-                BackgroundTransition(Transition::new(
-                    from,
-                    to,
-                    Duration::from_millis(100),
-                    Easing::Linear,
-                )),
-            ))
-            .id();
-        // Half-way: Tick.now is seeded at system run; shift the tween's
-        // start back 50 ms so sampling lands mid-flight.
-        world.get_mut::<BackgroundTransition>(e).unwrap().0.start -= Duration::from_millis(50);
-        {
-            let now =
-                world.get::<BackgroundTransition>(e).unwrap().0.start + Duration::from_millis(50);
-            world.resource_mut::<Tick>().now = now;
+    fn fill(c: Color) -> StyleValues {
+        StyleValues {
+            fill: Some(Some(Fill::Solid(c))),
+            ..StyleValues::default()
         }
-        world.run_system_once(step_background_transitions).unwrap();
-        let mid = world
+    }
+
+    fn solid(world: &World, e: Entity) -> Color {
+        world
             .get::<Visuals>(e)
             .unwrap()
             .fill
             .as_ref()
             .and_then(Fill::as_solid)
-            .unwrap();
-        assert!((mid.r - 0.5).abs() < 0.05, "mid-flight fill (r={})", mid.r);
-        assert!(
-            world.get::<BackgroundTransition>(e).is_some(),
-            "tween still active mid-flight"
-        );
-        // Past the end: snaps to target and retires the component.
-        {
-            let now =
-                world.get::<BackgroundTransition>(e).unwrap().0.start + Duration::from_millis(500);
-            world.resource_mut::<Tick>().now = now;
-        }
-        world.run_system_once(step_background_transitions).unwrap();
-        let done = world
-            .get::<Visuals>(e)
             .unwrap()
-            .fill
-            .as_ref()
-            .and_then(Fill::as_solid)
-            .unwrap();
-        assert_eq!(done, to);
-        assert!(world.get::<BackgroundTransition>(e).is_none());
     }
 
     #[test]
-    fn hidden_entity_ticks_no_animation() {
+    fn a_transition_holds_its_blend_and_lets_go_to_the_cascade() {
         use bevy_ecs::system::RunSystemOnce;
-        let mut world = bevy_ecs::world::World::new();
-        world.insert_resource(Tick::default());
-        world.insert_resource(lumen_core::render_world::AnimationsActive::default());
+        let mut world = world();
+        let black = Color::rgb(0.0, 0.0, 0.0);
+        let white = Color::rgb(1.0, 1.0, 1.0);
         let e = world
-            .spawn((
-                Opacity(0.0),
-                OpacityTransition(Transition::new(
-                    0.0,
-                    1.0,
-                    Duration::from_millis(500),
-                    Easing::Linear,
-                )),
-                lumen_core::components::Visible(false),
-            ))
+            .spawn(Visuals {
+                fill: Some(Fill::Solid(black)),
+                ..Visuals::default()
+            })
             .id();
-        world.run_system_once(step_opacity_transitions).unwrap();
-        // Hidden: snap to target, retire, no self-scheduled frame.
-        assert_eq!(world.get::<Opacity>(e).unwrap().0, 1.0);
-        assert!(world.get::<OpacityTransition>(e).is_none());
-        assert!(
-            !world
-                .resource::<lumen_core::render_world::AnimationsActive>()
-                .get(),
-            "hidden transitions must not keep the loop awake"
+        let start = world.resource::<Tick>().now;
+        start_transition(
+            &mut world.entity_mut(e),
+            StyleFields::FILL,
+            fill(black),
+            fill(white),
+            &spec(TransitionProperty::BackgroundColor, 100),
+            start,
         );
+        // The cascade moved to white while the transition holds black.
+        let shown = world
+            .get_mut::<StyleOverrides>(e)
+            .unwrap()
+            .rebase(&fill(white));
+        assert_eq!(shown.fill, Some(Some(Fill::Solid(black))));
+        assert_eq!(solid(&world, e), black, "starts where it showed");
+
+        world.resource_mut::<Tick>().now = start + Duration::from_millis(50);
+        world.run_system_once(step_transitions).unwrap();
+        world.flush();
+        let mid = solid(&world, e);
+        assert!(approx(mid.r, 0.5), "halfway (r={})", mid.r);
+        assert!(world.resource::<AnimationsActive>().get());
+
+        world.resource_mut::<Tick>().now = start + Duration::from_millis(150);
+        world.run_system_once(step_transitions).unwrap();
+        world.flush();
+        assert_eq!(solid(&world, e), white, "lands on the cascade's value");
+        assert!(world.get::<ActiveTransitions>(e).is_none());
+        assert!(world.get::<StyleOverrides>(e).unwrap().is_empty());
     }
 
     #[test]
-    fn lerp_color() {
-        let a = Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
+    fn a_hidden_element_finishes_its_transitions_at_once() {
+        use bevy_ecs::system::RunSystemOnce;
+        let mut world = world();
+        let e = world.spawn((Opacity(1.0), Visible(false))).id();
+        let now = world.resource::<Tick>().now;
+        start_transition(
+            &mut world.entity_mut(e),
+            StyleFields::OPACITY,
+            StyleValues {
+                opacity: Some(Some(0.0)),
+                ..StyleValues::default()
+            },
+            StyleValues {
+                opacity: Some(Some(1.0)),
+                ..StyleValues::default()
+            },
+            &spec(TransitionProperty::Opacity, 500),
+            now,
+        );
+        assert_eq!(world.get::<Opacity>(e), Some(&Opacity(0.0)));
+        world.run_system_once(step_transitions).unwrap();
+        world.flush();
+        assert_eq!(world.get::<Opacity>(e), Some(&Opacity(1.0)));
+        assert!(world.get::<ActiveTransitions>(e).is_none());
+        assert!(!world.resource::<AnimationsActive>().get());
+    }
+
+    #[test]
+    fn only_the_named_transform_property_tweens() {
+        use lumen_core::transform::LengthPct;
+        let from = StyleValues {
+            transform: Some(None),
+            ..StyleValues::default()
         };
-        let b = Color {
-            r: 1.0,
-            g: 1.0,
-            b: 1.0,
-            a: 1.0,
+        let to = StyleValues {
+            transform: Some(Some(ElementTransform {
+                rotate: 90.0,
+                translate: (LengthPct::px(10.0), LengthPct::default()),
+                ..ElementTransform::default()
+            })),
+            ..StyleValues::default()
         };
-        let mid = a.lerp(b, 0.5);
-        assert!(approx(mid.r, 0.5));
-        assert!(approx(mid.g, 0.5));
-        assert!(approx(mid.b, 0.5));
-        assert!(approx(mid.a, 0.5));
+        let start = transform_start(TransitionProperty::Rotate, &from, &to);
+        let x = start.transform.unwrap().unwrap();
+        assert_eq!(x.rotate, 0.0, "rotate tweens from where it was");
+        assert_eq!(x.translate.0, LengthPct::px(10.0), "translate snaps");
     }
 }

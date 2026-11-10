@@ -17,6 +17,7 @@ pub mod input;
 pub mod introspect;
 pub mod keycode;
 pub mod layout_backend;
+pub mod motion;
 pub mod native;
 pub mod nav;
 pub mod net_capture;

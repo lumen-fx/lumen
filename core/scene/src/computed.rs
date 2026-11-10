@@ -16,12 +16,13 @@ use lumen_core::components::{
     PlaceholderStyle, ShadowSpec, Style, TextInputPaint, TextStyle, Visuals, ZIndex,
 };
 use lumen_core::input::{Cursor, CursorImageRef, CursorKeyword, PointerEvents, ScrollbarStyle};
+use lumen_core::style_overrides::{Live, StyleFields};
 use lumen_core::style_overrides::{StyleOverrides, StyleValues};
 use lumen_ir::layout_ir::{Attributes, CursorSpec, PointerEventsSpec, WidgetPart};
+use lumen_primitives::transition::MOTION_RANK;
 use lumen_primitives::{
-    BackgroundTransition, BorderColorTransition, Interaction, OpacityTransition, StatePatch,
-    StateVisuals, TextColorTransition, TransitionProperty, TransitionSpec, TransitionSpecs,
-    retarget,
+    ActiveTransitions, Interaction, StatePatch, StateVisuals, TransitionSpec, TransitionSpecs,
+    cancel_transition, start_transition, tick_now,
 };
 
 use crate::spawn::{DISABLED_OPACITY_DEFAULT, apply_ua_style_defaults, track_style_over};
@@ -409,6 +410,10 @@ impl ComputedStyle {
             border: Some(v.and_then(|v| v.border)),
             opacity: Some(self.opacity),
             text_color: self.text.as_ref().map(|t| t.color),
+            radius: Some(v.map_or((0.0, None), |v| (v.radius, v.corner_radii))),
+            transform: Some(self.transform.clone()),
+            // The cascade never holds an outline at another color.
+            outline_color: Some(None),
         }
     }
 
@@ -416,7 +421,11 @@ impl ComputedStyle {
     /// components show.
     fn lay_over(&mut self, held: &StyleValues) {
         held.write_style(&mut &mut self.style);
-        if held.fill.is_some() || held.shadows.is_some() || held.border.is_some() {
+        if held.fill.is_some()
+            || held.shadows.is_some()
+            || held.border.is_some()
+            || held.radius.is_some()
+        {
             held.write_visuals(&mut self.visuals.get_or_insert_with(Visuals::default));
         }
         if held.text_color.is_some()
@@ -426,6 +435,9 @@ impl ComputedStyle {
         }
         if let Some(o) = held.opacity {
             self.opacity = o;
+        }
+        if let Some(t) = &held.transform {
+            self.transform.clone_from(t);
         }
     }
 
@@ -489,160 +501,16 @@ impl ComputedStyle {
     /// from where it is. Each component is written only when it changed,
     /// so an unchanged restyle marks nothing changed.
     pub fn commit(mut self, ent: &mut EntityWorldMut<'_>, animate: bool) {
+        let specs = TransitionSpecs(std::mem::take(&mut self.transitions));
+        let fresh = self.holdable();
+        start_transitions(ent, &specs, &fresh, animate);
+
         let held = match ent.get_mut::<StyleOverrides>() {
-            Some(mut ov) if !ov.is_empty() => {
-                let fresh = self.holdable();
-                Some(ov.rebase(&fresh))
-            }
+            Some(mut ov) if !ov.is_empty() => Some(ov.rebase(&fresh)),
             _ => None,
         };
-        let held_fields = held.as_ref().map(StyleValues::fields).unwrap_or_default();
         if let Some(held) = &held {
             self.lay_over(held);
-        }
-
-        // Transitions: the declarations land first, so the tween checks
-        // below read the restyled list.
-        let specs = TransitionSpecs(std::mem::take(&mut self.transitions));
-        let spec_for = |p: TransitionProperty| {
-            if !animate {
-                return None;
-            }
-            specs
-                .for_property(p)
-                .filter(|s| !s.duration.is_zero())
-                .copied()
-        };
-        let mut tweened = false;
-        use lumen_core::style_overrides::StyleFields;
-
-        // A property with a `transition` tweens from what is on screen
-        // now toward its new value, and a tween already heading for that
-        // value runs on undisturbed. A tween heading anywhere else is
-        // retargeted from where it is, or retired when nothing declares a
-        // transition any more. A field a system holds is the system's to
-        // animate, so it never tweens here.
-        let live_visuals = ent.get::<Visuals>().cloned();
-        if !held_fields.contains(StyleFields::FILL) {
-            let cur = live_visuals
-                .as_ref()
-                .and_then(|v| v.fill.as_ref())
-                .and_then(Fill::as_solid);
-            let new = self
-                .visuals
-                .as_ref()
-                .and_then(|v| v.fill.as_ref())
-                .and_then(Fill::as_solid);
-            let running = ent.get::<BackgroundTransition>().map(|t| t.0.to);
-            match (cur, new) {
-                (Some(cur), Some(new)) if running == Some(new) => {
-                    set_solid_fill(&mut self.visuals, cur);
-                }
-                (Some(cur), Some(new)) => {
-                    match spec_for(TransitionProperty::BackgroundColor)
-                        .and_then(|spec| retarget(cur, new, &spec))
-                    {
-                        Some(t) => {
-                            ent.insert(BackgroundTransition(t));
-                            set_solid_fill(&mut self.visuals, cur);
-                            tweened = true;
-                        }
-                        None if running.is_some() => {
-                            ent.remove::<BackgroundTransition>();
-                        }
-                        None => {}
-                    }
-                }
-                _ if running.is_some() => {
-                    ent.remove::<BackgroundTransition>();
-                }
-                _ => {}
-            }
-        }
-        if !held_fields.contains(StyleFields::BORDER) {
-            let cur = live_visuals.as_ref().and_then(|v| v.border);
-            let new = self.visuals.as_ref().and_then(|v| v.border);
-            let running = ent.get::<BorderColorTransition>().map(|t| t.0.to);
-            match (cur, new) {
-                (Some(cur), Some(new))
-                    if cur.widths == new.widths && running == Some(new.color) =>
-                {
-                    set_border_color(&mut self.visuals, cur.color);
-                }
-                (Some(cur), Some(new)) if cur.widths == new.widths => {
-                    match spec_for(TransitionProperty::BorderColor)
-                        .and_then(|spec| retarget(cur.color, new.color, &spec))
-                    {
-                        Some(t) => {
-                            ent.insert(BorderColorTransition(t));
-                            set_border_color(&mut self.visuals, cur.color);
-                            tweened = true;
-                        }
-                        None if running.is_some() => {
-                            ent.remove::<BorderColorTransition>();
-                        }
-                        None => {}
-                    }
-                }
-                _ if running.is_some() => {
-                    ent.remove::<BorderColorTransition>();
-                }
-                _ => {}
-            }
-        }
-        if !held_fields.contains(StyleFields::TEXT_COLOR) {
-            let cur = ent.get::<TextStyle>().map(|t| t.color);
-            let new = self.text.as_ref().map(|t| t.color);
-            let running = ent.get::<TextColorTransition>().map(|t| t.0.to);
-            match (cur, new, self.text.as_mut()) {
-                (Some(cur), Some(new), Some(text)) if running == Some(new) => {
-                    text.color = cur;
-                }
-                (Some(cur), Some(new), Some(text)) => {
-                    match spec_for(TransitionProperty::TextColor)
-                        .and_then(|spec| retarget(cur, new, &spec))
-                    {
-                        Some(t) => {
-                            ent.insert(TextColorTransition(t));
-                            text.color = cur;
-                            tweened = true;
-                        }
-                        None if running.is_some() => {
-                            ent.remove::<TextColorTransition>();
-                        }
-                        None => {}
-                    }
-                }
-                _ if running.is_some() => {
-                    ent.remove::<TextColorTransition>();
-                }
-                _ => {}
-            }
-        }
-        // Opacity tweens the same way. No component is fully opaque, so an
-        // element that had none starts from `1`, as in CSS, and a mount
-        // fade-in that is still running carries on to its value.
-        if !held_fields.contains(StyleFields::OPACITY) {
-            let cur = ent.get::<Opacity>().map(|o| o.0);
-            let target = self.opacity.unwrap_or(1.0);
-            let running = ent.get::<OpacityTransition>().map(|t| t.0.to);
-            if running == Some(target) {
-                self.opacity = cur;
-            } else {
-                match spec_for(TransitionProperty::Opacity)
-                    .and_then(|spec| retarget(cur.unwrap_or(1.0), target, &spec))
-                {
-                    Some(t) => {
-                        ent.insert(OpacityTransition(t));
-                        self.opacity = Some(cur.unwrap_or(1.0));
-                        tweened = true;
-                    }
-                    None if running.is_some() => {
-                        ent.remove::<OpacityTransition>();
-                    }
-                    None => {}
-                }
-            }
         }
 
         if specs.0.is_empty() {
@@ -665,6 +533,12 @@ impl ComputedStyle {
         put(ent, self.opacity.map(Opacity));
         put(ent, self.z_index.map(ZIndex));
         put(ent, self.transform);
+        put(
+            ent,
+            held.and_then(|h| h.outline_color)
+                .flatten()
+                .map(lumen_core::components::OutlineColor),
+        );
         put(ent, self.interaction);
         put(ent, self.state_visuals);
         put(ent, self.scrollbar);
@@ -689,18 +563,107 @@ impl ComputedStyle {
         if self.knob_geometry.is_some() {
             set_knob_fill(ent, self.knob_fill);
         }
+    }
+}
 
-        // Keep the loop awake while a tween runs; without the wake the app
-        // can sleep mid-tween and freeze a theme flip halfway.
-        if tweened {
-            ent.world_scope(|world| {
-                if let Some(anim) =
-                    world.get_resource::<lumen_core::render_world::AnimationsActive>()
-                {
-                    anim.request();
-                }
-            });
+/// The property groups a `transition` can move, in the order they start.
+const TRANSITION_FIELDS: [StyleFields; 8] = [
+    StyleFields::OPACITY,
+    StyleFields::FILL,
+    StyleFields::TEXT_COLOR,
+    StyleFields::BORDER,
+    StyleFields::SHADOWS,
+    StyleFields::RADIUS,
+    StyleFields::OUTLINE_COLOR,
+    StyleFields::TRANSFORM,
+];
+
+/// `v` with the absences that mean a value written out: no opacity is `1`,
+/// no transform is the identity. Two values that show the same compare
+/// equal after this.
+fn shown(mut v: StyleValues) -> StyleValues {
+    if v.opacity == Some(None) {
+        v.opacity = Some(Some(1.0));
+    }
+    if let Some(Some(t)) = &v.transform
+        && t.is_identity()
+    {
+        v.transform = Some(None);
+    }
+    v
+}
+
+/// Start, retarget or stop the transitions a restyle calls for, before its
+/// values are written: each property compares what shows now with `fresh`,
+/// the cascade's new value. A property a runtime system's own state covers
+/// (a tint, a checked fill) is that system's to animate and never
+/// transitions here.
+fn start_transitions(
+    ent: &mut EntityWorldMut<'_>,
+    specs: &TransitionSpecs,
+    fresh: &StyleValues,
+    animate: bool,
+) {
+    let running = ent.get::<ActiveTransitions>();
+    if specs.0.is_empty() && running.is_none() {
+        return;
+    }
+    let now = tick_now(ent);
+    let (held, covered, resting) = match ent.get::<StyleOverrides>() {
+        Some(ov) => (ov.held(), ov.held_below(MOTION_RANK), ov.resting().clone()),
+        None => Default::default(),
+    };
+    let live = |ent: &EntityWorldMut<'_>, field| {
+        StyleValues::read(
+            field,
+            &Live {
+                style: ent.get::<Style>(),
+                visuals: ent.get::<Visuals>(),
+                text: ent.get::<TextStyle>(),
+                opacity: ent.get::<Opacity>(),
+                transform: ent.get::<lumen_core::transform::ElementTransform>(),
+                outline_color: ent.get::<lumen_core::components::OutlineColor>(),
+            },
+        )
+    };
+    for field in TRANSITION_FIELDS {
+        let spec = animate.then(|| specs.for_field(field)).flatten();
+        let heading = ent
+            .get::<ActiveTransitions>()
+            .and_then(|a| a.on(field))
+            .map(|r| shown(r.to.clone()));
+        let new = fresh.clone().restricted(field);
+        let (Some(spec), false) = (spec, covered.intersects(field)) else {
+            if heading.is_some() {
+                cancel_transition(ent, field);
+            }
+            continue;
+        };
+        // The cascade's value before this restyle: what a holder recorded
+        // as resting, else what shows.
+        let old = if held.intersects(field) {
+            resting.clone().restricted(field)
+        } else {
+            live(ent, field)
+        };
+        let target = shown(new.clone());
+        let moved = match &heading {
+            Some(to) => *to != target,
+            None => shown(old) != target,
+        };
+        if !moved {
+            continue;
         }
+        let from = live(ent, field);
+        // Nothing to blend from: an element with no text style, no fill
+        // value to read.
+        if from.fields() != field || new.fields() != field || shown(from.clone()) == target {
+            if heading.is_some() {
+                cancel_transition(ent, field);
+            }
+            continue;
+        }
+        start_transition(ent, field, from, new, spec, now);
     }
 }
 
@@ -869,20 +832,6 @@ fn is_relayout_boundary(style: &Style, layout_boundary: bool, attrs: &Attributes
     matches!(style.width, Length::Px(_))
         && matches!(style.height, Length::Px(_))
         && style.shrink == 0.0
-}
-
-/// Point a solid fill at `color`, leaving any other fill alone.
-fn set_solid_fill(visuals: &mut Option<Visuals>, color: Color) {
-    if let Some(Some(Fill::Solid(slot))) = visuals.as_mut().map(|v| v.fill.as_mut()) {
-        *slot = color;
-    }
-}
-
-/// Point a border's color at `color`.
-fn set_border_color(visuals: &mut Option<Visuals>, color: Color) {
-    if let Some(Some(border)) = visuals.as_mut().map(|v| v.border.as_mut()) {
-        border.color = color;
-    }
 }
 
 fn insert_some<C: Component>(ent: &mut EntityWorldMut<'_>, c: Option<C>) {
@@ -1170,11 +1119,15 @@ mod tests {
             ..Default::default()
         };
         commit(&mut world, e, "tile", &attrs);
-        let tween = world
-            .get::<OpacityTransition>(e)
+        let active = world
+            .get::<lumen_primitives::ActiveTransitions>(e)
             .expect("the change tweens");
-        assert_eq!((tween.0.from, tween.0.to), (1.0, 0.2));
-        assert_eq!(world.get::<Opacity>(e), Some(&Opacity(1.0)));
+        let running = active.on(StyleFields::OPACITY).unwrap();
+        assert_eq!(
+            (running.from.opacity, running.to.opacity),
+            (Some(None), Some(Some(0.2)))
+        );
+        assert_eq!(world.get::<Opacity>(e), None, "still fully opaque");
     }
 
     /// A tween already heading for the value a restyle resolves keeps
@@ -1200,13 +1153,16 @@ mod tests {
         };
         ComputedStyle::new(&ctx("tile"), &start).insert(&mut world.entity_mut(e));
         commit(&mut world, e, "tile", &attrs);
-        let first = world.get::<BackgroundTransition>(e).expect("a tween").0;
-        assert_eq!(first.to, red.into());
+        let first = world
+            .get::<lumen_primitives::ActiveTransitions>(e)
+            .and_then(|a| a.on(StyleFields::FILL).cloned())
+            .expect("a tween");
+        assert_eq!(first.to.fill, Some(Some(Fill::Solid(red.into()))));
         commit(&mut world, e, "tile", &attrs);
         let again = world
-            .get::<BackgroundTransition>(e)
-            .expect("still tweening")
-            .0;
+            .get::<lumen_primitives::ActiveTransitions>(e)
+            .and_then(|a| a.on(StyleFields::FILL).cloned())
+            .expect("still tweening");
         assert_eq!(again.start, first.start, "the same tween, not a restart");
         assert_eq!(
             world.get::<Visuals>(e).unwrap().fill,

@@ -367,25 +367,24 @@ fn a_transition_in_flight_retargets_to_the_new_value() {
     );
     let t = h.by_id("t");
     h.set_classes("t", "a b");
-    let tween = h
-        .app
-        .world
-        .get::<lumen_primitives::BackgroundTransition>(t)
-        .expect("the change tweens")
-        .0;
-    assert!(near(Some(tween.to), 0.0, 0.0, 1.0));
+    let tween_to = |h: &Harness| {
+        h.app
+            .world
+            .get::<lumen_primitives::ActiveTransitions>(t)
+            .and_then(|a| a.on(lumen_core::style_overrides::StyleFields::FILL))
+            .and_then(|r| r.to.fill.clone().flatten())
+            .and_then(|f| f.as_solid())
+    };
+    assert!(
+        near(tween_to(&h), 0.0, 0.0, 1.0),
+        "the change tweens toward the new class's colour"
+    );
     // Part of the way there.
     h.settle(300);
     assert!(!near(h.fill(t), 1.0, 0.0, 0.0), "the fill has moved");
     h.set_classes("t", "a");
-    let tween = h
-        .app
-        .world
-        .get::<lumen_primitives::BackgroundTransition>(t)
-        .expect("still tweening")
-        .0;
     assert!(
-        near(Some(tween.to), 1.0, 0.0, 0.0),
+        near(tween_to(&h), 1.0, 0.0, 0.0),
         "the tween now heads back to the class's colour"
     );
 }

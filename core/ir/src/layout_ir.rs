@@ -1197,9 +1197,8 @@ pub struct Attributes {
         crate::transform::LengthPctSpec,
     )>,
     /// CSS `transition: <property> <duration> [<easing>] [, ...]` declarations. Each entry tweens the property instead of snapping when the value changes.
-    /// Animatable in v1: `opacity`, `background-color`/`bg`,
-    /// `color`/`text-color`, `border-color`. Layout properties (width,
-    /// height, ...) are rejected with a warn - see [`TransitionPropertyIr`].
+    /// The animatable set is [`TransitionPropertyIr`]; layout properties
+    /// (width, height, ...) are rejected with a warning.
     pub transitions: Vec<TransitionIr>,
     /// CSS `transition-property` longhand - comma list of property
     /// names. Combined with the duration / timing longhands by
@@ -1527,7 +1526,7 @@ impl Attributes {
         };
         // CSS `ease`, the initial `transition-timing-function`, same
         // default the `transition` shorthand applies.
-        let default_timing = [EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0)];
+        let default_timing = [crate::css::DEFAULT_EASING];
         let timings: &[EasingIr] = match self.transition_timing.as_deref() {
             Some(t) if !t.is_empty() => t,
             _ => &default_timing,
@@ -1538,7 +1537,7 @@ impl Attributes {
             .map(|(i, p)| TransitionIr {
                 property: *p,
                 duration_ms: durations[i % durations.len().max(1)],
-                easing: timings[i % timings.len().max(1)],
+                easing: timings[i % timings.len().max(1)].clone(),
             })
             .collect()
     }
@@ -1547,7 +1546,7 @@ impl Attributes {
 /// IR-side parsed `transition` shorthand entry. `From<&TransitionIr> for
 /// lumen_primitives::TransitionSpec` converts to the runtime form at
 /// spawn time.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TransitionIr {
     /// Property name as authored (`"opacity"` ...). The spawn layer maps
     /// to `lumen_primitives::TransitionProperty`.
@@ -1558,13 +1557,11 @@ pub struct TransitionIr {
     pub easing: EasingIr,
 }
 
-/// IR-side mirror of `lumen_primitives::TransitionProperty`. Kept local
-/// to layout_ir so the parser doesn't need to depend on primitives.
-///
-/// v1 animatable set: colors + opacity only - geometry-free visual
-/// props. Layout properties (`width`, `height`, padding, margins, ...)
-/// are deliberately not transitionable in v1: animating them would
-/// re-run layout every frame, and the parser warns + drops them.
+/// IR-side mirror of `lumen_primitives::TransitionProperty`: the paint
+/// properties a transition or an animation moves. Layout properties
+/// (`width`, `height`, padding, margins, ...) are not in the set, since
+/// animating them would run layout every frame; the parser warns about
+/// one and drops it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TransitionPropertyIr {
     /// CSS `opacity`.
@@ -1576,10 +1573,39 @@ pub enum TransitionPropertyIr {
     TextColor,
     /// CSS `border-color`.
     BorderColor,
+    /// CSS `box-shadow` (`shadow`).
+    BoxShadow,
+    /// CSS `border-radius` (`radius`).
+    BorderRadius,
+    /// CSS `outline-color`.
+    OutlineColor,
+    /// CSS `transform`.
+    Transform,
+    /// CSS `translate`.
+    Translate,
+    /// CSS `rotate`.
+    Rotate,
+    /// CSS `scale`.
+    Scale,
 }
 
 impl TransitionPropertyIr {
-    /// Parse a CSS property name into a transitionable property.
+    /// Every animatable property, which `all` stands for.
+    pub const ALL: [TransitionPropertyIr; 11] = [
+        TransitionPropertyIr::Opacity,
+        TransitionPropertyIr::BackgroundColor,
+        TransitionPropertyIr::TextColor,
+        TransitionPropertyIr::BorderColor,
+        TransitionPropertyIr::BoxShadow,
+        TransitionPropertyIr::BorderRadius,
+        TransitionPropertyIr::OutlineColor,
+        TransitionPropertyIr::Transform,
+        TransitionPropertyIr::Translate,
+        TransitionPropertyIr::Rotate,
+        TransitionPropertyIr::Scale,
+    ];
+
+    /// Parse a CSS property name into an animatable property.
     /// Returns `None` for unknown / non-animatable names (the caller
     /// warns and drops per CSS "ignore unanimatable" behavior).
     pub fn from_css_name(name: &str) -> Option<Self> {
@@ -1588,25 +1614,44 @@ impl TransitionPropertyIr {
             "background-color" | "background" | "bg" => Some(Self::BackgroundColor),
             "color" | "text-color" => Some(Self::TextColor),
             "border-color" => Some(Self::BorderColor),
+            "box-shadow" | "shadow" => Some(Self::BoxShadow),
+            "border-radius" | "radius" => Some(Self::BorderRadius),
+            "outline-color" => Some(Self::OutlineColor),
+            "transform" => Some(Self::Transform),
+            "translate" => Some(Self::Translate),
+            "rotate" => Some(Self::Rotate),
+            "scale" => Some(Self::Scale),
             _ => None,
         }
     }
 }
 
-/// IR-side mirror of `lumen_primitives::Easing`. Cubic-bezier carries
-/// its four control points; named curves are zero-sized.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Where a `steps()` timing function jumps; mirrors
+/// [`lumen_core::motion::StepPosition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StepPositionIr {
+    /// `jump-start`, `start`.
+    Start,
+    /// `jump-end`, `end`.
+    End,
+    /// `jump-none`.
+    None,
+    /// `jump-both`.
+    Both,
+}
+
+/// IR-side mirror of [`lumen_core::motion::Easing`]. The named curves
+/// (`ease`, `ease-in`, ...) parse to the cubic Beziers CSS defines them as.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum EasingIr {
     /// `linear`.
     Linear,
-    /// `ease-in`.
-    EaseIn,
-    /// `ease-out`.
-    EaseOut,
-    /// `ease-in-out`.
-    EaseInOut,
-    /// `cubic-bezier(p1x, p1y, p2x, p2y)`.
+    /// `cubic-bezier(p1x, p1y, p2x, p2y)`, and the named curves.
     CubicBezier(f32, f32, f32, f32),
+    /// `steps(n, position)`, `step-start`, `step-end`.
+    Steps(u32, StepPositionIr),
+    /// `linear(...)`: `(input, output)` stops with every input resolved.
+    Points(Vec<(f32, f32)>),
 }
 
 /// Parsed `shadow=` / `box-shadow=` value. Authors may stack multiple
@@ -2049,15 +2094,27 @@ pub enum IfModeSpec {
     Mounted,
 }
 
-impl From<EasingIr> for lumen_primitives::Easing {
-    fn from(e: EasingIr) -> Self {
-        use lumen_primitives::Easing as E;
+impl From<&EasingIr> for lumen_core::motion::Easing {
+    fn from(e: &EasingIr) -> Self {
+        use lumen_core::motion::{Easing as E, LinearStop, StepPosition};
         match e {
             EasingIr::Linear => E::Linear,
-            EasingIr::EaseIn => E::EaseIn,
-            EasingIr::EaseOut => E::EaseOut,
-            EasingIr::EaseInOut => E::EaseInOut,
-            EasingIr::CubicBezier(a, b, c, d) => E::CubicBezier(a, b, c, d),
+            EasingIr::CubicBezier(a, b, c, d) => E::CubicBezier(*a, *b, *c, *d),
+            EasingIr::Steps(n, pos) => E::Steps(
+                *n,
+                match pos {
+                    StepPositionIr::Start => StepPosition::Start,
+                    StepPositionIr::End => StepPosition::End,
+                    StepPositionIr::None => StepPosition::None,
+                    StepPositionIr::Both => StepPosition::Both,
+                },
+            ),
+            EasingIr::Points(stops) => E::Points(
+                stops
+                    .iter()
+                    .map(|&(input, output)| LinearStop { input, output })
+                    .collect(),
+            ),
         }
     }
 }
@@ -2070,6 +2127,13 @@ impl From<TransitionPropertyIr> for lumen_primitives::TransitionProperty {
             TransitionPropertyIr::BackgroundColor => P::BackgroundColor,
             TransitionPropertyIr::TextColor => P::TextColor,
             TransitionPropertyIr::BorderColor => P::BorderColor,
+            TransitionPropertyIr::BoxShadow => P::BoxShadow,
+            TransitionPropertyIr::BorderRadius => P::BorderRadius,
+            TransitionPropertyIr::OutlineColor => P::OutlineColor,
+            TransitionPropertyIr::Transform => P::Transform,
+            TransitionPropertyIr::Translate => P::Translate,
+            TransitionPropertyIr::Rotate => P::Rotate,
+            TransitionPropertyIr::Scale => P::Scale,
         }
     }
 }
@@ -2079,7 +2143,7 @@ impl From<&TransitionIr> for lumen_primitives::TransitionSpec {
         lumen_primitives::TransitionSpec {
             property: ir.property.into(),
             duration: std::time::Duration::from_millis(ir.duration_ms as u64),
-            easing: ir.easing.into(),
+            easing: (&ir.easing).into(),
         }
     }
 }

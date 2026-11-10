@@ -1476,10 +1476,7 @@ pub fn reconcile_if_blocks(
         &mut lumen_core::components::Style,
         &mut lumen_core::style_overrides::StyleOverrides,
     )>,
-    fade_targets: bevy_ecs::system::Query<(
-        Option<&lumen_primitives::TransitionSpecs>,
-        Option<&lumen_core::components::Opacity>,
-    )>,
+    fade_targets: bevy_ecs::system::Query<Option<&lumen_primitives::TransitionSpecs>>,
     mut commands: bevy_ecs::system::Commands,
 ) {
     for (parent_id, mut marker, children) in markers.iter_mut() {
@@ -1508,10 +1505,15 @@ pub fn reconcile_if_blocks(
                     }
                     // Entering transition on the block itself (children
                     // handle their own via `spawn_body_child`).
-                    if let Ok((specs, cur)) = fade_targets.get(parent_id)
-                        && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
+                    if fade_targets
+                        .get(parent_id)
+                        .is_ok_and(|specs| specs.is_some())
                     {
-                        commands.entity(parent_id).try_insert(bundle);
+                        commands.entity(parent_id).queue_silenced(
+                            |mut e: bevy_ecs::world::EntityWorldMut| {
+                                lumen_primitives::fade_in_on_mount(&mut e)
+                            },
+                        );
                     }
                     marker.currently_mounted = true;
                 } else if !now_truthy && marker.currently_mounted {
@@ -1570,10 +1572,12 @@ pub fn reconcile_if_blocks(
                 targets.extend(kids.iter());
             }
             for target in targets {
-                if let Ok((specs, cur)) = fade_targets.get(target)
-                    && let Some(bundle) = mount_fade_bundle(specs, cur.copied())
-                {
-                    commands.entity(target).try_insert(bundle);
+                if fade_targets.get(target).is_ok_and(|specs| specs.is_some()) {
+                    commands.entity(target).queue_silenced(
+                        |mut e: bevy_ecs::world::EntityWorldMut| {
+                            lumen_primitives::fade_in_on_mount(&mut e)
+                        },
+                    );
                 }
             }
         }
@@ -2833,11 +2837,7 @@ pub(crate) fn spawn_body_child(
         // despawn) are intentionally NOT implemented - CSS itself can't
         // express them without JS, and holding despawns hostage to
         // animations would complicate every reconciler.
-        let specs = world.get::<lumen_primitives::TransitionSpecs>(id).cloned();
-        let cur = world.get::<Opacity>(id).copied();
-        if let Some(bundle) = mount_fade_bundle(specs.as_ref(), cur) {
-            world.entity_mut(id).insert(bundle);
-        }
+        lumen_primitives::fade_in_on_mount(&mut world.entity_mut(id));
     });
 }
 
@@ -2889,33 +2889,6 @@ fn sort_rows(world: &mut World, parent: Entity, body_len: usize, row_order: &[us
         ordered.extend_from_slice(&kids[row * body_len..(row + 1) * body_len]);
     }
     world.entity_mut(parent).insert_children(0, &ordered);
-}
-
-/// Build the `(Opacity(0), OpacityTransition(0 -> target))` pair for a
-/// freshly-mounted / freshly-shown element that declares a
-/// `transition: opacity ...`. `None` when there is no (non-zero-duration)
-/// opacity spec or the target opacity is already 0.
-fn mount_fade_bundle(
-    specs: Option<&lumen_primitives::TransitionSpecs>,
-    current: Option<Opacity>,
-) -> Option<(Opacity, lumen_primitives::OpacityTransition)> {
-    let spec = specs?.for_property(lumen_primitives::TransitionProperty::Opacity)?;
-    if spec.duration.is_zero() {
-        return None;
-    }
-    let target = current.map(|o| o.0).unwrap_or(1.0);
-    if target <= 0.0 {
-        return None;
-    }
-    Some((
-        Opacity(0.0),
-        lumen_primitives::OpacityTransition(lumen_primitives::Transition::new(
-            0.0,
-            target,
-            spec.duration,
-            spec.easing,
-        )),
-    ))
 }
 
 /// The UA-origin per-tag sizing defaults (D3 / task #29) live in

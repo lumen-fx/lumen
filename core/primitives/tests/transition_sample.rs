@@ -19,7 +19,8 @@
 //! meaningful, reliably reproducible margin, so a ratio or ceiling here
 //! would just be noise dressed up as a check.
 
-use lumen_primitives::{Easing, Transition};
+use lumen_core::motion::Easing;
+use lumen_primitives::Transition;
 use std::time::Duration;
 
 fn approx(a: f32, b: f32) -> bool {
@@ -44,13 +45,13 @@ fn linear_sample_matches_progress_at_start_mid_and_end() {
 
 #[test]
 fn ease_out_sample_matches_progress_at_start_mid_and_end() {
-    let t = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(200), Easing::EaseOut);
+    let t = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(200), Easing::EASE_OUT);
     assert!(approx(t.sample(t.start), 0.0), "start must read `from`");
-    // 1 - (1 - 0.5)^3 = 0.875 - well above the linear midpoint, matching
-    // ease-out's "fast start, slow settle" shape.
+    // CSS ease-out, cubic-bezier(0, 0, 0.58, 1), reads about 0.685 at the
+    // halfway point: above linear, the "fast start, slow settle" shape.
     let mid = t.sample(t.start + Duration::from_millis(100));
     assert!(
-        mid > 0.8,
+        mid > 0.65,
         "ease-out midpoint should be well past the linear halfway point, got {mid}"
     );
     let end = t.start + Duration::from_millis(200);
@@ -82,7 +83,7 @@ fn easings_diverge_at_the_same_elapsed_time() {
     // the same wall-clock instant. If a regression made every curve
     // collapse to linear, this is the assertion that would catch it.
     let linear = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(200), Easing::Linear);
-    let ease_out = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(200), Easing::EaseOut);
+    let ease_out = Transition::<f32>::new(0.0, 1.0, Duration::from_millis(200), Easing::EASE_OUT);
     let bezier = Transition::<f32>::new(
         0.0,
         1.0,

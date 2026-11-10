@@ -60,7 +60,8 @@ use lumen_core::prelude::*;
 use lumen_core::render_world::AnimationsActive;
 
 use crate::controls::KnobGeometry;
-use crate::transition::{Easing, Transition, TransitionProperty, TransitionSpecs};
+use crate::transition::{Transition, TransitionProperty, TransitionSpecs};
+use lumen_core::motion::Easing;
 
 /// Fallback duration of the thumb slide when the switch flips, used when
 /// the track carries no `transition: bg ...` [`TransitionSpecs`] (see
@@ -73,7 +74,7 @@ pub const SWITCH_SLIDE_MS: u64 = 140;
 /// [`SWITCH_SLIDE_MS`]. Ease-out (fast start, gentle settle) is the
 /// Cocoa / Material short-transition curve; the same curve `<checkbox>` and
 /// the hover tints reach for.
-pub const SWITCH_SLIDE_EASING: Easing = Easing::EaseOut;
+pub const SWITCH_SLIDE_EASING: Easing = Easing::EASE_OUT;
 
 /// Resolve the thumb slide's duration + easing for one flip. A CSS
 /// `transition: bg <duration> <easing>` declaration on the track entity
@@ -84,7 +85,7 @@ pub const SWITCH_SLIDE_EASING: Easing = Easing::EaseOut;
 /// reproduces today's hardcoded slide exactly.
 fn slide_tween_params(specs: Option<&TransitionSpecs>) -> (Duration, Easing) {
     match specs.and_then(|s| s.for_property(TransitionProperty::BackgroundColor)) {
-        Some(spec) => (spec.duration, spec.easing),
+        Some(spec) => (spec.duration, spec.easing.clone()),
         None => (Duration::from_millis(SWITCH_SLIDE_MS), SWITCH_SLIDE_EASING),
     }
 }
@@ -106,7 +107,7 @@ pub struct SwitchThumb {
 /// Active thumb-slide tween driving a [`SwitchThumb`]'s horizontal inset.
 /// Reuses the shared [`Transition<f32>`] primitive; [`step_switch_thumb`]
 /// samples it and removes the component when the slide completes.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Debug)]
 pub struct SwitchThumbSlide(pub Transition<f32>);
 
 /// Plugin registering the switch visual-sync + thumb-slide systems.
