@@ -29,4 +29,5 @@ pub mod script_commands;
 pub mod script_host;
 pub mod source_parser;
 pub mod spawn;
+pub mod style_sheet;
 pub mod widgets;

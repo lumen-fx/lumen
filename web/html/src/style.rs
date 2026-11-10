@@ -287,6 +287,12 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("animation-direction", "animation-direction", Value::AsIs),
     ("animation-fill-mode", "animation-fill-mode", Value::AsIs),
     ("animation-play-state", "animation-play-state", Value::AsIs),
+    (
+        "animation-composition",
+        "animation-composition",
+        Value::AsIs,
+    ),
+    ("animation-timeline", "animation-timeline", Value::AsIs),
 ];
 
 /// Knobs with no CSS property behind them. Each becomes `--lm-` plus its
@@ -953,6 +959,12 @@ mod tests {
             "animation-play-state",
             "paused",
             "animation-play-state: paused",
+        ),
+        ("animation-composition", "add", "animation-composition: add"),
+        (
+            "animation-timeline",
+            "scroll(root)",
+            "animation-timeline: scroll(root)",
         ),
         ("tab-index", "0", "drop"),
         ("draggable", "true", "drop"),

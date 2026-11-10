@@ -132,6 +132,46 @@ impl Plugin for StateStylePlugin {
     }
 }
 
+/// The interaction markers an element carries, which decide the state
+/// rules that apply to it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StateMarkers {
+    /// The element or a descendant is under the pointer.
+    pub hovered: bool,
+    /// The element has focus.
+    pub focused: bool,
+    /// Its focus came from the keyboard.
+    pub focus_visible: bool,
+    /// The element or a descendant is pressed.
+    pub pressed: bool,
+    /// The primary pointer button is down.
+    pub primary_down: bool,
+    /// An acceptable drag hovers over it.
+    pub drag_over: bool,
+    /// It is disabled.
+    pub disabled: bool,
+}
+
+/// Which state rules apply, in the order they lay over each other, lowest
+/// first: `:hover`, `:focus`, `:focus-visible`, `:active`, `:drag-over`,
+/// `:disabled`.
+///
+/// `:active` mirrors the press-tint contract (spec section 0 rule 3): it
+/// holds for the press chain, the press target and its ancestors, and a
+/// pointer press dragged off the element presents un-pressed even though
+/// `Pressed` (the capture marker) stays. Keyboard presses (pointer up)
+/// present pressed without hover.
+pub fn active_states(m: StateMarkers) -> [bool; 6] {
+    [
+        m.hovered,
+        m.focused,
+        m.focused && m.focus_visible,
+        m.pressed && (m.hovered || !m.primary_down),
+        m.drag_over,
+        m.disabled,
+    ]
+}
+
 /// Swap text color / opacity / shadows / background per interaction
 /// state, and let them go when every state ends.
 ///
@@ -221,26 +261,26 @@ pub fn apply_state_visuals(
         drag_over,
     ) in &mut active
     {
-        // `:active` mirrors the press-tint contract (spec section 0 rule 3):
-        // it holds for the press chain, the press target and its ancestors,
-        // and a pointer press dragged off the element presents un-pressed
-        // even though `Pressed` (the capture marker) stays. Keyboard presses
-        // (pointer up) present pressed without hover.
-        let active_on = pressed && (hovered || !primary_down);
+        let on = active_states(StateMarkers {
+            hovered,
+            focused: focused.is_some(),
+            focus_visible: focus_visible.is_some(),
+            pressed,
+            primary_down,
+            drag_over,
+            disabled,
+        });
         // Field-wise merge: hover < focus < focus-visible < active <
         // disabled (disabled stamps last).
         let mut patch = StatePatch::default();
-        for (marker_on, p) in [
-            (hovered, &sv.hover),
-            (focused.is_some(), &sv.focus),
-            (
-                focused.is_some() && focus_visible.is_some(),
-                &sv.focus_visible,
-            ),
-            (active_on, &sv.active),
-            (drag_over, &sv.drag_over),
-            (disabled, &sv.disabled),
-        ] {
+        for (marker_on, p) in on.into_iter().zip([
+            &sv.hover,
+            &sv.focus,
+            &sv.focus_visible,
+            &sv.active,
+            &sv.drag_over,
+            &sv.disabled,
+        ]) {
             if !marker_on {
                 continue;
             }

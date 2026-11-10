@@ -270,6 +270,12 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
 - **lumen-primitives**: interaction primitives with no visual styling of their
   own: scroll, drag, press, hover tint, cursor shape, tooltip, tabs, checkbox,
   radio, switch, progress, transitions, validation.
+- **lumen-animations**: CSS keyframe animations, registered as the
+  `animations` capability. It reads the `animation-*` declarations the cascade
+  leaves on an element and the `@keyframes` blocks of the live stylesheet,
+  runs them, and raises their events. The core names none of it: a link that
+  leaves the capability out carries none of it, and the declarations parse and
+  do nothing.
 - **lumen-widget**: the `Widget` trait, the attribute bag, and the tag registry
   the markup parser consults for custom tags.
 - **lumen-widget-macros**: the `#[derive(Widget)]` macro, which emits the
@@ -791,6 +797,14 @@ lets go lands on the element's styles as they stand then. Interaction
 pseudo-classes reach that layer through state components: the cascade lowers
 `:hover`, `:focus`, `:active`, and `:disabled` into them, and a system swaps
 between the stored variants.
+
+Motion holds values the same way. A running CSS transition holds the property
+it moves at the rank CSS gives transitions, above everything else, and a
+keyframe animation holds its properties just below that, above every rule and
+state; both sample through `lumen_core::motion`, the one implementation of the
+timing functions and of the interpolation of each value type. The cascade
+records which properties an `!important` declaration set, and an animation
+leaves those alone.
 
 `<for>` and `<if>` are not resolved at spawn time. They stay as markers that
 reconcilers in the `Systems` stage keep in sync with the data behind them.

@@ -126,6 +126,60 @@ pub struct XdgColorSchemeUpdate {
     pub dark: bool,
 }
 
+/// Cross-thread payload pushed by the Linux XDG listener for the desktop's
+/// animation setting. Translated to
+/// [`lumen_core::components::StyleManager::reduce_motion`] by the
+/// typed-command handler [`run`] registers.
+pub struct XdgReduceMotionUpdate {
+    /// `true` when the desktop turned animations off.
+    pub reduce: bool,
+}
+
+/// The platform's "reduce motion" accessibility setting, read where it can
+/// be read synchronously: macOS and Windows. `None` elsewhere, where a
+/// listener reports it instead.
+fn platform_reduce_motion() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        Some(workspace.accessibilityDisplayShouldReduceMotion())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+        };
+        let mut animate: windows_sys::core::BOOL = 1;
+        // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL through the
+        // pointer, which points at a live local of that type.
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                (&mut animate as *mut windows_sys::core::BOOL).cast(),
+                0,
+            )
+        };
+        (ok != 0).then_some(animate == 0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+/// Write the platform's reduce-motion setting into the style manager, when
+/// it can be read here and it changed.
+fn refresh_reduce_motion(world: &mut World) {
+    if let Some(reduce) = platform_reduce_motion()
+        && world.resource::<StyleManager>().reduce_motion != reduce
+    {
+        world
+            .resource_mut::<StyleManager>()
+            .set_reduce_motion(reduce);
+    }
+}
+
 /// User-event envelope for the winit loop. Everything that needs to
 /// interrupt a parked loop from off the main thread posts one of these:
 ///
@@ -279,6 +333,13 @@ fn run(
     app.register_command::<XdgColorSchemeUpdate, _>(|world, payload| {
         let dark = payload.dark;
         world.resource_mut::<StyleManager>().set_system_dark(dark);
+    });
+    app.register_command::<XdgReduceMotionUpdate, _>(|world, payload| {
+        if world.resource::<StyleManager>().reduce_motion != payload.reduce {
+            world
+                .resource_mut::<StyleManager>()
+                .set_reduce_motion(payload.reduce);
+        }
     });
 
     // Unix: route SIGINT / SIGTERM through the same graceful close path
@@ -625,6 +686,13 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         // falls back to the winit-reported `WindowEvent::ThemeChanged` path.
         #[cfg(target_os = "linux")]
         try_spawn_xdg_color_scheme_listener(&mut self.app.world);
+        // The desktop's "reduce motion" setting: read here on macOS and
+        // Windows, and again whenever a window gains focus, which is when a
+        // person comes back from changing it; reported by a portal listener
+        // on Linux.
+        refresh_reduce_motion(&mut self.app.world);
+        #[cfg(target_os = "linux")]
+        try_spawn_xdg_motion_listener(&mut self.app.world);
         self.each_extension(event_loop, |ext, cx| ext.resumed(cx));
         refresh_monitors(&mut self.app.world, event_loop);
         // The window the platform opened is the one the app has: seed the
@@ -1032,6 +1100,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 });
                 if let Some(mut runtime) = self.app.world.get_mut::<WindowRuntime>(entity) {
                     runtime.focused = focused;
+                }
+                if focused {
+                    refresh_reduce_motion(&mut self.app.world);
                 }
                 self.roll_up();
                 if focused {
@@ -3003,6 +3074,67 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
         });
     if let Err(e) = spawn_result {
         tracing::debug!("lumen-window-winit: failed to spawn XDG theme listener thread ({e})");
+    }
+}
+
+/// Best-effort: follow the desktop's animation setting through the XDG
+/// Settings portal, the way [`try_spawn_xdg_color_scheme_listener`] follows
+/// its color scheme. GNOME publishes it as `enable-animations` in
+/// `org.gnome.desktop.interface`; a desktop that publishes nothing there
+/// leaves `prefers-reduced-motion` at `no-preference`. Spawns at most once
+/// per process and returns quietly when the portal is unavailable.
+#[cfg(target_os = "linux")]
+fn try_spawn_xdg_motion_listener(world: &mut World) {
+    use futures_util::StreamExt;
+    const NAMESPACE: &str = "org.gnome.desktop.interface";
+    const KEY: &str = "enable-animations";
+    static SPAWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SPAWNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let sender = world
+        .resource::<lumen_core::command::CommandQueue>()
+        .sender()
+        .clone();
+    let waker = world
+        .get_resource::<lumen_core::app::EventLoopWaker>()
+        .cloned();
+    let post = move |reduce: bool| {
+        let cmd = lumen_core::command::Command::Typed {
+            type_id: std::any::TypeId::of::<XdgReduceMotionUpdate>(),
+            payload: Box::new(XdgReduceMotionUpdate { reduce }),
+        };
+        if sender.try_send(cmd).is_ok()
+            && let Some(waker) = &waker
+        {
+            waker.wake();
+        }
+    };
+    let spawn_result = std::thread::Builder::new()
+        .name("lumen-xdg-motion".into())
+        .spawn(move || {
+            pollster::block_on(async move {
+                let Ok(settings) = ashpd::desktop::settings::Settings::new().await else {
+                    return;
+                };
+                if let Ok(enabled) = settings.read::<bool>(NAMESPACE, KEY).await {
+                    post(!enabled);
+                }
+                let Ok(mut stream) = settings
+                    .receive_setting_changed_with_args::<bool>(NAMESPACE, KEY)
+                    .await
+                else {
+                    return;
+                };
+                while let Some(change) = stream.next().await {
+                    if let Ok(enabled) = change {
+                        post(!enabled);
+                    }
+                }
+            });
+        });
+    if let Err(e) = spawn_result {
+        tracing::debug!("lumen-window-winit: failed to spawn XDG motion listener thread ({e})");
     }
 }
 

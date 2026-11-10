@@ -409,6 +409,12 @@ way; the module's documentation lists them and says which bubble and which a
 handler can cancel with `prevent_default`. They carry a detail map, which a
 built-in event leaves empty.
 
+A CSS animation raises `animationstart`, `animationiteration`,
+`animationend` and `animationcancel` on its element, on the desktop and in a
+web build alike. They bubble, cannot be cancelled, and carry
+`animation_name`, `elapsed_time` (seconds) and `pseudo_element` in their
+detail.
+
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
 `scroll` do not bubble. `keydown` and `keyup` target the focused element, or

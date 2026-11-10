@@ -452,6 +452,7 @@ pub(crate) fn register_styles(
     app.add_systems(
         TickStage::Systems,
         reapply_computed_styles
+            .in_set(lumen_scene::style_sheet::Restyle)
             .after(reapply_styles_on_root_class_change)
             .after(lumen_scene::dom::apply_dom_commands)
             .after(crate::spawn::reconcile_if_blocks)

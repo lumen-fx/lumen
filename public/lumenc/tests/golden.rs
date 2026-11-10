@@ -917,6 +917,37 @@ fn golden_transforms() {
     );
 }
 
+/// Keyframe animations sampled part-way: each is paused with a negative
+/// delay, which holds it at a fixed point of its timeline, so the frame is
+/// the same on every run. An eighth of a turn of a spin, a background and a
+/// shadow halfway between two colors, and a slide-in halfway in.
+#[test]
+fn golden_animation_frames() {
+    run_case(
+        "animation_frames",
+        r##"<root skin="default" bg="#11141b">
+  <row padding="40" gap="48">
+    <tile class="a" width="70px" height="70px" bg="#9ece6a" radius="8" />
+    <tile class="b" width="70px" height="70px" radius="10" />
+    <tile class="c" width="70px" height="70px" bg="#e0af68" />
+  </row>
+</root>"##,
+        r#"@keyframes spin { to { rotate: 360deg; } }
+@keyframes glow {
+  from { background: #7aa2f7; box-shadow: 0 0 4px 0 #7aa2f700; }
+  to { background: #f7768e; box-shadow: 0 0 16px 8px #f7768e; }
+}
+@keyframes slide {
+  from { transform: translateY(60px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.a { animation: spin 2s linear infinite paused -250ms; }
+.b { animation: glow 1s linear paused -500ms; }
+.c { animation: slide 1s linear paused -500ms both; }"#,
+        &no_drive,
+    );
+}
+
 // --- The dock module --------------------------------------------------------
 
 /// The manifest line that loads the dock module.

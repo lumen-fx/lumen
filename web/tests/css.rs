@@ -462,6 +462,7 @@ fn keyframes(prelude: &str, body: &str, media: Option<MediaQuery>) -> AtRule {
         prelude: prelude.to_string(),
         body: body.to_string(),
         media,
+        at: 0,
     }
 }
 
@@ -534,6 +535,7 @@ fn font_face(body: &str) -> AtRule {
         prelude: String::new(),
         body: body.to_string(),
         media: None,
+        at: 0,
     }
 }
 

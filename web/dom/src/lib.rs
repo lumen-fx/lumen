@@ -145,6 +145,16 @@ impl Plugin for WebDomPlugin {
         bevy_ecs::message::MessageRegistry::register_message::<
             lumen_core::text_events::TextEditApplied,
         >(&mut app.world);
+        // The animation events the browser raises reach a script as the
+        // custom events the desktop raises.
+        if !app
+            .world
+            .contains_resource::<bevy_ecs::message::Messages<lumen_script::CustomEvent>>()
+        {
+            bevy_ecs::message::MessageRegistry::register_message::<lumen_script::CustomEvent>(
+                &mut app.world,
+            );
+        }
         let table = NodeTable::adopting(self.root, self.root_entity);
         app.world.insert_non_send(table);
         // A dialog the browser dismisses writes the signal it hangs off, so

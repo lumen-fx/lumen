@@ -1210,6 +1210,15 @@ pub struct Attributes {
     /// CSS `transition-timing-function` longhand - comma list of easing
     /// curves, cycled over the property list.
     pub transition_timing: Option<Vec<EasingIr>>,
+    /// CSS `animation` and its longhands.
+    pub animation: crate::animation::AnimationDeclsIr,
+    /// The `animation-*` longhands state rules set (`:hover { animation:
+    /// ... }`), applied while the element is in that state.
+    pub state_animations: StateAnimationsIr,
+    /// The properties an `!important` declaration set, in their canonical
+    /// spelling: what an animation leaves alone, as CSS ranks important
+    /// declarations above animations.
+    pub important: Vec<String>,
     /// `required="true"` - form-field validity gate.
     pub required: bool,
     /// `pattern="<substring>"` - content must contain this literal
@@ -1541,6 +1550,23 @@ impl Attributes {
             })
             .collect()
     }
+}
+
+/// The `animation-*` longhands each state pseudo-class sets.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StateAnimationsIr {
+    /// `:hover`.
+    pub hover: crate::animation::AnimationDeclsIr,
+    /// `:focus`.
+    pub focus: crate::animation::AnimationDeclsIr,
+    /// `:focus-visible`.
+    pub focus_visible: crate::animation::AnimationDeclsIr,
+    /// `:active`.
+    pub active: crate::animation::AnimationDeclsIr,
+    /// `:drag-over`.
+    pub drag_over: crate::animation::AnimationDeclsIr,
+    /// `:disabled`.
+    pub disabled: crate::animation::AnimationDeclsIr,
 }
 
 /// IR-side parsed `transition` shorthand entry. `From<&TransitionIr> for

@@ -169,7 +169,13 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `::placeholder` rules matching an element set.
 ///
 /// `24`: [`crate::layout_ir::Attributes`] gains `transform`, `translate`,
-/// `rotate`, `scale` and `transform-origin`, an element's CSS transform.
+/// `rotate`, `scale` and `transform-origin`, an element's CSS transform;
+/// `animation` and `state_animations`, its `animation-*` declarations; and
+/// `important`, the properties an `!important` declaration set.
+/// [`crate::layout_ir::EasingIr`] names its curves as CSS defines them and
+/// gains `steps()` and `linear()`, and
+/// [`crate::layout_ir::TransitionPropertyIr`] gains the paint properties
+/// beyond the first four.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

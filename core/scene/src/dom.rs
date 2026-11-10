@@ -49,11 +49,10 @@ use lumen_script::event::{register_host_binding, unregister_binding};
 use lumen_script::node_query::{drain_external_dom_commands, external_dom_commands_pending};
 use lumen_script::runtime::{ScriptCommandEvent, register_script_commands};
 use lumen_script::{
-    EventHosts, PendingDomEvents, ScriptCommand, ScriptSet, deliver_input_events,
-    deliver_state_events, queue_pointer_and_key_events, queue_state_events,
+    EventHosts, PendingDomEvents, ScriptCommand, ScriptSet, deliver_custom_events,
+    deliver_input_events, deliver_state_events, queue_custom_events, queue_pointer_and_key_events,
+    queue_state_events,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use lumen_script::{deliver_custom_events, queue_custom_events};
 
 use crate::fragments::{
     FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args, instance_body,
@@ -183,11 +182,10 @@ fn install_dom_events(app: &mut App) {
         lumen_script::dom_events::forward_pointer_lock_asks
             .before(lumen_input::pointer_lock::grant_pointer_lock),
     );
-    // A module's own events, after the state events so a handler hears a
-    // control's `change` before the custom event the control's owner raised
-    // about it. A page runs no Rust module to raise one; its add-ons answer
-    // through plugin events instead, so a browser build carries none of this.
-    #[cfg(not(target_arch = "wasm32"))]
+    // A module's own events, and the ones a render backend translates from
+    // its platform (a page's CSS animation events), after the state events
+    // so a handler hears a control's `change` before the custom event the
+    // control's owner raised about it.
     app.add_systems(
         TickStage::Systems,
         (queue_custom_events, deliver_custom_events)

@@ -83,6 +83,11 @@ pub struct AtRule {
     pub body: String,
     /// The `@media` block this was written inside, if any.
     pub media: Option<MediaQuery>,
+    /// Byte offset of the first byte of [`Self::body`] in the source the
+    /// parser was given, for a diagnostic about something inside the body.
+    /// Not part of the compiled artifact.
+    #[serde(skip)]
+    pub at: usize,
 }
 
 /// At-rule names a [`Stylesheet`] carries verbatim instead of dropping.
@@ -1034,6 +1039,12 @@ fn cascade_one(
         };
         match apply_decl_for_pseudo(&ctx, &decl.name, &resolved, &m.matched_pseudo, attrs) {
             Ok(true) => {
+                if decl.important && !m.matched_pseudo.any() {
+                    let canonical = canonical_property_name(&decl.name);
+                    if !attrs.important.iter().any(|n| n == canonical) {
+                        attrs.important.push(canonical.to_string());
+                    }
+                }
                 if canonical_property_name(&decl.name) == "bg" {
                     let p = &m.matched_pseudo;
                     if !p.any() {
@@ -2221,6 +2232,23 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     }
     if inline.transition_timing.is_some() {
         target.transition_timing = inline.transition_timing.clone();
+    }
+    if !inline.animation.is_empty() {
+        target.animation.overlay(&inline.animation);
+    }
+    if inline.state_animations != Default::default() {
+        let (t, i) = (&mut target.state_animations, &inline.state_animations);
+        t.hover.overlay(&i.hover);
+        t.focus.overlay(&i.focus);
+        t.focus_visible.overlay(&i.focus_visible);
+        t.active.overlay(&i.active);
+        t.drag_over.overlay(&i.drag_over);
+        t.disabled.overlay(&i.disabled);
+    }
+    for name in &inline.important {
+        if !target.important.contains(name) {
+            target.important.push(name.clone());
+        }
     }
     if inline.scrollbar_color.is_some() {
         target.scrollbar_color = inline.scrollbar_color;
@@ -3472,6 +3500,25 @@ fn apply_decl_for_pseudo(
             }
             Ok(true)
         }
+        animation if animation.starts_with("animation") => {
+            let slot = if pseudo.active {
+                &mut attrs.state_animations.active
+            } else if pseudo.disabled {
+                &mut attrs.state_animations.disabled
+            } else if pseudo.drag_over {
+                &mut attrs.state_animations.drag_over
+            } else if pseudo.focus_visible {
+                &mut attrs.state_animations.focus_visible
+            } else if pseudo.focus {
+                &mut attrs.state_animations.focus
+            } else if pseudo.hover {
+                &mut attrs.state_animations.hover
+            } else {
+                // `:checked` / `:selected` route `bg` only.
+                return Ok(true);
+            };
+            slot.apply(ctx, animation, value)
+        }
         // Any other property under a state pseudo is consumed silently
         // (not routable yet) - matches the pre-existing behavior.
         _ => Ok(true),
@@ -3608,6 +3655,8 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "animation-direction",
     "animation-fill-mode",
     "animation-play-state",
+    "animation-composition",
+    "animation-timeline",
     "scrollbar-color",
     "scrollbar-width",
     "scrollbar-thickness",
@@ -4391,11 +4440,6 @@ fn apply_declaration(
             }
             attrs.transition_timing = Some(out);
         }
-        // Keyframe animations run on the web target, where the browser
-        // plays the `@keyframes` block the stylesheet carries alongside
-        // these declarations. The desktop cascade has no keyframe engine,
-        // so it accepts the family and stores nothing; `transition` is the
-        // property that animates a desktop app.
         "animation"
         | "animation-name"
         | "animation-duration"
@@ -4404,7 +4448,11 @@ fn apply_declaration(
         | "animation-iteration-count"
         | "animation-direction"
         | "animation-fill-mode"
-        | "animation-play-state" => {}
+        | "animation-play-state"
+        | "animation-composition"
+        | "animation-timeline" => {
+            attrs.animation.apply(ctx, name, value)?;
+        }
         // CSS Scrollbars Styling Level 1 - overlay-bar styling for
         // `<scroll>` containers. `scrollbar-color: auto` clears back to
         // the runtime default.
@@ -4780,6 +4828,11 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
                 Err(_) => easing_terms.push(term),
             }
         }
+        let easing = if easing_terms.is_empty() {
+            DEFAULT_EASING
+        } else {
+            parse_easing(ctx, name, &easing_terms.join(" "))?
+        };
         let Some(duration_ms) = duration_ms else {
             return Err(bad(
                 ctx,
@@ -4794,11 +4847,6 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
                 "transition: delay '{delay}' ignored - transitions start immediately"
             );
         }
-        let easing = if easing_terms.is_empty() {
-            DEFAULT_EASING
-        } else {
-            parse_easing(ctx, name, &easing_terms.join(" "))?
-        };
         for property in properties {
             out.push(TransitionIr {
                 property,
@@ -5002,7 +5050,7 @@ pub fn parse_easing(ctx: &str, name: &str, raw: &str) -> Result<EasingIr, ParseE
 
 /// Split on whitespace outside parentheses, so a function written with
 /// spaces in its arguments stays one term.
-fn split_top_level_whitespace(s: &str) -> Vec<&str> {
+pub(crate) fn split_top_level_whitespace(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0i32;
     let mut start: Option<usize> = None;
@@ -5099,7 +5147,7 @@ pub fn cascade_lint(css: &Stylesheet) -> Vec<CascadeDivergence> {
 // front-end (`parse_selector_list` needs it there); the value-list helpers
 // (`parse_transition` / `parse_box_shadow`) and `apply_declaration` need it
 // here.
-fn split_top_level_commas(s: &str) -> Vec<&str> {
+pub(crate) fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut depth: i32 = 0;
@@ -5308,28 +5356,68 @@ mod transition_tests {
     }
 
     #[test]
-    fn the_animation_family_is_recognized_and_stores_nothing() {
-        // The web target plays a keyframe animation; the desktop cascade
-        // has no keyframe engine, so it takes the declaration without
-        // calling it unknown and without setting anything.
+    fn the_animation_family_lands_on_the_element() {
         let mut attrs = Attributes::default();
-        for name in [
-            "animation",
-            "animation-name",
-            "animation-duration",
-            "animation-timing-function",
-            "animation-delay",
-            "animation-iteration-count",
-            "animation-direction",
-            "animation-fill-mode",
-            "animation-play-state",
-        ] {
-            assert!(
-                apply_declaration("ctx", name, "spin 2s linear infinite", &mut attrs).unwrap(),
-                "`{name}` must be a property the cascade recognizes"
-            );
-        }
-        assert!(attrs.transitions.is_empty());
+        assert!(
+            apply_declaration("ctx", "animation", "spin 2s linear infinite", &mut attrs).unwrap()
+        );
+        assert!(apply_declaration("ctx", "animation-play-state", "paused", &mut attrs).unwrap());
+        let list = attrs.animation.effective();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "spin");
+        assert_eq!(
+            list[0].play_state,
+            crate::animation::AnimationPlayStateIr::Paused
+        );
+    }
+
+    #[test]
+    fn a_state_rule_routes_its_animation_to_the_state() {
+        let mut attrs = Attributes::default();
+        let pseudo = SubjectPseudo {
+            hover: true,
+            ..SubjectPseudo::default()
+        };
+        assert!(
+            apply_decl_for_pseudo("ctx", "animation", "pulse 1s", &pseudo, &mut attrs).unwrap()
+        );
+        assert!(attrs.animation.is_empty());
+        assert_eq!(attrs.state_animations.hover.effective()[0].name, "pulse");
+    }
+
+    #[test]
+    fn an_important_declaration_is_recorded() {
+        let css = Stylesheet {
+            rules: vec![Rule {
+                selectors: parse_selector_list("tile").unwrap(),
+                declarations: vec![
+                    Declaration {
+                        name: "opacity".into(),
+                        value: "0.5".into(),
+                        important: true,
+                    },
+                    Declaration {
+                        name: "background".into(),
+                        value: "#fff".into(),
+                        important: false,
+                    },
+                ],
+                origin: Origin::Author,
+                source_order: 0,
+                media: None,
+                selector: Default::default(),
+            }],
+            at_rules: Vec::new(),
+        };
+        let mut ir = LayoutIR {
+            root: Element {
+                tag: "tile".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        apply_css(&mut ir, &css).unwrap();
+        assert_eq!(ir.root.attrs.important, vec!["opacity".to_string()]);
     }
 
     #[test]

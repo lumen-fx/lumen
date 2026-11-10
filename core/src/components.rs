@@ -1250,6 +1250,11 @@ pub struct StyleManager {
     /// Computed result of `scheme + system_dark`. Read by every theme
     /// consumer; written by [`Self::recompute`] from inside the setters.
     pub effective_dark: bool,
+    /// The OS asks apps for less motion: what `@media
+    /// (prefers-reduced-motion: reduce)` matches. Written by the window
+    /// backend from the platform's accessibility setting; `false` until it
+    /// reports one.
+    pub reduce_motion: bool,
 }
 
 impl Default for StyleManager {
@@ -1258,6 +1263,7 @@ impl Default for StyleManager {
             scheme: ColorScheme::Default,
             system_dark: false,
             effective_dark: false,
+            reduce_motion: false,
         }
     }
 }
@@ -1269,11 +1275,15 @@ impl StyleManager {
     pub fn with_scheme(scheme: ColorScheme) -> Self {
         let mut s = Self {
             scheme,
-            system_dark: false,
-            effective_dark: false,
+            ..Self::default()
         };
         s.recompute();
         s
+    }
+
+    /// Record whether the OS asks for less motion.
+    pub fn set_reduce_motion(&mut self, reduce: bool) {
+        self.reduce_motion = reduce;
     }
 
     /// Update the app's intent and recompute [`Self::effective_dark`].

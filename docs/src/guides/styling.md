@@ -214,9 +214,9 @@ Supported features are `prefers-color-scheme` (`dark`, `light`,
 viewport widths `min-width`, `max-width`, and `width`. Combine them with `and`.
 Blocks may nest.
 
-The color scheme and the viewport are live. The motion and contrast
-preferences are not read from the OS yet, so those two features only match
-`no-preference`; offer an in-app switch instead.
+The color scheme, the motion preference and the viewport are live. The
+contrast preference is not read from the OS yet, so `prefers-contrast` only
+matches `no-preference`.
 
 When the OS theme changes or the window crosses a width you wrote a rule for,
 the affected elements re-resolve. So does anything that appears afterwards: a
