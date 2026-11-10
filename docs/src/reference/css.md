@@ -618,6 +618,33 @@ there is no border: the computed width is zero and nothing paints.
 
 Borders participate in layout under `box-sizing`.
 
+### Transforms
+
+| Property | Values | Default |
+| --- | --- | --- |
+| `transform` | `none`, or a list of transform functions | `none` |
+| `translate` | `none`, or 1 to 2 lengths or percentages | `none` |
+| `rotate` | `none`, or an angle | `none` |
+| `scale` | `none`, or 1 to 2 numbers or percentages | `none` |
+| `transform-origin` | 1 to 2 keywords, lengths, or percentages | `50% 50%` |
+
+```css
+.card.lifted { scale: 1.03; }
+.badge { transform: translate(-50%, 0) rotate(-8deg); }
+```
+
+The transform functions are `translate()`, `translateX()`, `translateY()`,
+`scale()`, `scaleX()`, `scaleY()`, `rotate()`, `skew()`, `skewX()`,
+`skewY()` and `matrix()`. Angles take `deg`, `rad`, `grad` or `turn`; a
+percentage in a translation is of the element's own border box, as is one in
+`transform-origin`. 3D functions are rejected with a warning.
+
+A transform moves what an element and everything inside it paint, and where
+the pointer finds them, without moving its box: layout, and the elements around
+it, stay where they were. The individual properties apply before the list, in
+the order `translate`, `rotate`, `scale`, then `transform`, all about
+`transform-origin`.
+
 ### Text
 
 | Property | Values | Default | Inherited |

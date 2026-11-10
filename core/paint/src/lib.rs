@@ -49,6 +49,7 @@ pub mod rasterize;
 pub mod recording;
 pub mod svg;
 pub mod texture;
+pub mod transformed;
 pub mod walker;
 
 pub use cache::{CacheStats, FragmentCache, FragmentKey};

@@ -11,12 +11,14 @@
 //! (`lumen_core::render_world::RenderWindow::previous`) against this frame's and short-circuits via `Arc::ptr_eq` on identical subtrees. The answer gates
 //! whether a backend repaints at all.
 
+use crate::Painter;
 use crate::cache::FragmentCache;
 use crate::emit::{
     draw_image, draw_text, emit_border, emit_outline, emit_outline_cached, emit_rect,
     emit_rect_cached, emit_shadow, emit_shadow_cached, emit_svg, folded, text_bounds,
 };
 use crate::layers::{LayerCache, Plan};
+use crate::transformed::TransformedPainter;
 use crate::{PaintTarget, Shape};
 use bevy_ecs::world::World;
 use lumen_core::native::{NativePaintCtx, NativePainters};
@@ -27,6 +29,16 @@ use lumen_core::render_world::{
 use peniko::Fill;
 use peniko::kurbo::{Affine, Rect, RoundedRect};
 use std::sync::Arc;
+
+/// The sink a [`TransformedPainter`] the walker installed paints into.
+fn wrapped_inner(mut wrapped: Box<dyn Painter>) -> Option<Box<dyn Painter>> {
+    let t = wrapped.native().downcast_mut::<TransformedPainter>()?;
+    let placeholder = TransformedPainter::new(
+        Box::new(crate::recording::Recording::default()),
+        Affine::IDENTITY,
+    );
+    Some(std::mem::replace(t, placeholder).into_inner())
+}
 
 /// Active clip stack maintained by [`walk_node`]; each entry is the `push_layer` count we owe.
 ///
@@ -259,14 +271,31 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             }
         }
         Node::Transform { matrix, child } => {
-            // Push the transform onto the running matrix - a stack push, not a per-leaf transform,
-            // matching Qt's `QSGTransformNode`.
-            let prev = ctx.transform;
+            // The subtree paints through a sink that moves every call by the matrix, the way Qt's
+            // `QSGTransformNode` moves its children. Leaves emit in target pixels, so the logical
+            // matrix is conjugated by the device scale.
             let c = matrix.coeffs;
-            let t = Affine::new([c[0], c[1], c[2], c[3], c[4], c[5]]);
-            ctx.transform = prev * t;
+            let logical = Affine::new([c[0], c[1], c[2], c[3], c[4], c[5]]);
+            let dpr = f64::from(ctx.dpr);
+            let device = Affine::scale(dpr) * logical * Affine::scale(1.0 / dpr);
+            let inner = std::mem::replace(
+                ctx.painter,
+                Box::new(crate::recording::Recording::default()),
+            );
+            *ctx.painter = Box::new(TransformedPainter::new(inner, device));
+            // A kept layer was painted unmoved, and one painted here would be kept moved; groups
+            // inside the transform paint into plain layers instead.
+            let layers = ctx.layers.take();
             walk_node(ctx, child);
-            ctx.transform = prev;
+            ctx.layers = layers;
+            let wrapped = std::mem::replace(
+                ctx.painter,
+                Box::new(crate::recording::Recording::default()),
+            );
+            *ctx.painter = match wrapped_inner(wrapped) {
+                Some(inner) => inner,
+                None => unreachable!("the walker put a TransformedPainter there"),
+            };
         }
         Node::Opacity { alpha, child, key } => {
             // Group opacity: the subtree paints into a layer of its own and the layer fades once

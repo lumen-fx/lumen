@@ -82,7 +82,7 @@ pub fn install_extract_pipeline(app: &mut App) {
     }
     app.render_world.insert_resource(ExtractPipeline::default());
     app.render_world.init_resource::<RenderWindows>();
-    let chain: [ExtractFn; 8] = [
+    let chain: [ExtractFn; 9] = [
         // Runs first so it primes the shared hierarchy memos and so
         // `HiddenExtracts` is fresh for the `cull_hidden` guard.
         stash_hidden_entities,
@@ -92,6 +92,7 @@ pub fn install_extract_pipeline(app: &mut App) {
         extract_text,
         extract_clips,
         extract_opacity_groups,
+        extract_transform_groups,
         extract_scrollbars,
     ];
     app.extract_fns.splice(0..0, chain);
@@ -637,7 +638,11 @@ pub struct ExtractSchedule;
 pub fn roll_up_frame_dirty(
     mut fd: ResMut<FrameDirty>,
     windows: Query<(), Or<(Changed<WindowViewport>, Changed<Window>, Changed<WindowOf>)>>,
-    mut removed_windows: (RemovedComponents<Window>, RemovedComponents<WindowOf>),
+    mut removed_windows: (
+        RemovedComponents<Window>,
+        RemovedComponents<WindowOf>,
+        RemovedComponents<crate::transform::ElementTransform>,
+    ),
     property_store: Option<Res<crate::property_store::PropertyStore>>,
     component_changed: Query<
         (),
@@ -663,6 +668,7 @@ pub fn roll_up_frame_dirty(
             bevy_ecs::query::Changed<EchoMode>,
             bevy_ecs::query::Added<EchoMode>,
             bevy_ecs::query::Added<Visible>,
+            bevy_ecs::query::Changed<crate::transform::ElementTransform>,
         )>,
     >,
     mut removed_childof: RemovedComponents<bevy_ecs::hierarchy::ChildOf>,
@@ -686,7 +692,8 @@ pub fn roll_up_frame_dirty(
     // `FrameDirty` on a later idle tick and preventing the app from parking.
     // `.count()` advances the cursor past every entry this tick while still
     // reporting whether any ChildOf was removed.
-    let removed_any = removed_childof.read().count() > 0;
+    // A transform taken off moves paints back without any other component changing.
+    let removed_any = removed_childof.read().count() > 0 || removed_windows.2.read().count() > 0;
     let windows_gone = removed_windows.0.read().count() > 0 || removed_windows.1.read().count() > 0;
     if fd.dirty {
         return;
@@ -1127,6 +1134,24 @@ pub struct ExtractedOpacityGroup {
     pub key: u64,
 }
 
+/// One element whose paints, and its descendants', move under a CSS `transform`.
+///
+/// Brackets the same paints an [`ExtractedOpacityGroup`] would, from the slot its drop shadows take
+/// to its last descendant in the same paint band, and is folded into a
+/// [`crate::node_ir::Node::Transform`] around them. Leaves keep their untransformed positions; the
+/// matrix maps them to where they show.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ExtractedTransformGroup {
+    /// Maps window coordinates of the untransformed paints to where they show.
+    pub matrix: crate::node_ir::Affine2,
+    /// Paint-order key at which the transform opens: the slot under the element's own
+    /// [`PaintOrder`] that its drop shadows take.
+    pub start_order: PaintOrder,
+    /// Paint-order key at which the transform closes - the maximum [`PaintOrder`] across the element
+    /// and its descendants in the same paint band.
+    pub end_order: PaintOrder,
+}
+
 /// One element painted through a CSS mask (`mask-image`): its paints and its descendants' paint
 /// through the alpha of what `mask` paints, and nothing of them shows outside `region`.
 ///
@@ -1457,6 +1482,7 @@ pub fn cull_hidden(
 /// - Runs in [`RenderStage::Prepare`] (registered by [`install_extract_pipeline`]).
 /// - Performs only an AABB test against the viewport of the window the entity paints into (see
 ///   [`ExtractedWindow`]); partial-overlap clipping is the renderer's responsibility.
+#[allow(clippy::type_complexity)]
 pub fn cull_offscreen(
     mut commands: Commands,
     windows: Query<(&RenderWindow, &WindowViewport, Has<PrimaryWindow>)>,
@@ -1467,7 +1493,20 @@ pub fn cull_offscreen(
         &crate::native::ExtractedNative,
         Option<&ExtractedWindow>,
     )>,
+    transforms: Query<(&ExtractedTransformGroup, Option<&ExtractedWindow>)>,
 ) {
+    // A leaf inside a transform shows where the matrix puts it, not at its own box, so the box
+    // test would drop what is on screen; leave those to the renderer.
+    let moved: Vec<(PaintOrder, PaintOrder, Option<Entity>)> = transforms
+        .iter()
+        .map(|(g, w)| (g.start_order, g.end_order, w.map(|w| w.0)))
+        .collect();
+    let in_transform = |order: PaintOrder, tag: Option<&ExtractedWindow>| {
+        let w = tag.map(|t| t.0);
+        moved
+            .iter()
+            .any(|&(start, end, gw)| gw == w && order >= start && order <= end)
+    };
     let mut primary = Vec2::new(f32::INFINITY, f32::INFINITY);
     let mut sizes: Vec<(Entity, Vec2)> = Vec::new();
     for (window, viewport, is_primary) in &windows {
@@ -1489,6 +1528,9 @@ pub fn cull_offscreen(
     // Plugin leaves declare their bounds, so they cull on the same AABB test as rects. Without it
     // an off-screen leaf keeps calling its painter and keeps reporting damage outside the window.
     for (e, n, tag) in &natives {
+        if in_transform(n.order, tag) {
+            continue;
+        }
         let Vec2 { x: vw, y: vh } = size_of(tag);
         if n.bounds.origin.x + n.bounds.size.x <= 0.0
             || n.bounds.origin.y + n.bounds.size.y <= 0.0
@@ -1499,6 +1541,9 @@ pub fn cull_offscreen(
         }
     }
     for (e, r, tag) in &rects {
+        if in_transform(r.order, tag) {
+            continue;
+        }
         let Vec2 { x: vw, y: vh } = size_of(tag);
         if r.origin.x + r.size.x <= 0.0
             || r.origin.y + r.size.y <= 0.0
@@ -1509,6 +1554,9 @@ pub fn cull_offscreen(
         }
     }
     for (e, t, tag) in &texts {
+        if in_transform(t.order, tag) {
+            continue;
+        }
         let Vec2 { x: vw, y: vh } = size_of(tag);
         // Approximate the text bounds with `size_px * char_count + 1` for width and `size_px` for height.
         let h = t.size_px;
@@ -1555,6 +1603,9 @@ pub struct RenderEntityMap {
     pub opacity_group: std::collections::HashMap<Entity, Entity>,
     /// `main_entity -> render_entity` for [`ExtractedMaskGroup`]; one entry per masked element.
     pub mask_group: std::collections::HashMap<Entity, Entity>,
+    /// `main_entity -> render_entity` for [`ExtractedTransformGroup`]; one entry per transformed
+    /// element.
+    pub transform_group: std::collections::HashMap<Entity, Entity>,
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
@@ -1582,6 +1633,7 @@ pub fn clear_extracted(render: &mut World) {
         set.extend(map.clip.values().copied());
         set.extend(map.opacity_group.values().copied());
         set.extend(map.mask_group.values().copied());
+        set.extend(map.transform_group.values().copied());
         set.extend(map.image.values().copied());
         set.extend(map.svg.values().copied());
         set.extend(map.scrollbar.values().copied());
@@ -1934,6 +1986,16 @@ pub fn parent_scroll_clip_rects(
         let mut oq = main.query_filtered::<Entity, With<OverlayLayer>>();
         oq.iter(main).collect()
     };
+    // A transformed element is not where its box says, so neither it nor what is inside it is
+    // tested against a clip outside it; the clip layer still trims what it paints.
+    let moved: std::collections::HashSet<Entity> = {
+        let mut q = main.query::<(Entity, &crate::transform::ElementTransform)>();
+        q.iter(main)
+            .filter(|(_, x)| !x.is_identity())
+            .map(|(e, _)| e)
+            .collect()
+    };
+    let overlay: std::collections::HashSet<Entity> = overlay.union(&moved).copied().collect();
     let mut out: std::collections::HashMap<Entity, (Vec2, Vec2)> = std::collections::HashMap::new();
     let mut cache: std::collections::HashMap<Entity, Option<(Vec2, Vec2)>> =
         std::collections::HashMap::new();
@@ -2455,6 +2517,130 @@ pub fn extract_opacity_groups(main: &mut World, render: &mut World) {
         }
     }
     render.resource_mut::<RenderEntityMap>().opacity_group = next;
+}
+
+/// Extracts one [`ExtractedTransformGroup`] per visible element whose CSS transform moves anything.
+/// Each carries the element's matrix in window coordinates and the `(start_order, end_order)` bracket
+/// of the paints it moves, which [`crate::node_ir::transform_extracted_to_nodes`] folds into a
+/// [`crate::node_ir::Node::Transform`].
+pub fn extract_transform_groups(main: &mut World, render: &mut World) {
+    use crate::transform::ElementTransform;
+    let mut pairs: Vec<(Entity, ExtractedTransformGroup)> = Vec::new();
+    let any = {
+        let mut q = main.query_filtered::<(), With<ElementTransform>>();
+        q.iter(main).next().is_some()
+    };
+    if any {
+        let (parents, mut depth_cache) = build_parent_map(main);
+        let hidden = hidden_entities(main, &parents);
+        let scroll = parent_scroll_offsets(main, &parents);
+        let overlay: std::collections::HashSet<Entity> = {
+            let mut q = main.query_filtered::<Entity, With<OverlayLayer>>();
+            q.iter(main).collect()
+        };
+        let moved: Vec<(Entity, crate::node_ir::Affine2)> = {
+            let mut q = main.query::<(Entity, &Transform, &ElementTransform)>();
+            q.iter(main)
+                .filter(|(e, _, x)| !hidden.contains(e) && !x.is_identity())
+                .map(|(e, t, x)| {
+                    let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
+                    (e, x.matrix(t.absolute - off, t.size))
+                })
+                .collect()
+        };
+        if !moved.is_empty() {
+            let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
+            for (&e, &p) in &parents {
+                children.entry(p).or_default().push(e);
+            }
+            for (e, matrix) in moved {
+                let own = paint_order_of(e, &parents, &mut depth_cache);
+                let end = max_desc_order(e, &children, &parents, &overlay, &mut depth_cache);
+                pairs.push((
+                    e,
+                    ExtractedTransformGroup {
+                        matrix,
+                        start_order: own.saturating_sub(1),
+                        end_order: end,
+                    },
+                ));
+            }
+        }
+    }
+    // Keyed-upsert against `RenderEntityMap.transform_group`.
+    let prior = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().transform_group);
+    let mut next: HashMap<Entity, Entity> = HashMap::with_capacity(pairs.len());
+    for (main_e, group) in pairs {
+        let reuse = prior
+            .get(&main_e)
+            .copied()
+            .filter(|&re| render.get_entity(re).is_ok());
+        let render_e = match reuse {
+            Some(re) => {
+                if render.get::<ExtractedTransformGroup>(re) != Some(&group) {
+                    render.entity_mut(re).insert(group);
+                }
+                re
+            }
+            None => render.spawn(group).id(),
+        };
+        next.insert(main_e, render_e);
+    }
+    for (main_e, render_e) in &prior {
+        if !next.contains_key(main_e)
+            && let Ok(em) = render.get_entity_mut(*render_e)
+        {
+            em.despawn();
+        }
+    }
+    render.resource_mut::<RenderEntityMap>().transform_group = next;
+}
+
+/// Every element a CSS transform moves: those that carry a non-identity
+/// [`crate::transform::ElementTransform`] and everything inside them. Their untransformed boxes
+/// say nothing about where they show, so the box tests that drop what lies outside a clip or the
+/// viewport pass them by. Empty, and cheap, when nothing is transformed.
+pub fn transformed_entities(
+    main: &mut World,
+    parents: &HashMap<Entity, Entity>,
+) -> std::collections::HashSet<Entity> {
+    use crate::transform::ElementTransform;
+    let roots: std::collections::HashSet<Entity> = {
+        let mut q = main.query::<(Entity, &ElementTransform)>();
+        q.iter(main)
+            .filter(|(_, x)| !x.is_identity())
+            .map(|(e, _)| e)
+            .collect()
+    };
+    if roots.is_empty() {
+        return roots;
+    }
+    let mut memo: HashMap<Entity, bool> = HashMap::new();
+    fn under(
+        e: Entity,
+        parents: &HashMap<Entity, Entity>,
+        roots: &std::collections::HashSet<Entity>,
+        memo: &mut HashMap<Entity, bool>,
+    ) -> bool {
+        if roots.contains(&e) {
+            return true;
+        }
+        if let Some(&v) = memo.get(&e) {
+            return v;
+        }
+        let v = parents
+            .get(&e)
+            .is_some_and(|p| under(*p, parents, roots, memo));
+        memo.insert(e, v);
+        v
+    }
+    let mut out = roots.clone();
+    for &e in parents.keys() {
+        if under(e, parents, &roots, &mut memo) {
+            out.insert(e);
+        }
+    }
+    out
 }
 
 /// Ranks every [`OverlayLayer`] subtree into the top-layer band (`>= OVERLAY_ORDER_BASE`).

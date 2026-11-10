@@ -1178,6 +1178,24 @@ pub struct Attributes {
     pub shadows: Vec<ShadowSpec>,
     /// `opacity="0.5"` - alpha multiplier in `[0, 1]`. Absent = 1.0.
     pub opacity: Option<f32>,
+    /// CSS `transform`: the list of transform functions; `Some(empty)` is
+    /// `none`. Moves what the element paints and where the pointer finds
+    /// it, never its box.
+    pub transform: Option<Vec<crate::transform::TransformFnSpec>>,
+    /// CSS `translate`.
+    pub translate: Option<(
+        crate::transform::LengthPctSpec,
+        crate::transform::LengthPctSpec,
+    )>,
+    /// CSS `rotate`, in degrees.
+    pub rotate: Option<f32>,
+    /// CSS `scale`, per axis.
+    pub scale: Option<(f32, f32)>,
+    /// CSS `transform-origin`; `None` is the center of the border box.
+    pub transform_origin: Option<(
+        crate::transform::LengthPctSpec,
+        crate::transform::LengthPctSpec,
+    )>,
     /// CSS `transition: <property> <duration> [<easing>] [, ...]` declarations. Each entry tweens the property instead of snapping when the value changes.
     /// Animatable in v1: `opacity`, `background-color`/`bg`,
     /// `color`/`text-color`, `border-color`. Layout properties (width,

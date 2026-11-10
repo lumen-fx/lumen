@@ -48,7 +48,7 @@ use crate::native::ExtractedNative;
 use crate::render_world::{
     BackgroundClip, Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedMaskGroup,
     ExtractedOpacityGroup, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
-    ExtractedText, ExtractedWindow, PaintOrder, Rect, RenderWindow,
+    ExtractedText, ExtractedTransformGroup, ExtractedWindow, PaintOrder, Rect, RenderWindow,
 };
 use crate::window::PrimaryWindow;
 use bevy_ecs::entity::Entity;
@@ -575,6 +575,8 @@ enum Bracket {
     Opacity(f32, u64),
     /// A [`Node::Mask`]: the region and what the mask paints.
     Mask(Rect, Arc<Node>),
+    /// A [`Node::Transform`].
+    Transform(Affine2),
 }
 
 impl Bracket {
@@ -592,7 +594,19 @@ impl Bracket {
                 mask,
                 child,
             },
+            Bracket::Transform(matrix) => Node::Transform { matrix, child },
         })
+    }
+
+    /// Among brackets that open and close together, the lower nests outside: a transform moves
+    /// the faded, masked and clipped paints of its element as one.
+    fn nesting(&self) -> u8 {
+        match self {
+            Bracket::Transform(_) => 0,
+            Bracket::Opacity(..) => 1,
+            Bracket::Mask(..) => 2,
+            Bracket::Clip(_) => 3,
+        }
     }
 }
 
@@ -633,6 +647,7 @@ pub fn transform_extracted_to_nodes(
     groups: bevy_ecs::system::Query<(&ExtractedOpacityGroup, Option<&ExtractedWindow>)>,
     masks: bevy_ecs::system::Query<(&ExtractedMaskGroup, Option<&ExtractedWindow>)>,
     scrollbars: bevy_ecs::system::Query<(&ExtractedScrollbar, Option<&ExtractedWindow>)>,
+    transforms: bevy_ecs::system::Query<(&ExtractedTransformGroup, Option<&ExtractedWindow>)>,
 ) {
     // `None` is the primary window: everything a one-window app extracts.
     let mut parts: HashMap<Option<Entity>, WindowParts> = HashMap::new();
@@ -751,6 +766,13 @@ pub fn transform_extracted_to_nodes(
             Bracket::Mask(m.region, m.mask.clone()),
         ));
     }
+    for (t, w) in &transforms {
+        parts.entry(key(w)).or_default().ranges.push((
+            leaf_key(t.start_order),
+            leaf_key(t.end_order),
+            Bracket::Transform(t.matrix),
+        ));
+    }
 
     for (mut window, primary) in &mut windows {
         let key = if primary { None } else { Some(window.window) };
@@ -770,7 +792,11 @@ fn assemble_tree(parts: WindowParts) -> Arc<Node> {
     } = parts;
     entries.sort_by_key(|(k, _)| *k);
     // Ranges sorted by where they open; ranges that open together nest the longer one outside.
-    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    ranges.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(b.1.cmp(&a.1))
+            .then(a.2.nesting().cmp(&b.2.nesting()))
+    });
 
     // Single pass: at each leaf, close any open ranges whose end has passed, then open any ranges whose
     // start the leaf has reached. The result is a flat children Vec carrying the painter-ordered leaves
@@ -1030,6 +1056,45 @@ mod tests {
 
     /// The primary window's tree once the extracted entities in `world` are
     /// assembled.
+    /// A transform wraps its element's paints and its descendants', and
+    /// nests outside an opacity group that brackets the same paints.
+    #[test]
+    fn a_transform_wraps_its_subtree_outside_a_fade() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(solid_rect(2, Vec2::ZERO, Vec2::new(4.0, 4.0)));
+        world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(10.0, 10.0)));
+        world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(4.0, 4.0)));
+        world.spawn(solid_rect(8, Vec2::ZERO, Vec2::new(4.0, 4.0)));
+        let matrix = Affine2::translate(5.0, 0.0);
+        world.spawn(ExtractedOpacityGroup {
+            alpha: 0.5,
+            start_order: 3,
+            end_order: 6,
+            key: 1,
+        });
+        world.spawn(ExtractedTransformGroup {
+            matrix,
+            start_order: 3,
+            end_order: 6,
+        });
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 3, "before, the moved pair, after");
+        let Node::Transform { matrix: m, child } = children[1].as_ref() else {
+            panic!("the transform is outermost, got {:?}", children[1]);
+        };
+        assert_eq!(*m, matrix);
+        let inner = children_of(child);
+        assert!(matches!(inner[0].as_ref(), Node::Opacity { .. }));
+        assert_eq!(
+            children_of(match inner[0].as_ref() {
+                Node::Opacity { child, .. } => child,
+                _ => unreachable!(),
+            })
+            .len(),
+            2
+        );
+    }
+
     fn assemble(world: &mut bevy_ecs::world::World) -> Arc<Node> {
         let window = Entity::from_raw_u32(1).expect("an entity id");
         crate::render_world::spawn_render_window(

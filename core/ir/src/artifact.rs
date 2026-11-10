@@ -168,11 +168,14 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`crate::layout_ir::Attributes`] gains `placeholder_style`, what the
 /// `::placeholder` rules matching an element set.
 ///
+/// `24`: [`crate::layout_ir::Attributes`] gains `transform`, `translate`,
+/// `rotate`, `scale` and `transform-origin`, an element's CSS transform.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 23;
+pub const FORMAT_VERSION: u16 = 24;
 
 /// The navigable page set of a compiled multi-page app.
 ///
