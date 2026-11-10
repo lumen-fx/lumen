@@ -72,7 +72,7 @@ impl FramePatch {
     }
 
     /// Lay `top` over this: every value it declares wins.
-    fn merge(&mut self, top: &FramePatch) {
+    pub fn merge(&mut self, top: &FramePatch) {
         fn put<T: Clone>(slot: &mut Option<T>, top: &Option<T>) {
             if top.is_some() {
                 slot.clone_from(top);

@@ -90,6 +90,12 @@ pub fn portable_app() -> App {
 
     install_http(&mut app);
     install_clipboard(&mut app);
+    // The script functions of the linked capabilities, without the
+    // capabilities: a program compiled for a package that carries one
+    // declares its functions and has to find each of them to load. Nothing
+    // off the page runs them; a page's runtime registers its own.
+    #[cfg(not(target_arch = "wasm32"))]
+    lumen_capability::declare_all(&mut app);
 
     // Key routing only. The pointer, text-editing, IME and file-drop half of
     // the input layer is a native window's; the page's own fields copy and

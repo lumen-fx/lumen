@@ -589,3 +589,111 @@ fn a_scroll_timeline_follows_the_scroll_and_asks_for_no_frames() {
     let seen = h.opacity(v);
     assert!(seen > 0.5 && seen < 1.0, "crossing the view: {seen}");
 }
+
+#[test]
+fn a_script_animation_plays_pauses_reverses_and_reports_its_end() {
+    use lumen_script::{ScriptNs, ScriptValue, call_script_fn};
+    use std::collections::HashMap;
+    let mut h = Harness::new(
+        r#"<root><tile id="box" width="40" height="40"/></root>"#,
+        "",
+    );
+    let b = h.by_id("box");
+    let ns = ScriptNs::Named("animations".to_string());
+    let frame = |o: f64| {
+        ScriptValue::Map(HashMap::from([
+            ("opacity".to_string(), ScriptValue::Str(o.to_string())),
+            (
+                "transform".to_string(),
+                ScriptValue::Str(format!("translateX({}px)", o * 100.0)),
+            ),
+        ]))
+    };
+    let options = ScriptValue::Map(HashMap::from([
+        ("duration".to_string(), ScriptValue::F64(1000.0)),
+        ("fill".to_string(), ScriptValue::Str("forwards".into())),
+    ]));
+    let id = match call_script_fn(
+        &ns,
+        "animate",
+        &[
+            ScriptValue::Str("box".into()),
+            ScriptValue::Array(vec![frame(0.0), frame(1.0)]),
+            options,
+        ],
+    ) {
+        Ok(ScriptValue::I64(id)) => id,
+        other => panic!("animate returned {other:?}"),
+    };
+    let control = |name: &str, extra: Option<ScriptValue>| {
+        let mut args = vec![ScriptValue::I64(id)];
+        args.extend(extra);
+        call_script_fn(&ns, name, &args).expect(name)
+    };
+    h.ticks(1);
+    assert_eq!(h.running(b), 1);
+    control("set_current_time", Some(ScriptValue::F64(500.0)));
+    control("pause", None);
+    h.ticks(2);
+    assert!(
+        near(h.opacity(b), 0.5),
+        "seeked and paused: {}",
+        h.opacity(b)
+    );
+    let tx = h
+        .app
+        .world
+        .get::<ElementTransform>(b)
+        .map(|t| t.functions.clone());
+    assert_eq!(
+        tx,
+        Some(vec![lumen_core::transform::TransformFn::Translate(
+            lumen_core::transform::LengthPct::px(50.0),
+            lumen_core::transform::LengthPct::default()
+        )])
+    );
+    assert_eq!(
+        control("play_state", None),
+        ScriptValue::Str("paused".into())
+    );
+    match control("current_time", None) {
+        ScriptValue::F64(ms) => assert!((ms - 500.0).abs() < 1.0, "{ms}"),
+        other => panic!("{other:?}"),
+    }
+    control("finish", None);
+    h.ticks(2);
+    assert!(near(h.opacity(b), 1.0), "finished, filled forwards");
+    assert_eq!(
+        control("play_state", None),
+        ScriptValue::Str("finished".into())
+    );
+    assert!(h.kinds().contains(&"animationend"));
+    control("reverse", None);
+    control("pause", None);
+    control("set_current_time", Some(ScriptValue::F64(250.0)));
+    h.ticks(2);
+    assert!(
+        near(h.opacity(b), 0.25),
+        "reversed and seeked: {}",
+        h.opacity(b)
+    );
+    assert_eq!(control("playback_rate", None), ScriptValue::F64(-1.0));
+    control("cancel", None);
+    h.ticks(2);
+    assert!(near(h.opacity(b), 1.0), "cancelled: back to its own value");
+    assert_eq!(control("play_state", None), ScriptValue::Str("idle".into()));
+    assert!(h.kinds().contains(&"animationcancel"));
+    assert!(
+        call_script_fn(
+            &ns,
+            "animate",
+            &[
+                ScriptValue::Str("nope".into()),
+                ScriptValue::Array(vec![frame(0.0)]),
+                ScriptValue::Map(HashMap::new()),
+            ],
+        )
+        .is_err(),
+        "an unknown id is an error"
+    );
+}

@@ -25,3 +25,10 @@ lumen-script = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 tracing.workspace = true
+
+# A page plays a script's animation itself, through `element.animate`; the
+# browser half reaches the page's elements through the DOM backend.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+lumen-web-dom = { workspace = true }
+js-sys.workspace = true
+wasm-bindgen.workspace = true

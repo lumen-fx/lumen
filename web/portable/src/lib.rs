@@ -18,6 +18,11 @@
 
 #![warn(missing_docs)]
 
+// Every app assembled here off the page links the capabilities whose script
+// functions it declares; see `portable_app`.
+#[cfg(not(target_arch = "wasm32"))]
+use lumen_animations_capability as _;
+
 pub mod assemble;
 pub mod hosts;
 

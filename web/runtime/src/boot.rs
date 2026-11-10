@@ -99,6 +99,10 @@ async fn start(manifest_url: Option<String>, addons: &JsValue) -> Result<(), Boo
     let foreign = crate::addons::install(&mut app, &manifest, &loaded.artifact.addons, addons)
         .map_err(|e| BootError::Addons(e.to_string()))?;
     app.world.insert_non_send(foreign);
+    // `animations::animate`, which the page plays with its own
+    // `element.animate`; registered before the hosts bind their functions.
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugin(lumen_animations::browser::BrowserAnimationsPlugin);
     // The host goes in before the scene: `on_start` publishes the signals the
     // markup binds to, and the spawner seeds only what nothing has written.
     // A page cannot open a library, so the host module's plugin goes in here.

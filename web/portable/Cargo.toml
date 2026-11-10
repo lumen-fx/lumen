@@ -31,6 +31,14 @@ bevy_ecs.workspace = true
 # because it is the transport for exactly one platform: a server assembles the
 # same app and wants the native client, which its own composition point
 # installs.
+# The script functions the linked capabilities declare, bound in an app
+# assembled off the page: a program compiled against one has to find it to
+# load, though nothing here runs the capability. The animations capability is
+# named so every binary that assembles an app this way links it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lumen-capability = { workspace = true }
+lumen-animations-capability = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 lumen-web-http = { workspace = true }
 # The page's clipboard, behind the scripts' clipboard builtins. Target-gated for

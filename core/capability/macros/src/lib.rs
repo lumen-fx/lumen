@@ -29,13 +29,15 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Expr, LitStr, Token, parse_macro_input};
 
 /// `lumen_capability!("<name>", <phase>, <install>)`, with any of
-/// `preflight = <fn>` and `select = <Select>` after the install entry.
+/// `preflight = <fn>`, `select = <Select>` and `declare = <fn>` after the
+/// install entry.
 struct CapabilityEntry {
     name: LitStr,
     phase: Expr,
     install: Expr,
     preflight: Option<Expr>,
     select: Option<Expr>,
+    declare: Option<Expr>,
 }
 
 impl Parse for CapabilityEntry {
@@ -53,6 +55,7 @@ impl Parse for CapabilityEntry {
         let install: Expr = input.parse()?;
         let mut preflight = None;
         let mut select = None;
+        let mut declare = None;
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             if input.is_empty() {
@@ -63,11 +66,12 @@ impl Parse for CapabilityEntry {
             let slot = match key.to_string().as_str() {
                 "preflight" => &mut preflight,
                 "select" => &mut select,
+                "declare" => &mut declare,
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "the options after the install entry are `preflight = <fn>` and \
-                         `select = <Select>`",
+                        "the options after the install entry are `preflight = <fn>`, \
+                         `select = <Select>` and `declare = <fn>`",
                     ));
                 }
             };
@@ -85,6 +89,7 @@ impl Parse for CapabilityEntry {
             install,
             preflight,
             select,
+            declare,
         })
     }
 }
@@ -101,6 +106,7 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
         install,
         preflight,
         select,
+        declare,
     } = parse_macro_input!(input as CapabilityEntry);
 
     let declared = name.value();
@@ -113,6 +119,10 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
     let register_name = format!("lumen_capability_register_{suffix}");
     let register_fn = Ident::new(&format!("register_{suffix}"), Span::call_site());
     let preflight = match preflight {
+        Some(f) => quote! { ::core::option::Option::Some(#f) },
+        None => quote! { ::core::option::Option::None },
+    };
+    let declare = match declare {
         Some(f) => quote! { ::core::option::Option::Some(#f) },
         None => quote! { ::core::option::Option::None },
     };
@@ -131,6 +141,7 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
                     install: #install,
                     preflight: #preflight,
                     select: #select,
+                    declare: #declare,
                     // The package this expands in, which is the object the
                     // register symbol pulls.
                     crate_name: env!("CARGO_PKG_NAME"),

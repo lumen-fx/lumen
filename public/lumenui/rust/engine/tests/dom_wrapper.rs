@@ -157,3 +157,60 @@ fn window_document_history_namespaces() {
     dom::history::go(-1);
     settle(&mut app);
 }
+
+#[test]
+fn a_node_animates_and_its_handle_controls_it() {
+    use lumenui::animation::{AnimateOptions, Keyframe};
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir(r#"<root><tile id="card" width="40" height="40"/><tile/></root>"#);
+    let (mut app, _window) = build_headless_app(RunOptions::new(&dir)).expect("build headless app");
+    settle(&mut app);
+
+    let card = dom::get_by_id("card").expect("the card");
+    let fade = card
+        .animate(
+            &[
+                Keyframe::new().set("opacity", "0"),
+                Keyframe::new().set("opacity", "1").offset(1.0),
+            ],
+            &AnimateOptions {
+                duration_ms: 1000.0,
+                fill: "forwards".into(),
+                ..AnimateOptions::default()
+            },
+        )
+        .expect("the card animates");
+    fade.pause();
+    fade.set_current_time(500.0);
+    settle(&mut app);
+    assert_eq!(fade.play_state(), "paused");
+    assert!((fade.current_time() - 500.0).abs() < 1.0);
+    let opacity = app
+        .world
+        .query::<(
+            &lumenui::prelude::LumenId,
+            &lumenui::lumen_core::components::Opacity,
+        )>()
+        .iter(&app.world)
+        .find(|(id, _)| id.0 == "card")
+        .map(|(_, o)| o.0);
+    assert!(
+        opacity.is_some_and(|o| (o - 0.5).abs() < 0.01),
+        "halfway: {opacity:?}"
+    );
+    fade.cancel();
+    settle(&mut app);
+    assert_eq!(fade.play_state(), "idle");
+
+    let unnamed = card.next().expect("the second tile");
+    assert!(
+        unnamed
+            .animate(
+                &[Keyframe::new().set("opacity", "0")],
+                &AnimateOptions::default()
+            )
+            .is_err(),
+        "an element with no id cannot be animated"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

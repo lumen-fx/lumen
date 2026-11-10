@@ -243,6 +243,27 @@ end
 Use this rather than a repeating timer for anything visual: a timer fires on a
 wall-clock schedule that has nothing to do with when the app draws.
 
+## Animations
+
+Play keyframes on an element from a script, the Web Animations API's
+`element.animate`. See [animation](../guides/animations.md#from-a-script) for
+how the keyframes and the options read.
+
+| Function | Behaviour |
+| --- | --- |
+| `animations.animate(id, keyframes, options)` | Animate the element with that `id` through `keyframes`, a list of maps of CSS property to value (strings, as in a stylesheet); returns the animation's handle. |
+| `animations.play(a)`, `animations.pause(a)`, `animations.reverse(a)`, `animations.finish(a)`, `animations.cancel(a)` | Control it, as the methods of the same names do on the web. |
+| `animations.set_current_time(a, ms)`, `animations.set_playback_rate(a, rate)` | Seek it, or change its rate (`-1.0` plays it backwards). |
+| `animations.current_time(a)`, `animations.playback_rate(a)`, `animations.play_state(a)` | Read it as of the last frame; the state is `running`, `paused`, `finished`, or `idle` once cancelled. |
+
+The options are a map of `duration` and `delay` in milliseconds, `iterations`
+(negative runs forever), `direction`, `fill` and `easing`; a key left out takes
+the Web Animations default.
+
+```lua
+local a = animations.animate("toast", {{opacity = "0"}, {opacity = "1"}}, {duration = 180.0, fill = "forwards"})
+```
+
 ## Query and traverse the element tree
 
 `Node` is a cheap handle. Reads resolve against the snapshot rebuilt each tick,
@@ -412,7 +433,9 @@ A CSS animation raises `animationstart`, `animationiteration`,
 `animationend` and `animationcancel` on its element, on the desktop and in a
 web build alike. They bubble, cannot be cancelled, and carry
 `animation_name`, `elapsed_time` (seconds) and `pseudo_element` in their
-detail.
+detail. An animation a script started with `animations.animate` raises
+`animationend` and `animationcancel`, with an empty `animation_name` and its
+handle under `animation`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
