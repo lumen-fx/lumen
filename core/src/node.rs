@@ -270,7 +270,7 @@ impl DomIndex {
                 roots.push(r.entity);
             }
         }
-        roots.sort_by_key(|e| e.to_bits());
+        crate::order::sort_by_rank(&mut roots, |e| e.to_bits());
 
         // child_index / sibling_count from each parent's children list;
         // roots take their position among the sorted root list. Indexed so
@@ -324,7 +324,7 @@ impl DomIndex {
 
         // id -> entity, first in document order wins.
         let mut ordered: Vec<usize> = (0..records.len()).collect();
-        ordered.sort_by_key(|&i| records[i].doc_order);
+        crate::order::sort_by_rank(&mut ordered, |&i| u64::from(records[i].doc_order));
         let mut by_id: HashMap<String, Entity> = HashMap::new();
         for &i in &ordered {
             if let Some(id) = &records[i].id {

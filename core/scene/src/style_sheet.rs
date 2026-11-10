@@ -142,9 +142,11 @@ pub fn track_entry_exit_styles(
 /// Mark `root` and everything under it as entering, when the stylesheet
 /// has an `@starting-style` to resolve them against.
 pub fn mark_entering(world: &mut World, root: Entity) {
-    if !world
-        .get_resource::<EntryExitStyles>()
-        .is_some_and(|s| s.starting_style)
+    // A page's browser applies `@starting-style` to what enters it.
+    if cfg!(target_arch = "wasm32")
+        || !world
+            .get_resource::<EntryExitStyles>()
+            .is_some_and(|s| s.starting_style)
     {
         return;
     }
@@ -159,6 +161,16 @@ pub fn mark_entering(world: &mut World, root: Entity) {
         if let Some(kids) = ent.get::<bevy_ecs::hierarchy::Children>() {
             stack.extend(kids.iter());
         }
+    }
+}
+
+/// [`begin_leaving`] as a command, for a system that takes elements out.
+pub struct BeginLeaving(pub Entity);
+
+impl bevy_ecs::system::Command for BeginLeaving {
+    type Out = ();
+    fn apply(self, world: &mut World) {
+        begin_leaving(world, self.0);
     }
 }
 

@@ -20,8 +20,10 @@ use crate::layout_ir::{
     Attributes, BgSpec, CursorSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
     ImageRenderingSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError,
     PlaceholderStyle, PositionSpec, Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec,
-    TextAlignSpec, TextWrapSpec, TrackSizeSpec, TransitionIr, TransitionPropertyIr,
+    TextAlignSpec, TextWrapSpec, TrackSizeSpec,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::layout_ir::{TransitionIr, TransitionPropertyIr};
 use crate::values::{
     bad, parse_bg, parse_color, parse_edges, parse_f32, parse_font_weight, parse_i32,
     parse_inset_edges, parse_inset_term, parse_length,
@@ -969,7 +971,7 @@ fn cascade_one(
                 }
             }
         }
-        var_units.sort_by_key(|d| d.important);
+        lumen_core::order::sort_by_rank(&mut var_units, |d| u64::from(d.important));
         for decl in var_units {
             if let Some(name) = decl.name.strip_prefix("--") {
                 vars.insert(name.to_string(), decl.value.clone());
@@ -1032,7 +1034,7 @@ fn cascade_one(
             units.push((m, decl));
         }
     }
-    units.sort_by_key(|(_, decl)| decl.important);
+    lumen_core::order::sort_by_rank(&mut units, |(_, decl)| u64::from(decl.important));
 
     // Which origin last set the plain `bg`, and which last set a
     // pointer-state `bg`. The two land in different `Attributes` slots, so
@@ -2252,9 +2254,12 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.transition_timing.is_some() {
         target.transition_timing = inline.transition_timing.clone();
     }
+    // A page's runtime stores no motion (see `is_motion_property`).
+    #[cfg(not(target_arch = "wasm32"))]
     if !inline.animation.is_empty() {
         target.animation.overlay(&inline.animation);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if inline.state_animations != Default::default() {
         let (t, i) = (&mut target.state_animations, &inline.state_animations);
         t.hover.overlay(&i.hover);
@@ -3399,6 +3404,124 @@ fn apply_placeholder_declaration(
 /// Returns `Ok(true)` when the declaration was recognised (applied or
 /// deliberately consumed for the pseudo state), `Ok(false)` for an
 /// unknown property so the caller can warn.
+/// Whether `name` (canonical) is one of the motion properties: the
+/// transforms, the transitions and the animations.
+fn is_motion_property(name: &str) -> bool {
+    matches!(
+        name,
+        "transform"
+            | "translate"
+            | "rotate"
+            | "scale"
+            | "transform-origin"
+            | "transition"
+            | "transition-property"
+            | "transition-delay"
+            | "transition-duration"
+            | "transition-timing-function"
+            | "animation"
+            | "animation-name"
+            | "animation-duration"
+            | "animation-timing-function"
+            | "animation-delay"
+            | "animation-iteration-count"
+            | "animation-direction"
+            | "animation-fill-mode"
+            | "animation-play-state"
+            | "animation-composition"
+            | "animation-timeline"
+    )
+}
+
+/// Apply one of the [motion properties](is_motion_property).
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_motion_declaration(
+    ctx: &str,
+    name: &str,
+    value: &str,
+    attrs: &mut Attributes,
+) -> Result<(), ParseError> {
+    match name {
+        "transform" => attrs.transform = Some(crate::transform::parse_transform(ctx, name, value)?),
+        "translate" => attrs.translate = Some(crate::transform::parse_translate(ctx, name, value)?),
+        "rotate" => attrs.rotate = Some(crate::transform::parse_rotate(ctx, name, value)?),
+        "scale" => attrs.scale = Some(crate::transform::parse_scale(ctx, name, value)?),
+        "transform-origin" => {
+            attrs.transform_origin =
+                Some(crate::transform::parse_transform_origin(ctx, name, value)?)
+        }
+        "transition" => {
+            attrs.transitions = parse_transition(ctx, name, value)?;
+        }
+        // Longhand trio - combined by `Attributes::effective_transitions`
+        // (duration / timing cycle over the property list per CSS).
+        "transition-property" => {
+            let v = value.trim();
+            if v == "none" {
+                attrs.transition_property = Some(Vec::new());
+            } else {
+                let mut props = Vec::new();
+                for entry in v.split(',') {
+                    let entry = entry.trim();
+                    if entry.is_empty() {
+                        continue;
+                    }
+                    props.extend(transition_properties_for(entry));
+                }
+                attrs.transition_property = Some(props);
+            }
+        }
+        // Parsed and ignored: a transition always starts on the tick the
+        // value changes. Kept out of the unknown-property path so the
+        // warning says what happened, and so it matches the shorthand,
+        // which also warns on a delay term and drops it.
+        "transition-delay" => {
+            tracing::warn!(
+                target: "lumenc::css",
+                "transition-delay '{}' ignored - transitions start immediately",
+                value.trim()
+            );
+        }
+        "transition-duration" => {
+            let mut out = Vec::new();
+            for entry in value.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                out.push(parse_duration_ms(ctx, name, entry)?);
+            }
+            attrs.transition_duration = Some(out);
+        }
+        "transition-timing-function" => {
+            let mut out = Vec::new();
+            for entry in split_top_level_commas(value) {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                out.push(parse_easing(ctx, name, entry)?);
+            }
+            attrs.transition_timing = Some(out);
+        }
+        "animation"
+        | "animation-name"
+        | "animation-duration"
+        | "animation-timing-function"
+        | "animation-delay"
+        | "animation-iteration-count"
+        | "animation-direction"
+        | "animation-fill-mode"
+        | "animation-play-state"
+        | "animation-composition"
+        | "animation-timeline" => {
+            attrs.animation.apply(ctx, name, value)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn apply_decl_for_pseudo(
     ctx: &str,
     name: &str,
@@ -3417,6 +3540,9 @@ fn apply_decl_for_pseudo(
     }
     if !pseudo.any() {
         return apply_declaration(ctx, name, value, attrs);
+    }
+    if is_motion_property(name) && cfg!(target_arch = "wasm32") {
+        return Ok(true);
     }
     // State-routed properties. `:focus-visible` shares the `:focus`
     // slots for everything except `outline` (which gets its own
@@ -3539,6 +3665,7 @@ fn apply_decl_for_pseudo(
             }
             Ok(true)
         }
+        #[cfg(not(target_arch = "wasm32"))]
         animation if animation.starts_with("animation") => {
             let slot = if pseudo.active {
                 &mut attrs.state_animations.active
@@ -3813,6 +3940,13 @@ fn apply_declaration(
     attrs: &mut Attributes,
 ) -> Result<bool, ParseError> {
     let name = canonical_property_name(name);
+    if is_motion_property(name) {
+        // A page's browser plays its motion from the stylesheet it was
+        // given, and nothing in the runtime there reads these.
+        #[cfg(not(target_arch = "wasm32"))]
+        apply_motion_declaration(ctx, name, value, attrs)?;
+        return Ok(true);
+    }
     // No more `is_none()` guards - cascade ordering at the caller has
     // already arranged last-wins per CSS Cascade-5 section 6.4.4.
     match name {
@@ -4417,81 +4551,6 @@ fn apply_declaration(
         "mask-position" => {
             attrs.mask_position = Some(crate::values::parse_mask_position(ctx, name, value)?)
         }
-        "transform" => attrs.transform = Some(crate::transform::parse_transform(ctx, name, value)?),
-        "translate" => attrs.translate = Some(crate::transform::parse_translate(ctx, name, value)?),
-        "rotate" => attrs.rotate = Some(crate::transform::parse_rotate(ctx, name, value)?),
-        "scale" => attrs.scale = Some(crate::transform::parse_scale(ctx, name, value)?),
-        "transform-origin" => {
-            attrs.transform_origin =
-                Some(crate::transform::parse_transform_origin(ctx, name, value)?)
-        }
-        "transition" => {
-            attrs.transitions = parse_transition(ctx, name, value)?;
-        }
-        // Longhand trio - combined by `Attributes::effective_transitions`
-        // (duration / timing cycle over the property list per CSS).
-        "transition-property" => {
-            let v = value.trim();
-            if v == "none" {
-                attrs.transition_property = Some(Vec::new());
-            } else {
-                let mut props = Vec::new();
-                for entry in v.split(',') {
-                    let entry = entry.trim();
-                    if entry.is_empty() {
-                        continue;
-                    }
-                    props.extend(transition_properties_for(entry));
-                }
-                attrs.transition_property = Some(props);
-            }
-        }
-        // Parsed and ignored: a transition always starts on the tick the
-        // value changes. Kept out of the unknown-property path so the
-        // warning says what happened, and so it matches the shorthand,
-        // which also warns on a delay term and drops it.
-        "transition-delay" => {
-            tracing::warn!(
-                target: "lumenc::css",
-                "transition-delay '{}' ignored - transitions start immediately",
-                value.trim()
-            );
-        }
-        "transition-duration" => {
-            let mut out = Vec::new();
-            for entry in value.split(',') {
-                let entry = entry.trim();
-                if entry.is_empty() {
-                    continue;
-                }
-                out.push(parse_duration_ms(ctx, name, entry)?);
-            }
-            attrs.transition_duration = Some(out);
-        }
-        "transition-timing-function" => {
-            let mut out = Vec::new();
-            for entry in split_top_level_commas(value) {
-                let entry = entry.trim();
-                if entry.is_empty() {
-                    continue;
-                }
-                out.push(parse_easing(ctx, name, entry)?);
-            }
-            attrs.transition_timing = Some(out);
-        }
-        "animation"
-        | "animation-name"
-        | "animation-duration"
-        | "animation-timing-function"
-        | "animation-delay"
-        | "animation-iteration-count"
-        | "animation-direction"
-        | "animation-fill-mode"
-        | "animation-play-state"
-        | "animation-composition"
-        | "animation-timeline" => {
-            attrs.animation.apply(ctx, name, value)?;
-        }
         // CSS Scrollbars Styling Level 1 - overlay-bar styling for
         // `<scroll>` containers. `scrollbar-color: auto` clears back to
         // the runtime default.
@@ -4816,6 +4875,7 @@ pub const DEFAULT_EASING: EasingIr = EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0)
 /// per the CSS rule that such entries are ignored rather than fatal.
 /// Geometry props (width / height / padding ...) are excluded on
 /// purpose: animating them would re-run layout every frame.
+#[cfg(not(target_arch = "wasm32"))]
 fn transition_properties_for(term: &str) -> Vec<TransitionPropertyIr> {
     if term == "all" {
         return TransitionPropertyIr::ALL.to_vec();
@@ -4834,6 +4894,7 @@ fn transition_properties_for(term: &str) -> Vec<TransitionPropertyIr> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<TransitionIr>, ParseError> {
     let mut out = Vec::new();
     for entry in split_top_level_commas(value) {

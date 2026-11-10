@@ -170,7 +170,7 @@ pub fn query_entities(
             hits.push((rec.doc_order, rec.entity));
         }
     }
-    hits.sort_by_key(|(order, _)| *order);
+    lumen_core::order::sort_by_rank(&mut hits, |(order, _)| u64::from(*order));
     Ok(hits.into_iter().map(|(_, e)| e).collect())
 }
 

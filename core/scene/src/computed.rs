@@ -304,19 +304,25 @@ impl ComputedStyle {
             text,
             opacity,
             z_index: attrs.z_index,
-            transform: attrs.element_transform(),
+            transform: (!PAGE).then(|| attrs.element_transform()).flatten(),
             interaction: Option::<Interaction>::from(attrs),
             state_visuals,
-            transitions: attrs
-                .effective_transitions()
-                .iter()
-                .map(Into::into)
-                .collect(),
-            animation: (!attrs.animation.is_empty())
+            transitions: if PAGE {
+                Vec::new()
+            } else {
+                attrs
+                    .effective_transitions()
+                    .iter()
+                    .map(Into::into)
+                    .collect()
+            },
+            animation: (!PAGE && !attrs.animation.is_empty())
                 .then(|| crate::style_sheet::AnimationDeclarations(attrs.animation.clone())),
-            state_animations: (attrs.state_animations != Default::default())
+            state_animations: (!PAGE && attrs.state_animations != Default::default())
                 .then(|| crate::style_sheet::StateAnimations(attrs.state_animations.clone())),
-            important: {
+            important: if PAGE {
+                None
+            } else {
                 let fields = attrs
                     .important
                     .iter()
@@ -525,7 +531,9 @@ impl ComputedStyle {
     pub fn commit(mut self, ent: &mut EntityWorldMut<'_>, animate: bool) {
         let specs = TransitionSpecs(std::mem::take(&mut self.transitions));
         let fresh = self.holdable();
-        start_transitions(ent, &specs, &fresh, animate);
+        if !PAGE {
+            start_transitions(ent, &specs, &fresh, animate);
+        }
 
         let held = match ent.get_mut::<StyleOverrides>() {
             Some(mut ov) if !ov.is_empty() => Some(ov.rebase(&fresh)),
@@ -590,6 +598,12 @@ impl ComputedStyle {
         }
     }
 }
+
+/// Whether this is the runtime in a page, whose browser plays the
+/// transforms, transitions and animations of the stylesheet itself. There
+/// the cascade's motion values are dropped where they would become
+/// components, since nothing in the page's runtime reads them.
+const PAGE: bool = cfg!(target_arch = "wasm32");
 
 /// The property groups a `transition` can move, in the order they start.
 const TRANSITION_FIELDS: [StyleFields; 8] = [
