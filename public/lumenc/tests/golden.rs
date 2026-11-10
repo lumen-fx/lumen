@@ -887,6 +887,36 @@ fn golden_opacity_nesting() {
     );
 }
 
+/// CSS transforms: a rotated tile with a border, text and a drop shadow, a
+/// translated one, a scaled one about its corner, and a rotated
+/// `overflow: hidden` box whose clip turns with it. Layout is untouched,
+/// so the column keeps its spacing.
+#[test]
+fn golden_transforms() {
+    run_case(
+        "transforms",
+        r##"<root skin="default" bg="#11141b">
+  <row padding="40" gap="40">
+    <column class="spin" width="90px" height="60px" bg="#7aa2f7" radius="8">
+      <label text="Turn" />
+    </column>
+    <tile class="slide" width="60px" height="60px" bg="#9ece6a" radius="6" />
+    <tile class="grow" width="60px" height="60px" bg="#e0af68" />
+  </row>
+  <row padding="40">
+    <column class="clip" width="120px" height="70px" bg="#24283b">
+      <tile width="200px" height="30px" bg="#f7768e" />
+    </column>
+  </row>
+</root>"##,
+        r#".spin { rotate: 20deg; border: 2px solid #c0caf5; box-shadow: 0 6 12 #000a; }
+.slide { transform: translate(10px, 50%) rotate(45deg); }
+.grow { scale: 1.4; transform-origin: top left; }
+.clip { overflow: hidden; transform: rotate(-12deg) skewX(10deg); }"#,
+        &no_drive,
+    );
+}
+
 // --- The dock module --------------------------------------------------------
 
 /// The manifest line that loads the dock module.

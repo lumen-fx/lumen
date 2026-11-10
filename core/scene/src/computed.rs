@@ -109,6 +109,9 @@ pub struct ComputedStyle {
     pub opacity: Option<f32>,
     /// Sibling paint order.
     pub z_index: Option<i32>,
+    /// `transform` and the individual transform properties; absent is
+    /// untransformed.
+    pub transform: Option<lumen_core::transform::ElementTransform>,
     /// Hover / press tints, focus rings, state borders.
     pub interaction: Option<Interaction>,
     /// `:hover` / `:focus` / `:active` / `:drag-over` / `:disabled` patches.
@@ -293,6 +296,7 @@ impl ComputedStyle {
             text,
             opacity,
             z_index: attrs.z_index,
+            transform: attrs.element_transform(),
             interaction: Option::<Interaction>::from(attrs),
             state_visuals,
             transitions: attrs
@@ -443,6 +447,7 @@ impl ComputedStyle {
         if let Some(z) = self.z_index {
             ent.insert(ZIndex(z));
         }
+        insert_some(ent, self.transform);
         if let Some(ix) = self.interaction {
             ent.insert(ix);
         }
@@ -659,6 +664,7 @@ impl ComputedStyle {
         put(ent, self.text);
         put(ent, self.opacity.map(Opacity));
         put(ent, self.z_index.map(ZIndex));
+        put(ent, self.transform);
         put(ent, self.interaction);
         put(ent, self.state_visuals);
         put(ent, self.scrollbar);

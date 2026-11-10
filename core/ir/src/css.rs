@@ -2168,6 +2168,21 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.opacity.is_some() {
         target.opacity = inline.opacity;
     }
+    if inline.transform.is_some() {
+        target.transform = inline.transform.clone();
+    }
+    if inline.translate.is_some() {
+        target.translate = inline.translate;
+    }
+    if inline.rotate.is_some() {
+        target.rotate = inline.rotate;
+    }
+    if inline.scale.is_some() {
+        target.scale = inline.scale;
+    }
+    if inline.transform_origin.is_some() {
+        target.transform_origin = inline.transform_origin;
+    }
     if inline.image_fit.is_some() {
         target.image_fit = inline.image_fit;
     }
@@ -3563,6 +3578,11 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "aspect-ratio",
     "opacity",
     "disabled-opacity",
+    "transform",
+    "translate",
+    "rotate",
+    "scale",
+    "transform-origin",
     "shadow",
     "box-shadow",
     "fit",
@@ -4308,6 +4328,14 @@ fn apply_declaration(
         }
         "mask-position" => {
             attrs.mask_position = Some(crate::values::parse_mask_position(ctx, name, value)?)
+        }
+        "transform" => attrs.transform = Some(crate::transform::parse_transform(ctx, name, value)?),
+        "translate" => attrs.translate = Some(crate::transform::parse_translate(ctx, name, value)?),
+        "rotate" => attrs.rotate = Some(crate::transform::parse_rotate(ctx, name, value)?),
+        "scale" => attrs.scale = Some(crate::transform::parse_scale(ctx, name, value)?),
+        "transform-origin" => {
+            attrs.transform_origin =
+                Some(crate::transform::parse_transform_origin(ctx, name, value)?)
         }
         "transition" => {
             attrs.transitions = parse_transition(ctx, name, value)?;

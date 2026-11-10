@@ -1425,6 +1425,7 @@ type HitNode = (
     Has<lumen_core::components::Disabled>,
     Has<lumen_core::render_world::OverlayLayer>,
     Has<lumen_core::window::WindowOf>,
+    Option<&'static lumen_core::transform::ElementTransform>,
 );
 
 /// The elements a [`HitTree`] walk starts from: those with no parent that
@@ -1453,8 +1454,9 @@ struct HitScope<'a> {
 #[derive(Clone, Copy)]
 pub struct HitFrame {
     entity: Entity,
-    /// The ancestors' scroll offsets, summed up to the surface root.
-    scroll: Vec2,
+    /// The pointer in the coordinates the element is laid out in: the window position with the
+    /// ancestors' scroll offsets added and their transforms undone, up to the surface root.
+    at: Vec2,
     /// An ancestor hides the element (stops at a surface root).
     hidden: bool,
     /// The pointer passes through: the nearest declared `pointer-events`.
@@ -1495,15 +1497,25 @@ impl HitTree<'_, '_> {
         stack.clear();
         stack.extend(roots.into_iter().map(|entity| HitFrame {
             entity,
-            scroll: Vec2::ZERO,
+            at: p,
             hidden: false,
             through: false,
             clipped: false,
             overlay: None,
         }));
         while let Some(f) = stack.pop() {
-            let Ok((t, children, offset, style, visible, events, disabled, overlay, surface)) =
-                self.nodes.get(f.entity)
+            let Ok((
+                t,
+                children,
+                offset,
+                style,
+                visible,
+                events,
+                disabled,
+                overlay,
+                surface,
+                moved,
+            )) = self.nodes.get(f.entity)
             else {
                 continue;
             };
@@ -1522,11 +1534,21 @@ impl HitTree<'_, '_> {
                 continue;
             }
             // A surface root's ancestors neither scroll nor clip it.
-            let (scroll, clipped) = if surface {
-                (Vec2::ZERO, false)
+            let (mut pt, mut clipped) = if surface {
+                (p, false)
             } else {
-                (f.scroll, f.clipped)
+                (f.at, f.clipped)
             };
+            // A transformed element is found where it shows: undo its matrix on the pointer. One
+            // that collapses to a line or a point shows nowhere, and neither does what is in it.
+            if let (Some(t), Some(x)) = (t, moved)
+                && !x.is_identity()
+            {
+                match x.matrix(t.absolute, t.size).inverse() {
+                    Some(inv) => pt = inv.apply(pt),
+                    None => clipped = true,
+                }
+            }
             let through = match events {
                 Some(e) => *e == lumen_core::input::PointerEvents::None,
                 None => f.through,
@@ -1534,9 +1556,9 @@ impl HitTree<'_, '_> {
             let overlay = if overlay { Some(f.entity) } else { f.overlay };
             let mut clips_children = clipped;
             if let Some(t) = t {
-                let origin = t.absolute - scroll;
-                let inside_x = p.x >= origin.x && p.x < origin.x + t.size.x;
-                let inside_y = p.y >= origin.y && p.y < origin.y + t.size.y;
+                let origin = t.absolute;
+                let inside_x = pt.x >= origin.x && pt.x < origin.x + t.size.x;
+                let inside_y = pt.y >= origin.y && pt.y < origin.y + t.size.y;
                 if inside_x
                     && inside_y
                     && !hidden
@@ -1580,10 +1602,10 @@ impl HitTree<'_, '_> {
             let Some(children) = children else {
                 continue;
             };
-            let scroll = scroll + offset.map_or(Vec2::ZERO, |o| o.0);
+            let pt = pt + offset.map_or(Vec2::ZERO, |o| o.0);
             let frame = |entity| HitFrame {
                 entity,
-                scroll,
+                at: pt,
                 hidden,
                 through,
                 clipped: clips_children,
@@ -2760,6 +2782,75 @@ mod clip_hit_tests {
             world.get::<Hovered>(row).is_some(),
             "row scrolled into the clip box must hit at its visual position"
         );
+    }
+
+    /// A transformed element is hit where it paints, not at its box, and
+    /// what is inside it moves with it.
+    #[test]
+    fn a_transformed_element_hits_where_it_shows() {
+        use lumen_core::transform::{ElementTransform, LengthPct};
+        // A card laid out at x 0..100 that shows at x 200..300, with a label
+        // laid out at x 40..60 inside it, which shows at x 240..260.
+        let hovered = |x: f32, y: f32, moved: ElementTransform| {
+            let mut world = world_with_pointer(x, y);
+            let card = world
+                .spawn((
+                    Transform::new(Vec2::ZERO, Vec2::new(100.0, 40.0)),
+                    Visuals::default(),
+                    moved,
+                ))
+                .id();
+            let label = world
+                .spawn((
+                    Transform::new(Vec2::new(40.0, 0.0), Vec2::new(20.0, 20.0)),
+                    Visuals::default(),
+                    ChildOf(card),
+                ))
+                .id();
+            world.run_system_once(hit_test).unwrap();
+            (
+                world.get::<Hovered>(card).is_some(),
+                world.get::<Hovered>(label).is_some(),
+            )
+        };
+        let slid = ElementTransform {
+            translate: (LengthPct::px(200.0), LengthPct::default()),
+            ..ElementTransform::default()
+        };
+        assert_eq!(hovered(290.0, 10.0, slid.clone()), (true, false));
+        assert_eq!(hovered(250.0, 10.0, slid.clone()), (false, true));
+        assert_eq!(
+            hovered(50.0, 10.0, slid),
+            (false, false),
+            "nothing is where the box would have been"
+        );
+
+        // A square turned 45 degrees about its center misses the corner of
+        // its box that turned away, and is hit at its center.
+        let turned = ElementTransform {
+            rotate: 45.0,
+            ..ElementTransform::default()
+        };
+        let mut world = world_with_pointer(3.0, 3.0);
+        let square = world
+            .spawn((
+                Transform::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                Visuals::default(),
+                turned.clone(),
+            ))
+            .id();
+        world.run_system_once(hit_test).unwrap();
+        assert!(world.get::<Hovered>(square).is_none());
+        let mut world = world_with_pointer(50.0, 50.0);
+        let square = world
+            .spawn((
+                Transform::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                Visuals::default(),
+                turned,
+            ))
+            .id();
+        world.run_system_once(hit_test).unwrap();
+        assert!(world.get::<Hovered>(square).is_some());
     }
 
     /// `overflow: hidden` (non-scroll) clips the same way.

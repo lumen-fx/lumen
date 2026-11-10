@@ -103,6 +103,9 @@ enum Value {
     AsIs,
     /// With bare numbers written as pixel lengths.
     Length,
+    /// A `transform` list: bare numbers become pixels inside the translate
+    /// functions only, since every other function takes plain numbers.
+    Transform,
 }
 
 /// Properties that become one declaration under a possibly different
@@ -155,6 +158,11 @@ const PLAIN: &[(&str, &str, Value)] = &[
     // placement; the entry here names the property for a transition list.
     ("bg", "background", Value::AsIs),
     ("opacity", "opacity", Value::AsIs),
+    ("transform", "transform", Value::Transform),
+    ("translate", "translate", Value::Length),
+    ("rotate", "rotate", Value::AsIs),
+    ("scale", "scale", Value::AsIs),
+    ("transform-origin", "transform-origin", Value::Length),
     ("shadow", "box-shadow", Value::Length),
     ("box-shadow", "box-shadow", Value::Length),
     ("fit", "object-fit", Value::AsIs),
@@ -383,13 +391,14 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
                 let value = match form {
                     Value::AsIs => value.to_string(),
                     Value::Length => lengths(value),
+                    Value::Transform => transform_lengths(value),
                 };
                 return Emission::one(css, value);
             }
             if let Some((_, form)) = KNOBS.iter().find(|(knob, _)| *knob == name) {
                 let value = match form {
                     Value::AsIs => value.to_string(),
-                    Value::Length => lengths(value),
+                    Value::Length | Value::Transform => lengths(value),
                 };
                 return Emission::CustomProp(WebDecl::new(
                     format!("{LM_PROPERTY_PREFIX}{name}"),
@@ -583,6 +592,31 @@ pub fn lengths(value: &str) -> String {
     out
 }
 
+/// [`lengths`] for a `transform` list: only the arguments of the translate
+/// functions are lengths, so only they take the unit.
+pub fn transform_lengths(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 8);
+    let mut rest = value;
+    while let Some(open) = rest.find('(') {
+        let name = &rest[..open];
+        let Some(close) = rest[open..].find(')').map(|i| open + i) else {
+            break;
+        };
+        out.push_str(name);
+        out.push('(');
+        let args = &rest[open + 1..close];
+        if name.trim().to_ascii_lowercase().starts_with("translate") {
+            out.push_str(&lengths(args));
+        } else {
+            out.push_str(args);
+        }
+        out.push(')');
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn push_term(out: &mut String, term: &mut String) {
     out.push_str(term);
     if is_number(term) {
@@ -707,6 +741,15 @@ mod tests {
             "--lm-bg-size: contain; --lm-bg-position: center",
         ),
         ("opacity", "0.5", "opacity: 0.5"),
+        (
+            "transform",
+            "translate(4, 50%) scale(2) rotate(45deg)",
+            "transform: translate(4px, 50%) scale(2) rotate(45deg)",
+        ),
+        ("translate", "4 -2", "translate: 4px -2px"),
+        ("rotate", "30deg", "rotate: 30deg"),
+        ("scale", "1.5", "scale: 1.5"),
+        ("transform-origin", "left 8", "transform-origin: left 8px"),
         ("shadow", "0 2 6 #0008", "box-shadow: 0px 2px 6px #0008"),
         (
             "box-shadow",
