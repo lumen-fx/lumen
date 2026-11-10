@@ -1210,11 +1210,12 @@ pub struct Attributes {
     /// CSS `transition-timing-function` longhand - comma list of easing
     /// curves, cycled over the property list.
     pub transition_timing: Option<Vec<EasingIr>>,
-    /// CSS `animation` and its longhands.
-    pub animation: crate::animation::AnimationDeclsIr,
+    /// CSS `animation` and its longhands. Boxed, as the state ones are, so
+    /// an attribute bag a recursive tree walk holds stays small.
+    pub animation: Box<crate::animation::AnimationDeclsIr>,
     /// The `animation-*` longhands state rules set (`:hover { animation:
     /// ... }`), applied while the element is in that state.
-    pub state_animations: StateAnimationsIr,
+    pub state_animations: Box<StateAnimationsIr>,
     /// The properties an `!important` declaration set, in their canonical
     /// spelling: what an animation leaves alone, as CSS ranks important
     /// declarations above animations.
