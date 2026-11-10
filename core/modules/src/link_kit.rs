@@ -590,6 +590,7 @@ mod tests {
             phase: lumen_capability::Phase::Platform,
             install: nothing,
             preflight: None,
+            declare: None,
             select: lumen_capability::Select::OnUse(&["tray_icon"]),
             crate_name: "lumen-os-tray-capability",
         });

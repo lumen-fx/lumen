@@ -117,7 +117,7 @@ pub fn module_surface(
 }
 
 /// `f` with a body that answers the zero of its declared return type.
-#[cfg(feature = "modules")]
+#[cfg(any(feature = "modules", feature = "runtime-parse"))]
 fn answering_zero(f: &lumen_script::ScriptFn) -> lumen_script::ScriptFn {
     let zero = zero_of(&f.sig.ret);
     let mut declared = f.clone();
@@ -126,7 +126,7 @@ fn answering_zero(f: &lumen_script::ScriptFn) -> lumen_script::ScriptFn {
 }
 
 /// The zero of a declared type.
-#[cfg(feature = "modules")]
+#[cfg(any(feature = "modules", feature = "runtime-parse"))]
 fn zero_of(ty: &lumen_script::ScriptTy) -> lumen_script::ScriptValue {
     use lumen_script::{ScriptTy, ScriptValue};
     match ty {
@@ -142,14 +142,65 @@ fn zero_of(ty: &lumen_script::ScriptTy) -> lumen_script::ScriptValue {
 }
 
 /// The functions a compile declares: the add-ons' functions, bound to the
-/// body every target without a page binds, and the modules' functions as
-/// [`ModuleSurface`] holds them. A compiler declares them; nothing a run
-/// registers comes from here, since a run binds the module's own.
+/// body every target without a page binds, the functions of the linked
+/// capabilities the app at `dir` is packaged with (see [`capability_fns`]),
+/// and the modules' functions as [`ModuleSurface`] holds them. A compiler
+/// declares them; nothing a run registers comes from here, since a run binds
+/// the module's own.
 #[cfg(feature = "runtime-parse")]
-fn declared_fns(deps: &CompileDeps) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
+fn declared_fns(
+    deps: &CompileDeps,
+    dir: &Path,
+    cfg: &crate::config::LumenToml,
+) -> Result<Vec<lumen_script::ScriptFn>, RunError> {
     let mut fns = addon_stubs(&deps.addons)?;
+    fns.extend(capability_fns(Some((dir, cfg))));
     fns.extend(deps.modules.fns.iter().cloned());
     Ok(fns)
+}
+
+/// The functions the capabilities this binary links declare to scripts,
+/// each answering the zero of its type, as a module's do.
+///
+/// With an app, only the capabilities a package of that app carries count:
+/// its `[capabilities]` table, else each capability's own rule against the
+/// app's sources, the choice a static package makes. A program declares
+/// every function it is compiled against and a runtime must bind them all,
+/// so a capability a package leaves out must not be declared to its program.
+/// Without an app, every one counts, which is what reading a compiled
+/// program back needs: binding more than it declares costs nothing.
+#[cfg(feature = "runtime-parse")]
+fn capability_fns(
+    app_dir: Option<(&Path, &crate::config::LumenToml)>,
+) -> Vec<lumen_script::ScriptFn> {
+    use lumen_modules::link_kit::{KitCapability, select_capabilities};
+    let sources = app_dir.map(|(dir, _)| crate::config::app_sources(dir));
+    let mut app = App::new();
+    for capability in lumen_capability::registered() {
+        let Some(declare) = capability.declare else {
+            continue;
+        };
+        if let (Some((_, cfg)), Some(sources)) = (app_dir, sources.as_deref()) {
+            let kit = [KitCapability::from(&capability)];
+            let requested: std::collections::BTreeMap<String, bool> = cfg
+                .capabilities
+                .0
+                .get(capability.name)
+                .map(|&on| (capability.name.to_string(), on))
+                .into_iter()
+                .collect();
+            let carried = select_capabilities(&kit, sources, &cfg.raw, &requested, false)
+                .is_ok_and(|selected| !selected.is_empty());
+            if !carried {
+                continue;
+            }
+        }
+        declare(&mut app);
+    }
+    app.world
+        .get_resource::<lumen_script::ScriptFnRegistry>()
+        .map(|r| r.fns().iter().map(answering_zero).collect())
+        .unwrap_or_default()
 }
 
 /// The add-ons' functions alone, bound to the body every target without a
@@ -206,7 +257,7 @@ pub fn compile_app_with_skin(
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     lumen_modules::register_module_tags(&deps.tags);
-    let stubs = declared_fns(deps)?;
+    let stubs = declared_fns(deps, dir, &cfg)?;
     let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
@@ -428,7 +479,7 @@ fn hosts_of(dir: &Path, modules: &[String]) -> ScriptLanguages {
 ///
 /// `dir` is the app the program belongs to. `addons` are the browser add-ons
 /// the app was compiled against; their functions are declared in the program,
-/// so reading it back binds them too.
+/// so reading it back binds them too, as it binds the linked capabilities'.
 #[cfg(all(feature = "runtime-parse", feature = "modules"))]
 #[must_use]
 pub fn script_exports(
@@ -442,10 +493,11 @@ pub fn script_exports(
     }
     let hosts = hosts_of(dir, std::slice::from_ref(&script.module));
     let read = hosts.get(&script.engine)?.image_exports?;
-    let fns = match addon_stubs(addons) {
+    let mut fns = match addon_stubs(addons) {
         Ok(fns) => fns,
         Err(e) => return Some(Err(e.to_string())),
     };
+    fns.extend(capability_fns(None));
     Some(read(bytecode, &fns))
 }
 
@@ -547,7 +599,15 @@ pub fn check_app(
                 )
             )));
         };
-        check_per_target(check, &source, &uri, &script.map, &layout.lib_dir, targets)?;
+        check_per_target(
+            check,
+            &source,
+            &uri,
+            &script.map,
+            &layout.lib_dir,
+            targets,
+            (dir, &cfg),
+        )?;
     }
     Ok(CheckReport {
         element_count: count_elements(&ir.root),
@@ -597,10 +657,11 @@ fn check_per_target(
     source_map: &lumen_ir::source_map::SourceMap,
     lib_dir: &Path,
     targets: &[CompileDeps],
+    (dir, cfg): (&Path, &crate::config::LumenToml),
 ) -> Result<(), RunError> {
     let mut failures = Vec::new();
     for deps in targets {
-        let stubs = declared_fns(deps)?;
+        let stubs = declared_fns(deps, dir, cfg)?;
         let against = ScriptCompile {
             uri,
             source_map,

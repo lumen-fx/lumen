@@ -27,6 +27,8 @@ lumen-scene = { workspace = true }
 # The browser as a render backend: adopting the prerendered document, keeping
 # it in step with the world, and turning DOM events into Lumen events.
 lumen-web-dom = { workspace = true }
+# A script's `animations::animate`, played by the page's own animations.
+lumen-animations = { workspace = true }
 # The app a page runs, and the script hosts that run its scripts: everything
 # about a Lumen app that is not about the platform it runs on.
 lumen-portable = { workspace = true }

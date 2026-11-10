@@ -3581,13 +3581,16 @@ version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
+ "js-sys",
  "lumen-capability",
  "lumen-core",
  "lumen-ir",
  "lumen-primitives",
  "lumen-scene",
  "lumen-script",
+ "lumen-web-dom",
  "tracing",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4464,8 +4467,10 @@ name = "lumen-portable"
 version = "0.0.12"
 dependencies = [
  "bevy_ecs",
+ "lumen-animations-capability",
  "lumen-candela-dev-host",
  "lumen-candela-host",
+ "lumen-capability",
  "lumen-core",
  "lumen-html",
  "lumen-i18n",
@@ -4861,6 +4866,7 @@ version = "0.0.12"
 dependencies = [
  "bevy_ecs",
  "js-sys",
+ "lumen-animations",
  "lumen-candela-dev-host",
  "lumen-candela-host",
  "lumen-core",

@@ -234,6 +234,37 @@ applies only while the system asks for no less motion: the media query follows
 the OS's accessibility setting on the desktop, and the browser's in a web
 build.
 
+### From a script
+
+`animations::animate` plays keyframes a script describes on an element, the
+`element.animate(keyframes, options)` of the Web Animations API. The keyframes
+are a list of maps of CSS property to value, written as in a `@keyframes`
+body; a map may also carry `offset` (where it sits, `0` to `1`) and `easing`
+(the timing function to the next one). It returns a handle the other
+functions take:
+
+```candela
+let pulse = animations::animate("card",
+    [{"transform": "scale(1)"}, {"transform": "scale(1.05)"}, {"transform": "scale(1)"}],
+    animations::AnimateOptions { duration: 400.0, easing: "ease-in-out", .. });
+animations::pause(pulse);
+```
+
+The options are `duration` and `delay` in milliseconds, `iterations` (a
+negative count runs forever), `direction`, `fill` and `easing`, with the
+defaults of the Web Animations API. A `spring()` easing with no duration runs
+for as long as the spring takes to settle. `play`, `pause`, `reverse`,
+`finish`, `cancel`, `set_current_time` and `set_playback_rate` control the
+animation; `current_time`, `playback_rate` and `play_state` read it as of the
+last frame. The element raises `animationend` when it finishes and
+`animationcancel` when it is cancelled, and both carry the handle under
+`animation` in their detail. In a web build the browser's own
+`element.animate` plays it.
+
+The element is named by its `id`. The function list for each host is in its
+scripting reference, and the C++, Python and Rust wrappers in the
+[FFI reference](../reference/ffi.md).
+
 ### What an animation costs
 
 An animation runs on the desktop's frame loop only while it moves something you

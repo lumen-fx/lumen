@@ -378,3 +378,39 @@ fn a_rust_apps_linked_module_tags_check_clean() {
     let report = checked.expect("the canvas the app links parses");
     assert_eq!(report.element_count, 2);
 }
+
+/// A script calling a capability's function compiles: `check` declares the
+/// functions every linked capability declares, here `animations::animate`
+/// and its options struct.
+#[test]
+fn a_capability_function_checks() {
+    let dir = std::env::temp_dir().join(format!("lumenc_check_animate_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[script]\nengine = \"candela\"\n\n[mcp]\nport = 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.lmn"),
+        r#"<root><tile id="card"/><script src="main.cdl"/></root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.cdl"),
+        r#"import "lumen.cdl";
+
+fn on_ready() {
+    let a = animations::animate("card", [{"opacity": "0"}, {"opacity": "1"}],
+        animations::AnimateOptions { duration: 200.0, .. });
+    animations::pause(a);
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+    let report = lumenc::check_app(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(report.expect("animations::animate is declared").has_script);
+}

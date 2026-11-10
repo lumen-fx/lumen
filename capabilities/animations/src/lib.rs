@@ -13,5 +13,6 @@ lumen_capability!(
     "animations",
     Phase::Platform,
     lumen_animations::capability::install,
-    select = lumen_animations::capability::SELECT
+    select = lumen_animations::capability::SELECT,
+    declare = lumen_animations::capability::declare
 );

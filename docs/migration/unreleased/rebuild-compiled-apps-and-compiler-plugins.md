@@ -2,8 +2,9 @@
 
 The compiled-app format moved on: a `<menu>` keeps its `menu`, `menuitem`
 and `separator` elements, a menu item carries the keyboard shortcut it
-shows, and a stylesheet can style an input's `::placeholder`. The runtime
-refuses an artifact written by an earlier toolchain.
+shows, a stylesheet can style an input's `::placeholder`, and an element
+carries its transforms, its animations and the `@keyframes` blocks they name.
+The runtime refuses an artifact written by an earlier toolchain.
 
 This affects you if you load a precompiled app (`lumenc run --artifact`, a
 `.lmna` written by `lumenc build`, or `lumen_app_new_from_lmna` from the C ABI
@@ -11,7 +12,7 @@ or an SDK), or if your app declares compiler plugins under `[[plugins]]`.
 Loading an old artifact fails with an error that says:
 
 ```
-unsupported artifact version 21 (this build reads 23)
+unsupported artifact version 21 (this build reads 24)
 ```
 
 Rebuild the artifact with the new `lumenc`:

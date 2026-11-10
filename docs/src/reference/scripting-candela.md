@@ -483,6 +483,37 @@ fn on_frame(dt: float) {
 Use this rather than a repeating timer for anything visual: a timer fires on a
 wall-clock schedule that has nothing to do with when the app draws.
 
+## Animations
+
+Play keyframes on an element from a script, the Web Animations API's
+`element.animate`. See [animation](../guides/animations.md#from-a-script) for
+how the keyframes and the options read.
+
+| Function | Behaviour |
+| --- | --- |
+| `animations::animate(id: string, keyframes: {string: string}[], options: animations::AnimateOptions) -> int` | Animate the element with that `id`; returns the animation's handle. |
+| `animations::play(animation: int)` | Play it, or start it over once it has finished. |
+| `animations::pause(animation: int)` | Hold it where it is. |
+| `animations::reverse(animation: int)` | Play it the other way from where it is. |
+| `animations::finish(animation: int)` | Jump to its end. |
+| `animations::cancel(animation: int)` | Stop it and take its values off the element. |
+| `animations::set_current_time(animation: int, ms: float)` | Seek to that many milliseconds into its timeline. |
+| `animations::set_playback_rate(animation: int, rate: float)` | Play it at that rate: `2.0` twice as fast, `-1.0` backwards. |
+| `animations::current_time(animation: int) -> float` | Milliseconds into its timeline. |
+| `animations::playback_rate(animation: int) -> float` | The rate it plays at. |
+| `animations::play_state(animation: int) -> string` | `running`, `paused`, `finished`, or `idle` once cancelled. |
+
+`animations::AnimateOptions` has `duration: float = 0.0`, `delay: float = 0.0`,
+`iterations: float = 1.0` (negative runs forever), `direction: string =
+"normal"`, `fill: string = "none"` and `easing: string = "linear"`. Keyframe
+values are strings, as in a stylesheet.
+
+```candela
+let a = animations::animate("toast",
+    [{"opacity": "0", "transform": "translateY(8px)"}, {"opacity": "1", "transform": "none"}],
+    animations::AnimateOptions { duration: 180.0, easing: "ease-out", fill: "forwards", .. });
+```
+
 ## Query and traverse the element tree
 
 Node handles are `int` ids; `0` means "no node". Reads resolve against the
@@ -677,7 +708,9 @@ A CSS animation raises `animationstart`, `animationiteration`,
 `animationend` and `animationcancel` on its element, on the desktop and in a
 web build alike. They bubble, cannot be cancelled, and carry
 `animation_name`, `elapsed_time` (seconds) and `pseudo_element` in their
-detail.
+detail. An animation a script started with `animations::animate` raises
+`animationend` and `animationcancel`, with an empty `animation_name` and its
+handle under `animation`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and

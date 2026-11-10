@@ -22,9 +22,12 @@
 
 #![warn(missing_docs)]
 
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 pub mod capability;
 pub mod driver;
 pub mod keyframes;
+pub mod script;
 pub mod timing;
 
 use bevy_ecs::prelude::*;
@@ -51,6 +54,11 @@ impl Plugin for AnimationsPlugin {
                 &mut app.world,
             );
         }
+        // `animations::animate` and its controls, in every script host and
+        // through `lumen_call`.
+        let bus = script::ScriptAnimations::default();
+        lumen_script::ScriptFnAppExt::add_script_fns(app, script::script_fns(bus.0.clone()));
+        app.world.insert_resource(bus);
         // After the cascade commits this tick's declarations and the state
         // rules settle, so a class or a hover that adds a name starts it the
         // same tick; within the systems stage, so the values it holds lay
@@ -59,6 +67,7 @@ impl Plugin for AnimationsPlugin {
             TickStage::Systems,
             (
                 driver::sync_keyframes,
+                driver::apply_script_requests,
                 driver::reconcile_animations,
                 driver::sample_animations,
             )

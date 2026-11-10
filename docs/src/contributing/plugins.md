@@ -723,7 +723,12 @@ directory and id, the run mode, the whole `lumen.toml` for the capability to
 read its own section from with `section`, and a bounded view of the sources
 for `sources_mention`. A capability that has to act before the app is built
 adds `preflight = <fn>`; a single-instance app's second launch exits from
-there.
+there. A capability whose functions scripts call adds `declare = <fn>`, a
+function that registers those script functions alone on the app it is given.
+`lumenc check` and `lumenc build` declare them to an app's program when a
+package of that app carries the capability, by its `[capabilities]` entry or
+its own rule, so a script calling one compiles and a package without the
+capability gets a program that does not ask for its functions.
 
 A capability answers its own script commands: it reads the command stream
 through a cursor of its own and applies the variants it owns, so nothing in

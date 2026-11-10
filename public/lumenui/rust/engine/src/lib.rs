@@ -88,6 +88,7 @@
 // package (its examples and tests name it so already).
 extern crate self as lumenui_engine;
 
+pub mod animation;
 pub mod app;
 pub mod clipboard;
 pub mod conditions;
@@ -219,6 +220,8 @@ pub mod prelude {
 
     // The element tree: node handles and query results.
     pub use crate::dom::{self, Listener, Node, NodeQuery};
+    // Script-driven animations: `node.animate(keyframes, options)`.
+    pub use crate::animation::{AnimateOptions, Animation, Keyframe};
     // The app's published tree, which a system enters to look elements up.
     pub use lumen_core::node::AppDom;
 

@@ -479,7 +479,20 @@ std::int64_t w = lumen::canvas::width("art");
 
 The header and its namespace are named after the module without its `lumen-`
 prefix (`<lumen_fs.hpp>` and `lumen::fs` for `lumen-fs`), whatever namespace a
-script uses for the same functions.
+script uses for the same functions. `<lumen_animations.hpp>` wraps
+`animations::animate` and its controls the same way:
+
+```cpp
+#include <lumen_animations.hpp>
+
+using lumen::Value;
+std::int64_t a = lumen::animations::animate(
+    "card",
+    Value::array({Value::map({{"opacity", Value::string("0")}}),
+                  Value::map({{"opacity", Value::string("1")}})}),
+    Value::map({{"duration", Value::floating(300.0)}}));
+lumen::animations::pause(a);
+```
 
 ## Python SDK
 
@@ -541,6 +554,15 @@ module also has a generated wrapper module, named after it without its
 import lumen.canvas
 
 lumen.canvas.fill_rect("art", 0, 0, 16, 16)
+```
+
+`lumen.animations` wraps `animations::animate` and its controls:
+
+```python
+import lumen.animations
+
+a = lumen.animations.animate("card", [{"opacity": "0"}, {"opacity": "1"}], {"duration": 300.0})
+lumen.animations.pause(a)
 ```
 
 ## Rust SDK
@@ -937,6 +959,28 @@ can use: the build script reads the `tag` of every `#[widget(...)]` in the
 crate's `src/`, so the UI compiles with it, and the plugin the derive
 generates, added with `add_plugin`, makes the element at run time. A widget
 from another crate is not seen by the compile.
+
+### Animations
+
+`Node::animate` plays keyframes on an element and returns an `Animation` that
+controls it, the Web Animations API's `element.animate`. The element needs an
+`id`. See [animation](../guides/animations.md#from-a-script) for the options.
+
+```rust
+use lumenui::prelude::*;
+
+fn fade_in(card: Node) {
+    let frames = [Keyframe::new().set("opacity", "0"), Keyframe::new().set("opacity", "1")];
+    let options = AnimateOptions { duration_ms: 300.0, ..AnimateOptions::default() };
+    if let Ok(fade) = card.animate(&frames, &options) {
+        fade.pause();
+    }
+}
+```
+
+`Animation` has `play`, `pause`, `reverse`, `finish`, `cancel`,
+`set_current_time` and `set_playback_rate`, and reads back `current_time`,
+`playback_rate` and `play_state`.
 
 ### The window
 

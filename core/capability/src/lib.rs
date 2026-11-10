@@ -287,6 +287,11 @@ pub struct Capability {
     pub preflight: Option<fn(&CapabilityEnv) -> Preflight>,
     /// When a link that picks its capabilities carries this one.
     pub select: Select,
+    /// Register only what a script sees of it, its script functions, into
+    /// an app nothing runs. A compile reads them from there to declare them
+    /// to the program, so a script calling one compiles; `None` for a
+    /// capability scripts do not call.
+    pub declare: Option<fn(&mut App)>,
     /// The package that registers it, which is the object a link pulls by
     /// the register symbol. A kit lists a capability only when it carries
     /// that package.
@@ -329,6 +334,15 @@ pub fn install_phase(app: &mut App, env: &CapabilityEnv, phase: Phase) {
     }
 }
 
+/// Register, into `app`, the script functions of every registered capability
+/// that declares some ([`Capability::declare`]), in install order, without
+/// installing the capabilities themselves.
+pub fn declare_all(app: &mut App) {
+    for declare in registered().into_iter().filter_map(|c| c.declare) {
+        declare(app);
+    }
+}
+
 /// Run every preflight, in install order. The first one that asks to exit
 /// ends the walk.
 pub fn preflight(env: &CapabilityEnv) -> Preflight {
@@ -365,6 +379,7 @@ mod tests {
             install: nothing,
             preflight: None,
             select: Select::Always,
+            declare: None,
             crate_name: "registry-test",
         });
         register(Capability {
@@ -373,6 +388,7 @@ mod tests {
             install: nothing,
             preflight: None,
             select: Select::Always,
+            declare: None,
             crate_name: "registry-test",
         });
         register(Capability {
@@ -381,6 +397,7 @@ mod tests {
             install: nothing,
             preflight: None,
             select: Select::Always,
+            declare: None,
             crate_name: "registry-test",
         });
         let names: Vec<&str> = registered()
@@ -399,6 +416,7 @@ mod tests {
             install: nothing,
             preflight: None,
             select: Select::Always,
+            declare: None,
             crate_name: "registry-test",
         });
         register(Capability {
@@ -407,6 +425,7 @@ mod tests {
             install: nothing,
             preflight: None,
             select: Select::Always,
+            declare: None,
             crate_name: "registry-test",
         });
         let entries: Vec<Capability> = registered()
