@@ -33,16 +33,18 @@ pub struct RuntimeStylesheet(pub Stylesheet);
 pub struct LastMediaContext(pub MediaContext);
 
 /// An element's `animation` and `animation-*` declarations, as the cascade
-/// resolved them. Carried only by an element that declares one.
+/// resolved them. Carried only by an element that declares one. Boxed, as
+/// the attributes it comes from box it, so the style a spawn builds per
+/// element stays small.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
-pub struct AnimationDeclarations(pub AnimationDeclsIr);
+pub struct AnimationDeclarations(pub Box<AnimationDeclsIr>);
 
 /// The `animation-*` declarations an element's state rules set (`:hover {
 /// animation: ... }`), each laid over [`AnimationDeclarations`] while the
 /// element is in that state. Carried only by an element whose state rules
-/// set one.
+/// set one. Boxed for the same reason as [`AnimationDeclarations`].
 #[derive(Component, Clone, Debug, Default, PartialEq)]
-pub struct StateAnimations(pub StateAnimationsIr);
+pub struct StateAnimations(pub Box<StateAnimationsIr>);
 
 /// The style fields an element's `!important` declarations set. An
 /// animation leaves them alone, as CSS ranks important declarations above

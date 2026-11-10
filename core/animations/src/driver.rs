@@ -201,7 +201,7 @@ fn declared(
     states: Option<&StateAnimations>,
     markers: StateMarkers,
 ) -> Vec<AnimationIr> {
-    let mut decls: AnimationDeclsIr = base.map(|b| b.0.clone()).unwrap_or_default();
+    let mut decls: AnimationDeclsIr = base.map(|b| (*b.0).clone()).unwrap_or_default();
     if let Some(s) = states {
         let s = &s.0;
         for (on, d) in active_states(markers).into_iter().zip([

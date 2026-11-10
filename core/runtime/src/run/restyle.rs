@@ -656,19 +656,7 @@ fn restyle_element(
         .filter(|&k| is_sibling_element(world, k))
         .collect();
     let node = cascade_node(world, entity, place, !tagged.is_empty());
-    // An element entering the tree is also resolved against the stylesheet's
-    // `@starting-style` rules: its transitions start from there.
-    let mut starting = None;
-    if element
-        && let Ok(mut ent) = world.get_entity_mut(entity)
-        && ent.take::<lumen_scene::style_sheet::Entering>().is_some()
-    {
-        starting = Some(walk.resolve_starting(&node));
-    }
-    let mut attrs = walk.resolve(&node);
-    if element {
-        commit_resolved(world, entity, &mut attrs, starting.as_mut(), animate);
-    }
+    resolve_element(world, walk, entity, &node, element, animate);
     if children.is_empty() {
         return;
     }
@@ -693,6 +681,33 @@ fn restyle_element(
         restyle_subtree(world, walk, child, place, siblings, animate);
     }
     walk.leave();
+}
+
+/// Resolve one element's styles and, for an element, commit them. Its own
+/// function, kept out of line, so the attribute bags it holds are not in the
+/// frame [`restyle_element`] keeps while it recurses into the children.
+#[inline(never)]
+fn resolve_element(
+    world: &mut World,
+    walk: &mut lumen_ir::css::RestyleWalk<'_>,
+    entity: Entity,
+    node: &lumen_ir::css::AncestorInfo,
+    element: bool,
+    animate: bool,
+) {
+    // An element entering the tree is also resolved against the stylesheet's
+    // `@starting-style` rules: its transitions start from there.
+    let mut starting = None;
+    if element
+        && let Ok(mut ent) = world.get_entity_mut(entity)
+        && ent.take::<lumen_scene::style_sheet::Entering>().is_some()
+    {
+        starting = Some(walk.resolve_starting(node));
+    }
+    let mut attrs = walk.resolve(node);
+    if element {
+        commit_resolved(world, entity, &mut attrs, starting.as_mut(), animate);
+    }
 }
 
 /// Build the element's style components from what the cascade resolved

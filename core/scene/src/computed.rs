@@ -317,9 +317,9 @@ impl ComputedStyle {
                     .collect()
             },
             animation: (!PAGE && !attrs.animation.is_empty())
-                .then(|| crate::style_sheet::AnimationDeclarations((*attrs.animation).clone())),
+                .then(|| crate::style_sheet::AnimationDeclarations(attrs.animation.clone())),
             state_animations: (!PAGE && attrs.state_animations != Default::default())
-                .then(|| crate::style_sheet::StateAnimations((*attrs.state_animations).clone())),
+                .then(|| crate::style_sheet::StateAnimations(attrs.state_animations.clone())),
             important: if PAGE {
                 None
             } else {
