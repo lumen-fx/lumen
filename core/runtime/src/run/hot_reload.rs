@@ -506,9 +506,8 @@ fn restore_stateful_components(
     preserved: &std::collections::HashMap<String, PreservedState>,
 ) {
     use lumen_core::components::{LumenId, Opacity};
-    use lumen_primitives::{
-        Easing, OpacityTransition, Transition, TransitionProperty, TransitionSpecs,
-    };
+    use lumen_core::style_overrides::{StyleFields, StyleValues};
+    use lumen_primitives::TransitionSpecs;
     if preserved.is_empty() {
         return;
     }
@@ -538,22 +537,27 @@ fn restore_stateful_components(
         if let Some(so) = state.scroll_offset {
             ent.insert(so);
         }
-        // When an opacity transition is declared and the value changed across the respawn, attach a [`Transition<f32>`] driving [`Opacity`] from old to new.
-        // Reset the immediate [`Opacity`] to the old value so the animation starts there; the
-        // driver in `lumen-primitives::step_opacity_transitions` advances
-        // it back up to `new_opacity` over `spec.duration`.
+        // When an opacity transition is declared and the value changed
+        // across the respawn, fade from the old value to the new one.
         if let (Some(old), Some(new), Some(specs)) = (state.opacity, new_opacity, specs.as_ref())
-            && let Some(spec) = specs.for_property(TransitionProperty::Opacity)
+            && let Some(spec) = specs.for_field(StyleFields::OPACITY)
             && (old - new).abs() > f32::EPSILON
         {
-            let easing = if matches!(spec.easing, Easing::Linear) {
-                Easing::Linear
-            } else {
-                spec.easing
-            };
-            let tween = Transition::<f32>::new(old, new, spec.duration, easing);
-            ent.insert(Opacity(old));
-            ent.insert(OpacityTransition(tween));
+            let now = lumen_primitives::tick_now(&ent);
+            lumen_primitives::start_transition(
+                &mut ent,
+                StyleFields::OPACITY,
+                StyleValues {
+                    opacity: Some(Some(old)),
+                    ..StyleValues::default()
+                },
+                StyleValues {
+                    opacity: Some(Some(new)),
+                    ..StyleValues::default()
+                },
+                &spec.clone(),
+                now,
+            );
         }
     }
 }

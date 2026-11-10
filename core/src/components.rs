@@ -2234,6 +2234,12 @@ impl Opacity {
     }
 }
 
+/// The color an element's outline paints in while a runtime system holds
+/// one over what the element declares: an animated `outline-color`. Absent,
+/// the outline paints the color its declaration names.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct OutlineColor(pub Color);
+
 /// Stable string id assigned in markup via `id="..."`. Apps query `Query<(Entity, &LumenId)>` and match by name.
 #[derive(Component, Clone, Debug)]
 pub struct LumenId(pub String);

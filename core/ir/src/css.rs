@@ -4387,7 +4387,7 @@ fn apply_declaration(
                 if entry.is_empty() {
                     continue;
                 }
-                out.push(parse_easing(ctx, name, &[entry])?);
+                out.push(parse_easing(ctx, name, entry)?);
             }
             attrs.transition_timing = Some(out);
         }
@@ -4719,18 +4719,9 @@ fn grid_line_to_i16(ctx: &str, name: &str, v: i32) -> i16 {
 // transition / shadow helpers (unchanged semantics)
 // ---------------------------------------------------------------------------
 
-/// Every property a transition can animate. `transition: all` and
-/// `transition-property: all` expand to this list.
-const ALL_TRANSITION_PROPERTIES: [TransitionPropertyIr; 4] = [
-    TransitionPropertyIr::Opacity,
-    TransitionPropertyIr::BackgroundColor,
-    TransitionPropertyIr::TextColor,
-    TransitionPropertyIr::BorderColor,
-];
-
-/// CSS `ease`, the initial `transition-timing-function`, used when an
-/// entry names no curve.
-const DEFAULT_EASING: EasingIr = EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0);
+/// CSS `ease`, the initial `transition-timing-function` and
+/// `animation-timing-function`, used when an entry names no curve.
+pub const DEFAULT_EASING: EasingIr = EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0);
 
 /// Expand one `transition` / `transition-property` term into the
 /// properties it names. `all` covers the whole animatable set; an
@@ -4740,7 +4731,7 @@ const DEFAULT_EASING: EasingIr = EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0);
 /// purpose: animating them would re-run layout every frame.
 fn transition_properties_for(term: &str) -> Vec<TransitionPropertyIr> {
     if term == "all" {
-        return ALL_TRANSITION_PROPERTIES.to_vec();
+        return TransitionPropertyIr::ALL.to_vec();
     }
     match TransitionPropertyIr::from_css_name(term) {
         Some(p) => vec![p],
@@ -4748,7 +4739,8 @@ fn transition_properties_for(term: &str) -> Vec<TransitionPropertyIr> {
             tracing::warn!(
                 target: "lumenc::css",
                 "transition: property '{term}' is not animatable (animatable: all, opacity, \
-                 background-color, color, border-color) - entry ignored"
+                 background-color, color, border-color, box-shadow, border-radius, \
+                 outline-color, transform, translate, rotate, scale) - entry ignored"
             );
             Vec::new()
         }
@@ -4762,7 +4754,7 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
         if entry.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = entry.split_whitespace().collect();
+        let parts: Vec<&str> = split_top_level_whitespace(entry);
         if parts.len() < 2 {
             return Err(bad(
                 ctx,
@@ -4777,9 +4769,7 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
         }
         // Terms after the property come in any order: the first time
         // value is the duration, a second one is the delay, and whatever
-        // is left names the curve (`cubic-bezier(...)` survives the
-        // whitespace split because none of its pieces read as a
-        // duration).
+        // is left names the curve.
         let mut duration_ms: Option<u32> = None;
         let mut delay_term: Option<&str> = None;
         let mut easing_terms: Vec<&str> = Vec::new();
@@ -4807,13 +4797,13 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
         let easing = if easing_terms.is_empty() {
             DEFAULT_EASING
         } else {
-            parse_easing(ctx, name, &easing_terms)?
+            parse_easing(ctx, name, &easing_terms.join(" "))?
         };
         for property in properties {
             out.push(TransitionIr {
                 property,
                 duration_ms,
-                easing,
+                easing: easing.clone(),
             });
         }
     }
@@ -4892,37 +4882,151 @@ pub fn parse_duration_ms(ctx: &str, name: &str, raw: &str) -> Result<u32, ParseE
     ))
 }
 
-fn parse_easing(ctx: &str, name: &str, parts: &[&str]) -> Result<EasingIr, ParseError> {
-    let joined = parts.join(" ");
-    let raw = joined.trim();
+/// Parse one CSS timing function: `linear`, `ease`, `ease-in`, `ease-out`,
+/// `ease-in-out` (the cubic Beziers CSS defines), `cubic-bezier()`,
+/// `steps()`, `step-start`, `step-end` or `linear(...)`.
+pub fn parse_easing(ctx: &str, name: &str, raw: &str) -> Result<EasingIr, ParseError> {
+    use crate::layout_ir::StepPositionIr;
+    let raw = raw.trim();
+    let call = |f: &str| -> Option<&str> {
+        raw.strip_prefix(f)
+            .and_then(|r| r.trim_start().strip_prefix('('))
+            .and_then(|r| r.strip_suffix(')'))
+    };
+    let num = |s: &str| -> Result<f32, ParseError> {
+        s.trim()
+            .parse::<f32>()
+            .map_err(|e| bad(ctx, name, raw, format!("bad number '{}': {e}", s.trim())))
+    };
     match raw {
-        "linear" => Ok(EasingIr::Linear),
-        "ease" => Ok(DEFAULT_EASING),
-        "ease-in" => Ok(EasingIr::EaseIn),
-        "ease-out" => Ok(EasingIr::EaseOut),
-        "ease-in-out" => Ok(EasingIr::EaseInOut),
-        other if other.starts_with("cubic-bezier(") && other.ends_with(')') => {
-            let inside = &other["cubic-bezier(".len()..other.len() - 1];
-            let nums: Vec<f32> = inside
-                .split(',')
-                .map(|p| {
-                    p.trim()
-                        .parse::<f32>()
-                        .map_err(|e| bad(ctx, name, raw, e.to_string()))
-                })
-                .collect::<Result<_, _>>()?;
-            if nums.len() != 4 {
+        "linear" => return Ok(EasingIr::Linear),
+        "ease" => return Ok(DEFAULT_EASING),
+        "ease-in" => return Ok(EasingIr::CubicBezier(0.42, 0.0, 1.0, 1.0)),
+        "ease-out" => return Ok(EasingIr::CubicBezier(0.0, 0.0, 0.58, 1.0)),
+        "ease-in-out" => return Ok(EasingIr::CubicBezier(0.42, 0.0, 0.58, 1.0)),
+        "step-start" => return Ok(EasingIr::Steps(1, StepPositionIr::Start)),
+        "step-end" => return Ok(EasingIr::Steps(1, StepPositionIr::End)),
+        _ => {}
+    }
+    if let Some(inside) = call("cubic-bezier") {
+        let nums: Vec<f32> = inside.split(',').map(num).collect::<Result<_, _>>()?;
+        if nums.len() != 4 {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                "cubic-bezier expects 4 comma-separated numbers".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&nums[0]) || !(0.0..=1.0).contains(&nums[2]) {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                "cubic-bezier x values must be between 0 and 1".into(),
+            ));
+        }
+        return Ok(EasingIr::CubicBezier(nums[0], nums[1], nums[2], nums[3]));
+    }
+    if let Some(inside) = call("steps") {
+        let args: Vec<&str> = inside.split(',').map(str::trim).collect();
+        let n: u32 = args[0]
+            .parse()
+            .map_err(|e| bad(ctx, name, raw, format!("bad step count: {e}")))?;
+        let pos = match args.get(1).copied() {
+            None | Some("end" | "jump-end") => StepPositionIr::End,
+            Some("start" | "jump-start") => StepPositionIr::Start,
+            Some("jump-none") => StepPositionIr::None,
+            Some("jump-both") => StepPositionIr::Both,
+            Some(other) => {
                 return Err(bad(
                     ctx,
                     name,
                     raw,
-                    "cubic-bezier expects 4 comma-separated numbers".into(),
+                    format!("unknown step position '{other}'"),
                 ));
             }
-            Ok(EasingIr::CubicBezier(nums[0], nums[1], nums[2], nums[3]))
+        };
+        let least = if pos == StepPositionIr::None { 2 } else { 1 };
+        if n < least || args.len() > 2 {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                format!("steps() takes a count of at least {least} and one position"),
+            ));
         }
-        other => Err(bad(ctx, name, raw, format!("unknown easing '{other}'"))),
+        return Ok(EasingIr::Steps(n, pos));
     }
+    if let Some(inside) = call("linear") {
+        let mut stops: Vec<(f32, Vec<f32>)> = Vec::new();
+        for stop in split_top_level_commas(inside) {
+            let terms: Vec<&str> = stop.split_whitespace().collect();
+            let Some((output, inputs)) = terms.split_first() else {
+                return Err(bad(ctx, name, raw, "an empty linear() stop".into()));
+            };
+            if inputs.len() > 2 {
+                return Err(bad(
+                    ctx,
+                    name,
+                    raw,
+                    "a linear() stop takes at most two positions".into(),
+                ));
+            }
+            let inputs = inputs
+                .iter()
+                .map(|p| {
+                    p.strip_suffix('%')
+                        .ok_or_else(|| bad(ctx, name, raw, format!("'{p}' is not a percentage")))
+                        .and_then(|n| num(n).map(|v| v / 100.0))
+                })
+                .collect::<Result<Vec<f32>, _>>()?;
+            stops.push((num(output)?, inputs));
+        }
+        let Some(lumen_core::motion::Easing::Points(points)) =
+            lumen_core::motion::Easing::linear_points(&stops)
+        else {
+            return Err(bad(
+                ctx,
+                name,
+                raw,
+                "linear() needs at least two stops".into(),
+            ));
+        };
+        return Ok(EasingIr::Points(
+            points.iter().map(|p| (p.input, p.output)).collect(),
+        ));
+    }
+    Err(bad(ctx, name, raw, format!("unknown easing '{raw}'")))
+}
+
+/// Split on whitespace outside parentheses, so a function written with
+/// spaces in its arguments stays one term.
+fn split_top_level_whitespace(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start: Option<usize> = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => {
+                depth += 1;
+                start.get_or_insert(i);
+            }
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth <= 0 => {
+                if let Some(st) = start.take() {
+                    out.push(&s[st..i]);
+                }
+            }
+            _ => {
+                start.get_or_insert(i);
+            }
+        }
+    }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -5027,7 +5131,7 @@ mod transition_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].property, TransitionPropertyIr::Opacity);
         assert_eq!(out[0].duration_ms, 200);
-        assert_eq!(out[0].easing, EasingIr::EaseOut);
+        assert_eq!(out[0].easing, EasingIr::CubicBezier(0.0, 0.0, 0.58, 1.0));
     }
 
     #[test]
@@ -5039,7 +5143,7 @@ mod transition_tests {
         )
         .unwrap();
         assert_eq!(out.len(), 2);
-        assert_eq!(out[1].easing, EasingIr::EaseIn);
+        assert_eq!(out[1].easing, EasingIr::CubicBezier(0.42, 0.0, 1.0, 1.0));
         assert_eq!(out[1].duration_ms, 300);
     }
 
@@ -5119,15 +5223,40 @@ mod transition_tests {
         // CSS initial `transition-timing-function`.
         let out = parse_transition("ctx", "transition", "opacity 200ms").unwrap();
         assert_eq!(out[0].easing, DEFAULT_EASING);
-        assert_eq!(out[0].easing, parse_easing("ctx", "t", &["ease"]).unwrap());
+        assert_eq!(out[0].easing, parse_easing("ctx", "t", "ease").unwrap());
+    }
+
+    #[test]
+    fn parses_every_timing_function_form() {
+        use crate::layout_ir::StepPositionIr;
+        let e = |v: &str| parse_easing("ctx", "t", v).unwrap();
+        assert_eq!(e("ease-out"), EasingIr::CubicBezier(0.0, 0.0, 0.58, 1.0));
+        assert_eq!(e("steps(4)"), EasingIr::Steps(4, StepPositionIr::End));
+        assert_eq!(
+            e("steps(3, jump-start)"),
+            EasingIr::Steps(3, StepPositionIr::Start)
+        );
+        assert_eq!(e("step-end"), EasingIr::Steps(1, StepPositionIr::End));
+        assert_eq!(
+            e("linear(0, 0.25 75%, 1)"),
+            EasingIr::Points(vec![(0.0, 0.0), (0.75, 0.25), (1.0, 1.0)])
+        );
+        assert!(parse_easing("ctx", "t", "steps(1, jump-none)").is_err());
+        assert!(parse_easing("ctx", "t", "cubic-bezier(2, 0, 1, 1)").is_err());
+        assert!(parse_easing("ctx", "t", "bounce").is_err());
+        // A function written with spaces inside stays one term.
+        let out =
+            parse_transition("ctx", "transition", "transform 1s linear(0, 0.5 50%, 1)").unwrap();
+        assert_eq!(out[0].property, TransitionPropertyIr::Transform);
+        assert!(matches!(out[0].easing, EasingIr::Points(_)));
     }
 
     #[test]
     fn all_expands_to_every_animatable_property() {
         let out = parse_transition("ctx", "transition", "all 200ms linear").unwrap();
-        assert_eq!(out.len(), ALL_TRANSITION_PROPERTIES.len());
+        assert_eq!(out.len(), TransitionPropertyIr::ALL.len());
         let props: Vec<_> = out.iter().map(|t| t.property).collect();
-        assert_eq!(props, ALL_TRANSITION_PROPERTIES.to_vec());
+        assert_eq!(props, TransitionPropertyIr::ALL.to_vec());
         assert!(out.iter().all(|t| t.duration_ms == 200));
         assert!(out.iter().all(|t| t.easing == EasingIr::Linear));
     }
@@ -5143,7 +5272,7 @@ mod transition_tests {
         };
         apply_declaration("ctx", "transition", "all 120ms", &mut attrs).unwrap();
         let eff = attrs.effective_transitions();
-        assert_eq!(eff.len(), ALL_TRANSITION_PROPERTIES.len());
+        assert_eq!(eff.len(), TransitionPropertyIr::ALL.len());
         assert!(eff.iter().all(|t| t.duration_ms == 120));
     }
 
@@ -5153,7 +5282,7 @@ mod transition_tests {
         apply_declaration("ctx", "transition-property", "all", &mut attrs).unwrap();
         assert_eq!(
             attrs.transition_property.as_deref(),
-            Some(&ALL_TRANSITION_PROPERTIES[..])
+            Some(&TransitionPropertyIr::ALL[..])
         );
     }
 
@@ -5168,7 +5297,7 @@ mod transition_tests {
 
         let out = parse_transition("ctx", "transition", "opacity 200ms ease-in 50ms").unwrap();
         assert_eq!(out[0].duration_ms, 200);
-        assert_eq!(out[0].easing, EasingIr::EaseIn);
+        assert_eq!(out[0].easing, EasingIr::CubicBezier(0.42, 0.0, 1.0, 1.0));
     }
 
     #[test]

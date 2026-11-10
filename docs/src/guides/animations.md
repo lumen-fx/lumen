@@ -23,24 +23,30 @@ The property comes first and a duration is required. A duration needs its
 unit, `ms` or `s`; `0` alone is not a duration, `0ms` is. Leave the easing out
 and you get `ease`.
 
-Easings: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, and
-`cubic-bezier(a, b, c, d)`.
+Easings: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
+`cubic-bezier(a, b, c, d)`, `steps(n)`, `step-start`, `step-end`, and
+`linear(...)`, with the curves CSS defines, so a transition moves the same
+on the desktop and in a browser.
 
-Four properties animate:
+These properties animate:
 
 - `opacity`
 - `bg`, also spelled `background-color` or `background`
 - `text-color`, also spelled `color`
 - `border-color`
+- `box-shadow`, also spelled `shadow`
+- `radius`, also spelled `border-radius`
+- `outline-color`, the color of a focus outline
+- `transform`, `translate`, `rotate` and `scale`
 
-`all` covers all four:
+`all` covers every one:
 
 ```css
 .card { transition: all 150ms ease-out; }
 ```
 
 Naming anything else drops that entry with a warning and the value snaps
-instead. Size, position, spacing, and radius do not animate.
+instead. Size, position, and spacing do not animate.
 
 Longhands work too, and cycle their lists across the properties the way CSS
 does:
@@ -216,7 +222,7 @@ which is where a script draws something CSS cannot describe:
 
 ## What does not animate
 
-- A gradient background. Gradients snap; only a solid `bg` tweens.
+- A gradient background. Gradients switch halfway; only a solid `bg` tweens.
 - A border whose width changes at the same time as its colour.
 - The selected state of a `tabs` strip, a `toggle`, and a slider thumb, which
   set their own colours and snap.

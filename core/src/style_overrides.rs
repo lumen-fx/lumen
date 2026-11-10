@@ -28,9 +28,10 @@ use bevy_ecs::component::Component;
 use bevy_ecs::world::EntityWorldMut;
 
 use crate::components::{
-    Border, Color, Display, Edges, Fill, Length, Opacity, Position, ShadowSpec, Style, TextStyle,
-    Visuals,
+    Border, Color, Display, Edges, Fill, Length, Opacity, OutlineColor, Position, ShadowSpec,
+    Style, TextStyle, Visuals,
 };
+use crate::transform::ElementTransform;
 
 bitflags::bitflags! {
     /// The style values a runtime system can hold on an element.
@@ -62,6 +63,12 @@ bitflags::bitflags! {
         const PADDING = 1 << 11;
         /// `Style::basis`, CSS `flex-basis`.
         const BASIS = 1 << 12;
+        /// `Visuals::radius` and `Visuals::corner_radii`, CSS `border-radius`.
+        const RADIUS = 1 << 13;
+        /// The [`ElementTransform`] component, absent meaning untransformed.
+        const TRANSFORM = 1 << 14;
+        /// The [`OutlineColor`] component, absent meaning the declared color.
+        const OUTLINE_COLOR = 1 << 15;
         /// Every field that lives on [`Style`].
         const LAYOUT = Self::DISPLAY.bits()
             | Self::POSITION.bits()
@@ -72,7 +79,8 @@ bitflags::bitflags! {
             | Self::PADDING.bits()
             | Self::BASIS.bits();
         /// Every field that lives on [`Visuals`].
-        const VISUALS = Self::FILL.bits() | Self::SHADOWS.bits() | Self::BORDER.bits();
+        const VISUALS =
+            Self::FILL.bits() | Self::SHADOWS.bits() | Self::BORDER.bits() | Self::RADIUS.bits();
     }
 }
 
@@ -105,6 +113,12 @@ pub struct StyleValues {
     pub opacity: Option<Option<f32>>,
     /// `TextStyle::color`.
     pub text_color: Option<Color>,
+    /// `Visuals::radius` and `Visuals::corner_radii`.
+    pub radius: Option<(f32, Option<[f32; 4]>)>,
+    /// The [`ElementTransform`] component; `Some(None)` is no component.
+    pub transform: Option<Option<ElementTransform>>,
+    /// The [`OutlineColor`] component; `Some(None)` is no component.
+    pub outline_color: Option<Option<Color>>,
 }
 
 /// The live components of one element, read when a holder takes a field
@@ -119,6 +133,10 @@ pub struct Live<'a> {
     pub text: Option<&'a TextStyle>,
     /// The element's opacity; absent is fully opaque.
     pub opacity: Option<&'a Opacity>,
+    /// The element's transform; absent is untransformed.
+    pub transform: Option<&'a ElementTransform>,
+    /// The color a runtime system holds the element's outline at.
+    pub outline_color: Option<&'a OutlineColor>,
 }
 
 impl StyleValues {
@@ -138,6 +156,9 @@ impl StyleValues {
         f.set(StyleFields::BORDER, self.border.is_some());
         f.set(StyleFields::OPACITY, self.opacity.is_some());
         f.set(StyleFields::TEXT_COLOR, self.text_color.is_some());
+        f.set(StyleFields::RADIUS, self.radius.is_some());
+        f.set(StyleFields::TRANSFORM, self.transform.is_some());
+        f.set(StyleFields::OUTLINE_COLOR, self.outline_color.is_some());
         f
     }
 
@@ -163,9 +184,18 @@ impl StyleValues {
                 .contains(StyleFields::SHADOWS)
                 .then(|| vis.shadows.clone());
             v.border = fields.contains(StyleFields::BORDER).then_some(vis.border);
+            v.radius = fields
+                .contains(StyleFields::RADIUS)
+                .then_some((vis.radius, vis.corner_radii));
         }
         if fields.contains(StyleFields::OPACITY) {
             v.opacity = Some(live.opacity.map(|o| o.0));
+        }
+        if fields.contains(StyleFields::TRANSFORM) {
+            v.transform = Some(live.transform.cloned());
+        }
+        if fields.contains(StyleFields::OUTLINE_COLOR) {
+            v.outline_color = Some(live.outline_color.map(|o| o.0));
         }
         if let Some(t) = live.text {
             v.text_color = fields.contains(StyleFields::TEXT_COLOR).then_some(t.color);
@@ -214,6 +244,15 @@ impl StyleValues {
         if top.text_color.is_some() {
             self.text_color = top.text_color;
         }
+        if top.radius.is_some() {
+            self.radius = top.radius;
+        }
+        if top.transform.is_some() {
+            self.transform.clone_from(&top.transform);
+        }
+        if top.outline_color.is_some() {
+            self.outline_color = top.outline_color;
+        }
     }
 
     /// Keep only `fields`.
@@ -257,6 +296,15 @@ impl StyleValues {
         }
         if !keep(StyleFields::TEXT_COLOR) {
             self.text_color = None;
+        }
+        if !keep(StyleFields::RADIUS) {
+            self.radius = None;
+        }
+        if !keep(StyleFields::TRANSFORM) {
+            self.transform = None;
+        }
+        if !keep(StyleFields::OUTLINE_COLOR) {
+            self.outline_color = None;
         }
         self
     }
@@ -324,6 +372,12 @@ impl StyleValues {
         {
             visuals.border = b;
         }
+        if let Some((r, corners)) = self.radius
+            && (visuals.radius != r || visuals.corner_radii != corners)
+        {
+            visuals.radius = r;
+            visuals.corner_radii = corners;
+        }
     }
 
     /// Write the text color this sets onto `text`, if it differs.
@@ -333,6 +387,23 @@ impl StyleValues {
         {
             text.color = c;
         }
+    }
+
+    /// What to do with the [`ElementTransform`] component to make it hold
+    /// the transform this sets, read like [`Self::opacity_change`].
+    pub fn transform_change(
+        &self,
+        current: Option<&ElementTransform>,
+    ) -> Option<Option<ElementTransform>> {
+        let want = self.transform.as_ref()?;
+        (want.as_ref() != current).then(|| want.clone())
+    }
+
+    /// What to do with the [`OutlineColor`] component to make it hold the
+    /// outline color this sets, read like [`Self::opacity_change`].
+    pub fn outline_change(&self, current: Option<&OutlineColor>) -> Option<Option<OutlineColor>> {
+        let want = self.outline_color?.map(OutlineColor);
+        (want.as_ref() != current).then_some(want)
     }
 
     /// What to do with the [`Opacity`] component to make it hold the
@@ -345,6 +416,116 @@ impl StyleValues {
             (Some(o), Some(cur)) if cur.0 == o => None,
             (want, _) => Some(want.map(Opacity)),
         }
+    }
+}
+
+impl StyleValues {
+    /// The values a fraction `t` of the way from `self` to `to`, field by
+    /// field through [`crate::motion`]: colors, opacity, shadows, radii and
+    /// transforms blend, and anything without an in-between (a gradient
+    /// fill, a border whose widths differ, a layout value) flips at the
+    /// midpoint. A field only one side sets comes through as that side has
+    /// it. `size` is the element's border box, which resolves the
+    /// percentages of a transform that can only blend as a matrix.
+    pub fn interpolate(&self, to: &StyleValues, t: f32, size: glam::Vec2) -> StyleValues {
+        use crate::motion::{
+            Interpolate, discrete, interpolate_border, interpolate_radii, interpolate_shadows,
+            interpolate_transform,
+        };
+        fn pick<T: Clone>(a: &Option<T>, b: &Option<T>, t: f32) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(discrete(a, b, t).clone()),
+                (a, b) => a.clone().or_else(|| b.clone()),
+            }
+        }
+        fn both<T, R>(a: &Option<T>, b: &Option<T>, f: impl FnOnce(&T, &T) -> R) -> Option<R> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(f(a, b)),
+                _ => None,
+            }
+        }
+        let mut out = StyleValues {
+            display: pick(&self.display, &to.display, t),
+            position: pick(&self.position, &to.position, t),
+            inset: pick(&self.inset, &to.inset, t),
+            width: pick(&self.width, &to.width, t),
+            height: pick(&self.height, &to.height, t),
+            min_height: pick(&self.min_height, &to.min_height, t),
+            padding: pick(&self.padding, &to.padding, t),
+            basis: pick(&self.basis, &to.basis, t),
+            fill: pick(&self.fill, &to.fill, t),
+            shadows: pick(&self.shadows, &to.shadows, t),
+            border: pick(&self.border, &to.border, t),
+            opacity: pick(&self.opacity, &to.opacity, t),
+            text_color: pick(&self.text_color, &to.text_color, t),
+            radius: pick(&self.radius, &to.radius, t),
+            transform: pick(&self.transform, &to.transform, t),
+            outline_color: pick(&self.outline_color, &to.outline_color, t),
+        };
+        // No fill is a transparent one, so a background fades in or out
+        // keeping its hue, as CSS fades from `transparent`.
+        let clear = |c: &Color| Color { a: 0.0, ..*c };
+        if let Some(fill) = both(&self.fill, &to.fill, |a, b| match (a, b) {
+            (Some(Fill::Solid(a)), Some(Fill::Solid(b))) => {
+                Some(Some(Fill::Solid(a.interpolate(b, t))))
+            }
+            (None, Some(Fill::Solid(b))) => Some(Some(Fill::Solid(clear(b).interpolate(b, t)))),
+            (Some(Fill::Solid(a)), None) => Some(Some(Fill::Solid(a.interpolate(&clear(a), t)))),
+            _ => None,
+        })
+        .flatten()
+        {
+            out.fill = Some(fill);
+        }
+        if let Some(s) = both(&self.shadows, &to.shadows, |a, b| {
+            interpolate_shadows(a, b, t)
+        }) {
+            out.shadows = Some(s);
+        }
+        if let Some(Some(b)) = both(&self.border, &to.border, |a, b| match (a, b) {
+            (Some(a), Some(b)) => Some(interpolate_border(a, b, t)),
+            _ => None,
+        }) {
+            out.border = Some(Some(b));
+        }
+        if let Some(o) = both(&self.opacity, &to.opacity, |a, b| {
+            a.unwrap_or(1.0)
+                .interpolate(&b.unwrap_or(1.0), t)
+                .clamp(0.0, 1.0)
+        }) {
+            out.opacity = Some(Some(o));
+        }
+        if let Some(c) = both(&self.text_color, &to.text_color, |a, b| a.interpolate(b, t)) {
+            out.text_color = Some(c);
+        }
+        if let Some(r) = both(&self.radius, &to.radius, |a, b| {
+            let corners = |r: &(f32, Option<[f32; 4]>)| r.1.unwrap_or([r.0; 4]);
+            let blended = interpolate_radii(corners(a), corners(b), t);
+            if a.1.is_none() && b.1.is_none() {
+                (blended[0], None)
+            } else {
+                (blended.iter().copied().fold(0.0, f32::max), Some(blended))
+            }
+        }) {
+            out.radius = Some(r);
+        }
+        if let Some(x) = both(&self.transform, &to.transform, |a, b| {
+            let none = ElementTransform::default();
+            let a = a.as_ref().unwrap_or(&none);
+            let b = b.as_ref().unwrap_or(&none);
+            interpolate_transform(a, b, t, size)
+        }) {
+            out.transform = Some(Some(x));
+        }
+        if let Some(Some(c)) = both(&self.outline_color, &to.outline_color, |a, b| {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.interpolate(b, t)),
+                _ => None,
+            }
+        }) {
+            out.outline_color = Some(Some(c));
+        }
+        out
     }
 }
 
@@ -373,11 +554,13 @@ fn edges_eq(a: &Edges, b: &Edges) -> bool {
 pub trait StyleOwner: 'static {
     /// Where the owner's values sit: a higher rank lays over a lower one.
     ///
-    /// The shipped systems use, lowest first: 10 for a CSS `transition`
-    /// tween, 20 for a widget's own state fill (a toggle's checked track,
-    /// a selected tab) and for the layout holders, 30 for the `:disabled`
-    /// / `:drag-over` state patches, 40 for the hover tint, 50 for the
-    /// press tint, 60 for the hover and focus borders.
+    /// The shipped systems use, lowest first: 20 for a widget's own state
+    /// fill (a toggle's checked track, a selected tab) and for the layout
+    /// holders, 30 for the state patches, 40 for the hover tint, 50 for the
+    /// press tint, 60 for the hover and focus borders, 70 for a keyframe
+    /// animation and 80 for a CSS `transition` tween. Animations and
+    /// transitions sit above the rest because CSS orders them above every
+    /// normal declaration, and a state rule is one.
     const RANK: u8;
 }
 
@@ -412,6 +595,23 @@ impl StyleOverrides {
     /// True when nothing is held.
     pub fn is_empty(&self) -> bool {
         self.claims.is_empty()
+    }
+
+    /// Every field some holder other than `O` holds.
+    pub fn held_by_others<O: StyleOwner>(&self) -> StyleFields {
+        let owner = TypeId::of::<O>();
+        self.claims
+            .iter()
+            .filter(|c| c.owner != owner)
+            .fold(StyleFields::empty(), |f, c| f | c.values.fields())
+    }
+
+    /// Every field a holder ranked below `rank` holds.
+    pub fn held_below(&self, rank: u8) -> StyleFields {
+        self.claims
+            .iter()
+            .filter(|c| c.rank < rank)
+            .fold(StyleFields::empty(), |f, c| f | c.values.fields())
     }
 
     /// What `O` holds, if anything.
@@ -544,6 +744,8 @@ pub fn hold_on<O: StyleOwner>(ent: &mut EntityWorldMut<'_>, values: StyleValues)
             visuals: ent.get::<Visuals>(),
             text: ent.get::<TextStyle>(),
             opacity: ent.get::<Opacity>(),
+            transform: ent.get::<ElementTransform>(),
+            outline_color: ent.get::<OutlineColor>(),
         },
     );
     let mut overrides = ent.take::<StyleOverrides>().unwrap_or_default();
@@ -587,6 +789,24 @@ pub fn write_on(ent: &mut EntityWorldMut<'_>, values: &StyleValues) {
         }
         Some(None) => {
             ent.remove::<Opacity>();
+        }
+        None => {}
+    }
+    match values.transform_change(ent.get::<ElementTransform>()) {
+        Some(Some(t)) => {
+            ent.insert(t);
+        }
+        Some(None) => {
+            ent.remove::<ElementTransform>();
+        }
+        None => {}
+    }
+    match values.outline_change(ent.get::<OutlineColor>()) {
+        Some(Some(c)) => {
+            ent.insert(c);
+        }
+        Some(None) => {
+            ent.remove::<OutlineColor>();
         }
         None => {}
     }

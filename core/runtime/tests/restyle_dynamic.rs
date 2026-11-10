@@ -329,7 +329,7 @@ fn set_style_applies_without_a_stylesheet() {
 
 /// A `set_style` write to an animatable property tweens when the element
 /// declares a matching transition, exactly as a class flip does: the fill
-/// stays at the old colour and a `BackgroundTransition` drives it.
+/// stays at the old colour and a running transition drives it.
 #[test]
 fn set_style_tweens_when_a_transition_is_declared() {
     let mut h = Harness::new(
@@ -351,7 +351,7 @@ fn set_style_tweens_when_a_transition_is_declared() {
     assert!(
         h.app
             .world
-            .get::<lumen_primitives::BackgroundTransition>(entity)
+            .get::<lumen_primitives::ActiveTransitions>(entity)
             .is_some(),
         "an animatable inline change must start a tween, not snap"
     );

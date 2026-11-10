@@ -259,12 +259,13 @@ pub fn extract_focus_outlines(main: &mut World, render: &mut World) {
         Option<&'a Opacity>,
         Option<&'a Visuals>,
         Option<&'a lumen_core::input::FocusVisible>,
+        Option<&'a lumen_core::components::OutlineColor>,
     );
     let mut q = main.query_filtered::<Row, With<Focused>>();
     let pairs: Vec<(Entity, ExtractedOutline)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
-        .filter_map(|(e, t, ix, opacity, vis, focus_visible)| {
+        .filter_map(|(e, t, ix, opacity, vis, focus_visible, held_color)| {
             // `:focus-visible` ring wins while focus is keyboard-driven;
             // otherwise the always-on `:focus` ring (which may be absent
             // - a skin can style keyboard focus only).
@@ -289,7 +290,7 @@ pub fn extract_focus_outlines(main: &mut World, render: &mut World) {
                 ExtractedOutline {
                     origin: t.absolute - off - glam::Vec2::splat(grow),
                     size: t.size + glam::Vec2::splat(grow * 2.0),
-                    stroke: alpha.apply(ring.color),
+                    stroke: alpha.apply(held_color.map_or(ring.color, |c| c.0)),
                     width: ring.width,
                     radius: if radius > 0.0 {
                         radius + grow.max(0.0)
@@ -338,11 +339,14 @@ pub fn extract_focus_outlines(main: &mut World, render: &mut World) {
 fn bg_tween_params(
     specs: Option<&crate::transition::TransitionSpecs>,
     default_duration: f32,
-) -> (f32, crate::transition::Easing) {
+) -> (f32, lumen_core::motion::Easing) {
     match specs.and_then(|s| s.for_property(crate::transition::TransitionProperty::BackgroundColor))
     {
-        Some(spec) => (spec.duration.as_secs_f32().max(f32::EPSILON), spec.easing),
-        None => (default_duration, crate::transition::Easing::EaseOut),
+        Some(spec) => (
+            spec.duration.as_secs_f32().max(f32::EPSILON),
+            spec.easing.clone(),
+        ),
+        None => (default_duration, lumen_core::motion::Easing::EASE_OUT),
     }
 }
 
