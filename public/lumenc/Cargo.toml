@@ -241,6 +241,8 @@ lumen-script = { workspace = true }
 lumen-scene = { workspace = true }
 # bg_image.rs asserts the background image's decode and marker components.
 lumen-assets = { workspace = true }
+# animations.rs moves an animation along its timeline by its start.
+lumen-animations = { workspace = true }
 lumen-candela = { workspace = true }
 lumen-candela-dev = { workspace = true }
 # The deprecated hosts, named by the tests of an app that runs more than one

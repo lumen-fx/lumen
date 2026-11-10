@@ -1,0 +1,27 @@
+[package]
+name = "lumen-animations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CSS keyframe animations for Lumen: @keyframes and the animation properties, run on the desktop."
+keywords = ["ui", "gui", "css", "animation", "lumen"]
+categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
+
+[dependencies]
+# The optional-subsystem entry this crate registers itself through.
+lumen-capability = { workspace = true }
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-scene = { workspace = true }
+lumen-primitives = { workspace = true }
+# The `CustomEvent` an animation raises on its element, and the script
+# functions behind `animations::animate`.
+lumen-script = { workspace = true }
+bevy_ecs.workspace = true
+glam.workspace = true
+tracing.workspace = true

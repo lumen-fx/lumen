@@ -619,6 +619,15 @@ pub(crate) fn load_ir(
         let sheet = parser
             .parse_css(css_src)
             .map_err(|e| RunError::ParseCss(e.placed_with(&css_map)))?;
+        // What the desktop does not animate in a keyframe body, at its
+        // place in the file: the body is browser CSS and reaches the web
+        // target whole, so this is advice, never an error.
+        for (offset, message) in lumen_ir::animation::keyframe_diagnostics(&sheet.at_rules) {
+            let place = lumen_ir::source_map::SourceError::new(message)
+                .at_offset(css_src, offset)
+                .placed_with(&css_map);
+            eprintln!("{place}");
+        }
         for mut rule in sheet.rules {
             // Author origin is the parser default; the source-order bump
             // keeps author rules ordered after UA + skin rules within the

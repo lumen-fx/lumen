@@ -642,6 +642,7 @@ pub fn roll_up_frame_dirty(
         RemovedComponents<Window>,
         RemovedComponents<WindowOf>,
         RemovedComponents<crate::transform::ElementTransform>,
+        RemovedComponents<crate::components::OutlineColor>,
     ),
     property_store: Option<Res<crate::property_store::PropertyStore>>,
     component_changed: Query<
@@ -668,7 +669,10 @@ pub fn roll_up_frame_dirty(
             bevy_ecs::query::Changed<EchoMode>,
             bevy_ecs::query::Added<EchoMode>,
             bevy_ecs::query::Added<Visible>,
-            bevy_ecs::query::Changed<crate::transform::ElementTransform>,
+            Or<(
+                bevy_ecs::query::Changed<crate::transform::ElementTransform>,
+                bevy_ecs::query::Changed<crate::components::OutlineColor>,
+            )>,
         )>,
     >,
     mut removed_childof: RemovedComponents<bevy_ecs::hierarchy::ChildOf>,
@@ -692,8 +696,12 @@ pub fn roll_up_frame_dirty(
     // `FrameDirty` on a later idle tick and preventing the app from parking.
     // `.count()` advances the cursor past every entry this tick while still
     // reporting whether any ChildOf was removed.
-    // A transform taken off moves paints back without any other component changing.
-    let removed_any = removed_childof.read().count() > 0 || removed_windows.2.read().count() > 0;
+    // A transform or a held outline color taken off changes the paint without
+    // any other component changing. Every reader is drained, as above.
+    let removed_childof_any = removed_childof.read().count() > 0;
+    let removed_transform = removed_windows.2.read().count() > 0;
+    let removed_outline = removed_windows.3.read().count() > 0;
+    let removed_any = removed_childof_any || removed_transform || removed_outline;
     let windows_gone = removed_windows.0.read().count() > 0 || removed_windows.1.read().count() > 0;
     if fd.dirty {
         return;

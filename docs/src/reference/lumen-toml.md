@@ -234,6 +234,7 @@ its builtins prints a warning when the app runs.
 
 | Key | Carried by default when | Effect |
 |-----|-------------------------|--------|
+| `animations` | the app's sources mention `@keyframes`, `animation` or `animate(` | The keyframe engine: `@keyframes`, the `animation` properties and `animations::animate`. Without it they parse and do nothing on the desktop; transitions are not part of it and always run. |
 | `http-fetch` | the app calls `fetch(` or `http(` | The HTTP client behind the scripts' `fetch()` and `http()` builtins. Without it both calls report the missing client. |
 | `async` | the app calls a file-dialog builtin | The async bridge file dialogs resolve on; on macOS they do not open without it. |
 | `os-filedialog` | the app calls a file-dialog builtin | The file dialogs. |

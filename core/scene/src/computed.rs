@@ -119,6 +119,13 @@ pub struct ComputedStyle {
     pub state_visuals: Option<StateVisuals>,
     /// The `transition` declarations.
     pub transitions: Vec<TransitionSpec>,
+    /// The `animation-*` declarations, as syntax: a subsystem that runs
+    /// animations reads them.
+    pub animation: Option<crate::style_sheet::AnimationDeclarations>,
+    /// The `animation-*` declarations state rules set.
+    pub state_animations: Option<crate::style_sheet::StateAnimations>,
+    /// The fields `!important` declarations set.
+    pub important: Option<crate::style_sheet::ImportantFields>,
     /// Overlay scrollbar styling.
     pub scrollbar: Option<ScrollbarStyle>,
     /// `fit` for an image.
@@ -305,6 +312,18 @@ impl ComputedStyle {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            animation: (!attrs.animation.is_empty())
+                .then(|| crate::style_sheet::AnimationDeclarations(attrs.animation.clone())),
+            state_animations: (attrs.state_animations != Default::default())
+                .then(|| crate::style_sheet::StateAnimations(attrs.state_animations.clone())),
+            important: {
+                let fields = attrs
+                    .important
+                    .iter()
+                    .filter_map(|n| crate::style_sheet::style_field_of(n))
+                    .fold(StyleFields::empty(), |f, x| f | x);
+                (!fields.is_empty()).then_some(crate::style_sheet::ImportantFields(fields))
+            },
             scrollbar: scrollbar_style(attrs),
             image_fit: attrs.image_fit.map(ImageFit::from),
             image_rendering: attrs
@@ -469,6 +488,9 @@ impl ComputedStyle {
         if !self.transitions.is_empty() {
             ent.insert(TransitionSpecs(self.transitions));
         }
+        insert_some(ent, self.animation);
+        insert_some(ent, self.state_animations);
+        insert_some(ent, self.important);
         insert_some(ent, self.scrollbar);
         insert_some(ent, self.image_fit);
         insert_some(ent, self.image_rendering);
@@ -541,6 +563,9 @@ impl ComputedStyle {
         );
         put(ent, self.interaction);
         put(ent, self.state_visuals);
+        put(ent, self.animation);
+        put(ent, self.state_animations);
+        put(ent, self.important);
         put(ent, self.scrollbar);
         put(ent, self.image_fit);
         put(ent, self.image_rendering);

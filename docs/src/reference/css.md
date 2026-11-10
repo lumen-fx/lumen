@@ -35,12 +35,13 @@ importing file wins.
 `@media` blocks nest up to 32 levels, as do `:is()`, `:where()`, and
 `:not()` arguments.
 
-`@import`, `@media`, and `@font-face` are the at-rules Lumen implements.
-`@keyframes` and `@font-face` are kept as authored and handed to the web
-target, which writes them back out; the desktop ignores `@keyframes`. A
-`url()` inside a kept block names a file relative to the app directory, the
-same place an `<image src>` names one from, and a web build copies that file
-into the site and points the block at the copy.
+`@import`, `@media`, `@font-face` and `@keyframes` are the at-rules Lumen
+implements. `@keyframes` and `@font-face` are kept as authored and handed to
+the web target, which writes them back out; the desktop reads them too (see
+[Animations](#animations) for `@keyframes`). A `url()` inside a kept block
+names a file relative to the app directory, the same place an `<image src>`
+names one from, and a web build copies that file into the site and points the
+block at the copy.
 
 On the desktop a `@font-face` reads `font-family`, `src`, `font-weight`, and
 `font-style`. `src` is tried in order and the first TrueType or OpenType file
@@ -280,16 +281,17 @@ Features are joined with `and`. Comma-separated query lists, `or`, and
 | Feature | Values | Matches when |
 | --- | --- | --- |
 | `prefers-color-scheme` | `dark`, `light`, `no-preference` | The OS color scheme equals the value. With no known scheme, only `no-preference` matches. |
-| `prefers-reduced-motion` | `reduce`, `no-preference` | Always `no-preference`; see below. |
+| `prefers-reduced-motion` | `reduce`, `no-preference` | The OS asks for less motion (`reduce`), or does not. |
 | `prefers-contrast` | `more`, `less`, `custom`, `no-preference` | Always `no-preference`; see below. |
 | `min-width` | length in px | The viewport is at least that wide. |
 | `max-width` | length in px | The viewport is at most that wide. |
 | `width` | length in px | The viewport is that wide. |
 
-Lumen reads the OS color scheme and the window size. It does not read the
-motion or contrast preference from the OS yet, so `prefers-reduced-motion`
-and `prefers-contrast` only ever match `no-preference`. Give people an
-in-app switch for anything heavily animated or low-contrast.
+Lumen reads the OS color scheme, the OS motion preference and the window
+size. The motion preference is GNOME's "Animations" switch on Linux, "Reduce
+motion" on macOS and "Show animations in Windows" on Windows. It does not read
+the contrast preference yet, so `prefers-contrast` only ever matches
+`no-preference`.
 
 ## Value forms
 
@@ -797,24 +799,51 @@ cycle over it; a duration list without a property list produces nothing.
 | Property | Values | Default |
 | --- | --- | --- |
 | `animation` | the CSS shorthand, comma separated | none |
-| `animation-name` | comma-separated `@keyframes` names | none |
-| `animation-duration` | comma-separated durations | none |
-| `animation-timing-function` | comma-separated easings | none |
-| `animation-delay` | comma-separated durations | none |
-| `animation-iteration-count` | comma-separated counts or `infinite` | none |
-| `animation-direction` | comma-separated directions | none |
-| `animation-fill-mode` | comma-separated fill modes | none |
-| `animation-play-state` | `running` or `paused` | none |
+| `animation-name` | comma-separated `@keyframes` names, or `none` | `none` |
+| `animation-duration` | comma-separated durations | `0s` |
+| `animation-timing-function` | comma-separated easings | `ease` |
+| `animation-delay` | comma-separated durations; negative starts part-way in | `0s` |
+| `animation-iteration-count` | comma-separated counts, fractions allowed, or `infinite` | `1` |
+| `animation-direction` | `normal`, `reverse`, `alternate`, `alternate-reverse` | `normal` |
+| `animation-fill-mode` | `none`, `forwards`, `backwards`, `both` | `none` |
+| `animation-play-state` | `running`, `paused` | `running` |
+| `animation-composition` | `replace`, `add`, `accumulate` | `replace` |
 
-These reach the web target and do nothing on the desktop, which has no
-keyframe engine; `transition` is what animates a desktop app. Values are
-written out as authored, so the browser reads the standard CSS meaning of
-each one.
+The properties mean what they mean in CSS, and the shorthand reads its terms
+the CSS way: the first time is the duration and a second the delay, and a
+keyword that could be a longhand's value is that value before it is a name.
+Every list cycles over `animation-name`.
 
-A `@keyframes` block is browser CSS, not Lumen's dialect: its body is
-carried through untouched, so a keyframe declares `background`,
-`transform` and `opacity` rather than `bg`. A block written inside
-`@media` is emitted inside the same query.
+A `@keyframes` body is browser CSS, not Lumen's dialect, since the web target
+writes it out as authored: a keyframe declares `background`, `color`,
+`border-radius` and `box-shadow`, not `bg` or `radius`. Selectors are `from`,
+`to` and percentages, a comma list sets several, and a frame may set its own
+`animation-timing-function` for the way to the next frame. The desktop
+animates `opacity`, `background` (`background-color`), `color`,
+`border-color`, `box-shadow`, `border-radius` and its corners,
+`outline-color`, and the transforms (`transform`, `translate`, `rotate`,
+`scale`, `transform-origin`). Any other property in a body still reaches the
+browser; on the desktop `lumenc check` warns about it with its place in the
+file. `var()` in a body reads the `:root` custom properties. A block inside
+`@media` applies while its query matches, on both targets.
+
+An animation starts when its name appears in an element's `animation-name`
+and is cancelled when the name goes away, so `.button:hover { animation:
+pulse 1s }` starts on hover and stops on leave. A state rule (`:hover`,
+`:focus`, `:active`, `:disabled`, `:drag-over`) can set any `animation-*`
+longhand; `.card:hover { animation-play-state: paused }` pauses on hover.
+Hiding an element (`display: none`, a closed `<if mode="hide">`) cancels its
+animations, and showing it starts them again.
+
+An animated value outranks every rule, state rule and inline style, and
+loses to an `!important` declaration and to a running transition, as CSS
+orders them. Two animations on one property: the later in the list wins.
+`animation-composition: add` and `accumulate` parse and run as `replace` on
+the desktop, with a warning; the web target runs them as written.
+
+On the desktop the `animations` capability runs them: an app packaged
+without it (see [`[capabilities]`](lumen-toml.md#capabilities)) parses
+these properties and animates nothing.
 
 ### Scrollbars
 

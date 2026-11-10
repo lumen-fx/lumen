@@ -270,6 +270,24 @@ fn on_ready() {
 }
 ```
 
+A CSS animation raises `animationstart`, `animationiteration`, `animationend`
+and `animationcancel` on its element the same way, on the desktop and in a
+web build. Their `detail()` carries `animation_name`, `elapsed_time` in
+seconds, and `pseudo_element`:
+
+```rust
+fn on_ready() {
+    get_by_id("toast").on("animationend", "toast_gone");
+}
+
+fn toast_gone(ev: int) {
+    let name = (event(ev).detail() as {string: any})["animation_name"] as string;
+    if name == "slide-out" {
+        get_by_id("toast").set_class("hidden");
+    }
+}
+```
+
 They travel the same capture, target and bubble path as the built-in events.
 Where a module asks a question with one, as `panelclose` asks whether the
 panel may close, `prevent_default` is the answer no; the module's

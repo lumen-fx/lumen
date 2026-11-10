@@ -171,20 +171,19 @@ fn compile_dir(
     };
 
     // Resolve `@import "..."` (imported-first) before parsing the sheet.
-    let css = match &css_raw {
+    let (css, css_map) = match &css_raw {
         Some(src) => {
             let mut imports: Vec<PathBuf> = Vec::new();
-            Some(
-                crate::parse::resolve::resolve_css_imports(
-                    src,
-                    &css_path,
-                    &crate::parse::resolve::FsLoader,
-                    &mut imports,
-                )
-                .map_err(|e| CompileError::ParseCss(e.to_string()))?,
+            let (text, map) = crate::parse::resolve::resolve_css_imports_mapped(
+                src,
+                &css_path,
+                &crate::parse::resolve::FsLoader,
+                &mut imports,
             )
+            .map_err(|e| CompileError::ParseCss(e.to_string()))?;
+            (Some(text), map)
         }
-        None => None,
+        None => (None, lumen_ir::source_map::SourceMap::default()),
     };
 
     // Built-in Palette light/dark theme, parsed once and reused below for
@@ -296,6 +295,14 @@ fn compile_dir(
     let ua_rule_count = combined_rules.len();
     if let Some(css_src) = &css {
         let sheet = crate::parse_css(css_src).map_err(|e| CompileError::ParseCss(e.to_string()))?;
+        // What the desktop does not animate in a keyframe body, at its
+        // place in the file; advice, the same `load_ir` prints.
+        for (offset, message) in lumen_ir::animation::keyframe_diagnostics(&sheet.at_rules) {
+            let place = lumen_ir::source_map::SourceError::new(message)
+                .at_offset(css_src, offset)
+                .placed_with(&css_map);
+            eprintln!("{place}");
+        }
         for mut rule in sheet.rules {
             rule.source_order += ua_rule_count;
             combined_rules.push(rule);

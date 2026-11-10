@@ -41,6 +41,7 @@ pub mod hooks;
 // one carries none of it: `lumenc package` relinking the shared engine for an
 // app from the engine kit, and `lumenc package --static` replaying the link
 // kit.
+use lumen_animations_capability as _;
 #[cfg(feature = "async")]
 use lumen_async_tokio_capability as _;
 #[cfg(feature = "devtools")]

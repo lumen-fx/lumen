@@ -256,20 +256,13 @@ fn collect_width_breakpoints(sheet: &lumen_ir::css::Stylesheet, out: &mut Vec<f3
     }
 }
 
-/// Live copy of the combined (skin + user) stylesheet, kept as a
-/// resource so [`reapply_computed_styles`] can re-run the cascade on a
-/// theme / media flip without re-reading `main.css` from disk. Refreshed
-/// on every hot reload so an edited stylesheet re-resolves correctly.
-#[derive(Resource, Clone)]
-pub(crate) struct RuntimeStylesheet(pub(crate) lumen_ir::css::Stylesheet);
-
-/// The last [`MediaContext`] observed by [`detect_media_change`]. Used
-/// to detect a color-scheme flip or a viewport-width breakpoint crossing
-/// between ticks. `None` until the first post-window tick, which forces
-/// one re-resolve against the real OS context (the initial load applied
-/// with the default best-guess context before the window existed).
-#[derive(Resource, Clone, Copy)]
-pub(crate) struct LastMediaContext(pub(crate) lumen_ir::css::MediaContext);
+// The live stylesheet and the media context it last resolved against live
+// in the scene crate, where a subsystem that reads `@keyframes` or
+// `@media` reaches them. `LastMediaContext` is absent until the first
+// post-window tick, which forces one re-resolve against the real OS context
+// (the initial load applied the default best-guess context before the
+// window existed).
+pub(crate) use lumen_scene::style_sheet::{LastMediaContext, RuntimeStylesheet};
 
 /// The [`StyleVersion`] value [`reapply_computed_styles`] last consumed.
 /// The re-resolver re-walks entities only when the live `StyleVersion`
@@ -293,16 +286,20 @@ pub(crate) fn media_context_for(
     world: &World,
     window: Option<Entity>,
 ) -> lumen_ir::css::MediaContext {
-    use lumen_ir::css::{ColorSchemePreference, MediaContext};
-    let color_scheme = world
-        .get_resource::<lumen_core::components::StyleManager>()
-        .map(|sm| {
-            if sm.effective_dark {
-                ColorSchemePreference::Dark
-            } else {
-                ColorSchemePreference::Light
-            }
-        });
+    use lumen_ir::css::{ColorSchemePreference, MediaContext, MotionPreference};
+    let manager = world.get_resource::<lumen_core::components::StyleManager>();
+    let color_scheme = manager.map(|sm| {
+        if sm.effective_dark {
+            ColorSchemePreference::Dark
+        } else {
+            ColorSchemePreference::Light
+        }
+    });
+    let reduced_motion = if manager.is_some_and(|sm| sm.reduce_motion) {
+        MotionPreference::Reduce
+    } else {
+        MotionPreference::NoPreference
+    };
     let viewport_width = match window {
         Some(window) => world
             .get::<lumen_core::window::WindowViewport>(window)
@@ -311,6 +308,7 @@ pub(crate) fn media_context_for(
     };
     MediaContext {
         color_scheme,
+        reduced_motion,
         viewport_width,
         ..Default::default()
     }
@@ -335,6 +333,8 @@ fn media_crosses(
         .map(|c| c.media_features.color_scheme)
         .unwrap_or(false);
     let scheme_changed = uses_scheme && prev.color_scheme != media.color_scheme;
+    let motion_changed = cache.is_some_and(|c| c.media_features.reduced_motion)
+        && prev.reduced_motion != media.reduced_motion;
     let width_crossed = match (prev.viewport_width, media.viewport_width) {
         (Some(o), Some(n)) => cache
             .map(|c| c.width_breakpoints.iter().any(|t| (o >= *t) != (n >= *t)))
@@ -344,7 +344,7 @@ fn media_crosses(
             .unwrap_or(false),
         (None, None) => false,
     };
-    scheme_changed || width_crossed
+    scheme_changed || motion_changed || width_crossed
 }
 
 /// The window and media context each surface root last restyled against,

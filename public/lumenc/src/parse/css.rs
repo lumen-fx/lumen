@@ -69,9 +69,19 @@ pub fn parse_css(src: &str) -> Result<Stylesheet, ParseError> {
     let (cleaned, removed) = strip_comments(src);
     let mut input = cleaned.as_str();
     let mut rules = Vec::new();
-    let mut at_rules = Vec::new();
+    let mut at_rules: Vec<AtRule> = Vec::new();
     let mut next_order = 0usize;
-    parse_rule_list(
+    // The parser counts in the text with the comments taken out; an offset
+    // it reports goes back into `src` by putting them back.
+    let in_source = |offset: usize| {
+        offset
+            + removed
+                .iter()
+                .take_while(|(at, _)| *at <= offset)
+                .map(|(_, len)| len)
+                .sum::<usize>()
+    };
+    let parsed = parse_rule_list(
         &mut input,
         cleaned.as_str(),
         None,
@@ -81,19 +91,16 @@ pub fn parse_css(src: &str) -> Result<Stylesheet, ParseError> {
         0,
     )
     .map_err(|e| match e {
-        // The parser counted in the text with the comments taken out; put
-        // them back.
         ParseError::At { offset, error } => ParseError::At {
-            offset: offset
-                + removed
-                    .iter()
-                    .take_while(|(at, _)| *at <= offset)
-                    .map(|(_, len)| len)
-                    .sum::<usize>(),
+            offset: in_source(offset),
             error,
         },
         e => e,
-    })?;
+    });
+    parsed?;
+    for rule in &mut at_rules {
+        rule.at = in_source(rule.at);
+    }
     Ok(Stylesheet { rules, at_rules })
 }
 
@@ -152,6 +159,7 @@ fn parse_rule_list(
         if input.starts_with('@') {
             if let Some(mut at_rule) = take_at_rule(input).map_err(|e| e.at(start))? {
                 at_rule.media = media.cloned();
+                at_rule.at += start;
                 at_out.push(at_rule);
             }
             continue;
@@ -195,6 +203,7 @@ fn take_at_rule(input: &mut &str) -> Result<Option<AtRule>, ParseError> {
                     prelude,
                     body: after[..close].to_string(),
                     media: None,
+                    at: b + 1,
                 });
             }
             *input = &after[close + 1..];

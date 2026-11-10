@@ -6,6 +6,7 @@
 //! - [`layout_ir`] - [`LayoutIR`](layout_ir::LayoutIR), the tree of styled
 //!   elements decoupled from ECS spawning, plus the `From` impls that convert
 //!   each IR spec into its `lumen_core` / `lumen_primitives` runtime type.
+//! - [`animation`] - CSS `animation-*` declarations and `@keyframes` bodies.
 //! - [`css`] - the CSS AST ([`Stylesheet`](css::Stylesheet)) and the
 //!   Cascade-5 application / re-application logic. The hand-rolled front-end
 //!   that *parses* CSS text into a [`Stylesheet`](css::Stylesheet) still lives
@@ -33,6 +34,7 @@
 #![warn(missing_docs)]
 
 pub mod addon;
+pub mod animation;
 pub mod artifact;
 pub mod css;
 pub mod css_vars;

@@ -617,11 +617,8 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<lumen_core::text_events::TextEditApplied>(world);
     register::<TextInputCommitted>(world);
     register::<ControlInput>(world);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        register::<CustomEvent>(world);
-        register::<CustomEventDelivered>(world);
-    }
+    register::<CustomEvent>(world);
+    register::<CustomEventDelivered>(world);
 }
 
 /// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so

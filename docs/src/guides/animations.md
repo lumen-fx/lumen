@@ -1,15 +1,16 @@
 # Animation
 
-Lumen animates through CSS transitions. A transition says how long a value
-takes to reach its new setting, and the runtime tweens it from wherever it is:
+Lumen animates through CSS, the way a browser does. A transition says how long
+a value takes to reach its new setting, and the runtime tweens it from wherever
+it is:
 
 ```css
 button { transition: bg 130ms ease; }
 .panel  { transition: opacity 150ms ease-out; }
 ```
 
-A `@keyframes` animation runs on the web target and does nothing on the
-desktop; the section below says what it is for.
+A `@keyframes` animation plays a sequence of values on its own, once or in a
+loop; the [keyframes section](#keyframes) below covers it.
 
 ## Writing a transition
 
@@ -130,26 +131,66 @@ already is does nothing.
 Transitions do not advance while the window is unfocused or hidden; values
 settle immediately instead.
 
-## Keyframes, on the web
+## Keyframes
 
-A `@keyframes` block and the `animation` property that names it are for the
-web target: `lumenc web` writes both into the site's stylesheet and the
-browser runs the animation. On the desktop they do nothing, silently, and a
-transition is the answer there.
+A `@keyframes` block names a sequence of values, and the `animation` property
+plays it on an element:
 
 ```css
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; transform: scale(0.96); }
 }
 
-.spinner { animation: spin 2s linear infinite; }
+.badge.new { animation: pulse 1.2s ease-in-out infinite; }
 ```
 
+The shorthand takes a name, a duration, an easing, a delay, an iteration
+count or `infinite`, a direction (`reverse`, `alternate`), a fill mode
+(`forwards` keeps the last frame after it ends, `backwards` shows the first
+frame during the delay, `both` does both) and a play state (`paused`), in any
+order. The longhands (`animation-delay`, `animation-fill-mode`, ...) set one at
+a time. A negative delay starts part-way in.
+
 A keyframe body is written in browser CSS, not in Lumen's shortened names:
-declare `background` and `transform`, not `bg`. Put the block inside
-`@media (prefers-reduced-motion: no-preference)` and the query is emitted
-around it, so a visitor who asked for less motion gets none.
+declare `background` and `border-radius`, not `bg` and `radius`. The web target
+writes the block out as you wrote it, and the desktop reads the same names.
+The desktop animates opacity, colors, borders' colors, shadows, radii,
+outline colors and transforms; anything else in a body runs in a browser and
+is skipped on the desktop, and `lumenc check` says so with the line it is on.
+
+An animation starts when its name lands on the element and stops when the name
+goes away, so a state rule starts and stops one:
+
+```css
+.card:hover { animation: lift 300ms ease-out forwards; }
+.spinner:hover { animation-play-state: paused; }
+```
+
+Adding a class from a script starts one the same way. Hiding the element stops
+its animations, and showing it again starts them from the beginning.
+
+An animated value outranks the element's rules, its state rules and its inline
+style, as in CSS. An `!important` declaration outranks the animation, and a
+transition that starts while it runs plays over it.
+
+Each animation raises events on its element that a script can bind:
+`animationstart`, `animationiteration`, `animationend` and `animationcancel`.
+See [scripting](scripting.md#handling-events) for what they carry.
+
+Put a block inside `@media (prefers-reduced-motion: no-preference)` and it
+applies only while the system asks for no less motion: the media query follows
+the OS's accessibility setting on the desktop, and the browser's in a web
+build.
+
+### What an animation costs
+
+An animation runs on the desktop's frame loop only while it moves something you
+can see. A delay, a `steps()` easing, and a paused or finished animation wake
+the app at the moment something changes, or not at all, instead of drawing
+every frame. An element scrolled out of view keeps its place in time and draws
+nothing until it comes back. An `infinite` animation on a visible element keeps
+the app drawing for as long as it shows, so stop it when it is not needed.
 
 ## Built-in motion
 
@@ -227,12 +268,11 @@ which is where a script draws something CSS cannot describe:
 - The selected state of a `tabs` strip, a `toggle`, and a slider thumb, which
   set their own colours and snap.
 
-CSS transitions do not take a script API for tweening a value directly; a
-frame callback is what a script drives motion from.
+A frame callback is what a script drives continuous motion from.
 
-`@media (prefers-reduced-motion: reduce)` parses but never matches yet, so give
-people their own way to turn off anything heavily animated. See
-[accessibility](accessibility.md).
+`@media (prefers-reduced-motion: reduce)` follows the OS setting: GNOME's
+"Animations" switch on Linux, "Reduce motion" on macOS, and "Show animations in
+Windows" on Windows. See [accessibility](accessibility.md).
 
 The built-in skins already set transitions for every control, with timings that
 match each platform's conventions, so a themed app moves correctly before you

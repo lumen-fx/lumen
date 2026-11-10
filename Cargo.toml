@@ -143,6 +143,7 @@ resolver = "2"
 members = [
     "capabilities/*",
     "core",
+    "core/animations",
     "core/assets",
     "core/capability",
     "core/capability/macros",
@@ -278,6 +279,8 @@ lumen-js = { path = "std/js", default-features = false }
 lumen-layout-taffy = { path = "backends/layout-taffy" }
 lumen-lua = { path = "std/lua", default-features = false }
 lumen-mcp = { path = "core/mcp" }
+lumen-animations = { path = "core/animations" }
+lumen-animations-capability = { path = "capabilities/animations" }
 # The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
 # feature here, so dropping that feature drops the shared engine with it.
 lumen-module = { path = "public/lumen-module", default-features = false }

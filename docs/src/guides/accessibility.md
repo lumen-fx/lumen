@@ -112,10 +112,16 @@ user cannot see where they are. See [styling](styling.md).
 `@media (prefers-color-scheme: dark)` follows the desktop's light or dark
 setting and updates live when it changes.
 
-`prefers-reduced-motion` and `prefers-contrast` are accepted by the stylesheet
-parser but never match, so rules inside them do not apply. Until they do, offer
-your own setting for anything heavily animated. See
+`@media (prefers-reduced-motion: reduce)` follows the system's request for
+less motion: GNOME's "Animations" switch on Linux, "Reduce motion" on macOS,
+and "Show animations in Windows" on Windows. On Linux a change applies live;
+on macOS and Windows it is read at launch and whenever a window gains focus.
+Put a decorative animation inside `@media (prefers-reduced-motion:
+no-preference)` so it stops for people who asked for that. See
 [animations](animations.md).
+
+`prefers-contrast` is accepted by the stylesheet parser but never matches, so
+rules inside it do not apply.
 
 ## Limits today
 
