@@ -438,7 +438,22 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     app.world.insert_resource(placement);
     let menubar = super::menubar::mount_in_window_menubar(&mut ir, placement.native);
     use crate::spawn::SpawnIntoWorld;
+    let starting_style = ir
+        .combined_stylesheet
+        .as_ref()
+        .is_some_and(|s| s.has_starting_style());
     let root = ir.spawn_into(&mut app.world);
+    // The first frame resolves the document from scratch; with an
+    // `@starting-style` in the sheet, it transitions every element from it,
+    // as a browser does on load.
+    if starting_style {
+        app.world
+            .insert_resource(lumen_scene::style_sheet::EntryExitStyles {
+                starting_style: true,
+                leaving: false,
+            });
+        lumen_scene::style_sheet::mark_entering(&mut app.world, root);
+    }
     super::menubar::finish_in_window_menubar(&mut app.world, root, menubar);
     crate::run::restyle::install_root_class_list(&mut app.world, root);
     // The `<if>` / `<for>` bodies `on_start`'s writes open, mounted before the

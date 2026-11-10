@@ -413,7 +413,7 @@ impl ComputedStyle {
 
     /// The values a holder in [`StyleOverrides`] can hold, as this
     /// computes them.
-    fn holdable(&self) -> StyleValues {
+    pub fn holdable(&self) -> StyleValues {
         let v = self.visuals.as_ref();
         StyleValues {
             display: Some(self.style.display),
@@ -629,6 +629,9 @@ fn start_transitions(
     fresh: &StyleValues,
     animate: bool,
 ) {
+    // An element entering the tree starts its transitions from its
+    // `@starting-style`, as though it had shown that a moment ago.
+    let starting = ent.take::<lumen_primitives::StartingStyle>();
     let running = ent.get::<ActiveTransitions>();
     if specs.0.is_empty() && running.is_none() {
         return;
@@ -664,6 +667,14 @@ fn start_transitions(
             }
             continue;
         };
+        if let Some(start) = starting
+            .as_ref()
+            .map(|s| s.0.clone().restricted(field))
+            .filter(|s| s.fields() == field && shown(s.clone()) != shown(new.clone()))
+        {
+            start_transition(ent, field, start, new, spec, now);
+            continue;
+        }
         // The cascade's value before this restyle: what a holder recorded
         // as resting, else what shows.
         let old = if held.intersects(field) {

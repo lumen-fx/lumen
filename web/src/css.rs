@@ -303,16 +303,15 @@ pub fn rules_css(sheet: &Stylesheet) -> String {
     blocks.sort_by_key(|block| block.key);
 
     let mut out = String::new();
-    let mut open: Option<&str> = None;
+    let mut open: Option<&Wrapper> = None;
     for block in &blocks {
-        let media = block.media.as_deref();
+        let media = block.media.as_ref();
         if media != open {
-            if open.is_some() {
-                out.push_str("}\n");
+            if let Some(w) = open {
+                out.push_str(&"}\n".repeat(w.depth));
             }
-            if let Some(query) = media {
-                out.push_str("@media ");
-                out.push_str(query);
+            if let Some(w) = media {
+                out.push_str(&w.opener);
                 out.push_str(" {\n");
             }
             open = media;
@@ -321,10 +320,47 @@ pub fn rules_css(sheet: &Stylesheet) -> String {
             write_rule(&mut out, rule, media.is_some());
         }
     }
-    if open.is_some() {
-        out.push_str("}\n");
+    if let Some(w) = open {
+        out.push_str(&"}\n".repeat(w.depth));
     }
     out
+}
+
+/// The blocks a rule is written inside: `@media`, `@starting-style`, or
+/// the one within the other.
+#[derive(Clone, Debug, PartialEq)]
+struct Wrapper {
+    /// What opens them, without the last `{`.
+    opener: String,
+    /// How many blocks it opens.
+    depth: usize,
+}
+
+impl Wrapper {
+    fn of(media: &lumen_ir::css::MediaQuery) -> Self {
+        let starting = media
+            .features
+            .contains(&lumen_ir::css::MediaFeature::StartingStyle);
+        let conditions = media
+            .features
+            .iter()
+            .any(|f| *f != lumen_ir::css::MediaFeature::StartingStyle);
+        let query = format!("@media {}", media_query_to_css(media));
+        match (conditions, starting) {
+            (true, true) => Wrapper {
+                opener: format!("{query} {{\n@starting-style"),
+                depth: 2,
+            },
+            (false, true) => Wrapper {
+                opener: "@starting-style".to_string(),
+                depth: 1,
+            },
+            (_, false) => Wrapper {
+                opener: query,
+                depth: 1,
+            },
+        }
+    }
 }
 
 /// One rule as it is written out.
@@ -336,7 +372,7 @@ struct OutRule {
 /// A rule and the state rules it generated, which stay beside it.
 struct Block {
     key: SortKey,
-    media: Option<String>,
+    media: Option<Wrapper>,
     rules: Vec<OutRule>,
 }
 
@@ -526,7 +562,7 @@ fn blocks_for(rule: &Rule, tokens: &Tokens) -> Vec<Block> {
             .push(selector_to_web(selector, &names));
     }
 
-    let media = rule.media.as_ref().map(media_query_to_css);
+    let media = rule.media.as_ref().map(Wrapper::of);
     let (plain, states) = split_declarations(rule, tokens);
     order
         .into_iter()

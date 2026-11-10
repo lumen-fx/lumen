@@ -175,7 +175,8 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`crate::layout_ir::EasingIr`] names its curves as CSS defines them and
 /// gains `steps()` and `linear()`, and
 /// [`crate::layout_ir::TransitionPropertyIr`] gains the paint properties
-/// beyond the first four.
+/// beyond the first four, and [`crate::css::MediaFeature`] gains
+/// `StartingStyle`, which marks the rules inside `@starting-style`.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

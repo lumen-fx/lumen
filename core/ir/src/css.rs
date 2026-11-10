@@ -110,6 +110,15 @@ pub struct Stylesheet {
 }
 
 impl Stylesheet {
+    /// Whether any rule sits inside `@starting-style`.
+    pub fn has_starting_style(&self) -> bool {
+        self.rules.iter().any(|r| {
+            r.media
+                .as_ref()
+                .is_some_and(|m| m.features.contains(&MediaFeature::StartingStyle))
+        })
+    }
+
     /// Returns the union of class names appearing in any selector.
     /// The runtime class-change reapply path uses this as a fast-rejection
     /// set: when none of the changed classes are in the returned set, the
@@ -563,7 +572,7 @@ pub struct MediaQuery {
 }
 
 /// One `(feature: value)` test inside an `@media` query.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MediaFeature {
     /// `(prefers-color-scheme: dark | light | no-preference)`.
     PrefersColorScheme(ColorSchemePreference),
@@ -577,6 +586,11 @@ pub enum MediaFeature {
     MaxWidth(f32),
     /// `(width: <px>)`.
     Width(f32),
+    /// Not a media feature: what an `@starting-style` block puts on the
+    /// rules inside it. It matches only while the cascade resolves an
+    /// element's starting style, the values an element entering the tree
+    /// transitions from, and never in the ordinary cascade.
+    StartingStyle,
 }
 
 /// `prefers-color-scheme` value.
@@ -625,6 +639,9 @@ pub struct MediaContext {
     /// Viewport width in CSS pixels (used for width / min-width /
     /// max-width queries). `None` = no width-MQ matches.
     pub viewport_width: Option<f32>,
+    /// The cascade is resolving an element's starting style: the rules
+    /// inside `@starting-style` apply.
+    pub starting_style: bool,
 }
 
 impl Default for MediaContext {
@@ -634,6 +651,7 @@ impl Default for MediaContext {
             reduced_motion: MotionPreference::NoPreference,
             contrast: ContrastPreference::NoPreference,
             viewport_width: None,
+            starting_style: false,
         }
     }
 }
@@ -658,6 +676,7 @@ impl MediaFeature {
             Self::MinWidth(min) => ctx.viewport_width.is_some_and(|w| w >= *min),
             Self::MaxWidth(max) => ctx.viewport_width.is_some_and(|w| w <= *max),
             Self::Width(w) => ctx.viewport_width.is_some_and(|vp| (vp - *w).abs() < 0.5),
+            Self::StartingStyle => ctx.starting_style,
         }
     }
 }
@@ -2735,6 +2754,18 @@ impl<'a> RestyleWalk<'a> {
         self.media = media;
     }
 
+    /// `node`'s starting style: what it resolves to with the rules inside
+    /// `@starting-style` matching too. What an element entering the tree
+    /// transitions from. Resolve the element itself after this, with
+    /// [`Self::resolve`], before entering it.
+    pub fn resolve_starting(&mut self, node: &AncestorInfo) -> Attributes {
+        let media = self.media;
+        self.media.starting_style = true;
+        let attrs = self.resolve(node);
+        self.media = media;
+        attrs
+    }
+
     /// Descend into the element resolved last.
     pub fn enter(&mut self) {
         let (me, scope) = self
@@ -3172,13 +3203,21 @@ pub fn media_query_to_css(mq: &MediaQuery) -> String {
             MediaFeature::MinWidth(px) => format!("(min-width: {px}px)"),
             MediaFeature::MaxWidth(px) => format!("(max-width: {px}px)"),
             MediaFeature::Width(px) => format!("(width: {px}px)"),
+            MediaFeature::StartingStyle => unreachable!("filtered out above"),
         }
     }
-    if mq.features.is_empty() {
+    // `@starting-style` is a block of its own, not a condition `@media`
+    // can write; a caller that writes a rule out wraps it separately.
+    let features: Vec<&MediaFeature> = mq
+        .features
+        .iter()
+        .filter(|f| **f != MediaFeature::StartingStyle)
+        .collect();
+    if features.is_empty() {
         return "all".to_string();
     }
-    mq.features
-        .iter()
+    features
+        .into_iter()
         .map(feature)
         .collect::<Vec<_>>()
         .join(" and ")

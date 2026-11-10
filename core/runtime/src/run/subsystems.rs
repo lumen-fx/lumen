@@ -243,6 +243,9 @@ pub(crate) fn register_reactive(app: &mut App) {
         TickStage::Systems,
         crate::spawn::reconcile_if_blocks.before(lumen_assets::spawn_pending_decodes),
     );
+    // What the stylesheet asks of elements entering and leaving the tree,
+    // and the removal of a leaving element once its exit has run.
+    lumen_scene::style_sheet::install_entry_exit(app);
     // A `<split>`'s gutters and a `<tabs>`' strip, however their children
     // got there, and a tab's content once it shows.
     lumen_scene::widgets::install(app);

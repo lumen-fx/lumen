@@ -167,6 +167,8 @@ fn install_reconcilers(app: &mut App) {
         TickStage::Systems,
         (spawn::reconcile_for_blocks, spawn::reconcile_if_blocks),
     );
+    // A leaving element stays until the page's exit animation on it ends.
+    lumen_scene::style_sheet::install_entry_exit(app);
     // A `<split>`'s gutters and a `<tabs>`' strip, however their children
     // got there, and a tab's content once it shows.
     lumen_scene::widgets::install(app);

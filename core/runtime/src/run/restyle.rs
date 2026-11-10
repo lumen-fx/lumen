@@ -234,6 +234,9 @@ fn collect_media_usage(sheet: &lumen_ir::css::Stylesheet, out: &mut MediaFeature
                 MediaFeature::MinWidth(_) | MediaFeature::MaxWidth(_) | MediaFeature::Width(_) => {
                     out.viewport_width = true
                 }
+                // Not a condition of the window: only an entering element's
+                // own resolve matches it.
+                MediaFeature::StartingStyle => {}
             }
         }
     }
@@ -653,9 +656,18 @@ fn restyle_element(
         .filter(|&k| is_sibling_element(world, k))
         .collect();
     let node = cascade_node(world, entity, place, !tagged.is_empty());
+    // An element entering the tree is also resolved against the stylesheet's
+    // `@starting-style` rules: its transitions start from there.
+    let mut starting = None;
+    if element
+        && let Ok(mut ent) = world.get_entity_mut(entity)
+        && ent.take::<lumen_scene::style_sheet::Entering>().is_some()
+    {
+        starting = Some(walk.resolve_starting(&node));
+    }
     let mut attrs = walk.resolve(&node);
     if element {
-        commit_resolved(world, entity, &mut attrs, animate);
+        commit_resolved(world, entity, &mut attrs, starting.as_mut(), animate);
     }
     if children.is_empty() {
         return;
@@ -685,7 +697,13 @@ fn restyle_element(
 
 /// Build the element's style components from what the cascade resolved
 /// for it and commit them over the live ones.
-fn commit_resolved(world: &mut World, entity: Entity, attrs: &mut Attributes, animate: bool) {
+fn commit_resolved(
+    world: &mut World,
+    entity: Entity,
+    attrs: &mut Attributes,
+    starting: Option<&mut Attributes>,
+    animate: bool,
+) {
     use lumen_core::components::{BindDisabled, Disabled, LumenTag};
     use lumen_ir::layout_ir::WidgetPart;
     use lumen_scene::computed::{ComputedStyle, StyleContext};
@@ -732,6 +750,11 @@ fn commit_resolved(world: &mut World, entity: Entity, attrs: &mut Attributes, an
     };
     let computed = ComputedStyle::new(&ctx, attrs);
     let mut ent = world.entity_mut(entity);
+    if let Some(starting) = starting {
+        starting.style_role.clone_from(&attrs.style_role);
+        let from = ComputedStyle::new(&ctx, starting).holdable();
+        ent.insert(lumen_primitives::StartingStyle(from));
+    }
     computed.commit(&mut ent, animate);
     lumen_scene::spawn::apply_background_image(&mut ent, &tag, attrs);
     lumen_scene::spawn::apply_mask_image(&mut ent, attrs);

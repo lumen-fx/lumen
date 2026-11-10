@@ -488,9 +488,15 @@ pub fn apply_dom_commands(world: &mut World) {
                 ) {
                     // A node moved from elsewhere leaves a parent whose
                     // children changed too.
-                    reshaped.extend(world.get::<ChildOf>(node).map(|c| c.parent()));
+                    let moved_from = world.get::<ChildOf>(node).map(|c| c.parent());
+                    reshaped.extend(moved_from);
                     attach(world, parent, node, resolve(world, &reserved, before));
                     reshaped.push(parent);
+                    // A node entering the tree for the first time has a
+                    // starting style to transition from.
+                    if moved_from.is_none() {
+                        crate::style_sheet::mark_entering(world, node);
+                    }
                 }
             }
             ScriptCommand::ReplaceWith { old, new } => {
