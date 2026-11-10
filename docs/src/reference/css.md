@@ -303,7 +303,7 @@ the contrast preference yet, so `prefers-contrast` only ever matches
 | edges | 1 to 4 terms in top-right-bottom-left rotation; each `<n>`, `<n>px`, or `<n>%`. |
 | border width | `thin` (1px), `medium` (3px), `thick` (5px), or a px length. Percentages are rejected. |
 | duration | `<n>ms` or `<n>s`. |
-| easing | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(a, b, c, d)`, `steps(n[, <position>])`, `step-start`, `step-end`, `linear(<stop>, ...)`. The named curves are the cubic Beziers CSS defines. A `steps()` position is `jump-start` (`start`), `jump-end` (`end`, the default), `jump-none` or `jump-both`; a `linear()` stop is an output with up to two input percentages. |
+| easing | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(a, b, c, d)`, `steps(n[, <position>])`, `step-start`, `step-end`, `linear(<stop>, ...)`, `spring(<mass> <stiffness> <damping> [<velocity>])`. The named curves are the cubic Beziers CSS defines. A `steps()` position is `jump-start` (`start`), `jump-end` (`end`, the default), `jump-none` or `jump-both`; a `linear()` stop is an output with up to two input percentages. `spring()` is Lumen's: see [Springs](#springs). |
 | track size | `<n>`, `<n>px`, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(<min>, <max>)`. |
 
 ### Gradients
@@ -782,6 +782,25 @@ and ignored for the same reason.
 The `transition` shorthand resets the longhands. Otherwise
 `transition-property` defines the list and the duration and easing lists
 cycle over it; a duration list without a property list produces nothing.
+
+### Springs
+
+`spring(<mass> <stiffness> <damping> [<velocity>])` is a timing function that
+moves like a mass on a spring released toward the end value: an underdamped
+spring overshoots and settles, a stiff, damped one glides in. The arguments
+default to `1 100 10 0`, and commas between them are optional. A transition
+or `animation` entry that names a spring and no duration runs for as long as
+the spring takes to settle; one that names a duration plays the same curve
+over that time.
+
+```css
+.toast { transition: transform spring(1 170 26); }
+.badge { animation: pop spring(1 300 12) both; }
+```
+
+A browser has no `spring()`, so the web target writes the `linear()` curve the
+spring traces, and the settle time where an entry names no duration. The
+desktop plays the same sampled curve, so both move alike.
 
 ### Animations
 

@@ -166,6 +166,57 @@ impl Easing {
     }
 }
 
+/// A spring, sampled: the `linear()` stops that trace a mass on a spring
+/// released from `0` toward `1`, and the seconds it takes to settle there.
+///
+/// The spring is `mass`, `stiffness` and `damping` in the units Framer
+/// Motion and SwiftUI use, starting with `velocity` (in full travels per
+/// second). Settled is within a thousandth of the target and still. An
+/// underdamped spring overshoots, and its stops leave `[0, 1]` the way a
+/// browser's `linear()` lets them. A spring that never settles is cut at
+/// ten seconds.
+pub fn spring_curve(
+    mass: f32,
+    stiffness: f32,
+    damping: f32,
+    velocity: f32,
+) -> (Vec<LinearStop>, f32) {
+    const STEP: f32 = 1.0 / 1000.0;
+    const LIMIT: f32 = 10.0;
+    const SAMPLES: usize = 48;
+    let mass = mass.max(1e-3);
+    let stiffness = stiffness.max(1e-3);
+    let damping = damping.max(0.0);
+    // Integrate once to find the settle time, keeping the trace.
+    let (mut x, mut v) = (0.0f32, velocity);
+    let mut trace = vec![0.0f32];
+    let mut settled_at = 0usize;
+    let mut i = 0usize;
+    while (i as f32) * STEP < LIMIT {
+        let a = (-stiffness * (x - 1.0) - damping * v) / mass;
+        v += a * STEP;
+        x += v * STEP;
+        i += 1;
+        trace.push(x);
+        if (x - 1.0).abs() >= 1e-3 || v.abs() >= 1e-2 {
+            settled_at = i;
+        }
+    }
+    let end = settled_at.max(1);
+    let settle = end as f32 * STEP;
+    let stops = (0..=SAMPLES)
+        .map(|k| {
+            let at = k * end / SAMPLES;
+            let output = if k == SAMPLES { 1.0 } else { trace[at] };
+            LinearStop {
+                input: k as f32 / SAMPLES as f32,
+                output: (output * 10_000.0).round() / 10_000.0,
+            }
+        })
+        .collect();
+    (stops, settle)
+}
+
 /// CSS `steps(n, position)` at `t` in `[0, 1]`.
 fn steps(n: u32, pos: StepPosition, t: f32) -> f32 {
     let n = n.max(1) as i64;
@@ -593,6 +644,22 @@ mod tests {
             .unwrap();
         assert!(close(e.apply(0.5), 0.5));
         assert!(Easing::linear_points(&[(0.0, vec![])]).is_none());
+    }
+
+    #[test]
+    fn a_spring_settles_and_an_underdamped_one_overshoots() {
+        let (stops, settle) = spring_curve(1.0, 100.0, 10.0, 0.0);
+        assert!(settle > 0.3 && settle < 2.0, "settles in {settle}s");
+        assert_eq!(stops.first().unwrap().output, 0.0);
+        assert_eq!(stops.last().unwrap().output, 1.0);
+        assert!(stops.iter().any(|s| s.output > 1.0), "it overshoots");
+        let (stiff, _) = spring_curve(1.0, 300.0, 40.0, 0.0);
+        assert!(
+            stiff.iter().all(|s| s.output <= 1.0001),
+            "critically damped: no overshoot"
+        );
+        let e = Easing::Points(stops.into());
+        assert!(e.apply(0.5) > 0.9, "most of the way there halfway through");
     }
 
     #[test]

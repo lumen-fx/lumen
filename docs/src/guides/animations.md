@@ -29,6 +29,16 @@ Easings: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
 `linear(...)`, with the curves CSS defines, so a transition moves the same
 on the desktop and in a browser.
 
+`spring(mass stiffness damping)` moves like a spring: give it no duration and
+it runs until the spring settles.
+
+```css
+.drawer { transition: translate spring(1 170 26); }
+```
+
+See [springs](../reference/css.md#springs) for the arguments and how a web
+build plays one.
+
 These properties animate:
 
 - `opacity`

@@ -106,6 +106,12 @@ enum Value {
     /// A `transform` list: bare numbers become pixels inside the translate
     /// functions only, since every other function takes plain numbers.
     Transform,
+    /// A timing-function list: a `spring()` becomes the `linear()` curve it
+    /// traces.
+    Timing,
+    /// An `animation` shorthand: as [`Value::Timing`], and an entry that
+    /// names a spring and no duration gains the time the spring settles in.
+    Animation,
 }
 
 /// Properties that become one declaration under a possibly different
@@ -265,18 +271,19 @@ const PLAIN: &[(&str, &str, Value)] = &[
     (
         "transition-timing-function",
         "transition-timing-function",
-        Value::AsIs,
+        Value::Timing,
     ),
     // Animations. The values name a `@keyframes` block and the timing it
     // runs on, and the sheet carries that block through as authored, so
-    // every one of these goes out under its own name untouched.
-    ("animation", "animation", Value::AsIs),
+    // these go out under their own names, touched only where a `spring()`
+    // has to become the curve a browser can read.
+    ("animation", "animation", Value::Animation),
     ("animation-name", "animation-name", Value::AsIs),
     ("animation-duration", "animation-duration", Value::AsIs),
     (
         "animation-timing-function",
         "animation-timing-function",
-        Value::AsIs,
+        Value::Timing,
     ),
     ("animation-delay", "animation-delay", Value::AsIs),
     (
@@ -380,7 +387,7 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
         "scroll" => scroll(value),
         "max-lines" => line_clamp(value),
         "scrollbar-color" => Emission::one("scrollbar-color", scrollbar_color(value)),
-        "transition" => Emission::one("transition", transition(value)),
+        "transition" => Emission::one("transition", springs(&transition(value), true)),
         "transition-property" => Emission::one("transition-property", transition_property(value)),
         // Already in the document as an attribute.
         "tab-index" => Emission::Drop("the document carries it as `tabindex`"),
@@ -398,6 +405,8 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
                     Value::AsIs => value.to_string(),
                     Value::Length => lengths(value),
                     Value::Transform => transform_lengths(value),
+                    Value::Timing => springs(value, false),
+                    Value::Animation => springs(value, true),
                 };
                 return Emission::one(css, value);
             }
@@ -405,6 +414,7 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
                 let value = match form {
                     Value::AsIs => value.to_string(),
                     Value::Length | Value::Transform => lengths(value),
+                    Value::Timing | Value::Animation => springs(value, false),
                 };
                 return Emission::CustomProp(WebDecl::new(
                     format!("{LM_PROPERTY_PREFIX}{name}"),
@@ -595,6 +605,67 @@ pub fn lengths(value: &str) -> String {
         }
     }
     push_term(&mut out, &mut term);
+    out
+}
+
+/// `spring()` is Lumen's own timing function; a browser plays the
+/// `linear()` curve it traces, which is the curve the desktop samples too.
+/// With `fill_duration`, a list entry (of a `transition` or an `animation`
+/// shorthand) that names a spring and no time gains the milliseconds the
+/// spring takes to settle, as its duration on the desktop.
+pub fn springs(value: &str, fill_duration: bool) -> String {
+    if !value.contains("spring(") {
+        return value.to_string();
+    }
+    let mut entries = Vec::new();
+    for entry in split_outside_parens(value, ',') {
+        let mut settle = None;
+        let mut timed = false;
+        let mut terms = Vec::new();
+        for term in split_outside_parens(entry.trim(), ' ') {
+            if term.is_empty() {
+                continue;
+            }
+            if term.starts_with("spring(")
+                && let Ok(easing) = lumen_ir::css::parse_easing("web", "timing", term)
+                && let Some((curve, ms)) = easing.spring_as_linear()
+            {
+                settle = Some(ms);
+                terms.push(curve);
+                continue;
+            }
+            let digits = term.strip_suffix("ms").or_else(|| term.strip_suffix('s'));
+            timed |= digits.is_some_and(|d| d.trim_start_matches('-').parse::<f32>().is_ok());
+            terms.push(term.to_string());
+        }
+        if fill_duration
+            && !timed
+            && let Some(ms) = settle
+        {
+            terms.push(format!("{ms}ms"));
+        }
+        entries.push(terms.join(" "));
+    }
+    entries.join(", ")
+}
+
+/// Split `s` on `sep` where no parenthesis is open.
+fn split_outside_parens(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c == sep && depth <= 0 => {
+                out.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
     out
 }
 
@@ -1178,5 +1249,24 @@ mod tests {
         for (name, value, _) in CASES {
             assert_eq!(rewrite_property(name, value), rewrite_property(name, value));
         }
+    }
+
+    /// A spring goes out as the `linear()` curve the desktop plays, and a
+    /// shorthand entry with no duration takes the time it settles in.
+    #[test]
+    fn a_spring_is_written_as_its_linear_curve() {
+        let out = springs("transform spring(1 100 10), opacity 200ms ease", true);
+        let entries = split_outside_parens(&out, ',');
+        assert_eq!(entries.len(), 2, "{out}");
+        let spring = entries[0].trim();
+        assert!(spring.starts_with("transform linear(0 0%, "), "{spring}");
+        assert!(
+            spring.ends_with("ms"),
+            "the settle time fills the duration: {spring}"
+        );
+        assert_eq!(entries[1].trim(), "opacity 200ms ease");
+        assert_eq!(springs("ease-out", false), "ease-out");
+        let longhand = springs("spring(1 100 10)", false);
+        assert!(longhand.starts_with("linear(") && longhand.ends_with(')'));
     }
 }

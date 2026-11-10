@@ -439,6 +439,10 @@ fn parse_shorthand_entry(ctx: &str, name: &str, entry: &str) -> Result<Shorthand
         out.name = parse_name(ctx, name, term)?;
         named = true;
     }
+    // A spring with no duration runs for as long as it takes to settle.
+    if !duration && let Some(settle) = out.timing.settle_ms() {
+        out.duration = settle;
+    }
     Ok(out)
 }
 
@@ -818,6 +822,14 @@ mod tests {
         assert_eq!(list[0].play_state, AnimationPlayStateIr::Paused);
         assert_eq!(list[1].name, "pulse");
         assert_eq!(list[1].timing, DEFAULT_EASING);
+    }
+
+    #[test]
+    fn a_spring_entry_with_no_duration_takes_the_settle_time() {
+        let d = decls(&[("animation", "pop spring(1 170 26)")]);
+        let a = &d.effective()[0];
+        assert!(a.duration_ms > 100, "{}", a.duration_ms);
+        assert_eq!(Some(a.duration_ms), a.timing.settle_ms());
     }
 
     #[test]
