@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use bevy_ecs::hierarchy::ChildOf;
+use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
@@ -20,7 +20,8 @@ use lumen_core::tick::{Tick, WakeDeadline};
 use lumen_core::time::{Duration, Instant};
 use lumen_core::window::{PrimaryWindow, WindowViewport};
 use lumen_ir::animation::{
-    AnimationDeclsIr, AnimationIr, AnimationPlayStateIr, AnimationTimelineIr,
+    AnimationDeclsIr, AnimationIr, AnimationPlayStateIr, AnimationTimelineIr, ScrollAxisIr,
+    ScrollerIr,
 };
 use lumen_primitives::state_style::{StateMarkers, active_states};
 use lumen_primitives::transition::{MotionComponents, live_of, write_motion_values};
@@ -307,6 +308,112 @@ pub fn reconcile_animations(
     }
 }
 
+/// What [`Timelines`] reads of each element on the way up the tree.
+type TimelineNode = (
+    Option<&'static Transform>,
+    Option<&'static ScrollOffset>,
+    Has<lumen_core::input::Scroll>,
+    Option<&'static ChildOf>,
+    Option<&'static Children>,
+);
+
+/// Where a scroll-driven animation is on its timeline: the scroll position
+/// of a container (`scroll()`), or an element's way through its
+/// container's view (`view()`).
+#[derive(SystemParam)]
+pub struct Timelines<'w, 's> {
+    nodes: Query<'w, 's, TimelineNode>,
+}
+
+impl Timelines<'_, '_> {
+    /// The scroll container `scroller` names for `e`.
+    fn scroller(&self, e: Entity, scroller: ScrollerIr) -> Option<Entity> {
+        let is_scroller = |x: Entity| self.nodes.get(x).is_ok_and(|n| n.2);
+        let parent = |x: Entity| {
+            self.nodes
+                .get(x)
+                .ok()
+                .and_then(|n| n.3.map(ChildOf::parent))
+        };
+        match scroller {
+            ScrollerIr::SelfElement => is_scroller(e).then_some(e),
+            ScrollerIr::Nearest => {
+                let mut up = parent(e);
+                while let Some(a) = up {
+                    if is_scroller(a) {
+                        return Some(a);
+                    }
+                    up = parent(a);
+                }
+                None
+            }
+            ScrollerIr::Root => {
+                let mut found = None;
+                let mut up = Some(e);
+                while let Some(a) = up {
+                    if is_scroller(a) {
+                        found = Some(a);
+                    }
+                    up = parent(a);
+                }
+                found
+            }
+        }
+    }
+
+    /// How far `scroller` can scroll along each axis: its content's extent
+    /// past its own box.
+    fn range(&self, scroller: Entity) -> Option<Vec2> {
+        let (Some(own), _, _, _, Some(kids)) = self.nodes.get(scroller).ok()? else {
+            return None;
+        };
+        let mut extent = Vec2::ZERO;
+        for k in kids.iter() {
+            if let Ok((Some(t), ..)) = self.nodes.get(k) {
+                extent = extent.max(t.absolute - own.absolute + t.size);
+            }
+        }
+        Some((extent - own.size).max(Vec2::ZERO))
+    }
+
+    /// Progress along `timeline` for `e`, `0` at its start and `1` at its
+    /// end; outside that range while a `view()` subject is out of view.
+    /// `None` while the timeline is inactive: no container, or one that
+    /// cannot scroll.
+    fn progress(&self, e: Entity, timeline: AnimationTimelineIr) -> Option<f32> {
+        let pick = |v: Vec2, axis: ScrollAxisIr| match axis {
+            ScrollAxisIr::Block | ScrollAxisIr::Y => v.y,
+            ScrollAxisIr::Inline | ScrollAxisIr::X => v.x,
+        };
+        match timeline {
+            AnimationTimelineIr::Scroll(scroller, axis) => {
+                let s = self.scroller(e, scroller)?;
+                let range = pick(self.range(s)?, axis);
+                if range <= 0.0 {
+                    return None;
+                }
+                let offset = self.nodes.get(s).ok()?.1.map_or(Vec2::ZERO, |o| o.0);
+                Some((pick(offset, axis) / range).clamp(0.0, 1.0))
+            }
+            AnimationTimelineIr::View(axis) => {
+                let s = self.scroller(e, ScrollerIr::Nearest)?;
+                let (Some(port), offset, ..) = self.nodes.get(s).ok()? else {
+                    return None;
+                };
+                let (Some(subject), ..) = self.nodes.get(e).ok()? else {
+                    return None;
+                };
+                let offset = offset.map_or(Vec2::ZERO, |o| o.0);
+                let at = pick(subject.absolute - port.absolute - offset, axis);
+                let (view, size) = (pick(port.size, axis), pick(subject.size, axis));
+                let span = view + size;
+                (span > 0.0).then(|| (view - at) / span)
+            }
+            AnimationTimelineIr::Auto | AnimationTimelineIr::None => None,
+        }
+    }
+}
+
 /// What [`OnScreen`] reads of each element on the way up the tree.
 type ScreenNode = (
     Option<&'static Transform>,
@@ -495,7 +602,7 @@ pub fn sample_animations(
     anim: Res<AnimationsActive>,
     wake: Res<WakeDeadline>,
     set: Res<KeyframeSet>,
-    screen: OnScreen,
+    (screen, timelines): (OnScreen, Timelines),
     mut events: MessageWriter<CustomEvent>,
     mut q: Query<(
         Entity,
@@ -575,8 +682,24 @@ pub fn sample_animations(
                 // nothing, as in a browser.
                 continue;
             };
-            let timing = r.timing();
-            let local = r.local(now);
+            // A scroll-driven animation's place is where the scroll is: its
+            // whole active interval spans the timeline, and it asks for no
+            // frames of its own, since only a scroll moves it.
+            let scroll_driven = !matches!(r.spec.timeline, AnimationTimelineIr::Auto);
+            let (timing, local) = if scroll_driven {
+                let Some(p) = timelines.progress(entity, r.spec.timeline) else {
+                    continue;
+                };
+                let mut timing = r.timing();
+                timing.delay = 0.0;
+                if timing.duration <= 0.0 {
+                    timing.duration = 1.0;
+                }
+                let local = p * timing.active_duration();
+                (timing, local)
+            } else {
+                (r.timing(), r.local(now))
+            };
             let s = timing.sample(local);
             // Events, for the phase and iteration this tick reached.
             let was = r.reported;
@@ -616,7 +739,7 @@ pub fn sample_animations(
             }
             // What comes next on its own timeline.
             let at = |secs: f32| r.start + Duration::from_secs_f32(secs.max(0.0));
-            let own = if r.paused_at.is_some() {
+            let own = if r.paused_at.is_some() || scroll_driven {
                 Next::Never
             } else {
                 match s.phase {

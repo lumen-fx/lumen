@@ -840,6 +840,7 @@ desktop plays the same sampled curve, so both move alike.
 | `animation-fill-mode` | `none`, `forwards`, `backwards`, `both` | `none` |
 | `animation-play-state` | `running`, `paused` | `running` |
 | `animation-composition` | `replace`, `add`, `accumulate` | `replace` |
+| `animation-timeline` | `auto`, `none`, `scroll([<scroller>] [<axis>])`, `view([<axis>])` | `auto` |
 
 The properties mean what they mean in CSS, and the shorthand reads its terms
 the CSS way: the first time is the duration and a second the delay, and a
@@ -872,6 +873,19 @@ loses to an `!important` declaration and to a running transition, as CSS
 orders them. Two animations on one property: the later in the list wins.
 `animation-composition: add` and `accumulate` parse and run as `replace` on
 the desktop, with a warning; the web target runs them as written.
+
+`animation-timeline` ties an animation to a scroll position instead of the
+clock. `scroll()` follows a container's scroll from its start to its end:
+`nearest` (the default) is the closest scrolling ancestor, `root` the outermost
+one, `self` the element itself. `view()` follows the element's way through its
+nearest scrolling ancestor's view, from its leading edge entering at the far
+end to its trailing edge leaving at the near one. The axis is `block` (the
+default) or `y`, `inline` or `x`. The animation's whole active span maps onto
+the timeline: its duration only matters against its iteration count, a delay is
+ignored, and a scroll-driven animation draws only when the scroll moves. The
+`animation` shorthand resets `animation-timeline` to `auto`, so write the
+timeline after it. Named timelines (`scroll-timeline`, `view-timeline`) and
+`view()` insets are not supported.
 
 On the desktop the `animations` capability runs them: an app packaged
 without it (see [`[capabilities]`](lumen-toml.md#capabilities)) parses
