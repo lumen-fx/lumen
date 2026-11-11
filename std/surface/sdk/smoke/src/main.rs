@@ -1,6 +1,7 @@
 //! Exercises what a Rust app needs from `lumenui-surface` alone: a surface
-//! element, its endpoint string where the platform has a transport (Linux
-//! and macOS), and the state it reports. The app renders on the CPU, which
+//! element, its endpoint string where the platform has a transport (a Unix
+//! socket on Linux and macOS, a named pipe on Windows), and the state it
+//! reports. The app renders on the CPU, which
 //! cannot show shared GPU frames, so the surface must settle as unsupported
 //! and say so through its class. Exits non-zero when any of it does not
 //! hold.
@@ -55,7 +56,10 @@ fn main() {
     let well_formed = endpoint
         .as_deref()
         .is_some_and(|e| e.starts_with("v1;") && e.contains(";channel="));
-    if cfg!(unix) != well_formed {
+    // Every platform this runs on has a transport: a Unix socket, or a
+    // named pipe on Windows.
+    let has_transport = cfg!(unix) || cfg!(windows);
+    if has_transport != well_formed {
         eprintln!(
             "lumenui-surface-smoke: the endpoint is malformed, or present without a transport"
         );
