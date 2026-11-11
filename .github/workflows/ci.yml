@@ -444,10 +444,11 @@ jobs:
       # scene layer, the DOM backend and the input and widget behaviour the
       # page shares with a desktop app. It went up again when pages gained the
       # split pane, the number and color fields, pen and touch input, the
-      # menu bar, cursors and masks, and once more for the candela 0.1.6
-      # compiler. Trimming what a page does not use is its own piece of
+      # menu bar, cursors and masks, once more for the candela 0.1.6
+      # compiler, and once more for the animation runtime's web half: its
+      # events, the exit hold and `animations::animate`. Trimming what a page does not use is its own piece of
       # work, and this follows the measurement back down when that lands.
-      WASM_SIZE_BUDGET_BYTES: 3250000
+      WASM_SIZE_BUDGET_BYTES: 3310000
     steps:
       - if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v4
