@@ -177,6 +177,36 @@ fn state_fns() -> Vec<ScriptFn> {
                 });
                 Ok(ScriptValue::Unit)
             }),
+        // `showPopover()` / `hidePopover()` / `togglePopover()` by id: the
+        // popover's own open signal may be one `open` names, so the runtime
+        // looks it up.
+        emit(
+            "show_popover",
+            "Open the popover with that id.",
+            &[("id", T::Str)],
+            |cx| ScriptCommand::Popover {
+                id: cx.str_arg(0),
+                action: crate::PopoverOp::Show,
+            },
+        ),
+        emit(
+            "hide_popover",
+            "Close the popover with that id.",
+            &[("id", T::Str)],
+            |cx| ScriptCommand::Popover {
+                id: cx.str_arg(0),
+                action: crate::PopoverOp::Hide,
+            },
+        ),
+        emit(
+            "toggle_popover",
+            "Open the popover with that id when it is closed, close it when it is open.",
+            &[("id", T::Str)],
+            |cx| ScriptCommand::Popover {
+                id: cx.str_arg(0),
+                action: crate::PopoverOp::Toggle,
+            },
+        ),
         emit(
             "close_menu",
             "Close the menu with that id.",

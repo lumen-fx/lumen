@@ -178,7 +178,9 @@ The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
 `pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
 `gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
 `input`, `change`, `focus`, `blur`, `submit`, `scroll`, `pointerlockchange`,
-and `pointerlockerror`. Of those, `input`
+`pointerlockerror`, `beforetoggle` and `toggle`. A popover hears
+`beforetoggle` and then `toggle` when it opens or closes, with `old_state`
+and `new_state` in the event's detail. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit; leaving a field after an edit raises `change` too. Checkboxes,
 toggles, switches, sliders, radios, dropdowns and color fields raise `input` and

@@ -132,6 +132,13 @@ const PLAIN: &[(&str, &str, Value)] = &[
     ("box-sizing", "box-sizing", Value::AsIs),
     ("aspect-ratio", "aspect-ratio", Value::AsIs),
     ("z-index", "z-index", Value::AsIs),
+    // Where a popover goes against its anchor
+    ("position-area", "position-area", Value::AsIs),
+    (
+        "position-try-fallbacks",
+        "position-try-fallbacks",
+        Value::AsIs,
+    ),
     ("display", "display", Value::AsIs),
     ("overflow", "overflow", Value::AsIs),
     ("overflow-x", "overflow-x", Value::AsIs),
@@ -775,6 +782,16 @@ mod tests {
         ("box-sizing", "border-box", "box-sizing: border-box"),
         ("aspect-ratio", "1.5", "aspect-ratio: 1.5"),
         ("z-index", "3", "z-index: 3"),
+        (
+            "position-area",
+            "top span-left",
+            "position-area: top span-left",
+        ),
+        (
+            "position-try-fallbacks",
+            "flip-block",
+            "position-try-fallbacks: flip-block",
+        ),
         ("display", "grid", "display: grid"),
         ("overflow", "hidden", "overflow: hidden"),
         ("overflow-x", "scroll", "overflow-x: scroll"),

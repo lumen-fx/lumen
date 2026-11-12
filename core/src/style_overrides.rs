@@ -36,7 +36,7 @@ use crate::transform::ElementTransform;
 bitflags::bitflags! {
     /// The style values a runtime system can hold on an element.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-    pub struct StyleFields: u16 {
+    pub struct StyleFields: u32 {
         /// `Style::display`.
         const DISPLAY = 1 << 0;
         /// `Style::position`.
@@ -69,6 +69,8 @@ bitflags::bitflags! {
         const TRANSFORM = 1 << 14;
         /// The [`OutlineColor`] component, absent meaning the declared color.
         const OUTLINE_COLOR = 1 << 15;
+        /// `Style::max_height`.
+        const MAX_HEIGHT = 1 << 16;
         /// Every field that lives on [`Style`].
         const LAYOUT = Self::DISPLAY.bits()
             | Self::POSITION.bits()
@@ -76,6 +78,7 @@ bitflags::bitflags! {
             | Self::WIDTH.bits()
             | Self::HEIGHT.bits()
             | Self::MIN_HEIGHT.bits()
+            | Self::MAX_HEIGHT.bits()
             | Self::PADDING.bits()
             | Self::BASIS.bits();
         /// Every field that lives on [`Visuals`].
@@ -99,6 +102,8 @@ pub struct StyleValues {
     pub height: Option<Length>,
     /// `Style::min_height`.
     pub min_height: Option<Length>,
+    /// `Style::max_height`.
+    pub max_height: Option<Length>,
     /// `Style::padding`.
     pub padding: Option<Edges>,
     /// `Style::basis`.
@@ -149,6 +154,7 @@ impl StyleValues {
         f.set(StyleFields::WIDTH, self.width.is_some());
         f.set(StyleFields::HEIGHT, self.height.is_some());
         f.set(StyleFields::MIN_HEIGHT, self.min_height.is_some());
+        f.set(StyleFields::MAX_HEIGHT, self.max_height.is_some());
         f.set(StyleFields::PADDING, self.padding.is_some());
         f.set(StyleFields::BASIS, self.basis.is_some());
         f.set(StyleFields::FILL, self.fill.is_some());
@@ -175,6 +181,9 @@ impl StyleValues {
             v.min_height = fields
                 .contains(StyleFields::MIN_HEIGHT)
                 .then_some(s.min_height);
+            v.max_height = fields
+                .contains(StyleFields::MAX_HEIGHT)
+                .then_some(s.max_height);
             v.padding = fields.contains(StyleFields::PADDING).then_some(s.padding);
             v.basis = fields.contains(StyleFields::BASIS).then_some(s.basis);
         }
@@ -222,6 +231,9 @@ impl StyleValues {
         }
         if top.min_height.is_some() {
             self.min_height = top.min_height;
+        }
+        if top.max_height.is_some() {
+            self.max_height = top.max_height;
         }
         if top.padding.is_some() {
             self.padding = top.padding;
@@ -275,6 +287,9 @@ impl StyleValues {
         }
         if !keep(StyleFields::MIN_HEIGHT) {
             self.min_height = None;
+        }
+        if !keep(StyleFields::MAX_HEIGHT) {
+            self.max_height = None;
         }
         if !keep(StyleFields::PADDING) {
             self.padding = None;
@@ -341,6 +356,11 @@ impl StyleValues {
             && style.min_height != h
         {
             style.min_height = h;
+        }
+        if let Some(h) = self.max_height
+            && style.max_height != h
+        {
+            style.max_height = h;
         }
         if let Some(p) = self.padding
             && !edges_eq(&style.padding, &p)
@@ -451,6 +471,7 @@ impl StyleValues {
             width: pick(&self.width, &to.width, t),
             height: pick(&self.height, &to.height, t),
             min_height: pick(&self.min_height, &to.min_height, t),
+            max_height: pick(&self.max_height, &to.max_height, t),
             padding: pick(&self.padding, &to.padding, t),
             basis: pick(&self.basis, &to.basis, t),
             fill: pick(&self.fill, &to.fill, t),

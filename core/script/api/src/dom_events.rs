@@ -51,6 +51,11 @@
 //!   secondary-button press (a release on Windows), the ContextMenu key or
 //!   Shift+F10, or an assistive technology's request.
 //!
+//! - `beforetoggle` and `toggle` fire on a popover when it opens or closes,
+//!   in that order, on the tick its open state changed. The detail carries
+//!   `old_state` and `new_state` (`"open"` / `"closed"`), the DOM's
+//!   `ToggleEvent` fields. Neither bubbles, and `beforetoggle` cannot cancel
+//!   the change: it reports one that already happened.
 //! - A custom event is one a module raises on an element with a
 //!   [`CustomEvent`] message: a name of its own and a detail map. It
 //!   travels the same capture -> target -> bubble path, so `n.on(name, ..)`
@@ -202,6 +207,8 @@ pub const BUILT_IN_EVENTS: &[&str] = &[
     "scroll",
     "pointerlockchange",
     "pointerlockerror",
+    "beforetoggle",
+    "toggle",
 ];
 
 /// The DOM events read from this tick's input, waiting for delivery.
@@ -619,6 +626,8 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<ControlInput>(world);
     register::<CustomEvent>(world);
     register::<CustomEventDelivered>(world);
+    #[cfg(not(target_arch = "wasm32"))]
+    register::<lumen_primitives::PopoverToggled>(world);
 }
 
 /// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so
@@ -973,6 +982,25 @@ pub fn forward_pointer_lock_asks(mut asks: MessageWriter<lumen_core::input::Poin
             },
         };
         asks.write(lumen_core::input::PointerLockAsk { entity });
+    }
+}
+/// Read this tick's popover changes as `beforetoggle` and `toggle`, for
+/// [`deliver_state_events`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn queue_toggle_events(
+    mut pending: ResMut<PendingDomEvents>,
+    mut toggles: MessageReader<lumen_primitives::PopoverToggled>,
+) {
+    let state = |open: bool| if open { "open" } else { "closed" };
+    for t in toggles.read() {
+        for etype in ["beforetoggle", "toggle"] {
+            let mut data = base(t.entity, etype);
+            data.detail
+                .insert("old_state".into(), state(!t.open).to_string().into());
+            data.detail
+                .insert("new_state".into(), state(t.open).to_string().into());
+            pending.state.push((data, t.entity));
+        }
     }
 }
 

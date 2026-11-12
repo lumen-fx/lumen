@@ -160,6 +160,50 @@ impl<'w> Ui<'w> {
         }
     }
 
+    // -- Popovers ----------------------------------------------------------
+
+    /// Open the `popover` with this id, as the DOM's `showPopover()` and the
+    /// script `show_popover(id)` do.
+    pub fn show_popover(&mut self, id: &str) {
+        self.set_popover(id, Some(true));
+    }
+
+    /// Close the `popover` with this id.
+    pub fn hide_popover(&mut self, id: &str) {
+        self.set_popover(id, Some(false));
+    }
+
+    /// Open the `popover` with this id when it is closed and close it when it
+    /// is open.
+    pub fn toggle_popover(&mut self, id: &str) {
+        self.set_popover(id, None);
+    }
+
+    /// Write a popover's open state: `want`, or the opposite of what it is.
+    fn set_popover(&mut self, id: &str, want: Option<bool>) {
+        let mut q = self.world.query::<(
+            &lumen_core::components::LumenId,
+            &crate::lumen_primitives::Popover,
+        )>();
+        let Some(signal) = q
+            .iter(self.world)
+            .find(|(lid, _)| lid.0 == id)
+            .map(|(_, p)| p.open_signal.clone())
+        else {
+            lumen_core::warn_line!("no popover has the id `{id}`");
+            return;
+        };
+        let mut store = self.world.resource_mut::<PropertyStore>();
+        let open = store
+            .get_global_str(&signal)
+            .as_deref()
+            .is_some_and(lumen_core::signals::signal_is_truthy);
+        let next = want.unwrap_or(!open);
+        if next != open {
+            store.set_global_bool(&signal, next);
+        }
+    }
+
     /// Show the page at `path` (`"settings"`, `"/user/7"`, `"/"`).
     pub fn navigate(&mut self, path: impl Into<String>) {
         lumen_core::nav::navigate(path.into());

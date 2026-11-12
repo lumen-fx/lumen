@@ -47,11 +47,11 @@ pub struct LocaleSwitch<'w> {
 pub fn apply_scene_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     ids: Query<(Entity, &LumenId)>,
-    mut texts: Query<&mut TextContent>,
-    mut inputs: Query<&mut TextInput>,
+    (mut texts, mut inputs): (Query<&mut TextContent>, Query<&mut TextInput>),
     mut store: ResMut<PropertyStore>,
     mut array_signals: ResMut<ArraySignals>,
     mut locale: LocaleSwitch,
+    popovers: Query<&lumen_primitives::Popover>,
 ) {
     for event in events.read() {
         match &event.0 {
@@ -77,6 +77,28 @@ pub fn apply_scene_script_commands(
             }
             ScriptCommand::SetArray { name, items } => {
                 array_signals.set(name, items.clone());
+            }
+            ScriptCommand::Popover { id, action } => {
+                let Some(popover) = ids
+                    .iter()
+                    .filter(|(_, lid)| lid.0 == *id)
+                    .find_map(|(e, _)| popovers.get(e).ok())
+                else {
+                    warn_line!("no popover has the id `{id}`");
+                    continue;
+                };
+                let open = store
+                    .get_global_str(&popover.open_signal)
+                    .as_deref()
+                    .is_some_and(lumen_core::signals::signal_is_truthy);
+                let next = match action {
+                    lumen_script::PopoverOp::Show => true,
+                    lumen_script::PopoverOp::Hide => false,
+                    lumen_script::PopoverOp::Toggle => !open,
+                };
+                if next != open {
+                    store.set_global_bool(&popover.open_signal, next);
+                }
             }
             ScriptCommand::SetProperty { key, value } => {
                 // A typed write, coalesced onto the next tick. A host that

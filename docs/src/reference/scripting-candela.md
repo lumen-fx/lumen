@@ -696,7 +696,8 @@ through the accessors below:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`.
+`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`,
+`beforetoggle`, `toggle`.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
@@ -936,9 +937,12 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::clear_recent_files()` | Remove every entry from the recent-files list. |
 | `lumen::set_autostart(on: bool)` | Enable or disable launching this app at login. |
 | `lumen::query_autostart(tag: string)` | Request the autostart state; fires `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`. |
-| `lumen::open_menu(id: string)` | Open menu `id` where its styles place it, by setting the `__menu_open:id` signal to true. |
+| `lumen::open_menu(id: string)` | Open menu `id` below where it is written, by setting the `__menu_open:id` signal to true. |
 | `lumen::open_menu_at(id: string, x: float, y: float)` | Open menu `id` with its top-left corner at `(x, y)` in window coordinates. Near the right or bottom edge it opens to the left of or above the point instead. Pass a `contextmenu` event's client position to open a context menu at the pointer. |
 | `lumen::close_menu(id: string)` | Close menu `id`. |
+| `lumen::show_popover(id: string)` | Open the [popover](tags.md#popover) `id`, as the DOM's `showPopover()` does. |
+| `lumen::hide_popover(id: string)` | Close the popover `id`. |
+| `lumen::toggle_popover(id: string)` | Open the popover `id` when it is closed, close it when it is open. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
 

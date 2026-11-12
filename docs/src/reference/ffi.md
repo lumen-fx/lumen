@@ -786,8 +786,9 @@ anything inside it. `detail()` is what the event carries, and
   (`set_text`, `add_class`, `set_class_on(class, on)`, `set_attr`,
   `set_style`, `append`, `rect`, `computed_style_of`, `on(event, f)` and the
   rest).
-- Menus and pages: `open_menu(id)`, `open_menu_at(id, x, y)`,
-  `close_menu(id)`, `toggle_menu(id)`, `navigate(path)`. A menu's items are
+- Menus, popovers and pages: `open_menu(id)`, `open_menu_at(id, x, y)`,
+  `close_menu(id)`, `toggle_menu(id)`, `show_popover(id)`,
+  `hide_popover(id)`, `toggle_popover(id)`, `navigate(path)`. A menu's items are
   `Node`s like any element, there before the menu first opens: add, remove
   and relabel them with the DOM surface above.
 - The app's own state: `resource::<T>()` and `resource_mut::<T>()` over the

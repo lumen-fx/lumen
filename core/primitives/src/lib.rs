@@ -60,8 +60,10 @@ pub use number::{
     step_number_on_wheel,
 };
 pub use popup::{
-    PopupGap, PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
-    flip_open_dropdown_panels, place_menus_at_points,
+    AnchorPlacement, AreaAlign, AreaSide, Placement, Popover, PopoverAction, PopoverMode,
+    PopoverTarget, PopoverToggled, PopupGap, PopupSide, anchored_popup_origin,
+    dismiss_popups_on_outside_press, open_popovers_from_targets, place_against, place_popovers,
+    report_popover_toggles,
 };
 pub use popup_nav::{
     ActivePopupNav, PopupNavConfig, PopupNavSession, TypeAheadBuffer, closed_dropdown_keys,

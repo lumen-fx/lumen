@@ -821,7 +821,7 @@ pub fn update_highlight(
     transforms: Query<&Transform, (Without<HighlightBox>, Without<HighlightTip>)>,
     // The scroll walk stays inside the target's window: a surface root's
     // ancestors scroll another window.
-    parents: Query<&ChildOf, Without<WindowOf>>,
+    parents: Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
     scrolls: Query<&ScrollOffset>,
     mut boxes: Query<(&mut Transform, &mut Visible), (With<HighlightBox>, Without<HighlightTip>)>,
     mut tips: Query<

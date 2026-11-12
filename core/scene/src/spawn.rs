@@ -460,7 +460,7 @@ pub fn renumber_document_order(
 pub fn menu_open_signal_above(world: &World, from: Option<Entity>) -> Option<String> {
     let mut at = from;
     while let Some(e) = at {
-        if let Some(panel) = world.get::<lumen_primitives::PopupPanel>(e) {
+        if let Some(panel) = world.get::<lumen_primitives::Popover>(e) {
             return Some(panel.open_signal.clone());
         }
         at = world.get::<ChildOf>(e).map(ChildOf::parent);
@@ -1053,16 +1053,43 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     {
         entity.insert(TabIndex(-1));
     }
-    if let Some(open_signal) = &el.attrs.popup_panel {
-        entity.insert((
-            lumen_primitives::PopupPanel {
-                open_signal: open_signal.clone(),
+    if let Some(spec) = &el.attrs.popover {
+        // In the top layer while open: laid out against the window, over
+        // everything else, out of reach of its ancestors' clips.
+        entity.insert(lumen_primitives::Popover {
+            open_signal: spec.open_signal.clone(),
+            mode: match spec.mode {
+                lumen_ir::layout_ir::PopoverModeSpec::Auto => lumen_primitives::PopoverMode::Auto,
+                lumen_ir::layout_ir::PopoverModeSpec::Manual => {
+                    lumen_primitives::PopoverMode::Manual
+                }
             },
-            // Top-layer paint band: the panel must paint over all
-            // later-document-order content (inputs, textareas) it
-            // floats above.
-            lumen_core::render_world::OverlayLayer,
-        ));
+            anchor: spec.anchor.clone(),
+            match_anchor_width: spec.match_anchor_width,
+            invoker: None,
+            // The built list of a `<dropdown>` and the panel of a `<menu>`
+            // are walked with the arrow keys; a `popover` is the element it
+            // was written as.
+            keyboard: el.attrs.if_signal.is_none(),
+        });
+    }
+    // A page's browser runs `popovertarget` itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(target) = &el.attrs.popover_target {
+        entity.insert(lumen_primitives::PopoverTarget {
+            target: target.target.clone(),
+            action: match target.action {
+                lumen_ir::layout_ir::PopoverActionSpec::Toggle => {
+                    lumen_primitives::PopoverAction::Toggle
+                }
+                lumen_ir::layout_ir::PopoverActionSpec::Show => {
+                    lumen_primitives::PopoverAction::Show
+                }
+                lumen_ir::layout_ir::PopoverActionSpec::Hide => {
+                    lumen_primitives::PopoverAction::Hide
+                }
+            },
+        });
     }
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
@@ -1390,7 +1417,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         world
             .entity_mut(id)
             .insert(crate::widgets::PendingTabBody(el.children.clone()));
-    } else if (el.tag == "if" || el.tag == "dialog")
+    } else if (el.tag == "if" || el.tag == "dialog" || el.attrs.popover.is_some())
         && let Some(name) = &el.attrs.if_signal
     {
         world.entity_mut(id).insert(IfMarker {
@@ -1578,8 +1605,9 @@ pub fn reconcile_if_blocks(
         // Check the `<if>` entity itself (e.g. `<dialog>`) and its mounted
         // body roots (e.g. the synthetic dropdown / menu `.dropdown-panel`
         // children, which carry the CSS transition specs). A `Render` block
-        // fades in from its mount above.
-        if now_truthy && marker.mode == IfMode::Hide {
+        // fades in from its mount above; a `Hide` or `Mounted` one, whose
+        // body is already there, fades in here each time it shows.
+        if now_truthy && marker.mode != IfMode::Render {
             let mut targets: Vec<Entity> = vec![parent_id];
             if let Some(kids) = children {
                 targets.extend(kids.iter());
@@ -1639,7 +1667,8 @@ pub fn reconcile_if_blocks(
 ///
 /// 1. an open `<dropdown>` panel (`__dropdown_open:*` signal is `true`),
 /// 2. otherwise an open `<menu>` panel (`__menu_open:*` signal is `true`),
-/// 3. otherwise the top-most open `<dialog>`.
+/// 3. otherwise the last-opened `auto` popover,
+/// 4. otherwise the top-most open `<dialog>`.
 ///
 /// Dropdown / menu panels are gated by `<if eq="true" mode="hide">`
 /// blocks whose [`IfMarker::signal_name`] is the synthetic open signal,
@@ -1666,6 +1695,11 @@ pub fn close_dialogs_on_escape(
         Option<&lumen_core::components::Visible>,
         Option<&DialogMarker>,
     )>,
+    // A page's browser closes its own popovers on Escape.
+    #[cfg(not(target_arch = "wasm32"))] (popovers, open_order): (
+        bevy_ecs::system::Query<(Entity, &lumen_primitives::Popover)>,
+        Option<bevy_ecs::system::Res<lumen_core::render_world::OverlayOpenOrder>>,
+    ),
 ) {
     let escape_pressed = keys.read().any(|k| {
         matches!(
@@ -1698,7 +1732,31 @@ pub fn close_dialogs_on_escape(
             return;
         }
     }
-    // 3. Finally: the top-most open `<dialog>`.
+    // 3. Next: the last-opened `auto` popover.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let stamp = |e: Entity| {
+            open_order
+                .as_ref()
+                .and_then(|o| o.stamps.get(&e).copied())
+                .unwrap_or(0)
+        };
+        let top_popover = popovers
+            .iter()
+            .filter(|(_, p)| {
+                p.mode == lumen_primitives::PopoverMode::Auto
+                    && store
+                        .get_global_str(&p.open_signal)
+                        .as_deref()
+                        .is_some_and(lumen_core::signals::signal_is_truthy)
+            })
+            .max_by_key(|(e, _)| stamp(*e));
+        if let Some((_, popover)) = top_popover {
+            store.set_global_bool(&popover.open_signal, false);
+            return;
+        }
+    }
+    // 4. Finally: the top-most open `<dialog>`.
     for (marker, visible, dialog) in &blocks {
         if dialog.is_none() {
             continue;
@@ -1906,6 +1964,51 @@ pub fn manage_dialog_lifecycle(
             tracker.0 = Some(target);
             session.needs_focus = false;
         }
+    }
+}
+
+/// Move focus to the `autofocus` element inside a popover when it opens,
+/// as a browser does for a popover that holds one. A popover with none
+/// leaves focus where it is. Desktop only: a page's browser does this itself.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn focus_autofocus_in_popovers(
+    mut commands: bevy_ecs::system::Commands,
+    mut toggles: bevy_ecs::message::MessageReader<lumen_primitives::PopoverToggled>,
+    mut tracker: bevy_ecs::system::ResMut<lumen_core::input::FocusTracker>,
+    children: bevy_ecs::system::Query<&bevy_ecs::hierarchy::Children>,
+    autofocused: bevy_ecs::system::Query<
+        Option<&lumen_core::components::DocumentOrder>,
+        (With<AutoFocus>, Without<lumen_core::components::Disabled>),
+    >,
+) {
+    for toggled in toggles.read() {
+        if !toggled.open {
+            continue;
+        }
+        let mut descendants = Vec::new();
+        collect_descendants(toggled.entity, &children, &mut descendants);
+        let Some(target) = descendants
+            .into_iter()
+            .filter_map(|d| {
+                autofocused
+                    .get(d)
+                    .ok()
+                    .map(|doc| (doc.map_or(u32::MAX, |o| o.0), d))
+            })
+            .min()
+            .map(|(_, d)| d)
+        else {
+            continue;
+        };
+        if let Some(cur) = tracker.0
+            && cur != target
+        {
+            commands
+                .entity(cur)
+                .remove::<(lumen_core::input::Focused, lumen_core::input::FocusVisible)>();
+        }
+        commands.entity(target).insert(lumen_core::input::Focused);
+        tracker.0 = Some(target);
     }
 }
 

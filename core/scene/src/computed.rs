@@ -72,6 +72,8 @@ pub struct StyleContext<'a> {
     pub in_scroll: bool,
     /// Asked for a relayout boundary in markup (`layout-boundary`).
     pub layout_boundary: bool,
+    /// A popover, or the built list of a `<dropdown>` / panel of a `<menu>`.
+    pub popover: bool,
 }
 
 impl<'a> StyleContext<'a> {
@@ -90,6 +92,7 @@ impl<'a> StyleContext<'a> {
             virtualized_for: tag == "for" && attrs.virtualized,
             in_scroll,
             layout_boundary: attrs.layout_boundary,
+            popover: attrs.popover.is_some(),
         }
     }
 }
@@ -156,8 +159,12 @@ pub struct ComputedStyle {
     pub tab_button: Option<lumen_primitives::TabButtonStyle>,
     /// An indeterminate `<progress>`'s sweep width.
     pub progress_chunk: Option<lumen_primitives::progress::ProgressChunk>,
-    /// The gap a dropdown's panel opens at.
+    /// The gap a dropdown's panel opens at, on its header; on a popover,
+    /// the gap it keeps from its anchor when its own styles set one.
     pub popup_gap: Option<lumen_primitives::popup::PopupGap>,
+    /// Where a popover goes against its anchor (`position-area`,
+    /// `position-try-fallbacks`).
+    pub anchor_placement: Option<lumen_primitives::AnchorPlacement>,
     /// Knob and thumb geometry of a `<toggle>` / `<switch>` / `<slider>`.
     pub knob_geometry: Option<lumen_primitives::controls::KnobGeometry>,
     /// Knob and thumb fill.
@@ -394,12 +401,19 @@ impl ComputedStyle {
                     .map(lumen_primitives::progress::ProgressChunk)
                     .unwrap_or_default()
             }),
-            popup_gap: ctx.dropdown_button.then(|| {
-                attrs
-                    .popup_gap
-                    .map(lumen_primitives::popup::PopupGap)
-                    .unwrap_or_default()
-            }),
+            popup_gap: if ctx.dropdown_button {
+                Some(
+                    attrs
+                        .popup_gap
+                        .map(lumen_primitives::popup::PopupGap)
+                        .unwrap_or_default(),
+                )
+            } else if ctx.popover {
+                attrs.popup_gap.map(lumen_primitives::popup::PopupGap)
+            } else {
+                None
+            },
+            anchor_placement: ctx.popover.then(|| anchor_placement(attrs)),
             knob_geometry: knob.then(|| lumen_primitives::controls::KnobGeometry {
                 inset: attrs
                     .knob_inset
@@ -428,6 +442,7 @@ impl ComputedStyle {
             width: Some(self.style.width),
             height: Some(self.style.height),
             min_height: Some(self.style.min_height),
+            max_height: Some(self.style.max_height),
             padding: Some(self.style.padding),
             basis: Some(self.style.basis),
             fill: Some(v.and_then(|v| v.fill.clone())),
@@ -512,6 +527,9 @@ impl ComputedStyle {
         insert_some(ent, self.tab_button);
         insert_some(ent, self.progress_chunk);
         insert_some(ent, self.popup_gap);
+        // A page's browser places its popovers.
+        #[cfg(not(target_arch = "wasm32"))]
+        insert_some(ent, self.anchor_placement);
         insert_some(ent, self.knob_geometry);
         if let Some(ms) = self.caret_blink_ms {
             set_caret_blink(ent, ms);
@@ -589,6 +607,8 @@ impl ComputedStyle {
         put(ent, self.tab_button);
         put(ent, self.progress_chunk);
         put(ent, self.popup_gap);
+        #[cfg(not(target_arch = "wasm32"))]
+        put(ent, self.anchor_placement);
         put(ent, self.knob_geometry);
         if let Some(ms) = self.caret_blink_ms {
             set_caret_blink(ent, ms);
@@ -954,6 +974,33 @@ fn set_knob_fill(ent: &mut EntityWorldMut<'_>, fill: Color) {
             }
         }
     });
+}
+
+/// A popover's placement from its `position-area` and
+/// `position-try-fallbacks`; what neither sets is the default, below the
+/// anchor with the start edges together and both flips allowed.
+fn anchor_placement(attrs: &Attributes) -> lumen_primitives::AnchorPlacement {
+    use lumen_ir::layout_ir::{AreaAlignSpec, AreaSideSpec};
+    use lumen_primitives::{AreaAlign, AreaSide};
+    let mut placement = lumen_primitives::AnchorPlacement::default();
+    if let Some(area) = attrs.position_area {
+        placement.side = match area.side {
+            AreaSideSpec::Top => AreaSide::Top,
+            AreaSideSpec::Bottom => AreaSide::Bottom,
+            AreaSideSpec::Left => AreaSide::Left,
+            AreaSideSpec::Right => AreaSide::Right,
+        };
+        placement.align = match area.align {
+            AreaAlignSpec::Start => AreaAlign::Start,
+            AreaAlignSpec::Center => AreaAlign::Center,
+            AreaAlignSpec::End => AreaAlign::End,
+        };
+    }
+    if let Some(fallbacks) = attrs.position_try {
+        placement.flip_block = fallbacks.flip_block;
+        placement.flip_inline = fallbacks.flip_inline;
+    }
+    placement
 }
 
 #[cfg(test)]

@@ -482,6 +482,33 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Close the menu `id` (sets the `__menu_open:id` signal to false).",
     },
     BuiltinFn {
+        name: "show_popover",
+        params: &[BuiltinParam {
+            name: "id",
+            ty: "string",
+        }],
+        ret: "()",
+        doc: "Open the popover `id`.",
+    },
+    BuiltinFn {
+        name: "hide_popover",
+        params: &[BuiltinParam {
+            name: "id",
+            ty: "string",
+        }],
+        ret: "()",
+        doc: "Close the popover `id`.",
+    },
+    BuiltinFn {
+        name: "toggle_popover",
+        params: &[BuiltinParam {
+            name: "id",
+            ty: "string",
+        }],
+        ret: "()",
+        doc: "Open the popover `id` when it is closed, close it when it is open.",
+    },
+    BuiltinFn {
         name: "pick_file",
         params: &[BuiltinParam {
             name: "tag",

@@ -105,6 +105,20 @@
   justify-content: center;
 }
 
+/* A popover opens the way it does on the desktop: below its anchor with the
+   start edges together, flipped to the other side when it does not fit. A
+   popover with no anchor ignores both and stays centred, as the browser
+   puts it. The browser's border, padding and page fill are taken off, as
+   they are for a dialog: the box is the app's to style. */
+:where([popover]) {
+  position-area: bottom span-right;
+  position-try-fallbacks: flip-block, flip-inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
 /* The dim behind a modal is the dialog's own fill, which the skin sets, so
    the layer the browser paints under it has nothing left to say. */
 :where(.lm-dialog)::backdrop {

@@ -219,6 +219,17 @@ bordered card with its own fill and an inch of padding; a Lumen dialog is the
 whole window with the app's surface centred inside it, and that is what the
 page shows.
 
+A `popover` is the browser's own too: the page writes `popover`,
+`popovertarget` and the element's anchor as CSS anchor positioning, the
+browser shows it in its top layer and closes an `auto` one on an outside
+press or Escape, and its signal follows whatever the browser did.
+`position-area` and `position-try-fallbacks` go out as written, and a
+popover with neither opens below its anchor and flips the way it does on the
+desktop. Two of the desktop's rules are its own: the browser does not clamp
+a popover to the window or shrink it to the room it has, and `popup-gap` sets
+no gap on a page. The floating lists of `<dropdown>` and `<menu>` stay the
+page elements they were.
+
 An image is emitted with the size of the file the build copied, so the page
 holds its place in the layout before a byte of the image has arrived and the
 text below it does not jump when it lands. The size is the file's own; a

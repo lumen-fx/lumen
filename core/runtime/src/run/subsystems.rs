@@ -286,6 +286,11 @@ pub(crate) fn register_reactive(app: &mut App) {
             .after(crate::spawn::reconcile_if_blocks)
             .after(crate::spawn::mark_dialog_accept_on_default_click),
     );
+    // A popover that opens moves focus to its `autofocus` element.
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::focus_autofocus_in_popovers.after(lumen_primitives::report_popover_toggles),
+    );
     // Esc closes every visible <dialog> by writing "" to its open
     // signal. Runs in Input stage so the next reconcile_if_blocks tick
     // observes the new signal state - and strictly after the Wave-3

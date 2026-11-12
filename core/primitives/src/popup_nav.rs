@@ -47,7 +47,7 @@ use lumen_core::input::{ControlInput, FocusVisible, Key, KeyPressed, NamedKey};
 use lumen_core::prelude::*;
 use lumen_core::time::{Duration, Instant};
 
-use crate::popup::PopupPanel;
+use crate::popup::Popover;
 use crate::tabs::{DropdownButton, DropdownOptionButton, MenuItemButton};
 
 /// Interaction timings for popup keyboard navigation. This `Default`
@@ -76,7 +76,7 @@ pub struct PopupNavSession {
     /// Open-state signal the session is keyed on
     /// (`__dropdown_open:*` / `__menu_open:*`).
     pub open_signal: String,
-    /// The [`PopupPanel`] entity.
+    /// The panel ([`Popover`]) entity.
     pub panel: Entity,
     /// Focus holder at open time, restored when a *menu* closes.
     /// Dropdowns restore to their header instead (Qt returns focus to
@@ -316,7 +316,7 @@ pub fn popup_nav_lifecycle(
     mut nav: ResMut<ActivePopupNav>,
     mut tracker: ResMut<FocusTracker>,
     mut store: ResMut<PropertyStore>,
-    panels: Query<(Entity, &PopupPanel)>,
+    panels: Query<(Entity, &Popover)>,
     headers: Query<(Entity, &DropdownButton)>,
     options: Query<(
         Entity,
@@ -394,7 +394,7 @@ pub fn popup_nav_lifecycle(
     }
     let Some((panel_e, panel)) = panels
         .iter()
-        .filter(|(_, p)| store.get_global_bool(&p.open_signal) == Some(true))
+        .filter(|(_, p)| p.keyboard && store.get_global_bool(&p.open_signal) == Some(true))
         .min_by_key(|(e, _)| *e)
     else {
         return;
@@ -735,7 +735,7 @@ pub fn closed_dropdown_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::popup::PopupPanel;
+    use crate::popup::Popover;
     use crate::tabs::DropdownOptionSpec;
     use bevy_ecs::message::Messages;
     use bevy_ecs::system::RunSystemOnce;
@@ -811,8 +811,9 @@ mod tests {
             })
             .id();
         let panel = world
-            .spawn(PopupPanel {
-                open_signal: OPEN.into(),
+            .spawn(Popover {
+                keyboard: true,
+                ..Popover::new(OPEN)
             })
             .id();
         let mut rows = [Entity::PLACEHOLDER; 3];
@@ -1129,8 +1130,9 @@ mod tests {
     /// Duplicate disabled. Returns (panel, [items]).
     fn spawn_menu(world: &mut World) -> (Entity, [Entity; 3]) {
         let panel = world
-            .spawn(PopupPanel {
-                open_signal: MENU_OPEN.into(),
+            .spawn(Popover {
+                keyboard: true,
+                ..Popover::new(MENU_OPEN)
             })
             .id();
         let mut items = [Entity::PLACEHOLDER; 3];

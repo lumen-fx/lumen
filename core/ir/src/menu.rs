@@ -190,7 +190,10 @@ pub fn popup_menu_of(menu_id: &str, items: Vec<Element>) -> Element {
     panel.attrs.id = Some(menu_id.to_string());
     // Outside-click dismissal, placement, and the items' wiring key off the
     // open signal.
-    panel.attrs.popup_panel = Some(open_signal.clone());
+    panel.attrs.popover = Some(crate::layout_ir::PopoverSpec {
+        open_signal: open_signal.clone(),
+        ..Default::default()
+    });
 
     let mut if_block = Element {
         tag: "if".to_string(),
@@ -361,7 +364,7 @@ mod tests {
         assert_eq!(panel.tag, "menu");
         assert_eq!(panel.attrs.id.as_deref(), Some("menubar-0"));
         assert_eq!(
-            panel.attrs.popup_panel.as_deref(),
+            panel.attrs.popover.as_ref().map(|p| p.open_signal.as_str()),
             Some("__menu_open:menubar-0")
         );
         let rows: Vec<_> = panel
