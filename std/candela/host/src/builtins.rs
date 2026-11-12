@@ -1810,6 +1810,49 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Text value for `input` / `change` / `submit`.",
     },
     BuiltinFn {
+        name: "event_types",
+        params: &[BuiltinParam {
+            name: "ev",
+            ty: "int",
+        }],
+        ret: "string[]",
+        doc: "The MIME kinds a drag event carries; empty for other events.",
+    },
+    BuiltinFn {
+        name: "event_get_data",
+        params: &[
+            BuiltinParam {
+                name: "ev",
+                ty: "int",
+            },
+            BuiltinParam {
+                name: "kind",
+                ty: "string",
+            },
+        ],
+        ret: "string",
+        doc: "What a drag event carries under a MIME kind, as text; `\"\"` when it carries none.",
+    },
+    BuiltinFn {
+        name: "event_set_data",
+        params: &[
+            BuiltinParam {
+                name: "ev",
+                ty: "int",
+            },
+            BuiltinParam {
+                name: "kind",
+                ty: "string",
+            },
+            BuiltinParam {
+                name: "value",
+                ty: "string",
+            },
+        ],
+        ret: "bool",
+        doc: "In a `dragstart` handler, put a value in the drag under a MIME kind. Answers false anywhere else.",
+    },
+    BuiltinFn {
         name: "event_detail",
         params: &[BuiltinParam {
             name: "ev",

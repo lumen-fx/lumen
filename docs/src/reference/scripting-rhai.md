@@ -85,9 +85,9 @@ optional.
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |
 | `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |
-| `on_drop(target_id, payload)` | Drop-zone id, the source's text payload. |
-| `on_drag_start(source_id, payload)` | Drag-source id, its text payload. |
-| `on_file_dropped(id, path)` | Element id, dropped file path. |
+| `on_drop(target_id, payload)` | Drop-zone id, the drag's `text/plain` value, or its only value when it carries no text (a dropped file's `text/uri-list`). The DOM `drop` event carries every type. |
+| `on_drag_start(source_id, payload)` | Drag-source id, its payload as for `on_drop`. |
+| `on_file_dropped(id, path)` | Element id, dropped file path. Deprecated: a dropped file is a `drop` event carrying `text/uri-list`, and `on_drop` receives the uri. Removed in the next release. |
 | `on_file_picked(tag, path)` | Dialog tag, chosen path. Empty path on cancel. |
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
@@ -395,7 +395,10 @@ The handler receives an `Event`:
 | `key()` | `string` | Key name for keyboard events. |
 | `code()` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `value()` | `string` | Text value for `input` / `change` / `submit`. |
-| `detail()` | `map` | What a module's custom event carries, or a `rangechange`'s `first` / `last`; empty for the other built-in events. |
+| `types()` | `array` | The MIME types a drag event carries (`"text/plain"`, `"application/x-asset"`); empty for other events. |
+| `get_data(kind)` | `string` | What a drag event carries under a MIME type, as text; `""` when it carries none. `"text"` / `"url"` stand for `text/plain` / `text/uri-list`. |
+| `set_data(kind, value)` | `bool` | In a `dragstart` handler, put a value in the drag under a MIME type. `false` in any other handler. |
+| `detail()` | `map` | What a module's custom event carries, a `rangechange`'s `first` / `last`, or a popover `toggle`'s `old_state` / `new_state`; empty for the other built-in events. |
 | `button()` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `buttons()` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `pointer_id()` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -406,7 +409,7 @@ The handler receives an `Event`:
 | `tilt_x()` / `tilt_y()` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
 | `twist()` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
 | `width()` / `height()` | `float` | Contact size in logical pixels; `1` for a point device. |
-| `x()` / `y()` | `float` | Pointer position relative to the target. |
+| `x()` / `y()` | `float` | Pointer position relative to the target's top-left as it is painted, scrolling included. |
 | `client_x()` / `client_y()` | `float` | Pointer position in window coordinates. |
 | `movement_x()` / `movement_y()` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `delta_x()` / `delta_y()` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
@@ -423,7 +426,11 @@ The handler receives an `Event`:
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
 `blur`, `submit`, `scroll`, `rangechange`, `pointerlockchange`,
-`pointerlockerror`, `beforetoggle`, `toggle`.
+`pointerlockerror`, `beforetoggle`, `toggle`, `dragstart`, `dragenter`,
+`dragover`, `dragleave`, `drop`, `dragend`.
+`dragstart` and `dragend` fire on the element an in-app drag began on; the
+other four on the drop target under the pointer whose `accept` list takes the
+drag. A `dragstart` handler's `prevent_default` cancels the drag.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
@@ -851,6 +858,7 @@ Each names a [`<surface>`](tags.md#surface) element by its `id`.
 | `surface::state(id)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
 | `surface::frame_info(id)` | `map` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
 | `surface::frame_meta(id)` | `array` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::to_texture(id, x, y)` | `array` | Where the window position `(x, y)` lands in the frame, in frame pixels: `[x, y]`. Undoes the element's drawn box, its `object-fit` and the device pixel ratio. Empty before the first frame and on the web. |
 | `surface::request_frame(id)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
 | `surface::send(id, message)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
 | `surface::disconnect(id)` | | End the session with the producer. The surface keeps listening for another. |

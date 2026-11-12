@@ -468,53 +468,96 @@ the lock rather than with permissions it did not choose.
 
 ## Drag and drop
 
-### Files dropped from the desktop
-
-Mark the element that accepts them and handle the drop:
-
-```html
-<tile id="drop-zone" drop-target="true" text="Drop a file here"/>
-```
-
-```rhai
-fn on_file_dropped(id, path) {
-    if id == "drop-zone" { set_text("echo", "Dropped: " + path); }
-}
-```
-
-`drop="true"` is accepted as an older spelling of the same thing.
-
 ### Dragging inside the app
+
+In-app drags work in a desktop app only: they do not reach a web page yet
+(see [the web target's limits](web.md#known-limits)).
 
 Give the source a payload and the destination a drop target:
 
 ```html
 <tile id="card-3" drag-payload="card-3" text="Card 3"/>
-<column id="done" drop-target="true" accept="text/plain"/>
+<column id="done" drop-target="true"/>
 ```
 
 An empty `drag-payload=""` uses the element's `id` as the payload, and inside a
-`<for>` you can build it per row with a `{row.field}` placeholder. `accept`
-filters by MIME type; leave it out to accept anything.
+`<for>` you can build it per row with a `{row.field}` placeholder.
 
-```rhai
-fn on_drag_start(source_id, payload) { }
-fn on_drop(target_id, payload) { }
+The payload is `text/plain` unless `drag-type` names another MIME type, and a
+target's `accept` lists the types it takes, comma-separated, with `type/*`
+wildcards, as HTML `<input accept>` spells it. Leave `accept` out to take
+anything:
+
+```html
+<tile drag-payload="{row.path}" drag-type="application/x-asset" text="{row.name}"/>
+<column id="viewport" drop-target="true" accept="application/x-asset, image/*"/>
 ```
 
-Both have per-id `on(...)` forms, `on("drag_start", ...)` and `on("drop", ...)`.
-
-Style the destination while a drag hovers it:
+A target only lights up and only takes the drop when its list names one of the
+drag's types, so a scene view that wants assets never highlights for a text
+drag. Style it while an acceptable drag hovers it:
 
 ```css
 .column:drag-over { bg: #2a3550; }
 ```
 
+The drop arrives as the DOM drag events, which bubble like the web's:
+`dragstart` and `dragend` on the source, and `dragenter`, `dragover`,
+`dragleave` and `drop` on the target under the pointer. Read the payload by
+type; `ev.x()` / `ev.y()` are where it landed on the target as you see it,
+scrolling included:
+
+```rust
+fn on_viewport_drop(ev: int) {
+    let path = lumen::event_get_data(ev, "application/x-asset");
+    place_asset(path, lumen::event_x(ev), lumen::event_y(ev));
+}
+fn on_ready() {
+    lumen::event_on(lumen::node_get_by_id("viewport"), "drop", "on_viewport_drop");
+}
+```
+
+`lumen::event_types(ev)` lists the types a drag carries. A `dragstart` handler
+can add more with `lumen::event_set_data(ev, type, value)`, and a target's
+`accept` list sees them; its `prevent_default` cancels the drag. Rhai and Lua
+spell these `e.types()`, `e.get_data(type)` and `e.set_data(type, value)`.
+
+Two global functions are the short form, the way `on_click` sits beside
+`click`. They receive the payload's `text/plain` value, or its only value when
+it has no text:
+
+```rust
+fn on_drag_start(source_id: string, payload: string) { }
+fn on_drop(target_id: string, payload: string) { }
+```
+
+Both have per-id `on(...)` forms, `on("drag_start", ...)` and `on("drop", ...)`.
+
 Adding `draggable="true"` also moves the element under the pointer while it is
 dragged, which suits a card you want to see follow the cursor.
 
-Files dropped onto your window from other applications work. Dragging out of
-your window into another application does not.
+To place a drop on a `<surface>` in the producer's own pixels, pass the drop's
+window position to `surface::to_texture`; see
+[Surfaces](surfaces.md).
+
+### Files dropped from the desktop
+
+A file dropped on a drop target from another application is a `drop` event
+carrying `text/uri-list`, and `on_drop` receives the same uri:
+
+```rust
+fn on_zone_drop(ev: int) {
+    lumen::signal_set("dropped", lumen::event_get_data(ev, "text/uri-list"));
+}
+```
+
+`accept="text/uri-list"` makes a target take files and nothing else.
+`on_file_dropped(id, path)` still fires with the plain path; it is deprecated
+in favour of the `drop` event and goes in the next release. `drop="true"` is
+accepted as an older spelling of `drop-target`.
+
+Dragging out of your window into another application is not supported, and
+neither is a drag from one of your app's windows to another.
 
 ## Audio
 

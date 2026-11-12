@@ -94,6 +94,30 @@ has focus and was just clicked; Escape always gives the mouse back. When the
 surface loses focus the producer hears it and lets go of every key and button
 it held.
 
+### From the window to the frame
+
+Events on the surface element say where the pointer was in window and
+element coordinates, not in the frame's pixels. `surface::to_texture(id, x,
+y)` maps a window position into the frame: it undoes where the element is
+drawn (scrolled with its containers), its `object-fit` and the device pixel
+ratio, and returns `[x, y]` in frame pixels, or an empty list before the
+first frame. A point outside the drawn frame maps outside its width and
+height, so check the range before you use it. This is how a drop lands on
+what is under it in the scene:
+
+```rust
+fn on_scene_drop(ev: int) {
+    let at = surface::to_texture("scene", lumen::event_client_x(ev), lumen::event_client_y(ev));
+    if at.len() == 2 {
+        let asset = lumen::event_get_data(ev, "application/x-asset");
+        surface::send("scene", "place " + asset + " " + string(at[0]) + " " + string(at[1]));
+    }
+}
+```
+
+See [Drag and drop](os-integration.md#drag-and-drop) for the drop event. A
+Rust app calls `Surfaces::to_texture(id, position)`.
+
 ## States and events
 
 The element's `state` attribute and its class say where it stands:

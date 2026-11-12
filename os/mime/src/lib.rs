@@ -51,16 +51,50 @@ impl MimeKind {
     }
 }
 
+impl MimeKind {
+    /// The type without its parameters, the spelling the web's
+    /// `DataTransfer.types` lists: `text/plain` for [`MimeKind::TextPlain`],
+    /// `application/x-asset` for a custom kind of that name.
+    pub fn essence(&self) -> &str {
+        match self {
+            MimeKind::TextPlain => "text/plain",
+            other => {
+                let s = other.as_str();
+                s.split(';').next().unwrap_or(s).trim()
+            }
+        }
+    }
+
+    /// Whether this kind is what an `accept` entry names: the same type, or
+    /// any type under a `type/*` wildcard (`image/*` takes `image/png`), as
+    /// an HTML `<input accept>` list reads. Case is ignored and parameters
+    /// do not count.
+    pub fn matches(&self, pattern: &str) -> bool {
+        let pattern = pattern.split(';').next().unwrap_or(pattern).trim();
+        let essence = self.essence();
+        match pattern.strip_suffix("/*") {
+            Some("*") => true,
+            Some(major) => essence
+                .split_once('/')
+                .is_some_and(|(m, _)| m.eq_ignore_ascii_case(major)),
+            None => essence.eq_ignore_ascii_case(pattern),
+        }
+    }
+}
+
 impl From<&str> for MimeKind {
     fn from(s: &str) -> Self {
-        match s {
-            "text/plain" | "text/plain;charset=utf-8" => MimeKind::TextPlain,
+        // Lowercased, as the web's `DataTransfer` stores a type.
+        let lower = s.trim().to_ascii_lowercase();
+        match lower.split(';').next().unwrap_or_default().trim() {
+            // `text` and `url` are the web's two short names.
+            "text/plain" | "text" => MimeKind::TextPlain,
             "text/html" => MimeKind::TextHtml,
-            "text/uri-list" => MimeKind::TextUriList,
+            "text/uri-list" | "url" => MimeKind::TextUriList,
             "image/png" => MimeKind::ImagePng,
             "image/jpeg" => MimeKind::ImageJpeg,
             "application/octet-stream" => MimeKind::ApplicationOctet,
-            other => MimeKind::Custom(Arc::from(other)),
+            _ => MimeKind::Custom(Arc::from(lower)),
         }
     }
 }
@@ -94,6 +128,16 @@ impl MimePayload {
     pub fn with(mut self, kind: MimeKind, bytes: Vec<u8>) -> Self {
         self.kinds.push((kind, bytes));
         self
+    }
+
+    /// Put `bytes` under `kind`, replacing what the payload already carried
+    /// under it, the way the web's `DataTransfer.setData` does. A new kind
+    /// goes after the ones already there.
+    pub fn set(&mut self, kind: MimeKind, bytes: Vec<u8>) {
+        match self.kinds.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, b)) => *b = bytes,
+            None => self.kinds.push((kind, bytes)),
+        }
     }
 
     /// Look up the first entry matching `kind`. Returns `None` when not
@@ -346,6 +390,51 @@ mod tests {
             MimeKind::Custom(s) => assert_eq!(&*s, "application/x-myapp"),
             _ => panic!("expected Custom variant"),
         }
+    }
+
+    /// The web's spellings read the same as Lumen's: parameters and case
+    /// do not count, `text` and `url` are the short names, and an app's own
+    /// kind is stored lowercased.
+    #[test]
+    fn mime_kind_from_str_reads_the_web_spellings() {
+        assert_eq!(MimeKind::from("text"), MimeKind::TextPlain);
+        assert_eq!(MimeKind::from("URL"), MimeKind::TextUriList);
+        assert_eq!(
+            MimeKind::from("Text/Plain; charset=utf-8"),
+            MimeKind::TextPlain
+        );
+        assert_eq!(
+            MimeKind::from("Application/X-Asset"),
+            MimeKind::Custom(Arc::from("application/x-asset"))
+        );
+        assert_eq!(MimeKind::TextPlain.essence(), "text/plain");
+        assert_eq!(
+            MimeKind::from("application/x-a;v=1").essence(),
+            "application/x-a"
+        );
+    }
+
+    /// An accept entry names one type or every type under a major type.
+    #[test]
+    fn mime_kind_matches_an_accept_entry() {
+        assert!(MimeKind::ImagePng.matches("image/*"));
+        assert!(MimeKind::ImagePng.matches("IMAGE/PNG"));
+        assert!(!MimeKind::ImagePng.matches("image/jpeg"));
+        assert!(!MimeKind::TextPlain.matches("image/*"));
+        assert!(MimeKind::TextPlain.matches("text/plain;charset=utf-8"));
+        assert!(MimeKind::from("application/x-asset").matches("application/*"));
+        assert!(MimeKind::from("application/x-asset").matches("*/*"));
+    }
+
+    /// Setting a kind the payload carries replaces it in place.
+    #[test]
+    fn mime_payload_set_replaces_a_kind() {
+        let mut p = MimePayload::from("a");
+        p.set(MimeKind::from("application/x-b"), b"b".to_vec());
+        p.set(MimeKind::TextPlain, b"c".to_vec());
+        assert_eq!(p.kinds.len(), 2);
+        assert_eq!(p.text().as_deref(), Some("c"));
+        assert_eq!(p.kinds[1].0.essence(), "application/x-b");
     }
 
     #[test]

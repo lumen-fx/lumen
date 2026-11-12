@@ -21,6 +21,10 @@ export function frame_meta(_id) {
   return [];
 }
 
+export function to_texture(_id, _x, _y) {
+  return [];
+}
+
 export function request_frame(_id) {}
 
 export function send(_id, _message) {

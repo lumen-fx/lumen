@@ -18,7 +18,7 @@
 
 // The engine's copy of each crate this module names. The re-export block in
 // lib.rs says why they come from there rather than from a dependency.
-use crate::{bevy_ecs, lumen_core, lumen_primitives, lumen_scene, lumen_script};
+use crate::{bevy_ecs, lumen_core, lumen_os_dnd, lumen_primitives, lumen_scene, lumen_script};
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,6 +33,8 @@ use lumen_core::input::{
 };
 use lumen_core::node::AppDom;
 use lumen_core::tick::{AppSet, TickStage};
+use lumen_os_dnd::mime::{MimeKind, MimePayload};
+use lumen_os_dnd::{DragStarted, DropAccepted};
 use lumen_primitives::{SliderChanged, ToggleChanged};
 use lumen_scene::spawn::ForMarker;
 use lumen_script::CustomEventDelivered;
@@ -64,6 +66,15 @@ pub enum EventKind {
     /// A `<menuitem>` was chosen. The id is the item's own; a menu item is
     /// not in the element tree, so there is no target and no row.
     Menu,
+    /// An in-app drag began on the element (one with a `drag-payload`).
+    /// [`Event::types`] and [`Event::data`] read what it carries, and
+    /// [`Event::position`] is where the pointer was.
+    DragStart,
+    /// Something was dropped on the element (a drop target whose `accept`
+    /// list takes it): an in-app drag, or a file from the OS, which carries
+    /// `text/uri-list`. [`Event::data`] reads it, [`Event::local`] says
+    /// where on the element it landed.
+    Drop,
     /// A custom event a module raised under this name
     /// ([`lumen_script::CustomEvent`]), such as a dock's `layoutchange`.
     /// [`Event::detail`] is what it carries and
@@ -85,6 +96,8 @@ pub struct Event {
     detail: Option<HashMap<String, lumen_script::ScriptValue>>,
     default_prevented: bool,
     modifiers: Modifiers,
+    payload: Option<MimePayload>,
+    local: Option<Vec2>,
 }
 
 impl Event {
@@ -114,10 +127,38 @@ impl Event {
         self.row.as_ref()
     }
 
-    /// Where the pointer was, in window coordinates, for a click or a
-    /// context-menu request.
+    /// Where the pointer was, in window coordinates, for a click, a
+    /// context-menu request, a drag start or a drop.
     pub fn position(&self) -> Option<Vec2> {
         self.position
+    }
+
+    /// Where the pointer was relative to the top-left of the target as it is
+    /// painted (scrolled with its containers), in logical pixels: the web's
+    /// `offsetX` / `offsetY`. `None` where [`Event::position`] is.
+    pub fn local(&self) -> Option<Vec2> {
+        self.local
+    }
+
+    /// The MIME kinds a drag start or a drop carries (`text/plain`,
+    /// `application/x-asset`, ...), in the order they were set; empty for the
+    /// other kinds.
+    pub fn types(&self) -> Vec<&str> {
+        self.payload
+            .iter()
+            .flat_map(|p| p.kinds.iter().map(|(kind, _)| kind.essence()))
+            .collect()
+    }
+
+    /// What a drag start or a drop carries under the MIME kind `kind`, as
+    /// text. `text` and `url` stand for `text/plain` and `text/uri-list`, as
+    /// on the web.
+    pub fn data(&self, kind: &str) -> Option<String> {
+        let kind = MimeKind::from(kind);
+        self.payload
+            .as_ref()?
+            .get(&kind)
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
     }
 
     /// The pointer button of a click or a context-menu request.
@@ -229,6 +270,7 @@ pub(crate) struct Pending {
     value: Option<f64>,
     detail: Option<HashMap<String, lumen_script::ScriptValue>>,
     default_prevented: bool,
+    payload: Option<MimePayload>,
 }
 
 impl Pending {
@@ -243,6 +285,7 @@ impl Pending {
             value: None,
             detail: None,
             default_prevented: false,
+            payload: None,
         }
     }
 }
@@ -252,12 +295,20 @@ impl Pending {
 #[derive(Resource, Default)]
 pub(crate) struct PendingEvents(Vec<Pending>);
 
+/// The drag messages [`collect_ui_events`] reads.
+#[derive(bevy_ecs::system::SystemParam)]
+pub(crate) struct DragReaders<'w, 's> {
+    starts: MessageReader<'w, 's, DragStarted>,
+    drops: MessageReader<'w, 's, DropAccepted>,
+}
+
 /// Gather this tick's element events, in the order they happened per kind.
 ///
 /// A double-click drops the plain clicks on the same element that tick, so
 /// a quick pair is one double-click.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_ui_events(
+    mut drags: DragReaders,
     mut clicks: MessageReader<ClickEvent>,
     mut doubles: MessageReader<DoubleClickEvent>,
     mut longs: MessageReader<LongPressEvent>,
@@ -312,6 +363,18 @@ pub(crate) fn collect_ui_events(
     for item in items.read() {
         let mut ev = Pending::on(EventKind::Menu, None);
         ev.menu_id = Some(item.id.clone());
+        queue.0.push(ev);
+    }
+    for start in drags.starts.read() {
+        let mut ev = Pending::on(EventKind::DragStart, Some(start.source));
+        ev.position = Some(start.position);
+        ev.payload = Some(start.payload.clone());
+        queue.0.push(ev);
+    }
+    for dropped in drags.drops.read() {
+        let mut ev = Pending::on(EventKind::Drop, Some(dropped.target));
+        ev.position = Some(dropped.position);
+        ev.payload = Some(dropped.payload.clone());
         queue.0.push(ev);
     }
     for delivered in customs.read() {
@@ -410,12 +473,22 @@ pub(crate) fn dispatch_handlers(world: &mut World) {
             }
             (None, None) => (None, None),
         };
+        let local = p.target.zip(p.position).map(|(target, at)| {
+            let origin = world
+                .get::<lumen_core::components::Transform>(target)
+                .map_or(Vec2::ZERO, |t| {
+                    t.absolute - lumen_core::input::ancestor_scroll_in(world, target)
+                });
+            at - origin
+        });
         let event = Event {
             kind: p.kind,
             id,
             target: p.target,
             row: p.target.and_then(|t| row_of(world, t)),
             position: p.position,
+            local,
+            payload: p.payload,
             button: p.button,
             checked: p.checked,
             value: p.value,
@@ -476,6 +549,8 @@ pub(crate) fn install_handlers(
     ensure_message::<SliderChanged>(app);
     ensure_message::<MenuClicked>(app);
     ensure_message::<CustomEventDelivered>(app);
+    ensure_message::<DragStarted>(app);
+    ensure_message::<DropAccepted>(app);
     app.add_systems(
         TickStage::Systems,
         (collect_ui_events, dispatch_handlers)

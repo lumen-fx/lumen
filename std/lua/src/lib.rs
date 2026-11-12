@@ -412,6 +412,13 @@ impl UserData for LuaEvent {
         methods.add_method("detail", |lua, _this, ()| {
             script_value_to_lua(lua, &ScriptValue::Map(ev::event_detail()))
         });
+        methods.add_method("types", |_, _this, ()| Ok(ev::event_types()));
+        methods.add_method("get_data", |_, _this, kind: String| {
+            Ok(ev::event_get_data(&kind))
+        });
+        methods.add_method("set_data", |_, _this, (kind, value): (String, String)| {
+            Ok(ev::event_set_data(&kind, &value))
+        });
         methods.add_method("button", |_, _this, ()| Ok(ev::event_button()));
         methods.add_method("x", |_, _this, ()| Ok(ev::event_position_local().0));
         methods.add_method("y", |_, _this, ()| Ok(ev::event_position_local().1));

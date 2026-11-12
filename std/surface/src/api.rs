@@ -169,6 +169,18 @@ impl Surfaces {
         find(id).and_then(|e| e.shared.frame())
     }
 
+    /// Where the window position `client` (logical pixels, as an event's
+    /// position reads) lands in the frame of the surface with `id`, in
+    /// texture pixels: the element's box as drawn (scrolled with its
+    /// containers), its `object-fit` and the device pixel ratio undone. A
+    /// drop on the surface maps into the producer's frame this way. A point
+    /// outside the drawn frame maps outside `0..width` / `0..height`. `None`
+    /// when no surface has the id, before its first frame, or while it is
+    /// not drawn.
+    pub fn to_texture(self, id: &str, client: glam::Vec2) -> Option<glam::Vec2> {
+        find(id).and_then(|e| crate::paint::to_texture(&e.shared, client))
+    }
+
     /// Ask a paced producer for a frame now: after an edit the app made, so
     /// a still scene shows it.
     pub fn request_frame(&self, id: &str) {

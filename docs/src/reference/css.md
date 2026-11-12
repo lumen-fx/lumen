@@ -109,7 +109,7 @@ state on the desktop, toggle a class on the child from a script.
 | `:disabled` | Element is disabled. |
 | `:checked` | `<toggle>`, `<switch>`, or `<checkbox>` is on. |
 | `:selected` | Tab strip button of the active tab. |
-| `:drag-over` | An acceptable in-app drag hovers this drop target. |
+| `:drag-over` | An in-app drag whose type the target's `accept` list takes hovers this drop target. |
 
 Structural pseudo-classes filter on where the element sits in the tree:
 

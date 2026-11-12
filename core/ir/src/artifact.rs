@@ -181,9 +181,9 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `25`: [`crate::layout_ir::Attributes`] loses `popup_panel` and gains
 /// `popover`, `popover_target`, `anchor`, `popover_open`, `position_area`
 /// and `position_try`: any element can be a popover, placed against an
-/// anchor in the top layer.
-/// It also gains `cell_width`, the cell width that lays a virtualized
-/// `<for>` out as a grid.
+/// anchor in the top layer. It also gains `cell_width`, the cell width that
+/// lays a virtualized `<for>` out as a grid, and `drag_type`, the MIME kind a
+/// `drag-payload` is published under.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

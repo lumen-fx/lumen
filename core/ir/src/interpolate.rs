@@ -171,6 +171,7 @@ pub fn substitute_attrs(
         out.style_role.as_mut(),
         out.placeholder.as_mut(),
         out.drag_payload.as_mut(),
+        out.drag_type.as_mut(),
         out.tooltip.as_mut().map(|tooltip| &mut tooltip.text),
     ]
     .into_iter()
@@ -212,6 +213,7 @@ pub fn carries_placeholder(attrs: &Attributes) -> bool {
         attrs.style_role.as_ref(),
         attrs.placeholder.as_ref(),
         attrs.drag_payload.as_ref(),
+        attrs.drag_type.as_ref(),
         attrs.tooltip.as_ref().map(|tooltip| &tooltip.text),
     ]
     .into_iter()

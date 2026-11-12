@@ -792,13 +792,20 @@ pub struct Attributes {
     /// derives the payload from the element's `id`. Mirrors HTML5
     /// `dataTransfer.setData` / Qt `QMimeData`.
     pub drag_payload: Option<String>,
-    /// `accept="text/plain"` on a drop target - MIME filter
-    /// ([`DropAccept`](lumen_os_dnd::DropAccept)). Absent = accept any.
+    /// `drag-type="<mime>"` - the MIME kind [`Self::drag_payload`] is
+    /// published under (interpolated per-row like it). Absent =
+    /// `text/plain`.
+    pub drag_type: Option<String>,
+    /// `accept="..."` on a drop target - MIME filter
+    /// ([`DropAccept`](lumen_os_dnd::DropAccept)): a comma-separated list of
+    /// types and `type/*` wildcards, as HTML `<input accept>` spells it.
+    /// Absent = accept any.
     pub drop_accept: Option<String>,
     /// `placeholder="..."` on `<input>` - shown when [`text`] is empty.
     pub placeholder: Option<String>,
-    /// `drop="true"` - entity gains a `DropTarget` marker so OS file
-    /// drags landing on its bounds fire `on_file_dropped(id, path)`.
+    /// `drop="true"` / `drop-target` - entity gains a `DropTarget` marker:
+    /// in-app drags and files the OS drops on its bounds land on it, and its
+    /// DOM `drop` event fires.
     pub drop_target: bool,
     /// `drag="true"` on `<title-bar>` - entity gains a
     /// `TitleBarDraggable` marker. Pressing the bar requests a native

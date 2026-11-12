@@ -275,6 +275,9 @@ impl Event {
     fn code(self) { return lumen::event_code(self.handle); }
     fn value(self) { return lumen::event_value(self.handle); }
     fn detail(self) { return lumen::event_detail(self.handle); }
+    fn types(self) { return lumen::event_types(self.handle); }
+    fn get_data(self, kind) { return lumen::event_get_data(self.handle, kind); }
+    fn set_data(self, kind, value) { return lumen::event_set_data(self.handle, kind, value); }
     fn button(self) { return lumen::event_button(self.handle); }
     fn x(self) { return lumen::event_x(self.handle); }
     fn y(self) { return lumen::event_y(self.handle); }

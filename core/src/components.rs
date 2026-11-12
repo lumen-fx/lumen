@@ -1109,7 +1109,8 @@ impl CaretBlink {
     }
 }
 
-/// Marker: this entity accepts file drops.
+/// Marker: a drop target (`drop-target` in markup). In-app drags and files
+/// the OS drops land on it, filtered by `lumen-os-dnd`'s `DropAccept`.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct DropTarget;
 

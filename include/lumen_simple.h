@@ -154,8 +154,14 @@
  0.19 told a notched wheel from a touchpad: [`LumenEvent`] gains
  `delta_mode` at its end, the DOM `deltaMode` of the unit the wheel
  reported in. Additive, so a minor bump.
+
+ 0.20 reached a drag's payload: [`lumen_event_types`] lists the MIME kinds
+ a drag event (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`,
+ `dragend`) carries, [`lumen_event_data`] reads one of them, and
+ [`lumen_event_set_data`] adds one from a `dragstart` callback. Additive, so
+ a minor bump.
  */
-#define LUMEN_ABI_MINOR 19
+#define LUMEN_ABI_MINOR 20
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
@@ -1069,6 +1075,45 @@ extern "C" {
  or any other. Thread-safe.
  */
  LumenStatus lumen_event_stop_immediate_propagation(void) ;
+
+/*
+ Write the MIME kinds the current drag event carries into `*out`
+ (`text/plain`, `application/x-asset`, ...), in the order they were set;
+ an empty list for any other event. Release it with
+ [`lumen_strlist_free`]. Valid only inside a [`LumenEventFn`] callback.
+ Thread-safe.
+
+ # Safety
+
+ `out` must be null or point to writable storage for one [`LumenStrList`].
+ */
+ LumenStatus lumen_event_types(LumenStrList *out) ;
+
+/*
+ Copy what the current drag event carries under the MIME kind `kind` into
+ `buf`, as text; an empty string when it carries none. `kind` reads as the
+ web reads it: case and parameters do not count, and `text` / `url` stand
+ for `text/plain` / `text/uri-list`. See [`lumen_event_type`] for the
+ buffer convention. Thread-safe.
+
+ # Safety
+
+ `kind` must be null or a NUL-terminated string; `buf` / `out_len` follow
+ [`lumen_event_type`].
+ */
+ LumenStatus lumen_event_data(const char *kind, char *buf, size_t buf_len, size_t *out_len) ;
+
+/*
+ From a `dragstart` callback, put `value` in the drag under the MIME kind
+ `kind`, replacing what it carried there. A drop target's `accept` list
+ matches the kinds the drag ends up with. Returns
+ [`LumenStatus::ErrBadArg`] outside a `dragstart` callback. Thread-safe.
+
+ # Safety
+
+ `kind` and `value` must be null or NUL-terminated strings.
+ */
+ LumenStatus lumen_event_set_data(const char *kind, const char *value) ;
 
 #ifdef __cplusplus
 }  // extern "C"

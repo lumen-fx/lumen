@@ -34,6 +34,12 @@ def frame_meta(id: str) -> list:
     return call("surface", "frame_meta", id)  # type: ignore[return-value]
 
 
+def to_texture(id: str, x: float, y: float) -> list:
+    """Where the window position (x, y), in logical pixels as an event's client position reads, lands in the frame, in texture pixels: [x, y]. The element's box as drawn, its object-fit and the device pixel ratio are undone. Empty when no surface has the id, before the first frame, and on the web."""
+
+    return call("surface", "to_texture", id, x, y)  # type: ignore[return-value]
+
+
 def request_frame(id: str) -> None:
     """Ask a paced producer for a frame now, so a still scene shows an edit."""
 

@@ -15,16 +15,15 @@
 //! every key and button it held.
 
 use crate::api::SurfaceElement;
-use crate::paint::frame_rect;
+use crate::paint::{motion_scale, to_texture};
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
-use lumen_module::lumen_core::components::{ImageFit, LumenAttributes};
+use lumen_module::lumen_core::components::LumenAttributes;
 use lumen_module::lumen_core::input::{
     Focused, HoverWithin, Hovered, ImeEvent, Key, KeyPressed, KeyReleased, Modifiers, MouseWheel,
     NamedKey, PointerData, PointerKind, PointerLockChanged, PointerLockState, PointerMoved,
     PointerPressed, PointerReleased, WindowFocused,
 };
-use lumen_module::lumen_core::window::Viewports;
 use lumen_module::lumen_primitives::MenuAccelerators;
 use lumen_surface_protocol::wire::{InputEvent, PointerInput, modifiers};
 
@@ -34,54 +33,6 @@ pub struct ForwardState {
     /// The surface a press began on, which keeps the pointer until the
     /// buttons come up, wherever it goes.
     pressed: Option<Entity>,
-}
-
-/// A position in the element's frame, in texture pixels, from a window
-/// position: undoes where the element is, how the frame fits it, and the
-/// device pixel ratio.
-fn to_texture(
-    element: &SurfaceElement,
-    fit: ImageFit,
-    scale: f32,
-    position: glam::Vec2,
-) -> Option<glam::Vec2> {
-    let frame = element.shared.frame()?.size;
-    let [x, y, w, h] = element.shared.placement()?;
-    let [fx, fy, fw, fh] = frame_rect(
-        frame,
-        scale,
-        glam::Vec2::new(x, y),
-        glam::Vec2::new(w, h),
-        fit,
-    );
-    if fw <= 0.0 || fh <= 0.0 {
-        return None;
-    }
-    Some(glam::Vec2::new(
-        (position.x - fx) * frame.0 as f32 / fw,
-        (position.y - fy) * frame.1 as f32 / fh,
-    ))
-}
-
-/// The ratio from logical motion to texture pixels.
-fn motion_scale(element: &SurfaceElement, fit: ImageFit, scale: f32) -> glam::Vec2 {
-    let (Some(frame), Some([x, y, w, h])) = (
-        element.shared.frame().map(|f| f.size),
-        element.shared.placement(),
-    ) else {
-        return glam::Vec2::splat(scale);
-    };
-    let [_, _, fw, fh] = frame_rect(
-        frame,
-        scale,
-        glam::Vec2::new(x, y),
-        glam::Vec2::new(w, h),
-        fit,
-    );
-    glam::Vec2::new(
-        frame.0 as f32 / fw.max(0.001),
-        frame.1 as f32 / fh.max(0.001),
-    )
 }
 
 fn pointer_input(
@@ -181,7 +132,6 @@ pub struct InputReaders<'w, 's> {
 type ElementData = (
     Entity,
     &'static SurfaceElement,
-    Option<&'static ImageFit>,
     Option<&'static LumenAttributes>,
     Has<Hovered>,
     Has<Focused>,
@@ -196,7 +146,6 @@ pub struct Targets<'w, 's> {
     left: RemovedComponents<'w, 's, HoverWithin>,
     lock: Option<Res<'w, PointerLockState>>,
     accelerators: Option<Res<'w, MenuAccelerators>>,
-    viewports: Viewports<'w, 's>,
 }
 
 /// Forward this tick's input on every surface to its producer.
@@ -255,11 +204,8 @@ pub fn forward_input(
             .elements
             .get(entity)
             .ok()
-            .map(|(_, element, fit, attrs, ..)| {
-                (element, fit.copied().unwrap_or(ImageFit::Contain), attrs)
-            })
+            .map(|(_, element, attrs, ..)| (element, attrs))
     };
-    let scale_of = |entity: Entity| targets.viewports.of(entity).map_or(1.0, |v| v.scale_factor);
 
     // Pointer input, in the order it happened.
     enum Step {
@@ -303,19 +249,18 @@ pub fn forward_input(
         let Some(entity) = target else {
             continue;
         };
-        let Some((element, fit, _)) = element_of(entity) else {
+        let Some((element, _)) = element_of(entity) else {
             continue;
         };
-        let scale = scale_of(entity);
         let position = match &step {
             Step::Move(m) => m.position,
             Step::Down(p) => p.position,
             Step::Up(r) => r.position,
         };
-        let Some(at) = to_texture(element, fit, scale, position) else {
+        let Some(at) = to_texture(&element.shared, position) else {
             continue;
         };
-        let motion = data.movement * motion_scale(element, fit, scale);
+        let motion = data.movement * motion_scale(&element.shared);
         let event = match step {
             Step::Move(_) => InputEvent::PointerMove(pointer_input(at, motion, &data, -1)),
             Step::Down(p) => {
@@ -345,10 +290,10 @@ pub fn forward_input(
         let Some(entity) = locked.or(hovered) else {
             continue;
         };
-        let Some((element, fit, _)) = element_of(entity) else {
+        let Some((element, _)) = element_of(entity) else {
             continue;
         };
-        let Some(at) = to_texture(element, fit, scale_of(entity), wheel.position) else {
+        let Some(at) = to_texture(&element.shared, wheel.position) else {
             continue;
         };
         element.shared.send_input(InputEvent::Wheel {
@@ -377,7 +322,7 @@ pub fn forward_input(
         }
         return;
     };
-    let Some((element, _, attrs)) = element_of(entity) else {
+    let Some((element, attrs)) = element_of(entity) else {
         return;
     };
     let takes_all = locked == Some(entity) || attrs.and_then(|a| a.get("keyboard")) == Some("all");

@@ -93,6 +93,8 @@ use crate::runtime::prefix;
 pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
+#[cfg(not(target_arch = "wasm32"))]
+pub use dom_events::queue_drag_events;
 pub use dom_events::{
     BUILT_IN_EVENTS, CustomEvent, CustomEventDelivered, EventHosts, PendingDomEvents,
     deliver_custom_events, deliver_input_events, deliver_state_events, queue_custom_events,

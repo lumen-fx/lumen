@@ -8,7 +8,7 @@
 //! is not painted again for it.
 
 use crate::api::SurfaceElement;
-use crate::session::Shared;
+use crate::session::{Placement, Shared};
 use lumen_module::lumen_core::components::{ImageFit, ImageRendering, Transform};
 use lumen_module::lumen_core::native::{
     ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, upsert_native_leaves,
@@ -63,6 +63,69 @@ pub fn frame_rect(
     ]
 }
 
+/// The device pixels per logical pixel of the window `entity` shows in; 1
+/// with no window.
+fn scale_of(world: &World, entity: Entity) -> f32 {
+    world
+        .get_resource::<lumen_module::lumen_core::window::WindowPartitions>()
+        .and_then(|p| p.window_of(entity))
+        .and_then(|w| world.get::<lumen_module::lumen_core::window::WindowViewport>(w))
+        .map_or(1.0, |v| v.scale_factor)
+}
+
+/// Where a window position lands in the frame, in texture pixels: undoes
+/// where the element was drawn, how the frame fits it, and the device pixel
+/// ratio. `None` before the first frame or while the element is not drawn.
+/// Outside the frame's drawn rect the answer is outside `0..size` (negative,
+/// or past the frame's width or height), which the caller checks.
+pub(crate) fn to_texture(shared: &Shared, position: glam::Vec2) -> Option<glam::Vec2> {
+    map_point(shared.frame().map(|f| f.size), shared.placement(), position)
+}
+
+/// [`to_texture`] over a frame size and a placement.
+fn map_point(
+    frame: Option<(u32, u32)>,
+    placement: Option<Placement>,
+    position: glam::Vec2,
+) -> Option<glam::Vec2> {
+    let frame = frame?;
+    let placement = placement?;
+    let [fx, fy, fw, fh] = frame_rect_of(frame, &placement);
+    if fw <= 0.0 || fh <= 0.0 {
+        return None;
+    }
+    Some(glam::Vec2::new(
+        (position.x - fx) * frame.0 as f32 / fw,
+        (position.y - fy) * frame.1 as f32 / fh,
+    ))
+}
+
+/// The ratio from logical motion to texture pixels; the device pixel ratio
+/// before the first frame.
+pub(crate) fn motion_scale(shared: &Shared) -> glam::Vec2 {
+    let (Some(frame), Some(placement)) = (shared.frame().map(|f| f.size), shared.placement())
+    else {
+        return glam::Vec2::splat(shared.placement().map_or(1.0, |p| p.scale));
+    };
+    let [_, _, fw, fh] = frame_rect_of(frame, &placement);
+    glam::Vec2::new(
+        frame.0 as f32 / fw.max(0.001),
+        frame.1 as f32 / fh.max(0.001),
+    )
+}
+
+/// [`frame_rect`] for a recorded placement.
+fn frame_rect_of(frame: (u32, u32), p: &Placement) -> [f32; 4] {
+    let [x, y, w, h] = p.rect;
+    frame_rect(
+        frame,
+        p.scale,
+        glam::Vec2::new(x, y),
+        glam::Vec2::new(w, h),
+        p.fit,
+    )
+}
+
 /// Publish one leaf per surface element, and record where each was placed.
 pub fn extract_surfaces(main: &mut World, render: &mut World) {
     let mut place = NativeExtract::new(main);
@@ -80,11 +143,15 @@ pub fn extract_surfaces(main: &mut World, render: &mut World) {
             continue;
         };
         let b = placed.bounds;
-        element
-            .shared
-            .set_placement(Some([b.origin.x, b.origin.y, b.size.x, b.size.y]));
-        let frame_size = element.shared.frame().map(|f| f.size);
         let fit = fit.copied().unwrap_or(ImageFit::Contain);
+        // `place` has already taken the scroll offsets above the element
+        // off its box, so this is where it shows.
+        element.shared.set_placement(Some(Placement {
+            rect: [b.origin.x, b.origin.y, b.size.x, b.size.y],
+            fit,
+            scale: scale_of(main, entity),
+        }));
+        let frame_size = element.shared.frame().map(|f| f.size);
         let nearest = rendering.is_some_and(|r| r.is_nearest());
         let revision = revision(frame_size, fit, nearest, placed.opacity);
         leaves.push((
@@ -225,6 +292,54 @@ mod tests {
 
     /// A new frame of the same size paints the same leaf; a new size, a new
     /// fit or a fade does not.
+    #[test]
+    fn mapping_undoes_the_box_the_fit_and_the_pixel_ratio() {
+        // A 200 x 100 box at (100, 50) showing a 400 x 400 frame.
+        let at = |fit, scale| {
+            Some(Placement {
+                rect: [100.0, 50.0, 200.0, 100.0],
+                fit,
+                scale,
+            })
+        };
+        let map =
+            |fit, scale, x, y| map_point(Some((400, 400)), at(fit, scale), glam::Vec2::new(x, y));
+        // Contain: the frame shows 100 x 100, centred at (150, 50).
+        for scale in [1.0, 2.0] {
+            assert_eq!(
+                map(ImageFit::Contain, scale, 150.0, 50.0),
+                Some(glam::Vec2::ZERO)
+            );
+            assert_eq!(
+                map(ImageFit::Contain, scale, 160.0, 60.0),
+                Some(glam::Vec2::new(40.0, 40.0))
+            );
+        }
+        // Cover: the frame shows 200 x 200 from (100, 0), cropped to the box.
+        for scale in [1.0, 2.0] {
+            assert_eq!(
+                map(ImageFit::Cover, scale, 110.0, 60.0),
+                Some(glam::Vec2::new(20.0, 120.0))
+            );
+        }
+        // Unscaled: the device pixel ratio sets the frame's drawn size, 400
+        // logical pixels at a ratio of 1 and 200 at 2, from the box's corner.
+        assert_eq!(
+            map(ImageFit::None, 1.0, 110.0, 60.0),
+            Some(glam::Vec2::new(10.0, 10.0))
+        );
+        assert_eq!(
+            map(ImageFit::None, 2.0, 110.0, 60.0),
+            Some(glam::Vec2::new(20.0, 20.0))
+        );
+        // No frame yet, or not drawn: nothing to map into.
+        assert_eq!(
+            map_point(None, at(ImageFit::Contain, 1.0), glam::Vec2::ZERO),
+            None
+        );
+        assert_eq!(map_point(Some((400, 400)), None, glam::Vec2::ZERO), None);
+    }
+
     #[test]
     fn the_stamp_moves_with_what_the_leaf_paints() {
         let r = revision(Some((640, 480)), ImageFit::Contain, false, 1.0);
