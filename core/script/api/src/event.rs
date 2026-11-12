@@ -509,7 +509,7 @@ pub fn has_default_action(event_type: &str) -> bool {
 pub fn event_bubbles(event_type: &str) -> bool {
     !matches!(
         event_type,
-        "focus" | "blur" | "pointerenter" | "pointerleave" | "scroll"
+        "focus" | "blur" | "pointerenter" | "pointerleave" | "scroll" | "beforetoggle" | "toggle"
     )
 }
 

@@ -380,6 +380,9 @@ pub fn is_id_argument(call: &str, arg_index: usize) -> bool {
             | ("open_menu", 0)
             | ("open_menu_at", 0)
             | ("close_menu", 0)
+            | ("show_popover", 0)
+            | ("hide_popover", 0)
+            | ("toggle_popover", 0)
             | ("unregister_tray", 0)
     )
 }

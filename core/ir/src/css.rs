@@ -2334,6 +2334,12 @@ fn overlay_set_fields(target: &mut Attributes, inline: &Attributes) {
     if inline.popup_gap.is_some() {
         target.popup_gap = inline.popup_gap;
     }
+    if inline.position_area.is_some() {
+        target.position_area = inline.position_area;
+    }
+    if inline.position_try.is_some() {
+        target.position_try = inline.position_try;
+    }
     if inline.disabled_opacity_default.is_some() {
         target.disabled_opacity_default = inline.disabled_opacity_default;
     }
@@ -3765,6 +3771,8 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "knob-inset",
     "thumb-size",
     "popup-gap",
+    "position-area",
+    "position-try-fallbacks",
     "display",
     "grid-template-rows",
     "grid-template-columns",
@@ -4372,6 +4380,18 @@ fn apply_declaration(
         "knob-inset" => attrs.knob_inset = Some(parse_f32(ctx, name, value)?),
         "thumb-size" => attrs.thumb_size = Some(parse_f32(ctx, name, value)?),
         "popup-gap" => attrs.popup_gap = Some(parse_f32(ctx, name, value)?),
+        // A page's browser places its popovers from the declaration it
+        // was written with, so a page runtime only lets these through.
+        #[cfg(not(target_arch = "wasm32"))]
+        "position-area" => {
+            attrs.position_area = Some(crate::values::parse_position_area(ctx, name, value)?);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "position-try-fallbacks" => {
+            attrs.position_try = Some(crate::values::parse_position_try(ctx, name, value)?);
+        }
+        #[cfg(target_arch = "wasm32")]
+        "position-area" | "position-try-fallbacks" => {}
         "display" => {
             attrs.display = Some(match value.trim() {
                 "flex" => DisplaySpec::Flex,

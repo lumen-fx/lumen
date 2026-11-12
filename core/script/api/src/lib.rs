@@ -193,6 +193,17 @@ impl ScriptError {
     }
 }
 
+/// What [`ScriptCommand::Popover`] does to its popover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PopoverOp {
+    /// Open it.
+    Show,
+    /// Close it.
+    Hide,
+    /// Open it when closed, close it when open.
+    Toggle,
+}
+
 /// One side-effect a script wants to apply to the app this tick.
 ///
 /// V1 is intentionally small: just enough to demo end-to-end. Future
@@ -780,6 +791,14 @@ pub enum ScriptCommand {
     /// Quit the app (`app.quit()`): every window is asked to close, and a
     /// veto from any `on_close` cancels the quit.
     AppQuit,
+    /// Show, hide or toggle the `popover` with this id, as the DOM's
+    /// `showPopover()` / `hidePopover()` / `togglePopover()` do.
+    Popover {
+        /// The popover's id.
+        id: String,
+        /// What to do to it.
+        action: PopoverOp,
+    },
 }
 
 impl ScriptCommand {

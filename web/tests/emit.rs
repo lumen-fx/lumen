@@ -11,7 +11,7 @@ use lumen_html::contract::{
 };
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
-    WidgetPart,
+    PopoverActionSpec, PopoverModeSpec, PopoverSpec, PopoverTargetSpec, WidgetPart,
 };
 use lumen_web::{
     AssetRef, CheckedFile, EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec,
@@ -661,6 +661,89 @@ fn a_hidden_branch_stays_in_the_document() {
     let shown = page_html(&spec, "index.html");
     assert!(!shown.contains("data-lm-hidden"));
     assert!(shown.contains(">done<"));
+}
+
+#[test]
+fn a_popover_is_the_browsers_own_and_names_what_it_is_placed_against() {
+    let popover = |id: &str, anchor: Option<&str>, mode| {
+        element(
+            "column",
+            Attributes {
+                id: Some(id.into()),
+                if_signal: Some(format!("__popover_open:{id}")),
+                if_mode: IfModeSpec::Mounted,
+                popover: Some(PopoverSpec {
+                    open_signal: format!("__popover_open:{id}"),
+                    mode,
+                    anchor: anchor.map(Into::into),
+                    match_anchor_width: false,
+                }),
+                ..Attributes::default()
+            },
+            Vec::new(),
+        )
+    };
+    let opener = element(
+        "button",
+        Attributes {
+            popover_target: Some(PopoverTargetSpec {
+                target: "picker".into(),
+                action: PopoverActionSpec::Toggle,
+            }),
+            ..labelled("Add")
+        },
+        Vec::new(),
+    );
+    let closer = element(
+        "button",
+        Attributes {
+            popover_target: Some(PopoverTargetSpec {
+                target: "picker".into(),
+                action: PopoverActionSpec::Hide,
+            }),
+            ..labelled("Done")
+        },
+        Vec::new(),
+    );
+    let target = element(
+        "label",
+        Attributes {
+            id: Some("here".into()),
+            ..labelled("Here")
+        },
+        Vec::new(),
+    );
+    let spec = site(vec![PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![
+                opener,
+                closer,
+                target,
+                popover("picker", None, PopoverModeSpec::Auto),
+                popover("tip", Some("here"), PopoverModeSpec::Manual),
+            ],
+        )),
+    )]);
+    let html = page_html(&spec, "index.html");
+    assert!(
+        html.contains(r#"popovertarget="picker""#)
+            && html.contains(r#"popovertargetaction="hide""#),
+        "{html}"
+    );
+    assert!(html.contains(r#"popover="auto""#), "{html}");
+    assert!(html.contains(r#"popover="manual""#), "{html}");
+    // The button that opens the picker is its anchor; the label `here` is
+    // the tip's.
+    assert!(html.contains("anchor-name:--lm-popover-picker"), "{html}");
+    assert!(
+        html.contains("position-anchor:--lm-popover-picker"),
+        "{html}"
+    );
+    assert!(html.contains("anchor-name:--lm-popover-tip"), "{html}");
+    assert!(html.contains("position-anchor:--lm-popover-tip"), "{html}");
 }
 
 #[test]

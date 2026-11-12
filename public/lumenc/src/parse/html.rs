@@ -1334,7 +1334,11 @@ fn build_dropdown(
     panel.attrs.classes = vec!["dropdown-panel".to_string()];
     // Tag the panel so the runtime can dismiss it on an outside
     // click and flip it above the trigger near the viewport bottom.
-    panel.attrs.popup_panel = Some(open_signal.clone());
+    panel.attrs.popover = Some(crate::layout_ir::PopoverSpec {
+        open_signal: open_signal.clone(),
+        match_anchor_width: true,
+        ..Default::default()
+    });
 
     // Wrap the panel in `<if eq="true" mode="hide">` keyed on the
     // open signal so it shows / hides without despawning options.
@@ -2021,6 +2025,7 @@ fn apply_authored_attributes(
             in_for_body,
         ));
     }
+    settle_popover(tag, attrs)?;
     if !attrs.classes.is_empty() {
         let off = class_off.unwrap_or(0);
         attrs.classes = std::mem::take(&mut attrs.classes)
@@ -2030,6 +2035,62 @@ fn apply_authored_attributes(
             })
             .collect();
     }
+    Ok(())
+}
+
+/// Settle a `popover`'s open signal and anchor once every attribute of the
+/// element is read: the signal is `open="name"` when the element has one and
+/// `__popover_open:<id>` otherwise. The element itself becomes the `<if>`
+/// block that shows and hides it, with its body mounted from the start, as a
+/// `<dialog>` is.
+fn settle_popover(tag: &str, attrs: &mut Attributes) -> Result<(), ParseError> {
+    let open = attrs.popover_open.take();
+    let anchor = attrs.anchor.take();
+    let Some(popover) = &mut attrs.popover else {
+        if let Some(signal) = open
+            && tag != "dialog"
+        {
+            return Err(bad(
+                tag,
+                "open",
+                &signal,
+                "`open` names the signal of a `<dialog>` or a `popover`".to_string(),
+            ));
+        }
+        if anchor.is_some() {
+            return Err(bad(
+                tag,
+                "anchor",
+                anchor.as_deref().unwrap_or_default(),
+                "`anchor` places a `popover`; this element is not one".to_string(),
+            ));
+        }
+        return Ok(());
+    };
+    if tag == "dialog" {
+        return Err(bad(
+            tag,
+            "popover",
+            "",
+            "a `<dialog>` opens with `open`; it cannot also be a `popover`".to_string(),
+        ));
+    }
+    popover.anchor = anchor;
+    popover.open_signal = match (open, attrs.id.as_deref()) {
+        (Some(signal), _) => signal,
+        (None, Some(id)) if !id.contains('{') => format!("__popover_open:{id}"),
+        _ => {
+            return Err(bad(
+                tag,
+                "popover",
+                "",
+                "a `popover` needs a fixed `id`, or `open` naming the signal it follows"
+                    .to_string(),
+            ));
+        }
+    };
+    attrs.if_signal = Some(popover.open_signal.clone());
+    attrs.if_mode = crate::layout_ir::IfModeSpec::Mounted;
     Ok(())
 }
 
@@ -2995,9 +3056,59 @@ fn apply_attribute(
         // `<dialog open="signal">` is sugar for `<if signal="signal"
         // mode="hide">`. Preserving children state across show/hide is
         // the right default for modal forms.
+        // The body mounts with the dialog, so a handler that opens it can
+        // reach and style anything inside it on the same tick.
         "open" if tag == "dialog" => {
             attrs.if_signal = Some(signal_attr_name(value));
-            attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
+            attrs.if_mode = crate::layout_ir::IfModeSpec::Mounted;
+        }
+        // `popover` / `popover="auto"` / `popover="manual"`: the element is
+        // a popover. Its open signal is settled once every attribute is
+        // read (see `settle_popover`).
+        "popover" => {
+            let mode = match value.trim() {
+                "" | "auto" => crate::layout_ir::PopoverModeSpec::Auto,
+                "manual" => crate::layout_ir::PopoverModeSpec::Manual,
+                other => {
+                    return Err(bad(
+                        tag,
+                        name,
+                        value,
+                        format!("unknown popover '{other}' (supported: auto, manual)"),
+                    ));
+                }
+            };
+            attrs.popover = Some(crate::layout_ir::PopoverSpec {
+                mode,
+                ..Default::default()
+            });
+        }
+        "open" => attrs.popover_open = Some(signal_attr_name(value)),
+        "anchor" => attrs.anchor = Some(value.trim().to_string()),
+        "popovertarget" => {
+            let mut spec = attrs.popover_target.take().unwrap_or_default();
+            spec.target = value.trim().to_string();
+            attrs.popover_target = Some(spec);
+        }
+        "popovertargetaction" => {
+            let action = match value.trim() {
+                "toggle" => crate::layout_ir::PopoverActionSpec::Toggle,
+                "show" => crate::layout_ir::PopoverActionSpec::Show,
+                "hide" => crate::layout_ir::PopoverActionSpec::Hide,
+                other => {
+                    return Err(bad(
+                        tag,
+                        name,
+                        value,
+                        format!(
+                            "unknown popovertargetaction '{other}' (supported: toggle, show, hide)"
+                        ),
+                    ));
+                }
+            };
+            let mut spec = attrs.popover_target.take().unwrap_or_default();
+            spec.action = action;
+            attrs.popover_target = Some(spec);
         }
         "mode" if tag == "if" => {
             attrs.if_mode = match value.trim() {

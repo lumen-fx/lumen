@@ -179,6 +179,9 @@ thread_local! {
     /// Node paths of the dialogs the browser has dismissed since the last
     /// tick. Their own queue because what they need from the world is a
     /// different set of things entirely.
+    ///
+    /// A popover the browser opened or closed lands here too: the drain
+    /// tells the two apart by the element.
     static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
     /// CSS animation events since the last tick: the node path of the
@@ -953,26 +956,6 @@ fn on(target: &EventTarget, kind: &str, handler: Closure<dyn FnMut(Event)>) -> R
     Ok(())
 }
 
-/// Attach a listener that also sees events which do not bubble.
-///
-/// The capture phase runs from the document down to the target whatever the
-/// event is, so one listener on the root catches an event fired at a
-/// descendant that would never travel back up. A dialog's dismissal is one
-/// of those.
-fn on_capture(
-    target: &EventTarget,
-    kind: &str,
-    handler: Closure<dyn FnMut(Event)>,
-) -> Result<(), JsValue> {
-    target.add_event_listener_with_callback_and_bool(
-        kind,
-        handler.as_ref().unchecked_ref(),
-        true,
-    )?;
-    handler.forget();
-    Ok(())
-}
-
 /// Start listening on `root` for the events that drive an app.
 ///
 /// `routes` is what `[web] navigation = "soft"` resolves to: `Some` when a
@@ -1191,15 +1174,24 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
     // Escape on a showing dialog is the browser's to handle, and `cancel` is
     // how it says so. Letting it run closes the element; what the world still
     // has to learn is that the signal behind it is now false.
-    on_capture(
-        root,
-        "cancel",
-        Closure::wrap(Box::new(move |event: Event| {
-            if let Some(path) = path_of(&event) {
-                DISMISSED.with_borrow_mut(|queue| queue.push(path));
-            }
-        }) as Box<dyn FnMut(Event)>),
-    )?;
+    //
+    // A popover the browser opened (its `popovertarget` button) or closed (a
+    // press outside it, Escape) says so with `toggle`, which does not bubble
+    // either. One capturing listener on the root queues both: the capture
+    // phase runs from the document down to the target whatever the event is.
+    let dismissed = Closure::wrap(Box::new(move |event: Event| {
+        if let Some(path) = path_of(&event) {
+            DISMISSED.with_borrow_mut(|queue| queue.push(path));
+        }
+    }) as Box<dyn FnMut(Event)>);
+    for kind in ["cancel", "toggle"] {
+        root.add_event_listener_with_callback_and_bool(
+            kind,
+            dismissed.as_ref().unchecked_ref(),
+            true,
+        )?;
+    }
+    dismissed.forget();
     for (kind, gained) in [("focusin", true), ("focusout", false)] {
         on(
             root,
@@ -1587,13 +1579,17 @@ pub fn drain_dom_events(
     }
 }
 
-/// Follow the dialogs the browser dismissed back into the world.
+/// Follow the dialogs the browser dismissed, and the popovers it opened or
+/// closed, back into the world.
 ///
-/// The element is already closed by the time this runs. What is left is the
-/// signal named in `open="..."`, which is what stops the reconciler showing
-/// the dialog again and what a script watching the close reads. It is the
-/// same write a Cancel button makes, so the dialog's own lifecycle resolves
-/// the close as a rejection either way.
+/// A dismissed dialog is already closed by the time this runs. What is left
+/// is the signal named in `open="..."`, which is what stops the reconciler
+/// showing the dialog again and what a script watching the close reads. It
+/// is the same write a Cancel button makes, so the dialog's own lifecycle
+/// resolves the close as a rejection either way.
+///
+/// A popover's signal follows whether it is showing now; the runtime's own
+/// show and hide come back this way too, and change nothing.
 pub fn drain_dismissed_dialogs(
     table: NonSend<crate::nodes::NodeTable>,
     branches: Query<&IfMarker>,
@@ -1603,8 +1599,23 @@ pub fn drain_dismissed_dialogs(
         let Some(entity) = table.entity_at(&path) else {
             continue;
         };
-        if let Ok(branch) = branches.get(entity) {
-            store.set_global_str(branch.signal_name.as_str(), "");
+        let Ok(branch) = branches.get(entity) else {
+            continue;
+        };
+        let name = branch.signal_name.as_str();
+        match table.element(entity) {
+            Some(element) if element.has_attribute("popover") => {
+                let open = element.matches(":popover-open").unwrap_or(false);
+                if store.get_global_bool(name) != Some(open) {
+                    store.set_global_bool(name, open);
+                }
+            }
+            // A dialog raises `toggle` as well, opening as much as
+            // closing; only one the browser closed is a dismissal.
+            Some(element) if element.has_attribute("open") => {}
+            _ => {
+                store.set_global_str(name, "");
+            }
         }
     }
 }

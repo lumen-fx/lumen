@@ -91,6 +91,28 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(id) = &attrs.id {
         out.push(("id", id.clone()));
     }
+    // A `popover` is the browser's own: it shows in the top layer and closes
+    // on a press outside it or on Escape. The built list of a `<dropdown>`
+    // and a `<menu>`'s panel are popovers on the desktop only; on a page they
+    // stay the elements they were.
+    if let Some(popover) = attrs.popover.as_ref().filter(|_| attrs.if_signal.is_some()) {
+        let mode = match popover.mode {
+            lumen_ir::layout_ir::PopoverModeSpec::Auto => "auto",
+            lumen_ir::layout_ir::PopoverModeSpec::Manual => "manual",
+        };
+        out.push(("popover", mode.to_string()));
+    }
+    if let Some(target) = &attrs.popover_target {
+        out.push(("popovertarget", target.target.clone()));
+        let action = match target.action {
+            lumen_ir::layout_ir::PopoverActionSpec::Toggle => None,
+            lumen_ir::layout_ir::PopoverActionSpec::Show => Some("show"),
+            lumen_ir::layout_ir::PopoverActionSpec::Hide => Some("hide"),
+        };
+        if let Some(action) = action {
+            out.push(("popovertargetaction", action.to_string()));
+        }
+    }
     // A split's gutter is the web's window splitter: a focusable
     // `separator`. Its orientation and value follow the panes it sits
     // between, which only the page's layout knows, so the app writes them

@@ -224,18 +224,21 @@ impl Plugin for ControlsPlugin {
                 .before(crate::color::sync_color_bindings)
                 .run_if(any_with_component::<crate::color::ColorInput>),
         );
-        // Open popup panels, placed against the layout the window runs: a
-        // dropdown's panel below its trigger, flipped above near the
-        // viewport bottom, and a menu opened at a point (`open_menu_at`, a
-        // context menu) on that point, moved inward at the window edges. A
-        // page lays its panels out in the browser.
+        // Open popovers, placed against the layout the window runs: a
+        // dropdown's list below its header, a `popover` against its anchor,
+        // a menu opened at a point (`open_menu_at`, a context menu) on that
+        // point, each flipped and clamped to stay in the window. A page
+        // places its popovers in the browser.
+        app.add_message::<crate::popup::PopoverToggled>();
         app.add_systems(
             TickStage::Systems,
             (
-                crate::popup::flip_open_dropdown_panels,
-                crate::popup::place_menus_at_points,
+                crate::popup::open_popovers_from_targets.after(lumen_input::dispatch_clicks),
+                crate::popup::place_popovers,
+                crate::popup::report_popover_toggles,
             )
-                .run_if(any_with_component::<crate::popup::PopupPanel>),
+                .chain()
+                .run_if(any_with_component::<crate::popup::Popover>),
         );
         // The in-window menu bar: hovering another bar button while one of
         // its menus is open switches to that menu, and an item's `accel`

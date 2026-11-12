@@ -717,7 +717,7 @@ fn read_clipboard(res: Option<&mut ClipboardHost>) -> String {
 pub fn dispatch_file_drops(
     mut drops: ResMut<PendingFileDrops>,
     candidates: Query<(Entity, &Transform), With<DropTarget>>,
-    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    parents: Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
     scrolls: Query<&ScrollOffset>,
     pointer_events: Query<&lumen_core::input::PointerEvents>,
     (pointer, partitions): (
@@ -1005,9 +1005,10 @@ pub fn update_ime_request(
 /// hit-test and the scroll-aware extracts so visual + logical positions
 /// agree.
 ///
-/// Pass a `parents` query filtered `Without<WindowOf>` to stop at a surface
-/// root: a subtree shown in a window of its own does not move with its
-/// ancestors' scrolling.
+/// Pass a `parents` query filtered
+/// [`NotPaintRoot`](lumen_core::render_world::NotPaintRoot) to stop at a
+/// surface root or a top-layer element: neither moves with its ancestors'
+/// scrolling.
 pub fn ancestor_scroll<F: bevy_ecs::query::QueryFilter>(
     entity: Entity,
     parents: &Query<&ChildOf, F>,
@@ -1245,8 +1246,9 @@ impl Plugin for InputPlugin {
 ///
 /// Scroll-aware: the walk carries the ancestors' [`ScrollOffset`] values
 /// down the tree and shifts each box by them, so it matches the visual
-/// position the renderer draws at. A surface root (`WindowOf`) starts its
-/// own scroll and clip context.
+/// position the renderer draws at. A surface root (`WindowOf`) and a
+/// top-layer element (`TopLayer`) each start their own scroll and clip
+/// context.
 ///
 /// Hidden entities never hit (spec section 17.4): an entity is skipped when it
 /// (or any ancestor) carries `Visible(false)` (render-gate hide, the
@@ -1426,6 +1428,7 @@ type HitNode = (
     Has<lumen_core::render_world::OverlayLayer>,
     Has<lumen_core::window::WindowOf>,
     Option<&'static lumen_core::transform::ElementTransform>,
+    Has<lumen_core::render_world::TopLayer>,
 );
 
 /// The elements a [`HitTree`] walk starts from: those with no parent that
@@ -1439,6 +1442,16 @@ pub struct HitTree<'w, 's> {
     roots: Query<'w, 's, Entity, HitRoots>,
     nodes: Query<'w, 's, HitNode>,
     surfaces: Query<'w, 's, (), With<lumen_core::window::WindowOf>>,
+    /// Top-layer elements, with what says whether one is showing.
+    top_layers: Query<
+        'w,
+        's,
+        (
+            Option<&'static lumen_core::components::Visible>,
+            Option<&'static lumen_core::components::Style>,
+        ),
+        With<lumen_core::render_world::TopLayer>,
+    >,
     z_indices: Query<'w, 's, &'static lumen_core::components::ZIndex>,
 }
 
@@ -1486,7 +1499,13 @@ impl HitTree<'_, '_> {
         // Pruning a hidden or clipped subtree is exact only when no surface
         // root below it starts afresh.
         let single_window = scope.partitions.is_none();
-        let no_surfaces = self.surfaces.is_empty();
+        // A showing top-layer element starts afresh like a surface root, so
+        // a clipped subtree holding one cannot be pruned.
+        let no_surfaces = self.surfaces.is_empty()
+            && self.top_layers.iter().all(|(visible, style)| {
+                visible.is_some_and(|v| !v.0)
+                    || style.is_some_and(|s| matches!(s.display, Display::None))
+            });
         let mut best: Option<((u32, u64, u32), Entity)> = None;
         // Roots in entity order and children in document order, each list
         // pushed reversed so the stack pops them in order.
@@ -1515,6 +1534,7 @@ impl HitTree<'_, '_> {
                 overlay,
                 surface,
                 moved,
+                top,
             )) = self.nodes.get(f.entity)
             else {
                 continue;
@@ -1533,8 +1553,9 @@ impl HitTree<'_, '_> {
             if hidden && single_window {
                 continue;
             }
-            // A surface root's ancestors neither scroll nor clip it.
-            let (mut pt, mut clipped) = if surface {
+            // A surface root's ancestors neither scroll nor clip it, and
+            // neither do a top-layer element's.
+            let (mut pt, mut clipped) = if surface || top {
                 (p, false)
             } else {
                 (f.at, f.clipped)
@@ -2329,7 +2350,7 @@ pub fn text_pointer_to_caret(
         With<TextEditable>,
     >,
     (parents, tree): (
-        Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+        Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
         Query<&ChildOf>,
     ),
     scrolls: Query<&ScrollOffset>,
@@ -2464,7 +2485,7 @@ pub fn text_pointer_drag_select(
         Option<&EchoMode>,
         Option<&TextBlockOrigin>,
     )>,
-    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    parents: Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
     scrolls: Query<&ScrollOffset>,
     mut requests: MessageWriter<TextEditRequest>,
 ) {

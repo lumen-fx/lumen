@@ -115,6 +115,92 @@ struct Walk<'a> {
     warnings: &'a mut Vec<String>,
     /// The name of the tab the innermost `<tabs>` being written shows.
     shown_tab: Option<String>,
+    /// The popovers placed against an element, by that element's id, and
+    /// the popovers that name their own anchor; see [`popover_anchors`].
+    anchors: PopoverAnchors,
+}
+
+/// Which elements a page's popovers are placed against, so the document can
+/// say so in CSS anchor positioning: the element an `anchor="id"` names
+/// carries an `anchor-name` for each popover placed against it, and a
+/// `popovertarget` element carries one for its popover when that popover
+/// names no anchor of its own (the element that opens it is its anchor, as
+/// on the desktop). The popover itself carries the `position-anchor`.
+#[derive(Default)]
+struct PopoverAnchors {
+    /// Anchor element id to the popovers placed against it.
+    by_anchor: BTreeMap<String, Vec<String>>,
+    /// Popovers that name an anchor of their own.
+    explicit: BTreeSet<String>,
+}
+
+/// The anchor name of the popover with id `popover`.
+fn anchor_name(popover: &str) -> String {
+    let ident: String = popover
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("--lm-popover-{ident}")
+}
+
+/// Collect a page's popovers and what each is placed against.
+fn popover_anchors(element: &Element, out: &mut PopoverAnchors) {
+    if let (Some(popover), Some(id)) = (&element.attrs.popover, &element.attrs.id)
+        && element.attrs.if_signal.is_some()
+        && let Some(anchor) = &popover.anchor
+    {
+        out.explicit.insert(id.clone());
+        out.by_anchor
+            .entry(anchor.clone())
+            .or_default()
+            .push(id.clone());
+    }
+    for child in &element.children {
+        popover_anchors(child, out);
+    }
+}
+
+/// The anchor-positioning declarations an element carries: `anchor-name`
+/// for the popovers placed against it, `position-anchor` when it is a
+/// popover.
+fn anchor_style(attrs: &Attributes, anchors: &PopoverAnchors) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(id) = &attrs.id
+        && let Some(popovers) = anchors.by_anchor.get(id)
+    {
+        names.extend(popovers.iter().map(|p| anchor_name(p)));
+    }
+    // An element that only ever closes its popover never opens it, so it is
+    // never the popover's anchor.
+    if let Some(target) = &attrs.popover_target
+        && target.action != lumen_ir::layout_ir::PopoverActionSpec::Hide
+        && !anchors.explicit.contains(&target.target)
+    {
+        names.push(anchor_name(&target.target));
+    }
+    let mut out = String::new();
+    if !names.is_empty() {
+        out.push_str("anchor-name:");
+        out.push_str(&names.join(","));
+    }
+    // Every anchor of a popover carries the name made from the popover's id,
+    // so the popover points at that one name whatever its anchor is.
+    if let (Some(_), Some(id)) = (&attrs.popover, &attrs.id)
+        && attrs.if_signal.is_some()
+    {
+        if !out.is_empty() {
+            out.push(';');
+        }
+        out.push_str("position-anchor:");
+        out.push_str(&anchor_name(id));
+    }
+    out
 }
 
 impl<'a> Walk<'a> {
@@ -172,6 +258,11 @@ pub fn emit_tree(
         foreign_depth: 0,
         warnings,
         shown_tab: None,
+        anchors: {
+            let mut anchors = PopoverAnchors::default();
+            popover_anchors(&page.ir.root, &mut anchors);
+            anchors
+        },
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
     Ok((out, walk.seeded))
@@ -379,6 +470,13 @@ fn emit_element(
             style.push(';');
         }
         style.push_str(&style_value(&written.style));
+    }
+    let anchoring = anchor_style(attrs, &walk.anchors);
+    if !anchoring.is_empty() {
+        if !style.is_empty() {
+            style.push(';');
+        }
+        style.push_str(&anchoring);
     }
     if !style.is_empty() {
         write_attr(out, "style", &style);

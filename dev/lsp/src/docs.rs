@@ -107,6 +107,10 @@ pub const ATTRS: &[&str] = &[
     "autofocus",
     "default",
     "open",
+    "popover",
+    "popovertarget",
+    "popovertargetaction",
+    "anchor",
     "drop-target",
     "drag-payload",
     "accept",
@@ -328,7 +332,19 @@ it. The text falls back to the authored `text`, then to the key itself. \
             "**`default`** - boolean on `<button>`. The containing `<dialog>`'s default button: Enter anywhere activates it and closing through it takes the accepted path. Adds the `default` class."
         }
         "open" => {
-            "**`open`** - signal name on `<dialog>`. The dialog shows while the signal is truthy; the body stays mounted, so its state survives a close."
+            "**`open`** - signal name on `<dialog>` or a `popover`. It shows while the signal is truthy; its body is there from the first frame, so its state survives a close."
+        }
+        "popover" => {
+            "**`popover`** - `auto` or `manual`. Makes the element a popover: hidden until it opens, then shown over the whole window against its anchor. An `auto` one closes on a press outside it or Escape. Needs an `id` or `open`."
+        }
+        "popovertarget" => {
+            "**`popovertarget`** - id. A click opens or closes the popover with that id and makes this element its anchor."
+        }
+        "popovertargetaction" => {
+            "**`popovertargetaction`** - `toggle` (default), `show` or `hide`. What a click on a `popovertarget` element does."
+        }
+        "anchor" => {
+            "**`anchor`** - id, on a `popover`. The element it is placed against; without it, the element that opened it."
         }
         "min" => {
             "**`min`** - number. Lower bound for `<slider>` / `<progress>`, and a validation bound on text that parses as a number."
@@ -508,6 +524,8 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
         | "default" | "required" | "alpha" | "multiline" | "checked" | "indeterminate"
         | "virtualized" | "layout-boundary" => &["true", "false"],
         "position" => &["static", "relative", "absolute"],
+        "popover" => &["auto", "manual"],
+        "popovertargetaction" => &["toggle", "show", "hide"],
         "align" => &["start", "end", "center", "stretch", "between"],
         "justify" => &["start", "end", "center", "between", "around"],
         "overflow" | "overflow-x" | "overflow-y" => &["visible", "hidden", "scroll"],

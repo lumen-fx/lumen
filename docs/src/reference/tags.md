@@ -341,9 +341,10 @@ squeezed to fit. Write `shrink: 1` on a child to opt back in.
 
 Floats out of normal flow: `position: absolute` with all four insets at
 `0`, so it covers its parent's box. It is not reparented; it stays where
-it is written, which is what a dropdown anchored to its trigger wants.
-Lays out as a column. Use it for backdrops, dropdowns, and floating
-panels.
+it is written, and its parent's scrolling and clipping apply to it. Lays
+out as a column. Use it for backdrops and layers over one part of the
+page; for a panel that opens from a button and floats over the whole
+window, use a [`popover`](#popover).
 
 An `<overlay>` under a parent that is content-sized and has no in-flow
 children covers nothing, because that parent measures zero. See
@@ -765,8 +766,10 @@ container's width. The parser synthesizes a `.progress-fill` child.
 ### `<dropdown>` and `<option>`
 
 A combobox. The parser expands it into a header button plus a floating
-options panel; the panel is dismissed by clicking outside it and flips
-above the trigger near the bottom of the window.
+options panel. The panel is a [popover](#popover) anchored to the header
+at its width: it shows over the whole window, whatever scrolls or clips
+the dropdown, is dismissed by clicking outside it, flips above the header
+near the bottom of the window, and shrinks to the room it has.
 
 The tag stays on the box those parts sit in, so `width`, `min-width`,
 `padding`, `bg` and a `dropdown` rule in a stylesheet size and paint the
@@ -989,8 +992,11 @@ are `<menuitem>` and `<separator>`.
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by
-the signal `__menu_open:m`. It floats over the page and dismisses on an
-outside click. The menu, its items and its separators stay `menu`,
+the signal `__menu_open:m`. It is a [popover](#popover): it floats over
+the whole window and dismisses on an outside click. Opened with
+`open_menu_at`, it sits on that point; opened from a menu bar button, under
+the button; opened by id alone, below where it is written. Near a window
+edge it opens the other way, and it is never taller than the window. The menu, its items and its separators stay `menu`,
 `menuitem` and `separator` elements, so a stylesheet selects them by tag and
 a script reaches them like any element: they exist from the first frame,
 before the menu first opens, and an item a script creates and appends works
@@ -1025,10 +1031,52 @@ cover the window; under a content-sized parent it covers nothing (see
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `open` | signal name | Shows the dialog while the signal is truthy. The body is mounted once and hidden, so its state survives. |
+| `open` | signal name | Shows the dialog while the signal is truthy. The body is there from the first frame, hidden while the dialog is closed, so a handler that opens the dialog can find and change anything inside it on the same tick, and its state survives a close. |
 
 Inside a dialog, `autofocus` picks the element that takes focus on open,
 and `<button default="true">` is the default button.
+
+### `popover`
+
+Any element with `popover` is a popover: hidden until it opens, then shown
+over everything in the window, as an HTML `popover` is in a browser. It
+keeps its place in the document, so its styles inherit from its parent and
+its events bubble through it, but no ancestor clips it, scrolls it or
+fades it, and its size and position are worked out against the window.
+
+```html
+<button text="Add component" popovertarget="picker"/>
+<column id="picker" popover="auto" class="picker">
+  <input autofocus bind-text="search"/>
+  <for each="$matches" key="id"> ... </for>
+</column>
+```
+
+| Attribute | On | Value | Effect |
+| --- | --- | --- | --- |
+| `popover` | any element | empty, `auto` or `manual` | Makes the element a popover. An `auto` one closes when the user presses outside it or presses Escape; a `manual` one stays open until something closes it. It needs an `id`, or `open`. |
+| `open` | a popover | signal name | The signal the popover's open state follows, both ways. Without it the state is the signal `__popover_open:<id>`. |
+| `anchor` | a popover | id | The element it is placed against. Without it, the element that opened it last. |
+| `popovertarget` | any element | id | A click on it opens the popover with that id when closed and closes it when open, and makes this element the popover's anchor. |
+| `popovertargetaction` | with `popovertarget` | `toggle`, `show` or `hide` | What the click does. Defaults to `toggle`. |
+
+A popover with an anchor opens below it with the left edges together, and
+moves where it would leave the window: above the anchor near the bottom
+edge, lined up on the anchor's right edge near the right edge, and clamped
+inside the window. Taller than the room it has, it shrinks to fit, and
+its content scrolls when it sets `overflow`. CSS changes the defaults:
+`position-area` picks the side and the alignment, `position-try-fallbacks`
+which flips it may make, and `popup-gap` the space between it and its
+anchor (see [Popovers](css.md#popovers)). A popover with no anchor shows
+centred in the window.
+
+Scripts open and close one with `show_popover(id)`, `hide_popover(id)` and
+`toggle_popover(id)`, and hear `beforetoggle` then `toggle` on it when it
+opens or closes; the event's detail carries `old_state` and `new_state`,
+`"open"` or `"closed"`. `beforetoggle` reports a change that already
+happened, so it cannot cancel one. The body of a popover is there from the
+first frame, so a handler can reach anything inside it before it first
+opens.
 
 ### `<tooltip>`
 

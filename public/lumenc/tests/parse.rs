@@ -670,7 +670,7 @@ fn binding_to_a_fragment_argument_is_rejected() {
 }
 
 #[test]
-fn dialog_desugars_to_absolute_if_with_hide_mode() {
+fn dialog_desugars_to_absolute_if_with_its_body_mounted() {
     let ir =
         parse_with_ua(r##"<root><dialog open="show_settings"><label text="hi"/></dialog></root>"##);
     let dlg = &ir.root.children[0];
@@ -686,7 +686,7 @@ fn dialog_desugars_to_absolute_if_with_hide_mode() {
         (0.0, 0.0, 0.0, 0.0)
     );
     assert_eq!(dlg.attrs.if_signal.as_deref(), Some("show_settings"));
-    assert_eq!(dlg.attrs.if_mode, lumenc::layout_ir::IfModeSpec::Hide);
+    assert_eq!(dlg.attrs.if_mode, lumenc::layout_ir::IfModeSpec::Mounted);
 }
 
 #[test]
@@ -2437,7 +2437,7 @@ fn menu_panel_is_vertical_absolute_overlay() {
         "right/bottom auto so the panel shrink-wraps its items"
     );
     assert_eq!(
-        panel.attrs.popup_panel.as_deref(),
+        panel.attrs.popover.as_ref().map(|p| p.open_signal.as_str()),
         Some("__menu_open:ctx"),
         "panel wired into the popup dismissal machinery"
     );

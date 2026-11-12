@@ -174,6 +174,17 @@ fn install_dom_events(app: &mut App) {
             // installed (empty set).
             .after(lumen_core::text_events::TextEditSet::Apply),
     );
+    // A popover that opened or closed this tick hears `beforetoggle` and
+    // `toggle` with the state events. A page's browser raises its own.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dom_events::queue_toggle_events
+            .in_set(ScriptSet::DomState)
+            .after(queue_state_events)
+            .after(lumen_primitives::report_popover_toggles)
+            .before(deliver_state_events),
+    );
     // Pointer-lock asks from scripts and the C ABI reach the input layer
     // before it decides this tick's lock. A page has no such layer.
     #[cfg(not(target_arch = "wasm32"))]
