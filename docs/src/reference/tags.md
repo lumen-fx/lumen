@@ -1001,10 +1001,11 @@ are `<menuitem>` and `<separator>`.
 | --- | --- | --- |
 | `<menu>` | `label` | Required inside `<menubar>`. Menu title. |
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
-| `<menuitem>` | `id` | Required. Identifies the item to scripts and to `on_menu`. |
+| `<menuitem>` | `id` | Identifies the item to scripts and to `on_menu`. Required unless the item has a `command`, whose id it then takes. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
-| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus. A popup menu only shows it. |
+| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus, unless a focused text field keeps the chord or a command answers it. A popup menu only shows it. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
+| `<menuitem>` | `command` | The id of a [command](#commands-command-and-command-palette): the item takes the command's label, shortcut and disabled state, and a click runs it. The OS menu bar on macOS and Windows runs it but keeps the label and `accel` the markup wrote. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by
 the signal `__menu_open:m`. It is a [popover](#popover): it floats over
@@ -1140,6 +1141,38 @@ A title-bar region for frameless windows. Lays out as a row, full width,
 | `drag` | boolean | Pressing and moving the bar requests a native window drag. |
 
 Pair it with `<root frameless="true">`.
+
+### `<commands>`, `<command>` and `<command-palette>`
+
+Commands: named actions with keyboard shortcuts that menu items and a
+searchable palette run, with keys the user can rebind. The tags come from the
+`lumen-commands` module, so an app declares it first (see
+[Commands and shortcuts](../guides/os-integration.md#commands-and-shortcuts)).
+`<commands>` holds the `<command>` declarations and shows nothing.
+
+| Tag | Attribute | Effect |
+| --- | --- | --- |
+| `<command>` | `id` | Required. What runs it (`commands::run`, `<menuitem command>`) and what the `command` event's detail carries. |
+| `<command>` | `label` | What the palette and menu items show. Defaults to `id`. `translatable` names the catalogue message that translates it. |
+| `<command>` | `keys` | The chords that run it: one (`CommandOrControl+S`) or a comma-separated list. Modifiers `Ctrl`, `Alt` (`Option`), `Shift`, `Super` (`Cmd`, `Meta`) and `CommandOrControl`; keys are a character or a name such as `Enter`, `Escape`, `Space`, `Up`, `PageDown`, `F5`, `Plus`, `Comma`. |
+| `<command>` | `enabled` | `false` keeps it from running, greys out its menu items and leaves it out of the palette. Default `true`. |
+
+Changing a `<command>`'s attributes at run time changes the command, and
+removing the element removes it.
+
+A command that runs raises `command` on the document, its detail holding the
+command's `id`; a binding the user changes raises `keyschange` there with the
+command's `id` and its new `keys`.
+
+`<command-palette>` is where the palette opens: a strip across the top of the
+window, `--lumen-command-palette-top` from the top edge, with the palette
+centred below it. Its parts carry the classes `command-palette-panel`,
+`command-palette-input`, `command-palette-list`, `command-palette-item` (one per
+command, `highlighted` on the one Enter runs), `command-palette-label`,
+`command-palette-keys` and `command-palette-empty`. The tokens
+`--lumen-command-palette-width`, `-bg`, `-border`, `-radius`, `-text`,
+`-hover-bg`, `-highlight-bg`, `-highlight-text`, `-keys-text`, `-list-height`
+and `-row-height` style it.
 
 ### `<dock>` and its panels
 

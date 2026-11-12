@@ -1393,3 +1393,53 @@ messages rather than handling events.
 The C ABI, C++ and Python reach the same calls through the module's generated
 wrappers: `<lumen_dock.hpp>` (`lumen::dock::detach("inspector")`) and
 `lumen.dock`.
+
+### Commands
+
+The `lumenui-commands` crate gives a Rust app
+[commands](../guides/os-integration.md#commands-and-shortcuts): named actions
+with keyboard shortcuts that `<menuitem command>` and the command palette
+run, with keys the user rebinds. Add it beside `lumenui`, at the same version,
+and install `CommandsPlugin`:
+
+```toml
+[dependencies]
+lumenui = "X.Y.Z"
+lumenui-commands = "X.Y.Z"
+```
+
+```rust
+use lumenui::prelude::*;
+use lumenui_commands::{CommandRun, CommandsPlugin};
+
+fn setup(commands: lumenui_commands::Commands) {
+    commands.register("view.zoom_in", "Zoom in", "CommandOrControl+Plus").ok();
+}
+
+fn ran(mut runs: MessageReader<CommandRun>) {
+    for run in runs.read() {
+        if run.id == "view.zoom_in" { /* zoom */ }
+    }
+}
+
+fn main() -> lumenui::Result<()> {
+    lumenui::app!()
+        .add_plugin(CommandsPlugin::default())
+        .add_systems(TickStage::Systems, (setup, ran))
+        .run()
+}
+```
+
+`Commands` is a system parameter with the operations the
+[`commands` namespace](scripting-candela.md#commands) has: `register`,
+`unregister`, `run`, `set_enabled`, `keys` and `bind` (with
+`lumenui_commands::Chord` values), `reset`, `record` and `open_palette`, plus
+`ids`, `label` and `is_enabled`. A call that fails returns a `CommandError`.
+A command that runs raises the `command` event on the document, which
+`App::on(EventKind::Custom("command"), ...)` hears, and writes a `CommandRun`
+message. `CommandsPlugin { persist }` takes what the module's `config` table
+sets.
+
+The C ABI, C++ and Python reach the same calls through the module's generated
+wrappers: `<lumen_commands.hpp>` (`lumen::commands::run("file.save")`) and
+`lumen.commands`.

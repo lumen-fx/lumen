@@ -266,6 +266,7 @@ lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-cookie = { path = "std/cookie", default-features = false }
 lumen-core = { path = "core" }
 lumen-devtools = { path = "dev/devtools" }
+lumen-commands = { path = "std/commands", default-features = false }
 lumen-dock = { path = "std/dock", default-features = false }
 lumen-dock-model = { path = "std/dock/model" }
 lumen-download = { path = "std/download", default-features = false }

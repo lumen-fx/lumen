@@ -11,8 +11,11 @@
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use lumen_dock_model::{Container, Where};
+use lumen_module::lumen_core::chord::Chord;
 use lumen_module::lumen_core::components::{Disabled, Display, Style, TabIndex, Visible};
-use lumen_module::lumen_core::input::{FocusTracker, FocusVisible, Focused, Key, Modifiers};
+use lumen_module::lumen_core::input::{
+    FocusTracker, FocusVisible, Focused, Key, KeyCode, Modifiers,
+};
 use lumen_module::lumen_core::window::{PrimaryWindow, WindowRuntime};
 use lumen_module::lumen_primitives::TabStripButton;
 use lumen_module::lumen_script::CustomEvent;
@@ -20,50 +23,6 @@ use lumen_module::lumen_script::CustomEvent;
 use crate::adopt::DockPanel;
 use crate::realize::{Built, DockTab, DockWindow};
 use crate::state::{Reason, Shared};
-
-/// A key with its modifiers, as `Ctrl+Shift+F6` writes it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Chord {
-    /// The key.
-    pub key: Key,
-    /// Ctrl held.
-    pub ctrl: bool,
-    /// Shift held.
-    pub shift: bool,
-    /// Alt held.
-    pub alt: bool,
-}
-
-impl Chord {
-    /// Read `Ctrl+Shift+F6`: modifiers `Ctrl`, `Shift`, `Alt` joined to a key
-    /// name with `+`. `None` for an empty or unreadable chord.
-    pub fn parse(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.split('+').map(str::trim).collect();
-        let (key, mods) = parts.split_last()?;
-        if key.is_empty() {
-            return None;
-        }
-        let mut chord = Chord {
-            key: Key::from(*key),
-            ctrl: false,
-            shift: false,
-            alt: false,
-        };
-        for m in mods {
-            match m.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => chord.ctrl = true,
-                "shift" => chord.shift = true,
-                "alt" => chord.alt = true,
-                _ => return None,
-            }
-        }
-        Some(chord)
-    }
-
-    fn matches(&self, key: &Key, m: Modifiers) -> bool {
-        *key == self.key && m.ctrl == self.ctrl && m.shift == self.shift && m.alt == self.alt
-    }
-}
 
 /// The keys the module answers. `None` turns one off.
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -282,18 +241,18 @@ fn container_of(shared: &Shared, panel: &str) -> Option<Container> {
 }
 
 /// Answer the dock's keys.
-pub fn dock_keys(world: &mut World, pressed: Vec<(Key, Modifiers)>) {
+pub fn dock_keys(world: &mut World, pressed: Vec<(Key, KeyCode, Modifiers)>) {
     let keys = world.resource::<Keys>().clone();
     let shared = world.resource::<Shared>().clone();
     // Escape during a drag cancels the drag and nothing else.
     let dragging = world
         .get_resource::<crate::drag::DockDrag>()
         .is_some_and(|d| d.active());
-    for (key, m) in pressed {
+    for (key, code, m) in pressed {
         if dragging && key == Key::Named(lumen_module::lumen_core::input::NamedKey::Escape) {
             continue;
         }
-        let hit = |c: &Option<Chord>| c.as_ref().is_some_and(|c| c.matches(&key, m));
+        let hit = |c: &Option<Chord>| c.as_ref().is_some_and(|c| c.matches(&key, code, &m));
         let focused = world.resource::<FocusTracker>().0;
         let panel = focused.and_then(|f| panel_at(world, f));
         let on_tab = focused.is_some_and(|f| {
@@ -495,24 +454,6 @@ fn focused_window_id(world: &mut World) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn chords_read_as_written() {
-        let c = Chord::parse("Ctrl+Shift+F6").unwrap();
-        assert!(c.ctrl && c.shift && !c.alt);
-        assert_eq!(c.key, Key::Character("F6".into()));
-        assert_eq!(Chord::parse("Alt+Delete").unwrap().key, Key::from("Delete"));
-        assert!(Chord::parse("").is_none());
-        assert!(Chord::parse("Hyper+X").is_none());
-        assert!(Chord::parse("Ctrl+").is_none());
-        let m = Modifiers {
-            ctrl: true,
-            shift: true,
-            ..Modifiers::default()
-        };
-        assert!(c.matches(&Key::Character("F6".into()), m));
-        assert!(!c.matches(&Key::Character("F6".into()), Modifiers::default()));
-    }
 
     #[test]
     fn the_keys_config_rebinds_and_turns_off() {

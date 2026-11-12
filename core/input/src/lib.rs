@@ -442,6 +442,62 @@ fn edits(ev: &FocusedKey, multiline: bool) -> bool {
     }
 }
 
+/// Whether a focused text field keeps a key press from the app's shortcuts:
+/// plain and Shift-only keys, which type and move, and its editing chords
+/// (Ctrl or Cmd with A, C, X, V, Z, Y, the arrows, Home, End, Backspace and
+/// Delete). Every other chord (Ctrl+S, Ctrl+Shift+P, Alt+F4) and Escape and
+/// the function keys go to the app, so a command bound to one still runs
+/// while the user types. The web target's key routing keeps the same keys
+/// for the browser's own editor.
+pub fn text_field_keeps(key: &Key, modifiers: &Modifiers) -> bool {
+    match key {
+        Key::Named(NamedKey::Escape) => false,
+        Key::Named(
+            NamedKey::ArrowUp
+            | NamedKey::ArrowDown
+            | NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::Backspace
+            | NamedKey::Delete,
+        ) => true,
+        _ if modifiers.ctrl || modifiers.super_ => matches!(
+            key,
+            Key::Character(s) if matches!(s.to_ascii_lowercase().as_str(), "a" | "c" | "x" | "v" | "z" | "y")
+        ),
+        Key::Character(s) => !is_named_key_string(s),
+        Key::Named(_) => true,
+    }
+}
+
+/// Whether the element with keyboard focus keeps a key press from the
+/// app-wide shortcuts (a menu bar's accelerators, a command registry): a
+/// text field keeps what [`text_field_keeps`] says, and an element that
+/// takes every key ([`TakesEveryKey`](lumen_core::input::TakesEveryKey), or
+/// the one holding the pointer lock) keeps them all.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct FocusKeeps<'w, 's> {
+    tracker: Option<Res<'w, FocusTracker>>,
+    fields: Query<'w, 's, (), With<lumen_core::components::TextInput>>,
+    takers: Query<'w, 's, (), With<lumen_core::input::TakesEveryKey>>,
+    lock: Option<Res<'w, lumen_core::input::PointerLockState>>,
+}
+
+impl FocusKeeps<'_, '_> {
+    /// Whether the focused element keeps `key` with `modifiers`.
+    pub fn keeps(&self, key: &Key, modifiers: &Modifiers) -> bool {
+        if self.lock.as_ref().is_some_and(|l| l.owner.is_some()) {
+            return true;
+        }
+        let Some(focused) = self.tracker.as_ref().and_then(|t| t.0) else {
+            return false;
+        };
+        self.takers.contains(focused)
+            || (self.fields.contains(focused) && text_field_keeps(key, modifiers))
+    }
+}
+
 /// Enter on a single-line input, or Shift+Enter on a multiline one, is the
 /// commit signal `activate_focused_on_enter` turns into
 /// [`TextInputCommitted`].

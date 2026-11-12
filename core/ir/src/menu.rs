@@ -16,6 +16,8 @@
 //! written here are the ones that make a panel float: its position and its
 //! inset.
 
+use lumen_core::chord::Chord;
+
 use crate::layout_ir::{
     Attributes, DropdownButtonSpec, Element, IfModeSpec, MenuBarSpec, MenuEntrySpec, WidgetRole,
 };
@@ -35,64 +37,19 @@ pub enum MenuRow {
         /// markup wrote it (`CommandOrControl+Z`). Shown only: binding it is
         /// the menu bar's business, or the app's.
         accel: Option<String>,
+        /// The command the row runs, `command="..."`.
+        command: Option<String>,
     },
     /// A rule between groups of items.
     Separator,
 }
 
-/// An accelerator (`CommandOrControl+Shift+S`, `Alt+F4`) as a menu shows it.
-///
-/// Off macOS it reads the way Windows and Linux menus write one: modifiers
-/// and the key joined by `+`, `CommandOrControl` as `Ctrl`, the logo key as
-/// `Super`. On macOS it is the modifier symbols in the system's order
-/// (Control, Option, Shift, Command) followed by the key, so
-/// `CommandOrControl+Shift+S` reads as Shift-Command-S. A single-letter key
-/// is upper-cased; anything this does not know is kept as written.
+/// An accelerator (`CommandOrControl+Shift+S`, `Alt+F4`) as a menu shows it:
+/// the [`Chord`]'s label for macOS when `mac`, else for Windows and Linux.
+/// Text that does not read as a chord is kept as written.
 #[must_use]
 pub fn shortcut_label(accel: &str, mac: bool) -> String {
-    let mut parts: Vec<&str> = accel.split('+').map(str::trim).collect();
-    let key = parts.pop().unwrap_or_default();
-    let key = if key.chars().count() == 1 {
-        key.to_uppercase()
-    } else {
-        key.to_string()
-    };
-    // Control, Alt/Option, Shift, Super/Command: the order macOS draws its
-    // symbols in.
-    let mut held = [false; 4];
-    let mut unknown = Vec::new();
-    for part in parts {
-        match part.to_ascii_lowercase().as_str() {
-            "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" => {
-                held[if mac { 3 } else { 0 }] = true;
-            }
-            "control" | "ctrl" => held[0] = true,
-            "alt" | "option" => held[1] = true,
-            "shift" => held[2] = true,
-            "super" | "cmd" | "command" | "meta" => held[3] = true,
-            _ => unknown.push(part),
-        }
-    }
-    if mac {
-        const SYMBOLS: [&str; 4] = ["\u{2303}", "\u{2325}", "\u{21e7}", "\u{2318}"];
-        let mut out: String = unknown.concat();
-        for (on, symbol) in held.iter().zip(SYMBOLS) {
-            if *on {
-                out.push_str(symbol);
-            }
-        }
-        out.push_str(&key);
-        return out;
-    }
-    const NAMES: [&str; 4] = ["Ctrl", "Alt", "Shift", "Super"];
-    let mut out: Vec<&str> = held
-        .iter()
-        .zip(NAMES)
-        .filter_map(|(on, name)| on.then_some(name))
-        .collect();
-    out.extend(unknown);
-    out.push(&key);
-    out.join("+")
+    Chord::parse_for(accel, mac).map_or_else(|| accel.to_string(), |c| c.label(mac))
 }
 
 /// The reserved signal holding the open state of menu `menu_id`.
@@ -113,9 +70,16 @@ fn set_built_style(attrs: &mut Attributes, property: &str, value: &str) {
 }
 
 /// The `menuitem` element for one item: `id` names it to scripts, `label`
-/// is its text, and `accel` the shortcut it shows.
+/// is its text, `accel` the shortcut it shows, and `command` the command it
+/// runs.
 #[must_use]
-pub fn menu_item(id: &str, label: &str, disabled: bool, accel: Option<&str>) -> Element {
+pub fn menu_item(
+    id: &str,
+    label: &str,
+    disabled: bool,
+    accel: Option<&str>,
+    command: Option<&str>,
+) -> Element {
     let mut item = Element {
         tag: "menuitem".to_string(),
         ..Default::default()
@@ -124,6 +88,9 @@ pub fn menu_item(id: &str, label: &str, disabled: bool, accel: Option<&str>) -> 
     item.attrs.text = Some(label.to_string());
     item.attrs.disabled = disabled;
     item.attrs.shortcut = accel.map(str::to_string);
+    // Handed through untouched, as the parser does for `<menuitem command>`,
+    // for whatever module keeps the commands.
+    item.attrs.widget_attributes = command.map(|c| vec![("command".to_string(), c.to_string())]);
     item
 }
 
@@ -160,7 +127,8 @@ pub fn popup_menu(menu_id: &str, rows: &[MenuRow]) -> Element {
                 label,
                 disabled,
                 accel,
-            } => menu_item(id, label, *disabled, accel.as_deref()),
+                command,
+            } => menu_item(id, label, *disabled, accel.as_deref(), command.as_deref()),
             MenuRow::Separator => menu_separator(),
         })
         .collect();
@@ -240,11 +208,13 @@ pub fn in_window_menubar(spec: &MenuBarSpec) -> Element {
                         id,
                         label,
                         accelerator,
+                        command,
                     } => MenuRow::Item {
                         id: id.clone(),
                         label: label.clone(),
                         disabled: false,
                         accel: accelerator.clone(),
+                        command: command.clone(),
                     },
                     MenuEntrySpec::Separator => MenuRow::Separator,
                 })
@@ -307,12 +277,14 @@ mod tests {
                             id: "open".to_string(),
                             label: "Open".to_string(),
                             accelerator: Some("CommandOrControl+O".to_string()),
+                            command: None,
                         },
                         MenuEntrySpec::Separator,
                         MenuEntrySpec::Item {
                             id: "quit".to_string(),
                             label: "Quit".to_string(),
                             accelerator: None,
+                            command: Some("app.quit".to_string()),
                         },
                     ],
                 },
@@ -322,6 +294,7 @@ mod tests {
                         id: "about".to_string(),
                         label: "About".to_string(),
                         accelerator: None,
+                        command: None,
                     }],
                 },
             ],
@@ -407,6 +380,11 @@ mod tests {
             "\u{2303}\u{2325}Delete"
         );
         assert_eq!(shortcut_label("F1", true), "F1");
+        assert_eq!(
+            shortcut_label("Hyper+X", false),
+            "Hyper+X",
+            "kept as written"
+        );
     }
 
     /// An item is a `menuitem` element whose text is its label and whose
@@ -421,12 +399,14 @@ mod tests {
                     label: "Undo".to_string(),
                     disabled: true,
                     accel: Some("CommandOrControl+Z".to_string()),
+                    command: None,
                 },
                 MenuRow::Item {
                     id: "prefs".to_string(),
                     label: "Preferences".to_string(),
                     disabled: false,
                     accel: None,
+                    command: Some("app.prefs".to_string()),
                 },
             ],
         );
@@ -438,6 +418,10 @@ mod tests {
         assert_eq!(undo.attrs.shortcut.as_deref(), Some("CommandOrControl+Z"));
         assert!(undo.children.is_empty());
         assert_eq!(panel.children[1].attrs.shortcut, None);
+        assert_eq!(
+            panel.children[1].attrs.widget_attributes,
+            Some(vec![("command".to_string(), "app.prefs".to_string())])
+        );
     }
 
     /// The in-window menu bar's menus carry the accelerators their items
@@ -451,5 +435,9 @@ mod tests {
             Some("CommandOrControl+O")
         );
         assert_eq!(panel.children[2].attrs.shortcut, None, "quit has none");
+        assert_eq!(
+            panel.children[2].attrs.widget_attributes,
+            Some(vec![("command".to_string(), "app.quit".to_string())])
+        );
     }
 }

@@ -289,3 +289,98 @@ fn a_menu_lists_rows_from_a_signal() {
         .map(|b| b.open_signal.clone());
     assert_eq!(wired.as_deref(), Some("__menu_open:window"));
 }
+
+/// An app with an in-window menu bar holding Undo on Ctrl+Z, and a text
+/// field.
+fn build_with_bar() -> App {
+    let dir = std::env::temp_dir().join(format!("lumenc_menu_bar_{}", std::process::id()));
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("main.lmn"),
+        r#"<root>
+  <menubar>
+    <menu label="Edit">
+      <menuitem id="undo" label="Undo" accel="Ctrl+Z"/>
+      <menuitem command="file.save" label="Save" accel="Ctrl+S"/>
+    </menu>
+  </menubar>
+  <input id="field"/>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[window]\nmenubar = \"window\"\n\n[mcp]\nport = 0\n\n[render]\nbackend = \"cpu\"\n",
+    )
+    .unwrap();
+    let mut opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    ticks(&mut app, 4);
+    let _ = std::fs::remove_dir_all(&dir);
+    app
+}
+
+fn press_ctrl(app: &mut App, key: &str) -> Vec<String> {
+    let key = lumen_core::input::Key::from(key);
+    app.world.write_message(lumen_core::input::KeyPressed {
+        code: key.us_code(),
+        key,
+        modifiers: lumen_core::input::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+        repeat: false,
+        time_stamp: std::time::Instant::now(),
+    });
+    app.tick();
+    let ids = app
+        .world
+        .resource::<Messages<MenuClicked>>()
+        .iter_current_update_messages()
+        .map(|m| m.id.clone())
+        .collect();
+    ticks(app, 2);
+    ids
+}
+
+/// Ctrl+Z in a focused text field undoes the field's edit and does not
+/// reach the menu bar's Undo; with focus elsewhere, it does (#631).
+#[test]
+fn a_menubar_shortcut_leaves_a_focused_field_s_editing_chords_alone() {
+    let mut app = build_with_bar();
+    let mut q = app.world.query::<(Entity, &LumenId)>();
+    let field = q
+        .iter(&app.world)
+        .find(|(_, id)| id.0 == "field")
+        .map(|(e, _)| e)
+        .expect("the field");
+    app.world
+        .entity_mut(field)
+        .insert(lumen_core::input::Focused);
+    app.world
+        .resource_mut::<lumen_core::input::FocusTracker>()
+        .0 = Some(field);
+    assert!(
+        press_ctrl(&mut app, "z").is_empty(),
+        "the field keeps Ctrl+Z"
+    );
+    app.world
+        .entity_mut(field)
+        .remove::<lumen_core::input::Focused>();
+    app.world
+        .resource_mut::<lumen_core::input::FocusTracker>()
+        .0 = None;
+    assert_eq!(press_ctrl(&mut app, "z"), vec!["undo"]);
+    // With nothing else answering it, an item's chord is the item's even
+    // when it names a command.
+    assert_eq!(press_ctrl(&mut app, "s"), vec!["file.save"]);
+    assert_eq!(
+        app.world
+            .resource::<lumen_core::chord::ReservedChords>()
+            .of("menubar")
+            .len(),
+        2
+    );
+}

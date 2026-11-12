@@ -223,88 +223,25 @@ impl From<Vec<std::path::PathBuf>> for MimePayload {
     }
 }
 
-/// A keyboard-shortcut chord. Stored as a `muda` / `global-hotkey`-style
-/// accelerator string (e.g. `"Ctrl+S"`, `"Cmd+Shift+P"`).
-///
-/// Kept opaque so the menu / hotkey backends parse via their own crate
-/// API (`muda::accelerator::Accelerator::from_str`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyChord(pub Arc<str>);
-
-impl From<&str> for KeyChord {
-    fn from(s: &str) -> Self {
-        KeyChord(Arc::from(s))
-    }
-}
-
-impl From<String> for KeyChord {
-    fn from(s: String) -> Self {
-        KeyChord(Arc::from(s.as_str()))
-    }
-}
-
-/// A high-level user-invokable command. One `Action` ties together the
-/// menu item, toolbar button, and keyboard shortcut that all do the
-/// same thing - the model Qt's `QAction` and GTK 4's `GAction` use.
-///
-/// Lives in `ActionRegistry` (or a similar resource) per the OS plan
-/// (section 470). Backends translate the action into a menu item, hotkey, or
-/// toolbar button as appropriate.
-#[derive(Clone, Debug)]
+/// One entry of a tray menu or one button of a notification: the id a click
+/// reports and the label it shows. Read from an action spec
+/// ([`parse_action_spec`]), so a tray menu and a notification's buttons are
+/// written alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
-    /// Stable id used to dispatch `ActionInvoked { id }` and to look the
-    /// action up across hot-reloads.
+    /// The id a click on the entry reports.
     pub id: Arc<str>,
-    /// Human-visible label.
+    /// The text the entry shows.
     pub label: Arc<str>,
-    /// Optional icon identifier (asset path or theme name).
-    pub icon: Option<Arc<str>>,
-    /// Optional keyboard shortcut.
-    pub shortcut: Option<KeyChord>,
-    /// `true` when the action can be invoked.
-    pub enabled: bool,
-    /// `Some(true|false)` for a check / radio action; `None` for a
-    /// plain action.
-    pub checked: Option<bool>,
 }
 
 impl Action {
-    /// Construct a plain enabled action with no shortcut, icon, or
-    /// check state.
+    /// An entry with this id and label.
     pub fn new(id: impl Into<Arc<str>>, label: impl Into<Arc<str>>) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            icon: None,
-            shortcut: None,
-            enabled: true,
-            checked: None,
         }
-    }
-
-    /// Builder: set the keyboard shortcut.
-    pub fn with_shortcut(mut self, chord: impl Into<KeyChord>) -> Self {
-        self.shortcut = Some(chord.into());
-        self
-    }
-
-    /// Builder: set the icon.
-    pub fn with_icon(mut self, icon: impl Into<Arc<str>>) -> Self {
-        self.icon = Some(icon.into());
-        self
-    }
-
-    /// Builder: set the enabled flag.
-    pub fn enabled(mut self, on: bool) -> Self {
-        self.enabled = on;
-        self
-    }
-
-    /// Builder: turn into a check action with the supplied initial
-    /// state.
-    pub fn checked(mut self, on: bool) -> Self {
-        self.checked = Some(on);
-        self
     }
 }
 
@@ -347,12 +284,6 @@ pub fn parse_action_spec(spec: &str) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn key_chord_from_str_keeps_the_accelerator() {
-        let c: KeyChord = "Ctrl+S".into();
-        assert_eq!(c.0.as_ref(), "Ctrl+S");
-    }
 
     #[test]
     fn mime_payload_from_str_roundtrips_text() {
@@ -435,24 +366,6 @@ mod tests {
         assert_eq!(p.kinds.len(), 2);
         assert_eq!(p.text().as_deref(), Some("c"));
         assert_eq!(p.kinds[1].0.essence(), "application/x-b");
-    }
-
-    #[test]
-    fn action_builder_chain() {
-        let a = Action::new("file.save", "Save")
-            .with_shortcut("Ctrl+S")
-            .enabled(true);
-        assert_eq!(&*a.id, "file.save");
-        assert_eq!(&*a.label, "Save");
-        assert_eq!(a.shortcut.as_ref().map(|c| c.0.as_ref()), Some("Ctrl+S"));
-        assert!(a.enabled);
-        assert!(a.checked.is_none());
-    }
-
-    #[test]
-    fn action_check_state() {
-        let a = Action::new("view.bold", "Bold").checked(true);
-        assert_eq!(a.checked, Some(true));
     }
 
     #[test]

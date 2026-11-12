@@ -164,6 +164,17 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(tooltip) = &attrs.tooltip {
         out.push(("title", tooltip.text.clone()));
     }
+    // The command a menu item runs, for the module that keeps commands to
+    // find it by.
+    if ir_tag == "menuitem"
+        && let Some((_, command)) = attrs
+            .widget_attributes
+            .iter()
+            .flatten()
+            .find(|(name, _)| name == "command")
+    {
+        out.push(("data-command", command.clone()));
+    }
     // The control is the tab stop where there is one; a tab index on the
     // element around it would make one checkbox two of them.
     if let Some(index) = attrs.tab_index.filter(|_| !has_control) {

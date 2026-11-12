@@ -31,5 +31,11 @@
     </dock-split>
     <dock-panel id="desk-spare" title="Spare"><label text="spare" /></dock-panel>
   </dock>
+  <commands>
+    <command id="say.hello" label="Say hello" keys="Ctrl+Shift+H" />
+  </commands>
+  <command-palette />
+  <label id="commands-keys" bind-text="commands_keys" text="waiting" />
+  <label id="commands-ran" bind-text="commands_ran" text="waiting" />
   <script src="main.cdl" />
 </root>

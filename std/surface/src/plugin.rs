@@ -21,7 +21,7 @@ use lumen_module::lumen_core::components::{
     ImageComponent, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, StyleDirty,
     TabIndex, Transform,
 };
-use lumen_module::lumen_core::input::PointerLockAsk;
+use lumen_module::lumen_core::input::{PointerLockAsk, TakesEveryKey};
 use lumen_module::lumen_core::prelude::*;
 use lumen_module::lumen_core::render_backend::RendererInfo;
 use lumen_module::lumen_core::render_world::{FrameDirty, RenderStage};
@@ -153,7 +153,7 @@ impl Plugin for SurfacePlugin {
         );
         app.add_systems(
             TickStage::Systems,
-            sync_surfaces
+            (sync_surfaces, mark_key_takers)
                 .in_set(SurfaceSet::Sync)
                 .after(SurfaceSet::Adopt)
                 .before(ScriptSet::DomState),
@@ -328,6 +328,30 @@ fn reflect_state(world: &mut World, entity: Entity, state: SurfaceStateKind) {
     classes.0.retain(|c| !c.starts_with("surface-"));
     classes.0.push(format!("surface-{}", state.as_str()).into());
     e.insert((attrs, classes, SurfaceState(state), StyleDirty));
+}
+
+/// Mark each surface written `keyboard="all"` as taking every key, so the
+/// app's shortcuts (a menu bar, commands) leave its keys to the producer
+/// while it has focus.
+#[allow(clippy::type_complexity)]
+fn mark_key_takers(
+    mut commands: Commands,
+    changed: Query<
+        (Entity, Option<&LumenAttributes>, Has<TakesEveryKey>),
+        (
+            With<SurfaceElement>,
+            Or<(Changed<LumenAttributes>, Added<SurfaceElement>)>,
+        ),
+    >,
+) {
+    for (entity, attrs, marked) in &changed {
+        let all = attrs.and_then(|a| a.get("keyboard")) == Some("all");
+        if all && !marked {
+            commands.entity(entity).insert(TakesEveryKey);
+        } else if !all && marked {
+            commands.entity(entity).remove::<TakesEveryKey>();
+        }
+    }
 }
 
 /// Report what the sessions did, and keep each producer told what its

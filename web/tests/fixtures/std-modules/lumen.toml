@@ -9,6 +9,7 @@ engine = "candela"
 [dependencies]
 lumen-browser = { bundled = true }
 lumen-canvas = { bundled = true }
+lumen-commands = { bundled = true }
 lumen-cookie = { bundled = true }
 lumen-dock = { bundled = true }
 lumen-js = { bundled = true, config = { allow = ["data:"] } }

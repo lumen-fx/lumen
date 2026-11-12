@@ -1,6 +1,7 @@
 # OS integration
 
-Menus, a tray icon, notifications, global hotkeys, file dialogs, the clipboard,
+Menus, commands and keyboard shortcuts, a tray icon, notifications, global
+hotkeys, file dialogs, the clipboard,
 drag and drop, opening links, keeping the machine awake, recent files,
 autostart, single-instance launches, and audio. Some of these are markup, the
 rest are script calls with a callback.
@@ -56,7 +57,8 @@ on("menu", "file-open", "handle_open");
 Linux desktops have no native menu bar, so there the same markup is drawn in
 the window: a bar along the top with one button per menu. Its items reach
 `on_menu` the same way, and their `accel` shortcuts work while the window has
-focus. The skin styles it, and an app can restyle the `.menubar` and
+focus. A shortcut a focused text field uses (typing, Ctrl+Z, Ctrl+C and the
+other editing chords) stays with the field; any other chord reaches the bar. The skin styles it, and an app can restyle the `.menubar` and
 `.menubar-button` classes and the `menu` and `menuitem` tags like any other
 element.
 
@@ -139,8 +141,8 @@ Or keep the items in a list signal and let a `<for>` in the menu build them:
 
 An item's `accel` shows its shortcut at the end of the row, written the way the
 platform's menus write one: `Ctrl+Z` on Linux and Windows, the Command symbol
-followed by `Z` on macOS. A popup menu only shows the shortcut; bind the key
-yourself, on `document_node()`, as for any app-wide shortcut. The menu bar's
+followed by `Z` on macOS. A popup menu only shows the shortcut; to have the key
+run it, make the item a [command](#commands-and-shortcuts). The menu bar's
 menus show their shortcuts the same way, and run them too. The `.menu-accel`
 class styles the shortcut.
 
@@ -186,6 +188,114 @@ scrolled container, so the point it opens at is the point you passed.
 
 A Rust app reads the same requests as `ContextMenuEvent` messages and opens the
 menu with `Signals::open_menu_at`.
+
+## Commands and shortcuts
+
+A command is a named action with keyboard shortcuts: Save on Ctrl+S, the
+command palette on Ctrl+Shift+P. Declare it once, and its keys, its menu items
+and a searchable palette all run it, and the user can rebind its keys. Add the
+`lumen-commands` module to `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-commands = { bundled = true }
+```
+
+Declare the commands in markup:
+
+```html
+<commands>
+  <command id="file.save" label="Save" keys="CommandOrControl+S"/>
+  <command id="file.export" label="Export" keys="CommandOrControl+Shift+E" enabled="false"/>
+  <command id="edit.redo" label="Redo" keys="CommandOrControl+Y, CommandOrControl+Shift+Z"/>
+</commands>
+```
+
+`keys` is one chord or a comma-separated list. `CommandOrControl` is Command
+on macOS and Control elsewhere. `<commands>` shows nothing; give a `<command>`
+a `translatable` key to translate its label like any element's text.
+
+Whatever runs a command, a key, a menu item, the palette or a call, the app
+hears one `command` event on the document, with the command's id in its
+detail:
+
+```rhai
+fn on_ready() {
+    document_node().on("command", |e| {
+        if e.detail().id == "file.save" { save(); }
+    });
+}
+```
+
+A script makes commands at run time and drives them through the `commands`
+namespace: `commands::register(id, label, keys)`, `commands::unregister(id)`,
+`commands::run(id)` and `commands::set_enabled(id, on)`. A disabled command
+does not run, shows greyed out in its menu items, and is left out of the
+palette.
+
+### Which keys reach a command
+
+The first enabled command bound to a key runs, wherever focus is, with two
+exceptions. A focused text field keeps what it uses: typing, Shift with a key,
+and its editing chords (Ctrl or Command with A, C, X, V, Z or Y, the arrows,
+Home, End, Backspace and Delete). Every other chord reaches the commands, so
+Ctrl+S saves while the user types. A focused element that takes every key,
+a `<surface keyboard="all">` or one holding the pointer lock, keeps them all.
+A held key's repeats do not run a command again.
+
+### Menu items
+
+A menu item that names a command takes its label, its shortcut and its
+greyed-out state from it, and a click on it runs the command:
+
+```html
+<menu id="file">
+  <menuitem command="file.save"/>
+  <menuitem command="file.export"/>
+</menu>
+```
+
+An item with a `command` and no `id` takes the command's id. This works in
+popup menus and in the menu bar Lumen draws in the window, where a chord a
+command answers runs the command once rather than the item too. The OS menu bar on
+macOS and Windows is built once from the markup: there an item with a
+`command` runs it when clicked, but shows the label and `accel` the markup
+gave it rather than the command's.
+
+### The command palette
+
+The palette lists every enabled command with its shortcut and narrows the list
+as the user types, keeping the commands whose label holds every word typed.
+The arrow keys move the highlight, Enter runs the highlighted command, and
+Escape closes it. CommandOrControl+Shift+P opens it, and so does
+`commands::open_palette()`; its own command is `commands.palette`, so it can be
+rebound like any other. Place it with `<command-palette/>`, which opens it near
+the top of the window; an app that writes none gets one there. The
+`--lumen-command-palette-*` tokens style it (see the
+[tag reference](../reference/tags.md#commands-command-and-command-palette)).
+
+### Rebinding keys
+
+`commands::bind(id, keys)` binds a command to new keys, `commands::reset(id)`
+gives it its declared ones back, and `commands::keys(id)` reads what runs it
+now. `commands::record(id)` binds the next chord the user presses, which is
+how a settings screen asks for one; Escape cancels. A chord another command
+had moves to this one. Each change raises `keyschange` on the document with
+the command's `id` and its new `keys`.
+
+The user's bindings are kept in `keymap.json` in the app's data directory and
+come back on the next run. Set `persist = "none"` on the module to keep them
+for one run only:
+
+```toml
+[dependencies]
+lumen-commands = { bundled = true, config = { persist = "none" } }
+```
+
+In a page, the bindings are kept in the browser's local storage, a command
+also raises `command` on the JavaScript `document`, and a script hears it as
+`on_command(id)` (and a binding change as `on_keyschange(id, keys)`) rather
+than through `document_node().on`.
 
 ## System tray
 

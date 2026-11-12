@@ -433,7 +433,10 @@ fn keys_gate(
     mut keys: MessageReader<lumen_module::lumen_core::input::KeyPressed>,
     mut commands: Commands,
 ) {
-    let pressed: Vec<_> = keys.read().map(|k| (k.key.clone(), k.modifiers)).collect();
+    let pressed: Vec<_> = keys
+        .read()
+        .map(|k| (k.key.clone(), k.code, k.modifiers))
+        .collect();
     if !pressed.is_empty() {
         commands.queue(move |world: &mut World| crate::keys::dock_keys(world, pressed));
     }
