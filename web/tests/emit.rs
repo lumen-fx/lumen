@@ -11,7 +11,7 @@ use lumen_html::contract::{
 };
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
-    WidgetPart,
+    PopoverActionSpec, PopoverModeSpec, PopoverSpec, PopoverTargetSpec, WidgetPart,
 };
 use lumen_web::{
     AssetRef, CheckedFile, EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec,
@@ -664,6 +664,89 @@ fn a_hidden_branch_stays_in_the_document() {
 }
 
 #[test]
+fn a_popover_is_the_browsers_own_and_names_what_it_is_placed_against() {
+    let popover = |id: &str, anchor: Option<&str>, mode| {
+        element(
+            "column",
+            Attributes {
+                id: Some(id.into()),
+                if_signal: Some(format!("__popover_open:{id}")),
+                if_mode: IfModeSpec::Mounted,
+                popover: Some(PopoverSpec {
+                    open_signal: format!("__popover_open:{id}"),
+                    mode,
+                    anchor: anchor.map(Into::into),
+                    match_anchor_width: false,
+                }),
+                ..Attributes::default()
+            },
+            Vec::new(),
+        )
+    };
+    let opener = element(
+        "button",
+        Attributes {
+            popover_target: Some(PopoverTargetSpec {
+                target: "picker".into(),
+                action: PopoverActionSpec::Toggle,
+            }),
+            ..labelled("Add")
+        },
+        Vec::new(),
+    );
+    let closer = element(
+        "button",
+        Attributes {
+            popover_target: Some(PopoverTargetSpec {
+                target: "picker".into(),
+                action: PopoverActionSpec::Hide,
+            }),
+            ..labelled("Done")
+        },
+        Vec::new(),
+    );
+    let target = element(
+        "label",
+        Attributes {
+            id: Some("here".into()),
+            ..labelled("Here")
+        },
+        Vec::new(),
+    );
+    let spec = site(vec![PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![
+                opener,
+                closer,
+                target,
+                popover("picker", None, PopoverModeSpec::Auto),
+                popover("tip", Some("here"), PopoverModeSpec::Manual),
+            ],
+        )),
+    )]);
+    let html = page_html(&spec, "index.html");
+    assert!(
+        html.contains(r#"popovertarget="picker""#)
+            && html.contains(r#"popovertargetaction="hide""#),
+        "{html}"
+    );
+    assert!(html.contains(r#"popover="auto""#), "{html}");
+    assert!(html.contains(r#"popover="manual""#), "{html}");
+    // The button that opens the picker is its anchor; the label `here` is
+    // the tip's.
+    assert!(html.contains("anchor-name:--lm-popover-picker"), "{html}");
+    assert!(
+        html.contains("position-anchor:--lm-popover-picker"),
+        "{html}"
+    );
+    assert!(html.contains("anchor-name:--lm-popover-tip"), "{html}");
+    assert!(html.contains("position-anchor:--lm-popover-tip"), "{html}");
+}
+
+#[test]
 fn a_dialog_is_open_when_the_signal_it_names_is_true() {
     let dialog = element(
         "dialog",
@@ -1171,6 +1254,57 @@ fn a_virtualized_block_emits_the_rows_a_first_screen_shows() {
         "a list the runtime completes on load is not a hole in the page: {:?}",
         site.warnings
     );
+}
+
+/// A virtualized grid over `items`: 84 by 92 pixel cells.
+fn grid_page(virtualized: bool) -> PageSpec {
+    let block = element(
+        "for",
+        Attributes {
+            each: Some("items".into()),
+            key: Some("id".into()),
+            virtualized,
+            row_height: Some(92.0),
+            cell_width: Some(84.0),
+            ..Attributes::default()
+        },
+        vec![row_label("{row.name}")],
+    );
+    PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    )
+}
+
+#[test]
+fn a_virtualized_grid_is_a_css_grid_carrying_a_first_screen_of_cells() {
+    let names: Vec<String> = (0..400).map(|n| format!("cell {n}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut spec = site(vec![grid_page(true)]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&refs));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(
+        html.contains(
+            r#"<div class="lm-for" data-lm="0.0" style="display:grid;grid-template-columns:repeat(auto-fill,84px);grid-auto-rows:92px">"#
+        ),
+        "the browser wraps the cells itself: {html}"
+    );
+    // ceil(1080 / 92) grid rows of floor(1920 / 84) cells.
+    assert_eq!(node_paths(&html).len(), 2 + 12 * 22);
+    assert_well_formed(&html);
+}
+
+#[test]
+fn a_cell_width_on_a_list_that_is_not_virtualized_lays_nothing_out() {
+    let mut spec = site(vec![grid_page(false)]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(!html.contains("display:grid"), "{html}");
+    assert_eq!(node_paths(&html).len(), 4);
 }
 
 #[test]

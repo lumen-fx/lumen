@@ -109,7 +109,7 @@ state on the desktop, toggle a class on the child from a script.
 | `:disabled` | Element is disabled. |
 | `:checked` | `<toggle>`, `<switch>`, or `<checkbox>` is on. |
 | `:selected` | Tab strip button of the active tab. |
-| `:drag-over` | An acceptable in-app drag hovers this drop target. |
+| `:drag-over` | An in-app drag whose type the target's `accept` list takes hovers this drop target. |
 
 Structural pseudo-classes filter on where the element sits in the tree:
 
@@ -530,6 +530,33 @@ a blank window.
 `lumenc lint` reports this shape as `collapsed_containing_block` and
 names the child it found.
 
+An open [popover](tags.md#popover), and the floating lists of `<dropdown>`
+and `<menu>`, are the exception: they are laid out against the window, and
+their placement against their anchor comes from the properties under
+[Popovers](#popovers).
+
+#### Popovers
+
+Where an open popover goes against its anchor. The browser has these
+properties for anchor positioning; Lumen reads the forms below and a page
+writes them out unchanged.
+
+| Property | Values | Default |
+| --- | --- | --- |
+| `position-area` | a side, `top`, `bottom`, `left` or `right`, alone or with a span toward one end: `span-right` or `span-left` beside `top` and `bottom`, `span-bottom` or `span-top` beside `left` and `right`; the two words in either order | `bottom span-right` |
+| `position-try-fallbacks` | `none`, or a comma-separated list of `flip-block`, `flip-inline` and `flip-block flip-inline` | `flip-block, flip-inline` |
+| `popup-gap` | number | `4` from the element that opened it, `0` from a point |
+
+A side alone centres the popover on the anchor along that side; `bottom
+span-right` lines up the left edges and `bottom span-left` the right edges.
+`flip-block` lets a popover that does not fit above or below move to the
+other side when that side has more room; `flip-inline` does the same left
+and right, and lets a popover that would leave the window line up on the
+anchor's other edge. Whatever it does, a popover stays inside the window,
+and one taller than the room on its side shrinks to that room. On a page
+the browser places it: the window clamp and the shrink are the desktop's
+own, and `popup-gap` sets the gap on the desktop only.
+
 ### Logical properties
 
 Each takes a px number (the `inset-*` ones also take `auto`) and
@@ -572,7 +599,7 @@ integer are clamped with a warning.
 | `knob-color` | color | built-in knob fill |
 | `knob-inset` | number | `4` |
 | `thumb-size` | number | `16` |
-| `popup-gap` | number | `4` |
+| `popup-gap` | number | `4`; see [Popovers](#popovers) |
 | `draggable` | `true`, `yes` | `false` |
 
 `opacity` fades an element together with everything inside it, as one

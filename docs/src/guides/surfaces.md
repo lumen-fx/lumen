@@ -88,11 +88,37 @@ Pointer and key input on the surface goes to the producer, with positions in
 the frame's own pixels. Children of the surface (labels, selection boxes, a
 toolbar) take the pointer first; give them `pointer-events: none` to let it
 through. While the surface has focus its keys go to the producer, except Tab
-and your menu bar's shortcuts; `keyboard="all"` sends those too. A game that
+and the shortcuts your app answers app-wide (the menu bar's, and its
+[commands'](os-integration.md#commands-and-shortcuts)); `keyboard="all"` sends
+those too, and then the app's shortcuts leave the surface's keys alone. A game that
 takes the mouse asks for the pointer lock, which the surface grants when it
 has focus and was just clicked; Escape always gives the mouse back. When the
 surface loses focus the producer hears it and lets go of every key and button
 it held.
+
+### From the window to the frame
+
+Events on the surface element say where the pointer was in window and
+element coordinates, not in the frame's pixels. `surface::to_texture(id, x,
+y)` maps a window position into the frame: it undoes where the element is
+drawn (scrolled with its containers), its `object-fit` and the device pixel
+ratio, and returns `[x, y]` in frame pixels, or an empty list before the
+first frame. A point outside the drawn frame maps outside its width and
+height, so check the range before you use it. This is how a drop lands on
+what is under it in the scene:
+
+```rust
+fn on_scene_drop(ev: int) {
+    let at = surface::to_texture("scene", lumen::event_client_x(ev), lumen::event_client_y(ev));
+    if at.len() == 2 {
+        let asset = lumen::event_get_data(ev, "application/x-asset");
+        surface::send("scene", "place " + asset + " " + string(at[0]) + " " + string(at[1]));
+    }
+}
+```
+
+See [Drag and drop](os-integration.md#drag-and-drop) for the drop event. A
+Rust app calls `Surfaces::to_texture(id, position)`.
 
 ## States and events
 

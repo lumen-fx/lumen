@@ -69,9 +69,15 @@ pub struct EventData {
     pub delta_mode: lumen_core::input::WheelDeltaMode,
     /// Text value for `input` / `change` events.
     pub value: String,
-    /// What a custom event carries ([`crate::dom_events::CustomEvent`]);
-    /// empty for the built-in events.
+    /// What a custom event carries ([`crate::dom_events::CustomEvent`]), or
+    /// a `rangechange`'s `first` / `last`; empty for the other built-in
+    /// events.
     pub detail: std::collections::HashMap<String, crate::ScriptValue>,
+    /// What a drag event carries, one value per MIME kind: the web's
+    /// `DataTransfer`. Empty for every other event. A page raises no drag
+    /// events, so the browser module carries no payload.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub data: lumen_os_dnd::mime::MimePayload,
     /// Set by `prevent_default`: the event's default action is cancelled.
     pub default_prevented: bool,
     /// Set by `stop_propagation`: no further nodes receive the event.
@@ -216,12 +222,86 @@ pub fn event_value() -> String {
         .unwrap_or_default()
 }
 
-/// `ev.detail()`: what a custom event carries, empty for a built-in one.
+/// `ev.detail()`: what a custom event carries, or a `rangechange`'s
+/// `first` / `last`; empty for the other built-in events.
 pub fn event_detail() -> std::collections::HashMap<String, crate::ScriptValue> {
     current_cell()
         .read()
         .map(|g| g.detail.clone())
         .unwrap_or_default()
+}
+
+/// `ev.types()`: the MIME kinds a drag event carries, in the order they were
+/// set (`text/plain`, `application/x-asset`, ...); empty for other events,
+/// and always on a page, which raises no drag events.
+pub fn event_types() -> Vec<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        current_cell()
+            .read()
+            .map(|g| {
+                g.data
+                    .kinds
+                    .iter()
+                    .map(|(kind, _)| kind.essence().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Vec::new()
+    }
+}
+
+/// `ev.get_data(kind)`: the value a drag event carries under `kind`, as text;
+/// `""` when it carries none. `kind` reads as the web reads it: case and
+/// parameters do not count, and `text` / `url` stand for `text/plain` /
+/// `text/uri-list`.
+pub fn event_get_data(kind: &str) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let kind = lumen_os_dnd::mime::MimeKind::from(kind);
+        current_cell()
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.data
+                    .get(&kind)
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            })
+            .unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = kind;
+        String::new()
+    }
+}
+
+/// `ev.set_data(kind, value)`: put `value` in the drag's payload under
+/// `kind`, replacing what it carried there. Only a `dragstart` handler fills
+/// the payload, as on the web; anywhere else this does nothing and answers
+/// false.
+pub fn event_set_data(kind: &str, value: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match current_cell().write() {
+            Ok(mut g) if g.event_type == "dragstart" && !kind.trim().is_empty() => {
+                g.data.set(
+                    lumen_os_dnd::mime::MimeKind::from(kind),
+                    value.as_bytes().to_vec(),
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (kind, value);
+        false
+    }
 }
 
 /// `ev.prevent_default()`.
@@ -505,11 +585,20 @@ pub fn has_default_action(event_type: &str) -> bool {
 
 /// Whether `event_type` bubbles (fires bubble-phase handlers on ancestors
 /// after the target). Mirrors the DOM: `focus` / `blur`, pointer
-/// `enter` / `leave`, and `scroll` do not bubble; everything else does.
+/// `enter` / `leave`, and `scroll` do not bubble; neither do `rangechange`,
+/// which is about the one list it fires on, and a popover's `beforetoggle` and
+/// `toggle`. Everything else does, the drag events included.
 pub fn event_bubbles(event_type: &str) -> bool {
     !matches!(
         event_type,
-        "focus" | "blur" | "pointerenter" | "pointerleave" | "scroll"
+        "focus"
+            | "blur"
+            | "pointerenter"
+            | "pointerleave"
+            | "scroll"
+            | "rangechange"
+            | "beforetoggle"
+            | "toggle"
     )
 }
 
@@ -823,6 +912,34 @@ mod tests {
     fn record(log: &Arc<Mutex<Vec<String>>>, tag: &'static str) -> Arc<dyn Fn() + Send + Sync> {
         let log = log.clone();
         Arc::new(move || log.lock().unwrap().push(tag.to_string()))
+    }
+
+    /// A drag event reads its payload by kind, and only `dragstart` may
+    /// write it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn drag_data_reads_by_kind_and_writes_only_in_dragstart() {
+        let _g = GUARD.lock().unwrap();
+        let data = EventData {
+            event_type: "dragstart".into(),
+            data: lumen_os_dnd::mime::MimePayload::from("card-3"),
+            ..Default::default()
+        };
+        set_current_event(data);
+        assert_eq!(event_types(), vec!["text/plain".to_string()]);
+        assert_eq!(event_get_data("text"), "card-3");
+        assert!(event_set_data("Application/X-Card", "{\"id\":3}"));
+        assert_eq!(event_get_data("application/x-card"), "{\"id\":3}");
+        assert_eq!(event_types().len(), 2);
+        assert_eq!(event_get_data("image/png"), "");
+
+        set_current_event(EventData {
+            event_type: "drop".into(),
+            ..Default::default()
+        });
+        assert!(!event_set_data("text/plain", "x"), "a drop cannot write");
+        assert!(event_types().is_empty());
+        set_current_event(EventData::default());
     }
 
     #[test]

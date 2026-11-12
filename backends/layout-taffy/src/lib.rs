@@ -62,7 +62,9 @@ pub mod capability;
 mod memo;
 
 use lumen_core::layout_backend::LayoutSolve;
+use lumen_core::render_world::{PaintRoot, TopLayer};
 use lumen_core::traits::LayoutEngine;
+use lumen_core::window::WindowPartitions;
 use memo::{Geometry, compute_layout_memoised};
 
 /// The roots of the document's own tree: styled, parentless, and not shown
@@ -87,7 +89,12 @@ type SurfaceMoves<'w, 's> = (
 
 /// Where dirtiness stops climbing: a relayout boundary, or a surface root,
 /// which lays out against its own window.
-type LayoutBoundary = Or<(With<RelayoutBoundary>, With<WindowOf>)>;
+type LayoutBoundary = Or<(With<RelayoutBoundary>, With<WindowOf>, With<TopLayer>)>;
+
+/// The elements laid out as layout roots of their own while their parent
+/// keeps them in the tree: surface roots ([`WindowOf`]), in their window, and
+/// top-layer elements ([`TopLayer`]), in the window they show in.
+type OwnRoots<'w, 's> = Query<'w, 's, Option<&'static WindowOf>, PaintRoot>;
 
 /// The taffy layout engine. As a plugin it installs the non-send layout
 /// state and registers the LayoutSync systems with explicit ordering; as a
@@ -463,6 +470,12 @@ pub struct LayoutResource {
     /// [`AnonymousTextBox`]). Empty in a document whose text is all in
     /// leaves.
     anon: HashMap<Entity, NodeId>,
+    /// The window-sized box each top-layer element ([`TopLayer`]) is laid
+    /// out in: a taffy node with no entity, the size of the element's
+    /// window, holding the element as its one child. The element resolves
+    /// its `inset` and percentages against it, as CSS's top layer resolves
+    /// them against the viewport.
+    top_hosts: HashMap<Entity, NodeId>,
 }
 
 impl LayoutResource {
@@ -483,6 +496,7 @@ impl LayoutResource {
             dock_insets: (0.0, 0.0),
             windows: HashMap::new(),
             anon: HashMap::new(),
+            top_hosts: HashMap::new(),
         }
     }
 
@@ -569,6 +583,7 @@ pub fn sync_viewport(
     mut layout: NonSendMut<LayoutResource>,
     (roots_q, surfaces): LayoutRoots,
     (moved, mut gone, parents, alive): SurfaceMoves,
+    top_layer: Query<Entity, (With<TopLayer>, With<Style>)>,
 ) {
     for (e, parent) in &moved {
         commands.entity(e).insert(DirtyLayout);
@@ -601,6 +616,10 @@ pub fn sync_viewport(
         for e in &roots_q {
             commands.entity(e).insert(DirtyLayout);
         }
+        // A top-layer element lays out against its window too.
+        for e in &top_layer {
+            commands.entity(e).insert(DirtyLayout);
+        }
     }
     if surfaces.is_empty() && layout.windows.is_empty() {
         return;
@@ -619,6 +638,9 @@ pub fn sync_viewport(
     }
     if layout.windows != seen {
         layout.windows = seen;
+        for e in &top_layer {
+            commands.entity(e).insert(DirtyLayout);
+        }
     }
 }
 
@@ -808,7 +830,7 @@ pub fn sync_layout(
     // solve against their own window's viewport.
     // An element whose text sits in an anonymous box gets the box's
     // geometry here.
-    (overlay_q, surface_q, viewport_q, mut anon_box_q): PlacementQueries,
+    (overlay_q, surface_q, viewport_q, mut anon_box_q, partitions): PlacementQueries,
 ) {
     // Idle-tick fast path: with no dirty entities there is no relayout to
     // do, so we also skip the map/tree bookkeeping below. Entity despawns
@@ -832,6 +854,9 @@ pub fn sync_layout(
         // `Style` since last tick (including the despawn-everything
         // path).
         for entity in removed_style.read() {
+            if let Some(host) = layout.top_hosts.remove(&entity) {
+                let _ = layout.tree.remove(host);
+            }
             if let Some(node) = layout.map.remove(&entity) {
                 let _ = layout.tree.remove(node);
                 layout.geometry.remove(node);
@@ -864,6 +889,9 @@ pub fn sync_layout(
             layout.last_style.remove(&e);
             layout.last_context.remove(&e);
             layout.remove_anon(e);
+            if let Some(host) = layout.top_hosts.remove(&e) {
+                let _ = layout.tree.remove(host);
+            }
             memo.heights.remove(&e);
         }
     }
@@ -1155,13 +1183,53 @@ pub fn sync_layout(
     };
     // The space a surface root solves against: its window's whole viewport.
     let window_space = |root: Entity| -> Option<taffy::Size<AvailableSpace>> {
-        let window = surface_q.get(root).ok()?.window();
+        let window = match surface_q.get(root).ok()? {
+            Some(of) => of.window(),
+            // A top-layer element lays out against the window it shows in.
+            None => partitions.as_ref()?.window_of(root)?,
+        };
         let size = viewport_q.get(window).map(|v| v.size).unwrap_or(Vec2::ZERO);
         Some(taffy::Size {
             width: AvailableSpace::Definite(size.x),
             height: AvailableSpace::Definite(size.y),
         })
     };
+    // A top-layer element lays out inside a window-sized box of its own, so
+    // its `inset` and percentages resolve against the window and its size
+    // shrinks to fit its content the way an absolutely positioned box's does.
+    for root in &dirty_roots {
+        if !matches!(surface_q.get(*root), Ok(None)) {
+            continue;
+        }
+        let (Some(&node), Some(space)) = (layout.map.get(root), window_space(*root)) else {
+            continue;
+        };
+        let size = taffy::Size {
+            width: taffy::style::Dimension::length(definite_or_zero(space).x),
+            height: taffy::style::Dimension::length(definite_or_zero(space).y),
+        };
+        let host_style = taffy::Style {
+            size,
+            ..taffy::Style::default()
+        };
+        match layout.top_hosts.get(root) {
+            Some(&host) => {
+                if layout.tree.style(host).map(|s| s.size) != Ok(size) {
+                    let _ = layout.tree.set_style(host, host_style);
+                }
+                if layout.tree.children(host).ok().as_deref() != Some(&[node][..]) {
+                    let _ = layout.tree.set_children(host, &[node]);
+                }
+            }
+            None => {
+                let host = layout
+                    .tree
+                    .new_with_children(host_style, &[node])
+                    .expect("taffy new_with_children should not fail");
+                layout.top_hosts.insert(*root, host);
+            }
+        }
+    }
     layout.solves_last_sync = 0;
     layout.visits_last_sync = 0;
     let shaper: &mut dyn TextShaper = &mut **shaper;
@@ -1182,7 +1250,12 @@ pub fn sync_layout(
                 inset_viewport
             }
         });
-        if let Some(&node) = layout.map.get(root) {
+        let node = layout
+            .top_hosts
+            .get(root)
+            .or_else(|| layout.map.get(root))
+            .copied();
+        if let Some(node) = node {
             layout.solves_last_sync += 1;
             layout.visits_last_sync += compute_layout_memoised(
                 tree,
@@ -1312,6 +1385,11 @@ pub fn sync_layout(
     // which must not leak into the boundary's own Transform.
     for root in &dirty_roots {
         let absolute_override = pins.get(root).map(|p| p.prior_absolute).or_else(|| {
+            // A top-layer element's place is its place in its window-sized
+            // box, which the solve already gave it.
+            if layout.top_hosts.contains_key(root) {
+                return None;
+            }
             // A true root has no parent box for its `inset` to resolve
             // against, so an absolutely positioned one (a tooltip
             // popup) resolves it against the space it was solved in,
@@ -1536,9 +1614,10 @@ struct TextMeasureInput {
 /// roots, surface roots, each window's viewport, and the boxes themselves.
 type PlacementQueries<'w, 's> = (
     Query<'w, 's, (), With<lumen_core::render_world::OverlayLayer>>,
-    Query<'w, 's, &'static WindowOf>,
+    OwnRoots<'w, 's>,
     Query<'w, 's, &'static WindowViewport>,
     Query<'w, 's, &'static mut AnonymousTextBox>,
+    Option<Res<'w, WindowPartitions>>,
 );
 
 /// An element's text and text style, with what decides whether that text
@@ -1655,7 +1734,7 @@ fn rebuild_taffy_subtree(
     layout: &mut LayoutResource,
     entity: Entity,
     children_q: &Query<&Children>,
-    surface_q: &Query<&WindowOf>,
+    surface_q: &OwnRoots,
 ) {
     let Some(&parent_node) = layout.map.get(&entity) else {
         return;
@@ -1701,7 +1780,7 @@ fn write_transforms_recursive(
     parent_origin: Vec2,
     absolute_override: Option<Vec2>,
     children_q: &Query<&Children>,
-    surface_q: &Query<&WindowOf>,
+    surface_q: &OwnRoots,
     transform_q: &mut Query<&mut Transform>,
     anon_box_q: &mut Query<&mut AnonymousTextBox>,
     commands: &mut Commands,

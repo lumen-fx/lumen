@@ -3552,6 +3552,7 @@ dependencies = [
  "lumen-fs",
  "lumen-lua",
  "lumen-os-clipboard",
+ "lumen-os-dnd",
  "lumen-os-filedialog",
  "lumen-primitives",
  "lumen-rhai",
@@ -3774,6 +3775,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-commands"
+version = "0.0.12"
+dependencies = [
+ "bevy_ecs",
+ "lumen-candela-dev",
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
+ "serde_json",
+]
+
+[[package]]
 name = "lumen-cookie"
 version = "0.0.12"
 dependencies = [
@@ -3902,6 +3917,7 @@ dependencies = [
  "bevy_ecs",
  "lumen-core",
  "lumen-os-clipboard",
+ "lumen-os-dnd",
  "lumen-os-filedialog",
  "lumen-primitives",
  "lumen-runtime",
@@ -4014,6 +4030,7 @@ dependencies = [
  "lumen-browser",
  "lumen-candela",
  "lumen-canvas",
+ "lumen-commands",
  "lumen-cookie",
  "lumen-dock",
  "lumen-download",
@@ -4999,6 +5016,7 @@ dependencies = [
  "lumen-candela-dev",
  "lumen-canvas",
  "lumen-capability",
+ "lumen-commands",
  "lumen-cookie",
  "lumen-core",
  "lumen-devtools",

@@ -85,9 +85,9 @@ optional.
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |
 | `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |
-| `on_drop(target_id, payload)` | Drop-zone id, the source's text payload. |
-| `on_drag_start(source_id, payload)` | Drag-source id, its text payload. |
-| `on_file_dropped(id, path)` | Element id, dropped file path. |
+| `on_drop(target_id, payload)` | Drop-zone id, the drag's `text/plain` value, or its only value when it carries no text (a dropped file's `text/uri-list`). The DOM `drop` event carries every type. |
+| `on_drag_start(source_id, payload)` | Drag-source id, its payload as for `on_drop`. |
+| `on_file_dropped(id, path)` | Element id, dropped file path. Deprecated: a dropped file is a `drop` event carrying `text/uri-list`, and `on_drop` receives the uri. Removed in the next release. |
 | `on_file_picked(tag, path)` | Dialog tag, chosen path. Empty path on cancel. |
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
@@ -395,7 +395,10 @@ The handler receives an `Event`:
 | `key()` | `string` | Key name for keyboard events. |
 | `code()` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `value()` | `string` | Text value for `input` / `change` / `submit`. |
-| `detail()` | `map` | What a module's custom event carries; empty for a built-in event. |
+| `types()` | `array` | The MIME types a drag event carries (`"text/plain"`, `"application/x-asset"`); empty for other events. |
+| `get_data(kind)` | `string` | What a drag event carries under a MIME type, as text; `""` when it carries none. `"text"` / `"url"` stand for `text/plain` / `text/uri-list`. |
+| `set_data(kind, value)` | `bool` | In a `dragstart` handler, put a value in the drag under a MIME type. `false` in any other handler. |
+| `detail()` | `map` | What a module's custom event carries, a `rangechange`'s `first` / `last`, or a popover `toggle`'s `old_state` / `new_state`; empty for the other built-in events. |
 | `button()` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `buttons()` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `pointer_id()` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -406,7 +409,7 @@ The handler receives an `Event`:
 | `tilt_x()` / `tilt_y()` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
 | `twist()` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
 | `width()` / `height()` | `float` | Contact size in logical pixels; `1` for a point device. |
-| `x()` / `y()` | `float` | Pointer position relative to the target. |
+| `x()` / `y()` | `float` | Pointer position relative to the target's top-left as it is painted, scrolling included. |
 | `client_x()` / `client_y()` | `float` | Pointer position in window coordinates. |
 | `movement_x()` / `movement_y()` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `delta_x()` / `delta_y()` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down and positive `delta_x` scrolls right. |
@@ -422,13 +425,25 @@ The handler receives an `Event`:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`.
+`blur`, `submit`, `scroll`, `rangechange`, `pointerlockchange`,
+`pointerlockerror`, `beforetoggle`, `toggle`, `dragstart`, `dragenter`,
+`dragover`, `dragleave`, `drop`, `dragend`.
+`dragstart` and `dragend` fire on the element an in-app drag began on; the
+other four on the drop target under the pointer whose `accept` list takes the
+drag. A `dragstart` handler's `prevent_default` cancels the drag.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
 way; the module's documentation lists them and says which bubble and which a
 handler can cancel with `prevent_default`. They carry a detail map, which a
-built-in event leaves empty.
+built-in event leaves empty, except `rangechange`.
+
+`rangechange` fires on a `<for virtualized="true">` each time the items it has
+mounted change: a scroll moves its window, a grid's column count changes, or
+the list grows or shrinks. Its detail is `{first, last}`, item indices with
+`first` inclusive and `last` exclusive, so a handler loads thumbnails for those
+items and nothing else. A web build mounts the whole list and does not fire
+it.
 
 A CSS animation raises `animationstart`, `animationiteration`,
 `animationend` and `animationcancel` on its element, on the desktop and in a
@@ -439,9 +454,9 @@ detail. An animation a script started with `animations::animate` raises
 handle under `animation`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
-(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
-`scroll` do not bubble. `keydown` and `keyup` target the focused element, or
-the document root when nothing is focused.
+(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`,
+`scroll` and `rangechange` do not bubble. `keydown` and `keyup` target the
+focused element, or the document root when nothing is focused.
 
 `pointerenter` fires on an element when the pointer reaches it or one of its
 descendants, outermost element first, and `pointerleave` when the pointer is
@@ -582,9 +597,12 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `clear_recent_files()` | Remove every entry from the recent-files list. |
 | `set_autostart(on)` | Enable or disable launching this app at login. |
 | `query_autostart(tag)` | Request the autostart state; fires `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`. |
-| `open_menu(id)` | Open menu `id` where its styles place it, by setting the `__menu_open:id` signal to true. |
+| `open_menu(id)` | Open menu `id` below where it is written, by setting the `__menu_open:id` signal to true. |
 | `open_menu_at(id, x, y)` | Open menu `id` with its top-left corner at `(x, y)` in window coordinates. Near the right or bottom edge it opens to the left of or above the point instead. Pass a `contextmenu` event's client position to open a context menu at the pointer. |
 | `close_menu(id)` | Close menu `id`. |
+| `show_popover(id)` | Open the [popover](tags.md#popover) `id`, as the DOM's `showPopover()` does. |
+| `hide_popover(id)` | Close the popover `id`. |
+| `toggle_popover(id)` | Open the popover `id` when it is closed, close it when it is open. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
 
@@ -840,6 +858,7 @@ Each names a [`<surface>`](tags.md#surface) element by its `id`.
 | `surface::state(id)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
 | `surface::frame_info(id)` | `map` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
 | `surface::frame_meta(id)` | `array` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::to_texture(id, x, y)` | `array` | Where the window position `(x, y)` lands in the frame, in frame pixels: `[x, y]`. Undoes the element's drawn box, its `object-fit` and the device pixel ratio. Empty before the first frame and on the web. |
 | `surface::request_frame(id)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
 | `surface::send(id, message)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
 | `surface::disconnect(id)` | | End the session with the producer. The surface keeps listening for another. |
@@ -847,6 +866,44 @@ Each names a [`<surface>`](tags.md#surface) element by its `id`.
 What the producer sends back arrives as events on the element:
 `surfacemessage` carries a message in its detail (`text`, and the raw
 `bytes`). See [Showing another renderer's frames](../guides/surfaces.md).
+
+## Commands
+
+These functions come from the `lumen-commands` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-commands = { bundled = true }
+```
+
+They name a command by its `id`, whether a
+[`<command>`](tags.md#commands-command-and-command-palette) declared it or a
+script registered it. Whatever runs a command raises `command` on the
+document, with `id` in its detail; a binding that changes raises `keyschange`
+there with `id` and `keys`. See
+[Commands and shortcuts](../guides/os-integration.md#commands-and-shortcuts).
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `commands::register(id, label, keys)` | `bool` | Add a command made at run time, or replace the one with the same id. `keys` is a chord such as `Ctrl+Shift+P`, a comma-separated list of them, or empty. `false` when the id is empty or a chord does not read. |
+| `commands::unregister(id)` | `bool` | Remove the command. `false` when no command has the id. |
+| `commands::run(id)` | `bool` | Run the command: a `command` event on the document carries its id. `false` when no command has the id or it is disabled. |
+| `commands::set_enabled(id, enabled)` | `bool` | Turn the command on or off. A disabled command does not run, shows greyed out in its menu items, and is left out of the palette. |
+| `commands::keys(id)` | `string` | The chords that run the command now, comma-separated, in the form `bind` reads back. |
+| `commands::bind(id, keys)` | `bool` | Bind the command to `keys` in place of what it had; `""` unbinds it. A chord another command has moves to this one. Kept between runs unless the module's `persist` is `none`. |
+| `commands::reset(id)` | `bool` | Give the command its declared keys back. `false` when the user had not bound it. |
+| `commands::record(id)` | `bool` | Bind the next chord the user presses to the command, as `bind` does; Escape cancels. `keyschange` on the document tells when it is done. |
+| `commands::open_palette()` | nothing | Open the command palette. |
+
+```rhai
+fn on_ready() {
+    document_node().on("command", |e| {
+        if e.detail().id == "file.save" { save(); }
+    });
+    commands::register("view.zoom_in", "Zoom in", "CommandOrControl+Plus");
+}
+```
 
 ## Docks and windows
 

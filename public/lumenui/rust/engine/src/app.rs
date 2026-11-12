@@ -263,6 +263,29 @@ impl App {
         self.on(EventKind::Slider, id, handler)
     }
 
+    /// Run `handler` when something is dropped on the drop target with
+    /// `id`: an in-app drag its `accept` list takes, or a file from the OS
+    /// (`text/uri-list`). [`Event::data`] reads the payload by MIME kind and
+    /// [`Event::local`] is where on the element it landed.
+    #[must_use]
+    pub fn on_drop<F>(self, id: impl Into<String>, handler: F) -> Self
+    where
+        F: FnMut(&mut Ui<'_>, &Event) + Send + Sync + 'static,
+    {
+        self.on(EventKind::Drop, id, handler)
+    }
+
+    /// Run `handler` when an in-app drag begins on the element with `id`
+    /// (one with a `drag-payload`). [`Event::types`] and [`Event::data`]
+    /// read what it carries.
+    #[must_use]
+    pub fn on_drag_start<F>(self, id: impl Into<String>, handler: F) -> Self
+    where
+        F: FnMut(&mut Ui<'_>, &Event) + Send + Sync + 'static,
+    {
+        self.on(EventKind::DragStart, id, handler)
+    }
+
     /// Run `handler` when the `<menuitem>` with `id` is chosen.
     #[must_use]
     pub fn on_menu<F>(self, id: impl Into<String>, handler: F) -> Self

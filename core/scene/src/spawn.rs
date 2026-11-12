@@ -164,6 +164,17 @@ pub struct ForMarker {
     /// Required when `virtualized = true`. Default 32 px when authors
     /// turn on `virtualized` without specifying `row-height`.
     pub row_height: f32,
+    /// `cell-width`: a virtualized block with one lays its items out as a
+    /// grid of `cell_width` x `row_height` cells, as many to a grid row as
+    /// its width holds. `None` is the one-item-per-row list.
+    pub cell_width: Option<f32>,
+    /// The grid geometry the mounted cells were slotted with, so a change
+    /// in the block's width or gap re-slots them. `None` for a list, and
+    /// for a grid before its first layout.
+    pub grid: Option<GridGeometry>,
+    /// The item range last reported with a
+    /// [`MountedRangeChanged`](lumen_core::signals::MountedRangeChanged).
+    pub range: std::ops::Range<usize>,
     /// The `(row_index, key)` pairs currently mounted, in child-list order
     /// (each entry owns `body.len()` consecutive children). The key is the
     /// record's `key_field`, or its index when the block names none. Rows
@@ -184,6 +195,48 @@ pub struct ForMarker {
     /// placeholders resolved again and written onto the entities it
     /// already has.
     pub row_items: Vec<ArrayItem>,
+}
+
+/// How a virtualized grid places its cells: how many fit a grid row and the
+/// spacing between them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridGeometry {
+    /// Cells per grid row, at least one.
+    pub columns: usize,
+    /// Width of one cell.
+    pub cell_width: f32,
+    /// The block's CSS `column-gap`.
+    pub column_gap: f32,
+    /// The block's CSS `row-gap`.
+    pub row_gap: f32,
+}
+
+impl GridGeometry {
+    /// The geometry of a grid of `cell_width`-wide cells in a block whose
+    /// content area is `width` wide, spaced by the block's `gap`: as many
+    /// cells as fit with a gap between each pair, and never fewer than one,
+    /// like `grid-template-columns: repeat(auto-fill, <cell_width>)`. A
+    /// percentage column gap resolves against `width`; a percentage row gap
+    /// has no definite height to resolve against and counts as zero.
+    pub fn new(cell_width: f32, width: f32, gap: lumen_core::components::Gap) -> Self {
+        let cell_width = cell_width.max(1.0);
+        let column_gap = gap
+            .column_pct
+            .map_or(gap.column, |pct| pct / 100.0 * width)
+            .max(0.0);
+        let row_gap = if gap.row_pct.is_some() {
+            0.0
+        } else {
+            gap.row.max(0.0)
+        };
+        let columns = ((width.max(0.0) + column_gap) / (cell_width + column_gap)).floor();
+        Self {
+            columns: (columns as usize).max(1),
+            cell_width,
+            column_gap,
+            row_gap,
+        }
+    }
 }
 
 /// Who mounts the rows of a virtualized `<for>`.
@@ -460,7 +513,7 @@ pub fn renumber_document_order(
 pub fn menu_open_signal_above(world: &World, from: Option<Entity>) -> Option<String> {
     let mut at = from;
     while let Some(e) = at {
-        if let Some(panel) = world.get::<lumen_primitives::PopupPanel>(e) {
+        if let Some(panel) = world.get::<lumen_primitives::Popover>(e) {
             return Some(panel.open_signal.clone());
         }
         at = world.get::<ChildOf>(e).map(ChildOf::parent);
@@ -628,16 +681,23 @@ pub fn apply_mask_image(ent: &mut bevy_ecs::world::EntityWorldMut<'_>, attrs: &A
     }
 }
 
-/// The in-app drag source a `drag-payload` attribute publishes. An empty
-/// payload names the element by its `id`.
+/// The in-app drag source a `drag-payload` attribute publishes, under the
+/// kind `drag-type` names (`text/plain` without one). An empty payload names
+/// the element by its `id`.
 fn drag_source(attrs: &Attributes) -> Option<lumen_os_dnd::DragSource> {
+    use lumen_os_dnd::mime::{MimeKind, MimePayload};
     let payload = attrs.drag_payload.as_ref()?;
     let text = if payload.is_empty() {
         attrs.id.clone().unwrap_or_default()
     } else {
         payload.clone()
     };
-    Some(lumen_os_dnd::DragSource::new(text).with_effects(lumen_os_dnd::DropEffectSet::ANY))
+    let kind = attrs
+        .drag_type
+        .as_deref()
+        .map_or(MimeKind::TextPlain, MimeKind::from);
+    let payload = MimePayload::new().with(kind, text.into_bytes());
+    Some(lumen_os_dnd::DragSource::new(payload).with_effects(lumen_os_dnd::DropEffectSet::ANY))
 }
 
 fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
@@ -944,9 +1004,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         // `acceptProposedAction`). No `accept="..."` => accept any payload,
         // matching the file-drop path's "accept anything" default.
         let accept = match &el.attrs.drop_accept {
-            Some(mime) => {
-                lumen_os_dnd::DropAccept::only([lumen_os_dnd::mime::MimeKind::from(mime.as_str())])
-            }
+            Some(list) => lumen_os_dnd::DropAccept::from_list(list),
             None => lumen_os_dnd::DropAccept::any(),
         }
         .with_effects(lumen_os_dnd::DropEffectSet::ANY);
@@ -1053,16 +1111,43 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
     {
         entity.insert(TabIndex(-1));
     }
-    if let Some(open_signal) = &el.attrs.popup_panel {
-        entity.insert((
-            lumen_primitives::PopupPanel {
-                open_signal: open_signal.clone(),
+    if let Some(spec) = &el.attrs.popover {
+        // In the top layer while open: laid out against the window, over
+        // everything else, out of reach of its ancestors' clips.
+        entity.insert(lumen_primitives::Popover {
+            open_signal: spec.open_signal.clone(),
+            mode: match spec.mode {
+                lumen_ir::layout_ir::PopoverModeSpec::Auto => lumen_primitives::PopoverMode::Auto,
+                lumen_ir::layout_ir::PopoverModeSpec::Manual => {
+                    lumen_primitives::PopoverMode::Manual
+                }
             },
-            // Top-layer paint band: the panel must paint over all
-            // later-document-order content (inputs, textareas) it
-            // floats above.
-            lumen_core::render_world::OverlayLayer,
-        ));
+            anchor: spec.anchor.clone(),
+            match_anchor_width: spec.match_anchor_width,
+            invoker: None,
+            // The built list of a `<dropdown>` and the panel of a `<menu>`
+            // are walked with the arrow keys; a `popover` is the element it
+            // was written as.
+            keyboard: el.attrs.if_signal.is_none(),
+        });
+    }
+    // A page's browser runs `popovertarget` itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(target) = &el.attrs.popover_target {
+        entity.insert(lumen_primitives::PopoverTarget {
+            target: target.target.clone(),
+            action: match target.action {
+                lumen_ir::layout_ir::PopoverActionSpec::Toggle => {
+                    lumen_primitives::PopoverAction::Toggle
+                }
+                lumen_ir::layout_ir::PopoverActionSpec::Show => {
+                    lumen_primitives::PopoverAction::Show
+                }
+                lumen_ir::layout_ir::PopoverActionSpec::Hide => {
+                    lumen_primitives::PopoverAction::Hide
+                }
+            },
+        });
     }
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
@@ -1380,6 +1465,9 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
             key_field: el.attrs.key.clone(),
             virtualized: el.attrs.virtualized,
             row_height: el.attrs.row_height.unwrap_or(32.0),
+            cell_width: el.attrs.cell_width,
+            grid: None,
+            range: 0..0,
             rows: Vec::new(),
             cascaded_body: None,
             row_items: Vec::new(),
@@ -1390,7 +1478,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         world
             .entity_mut(id)
             .insert(crate::widgets::PendingTabBody(el.children.clone()));
-    } else if (el.tag == "if" || el.tag == "dialog")
+    } else if (el.tag == "if" || el.tag == "dialog" || el.attrs.popover.is_some())
         && let Some(name) = &el.attrs.if_signal
     {
         world.entity_mut(id).insert(IfMarker {
@@ -1578,8 +1666,9 @@ pub fn reconcile_if_blocks(
         // Check the `<if>` entity itself (e.g. `<dialog>`) and its mounted
         // body roots (e.g. the synthetic dropdown / menu `.dropdown-panel`
         // children, which carry the CSS transition specs). A `Render` block
-        // fades in from its mount above.
-        if now_truthy && marker.mode == IfMode::Hide {
+        // fades in from its mount above; a `Hide` or `Mounted` one, whose
+        // body is already there, fades in here each time it shows.
+        if now_truthy && marker.mode != IfMode::Render {
             let mut targets: Vec<Entity> = vec![parent_id];
             if let Some(kids) = children {
                 targets.extend(kids.iter());
@@ -1639,7 +1728,8 @@ pub fn reconcile_if_blocks(
 ///
 /// 1. an open `<dropdown>` panel (`__dropdown_open:*` signal is `true`),
 /// 2. otherwise an open `<menu>` panel (`__menu_open:*` signal is `true`),
-/// 3. otherwise the top-most open `<dialog>`.
+/// 3. otherwise the last-opened `auto` popover,
+/// 4. otherwise the top-most open `<dialog>`.
 ///
 /// Dropdown / menu panels are gated by `<if eq="true" mode="hide">`
 /// blocks whose [`IfMarker::signal_name`] is the synthetic open signal,
@@ -1666,6 +1756,11 @@ pub fn close_dialogs_on_escape(
         Option<&lumen_core::components::Visible>,
         Option<&DialogMarker>,
     )>,
+    // A page's browser closes its own popovers on Escape.
+    #[cfg(not(target_arch = "wasm32"))] (popovers, open_order): (
+        bevy_ecs::system::Query<(Entity, &lumen_primitives::Popover)>,
+        Option<bevy_ecs::system::Res<lumen_core::render_world::OverlayOpenOrder>>,
+    ),
 ) {
     let escape_pressed = keys.read().any(|k| {
         matches!(
@@ -1698,7 +1793,31 @@ pub fn close_dialogs_on_escape(
             return;
         }
     }
-    // 3. Finally: the top-most open `<dialog>`.
+    // 3. Next: the last-opened `auto` popover.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let stamp = |e: Entity| {
+            open_order
+                .as_ref()
+                .and_then(|o| o.stamps.get(&e).copied())
+                .unwrap_or(0)
+        };
+        let top_popover = popovers
+            .iter()
+            .filter(|(_, p)| {
+                p.mode == lumen_primitives::PopoverMode::Auto
+                    && store
+                        .get_global_str(&p.open_signal)
+                        .as_deref()
+                        .is_some_and(lumen_core::signals::signal_is_truthy)
+            })
+            .max_by_key(|(e, _)| stamp(*e));
+        if let Some((_, popover)) = top_popover {
+            store.set_global_bool(&popover.open_signal, false);
+            return;
+        }
+    }
+    // 4. Finally: the top-most open `<dialog>`.
     for (marker, visible, dialog) in &blocks {
         if dialog.is_none() {
             continue;
@@ -1909,6 +2028,51 @@ pub fn manage_dialog_lifecycle(
     }
 }
 
+/// Move focus to the `autofocus` element inside a popover when it opens,
+/// as a browser does for a popover that holds one. A popover with none
+/// leaves focus where it is. Desktop only: a page's browser does this itself.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn focus_autofocus_in_popovers(
+    mut commands: bevy_ecs::system::Commands,
+    mut toggles: bevy_ecs::message::MessageReader<lumen_primitives::PopoverToggled>,
+    mut tracker: bevy_ecs::system::ResMut<lumen_core::input::FocusTracker>,
+    children: bevy_ecs::system::Query<&bevy_ecs::hierarchy::Children>,
+    autofocused: bevy_ecs::system::Query<
+        Option<&lumen_core::components::DocumentOrder>,
+        (With<AutoFocus>, Without<lumen_core::components::Disabled>),
+    >,
+) {
+    for toggled in toggles.read() {
+        if !toggled.open {
+            continue;
+        }
+        let mut descendants = Vec::new();
+        collect_descendants(toggled.entity, &children, &mut descendants);
+        let Some(target) = descendants
+            .into_iter()
+            .filter_map(|d| {
+                autofocused
+                    .get(d)
+                    .ok()
+                    .map(|doc| (doc.map_or(u32::MAX, |o| o.0), d))
+            })
+            .min()
+            .map(|(_, d)| d)
+        else {
+            continue;
+        };
+        if let Some(cur) = tracker.0
+            && cur != target
+        {
+            commands
+                .entity(cur)
+                .remove::<(lumen_core::input::Focused, lumen_core::input::FocusVisible)>();
+        }
+        commands.entity(target).insert(lumen_core::input::Focused);
+        tracker.0 = Some(target);
+    }
+}
+
 /// Enter anywhere in an open `<dialog>` activates its DEFAULT button
 /// (Qt QDialog default-button contract) - unless focus sits on a
 /// button (its own Enter->click path wins) or on a multiline text
@@ -2070,11 +2234,23 @@ pub fn reconcile_for_blocks(
         With<lumen_core::input::Scroll>,
     >,
     styles: bevy_ecs::system::Query<&lumen_core::components::Style>,
+    // A virtualized grid reads its block's last layout for how many cells a
+    // grid row holds; a list never does, and neither does a page, which
+    // leaves the windowing to the browser.
+    #[cfg(not(target_arch = "wasm32"))] boxes: bevy_ecs::system::Query<
+        &lumen_core::components::Transform,
+    >,
     stylesheet: Option<bevy_ecs::system::Res<LumenStylesheet>>,
     (policy, leaving): (
         Option<bevy_ecs::system::Res<ScenePolicy>>,
         bevy_ecs::system::Query<(), With<crate::style_sheet::Leaving>>,
     ),
+    // Optional: a bare world (a test, `settle_tree` before the app exists)
+    // has no message bus to report the mounted range on. A page reports
+    // none: the browser mounts and scrolls the whole list.
+    #[cfg(not(target_arch = "wasm32"))] mut ranges: Option<
+        bevy_ecs::message::MessageWriter<lumen_core::signals::MountedRangeChanged>,
+    >,
 ) {
     let policy = policy.map(|p| *p).unwrap_or_default();
     // Nothing wrote an array since the last pass, so every mounted row
@@ -2100,6 +2276,23 @@ pub fn reconcile_for_blocks(
             .unwrap_or(&[] as &[ArrayItem]);
         let windowed = marker.virtualized && policy.virtualization == Virtualization::Enabled;
         let row_h = marker.row_height.max(1.0);
+        // A grid lays its cells out from the block's width as the last
+        // layout left it; a width that changes re-slots every mounted cell.
+        // A grid not laid out yet has no geometry, and mounts nothing until
+        // it has: a column count guessed before the first layout would show
+        // its cells in the wrong places for a frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        let grid = match (windowed, marker.cell_width) {
+            (true, Some(cell_w)) => GridGeometry::of_block(
+                cell_w,
+                styles.get(parent_id).ok(),
+                boxes.get(parent_id).ok(),
+            ),
+            _ => None,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let grid: Option<GridGeometry> = None;
+        let grid_changed = marker.grid != grid;
 
         // Virtualised: derive the visible row range from the nearest
         // `<scroll>` ancestor's [`ScrollOffset`] and [`Transform`], mount
@@ -2107,6 +2300,8 @@ pub fn reconcile_for_blocks(
         // and absolute-position each row at `top = row_index * row_height`
         // so layout stays predictable regardless of which subset is
         // mounted. Author opts in via `<for virtualized="true" row-height="N">`.
+        // A grid (`cell-width="N"`) windows whole grid rows of cells the
+        // same way.
         let window = if windowed {
             // No scroll ancestor = window anchored at the top with a tall
             // default viewport, so apps still see some rows.
@@ -2121,24 +2316,23 @@ pub fn reconcile_for_blocks(
                 }
                 anc = parents.get(e).ok().map(|c| c.parent());
             }
-            // Overscan: rows mounted beyond both window edges so a small
-            // shift lands on already-mounted rows and the per-frame mount
-            // cost amortises across several frames of scrolling.
-            //
-            // Considered and rejected (wave-3 scroll-p95 work): quantizing
-            // the window to N-row pages to batch mounts. Measured on the
-            // 10k-row bench it left p95 unchanged (per-row mount spikes
-            // were never the p95 tail - external drive-loop jitter is)
-            // and regressed p99 ~18.2 -> ~20.5 ms because the batched
-            // 12-row mount tick costs more than any per-row tick. Per-row
-            // shifting keeps the worst single tick small.
-            const BUFFER_ROWS: usize = 8;
-            let first = ((offset_y / row_h).floor() as i64 - BUFFER_ROWS as i64).max(0) as usize;
-            let last =
-                (((offset_y + viewport_h) / row_h).ceil() as usize + BUFFER_ROWS).min(items.len());
+            // The window plus `BUFFER_ROWS` of overscan on both edges.
+            let (first, last, content_h) = match (grid, marker.cell_width) {
+                (Some(grid), _) => grid.window(row_h, offset_y, viewport_h, items.len()),
+                (None, Some(_)) => (0, 0, 0.0),
+                (None, None) => {
+                    let first =
+                        ((offset_y / row_h).floor() as i64 - BUFFER_ROWS as i64).max(0) as usize;
+                    let last = (((offset_y + viewport_h) / row_h).ceil() as usize + BUFFER_ROWS)
+                        .min(items.len());
+                    (first, last, items.len() as f32 * row_h)
+                }
+            };
 
-            // Pin the for-block's height to total_rows * row_h so taffy
-            // gives the scroll content the right extent. Without this
+            // Pin the for-block's height to its content height (a list's
+            // total_rows * row_h, a grid's grid rows and the gaps between
+            // them) so taffy gives the scroll content the right extent.
+            // Without this
             // the for-block sizes to 0 (no flex children - every row is
             // position: absolute) and rows escape upward into the
             // scroll's siblings (e.g. the toolbar/header) because the
@@ -2152,7 +2346,6 @@ pub fn reconcile_for_blocks(
             // same value so Taffy can't shrink it - that's what gives
             // the scroll a content extent larger than the viewport
             // (without it the user can't scroll down past viewport).
-            let content_h = items.len() as f32 * row_h;
             let extent = lumen_core::components::Length::Px(content_h);
             // Only write when the size differs. An unconditional write
             // every steady tick re-triggered Changed<Style> -> DirtyLayout
@@ -2184,6 +2377,20 @@ pub fn reconcile_for_blocks(
         } else {
             0..items.len()
         };
+        // What the block mounts is what an app showing thumbnails for it
+        // needs to know: report the range each time it moves. A list the
+        // presentation layer windows mounts all of it.
+        if marker.virtualized && marker.range != window {
+            marker.range = window.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(ranges) = ranges.as_mut() {
+                ranges.write(lumen_core::signals::MountedRangeChanged {
+                    block: parent_id,
+                    first: window.start,
+                    last: window.end,
+                });
+            }
+        }
 
         // The `(index, key)` pairs the block should show, in row order.
         // Keys are built for window rows only, never for the whole array.
@@ -2198,7 +2405,7 @@ pub fn reconcile_for_blocks(
             .collect();
 
         // Steady state: the same rows over the same records.
-        if children.is_some() && marker.rows == desired && !arrays_changed {
+        if children.is_some() && marker.rows == desired && !arrays_changed && !grid_changed {
             continue;
         }
         let marker = &mut *marker;
@@ -2224,14 +2431,28 @@ pub fn reconcile_for_blocks(
             &report_missing,
             &lookup,
         );
-        for &(slot, row) in &diff.moved {
+        // A grid whose geometry changed slots every kept cell again, not
+        // only the ones whose index moved.
+        let every_kept: Vec<(usize, usize)>;
+        let moved: &[(usize, usize)] = if grid_changed && windowed {
+            every_kept = diff
+                .slots
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, kept)| kept.map(|row| (slot, row)))
+                .collect();
+            &every_kept
+        } else {
+            &diff.moved
+        };
+        for &(slot, row) in moved {
             let index = desired[slot].0;
             for &root in &kids[row * body_len..(row + 1) * body_len] {
                 commands
                     .entity(root)
                     .queue(move |mut ent: bevy_ecs::world::EntityWorldMut<'_>| {
                         if windowed {
-                            let slot = virtual_row_slot(index, row_h);
+                            let slot = virtual_row_slot(index, row_h, grid);
                             lumen_core::style_overrides::hold_on::<VirtualRow>(&mut ent, slot);
                         } else {
                             // A row's place among its siblings is something a
@@ -2287,7 +2508,7 @@ pub fn reconcile_for_blocks(
                     if per_row_cascade { row_css } else { None },
                 );
                 let kind = if windowed {
-                    BodyChild::VirtualRow(Box::new(virtual_row_slot(i, row_h)))
+                    BodyChild::VirtualRow(Box::new(virtual_row_slot(i, row_h, grid)))
                 } else {
                     BodyChild::Restyled
                 };
@@ -2317,6 +2538,93 @@ pub fn reconcile_for_blocks(
         }
         marker.row_items = desired.iter().map(|(i, _)| items[*i].clone()).collect();
         marker.rows = desired;
+        marker.grid = grid;
+    }
+}
+
+/// Rows mounted beyond both edges of a virtualized list's window, so a small
+/// shift lands on already-mounted rows and the per-frame mount cost
+/// amortises across several frames of scrolling. A grid mounts
+/// `max(2, ceil(BUFFER_ROWS / columns))` grid rows instead, which keeps a
+/// wide grid from mounting eight full rows of cells it does not show.
+///
+/// Considered and rejected (wave-3 scroll-p95 work): quantizing the window
+/// to N-row pages to batch mounts. Measured on the 10k-row bench it left p95
+/// unchanged (per-row mount spikes were never the p95 tail - external
+/// drive-loop jitter is) and regressed p99 ~18.2 -> ~20.5 ms because the
+/// batched 12-row mount tick costs more than any per-row tick. Per-row
+/// shifting keeps the worst single tick small.
+const BUFFER_ROWS: usize = 8;
+
+impl GridGeometry {
+    /// The geometry of a grid of `cell_w`-wide cells in a block with the
+    /// given style and last layout, or `None` while the block has no width
+    /// to lay cells out in (before its first layout). The cells sit against
+    /// the block's padding box, which is what an absolutely positioned child
+    /// is placed in, so its border is not room for cells.
+    fn of_block(
+        cell_w: f32,
+        style: Option<&lumen_core::components::Style>,
+        laid_out: Option<&lumen_core::components::Transform>,
+    ) -> Option<Self> {
+        let border = style.map_or(0.0, |s| s.border.left + s.border.right);
+        let width = laid_out?.size.x - border;
+        (width > 0.0).then(|| Self::new(cell_w, width, style.map(|s| s.gap).unwrap_or_default()))
+    }
+
+    /// The items a grid of `len` items mounts at scroll offset `offset_y`
+    /// in a viewport `viewport_h` tall, as `(first, last, content height)`:
+    /// the grid rows the viewport shows plus the buffer, whole rows of
+    /// cells each.
+    fn window(self, row_h: f32, offset_y: f32, viewport_h: f32, len: usize) -> (usize, usize, f32) {
+        let pitch = row_h + self.row_gap;
+        let rows = len.div_ceil(self.columns);
+        let buffer = BUFFER_ROWS.div_ceil(self.columns).max(2);
+        let first_row = ((offset_y / pitch).floor() as i64 - buffer as i64).max(0) as usize;
+        let last_row = (((offset_y + viewport_h) / pitch).ceil() as usize + buffer).min(rows);
+        let content_h = rows as f32 * row_h + rows.saturating_sub(1) as f32 * self.row_gap;
+        (
+            (first_row * self.columns).min(len),
+            (last_row * self.columns).min(len),
+            content_h,
+        )
+    }
+}
+
+/// Ask for one more tick when a layout changed a virtualized grid's width
+/// enough to change how its cells are laid out.
+///
+/// The reconciler reads the width the last layout left, so the tick that
+/// lays a resized window out is the one that learns the grid's new column
+/// count, and nothing else may be due to tick after it. Without this the
+/// cells keep their old columns until an unrelated event wakes the app.
+pub fn request_tick_on_grid_reflow(
+    blocks: Query<
+        (
+            &ForMarker,
+            &lumen_core::components::Style,
+            &lumen_core::components::Transform,
+        ),
+        Changed<lumen_core::components::Transform>,
+    >,
+    policy: Option<Res<ScenePolicy>>,
+    anim: Option<Res<lumen_core::render_world::AnimationsActive>>,
+) {
+    let Some(anim) = anim else {
+        return;
+    };
+    // A presentation layer that windows the list itself lays it out too.
+    if policy.is_some_and(|p| p.virtualization == Virtualization::HostManaged) {
+        return;
+    }
+    let reflowed = blocks.iter().any(|(marker, style, laid_out)| {
+        marker.virtualized
+            && marker.cell_width.is_some_and(|cell_w| {
+                GridGeometry::of_block(cell_w, Some(style), Some(laid_out)) != marker.grid
+            })
+    });
+    if reflowed {
+        anim.request();
     }
 }
 
@@ -2325,18 +2633,34 @@ pub fn reconcile_for_blocks(
 /// `height=row_h` setting its size. Setting `right` / `bottom` too would
 /// over-constrain taffy (it expects either inset OR size, not both on the
 /// same axis) and the row collapses to content width.
-fn virtual_row_slot(index: usize, row_h: f32) -> StyleValues {
+///
+/// A grid's cell sits at column `index % columns` of grid row
+/// `index / columns`, `cell_width` wide, with the block's gaps between
+/// cells.
+fn virtual_row_slot(index: usize, row_h: f32, grid: Option<GridGeometry>) -> StyleValues {
+    use lumen_core::components::Length;
+    let (left, top, width) = match grid {
+        None => (0.0, index as f32 * row_h, Length::Percent(100.0)),
+        Some(g) => {
+            let (row, column) = (index / g.columns, index % g.columns);
+            (
+                column as f32 * (g.cell_width + g.column_gap),
+                row as f32 * (row_h + g.row_gap),
+                Length::Px(g.cell_width),
+            )
+        }
+    };
     StyleValues {
         position: Some(lumen_core::components::Position::Absolute),
         inset: Some(lumen_core::components::Edges {
-            top: index as f32 * row_h,
+            top,
             right: f32::NAN,
             bottom: f32::NAN,
-            left: 0.0,
+            left,
             ..lumen_core::components::Edges::default()
         }),
-        height: Some(lumen_core::components::Length::Px(row_h)),
-        width: Some(lumen_core::components::Length::Percent(100.0)),
+        height: Some(Length::Px(row_h)),
+        width: Some(width),
         ..StyleValues::default()
     }
 }
@@ -2360,6 +2684,7 @@ fn reads_row_index(el: &Element) -> bool {
         &a.style_role,
         &a.placeholder,
         &a.drag_payload,
+        &a.drag_type,
     ]
     .into_iter()
     .flatten()
@@ -2520,7 +2845,7 @@ impl RowStringChanges {
             classes: old.classes != new.classes,
             src: old.src != new.src,
             style_role: old.style_role != new.style_role,
-            drag_payload: old.drag_payload != new.drag_payload,
+            drag_payload: old.drag_payload != new.drag_payload || old.drag_type != new.drag_type,
         }
     }
 
@@ -4098,6 +4423,9 @@ mod virtualized_for_tests {
                     key_field: Some("id".to_string()),
                     virtualized: true,
                     row_height: 20.0,
+                    cell_width: None,
+                    grid: None,
+                    range: 0..0,
                     rows: Vec::new(),
                     cascaded_body: None,
                     row_items: Vec::new(),
@@ -4124,6 +4452,254 @@ mod virtualized_for_tests {
         assert_eq!(
             world.get::<TextContent>(kids[0]).map(|t| t.0.as_str()),
             Some("row 2")
+        );
+    }
+}
+
+#[cfg(test)]
+mod virtualized_grid_tests {
+    //! `cell-width` lays a virtualized `<for>` out as a grid: the column
+    //! count comes from the block's width and gap, the window is whole grid
+    //! rows, and a width change re-slots the mounted cells.
+    use super::*;
+    use bevy_ecs::message::{MessageRegistry, Messages};
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::components::{Edges, Gap, Length, Style, Transform};
+    use lumen_core::input::{Scroll, ScrollOffset};
+    use lumen_core::signals::{ArrayItem, ArraySignals, MountedRangeChanged};
+
+    const CELL_W: f32 = 84.0;
+    const ROW_H: f32 = 92.0;
+    const GAP: f32 = 8.0;
+
+    fn items(n: usize) -> Vec<ArrayItem> {
+        (0..n)
+            .map(|i| {
+                let mut m = ArrayItem::default();
+                m.insert("id".to_string(), i.to_string());
+                m
+            })
+            .collect()
+    }
+
+    /// A 300 px tall scroll holding a grid over `n` items, its block laid
+    /// out `width` wide with an 8 px gap.
+    fn grid(n: usize, width: f32) -> (World, Entity, Entity) {
+        let mut world = World::new();
+        let mut arrays = ArraySignals::default();
+        arrays.set("items", items(n));
+        world.insert_resource(arrays);
+        world.insert_resource(PropertyStore::default());
+        MessageRegistry::register_message::<MountedRangeChanged>(&mut world);
+        let scroll = world
+            .spawn((
+                Scroll::default(),
+                ScrollOffset::default(),
+                Transform::new(glam::Vec2::ZERO, glam::Vec2::new(width, 300.0)),
+            ))
+            .id();
+        let mut cell = Element {
+            tag: "label".to_string(),
+            ..Element::default()
+        };
+        cell.attrs.text = Some("{id}".to_string());
+        let block = world
+            .spawn((
+                Style {
+                    gap: Gap::all(GAP),
+                    ..Style::default()
+                },
+                Transform::new(glam::Vec2::ZERO, glam::Vec2::new(width, 0.0)),
+                ForMarker {
+                    array_name: "items".into(),
+                    body: vec![cell],
+                    key_field: Some("id".to_string()),
+                    virtualized: true,
+                    row_height: ROW_H,
+                    cell_width: Some(CELL_W),
+                    grid: None,
+                    range: 0..0,
+                    rows: Vec::new(),
+                    cascaded_body: None,
+                    row_items: Vec::new(),
+                },
+                ChildOf(scroll),
+            ))
+            .id();
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        (world, scroll, block)
+    }
+
+    fn kids(world: &World, block: Entity) -> Vec<Entity> {
+        world
+            .get::<bevy_ecs::hierarchy::Children>(block)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// The `(left, top, width)` slot of the cell showing item `index`.
+    fn slot(world: &World, block: Entity, index: usize) -> (f32, f32, Length) {
+        let e = kids(world, block)
+            .into_iter()
+            .find(|&e| {
+                world
+                    .get::<TextContent>(e)
+                    .is_some_and(|t| t.0 == index.to_string())
+            })
+            .unwrap_or_else(|| panic!("item {index} is mounted"));
+        let style = world.get::<Style>(e).expect("a style");
+        (style.inset.left, style.inset.top, style.width)
+    }
+
+    fn reported(world: &mut World) -> Vec<(usize, usize)> {
+        world
+            .resource_mut::<Messages<MountedRangeChanged>>()
+            .drain()
+            .map(|m| (m.first, m.last))
+            .collect()
+    }
+
+    #[test]
+    fn columns_are_as_many_cells_as_the_width_holds_and_never_none() {
+        let columns =
+            |width: f32, gap: f32| GridGeometry::new(CELL_W, width, Gap::all(gap)).columns;
+        // (400 + 8) / (84 + 8) = 4.4
+        assert_eq!(columns(400.0, GAP), 4);
+        // Four cells and three gaps fill 360 exactly.
+        assert_eq!(columns(360.0, GAP), 4);
+        assert_eq!(columns(359.0, GAP), 3);
+        assert_eq!(columns(420.0, 0.0), 5);
+        assert_eq!(
+            columns(10.0, GAP),
+            1,
+            "a block narrower than a cell still holds one"
+        );
+        let pct = Gap {
+            column_pct: Some(2.0),
+            ..Gap::all(0.0)
+        };
+        assert_eq!(GridGeometry::new(CELL_W, 400.0, pct).column_gap, 8.0);
+    }
+
+    #[test]
+    fn a_grid_mounts_whole_grid_rows_of_the_window_and_slots_each_cell() {
+        let (mut world, _, block) = grid(5000, 400.0);
+        // 4 columns, a 100 px row pitch: the 300 px viewport shows 3 grid
+        // rows, and the buffer is max(2, ceil(8 / 4)) = 2 rows below.
+        assert_eq!(kids(&world, block).len(), 5 * 4);
+        assert_eq!(slot(&world, block, 0), (0.0, 0.0, Length::Px(CELL_W)));
+        assert_eq!(slot(&world, block, 5), (92.0, 100.0, Length::Px(CELL_W)));
+        assert_eq!(slot(&world, block, 19), (276.0, 400.0, Length::Px(CELL_W)));
+        // 1250 grid rows, 1249 gaps between them.
+        let extent = Length::Px(1250.0 * ROW_H + 1249.0 * GAP);
+        let style = world.get::<Style>(block).unwrap();
+        assert_eq!((style.height, style.min_height), (extent, extent));
+        assert_eq!(reported(&mut world), vec![(0, 20)]);
+    }
+
+    #[test]
+    fn a_scroll_moves_the_window_by_grid_rows_and_reports_it() {
+        let (mut world, scroll, block) = grid(5000, 400.0);
+        reported(&mut world);
+        world.get_mut::<ScrollOffset>(scroll).unwrap().0.y = 1000.0;
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        // Grid rows 10..13 show; 8..15 mount with the buffer.
+        assert_eq!(world.get::<ForMarker>(block).unwrap().range, 32..60);
+        assert_eq!(kids(&world, block).len(), 28);
+        assert_eq!(slot(&world, block, 33), (92.0, 800.0, Length::Px(CELL_W)));
+        assert_eq!(reported(&mut world), vec![(32, 60)]);
+        // A tick that moves nothing reports nothing.
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        assert!(reported(&mut world).is_empty());
+    }
+
+    #[test]
+    fn a_narrower_block_re_slots_the_cells_it_keeps() {
+        let (mut world, scroll, block) = grid(5000, 400.0);
+        reported(&mut world);
+        let kept = kids(&world, block)[5];
+        world.get_mut::<Transform>(block).unwrap().size.x = 200.0;
+        world.get_mut::<Transform>(scroll).unwrap().size.x = 200.0;
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        // 2 columns: 3 grid rows show, and the buffer grows to 4 rows.
+        assert_eq!(kids(&world, block).len(), 7 * 2);
+        assert!(kids(&world, block).contains(&kept), "item 5 keeps its cell");
+        assert_eq!(slot(&world, block, 5), (92.0, 200.0, Length::Px(CELL_W)));
+        assert_eq!(slot(&world, block, 0), (0.0, 0.0, Length::Px(CELL_W)));
+        let extent = Length::Px(2500.0 * ROW_H + 2499.0 * GAP);
+        assert_eq!(world.get::<Style>(block).unwrap().height, extent);
+        assert_eq!(reported(&mut world), vec![(0, 14)]);
+    }
+
+    #[test]
+    fn a_layout_that_changes_the_column_count_asks_for_a_tick() {
+        let (mut world, _, block) = grid(50, 400.0);
+        world.insert_resource(lumen_core::render_world::AnimationsActive::default());
+        // Wider, but not by a whole cell: the grid is laid out as it was.
+        world.get_mut::<Transform>(block).unwrap().size.x = 420.0;
+        world.run_system_once(request_tick_on_grid_reflow).unwrap();
+        assert!(
+            !world
+                .resource::<lumen_core::render_world::AnimationsActive>()
+                .get()
+        );
+        world.get_mut::<Transform>(block).unwrap().size.x = 500.0;
+        world.run_system_once(request_tick_on_grid_reflow).unwrap();
+        assert!(
+            world
+                .resource::<lumen_core::render_world::AnimationsActive>()
+                .get()
+        );
+    }
+
+    #[test]
+    fn a_grid_mounts_nothing_until_it_is_laid_out() {
+        let (mut world, _, block) = grid(50, 0.0);
+        assert!(kids(&world, block).is_empty());
+        assert!(reported(&mut world).is_empty());
+        world.insert_resource(lumen_core::render_world::AnimationsActive::default());
+        world.get_mut::<Transform>(block).unwrap().size.x = 400.0;
+        world.run_system_once(request_tick_on_grid_reflow).unwrap();
+        assert!(
+            world
+                .resource::<lumen_core::render_world::AnimationsActive>()
+                .get(),
+            "the first layout asks for the tick that mounts the cells"
+        );
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        assert_eq!(kids(&world, block).len(), 20);
+        assert_eq!(reported(&mut world), vec![(0, 20)]);
+    }
+
+    #[test]
+    fn a_border_is_not_room_for_cells() {
+        let (mut world, _, block) = grid(50, 400.0);
+        world.get_mut::<Style>(block).unwrap().border = Edges {
+            left: 30.0,
+            right: 30.0,
+            ..Edges::default()
+        };
+        world.get_mut::<ForMarker>(block).unwrap().grid = None;
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        assert_eq!(
+            world.get::<ForMarker>(block).unwrap().grid.unwrap().columns,
+            3
+        );
+    }
+
+    #[test]
+    fn a_list_reports_its_range_and_keeps_its_row_slots() {
+        let (mut world, _, block) = grid(5000, 400.0);
+        world.get_mut::<ForMarker>(block).unwrap().cell_width = None;
+        reported(&mut world);
+        world.run_system_once(reconcile_for_blocks).unwrap();
+        // ceil(300 / 92) rows plus the list's 8-row buffer.
+        assert_eq!(world.get::<ForMarker>(block).unwrap().range, 0..12);
+        assert_eq!(slot(&world, block, 5), (0.0, 460.0, Length::Percent(100.0)));
+        assert_eq!(reported(&mut world), vec![(0, 12)]);
+        assert_eq!(
+            world.get::<Style>(block).unwrap().height,
+            Length::Px(5000.0 * ROW_H)
         );
     }
 }
@@ -4174,6 +4750,9 @@ mod keyed_for_tests {
                     key_field: key_field.map(str::to_string),
                     virtualized,
                     row_height: 20.0,
+                    cell_width: None,
+                    grid: None,
+                    range: 0..0,
                     rows: Vec::new(),
                     cascaded_body: None,
                     row_items: Vec::new(),

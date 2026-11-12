@@ -18,8 +18,10 @@
 
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
+use lumen_core::chord::{Chord, ReservedChords};
 use lumen_core::input::{KeyPressed, MenuClicked};
 use lumen_core::prelude::*;
+use lumen_input::FocusKeeps;
 
 use crate::tabs::DropdownButton;
 
@@ -62,61 +64,13 @@ pub fn switch_menubar_menus_on_hover(
     }
 }
 
-/// One shortcut: the modifiers that must be held and the key.
-#[derive(Debug, Clone, PartialEq)]
-struct Accelerator {
-    modifiers: Modifiers,
-    key: Key,
-}
-
-impl Accelerator {
-    /// Read an accelerator in the form a `<menuitem accel>` takes
-    /// (`CommandOrControl+Shift+S`, `Alt+F4`, `Ctrl+O`): modifiers and a key
-    /// joined by `+`. `CommandOrControl` is Command on macOS and Control
-    /// elsewhere. `None` for a string with no key or an unknown modifier.
-    fn parse(accel: &str) -> Option<Self> {
-        let mut modifiers = Modifiers::default();
-        let mut parts: Vec<&str> = accel.split('+').map(str::trim).collect();
-        let key = parts.pop().filter(|k| !k.is_empty())?;
-        for part in parts {
-            match part.to_ascii_lowercase().as_str() {
-                "commandorcontrol" | "cmdorctrl" | "cmdorcontrol" | "commandorctrl" => {
-                    if cfg!(target_os = "macos") {
-                        modifiers.super_ = true;
-                    } else {
-                        modifiers.ctrl = true;
-                    }
-                }
-                "control" | "ctrl" => modifiers.ctrl = true,
-                "shift" => modifiers.shift = true,
-                "alt" | "option" => modifiers.alt = true,
-                "super" | "cmd" | "command" | "meta" => modifiers.super_ = true,
-                _ => return None,
-            }
-        }
-        Some(Self {
-            modifiers,
-            key: Key::from(key),
-        })
-    }
-
-    /// Whether a key press is this shortcut. Letters compare without case,
-    /// because Shift is a modifier of the shortcut, not part of its key.
-    fn matches(&self, key: &Key, modifiers: &Modifiers) -> bool {
-        if *modifiers != self.modifiers {
-            return false;
-        }
-        match (&self.key, key) {
-            (Key::Character(want), Key::Character(got)) => want.eq_ignore_ascii_case(got),
-            (want, got) => want == got,
-        }
-    }
-}
+/// The name the menu bar's shortcuts go under in [`ReservedChords`].
+pub const OWNER: &str = "menubar";
 
 /// The shortcuts the in-window menu bar's items declare, each with the id
 /// of the item it activates.
 #[derive(Resource, Debug, Clone, Default)]
-pub struct MenuAccelerators(Vec<(Accelerator, String)>);
+pub struct MenuAccelerators(Vec<(Chord, String)>);
 
 impl MenuAccelerators {
     /// Collect `(item id, accel)` pairs. An accelerator that does not parse
@@ -124,7 +78,7 @@ impl MenuAccelerators {
     pub fn from_entries<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
         let mut out = Vec::new();
         for (id, accel) in entries {
-            match Accelerator::parse(accel) {
+            match Chord::parse(accel) {
                 Some(a) => out.push((a, id.to_string())),
                 None => lumen_core::warn_line!(
                     "menubar: item `{id}` has an accel `{accel}` this platform cannot read"
@@ -144,17 +98,22 @@ impl MenuAccelerators {
         self.0.is_empty()
     }
 
-    /// Whether `key` with `modifiers` is one of the shortcuts: an element
-    /// that takes every key (a game viewport) leaves these to the menu bar.
-    pub fn matches(&self, key: &Key, modifiers: &Modifiers) -> bool {
-        self.0.iter().any(|(a, _)| a.matches(key, modifiers))
+    /// The shortcuts, for [`ReservedChords`] under [`OWNER`].
+    pub fn chords(&self) -> Vec<Chord> {
+        self.0.iter().map(|(c, _)| c.clone()).collect()
     }
 }
 
 /// Activate the menu bar item whose shortcut was pressed, as a click on it
-/// would. A held key's repeats do not activate it again.
+/// would. A held key's repeats do not activate it again, a key the focused
+/// element keeps (a text field's typing and editing chords, every key of an
+/// element that takes them all) is left to it, and so is a chord something
+/// else in the app answers app-wide ([`ReservedChords`]), such as a command
+/// the item runs, so the chord fires once.
 pub fn dispatch_menu_accelerators(
     accelerators: Res<MenuAccelerators>,
+    focus: FocusKeeps,
+    reserved: Option<Res<ReservedChords>>,
     mut keys: MessageReader<KeyPressed>,
     mut clicked: MessageWriter<MenuClicked>,
 ) {
@@ -163,13 +122,18 @@ pub fn dispatch_menu_accelerators(
         return;
     }
     for key in keys.read() {
-        if key.repeat {
+        if key.repeat
+            || focus.keeps(&key.key, &key.modifiers)
+            || reserved
+                .as_ref()
+                .is_some_and(|r| r.taken_by_other(OWNER, &key.key, key.code, &key.modifiers))
+        {
             continue;
         }
         if let Some((_, id)) = accelerators
             .0
             .iter()
-            .find(|(a, _)| a.matches(&key.key, &key.modifiers))
+            .find(|(a, _)| a.matches(&key.key, key.code, &key.modifiers))
         {
             clicked.write(MenuClicked { id: id.clone() });
         }
@@ -243,14 +207,45 @@ mod tests {
         assert!(clicked(&mut world).is_empty());
     }
 
-    /// `CommandOrControl` is Control off macOS and Command on it.
+    /// A focused text field keeps its typing and editing chords: Ctrl+Z
+    /// there undoes the edit and does not reach the bar's Undo, while a
+    /// chord the field does not use still does.
     #[test]
-    fn command_or_control_follows_the_platform() {
-        let a = Accelerator::parse("CommandOrControl+N").expect("parses");
-        assert_eq!(a.modifiers.ctrl, !cfg!(target_os = "macos"));
-        assert_eq!(a.modifiers.super_, cfg!(target_os = "macos"));
-        assert!(Accelerator::parse("Hyper+N").is_none());
-        assert!(Accelerator::parse("Ctrl+").is_none());
+    fn a_focused_text_field_keeps_its_editing_chords() {
+        let mut world = World::new();
+        world.init_resource::<Messages<KeyPressed>>();
+        world.init_resource::<Messages<MenuClicked>>();
+        world.insert_resource(MenuAccelerators::from_entries([
+            ("undo", "Ctrl+Z"),
+            ("save", "Ctrl+S"),
+            ("help", "F1"),
+        ]));
+        let field = world
+            .spawn(lumen_core::components::TextInput::default())
+            .id();
+        world.insert_resource(FocusTracker(Some(field)));
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        press(&mut world, "z", ctrl);
+        world.run_system_once(dispatch_menu_accelerators).unwrap();
+        assert!(clicked(&mut world).is_empty(), "the field undoes");
+        press(&mut world, "s", ctrl);
+        world.run_system_once(dispatch_menu_accelerators).unwrap();
+        assert_eq!(clicked(&mut world), vec!["save"]);
+        press(&mut world, "F1", Modifiers::default());
+        world.run_system_once(dispatch_menu_accelerators).unwrap();
+        assert_eq!(clicked(&mut world), vec!["help"]);
+
+        // An element that takes every key keeps them all.
+        world
+            .entity_mut(field)
+            .remove::<lumen_core::components::TextInput>()
+            .insert(lumen_core::input::TakesEveryKey);
+        press(&mut world, "s", ctrl);
+        world.run_system_once(dispatch_menu_accelerators).unwrap();
+        assert!(clicked(&mut world).is_empty());
     }
 
     /// With one bar menu open, hovering another bar button opens its menu

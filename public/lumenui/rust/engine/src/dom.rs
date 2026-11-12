@@ -656,6 +656,28 @@ impl Event {
         ev::event_value()
     }
 
+    /// The MIME kinds a drag event carries (`text/plain`,
+    /// `application/x-asset`, ...); empty for other events. The web's
+    /// `dataTransfer.types`.
+    pub fn types(&self) -> Vec<String> {
+        ev::event_types()
+    }
+
+    /// What a drag event carries under the MIME kind `kind`, as text; `""`
+    /// when it carries none. The web's `dataTransfer.getData`.
+    pub fn get_data(&self, kind: &str) -> String {
+        ev::event_get_data(kind)
+    }
+
+    /// In a `dragstart` listener, put `value` in the drag under the MIME
+    /// kind `kind`, replacing what it carried there; a drop target's
+    /// `accept` list matches the kinds the drag ends up with. Returns false,
+    /// doing nothing, in any other listener. The web's
+    /// `dataTransfer.setData`.
+    pub fn set_data(&self, kind: &str, value: &str) -> bool {
+        ev::event_set_data(kind, value)
+    }
+
     /// The button for pointer events, the web `button` code (0 primary, 1
     /// middle, 2 secondary, 3 back, 4 forward, 5 pen eraser, -1 none).
     pub fn button(&self) -> i64 {
@@ -689,6 +711,13 @@ impl Event {
     /// Modifier state `(shift, ctrl, alt, super)`.
     pub fn modifiers(&self) -> (bool, bool, bool, bool) {
         ev::event_modifiers()
+    }
+
+    /// What the event carries: a module's custom event's detail, or a
+    /// `rangechange`'s `first` / `last` item indices. Empty for the other
+    /// built-in events.
+    pub fn detail(&self) -> HashMap<String, lumen_script::ScriptValue> {
+        ev::event_detail()
     }
 
     /// Cancel the event's default action.

@@ -14,8 +14,8 @@
 //! StatusNotifierWatcher is registered (some lightweight WMs) registration logs at debug and the
 //! [`TrayService`] silently records the config without surfacing an icon.
 //!
-//! `TrayMenu` reuses [`lumen_os_mime::Action`] so a single Action drives menus, tray menus, and
-//! notification buttons - the shared abstraction described in section 470 of the audit.
+//! `TrayMenu` entries are [`lumen_os_mime::Action`]s, read from the same action spec a
+//! notification's buttons are.
 
 #![warn(missing_docs)]
 
@@ -52,9 +52,7 @@ pub struct TrayConfig {
     pub icon_path: std::path::PathBuf,
     /// Optional hover tooltip.
     pub tooltip: Option<String>,
-    /// Optional menu attached to the tray icon. Reuses
-    /// [`lumen_os_mime::Action`] so the menu shares the action surface
-    /// with `lumen-os-menu`.
+    /// Optional menu attached to the tray icon.
     pub menu: Option<TrayMenu>,
     /// macOS template-image flag - when true the icon is treated as
     /// monochrome and recoloured for the active menu-bar theme.

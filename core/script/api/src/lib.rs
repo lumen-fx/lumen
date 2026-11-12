@@ -93,6 +93,8 @@ use crate::runtime::prefix;
 pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
+#[cfg(not(target_arch = "wasm32"))]
+pub use dom_events::queue_drag_events;
 pub use dom_events::{
     BUILT_IN_EVENTS, CustomEvent, CustomEventDelivered, EventHosts, PendingDomEvents,
     deliver_custom_events, deliver_input_events, deliver_state_events, queue_custom_events,
@@ -191,6 +193,17 @@ impl ScriptError {
             message: message.into(),
         }
     }
+}
+
+/// What [`ScriptCommand::Popover`] does to its popover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PopoverOp {
+    /// Open it.
+    Show,
+    /// Close it.
+    Hide,
+    /// Open it when closed, close it when open.
+    Toggle,
 }
 
 /// One side-effect a script wants to apply to the app this tick.
@@ -780,6 +793,14 @@ pub enum ScriptCommand {
     /// Quit the app (`app.quit()`): every window is asked to close, and a
     /// veto from any `on_close` cancels the quit.
     AppQuit,
+    /// Show, hide or toggle the `popover` with this id, as the DOM's
+    /// `showPopover()` / `hidePopover()` / `togglePopover()` do.
+    Popover {
+        /// The popover's id.
+        id: String,
+        /// What to do to it.
+        action: PopoverOp,
+    },
 }
 
 impl ScriptCommand {

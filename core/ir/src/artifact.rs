@@ -178,11 +178,19 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// beyond the first four, and [`crate::css::MediaFeature`] gains
 /// `StartingStyle`, which marks the rules inside `@starting-style`.
 ///
+/// `25`: [`crate::layout_ir::Attributes`] loses `popup_panel` and gains
+/// `popover`, `popover_target`, `anchor`, `popover_open`, `position_area`
+/// and `position_try`: any element can be a popover, placed against an
+/// anchor in the top layer. It also gains `cell_width`, the cell width that
+/// lays a virtualized `<for>` out as a grid, and `drag_type`, the MIME kind a
+/// `drag-payload` is published under. [`crate::layout_ir::MenuEntrySpec::Item`]
+/// gains `command`, the command a menu bar item runs.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 24;
+pub const FORMAT_VERSION: u16 = 25;
 
 /// The navigable page set of a compiled multi-page app.
 ///

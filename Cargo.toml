@@ -64,6 +64,10 @@ lumen-widget-macros = { workspace = true }
 # this copy (see the `sdk` re-export module in src/lib.rs).
 lumen-os-clipboard = { workspace = true }
 lumen-os-filedialog = { workspace = true }
+# The drag session's messages, which the Rust SDK's drag and drop handlers
+# read. Already in the engine through the runtime; named here so the SDK
+# reaches this copy.
+lumen-os-dnd = { workspace = true }
 # The control messages (toggle, slider) and the `<for>` rows the Rust SDK's
 # event handlers read. Already in the engine through the runtime; named here
 # so the SDK reaches this copy.
@@ -262,6 +266,7 @@ lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-cookie = { path = "std/cookie", default-features = false }
 lumen-core = { path = "core" }
 lumen-devtools = { path = "dev/devtools" }
+lumen-commands = { path = "std/commands", default-features = false }
 lumen-dock = { path = "std/dock", default-features = false }
 lumen-dock-model = { path = "std/dock/model" }
 lumen-download = { path = "std/download", default-features = false }

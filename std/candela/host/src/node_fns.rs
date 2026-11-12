@@ -848,7 +848,7 @@ fn event_fns() -> Vec<ScriptFn> {
         ),
         accessor(
             "event_detail",
-            "What a module's custom event carries, as a map; empty for a built-in event.",
+            "What a module's custom event carries, as a map, or a `rangechange`'s `first` / `last`; empty for the other built-in events.",
             T::Dynamic,
             || ScriptValue::Map(event::event_detail()),
         ),
@@ -959,6 +959,26 @@ fn event_fns() -> Vec<ScriptFn> {
             "Whether the super key was held.",
             T::Bool,
             || ScriptValue::Bool(event::event_modifiers().3),
+        ),
+        accessor(
+            "event_types",
+            "The MIME kinds a drag event carries; empty for other events.",
+            T::Array(Box::new(T::Str)),
+            || strings(event::event_types()),
+        ),
+        f(
+            "event_get_data",
+            "What a drag event carries under a MIME kind, as text; \"\" when it carries none.",
+            &[("ev", T::Int), ("kind", T::Str)],
+            T::Str,
+            |cx| ScriptValue::Str(event::event_get_data(&cx.str_arg(1))),
+        ),
+        f(
+            "event_set_data",
+            "In a dragstart handler, put a value in the drag under a MIME kind. Answers false anywhere else.",
+            &[("ev", T::Int), ("kind", T::Str), ("value", T::Str)],
+            T::Bool,
+            |cx| ScriptValue::Bool(event::event_set_data(&cx.str_arg(1), &cx.str_arg(2))),
         ),
         accessor(
             "event_prevent_default",

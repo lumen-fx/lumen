@@ -762,6 +762,7 @@ fn commit_resolved(
             .is_some_and(|m| m.virtualized),
         in_scroll,
         layout_boundary: attrs.layout_boundary,
+        popover: has(world, |e| e.contains::<lumen_primitives::Popover>()),
     };
     let computed = ComputedStyle::new(&ctx, attrs);
     let mut ent = world.entity_mut(entity);

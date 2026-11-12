@@ -1007,12 +1007,19 @@ fn extract_menubar(
         for child in menu_node.children().filter(|c| c.is_element()) {
             match child.tag_name().name() {
                 "menuitem" => {
+                    let command = child
+                        .attribute("command")
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string);
                     let id = child
                         .attribute("id")
                         .map(|s| s.to_string())
+                        .or_else(|| command.clone())
                         .ok_or_else(|| {
                             ParseError::Xml(
-                                "<menuitem> requires an id=\"...\" attribute".to_string(),
+                                "<menuitem> requires an id=\"...\" or a command=\"...\" attribute"
+                                    .to_string(),
                             )
                             .at(child.range().start)
                         })?;
@@ -1025,6 +1032,7 @@ fn extract_menubar(
                         id,
                         label: item_label,
                         accelerator,
+                        command,
                     });
                 }
                 "separator" => items.push(MenuEntrySpec::Separator),
@@ -1334,7 +1342,11 @@ fn build_dropdown(
     panel.attrs.classes = vec!["dropdown-panel".to_string()];
     // Tag the panel so the runtime can dismiss it on an outside
     // click and flip it above the trigger near the viewport bottom.
-    panel.attrs.popup_panel = Some(open_signal.clone());
+    panel.attrs.popover = Some(crate::layout_ir::PopoverSpec {
+        open_signal: open_signal.clone(),
+        match_anchor_width: true,
+        ..Default::default()
+    });
 
     // Wrap the panel in `<if eq="true" mode="hide">` keyed on the
     // open signal so it shows / hides without despawning options.
@@ -1433,13 +1445,13 @@ fn build_menu(
 
 /// Refuse what a menu cannot hold: anything but `<menuitem>`,
 /// `<separator>`, or (directly in the menu) a `<for>` whose rows are those,
-/// and an item with no `id`.
+/// and an item with neither an `id` nor a `command`.
 fn check_menu_row(node: roxmltree::Node, in_for: bool) -> Result<(), ParseError> {
     match node.tag_name().name() {
-        "menuitem" if node.attribute("id").is_none() => Err(ParseError::Xml(
-            "<menuitem> requires id=\"...\"".to_string(),
-        )
-        .at(node.range().start)),
+        "menuitem" if node.attribute("id").is_none() && node.attribute("command").is_none() => Err(
+            ParseError::Xml("<menuitem> requires id=\"...\" or command=\"...\"".to_string())
+                .at(node.range().start),
+        ),
         "menuitem" | "separator" => Ok(()),
         "for" if !in_for => node
             .children()
@@ -1920,9 +1932,11 @@ fn apply_authored_attributes(
     let mut src_off: Option<usize> = None;
     let mut id_off: Option<usize> = None;
     let mut class_off: Option<usize> = None;
+    let mut cell_width_off: Option<usize> = None;
     for a in node.attributes() {
         let off = a.range_value().start;
         match a.name() {
+            "cell-width" => cell_width_off = Some(off),
             "text" => text_off = Some(off),
             "label" if tag == "menuitem" => text_off = Some(off),
             "placeholder" => placeholder_off = Some(off),
@@ -1964,6 +1978,23 @@ fn apply_authored_attributes(
                 .markup_styles
                 .push((property.to_string(), a.value().to_string()));
         }
+    }
+
+    // `cell-width` only means something to the windowing a virtualized
+    // `<for>` does; anywhere else it would silently do nothing.
+    if attrs.cell_width.is_some() && !attrs.virtualized {
+        let (line, col) = line_col_of(src, cell_width_off.unwrap_or(0));
+        lint_findings.push(LintFinding {
+            kind: LintKind::UnknownAttribute,
+            severity: LintSeverity::Warn,
+            message: format!(
+                "`cell-width` on `<{tag}>` is ignored: it lays out a `<for virtualized=\"true\">` \
+                 as a grid, and this element is not one."
+            ),
+            line,
+            col,
+            suggest: None,
+        });
     }
 
     // Normalise `{$name}` -> `{name}` in string-valued attrs that may
@@ -2021,6 +2052,7 @@ fn apply_authored_attributes(
             in_for_body,
         ));
     }
+    settle_popover(tag, attrs)?;
     if !attrs.classes.is_empty() {
         let off = class_off.unwrap_or(0);
         attrs.classes = std::mem::take(&mut attrs.classes)
@@ -2030,6 +2062,62 @@ fn apply_authored_attributes(
             })
             .collect();
     }
+    Ok(())
+}
+
+/// Settle a `popover`'s open signal and anchor once every attribute of the
+/// element is read: the signal is `open="name"` when the element has one and
+/// `__popover_open:<id>` otherwise. The element itself becomes the `<if>`
+/// block that shows and hides it, with its body mounted from the start, as a
+/// `<dialog>` is.
+fn settle_popover(tag: &str, attrs: &mut Attributes) -> Result<(), ParseError> {
+    let open = attrs.popover_open.take();
+    let anchor = attrs.anchor.take();
+    let Some(popover) = &mut attrs.popover else {
+        if let Some(signal) = open
+            && tag != "dialog"
+        {
+            return Err(bad(
+                tag,
+                "open",
+                &signal,
+                "`open` names the signal of a `<dialog>` or a `popover`".to_string(),
+            ));
+        }
+        if anchor.is_some() {
+            return Err(bad(
+                tag,
+                "anchor",
+                anchor.as_deref().unwrap_or_default(),
+                "`anchor` places a `popover`; this element is not one".to_string(),
+            ));
+        }
+        return Ok(());
+    };
+    if tag == "dialog" {
+        return Err(bad(
+            tag,
+            "popover",
+            "",
+            "a `<dialog>` opens with `open`; it cannot also be a `popover`".to_string(),
+        ));
+    }
+    popover.anchor = anchor;
+    popover.open_signal = match (open, attrs.id.as_deref()) {
+        (Some(signal), _) => signal,
+        (None, Some(id)) if !id.contains('{') => format!("__popover_open:{id}"),
+        _ => {
+            return Err(bad(
+                tag,
+                "popover",
+                "",
+                "a `popover` needs a fixed `id`, or `open` naming the signal it follows"
+                    .to_string(),
+            ));
+        }
+    };
+    attrs.if_signal = Some(popover.open_signal.clone());
+    attrs.if_mode = crate::layout_ir::IfModeSpec::Mounted;
     Ok(())
 }
 
@@ -2170,7 +2258,16 @@ fn build_element(
         frag,
         in_for_body,
     )?;
-    // A menu item with no label shows its id.
+    // A menu item written with a command and no id takes the command's id,
+    // and one with no label shows its id.
+    if tag == "menuitem" && attrs.id.is_none() {
+        attrs.id = attrs
+            .widget_attributes
+            .iter()
+            .flatten()
+            .find(|(name, _)| name == "command")
+            .map(|(_, value)| value.clone());
+    }
     if tag == "menuitem" && attrs.text.is_none() {
         attrs.text = attrs.id.clone();
     }
@@ -2532,6 +2629,15 @@ fn apply_attribute(
         "accel" if tag == "menuitem" => {
             attrs.shortcut = Some(value.to_string()).filter(|a| !a.trim().is_empty());
         }
+        // `<menuitem command>`: the command the item runs, handed through
+        // untouched for whatever module keeps the commands to read off the
+        // element's attributes.
+        "command" if tag == "menuitem" => {
+            let bag = attrs.widget_attributes.get_or_insert_with(Vec::new);
+            if !bag.iter().any(|(name, _)| name == "command") {
+                bag.push(("command".to_string(), value.trim().to_string()));
+            }
+        }
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
         "height" => attrs.height = Some(parse_length(tag, name, value)?),
         "bg" => attrs.bg = Some(parse_bg(tag, name, value)?),
@@ -2630,9 +2736,10 @@ fn apply_attribute(
         "drop-target" => {
             attrs.drop_target = ctx.bool_value(tag, name, value);
         }
-        // MIME filter for a drop target - mirrors HTML5 `dropzone` /
-        // `DataTransfer` type filtering. Empty = accept any.
-        "accept" if !value.is_empty() => attrs.drop_accept = Some(value.trim().to_string()),
+        // MIME filter for a drop target: a comma-separated list of types
+        // and `type/*` wildcards, spelled as HTML `<input accept>`. Empty =
+        // accept any.
+        "accept" if !value.trim().is_empty() => attrs.drop_accept = Some(value.trim().to_string()),
         "drag" if tag == "title-bar" => {
             attrs.title_bar_drag = ctx.bool_value(tag, name, value);
         }
@@ -2848,6 +2955,7 @@ fn apply_attribute(
         "key" => attrs.key = Some(value.trim().to_string()),
         "virtualized" => attrs.virtualized = ctx.bool_value(tag, name, value),
         "row-height" => attrs.row_height = Some(parse_f32(tag, name, value)?),
+        "cell-width" => attrs.cell_width = Some(parse_f32(tag, name, value)?),
         "wrap" => {
             if value == "ellipsis" {
                 // Single-line elision: lowered by the spawn layer onto
@@ -2995,9 +3103,59 @@ fn apply_attribute(
         // `<dialog open="signal">` is sugar for `<if signal="signal"
         // mode="hide">`. Preserving children state across show/hide is
         // the right default for modal forms.
+        // The body mounts with the dialog, so a handler that opens it can
+        // reach and style anything inside it on the same tick.
         "open" if tag == "dialog" => {
             attrs.if_signal = Some(signal_attr_name(value));
-            attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
+            attrs.if_mode = crate::layout_ir::IfModeSpec::Mounted;
+        }
+        // `popover` / `popover="auto"` / `popover="manual"`: the element is
+        // a popover. Its open signal is settled once every attribute is
+        // read (see `settle_popover`).
+        "popover" => {
+            let mode = match value.trim() {
+                "" | "auto" => crate::layout_ir::PopoverModeSpec::Auto,
+                "manual" => crate::layout_ir::PopoverModeSpec::Manual,
+                other => {
+                    return Err(bad(
+                        tag,
+                        name,
+                        value,
+                        format!("unknown popover '{other}' (supported: auto, manual)"),
+                    ));
+                }
+            };
+            attrs.popover = Some(crate::layout_ir::PopoverSpec {
+                mode,
+                ..Default::default()
+            });
+        }
+        "open" => attrs.popover_open = Some(signal_attr_name(value)),
+        "anchor" => attrs.anchor = Some(value.trim().to_string()),
+        "popovertarget" => {
+            let mut spec = attrs.popover_target.take().unwrap_or_default();
+            spec.target = value.trim().to_string();
+            attrs.popover_target = Some(spec);
+        }
+        "popovertargetaction" => {
+            let action = match value.trim() {
+                "toggle" => crate::layout_ir::PopoverActionSpec::Toggle,
+                "show" => crate::layout_ir::PopoverActionSpec::Show,
+                "hide" => crate::layout_ir::PopoverActionSpec::Hide,
+                other => {
+                    return Err(bad(
+                        tag,
+                        name,
+                        value,
+                        format!(
+                            "unknown popovertargetaction '{other}' (supported: toggle, show, hide)"
+                        ),
+                    ));
+                }
+            };
+            let mut spec = attrs.popover_target.take().unwrap_or_default();
+            spec.action = action;
+            attrs.popover_target = Some(spec);
         }
         "mode" if tag == "if" => {
             attrs.if_mode = match value.trim() {
@@ -3136,6 +3294,9 @@ fn apply_attribute(
         // Value may be a `{row.field}` placeholder (substituted per-row in
         // a `<for>`); empty string means "derive the payload from `id`".
         "drag-payload" => attrs.drag_payload = Some(value.to_string()),
+        // The MIME kind `drag-payload` is published under (`text/plain` when
+        // absent), what a target's `accept` list matches.
+        "drag-type" if !value.trim().is_empty() => attrs.drag_type = Some(value.trim().to_string()),
         "draggable" => {
             attrs.draggable = ctx.bool_value(tag, name, value);
         }

@@ -154,6 +154,18 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   static build compiles the same plugin in. Its web half in `std/canvas/web`
   draws the same calls with Canvas 2D; a unit test in this crate holds the web
   half's functions equal to the ones it registers.
+- **lumen-commands** (`std/commands`): commands, as a self-contained module
+  the engine knows nothing about. The registry (commands, the user's
+  bindings, what is due) sits behind one lock the script functions, the C ABI
+  and the `Commands` system parameter share. One system reads key presses,
+  menu clicks and palette clicks and queues the module's world work: it adopts
+  `<command>` elements, runs commands as a `command` custom event on the
+  document, writes the label, `accel` and disabled state of every
+  `<menuitem command>` through the item's ordinary attributes, lists its
+  chords in the core `ReservedChords`, and keeps the palette, a core popover,
+  in step. Keys go through the core `Chord` and `lumen_input::FocusKeeps`, the
+  same text-field rule the in-window menu bar uses. Its web half does the same
+  in JavaScript.
 - **lumen-dock** (`std/dock`): docks and windows, as a self-contained module
   the engine knows nothing about. The arrangement is a plain-data model in
   `lumen-dock-model` (`std/dock/model`): docks of splits and tab stacks, the
@@ -592,6 +604,16 @@ system that runs before layout and only while a surface root exists or one
 was just added or removed, so an app with one window never runs it. The
 browser runtime does not install the window core at all.
 
+A top-layer element (`TopLayer`: an open popover, a dropdown's list, a menu's
+panel) is the same idea inside one window. It keeps its place in the tree
+and is laid out inside a window-sized taffy box of its own, so its `inset`
+and percentages resolve against the window and its size shrinks to its
+content; no ancestor's scroll offset, clip or opacity reaches it, but an
+ancestor's `display: none` still hides it. `lumen_primitives::place_popovers`
+holds a popover's position against its anchor in `StyleOverrides` while it is
+open. `PaintRoot` and `NotPaintRoot` name the elements where the ancestor
+walks for scroll offsets and clips stop.
+
 Input follows the same split. Hit testing considers only the elements in the
 window under the pointer (`PointerState::window`), but the hover chain that
 puts `:hover` on an element's ancestors, and event bubbling, run up the one
@@ -599,7 +621,8 @@ tree across window boundaries, the way they would in one browser document.
 Every entity with a `Transform` is a hit candidate; the hit test walks the
 tree once from its roots, carrying scroll offsets, clips, `pointer-events`
 and the hidden and disabled state down, and skips a subtree whole when it is
-hidden, disabled or clipped away at the pointer. Among the boxes under the
+hidden, disabled or clipped away at the pointer; a surface root and a
+showing top-layer element start without their ancestors' clips. Among the boxes under the
 pointer the one painted last wins, in the paint order the extract uses (top
 layer first, then document order with `z-index` among siblings). It carries
 `Hovered`, the element a press went down on carries `Pressed`, and the chain
@@ -612,8 +635,8 @@ last had in `LastFocus` and gets it back when it regains focus, focusing an
 element in a window that lacks focus raises that window, and Tab cycles within
 the focused window. A window carrying `InputBlocked` ignores input and refuses
 accessibility actions, simulated MCP input included. Dropdown panels, menus,
-and the color picker are in the tree under the element that opens them, so
-they show in its window and clamp to its viewport. A tooltip, which is
+popovers and the color picker are in the tree under the element that opens
+them, so they show in its window and clamp to its viewport. A tooltip, which is
 spawned at the top of the tree, gets `WindowOf` from its trigger's window and
 opens there.
 
@@ -811,6 +834,13 @@ reconcilers in the `Systems` stage keep in sync with the data behind them.
 `<for>` keeps a row whose key survives a write: when its record changed, the
 row's placeholders are resolved again and written onto the entities it
 already has, so focus, scroll, and animation state stay with it.
+A virtualized `<for>` mounts only the rows its scroll window shows and holds
+each one in an absolute slot; with `cell-width` the slot is a grid cell, and
+the column count comes from the block's width as the previous layout left
+it. When a layout changes that count, `request_tick_on_grid_reflow` asks for
+the tick that re-slots the cells. The reconciler reports the mounted range
+with a `MountedRangeChanged` message, which `lumen-script` raises as the DOM
+`rangechange` event.
 `<if>` has two policies: rebuild the subtree on each transition, or mount it
 once and toggle visibility, which preserves focus, scroll position, and
 per-row state.

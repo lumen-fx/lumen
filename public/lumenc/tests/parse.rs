@@ -670,7 +670,7 @@ fn binding_to_a_fragment_argument_is_rejected() {
 }
 
 #[test]
-fn dialog_desugars_to_absolute_if_with_hide_mode() {
+fn dialog_desugars_to_absolute_if_with_its_body_mounted() {
     let ir =
         parse_with_ua(r##"<root><dialog open="show_settings"><label text="hi"/></dialog></root>"##);
     let dlg = &ir.root.children[0];
@@ -686,7 +686,7 @@ fn dialog_desugars_to_absolute_if_with_hide_mode() {
         (0.0, 0.0, 0.0, 0.0)
     );
     assert_eq!(dlg.attrs.if_signal.as_deref(), Some("show_settings"));
-    assert_eq!(dlg.attrs.if_mode, lumenc::layout_ir::IfModeSpec::Hide);
+    assert_eq!(dlg.attrs.if_mode, lumenc::layout_ir::IfModeSpec::Mounted);
 }
 
 #[test]
@@ -1359,6 +1359,47 @@ fn unknown_attribute_records_lint_finding() {
     assert!(unknown[0].line >= 1 && unknown[0].col >= 1);
     // The attribute is still dropped: nothing lands in the IR.
     assert!(ir.root.children[0].attrs.text.is_none());
+}
+
+#[test]
+fn cell_width_lays_out_a_virtualized_for_and_warns_anywhere_else() {
+    use lumenc::layout_ir::{LintKind, LintSeverity};
+    let ir = parse_html(
+        r##"<root><for each="a" virtualized="true" row-height="92" cell-width="84"/></root>"##,
+    )
+    .expect("html");
+    assert_eq!(ir.root.children[0].attrs.cell_width, Some(84.0));
+    assert!(
+        !ir.lint_findings
+            .iter()
+            .any(|f| f.kind == LintKind::UnknownAttribute),
+        "a virtualized grid does not lint, got {:?}",
+        ir.lint_findings,
+    );
+
+    // Without `virtualized`, on a `<for>` or on any other tag, it warns.
+    for markup in [
+        r##"<root><for each="a" cell-width="84"/></root>"##,
+        r##"<root><column cell-width="84"/></root>"##,
+    ] {
+        let ir = parse_html(markup).expect("html");
+        let ignored: Vec<_> = ir
+            .lint_findings
+            .iter()
+            .filter(|f| f.kind == LintKind::UnknownAttribute)
+            .collect();
+        assert_eq!(ignored.len(), 1, "{markup}: {:?}", ir.lint_findings);
+        assert_eq!(ignored[0].severity, LintSeverity::Warn);
+        assert!(
+            ignored[0].message.contains("cell-width"),
+            "{}",
+            ignored[0].message
+        );
+    }
+    // `virtualized` written after it counts.
+    let ir = parse_html(r##"<root><for cell-width="84" each="a" virtualized="true"/></root>"##)
+        .expect("html");
+    assert!(ir.lint_findings.is_empty(), "{:?}", ir.lint_findings);
 }
 
 #[test]
@@ -2236,6 +2277,9 @@ fn virtualized_for_inserts_style_only_when_changed() {
                 key_field: None,
                 virtualized: true,
                 row_height: 20.0,
+                cell_width: None,
+                grid: None,
+                range: 0..0,
                 rows: Vec::new(),
                 cascaded_body: None,
                 row_items: Vec::new(),
@@ -2329,6 +2373,9 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
                     key_field: None,
                     virtualized: true,
                     row_height: 20.0,
+                    cell_width: None,
+                    grid: None,
+                    range: 0..0,
                     rows: Vec::new(),
                     cascaded_body: None,
                     row_items: Vec::new(),
@@ -2437,7 +2484,7 @@ fn menu_panel_is_vertical_absolute_overlay() {
         "right/bottom auto so the panel shrink-wraps its items"
     );
     assert_eq!(
-        panel.attrs.popup_panel.as_deref(),
+        panel.attrs.popover.as_ref().map(|p| p.open_signal.as_str()),
         Some("__menu_open:ctx"),
         "panel wired into the popup dismissal machinery"
     );

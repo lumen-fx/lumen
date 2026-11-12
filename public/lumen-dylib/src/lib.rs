@@ -26,6 +26,7 @@ pub mod sdk {
     pub use bevy_ecs;
     pub use lumen_core;
     pub use lumen_os_clipboard;
+    pub use lumen_os_dnd;
     pub use lumen_os_filedialog;
     pub use lumen_primitives;
     pub use lumen_runtime;

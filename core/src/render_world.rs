@@ -804,6 +804,27 @@ pub const OVERLAY_ORDER_BASE: PaintOrder = 0x4000_0000;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct OverlayLayer;
 
+/// Marks an element as shown in the top layer, the way a browser shows an
+/// open `popover`: it keeps its place in the element tree, so styles
+/// inherit through it, events bubble through it and `:hover` reaches its
+/// ancestors, but it is laid out as a layout root of its own against the
+/// window it shows in, and no ancestor's scroll offset, clip or opacity
+/// reaches it. An ancestor's `display: none` still hides it.
+///
+/// A top-layer element paints in the top band ([`OverlayLayer`], which it
+/// requires) and is hit-tested where it paints.
+#[derive(Component, Clone, Copy, Debug, Default)]
+#[require(OverlayLayer)]
+pub struct TopLayer;
+
+/// Elements their ancestors' scroll offsets and clips stop at: surface roots
+/// ([`WindowOf`]) and top-layer elements ([`TopLayer`]).
+pub type PaintRoot = Or<(With<WindowOf>, With<TopLayer>)>;
+
+/// Everything but a [`PaintRoot`]: a `Query<&ChildOf, NotPaintRoot>` walks
+/// up to the nearest paint root and no further.
+pub type NotPaintRoot = (Without<WindowOf>, Without<TopLayer>);
+
 /// Main-world resource tracking the order in which [`OverlayLayer`] roots became visible, so
 /// concurrently open popups stack later-opened-on-top (like OS popup windows).
 ///
@@ -2369,6 +2390,10 @@ pub fn opacity_model(main: &mut World, parents: &HashMap<Entity, Entity>) -> Opa
             let mut q = main.query_filtered::<Entity, With<OverlayLayer>>();
             q.iter(main).collect()
         };
+        let top: std::collections::HashSet<Entity> = {
+            let mut q = main.query_filtered::<Entity, With<TopLayer>>();
+            q.iter(main).collect()
+        };
         let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
         for (&e, &p) in parents {
             children.entry(p).or_default().push(e);
@@ -2412,13 +2437,18 @@ pub fn opacity_model(main: &mut World, parents: &HashMap<Entity, Entity>) -> Opa
             parents: &HashMap<Entity, Entity>,
             direct: &HashMap<Entity, f32>,
             overlay: &std::collections::HashSet<Entity>,
+            top: &std::collections::HashSet<Entity>,
             chains: &mut HashMap<Entity, f32>,
             memo: &mut HashMap<Entity, f32>,
         ) -> f32 {
             if let Some(v) = memo.get(&e) {
                 return *v;
             }
-            let value = if overlay.contains(&e) {
+            let value = if top.contains(&e) {
+                // A top-layer element is outside every ancestor's
+                // stacking context: none of their opacity reaches it.
+                1.0
+            } else if overlay.contains(&e) {
                 parents
                     .get(&e)
                     .map(|p| chain(*p, parents, direct, chains))
@@ -2426,7 +2456,7 @@ pub fn opacity_model(main: &mut World, parents: &HashMap<Entity, Entity>) -> Opa
             } else {
                 parents
                     .get(&e)
-                    .map(|p| outer(*p, parents, direct, overlay, chains, memo))
+                    .map(|p| outer(*p, parents, direct, overlay, top, chains, memo))
                     .unwrap_or(1.0)
             };
             memo.insert(e, value);
@@ -2450,7 +2480,16 @@ pub fn opacity_model(main: &mut World, parents: &HashMap<Entity, Entity>) -> Opa
             } else {
                 direct.get(&e).copied().unwrap_or(1.0)
             };
-            let alpha = own * outer(e, parents, &direct, &overlay, &mut chains, &mut outers);
+            let alpha = own
+                * outer(
+                    e,
+                    parents,
+                    &direct,
+                    &overlay,
+                    &top,
+                    &mut chains,
+                    &mut outers,
+                );
             if alpha < 1.0 {
                 draw.insert(e, alpha);
             }
@@ -2743,10 +2782,16 @@ pub fn parent_scroll_offsets(
     let by_entity: HashMap<Entity, Vec2> = if direct.is_empty() {
         HashMap::new()
     } else {
+        // No ancestor's scroll offset reaches a top-layer element.
+        let top: std::collections::HashSet<Entity> = {
+            let mut q = main.query_filtered::<Entity, With<TopLayer>>();
+            q.iter(main).collect()
+        };
         fn cumulative(
             e: Entity,
             parents: &HashMap<Entity, Entity>,
             direct: &HashMap<Entity, Vec2>,
+            top: &std::collections::HashSet<Entity>,
             cache: &mut HashMap<Entity, Vec2>,
         ) -> Vec2 {
             if let Some(v) = cache.get(&e) {
@@ -2754,7 +2799,8 @@ pub fn parent_scroll_offsets(
             }
             let parent_off = parents
                 .get(&e)
-                .map(|p| cumulative(*p, parents, direct, cache))
+                .filter(|_| !top.contains(&e))
+                .map(|p| cumulative(*p, parents, direct, top, cache))
                 .unwrap_or(Vec2::ZERO);
             let own = direct.get(&e).copied().unwrap_or(Vec2::ZERO);
             let total = parent_off + own;
@@ -2764,8 +2810,8 @@ pub fn parent_scroll_offsets(
         let mut cache: HashMap<Entity, Vec2> = HashMap::new();
         let mut by_entity: HashMap<Entity, Vec2> = HashMap::new();
         for &e in parents.keys() {
-            if let Some(p) = parents.get(&e) {
-                let off = cumulative(*p, parents, &direct, &mut cache);
+            if let Some(p) = parents.get(&e).filter(|_| !top.contains(&e)) {
+                let off = cumulative(*p, parents, &direct, &top, &mut cache);
                 if off != Vec2::ZERO {
                     by_entity.insert(e, off);
                 }

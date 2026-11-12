@@ -56,7 +56,7 @@ list do not see it. Text fields (`<input>`, `<textarea>`) are the exception;
 their text always fills the field.
 
 `{...}` placeholders are substituted in `text`, `placeholder`, `src`,
-`id`, `class`, `style`, `drag-payload`, a `<tooltip>`'s `text`, and every
+`id`, `class`, `style`, `drag-payload`, `drag-type`, a `<tooltip>`'s `text`, and every
 attribute of a custom widget's tag:
 
 | Placeholder | Resolves to |
@@ -222,8 +222,9 @@ children stack left to right.
 | `disabled` | boolean | Input routing skips the element and the default render dims it. |
 | `draggable` | boolean | Pointer drags translate the element. |
 | `drag-payload` | text | Makes the element an in-app drag source publishing this payload. An empty value uses the element's `id`. Interpolated per row inside `<for>`. |
-| `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. |
-| `accept` | MIME type | Restricts what an in-app drop target accepts. Absent accepts anything. |
+| `drag-type` | MIME type | The type `drag-payload` is published under. Defaults to `text/plain`. Interpolated per row inside `<for>`. |
+| `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. It hears the `dragenter`, `dragover`, `dragleave` and `drop` events. |
+| `accept` | MIME type list | The types a drop target takes: comma-separated, with `type/*` wildcards (`image/*, application/x-asset`), as HTML `<input accept>` spells it. A drag carrying none of them neither lights `:drag-over` nor drops. A dropped file is `text/uri-list`. Absent accepts anything. |
 
 An element receives the pointer when it is focusable (it has a
 `tab-index`, which the controls and `<a href>` carry by default), when it
@@ -341,9 +342,10 @@ squeezed to fit. Write `shrink: 1` on a child to opt back in.
 
 Floats out of normal flow: `position: absolute` with all four insets at
 `0`, so it covers its parent's box. It is not reparented; it stays where
-it is written, which is what a dropdown anchored to its trigger wants.
-Lays out as a column. Use it for backdrops, dropdowns, and floating
-panels.
+it is written, and its parent's scrolling and clipping apply to it. Lays
+out as a column. Use it for backdrops and layers over one part of the
+page; for a panel that opens from a button and floats over the whole
+window, use a [`popover`](#popover).
 
 An `<overlay>` under a parent that is content-sized and has no in-flow
 children covers nothing, because that parent measures zero. See
@@ -765,8 +767,10 @@ container's width. The parser synthesizes a `.progress-fill` child.
 ### `<dropdown>` and `<option>`
 
 A combobox. The parser expands it into a header button plus a floating
-options panel; the panel is dismissed by clicking outside it and flips
-above the trigger near the bottom of the window.
+options panel. The panel is a [popover](#popover) anchored to the header
+at its width: it shows over the whole window, whatever scrolls or clips
+the dropdown, is dismissed by clicking outside it, flips above the header
+near the bottom of the window, and shrinks to the room it has.
 
 The tag stays on the box those parts sit in, so `width`, `min-width`,
 `padding`, `bg` and a `dropdown` rule in a stylesheet size and paint the
@@ -882,11 +886,25 @@ column.
 | `each` | array signal name | Required for iteration. Without it the children spawn once, unrepeated. |
 | `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is still in the array keeps its elements wherever the key moves, and is updated in place when its record's fields change; only rows whose keys came or went are built or removed. |
 | `virtualized` | `true`, `yes` | Spawn only the rows in the visible scroll window. Needs a `<scroll>` ancestor. |
-| `row-height` | number | Pixel height per virtualized row. Defaults to `32`. |
+| `row-height` | number | Pixel height per virtualized row, and of each cell of a grid. Defaults to `32`. |
+| `cell-width` | number | Lay a virtualized `<for>` out as a grid of fixed-size cells this many pixels wide. Ignored, with a warning, without `virtualized`. |
 
 Inside the body, `{row.field}` reads the current record and `{$index}`
 the row index. A virtualized `<for>` is forced to full width so its rows
 have a reference box.
+
+With `cell-width`, each item is a cell `cell-width` wide and `row-height`
+tall. A grid row holds as many cells as fit the block's width, spaced by the
+block's CSS `column-gap` and `row-gap`, and never fewer than one; the cells
+sit at the left and the leftover width stays at the end of the row, as
+`grid-template-columns: repeat(auto-fill, <cell-width>px)` lays them out on
+the web. A change in the block's width moves the cells to the new column
+count. Only the grid rows in the visible window are built, plus a buffer of
+at least two grid rows.
+
+| Event | Detail | Fires |
+| --- | --- | --- |
+| `rangechange` | `{first, last}` | On a virtualized `<for>`, each time the items it has mounted change: a scroll, a new column count, or the list growing or shrinking. `first` is the index of the first mounted item and `last` one past the last. Does not bubble. Not fired on the web, where the whole list mounts. |
 
 ### `<if>`
 
@@ -983,14 +1001,18 @@ are `<menuitem>` and `<separator>`.
 | --- | --- | --- |
 | `<menu>` | `label` | Required inside `<menubar>`. Menu title. |
 | `<menu>` | `id` | Required outside `<menubar>`. Names the popup. |
-| `<menuitem>` | `id` | Required. Identifies the item to scripts and to `on_menu`. |
+| `<menuitem>` | `id` | Identifies the item to scripts and to `on_menu`. Required unless the item has a `command`, whose id it then takes. |
 | `<menuitem>` | `label` | Display text. Defaults to `id`. |
-| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus. A popup menu only shows it. |
+| `<menuitem>` | `accel` | Keyboard accelerator, such as `CommandOrControl+S` or `Alt+F4`, shown at the end of the item's row. A menubar menu runs it; the in-window bar while the window has focus, unless a focused text field keeps the chord or a command answers it. A popup menu only shows it. |
 | `<menuitem>` | `disabled` | Unclickable, skipped by arrow navigation. Popup menus only. |
+| `<menuitem>` | `command` | The id of a [command](#commands-command-and-command-palette): the item takes the command's label, shortcut and disabled state, and a click runs it. The OS menu bar on macOS and Windows runs it but keeps the label and `accel` the markup wrote. |
 
 Outside a menubar, `<menu id="m">` is an in-window popup panel toggled by
-the signal `__menu_open:m`. It floats over the page and dismisses on an
-outside click. The menu, its items and its separators stay `menu`,
+the signal `__menu_open:m`. It is a [popover](#popover): it floats over
+the whole window and dismisses on an outside click. Opened with
+`open_menu_at`, it sits on that point; opened from a menu bar button, under
+the button; opened by id alone, below where it is written. Near a window
+edge it opens the other way, and it is never taller than the window. The menu, its items and its separators stay `menu`,
 `menuitem` and `separator` elements, so a stylesheet selects them by tag and
 a script reaches them like any element: they exist from the first frame,
 before the menu first opens, and an item a script creates and appends works
@@ -1025,10 +1047,52 @@ cover the window; under a content-sized parent it covers nothing (see
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `open` | signal name | Shows the dialog while the signal is truthy. The body is mounted once and hidden, so its state survives. |
+| `open` | signal name | Shows the dialog while the signal is truthy. The body is there from the first frame, hidden while the dialog is closed, so a handler that opens the dialog can find and change anything inside it on the same tick, and its state survives a close. |
 
 Inside a dialog, `autofocus` picks the element that takes focus on open,
 and `<button default="true">` is the default button.
+
+### `popover`
+
+Any element with `popover` is a popover: hidden until it opens, then shown
+over everything in the window, as an HTML `popover` is in a browser. It
+keeps its place in the document, so its styles inherit from its parent and
+its events bubble through it, but no ancestor clips it, scrolls it or
+fades it, and its size and position are worked out against the window.
+
+```html
+<button text="Add component" popovertarget="picker"/>
+<column id="picker" popover="auto" class="picker">
+  <input autofocus bind-text="search"/>
+  <for each="$matches" key="id"> ... </for>
+</column>
+```
+
+| Attribute | On | Value | Effect |
+| --- | --- | --- | --- |
+| `popover` | any element | empty, `auto` or `manual` | Makes the element a popover. An `auto` one closes when the user presses outside it or presses Escape; a `manual` one stays open until something closes it. It needs an `id`, or `open`. |
+| `open` | a popover | signal name | The signal the popover's open state follows, both ways. Without it the state is the signal `__popover_open:<id>`. |
+| `anchor` | a popover | id | The element it is placed against. Without it, the element that opened it last. |
+| `popovertarget` | any element | id | A click on it opens the popover with that id when closed and closes it when open, and makes this element the popover's anchor. |
+| `popovertargetaction` | with `popovertarget` | `toggle`, `show` or `hide` | What the click does. Defaults to `toggle`. |
+
+A popover with an anchor opens below it with the left edges together, and
+moves where it would leave the window: above the anchor near the bottom
+edge, lined up on the anchor's right edge near the right edge, and clamped
+inside the window. Taller than the room it has, it shrinks to fit, and
+its content scrolls when it sets `overflow`. CSS changes the defaults:
+`position-area` picks the side and the alignment, `position-try-fallbacks`
+which flips it may make, and `popup-gap` the space between it and its
+anchor (see [Popovers](css.md#popovers)). A popover with no anchor shows
+centred in the window.
+
+Scripts open and close one with `show_popover(id)`, `hide_popover(id)` and
+`toggle_popover(id)`, and hear `beforetoggle` then `toggle` on it when it
+opens or closes; the event's detail carries `old_state` and `new_state`,
+`"open"` or `"closed"`. `beforetoggle` reports a change that already
+happened, so it cannot cancel one. The body of a popover is there from the
+first frame, so a handler can reach anything inside it before it first
+opens.
 
 ### `<tooltip>`
 
@@ -1077,6 +1141,38 @@ A title-bar region for frameless windows. Lays out as a row, full width,
 | `drag` | boolean | Pressing and moving the bar requests a native window drag. |
 
 Pair it with `<root frameless="true">`.
+
+### `<commands>`, `<command>` and `<command-palette>`
+
+Commands: named actions with keyboard shortcuts that menu items and a
+searchable palette run, with keys the user can rebind. The tags come from the
+`lumen-commands` module, so an app declares it first (see
+[Commands and shortcuts](../guides/os-integration.md#commands-and-shortcuts)).
+`<commands>` holds the `<command>` declarations and shows nothing.
+
+| Tag | Attribute | Effect |
+| --- | --- | --- |
+| `<command>` | `id` | Required. What runs it (`commands::run`, `<menuitem command>`) and what the `command` event's detail carries. |
+| `<command>` | `label` | What the palette and menu items show. Defaults to `id`. `translatable` names the catalogue message that translates it. |
+| `<command>` | `keys` | The chords that run it: one (`CommandOrControl+S`) or a comma-separated list. Modifiers `Ctrl`, `Alt` (`Option`), `Shift`, `Super` (`Cmd`, `Meta`) and `CommandOrControl`; keys are a character or a name such as `Enter`, `Escape`, `Space`, `Up`, `PageDown`, `F5`, `Plus`, `Comma`. |
+| `<command>` | `enabled` | `false` keeps it from running, greys out its menu items and leaves it out of the palette. Default `true`. |
+
+Changing a `<command>`'s attributes at run time changes the command, and
+removing the element removes it.
+
+A command that runs raises `command` on the document, its detail holding the
+command's `id`; a binding the user changes raises `keyschange` there with the
+command's `id` and its new `keys`.
+
+`<command-palette>` is where the palette opens: a strip across the top of the
+window, `--lumen-command-palette-top` from the top edge, with the palette
+centred below it. Its parts carry the classes `command-palette-panel`,
+`command-palette-input`, `command-palette-list`, `command-palette-item` (one per
+command, `highlighted` on the one Enter runs), `command-palette-label`,
+`command-palette-keys` and `command-palette-empty`. The tokens
+`--lumen-command-palette-width`, `-bg`, `-border`, `-radius`, `-text`,
+`-hover-bg`, `-highlight-bg`, `-highlight-text`, `-keys-text`, `-list-height`
+and `-row-height` style it.
 
 ### `<dock>` and its panels
 

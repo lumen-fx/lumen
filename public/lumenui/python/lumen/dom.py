@@ -620,8 +620,31 @@ class Event:
 
         return _read_string_out(get_library().lumen_event_value)
 
+    def types(self) -> list[str]:
+        """The MIME kinds a drag event carries (``"text/plain"``,
+        ``"application/x-asset"``, ...); empty for other events."""
+
+        lib = get_library()
+        return _read_strlist(lib, lib.lumen_event_types)
+
+    def get_data(self, kind: str) -> str:
+        """What a drag event carries under the MIME kind ``kind``, as text;
+        ``""`` when it carries none."""
+
+        return _read_string_out(get_library().lumen_event_data, kind.encode("utf-8"))
+
+    def set_data(self, kind: str, value: str) -> bool:
+        """In a ``dragstart`` handler, put ``value`` in the drag under the MIME
+        kind ``kind``. Returns False, doing nothing, in any other handler."""
+
+        status = get_library().lumen_event_set_data(kind.encode("utf-8"), value.encode("utf-8"))
+        return status == _OK
+
     def detail(self) -> dict:
-        """What a module's custom event carries; empty for a built-in one."""
+        """What a module's custom event carries, or a rangechange's first / last.
+
+        Empty for the other built-in events.
+        """
 
         from .api import take_value
 

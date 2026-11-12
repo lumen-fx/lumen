@@ -51,16 +51,50 @@ impl MimeKind {
     }
 }
 
+impl MimeKind {
+    /// The type without its parameters, the spelling the web's
+    /// `DataTransfer.types` lists: `text/plain` for [`MimeKind::TextPlain`],
+    /// `application/x-asset` for a custom kind of that name.
+    pub fn essence(&self) -> &str {
+        match self {
+            MimeKind::TextPlain => "text/plain",
+            other => {
+                let s = other.as_str();
+                s.split(';').next().unwrap_or(s).trim()
+            }
+        }
+    }
+
+    /// Whether this kind is what an `accept` entry names: the same type, or
+    /// any type under a `type/*` wildcard (`image/*` takes `image/png`), as
+    /// an HTML `<input accept>` list reads. Case is ignored and parameters
+    /// do not count.
+    pub fn matches(&self, pattern: &str) -> bool {
+        let pattern = pattern.split(';').next().unwrap_or(pattern).trim();
+        let essence = self.essence();
+        match pattern.strip_suffix("/*") {
+            Some("*") => true,
+            Some(major) => essence
+                .split_once('/')
+                .is_some_and(|(m, _)| m.eq_ignore_ascii_case(major)),
+            None => essence.eq_ignore_ascii_case(pattern),
+        }
+    }
+}
+
 impl From<&str> for MimeKind {
     fn from(s: &str) -> Self {
-        match s {
-            "text/plain" | "text/plain;charset=utf-8" => MimeKind::TextPlain,
+        // Lowercased, as the web's `DataTransfer` stores a type.
+        let lower = s.trim().to_ascii_lowercase();
+        match lower.split(';').next().unwrap_or_default().trim() {
+            // `text` and `url` are the web's two short names.
+            "text/plain" | "text" => MimeKind::TextPlain,
             "text/html" => MimeKind::TextHtml,
-            "text/uri-list" => MimeKind::TextUriList,
+            "text/uri-list" | "url" => MimeKind::TextUriList,
             "image/png" => MimeKind::ImagePng,
             "image/jpeg" => MimeKind::ImageJpeg,
             "application/octet-stream" => MimeKind::ApplicationOctet,
-            other => MimeKind::Custom(Arc::from(other)),
+            _ => MimeKind::Custom(Arc::from(lower)),
         }
     }
 }
@@ -94,6 +128,16 @@ impl MimePayload {
     pub fn with(mut self, kind: MimeKind, bytes: Vec<u8>) -> Self {
         self.kinds.push((kind, bytes));
         self
+    }
+
+    /// Put `bytes` under `kind`, replacing what the payload already carried
+    /// under it, the way the web's `DataTransfer.setData` does. A new kind
+    /// goes after the ones already there.
+    pub fn set(&mut self, kind: MimeKind, bytes: Vec<u8>) {
+        match self.kinds.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, b)) => *b = bytes,
+            None => self.kinds.push((kind, bytes)),
+        }
     }
 
     /// Look up the first entry matching `kind`. Returns `None` when not
@@ -179,88 +223,25 @@ impl From<Vec<std::path::PathBuf>> for MimePayload {
     }
 }
 
-/// A keyboard-shortcut chord. Stored as a `muda` / `global-hotkey`-style
-/// accelerator string (e.g. `"Ctrl+S"`, `"Cmd+Shift+P"`).
-///
-/// Kept opaque so the menu / hotkey backends parse via their own crate
-/// API (`muda::accelerator::Accelerator::from_str`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyChord(pub Arc<str>);
-
-impl From<&str> for KeyChord {
-    fn from(s: &str) -> Self {
-        KeyChord(Arc::from(s))
-    }
-}
-
-impl From<String> for KeyChord {
-    fn from(s: String) -> Self {
-        KeyChord(Arc::from(s.as_str()))
-    }
-}
-
-/// A high-level user-invokable command. One `Action` ties together the
-/// menu item, toolbar button, and keyboard shortcut that all do the
-/// same thing - the model Qt's `QAction` and GTK 4's `GAction` use.
-///
-/// Lives in `ActionRegistry` (or a similar resource) per the OS plan
-/// (section 470). Backends translate the action into a menu item, hotkey, or
-/// toolbar button as appropriate.
-#[derive(Clone, Debug)]
+/// One entry of a tray menu or one button of a notification: the id a click
+/// reports and the label it shows. Read from an action spec
+/// ([`parse_action_spec`]), so a tray menu and a notification's buttons are
+/// written alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
-    /// Stable id used to dispatch `ActionInvoked { id }` and to look the
-    /// action up across hot-reloads.
+    /// The id a click on the entry reports.
     pub id: Arc<str>,
-    /// Human-visible label.
+    /// The text the entry shows.
     pub label: Arc<str>,
-    /// Optional icon identifier (asset path or theme name).
-    pub icon: Option<Arc<str>>,
-    /// Optional keyboard shortcut.
-    pub shortcut: Option<KeyChord>,
-    /// `true` when the action can be invoked.
-    pub enabled: bool,
-    /// `Some(true|false)` for a check / radio action; `None` for a
-    /// plain action.
-    pub checked: Option<bool>,
 }
 
 impl Action {
-    /// Construct a plain enabled action with no shortcut, icon, or
-    /// check state.
+    /// An entry with this id and label.
     pub fn new(id: impl Into<Arc<str>>, label: impl Into<Arc<str>>) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            icon: None,
-            shortcut: None,
-            enabled: true,
-            checked: None,
         }
-    }
-
-    /// Builder: set the keyboard shortcut.
-    pub fn with_shortcut(mut self, chord: impl Into<KeyChord>) -> Self {
-        self.shortcut = Some(chord.into());
-        self
-    }
-
-    /// Builder: set the icon.
-    pub fn with_icon(mut self, icon: impl Into<Arc<str>>) -> Self {
-        self.icon = Some(icon.into());
-        self
-    }
-
-    /// Builder: set the enabled flag.
-    pub fn enabled(mut self, on: bool) -> Self {
-        self.enabled = on;
-        self
-    }
-
-    /// Builder: turn into a check action with the supplied initial
-    /// state.
-    pub fn checked(mut self, on: bool) -> Self {
-        self.checked = Some(on);
-        self
     }
 }
 
@@ -305,12 +286,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_chord_from_str_keeps_the_accelerator() {
-        let c: KeyChord = "Ctrl+S".into();
-        assert_eq!(c.0.as_ref(), "Ctrl+S");
-    }
-
-    #[test]
     fn mime_payload_from_str_roundtrips_text() {
         let p: MimePayload = "hello".into();
         assert_eq!(p.text().as_deref(), Some("hello"));
@@ -348,22 +323,49 @@ mod tests {
         }
     }
 
+    /// The web's spellings read the same as Lumen's: parameters and case
+    /// do not count, `text` and `url` are the short names, and an app's own
+    /// kind is stored lowercased.
     #[test]
-    fn action_builder_chain() {
-        let a = Action::new("file.save", "Save")
-            .with_shortcut("Ctrl+S")
-            .enabled(true);
-        assert_eq!(&*a.id, "file.save");
-        assert_eq!(&*a.label, "Save");
-        assert_eq!(a.shortcut.as_ref().map(|c| c.0.as_ref()), Some("Ctrl+S"));
-        assert!(a.enabled);
-        assert!(a.checked.is_none());
+    fn mime_kind_from_str_reads_the_web_spellings() {
+        assert_eq!(MimeKind::from("text"), MimeKind::TextPlain);
+        assert_eq!(MimeKind::from("URL"), MimeKind::TextUriList);
+        assert_eq!(
+            MimeKind::from("Text/Plain; charset=utf-8"),
+            MimeKind::TextPlain
+        );
+        assert_eq!(
+            MimeKind::from("Application/X-Asset"),
+            MimeKind::Custom(Arc::from("application/x-asset"))
+        );
+        assert_eq!(MimeKind::TextPlain.essence(), "text/plain");
+        assert_eq!(
+            MimeKind::from("application/x-a;v=1").essence(),
+            "application/x-a"
+        );
     }
 
+    /// An accept entry names one type or every type under a major type.
     #[test]
-    fn action_check_state() {
-        let a = Action::new("view.bold", "Bold").checked(true);
-        assert_eq!(a.checked, Some(true));
+    fn mime_kind_matches_an_accept_entry() {
+        assert!(MimeKind::ImagePng.matches("image/*"));
+        assert!(MimeKind::ImagePng.matches("IMAGE/PNG"));
+        assert!(!MimeKind::ImagePng.matches("image/jpeg"));
+        assert!(!MimeKind::TextPlain.matches("image/*"));
+        assert!(MimeKind::TextPlain.matches("text/plain;charset=utf-8"));
+        assert!(MimeKind::from("application/x-asset").matches("application/*"));
+        assert!(MimeKind::from("application/x-asset").matches("*/*"));
+    }
+
+    /// Setting a kind the payload carries replaces it in place.
+    #[test]
+    fn mime_payload_set_replaces_a_kind() {
+        let mut p = MimePayload::from("a");
+        p.set(MimeKind::from("application/x-b"), b"b".to_vec());
+        p.set(MimeKind::TextPlain, b"c".to_vec());
+        assert_eq!(p.kinds.len(), 2);
+        assert_eq!(p.text().as_deref(), Some("c"));
+        assert_eq!(p.kinds[1].0.essence(), "application/x-b");
     }
 
     #[test]

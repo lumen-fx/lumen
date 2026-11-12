@@ -378,6 +378,9 @@ impl App {
             MessageRegistry::register_message::<crate::input::PointerLockAsk>(&mut world);
             MessageRegistry::register_message::<crate::input::PointerLockChanged>(&mut world);
             MessageRegistry::register_message::<crate::input::PointerLockError>(&mut world);
+            // A page mounts a virtualized list whole, so it has no mounted
+            // range to report.
+            MessageRegistry::register_message::<crate::signals::MountedRangeChanged>(&mut world);
         }
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's

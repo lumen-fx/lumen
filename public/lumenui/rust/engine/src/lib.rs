@@ -158,13 +158,13 @@ macro_rules! app {
 // these are the same crates and the same types, and an app links them in.
 #[cfg(windows)]
 pub use lumen::sdk::{
-    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_primitives, lumen_runtime,
-    lumen_scene, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_dnd, lumen_os_filedialog, lumen_primitives,
+    lumen_runtime, lumen_scene, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
 };
 #[cfg(not(windows))]
 pub use lumen_engine::sdk::{
-    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_filedialog, lumen_primitives, lumen_runtime,
-    lumen_scene, lumen_script, lumen_widget, lumen_widget_macros,
+    bevy_ecs, lumen_core, lumen_os_clipboard, lumen_os_dnd, lumen_os_filedialog, lumen_primitives,
+    lumen_runtime, lumen_scene, lumen_script, lumen_widget, lumen_widget_macros,
 };
 // The parser/compiler front-end sits outside the shared engine (the `lumenc`
 // binary links that library itself); its heavy dependencies still resolve

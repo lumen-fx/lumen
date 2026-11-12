@@ -171,6 +171,7 @@ lumen-archive = { workspace = true, optional = true }
 lumen-audio = { workspace = true, optional = true }
 lumen-browser = { workspace = true, optional = true }
 lumen-canvas = { workspace = true, optional = true }
+lumen-commands = { workspace = true, optional = true }
 lumen-cookie = { workspace = true, optional = true }
 lumen-dock = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
@@ -343,6 +344,7 @@ dev-run = [
     "dep:lumen-audio",
     "dep:lumen-browser",
     "dep:lumen-canvas",
+    "dep:lumen-commands",
     "dep:lumen-cookie",
     "dep:lumen-dock",
     "dep:lumen-download",

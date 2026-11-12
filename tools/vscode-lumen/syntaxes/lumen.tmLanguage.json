@@ -81,7 +81,7 @@
       ]
     },
     "control-tag": {
-      "comment": "Control-flow elements <for ...>/<if ...>/<template ...> - highlighted as keywords, with their special attributes (each/key/signal/when/virtualized/row-height) marked.",
+      "comment": "Control-flow elements <for ...>/<if ...>/<template ...> - highlighted as keywords, with their special attributes (each/key/signal/when/virtualized/row-height/cell-width) marked.",
       "begin": "(</?)(for|if|template)\\b",
       "beginCaptures": {
         "1": { "name": "punctuation.definition.tag.lumen" },
@@ -93,7 +93,7 @@
       },
       "patterns": [
         {
-          "match": "\\b(each|key|signal|when|virtualized|row-height|name)\\b(?=\\s*=)",
+          "match": "\\b(each|key|signal|when|virtualized|row-height|cell-width|name)\\b(?=\\s*=)",
           "name": "keyword.control.attribute.lumen"
         },
         { "include": "#attribute" }

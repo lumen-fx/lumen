@@ -55,6 +55,9 @@ fn on_start() {
 fn on_ready() {
     lumen::signal_set("svg_count", string(svg::set_attribute("art", "#dot", "fill", "blue")));
     lumen::signal_set("canvas_size", string(canvas::width("paint")) + "x" + string(canvas::height("paint")));
+    // commands: a command made at run time, and the keys of both read back.
+    commands::register("say.bye", "Say goodbye", "Alt+B");
+    lumen::signal_set("commands_keys", commands::keys("say.hello") + "|" + commands::keys("say.bye"));
 }
 
 fn on_js_call_async(tag: string, value: any) {
@@ -88,6 +91,11 @@ fn on_ws_message(key: string, text: any) {
 
 fn on_ws_close(key: string, code: any, reason: any, clean: any) {
     lumen::signal_set("ws_close", key + ": " + string(code) + " " + string(reason));
+}
+
+// commands: the one the smoke presses, heard.
+fn on_command(id: string) {
+    lumen::signal_set("commands_ran", id);
 }
 
 fn on_storage_change(key: string, new_value: any, old_value: any) {

@@ -2068,6 +2068,9 @@ pub fn dispatch_long_press_to_script<H: ScriptHost + Resource<Mutability = Mutab
 }
 
 /// Forward [`FileDropped`] as `on_file_dropped(id, path)`.
+///
+/// Deprecated for one release: a dropped file reaches the DOM `drop` event as
+/// `text/uri-list` and `on_drop` as its uri, which replace this callback.
 pub fn dispatch_file_drops_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
     dom: Option<Res<AppDom>>,

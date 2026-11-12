@@ -107,8 +107,13 @@ pub const ATTRS: &[&str] = &[
     "autofocus",
     "default",
     "open",
+    "popover",
+    "popovertarget",
+    "popovertargetaction",
+    "anchor",
     "drop-target",
     "drag-payload",
+    "drag-type",
     "accept",
     "layout-boundary",
     // scroll
@@ -135,6 +140,7 @@ pub const ATTRS: &[&str] = &[
     "alpha",
     "password-character",
     "accel",
+    "command",
     "delay",
     "offset",
     // reactivity / templates
@@ -147,6 +153,7 @@ pub const ATTRS: &[&str] = &[
     "key",
     "virtualized",
     "row-height",
+    "cell-width",
     "mode",
     "eq",
     "name",
@@ -257,7 +264,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<menu>`** - Inside `<menubar>`, a top-level menu titled by `label` (the OS menu bar on macOS and Windows, a bar drawn in the window on Linux or with `[window] menubar = \"window\"`), holding `<menuitem>` and `<separator>` children. Outside it, `<menu id=\"m\">` is an in-window popup panel toggled by the `__menu_open:m` signal, dismissed on an outside click."
         }
         "menuitem" => {
-            "**`<menuitem id=\"open\" label=\"Open\">`** - One menu entry. `id` is required and is passed to `on_menu(id)`; `label` defaults to `id`. `accel` sets a keyboard accelerator (menubar menus only) and `disabled` greys it out (popup menus only)."
+            "**`<menuitem id=\"open\" label=\"Open\">`** - One menu entry. `id` is passed to `on_menu(id)` and is required unless `command` names a command, whose id it then takes; `label` defaults to `id`. `accel` sets a keyboard accelerator (menubar menus only), `disabled` greys it out (popup menus only), and `command` runs a command from the `lumen-commands` module."
         }
         "separator" => {
             "**`<separator/>`** - Divider line between menu entries. Only valid inside a `<menu>`."
@@ -328,7 +335,19 @@ it. The text falls back to the authored `text`, then to the key itself. \
             "**`default`** - boolean on `<button>`. The containing `<dialog>`'s default button: Enter anywhere activates it and closing through it takes the accepted path. Adds the `default` class."
         }
         "open" => {
-            "**`open`** - signal name on `<dialog>`. The dialog shows while the signal is truthy; the body stays mounted, so its state survives a close."
+            "**`open`** - signal name on `<dialog>` or a `popover`. It shows while the signal is truthy; its body is there from the first frame, so its state survives a close."
+        }
+        "popover" => {
+            "**`popover`** - `auto` or `manual`. Makes the element a popover: hidden until it opens, then shown over the whole window against its anchor. An `auto` one closes on a press outside it or Escape. Needs an `id` or `open`."
+        }
+        "popovertarget" => {
+            "**`popovertarget`** - id. A click opens or closes the popover with that id and makes this element its anchor."
+        }
+        "popovertargetaction" => {
+            "**`popovertargetaction`** - `toggle` (default), `show` or `hide`. What a click on a `popovertarget` element does."
+        }
+        "anchor" => {
+            "**`anchor`** - id, on a `popover`. The element it is placed against; without it, the element that opened it."
         }
         "min" => {
             "**`min`** - number. Lower bound for `<slider>` / `<progress>`, and a validation bound on text that parses as a number."
@@ -358,7 +377,10 @@ it. The text falls back to the authored `text`, then to the key itself. \
             "**`password-character`** - exactly one character. Masks the rendered value of a text field; the buffer and bound signal keep the real text."
         }
         "accel" => {
-            "**`accel`** - keyboard accelerator on `<menuitem>`, in muda spelling (`CommandOrControl+S`, `Alt+F4`). Menubar menus only."
+            "**`accel`** - keyboard shortcut on `<menuitem>` (`CommandOrControl+S`, `Alt+F4`). Menu bar items run it; a popup menu shows it."
+        }
+        "command" => {
+            "**`command`** - on `<menuitem>`, the id of a command from the `lumen-commands` module: the item takes the command's label, shortcut and enabled state, and a click runs it."
         }
         "delay" => {
             "**`delay`** - milliseconds of pointer dwell before a `<tooltip>` appears. Defaults to `500` or the `--lumen-tooltip-delay` custom property."
@@ -428,14 +450,19 @@ multi-line clamp. Not inherited."
         "focus-outline" => {
             "**`focus-outline`** - `<width>px <color>`. Outline ring when focused (any source). Use `:focus-visible { outline: ... }` for a keyboard-only ring and `outline-offset` for a gap between box edge and ring."
         }
-        "drop" => "**`drop`** - boolean. Accept dropped files; fires `on_file_dropped`.",
+        "drop" => "**`drop`** - boolean. Older spelling of `drop-target`.",
         "drop-target" => {
-            "**`drop-target`** - boolean. Marks an in-app drop zone. Pair with `accept` to filter payloads by MIME type."
+            "**`drop-target`** - boolean. Marks a drop zone for in-app drags and dropped files; hears `dragenter`, `dragover`, `dragleave` and `drop`. Pair with `accept` to filter by MIME type."
         }
         "drag-payload" => {
-            "**`drag-payload`** - string carried by an in-app drag (web `dataTransfer.setData`). May contain `{row.field}` placeholders; empty derives the payload from `id`."
+            "**`drag-payload`** - string carried by an in-app drag (web `dataTransfer.setData`). May contain `{row.field}` placeholders; empty derives the payload from `id`. `drag-type` names its MIME type."
         }
-        "accept" => "**`accept`** - MIME type filter on a drop target. Unset accepts any payload.",
+        "drag-type" => {
+            "**`drag-type`** - MIME type `drag-payload` is published under (`application/x-asset`). Default `text/plain`. May contain `{row.field}` placeholders."
+        }
+        "accept" => {
+            "**`accept`** - MIME types a drop target takes, comma-separated, with `type/*` wildcards (`image/*, application/x-asset`), as HTML `<input accept>`. A dropped file is `text/uri-list`. Unset accepts anything."
+        }
         "layout-boundary" => {
             "**`layout-boundary`** - boolean. Confines relayout to this subtree. Inferred for scroll containers and for elements with a fixed width and height."
         }
@@ -443,7 +470,10 @@ multi-line clamp. Not inherited."
             "**`virtualized`** - boolean on `<for>`. Spawn only the rows inside the visible scroll window. Needs a `<scroll>` ancestor; pair with `row-height`."
         }
         "row-height" => {
-            "**`row-height`** - pixels per row of a virtualized `<for>`. Defaults to `32`."
+            "**`row-height`** - pixels per row of a virtualized `<for>`, and the height of a grid's cells. Defaults to `32`."
+        }
+        "cell-width" => {
+            "**`cell-width`** - pixels per cell on a virtualized `<for>`. Lays the items out as a grid of fixed-size cells, as many to a row as the block's width holds, spaced by its CSS `gap`. Only on `<for virtualized=\"true\">`."
         }
         "eq" => {
             "**`eq`** - value on `<if>`. Mounts the children when the signal equals this string, instead of testing truthiness."
@@ -508,6 +538,8 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
         | "default" | "required" | "alpha" | "multiline" | "checked" | "indeterminate"
         | "virtualized" | "layout-boundary" => &["true", "false"],
         "position" => &["static", "relative", "absolute"],
+        "popover" => &["auto", "manual"],
+        "popovertargetaction" => &["toggle", "show", "hide"],
         "align" => &["start", "end", "center", "stretch", "between"],
         "justify" => &["start", "end", "center", "between", "around"],
         "overflow" | "overflow-x" | "overflow-y" => &["visible", "hidden", "scroll"],

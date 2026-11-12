@@ -1,8 +1,6 @@
 //! Native menu-bar abstraction for Lumen.
 //!
-//! Wraps `muda` 0.19 behind a [`MenuModel`] / [`MenuBuilder`] +
-//! [`Action`](lumen_os_mime::Action) shape that mirrors `QAction` /
-//! `GAction` (per os-integration audit section 154-164, section 470).
+//! Wraps `muda` 0.19 behind a [`MenuModel`] / [`MenuBuilder`].
 //!
 //! - [`MenuModel`] / [`MenuEntry`] are the pure-data tree the markup
 //!   layer hands to the runtime. They are defined in
@@ -27,7 +25,6 @@ use lumen_core::input::MenuClicked;
 
 pub use lumen_core::window::{Menu, MenuEntry, MenuModel};
 pub use lumen_os_mime as mime;
-pub use lumen_os_mime::{Action, KeyChord};
 
 /// Re-export of [`lumen_core::input::MenuClicked`] under the QAction /
 /// GAction-style name. Identical type; emitted whenever a native menu
@@ -59,49 +56,10 @@ impl MenuBuilder {
         self
     }
 
-    /// Append an [`Action`] as a clickable menu entry. Convenience for
-    /// callers that have an `Action` table already.
-    pub fn action_entry(action: &Action) -> MenuEntry {
-        MenuEntry::Item {
-            id: action.id.as_ref().to_string(),
-            label: action.label.as_ref().to_string(),
-            accelerator: action.shortcut.as_ref().map(|c| c.0.as_ref().to_string()),
-        }
-    }
-
     /// Finalize the model.
     pub fn build(self) -> MenuModel {
         self.model
     }
-}
-
-/// Default action ids the macOS app-menu items should use when an app
-/// wants to override (About / Quit / Hide / Hide-Others / Services).
-/// Per `QAction::MenuRole` convention.
-pub mod default_action_ids {
-    /// `application.about` - the macOS About item.
-    pub const ABOUT: &str = "application.about";
-    /// `application.preferences` - the macOS Preferences / Settings
-    /// item.
-    pub const PREFERENCES: &str = "application.preferences";
-    /// `application.services` - macOS Services submenu.
-    pub const SERVICES: &str = "application.services";
-    /// `application.hide` - Hide.
-    pub const HIDE: &str = "application.hide";
-    /// `application.hide_others` - Hide Others.
-    pub const HIDE_OTHERS: &str = "application.hide_others";
-    /// `application.show_all` - Show All.
-    pub const SHOW_ALL: &str = "application.show_all";
-    /// `application.quit` - Quit.
-    pub const QUIT: &str = "application.quit";
-    /// `edit.copy`.
-    pub const COPY: &str = "edit.copy";
-    /// `edit.cut`.
-    pub const CUT: &str = "edit.cut";
-    /// `edit.paste`.
-    pub const PASTE: &str = "edit.paste";
-    /// `edit.select_all`.
-    pub const SELECT_ALL: &str = "edit.select_all";
 }
 
 /// Build a native muda menu from `spec` and attach it. `window_handle`
@@ -231,32 +189,5 @@ mod tests {
         assert_eq!(model.menus[0].label, "File");
         assert_eq!(model.menus[0].items.len(), 3);
         assert_eq!(model.menus[1].label, "Edit");
-    }
-
-    #[test]
-    fn action_entry_from_action() {
-        let a = Action::new("file.save", "Save").with_shortcut("Ctrl+S");
-        let entry = MenuBuilder::action_entry(&a);
-        match entry {
-            MenuEntry::Item {
-                id,
-                label,
-                accelerator,
-            } => {
-                assert_eq!(id, "file.save");
-                assert_eq!(label, "Save");
-                assert_eq!(accelerator.as_deref(), Some("Ctrl+S"));
-            }
-            _ => panic!("expected Item"),
-        }
-    }
-
-    #[test]
-    fn default_action_ids_stable() {
-        // Pin the strings so users overriding by id don't get silent
-        // breakage from rename churn.
-        assert_eq!(default_action_ids::QUIT, "application.quit");
-        assert_eq!(default_action_ids::ABOUT, "application.about");
-        assert_eq!(default_action_ids::COPY, "edit.copy");
     }
 }

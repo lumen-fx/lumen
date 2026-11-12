@@ -1564,8 +1564,25 @@ public:
     std::pair<double, double> movement() const {
         return ev_ ? std::make_pair(ev_->movement_x, ev_->movement_y) : std::make_pair(0.0, 0.0);
     }
-    /// What a module's custom event carries, a map; empty for a built-in
-    /// event.
+    /// The MIME kinds a drag event carries (`"text/plain"`,
+    /// `"application/x-asset"`, ...); empty for other events.
+    std::vector<std::string> types() const {
+        return detail::read_strlist([](LumenStrList* o) { return lumen_event_types(o); });
+    }
+    /// What a drag event carries under the MIME kind `kind`, as text; empty
+    /// when it carries none.
+    std::string get_data(const std::string& kind) const {
+        return raw::detail::read_string_out([&](char* buf, std::size_t len, std::size_t* out) {
+                   return lumen_event_data(kind.c_str(), buf, len, out);
+               }).value_or(std::string());
+    }
+    /// In a `dragstart` handler, put `value` in the drag under the MIME kind
+    /// `kind`. Returns false, doing nothing, in any other handler.
+    bool set_data(const std::string& kind, const std::string& value) const {
+        return lumen_event_set_data(kind.c_str(), value.c_str()) == LUMEN_OK;
+    }
+    /// What a module's custom event carries, a map, or a `rangechange`'s
+    /// `first` / `last`; empty for the other built-in events.
     Value detail() const {
         LumenValue out{};
         out.kind = LUMEN_NIL;

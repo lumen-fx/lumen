@@ -151,9 +151,20 @@ fn install_dom_events(app: &mut App) {
     lumen_script::register_dom_event_messages(&mut app.world);
     app.world.init_resource::<PendingDomEvents>();
     app.world.init_resource::<EventHosts>();
+    // The drag events follow this tick's pointer events, read after the drag
+    // session wrote them, so a `dragstart` handler's `set_data` reaches the
+    // session before the drag next moves. A page has no in-app drag session.
+    #[cfg(not(target_arch = "wasm32"))]
+    let queue = (
+        queue_pointer_and_key_events,
+        lumen_script::queue_drag_events.after(lumen_os_dnd::DndSet),
+    )
+        .chain();
+    #[cfg(target_arch = "wasm32")]
+    let queue = queue_pointer_and_key_events;
     app.add_systems(
         TickStage::Systems,
-        (queue_pointer_and_key_events, deliver_input_events)
+        (queue, deliver_input_events)
             .chain()
             .in_set(ScriptSet::DomInput)
             .after(build_dom_index)
@@ -173,6 +184,17 @@ fn install_dom_events(app: &mut App) {
             // tick, in one fixed order. Inert when no text plugin is
             // installed (empty set).
             .after(lumen_core::text_events::TextEditSet::Apply),
+    );
+    // A popover that opened or closed this tick hears `beforetoggle` and
+    // `toggle` with the state events. A page's browser raises its own.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dom_events::queue_toggle_events
+            .in_set(ScriptSet::DomState)
+            .after(queue_state_events)
+            .after(lumen_primitives::report_popover_toggles)
+            .before(deliver_state_events),
     );
     // Pointer-lock asks from scripts and the C ABI reach the input layer
     // before it decides this tick's lock. A page has no such layer.

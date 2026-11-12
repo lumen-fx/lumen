@@ -816,6 +816,19 @@ fn register_dom_events(
     engine.register_fn("detail", |_e: &mut Event| -> rhai::Dynamic {
         script_value_to_dynamic(&ScriptValue::Map(ev::event_detail()))
     });
+    engine.register_fn("types", |_e: &mut Event| -> rhai::Array {
+        ev::event_types()
+            .into_iter()
+            .map(rhai::Dynamic::from)
+            .collect()
+    });
+    engine.register_fn("get_data", |_e: &mut Event, kind: &str| -> String {
+        ev::event_get_data(kind)
+    });
+    engine.register_fn(
+        "set_data",
+        |_e: &mut Event, kind: &str, value: &str| -> bool { ev::event_set_data(kind, value) },
+    );
     engine.register_fn("button", |_e: &mut Event| -> i64 { ev::event_button() });
     engine.register_fn("x", |_e: &mut Event| -> f64 {
         ev::event_position_local().0

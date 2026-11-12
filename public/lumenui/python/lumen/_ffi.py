@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 19
+ABI_MINOR = 20
 ABI_PATCH = 0
 
 
@@ -1018,6 +1018,12 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
     lib.lumen_event_code.restype = c.c_uint32
     lib.lumen_event_value.argtypes = [c.c_char_p, c.c_size_t, P(c.c_size_t)]
     lib.lumen_event_value.restype = c.c_uint32
+    lib.lumen_event_types.argtypes = [P(LumenStrList)]
+    lib.lumen_event_types.restype = c.c_uint32
+    lib.lumen_event_data.argtypes = [c.c_char_p, c.c_char_p, c.c_size_t, P(c.c_size_t)]
+    lib.lumen_event_data.restype = c.c_uint32
+    lib.lumen_event_set_data.argtypes = [c.c_char_p, c.c_char_p]
+    lib.lumen_event_set_data.restype = c.c_uint32
     lib.lumen_event_target.argtypes = []
     lib.lumen_event_target.restype = c.c_uint64
     lib.lumen_event_current_target.argtypes = []

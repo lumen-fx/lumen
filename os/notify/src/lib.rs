@@ -12,10 +12,8 @@
 //! on freedesktop desktops only, the one backend `notify-rust` gives an
 //! activation callback for.
 //!
-//! `Action`s come from [`lumen_os_mime::Action`] so one Action drives
-//! menu items, hotkeys, tray menus, and notification buttons (the
-//! shared abstraction described in audit section 470 - equivalent to
-//! `GAction` driving every interaction surface in GIO).
+//! Buttons are [`lumen_os_mime::Action`]s, read from the same action spec
+//! a tray menu's entries are.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -132,8 +130,7 @@ pub struct Notification {
     pub icon: Option<String>,
     /// Urgency hint, mapped per-backend.
     pub urgency: Urgency,
-    /// Inline action buttons. Reuses [`Action`] from `lumen-os-mime`
-    /// so the same Action drives menus and notifications.
+    /// Inline action buttons.
     pub actions: Vec<Action>,
 }
 

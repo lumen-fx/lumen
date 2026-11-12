@@ -115,6 +115,92 @@ struct Walk<'a> {
     warnings: &'a mut Vec<String>,
     /// The name of the tab the innermost `<tabs>` being written shows.
     shown_tab: Option<String>,
+    /// The popovers placed against an element, by that element's id, and
+    /// the popovers that name their own anchor; see [`popover_anchors`].
+    anchors: PopoverAnchors,
+}
+
+/// Which elements a page's popovers are placed against, so the document can
+/// say so in CSS anchor positioning: the element an `anchor="id"` names
+/// carries an `anchor-name` for each popover placed against it, and a
+/// `popovertarget` element carries one for its popover when that popover
+/// names no anchor of its own (the element that opens it is its anchor, as
+/// on the desktop). The popover itself carries the `position-anchor`.
+#[derive(Default)]
+struct PopoverAnchors {
+    /// Anchor element id to the popovers placed against it.
+    by_anchor: BTreeMap<String, Vec<String>>,
+    /// Popovers that name an anchor of their own.
+    explicit: BTreeSet<String>,
+}
+
+/// The anchor name of the popover with id `popover`.
+fn anchor_name(popover: &str) -> String {
+    let ident: String = popover
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("--lm-popover-{ident}")
+}
+
+/// Collect a page's popovers and what each is placed against.
+fn popover_anchors(element: &Element, out: &mut PopoverAnchors) {
+    if let (Some(popover), Some(id)) = (&element.attrs.popover, &element.attrs.id)
+        && element.attrs.if_signal.is_some()
+        && let Some(anchor) = &popover.anchor
+    {
+        out.explicit.insert(id.clone());
+        out.by_anchor
+            .entry(anchor.clone())
+            .or_default()
+            .push(id.clone());
+    }
+    for child in &element.children {
+        popover_anchors(child, out);
+    }
+}
+
+/// The anchor-positioning declarations an element carries: `anchor-name`
+/// for the popovers placed against it, `position-anchor` when it is a
+/// popover.
+fn anchor_style(attrs: &Attributes, anchors: &PopoverAnchors) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(id) = &attrs.id
+        && let Some(popovers) = anchors.by_anchor.get(id)
+    {
+        names.extend(popovers.iter().map(|p| anchor_name(p)));
+    }
+    // An element that only ever closes its popover never opens it, so it is
+    // never the popover's anchor.
+    if let Some(target) = &attrs.popover_target
+        && target.action != lumen_ir::layout_ir::PopoverActionSpec::Hide
+        && !anchors.explicit.contains(&target.target)
+    {
+        names.push(anchor_name(&target.target));
+    }
+    let mut out = String::new();
+    if !names.is_empty() {
+        out.push_str("anchor-name:");
+        out.push_str(&names.join(","));
+    }
+    // Every anchor of a popover carries the name made from the popover's id,
+    // so the popover points at that one name whatever its anchor is.
+    if let (Some(_), Some(id)) = (&attrs.popover, &attrs.id)
+        && attrs.if_signal.is_some()
+    {
+        if !out.is_empty() {
+            out.push(';');
+        }
+        out.push_str("position-anchor:");
+        out.push_str(&anchor_name(id));
+    }
+    out
 }
 
 impl<'a> Walk<'a> {
@@ -172,6 +258,11 @@ pub fn emit_tree(
         foreign_depth: 0,
         warnings,
         shown_tab: None,
+        anchors: {
+            let mut anchors = PopoverAnchors::default();
+            popover_anchors(&page.ir.root, &mut anchors);
+            anchors
+        },
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
     Ok((out, walk.seeded))
@@ -379,6 +470,21 @@ fn emit_element(
             style.push(';');
         }
         style.push_str(&style_value(&written.style));
+    }
+    let anchoring = anchor_style(attrs, &walk.anchors);
+    if !anchoring.is_empty() {
+        if !style.is_empty() {
+            style.push(';');
+        }
+        style.push_str(&anchoring);
+    }
+    if ir_tag == "for"
+        && let Some(grid) = grid_style(element)
+    {
+        if !style.is_empty() {
+            style.push(';');
+        }
+        style.push_str(&grid);
     }
     if !style.is_empty() {
         write_attr(out, "style", &style);
@@ -695,6 +801,11 @@ fn emit_rows(
 /// virtualized list whole, and the runtime builds the rest below it.
 const FOLD_PX: f32 = 1080.0;
 
+/// How wide a first screen is taken to be, in CSS pixels, for a virtualized
+/// grid. Nominal, and wide: the gap between cells is the stylesheet's, which
+/// the build does not resolve, so a grid row is counted as if it had none.
+const FOLD_WIDTH_PX: f32 = 1920.0;
+
 /// How many of a `<for>` block's rows the document carries.
 ///
 /// Every row, except for a virtualized block on a page whose runtime mounts
@@ -709,7 +820,27 @@ fn row_limit(element: &Element, len: usize, runtime: bool) -> usize {
     // The row height the spawner reads, with the same default and the same
     // guard against a zero or negative one.
     let row_height = element.attrs.row_height.unwrap_or(32.0).max(1.0);
-    len.min((FOLD_PX / row_height).ceil().max(1.0) as usize)
+    let rows = (FOLD_PX / row_height).ceil().max(1.0) as usize;
+    // A grid's first screen is as many grid rows, each as many cells as a
+    // wide screen holds.
+    let columns = element.attrs.cell_width.map_or(1, |w| {
+        (FOLD_WIDTH_PX / w.max(1.0)).floor().max(1.0) as usize
+    });
+    len.min(rows * columns)
+}
+
+/// The inline style that lays a virtualized grid out: the browser wraps its
+/// cells into as many fixed-width columns as fit, as the desktop reconciler
+/// does, and scrolls them itself. The gap between cells is the stylesheet's.
+/// `None` for a block that is not a grid.
+fn grid_style(element: &Element) -> Option<String> {
+    let attrs = &element.attrs;
+    let cell_width = attrs.cell_width.filter(|_| attrs.virtualized)?.max(1.0);
+    let row_height = attrs.row_height.unwrap_or(32.0).max(1.0);
+    Some(format!(
+        "display:grid;grid-template-columns:repeat(auto-fill,{cell_width}px);\
+         grid-auto-rows:{row_height}px"
+    ))
 }
 
 /// What Lumen's cascade resolved for this element, as an inline style.

@@ -10,17 +10,20 @@
 //! `lumen-primitives::drag`), [`track_drop_hover`] follows the pointer
 //! marking the hovered target with `DropHovered`, and
 //! [`finish_in_app_drag`] hit-tests the release point and emits
-//! [`DropAccepted`]. The inbound file-drop path continues to work
-//! unchanged via `lumen-core::FileDropped` / `PendingFileDrops`
-//! ([`translate_file_drops_to_payload`]). Cross-window drag-source via
-//! the platform (`NSDraggingSession`, `DoDragDrop`, `wl_data_source`/Xdnd)
-//! is deferred - winit exposes no source API today.
+//! [`DropAccepted`]; [`DragHovered`] and [`DragEnded`] report the steps in
+//! between, which the script layer turns into the DOM's `dragenter`,
+//! `dragover`, `dragleave` and `dragend`. Files the platform drops on the
+//! window arrive as `lumen-core::FileDropped` and become a [`DropAccepted`]
+//! carrying `text/uri-list` ([`translate_file_drops_to_payload`]). A drag
+//! that leaves the window for another app (`NSDraggingSession`,
+//! `DoDragDrop`, `wl_data_source`/Xdnd) is not supported: winit exposes no
+//! source API.
 //!
 //! Mirrors: the source-publishes-mime -> target-negotiates-effect ->
 //! drop-carries-source+data shape of `QDrag`/`QMimeData`/`dropEvent`, and
-//! the HTML5 `dragstart`/`dragenter`/`drop` + `dataTransfer` event model
-//! (so the markup `draggable` / `drop-target` / `on-drop` surface maps
-//! 1:1 onto real DOM DnD when transpiled).
+//! the HTML5 `dragstart`/`dragenter`/`drop` + `dataTransfer` event model,
+//! so the markup `drag-payload` / `drag-type` / `drop-target` / `accept`
+//! surface is the same on a page, where the browser runs the drag.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -29,14 +32,16 @@ use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use lumen_core::components::{DropHovered, DropTarget, Transform};
-use lumen_core::input::{DragEndEvent, DragStartEvent, FileDropped, PointerState, ScrollOffset};
+use lumen_core::input::{
+    DragEndEvent, DragStartEvent, FileDropped, PointerState, ScrollOffset, ancestor_scroll,
+};
 use lumen_os_mime::{MimeKind, MimePayload};
 
 pub use lumen_os_mime as mime;
 
 /// Marker / data component for an entity that can be the *source* of a
-/// drag-and-drop. Authored by the markup layer (`<draggable mime=...>`
-/// follow-up) or imperatively by the app.
+/// drag-and-drop. The markup's `drag-payload` (with `drag-type` naming its
+/// kind) inserts one; an app can insert one itself.
 ///
 /// The payload is built eagerly - for lazy construction (GTK
 /// `DragSource::prepare`), wrap a closure inside a `Custom` blob and
@@ -109,7 +114,8 @@ impl DropEffectSet {
 /// `lumen-core::DropTarget` stays untouched; entities can carry both.
 #[derive(Component, Clone, Debug, Default)]
 pub struct DropAccept {
-    /// MIME kinds this target accepts. Empty means "accept any".
+    /// MIME kinds this target accepts, each a type or a `type/*` wildcard
+    /// ([`MimeKind::matches`]). Empty means "accept any".
     pub kinds: Vec<MimeKind>,
     /// Effects this target advertises. Empty (`NONE`) rejects.
     pub effects: DropEffectSet,
@@ -122,6 +128,18 @@ impl DropAccept {
             kinds: Vec::new(),
             effects: DropEffectSet::COPY,
         }
+    }
+
+    /// The filter an `accept` attribute names: a comma-separated list of
+    /// types and `type/*` wildcards, spelled as an HTML `<input accept>`.
+    /// An empty list accepts any kind.
+    pub fn from_list(list: &str) -> Self {
+        Self::only(
+            list.split(',')
+                .map(str::trim)
+                .filter(|kind| !kind.is_empty())
+                .map(MimeKind::from),
+        )
     }
 
     /// Accept only the given MIME kinds.
@@ -149,7 +167,9 @@ impl DropAccept {
         if self.kinds.is_empty() {
             return true;
         }
-        kinds.into_iter().any(|k| self.kinds.contains(k))
+        kinds
+            .into_iter()
+            .any(|k| self.kinds.iter().any(|want| k.matches(want.as_str())))
     }
 
     /// True when this accept-set permits the supplied payload.
@@ -159,18 +179,55 @@ impl DropAccept {
 }
 
 /// Emitted when a drag starts on a [`DragSource`] entity (in-app
-/// gesture). Cross-window drag-source via the platform is deferred -
-/// see crate docs.
+/// gesture). A drag out of the window to another app is not supported; see
+/// the crate docs.
 #[derive(Message, Clone, Debug)]
 pub struct DragStarted {
     /// Source entity carrying [`DragSource`].
     pub source: Entity,
     /// Payload the source published.
     pub payload: MimePayload,
+    /// Where the pointer was when the drag began, in window logical pixels.
+    pub position: Vec2,
+}
+
+/// Emitted while an in-app drag moves: the accepting drop target under the
+/// pointer, if any, and whether it is new.
+///
+/// Written on every tick the pointer moved or the target changed, so a
+/// reader sees the web's `dragenter` (`entered`), `dragover` (`over`) and
+/// `dragleave` (`left`) in one message.
+#[derive(Message, Clone, Debug)]
+pub struct DragHovered {
+    /// The element the drag started on.
+    pub source: Entity,
+    /// The accepting drop target under the pointer.
+    pub over: Option<Entity>,
+    /// True when `over` was not under the pointer the step before.
+    pub entered: bool,
+    /// The target the pointer left this step.
+    pub left: Option<Entity>,
+    /// Where the pointer is, in window logical pixels.
+    pub position: Vec2,
+}
+
+/// Emitted when an in-app drag ends, dropped or not, after the
+/// [`DropAccepted`] of a drop.
+#[derive(Message, Clone, Debug)]
+pub struct DragEnded {
+    /// The element the drag started on.
+    pub source: Entity,
+    /// The target it was dropped on; `None` for a drag released over
+    /// nothing that takes it.
+    pub target: Option<Entity>,
+    /// The effect of the drop, [`DropEffect::None`] when nothing took it.
+    pub effect: DropEffect,
+    /// Where the pointer was released, in window logical pixels.
+    pub position: Vec2,
 }
 
 /// Emitted when the user releases the drag on a hovered drop target
-/// (in-app gesture).
+/// (in-app gesture), or the platform drops a file on one.
 #[derive(Message, Clone, Debug)]
 pub struct DropAccepted {
     /// Source entity, when the drop originated in-app.
@@ -181,6 +238,8 @@ pub struct DropAccepted {
     pub payload: MimePayload,
     /// Effect chosen by the target.
     pub effect: DropEffect,
+    /// Where the pointer was at the drop, in window logical pixels.
+    pub position: Vec2,
 }
 
 /// Single resolved drop effect (one bit of [`DropEffectSet`]).
@@ -243,8 +302,9 @@ pub fn translate_file_drops_to_payload(
         out.write(DropAccepted {
             source: None,
             target: ev.entity,
-            payload: payload.clone(),
+            payload,
             effect,
+            position: ev.position,
         });
     }
 }
@@ -271,27 +331,6 @@ pub struct ActiveDragData {
     pub effects: DropEffectSet,
 }
 
-/// Sum every ancestor's [`ScrollOffset`] (excluding the entity's own) so
-/// a target's logical bounds match what the user sees - the same walk
-/// `lumen-input::ancestor_scroll` performs for the file-drop hit-test,
-/// inlined here to keep `lumen-os-dnd` free of an `lumen-input` dep.
-fn ancestor_scroll_offset(
-    entity: Entity,
-    parents: &Query<&ChildOf>,
-    scrolls: &Query<&ScrollOffset>,
-) -> Vec2 {
-    let mut total = Vec2::ZERO;
-    let mut cur = entity;
-    while let Ok(child_of) = parents.get(cur) {
-        let parent = child_of.parent();
-        if let Ok(off) = scrolls.get(parent) {
-            total += off.0;
-        }
-        cur = parent;
-    }
-    total
-}
-
 /// Hit-test `pos` against every [`DropTarget`], returning the topmost
 /// (deepest in the hierarchy, then highest entity id) target that accepts
 /// `payload`, paired with the negotiated [`DropEffect`].
@@ -313,7 +352,7 @@ fn topmost_target(
 ) -> Option<(Entity, DropEffect)> {
     let mut best: Option<(u32, Entity, DropEffect)> = None;
     for (e, t, accept) in targets.iter() {
-        let off = ancestor_scroll_offset(e, parents, scrolls);
+        let off = ancestor_scroll(e, parents, scrolls);
         let origin = t.absolute - off;
         if !(pos.x >= origin.x
             && pos.y >= origin.y
@@ -377,15 +416,17 @@ pub fn begin_in_app_drag(
             out.write(DragStarted {
                 source,
                 payload: src.payload.clone(),
+                position: ev.position,
             });
         }
     }
 }
 
 /// While a drag is active, keep [`DropHovered`] on the topmost accepting
-/// [`DropTarget`] under the pointer (and off every other target). Mirrors
-/// HTML5 `dragenter` / `dragleave` so `:drag-over` styling follows the
-/// cursor.
+/// [`DropTarget`] under the pointer (and off every other target), and
+/// report each step with a [`DragHovered`]. Mirrors HTML5 `dragenter` /
+/// `dragover` / `dragleave` so `:drag-over` styling follows the cursor.
+#[allow(clippy::too_many_arguments)] // ECS system: each arg is a query/param
 pub fn track_drop_hover(
     mut commands: Commands,
     active: Res<ActiveDrag>,
@@ -394,6 +435,8 @@ pub fn track_drop_hover(
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,
     hovered: Query<Entity, With<DropHovered>>,
+    mut out: MessageWriter<DragHovered>,
+    mut last: Local<Option<Vec2>>,
 ) {
     let want = match (&active.0, pointer.position) {
         (Some(d), Some(pos)) => {
@@ -401,16 +444,38 @@ pub fn track_drop_hover(
         }
         _ => None,
     };
+    let mut left = None;
     for e in &hovered {
         if Some(e) != want {
             commands.entity(e).remove::<DropHovered>();
+            left = Some(e);
         }
     }
+    let entered = want.is_some_and(|e| !hovered.contains(e));
     if let Some(e) = want
-        && !hovered.contains(e)
+        && entered
     {
         commands.entity(e).insert(DropHovered);
     }
+    let Some(drag) = &active.0 else {
+        *last = None;
+        return;
+    };
+    let Some(position) = pointer.position else {
+        return;
+    };
+    // A drag that holds still over the same target says nothing new.
+    if *last == Some(position) && !entered && left.is_none() {
+        return;
+    }
+    *last = Some(position);
+    out.write(DragHovered {
+        source: drag.source,
+        over: want,
+        entered,
+        left,
+        position,
+    });
 }
 
 /// On the release edge of an active drag, hit-test the drop point and
@@ -428,6 +493,7 @@ pub fn finish_in_app_drag(
     scrolls: Query<&ScrollOffset>,
     hovered: Query<Entity, With<DropHovered>>,
     mut out: MessageWriter<DropAccepted>,
+    mut ended: MessageWriter<DragEnded>,
 ) {
     for ev in ends.read() {
         let Some(data) = active.0.clone() else {
@@ -438,27 +504,40 @@ pub fn finish_in_app_drag(
         {
             continue;
         }
-        if let Some((target, effect)) = topmost_target(
+        let dropped = topmost_target(
             ev.position,
             &data.payload,
             data.effects,
             &targets,
             &parents,
             &scrolls,
-        ) {
+        );
+        if let Some((target, effect)) = dropped {
             out.write(DropAccepted {
                 source: Some(data.source),
                 target,
                 payload: data.payload.clone(),
                 effect,
+                position: ev.position,
             });
         }
+        ended.write(DragEnded {
+            source: data.source,
+            target: dropped.map(|(t, _)| t),
+            effect: dropped.map_or(DropEffect::None, |(_, e)| e),
+            position: ev.position,
+        });
         active.0 = None;
         for e in &hovered {
             commands.entity(e).remove::<DropHovered>();
         }
     }
 }
+
+/// The systems [`DndPlugin`] runs. Whoever reads this tick's drag messages
+/// orders itself after it.
+#[derive(bevy_ecs::schedule::SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct DndSet;
 
 /// Plugin: registers DnD messages + both the platform file-drop -> payload
 /// translator and the in-app drag-gesture -> drop pipeline.
@@ -467,23 +546,22 @@ pub struct DndPlugin;
 impl lumen_core::app::Plugin for DndPlugin {
     fn build(self, app: &mut lumen_core::app::App) {
         app.add_message::<DragStarted>();
+        app.add_message::<DragHovered>();
+        app.add_message::<DragEnded>();
         app.add_message::<DropAccepted>();
         app.world.insert_resource(ActiveDrag::default());
         app.add_systems(
             lumen_core::tick::TickStage::Systems,
-            translate_file_drops_to_payload,
+            translate_file_drops_to_payload.in_set(DndSet),
         );
         // In-app gesture path: open the session, resolve the drop, then
         // refresh the hover marker (so a just-finished drag clears its
         // `:drag-over` in the same tick).
-        app.add_systems(lumen_core::tick::TickStage::Systems, begin_in_app_drag);
         app.add_systems(
             lumen_core::tick::TickStage::Systems,
-            finish_in_app_drag.after(begin_in_app_drag),
-        );
-        app.add_systems(
-            lumen_core::tick::TickStage::Systems,
-            track_drop_hover.after(finish_in_app_drag),
+            (begin_in_app_drag, finish_in_app_drag, track_drop_hover)
+                .chain()
+                .in_set(DndSet),
         );
     }
 }
@@ -540,6 +618,19 @@ mod tests {
     }
 
     #[test]
+    fn drop_accept_from_list_reads_an_input_accept_list() {
+        let a = DropAccept::from_list(" image/* ,text/uri-list,, ");
+        assert_eq!(a.kinds.len(), 2);
+        assert!(a.accepts_kinds([&MimeKind::ImageJpeg]));
+        assert!(a.accepts_kinds([&MimeKind::TextUriList]));
+        assert!(!a.accepts_kinds([&MimeKind::TextPlain]));
+        assert!(
+            DropAccept::from_list("").kinds.is_empty(),
+            "empty takes any"
+        );
+    }
+
+    #[test]
     fn drop_accept_any_accepts_everything() {
         let a = DropAccept::any();
         let p: MimePayload = "x".into();
@@ -561,6 +652,8 @@ mod tests {
             world.init_resource::<Messages<DragEndEvent>>();
             world.init_resource::<Messages<DragStarted>>();
             world.init_resource::<Messages<DropAccepted>>();
+            world.init_resource::<Messages<DragHovered>>();
+            world.init_resource::<Messages<DragEnded>>();
             world.insert_resource(ActiveDrag::default());
             world.insert_resource(PointerState::default());
             world
@@ -602,6 +695,7 @@ mod tests {
                 .collect();
             assert_eq!(started.len(), 1);
             assert_eq!(started[0].source, src);
+            assert_eq!(started[0].position, Vec2::new(20.0, 10.0));
             assert_eq!(started[0].payload.text().as_deref(), Some("card-42"));
 
             // Release inside the target.
@@ -622,7 +716,15 @@ mod tests {
             assert_eq!(dropped[0].target, tgt);
             assert_eq!(dropped[0].payload.text().as_deref(), Some("card-42"));
             assert_eq!(dropped[0].effect, DropEffect::Copy);
+            assert_eq!(dropped[0].position, Vec2::new(150.0, 50.0));
             assert!(world.resource::<ActiveDrag>().0.is_none(), "session closed");
+            let ended: Vec<DragEnded> = world
+                .resource_mut::<Messages<DragEnded>>()
+                .drain()
+                .collect();
+            assert_eq!(ended.len(), 1, "one DragEnded after the drop");
+            assert_eq!(ended[0].target, Some(tgt));
+            assert_eq!(ended[0].effect, DropEffect::Copy);
         }
 
         /// Releasing outside every target drops nothing and closes the
@@ -717,15 +819,75 @@ mod tests {
                 effects: DropEffectSet::COPY,
             });
 
+            let mut system = IntoSystem::into_system(track_drop_hover);
+            system.initialize(&mut world);
+            let mut step = |world: &mut World, at: Vec2| {
+                world.resource_mut::<PointerState>().position = Some(at);
+                system.run((), world).unwrap();
+                world.flush();
+                world
+                    .resource_mut::<Messages<DragHovered>>()
+                    .drain()
+                    .collect::<Vec<_>>()
+            };
+
+            let hover = step(&mut world, Vec2::new(50.0, 50.0));
+            assert!(world.get::<DropHovered>(tgt).is_some(), "marked on enter");
+            assert_eq!(hover.len(), 1);
+            assert_eq!((hover[0].over, hover[0].entered), (Some(tgt), true));
+
+            let hover = step(&mut world, Vec2::new(60.0, 50.0));
+            assert_eq!(hover.len(), 1, "a move over the target is a dragover");
+            assert_eq!((hover[0].over, hover[0].entered), (Some(tgt), false));
+            assert!(
+                step(&mut world, Vec2::new(60.0, 50.0)).is_empty(),
+                "holding still says nothing"
+            );
+
+            let hover = step(&mut world, Vec2::new(500.0, 500.0));
+            assert!(world.get::<DropHovered>(tgt).is_none(), "cleared on leave");
+            assert_eq!((hover[0].over, hover[0].left), (None, Some(tgt)));
+        }
+
+        /// An `accept` list takes any kind it names, wildcards included, and
+        /// lights `:drag-over` only for a drag carrying one of them.
+        #[test]
+        fn accept_list_filters_the_hover() {
+            let mut world = setup();
+            let src = world.spawn(DragSource::new("c")).id();
+            let images = target(
+                &mut world,
+                Vec2::ZERO,
+                Vec2::new(100.0, 100.0),
+                DropAccept::from_list("image/*, application/x-asset"),
+            );
+            let mut payload = MimePayload::from("c");
+            world.resource_mut::<ActiveDrag>().0 = Some(ActiveDragData {
+                source: src,
+                payload: payload.clone(),
+                effects: DropEffectSet::COPY,
+            });
             world.resource_mut::<PointerState>().position = Some(Vec2::new(50.0, 50.0));
             world.run_system_once(track_drop_hover).unwrap();
             world.flush();
-            assert!(world.get::<DropHovered>(tgt).is_some(), "marked on enter");
+            assert!(
+                world.get::<DropHovered>(images).is_none(),
+                "text is refused"
+            );
 
-            world.resource_mut::<PointerState>().position = Some(Vec2::new(500.0, 500.0));
+            payload.set(MimeKind::from("application/x-asset"), b"a".to_vec());
+            world
+                .resource_mut::<ActiveDrag>()
+                .0
+                .as_mut()
+                .unwrap()
+                .payload = payload;
             world.run_system_once(track_drop_hover).unwrap();
             world.flush();
-            assert!(world.get::<DropHovered>(tgt).is_none(), "cleared on leave");
+            assert!(
+                world.get::<DropHovered>(images).is_some(),
+                "the asset is taken"
+            );
         }
     }
 

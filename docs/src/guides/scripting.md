@@ -173,12 +173,18 @@ released over the button's padding clicks the button. A handler
 receives an event it can inspect and control, with `target`, `current_target`,
 `key`, `value`, `button`, coordinates, wheel deltas, modifier flags,
 `prevent_default`, `stop_propagation`, and `stop_immediate_propagation`.
+`x` and `y` are relative to the target's top-left as it is painted, scrolling
+included, as the web's `offsetX` / `offsetY` are; `client_x` and `client_y`
+are window coordinates.
 
 The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
 `pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
 `gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
-`input`, `change`, `focus`, `blur`, `submit`, `scroll`, `pointerlockchange`,
-and `pointerlockerror`. Of those, `input`
+`input`, `change`, `focus`, `blur`, `submit`, `scroll`, `rangechange`,
+`pointerlockchange`, `pointerlockerror`, `beforetoggle`, `toggle`, and the
+drag events `dragstart`, `dragenter`, `dragover`, `dragleave`, `drop` and
+`dragend`. A popover hears `beforetoggle` and then `toggle` when it opens or
+closes, with `old_state` and `new_state` in the event's detail. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit; leaving a field after an edit raises `change` too. Checkboxes,
 toggles, switches, sliders, radios, dropdowns and color fields raise `input` and
@@ -188,10 +194,16 @@ action to prevent:
 `contextmenu` keeps a browser from opening its own menu in a web build. Key
 events go to the focused element; with nothing focused they go to the
 document, so bind
-app-wide shortcuts on `document_node()`. A key event's `key` is what the key
+app-wide shortcuts on `document_node()`, or declare them as
+[commands](os-integration.md#commands-and-shortcuts), which also put them in
+menus and a command palette and let the user rebind them. A key event's `key` is what the key
 means under the user's layout and its `code` is where the key sits (`KeyW`,
 `ShiftLeft`), named after the US layout; bind a game's movement keys by
 `code`, so they stay put on every layout.
+
+`rangechange` fires on a virtualized `<for>` when the items it has built
+change, with their indices in `detail()` as `first` and `last` (`last`
+exclusive); see [Reactivity](reactivity.md) for loading only what is shown.
 
 A `wheel` event's `delta_x` and `delta_y` are always in logical pixels, a
 wheel's notches converted at 32 pixels a line. Its `delta_mode` says what the
@@ -250,6 +262,27 @@ screen reports pressure. On macOS and Linux a pen moves the mouse pointer and
 reports neither pressure nor tilt; a Linux touch screen reports touches
 without pressure, and macOS reports no touches. In a web build every reading
 comes from the browser.
+
+The drag events follow an in-app drag: `dragstart` and `dragend` fire on the
+element the drag began on, and `dragenter`, `dragover`, `dragleave` and `drop`
+on the drop target under the pointer whose `accept` list takes the drag. A
+file dropped from another application is a `drop` carrying `text/uri-list`.
+`types()` lists the MIME types a drag carries and `get_data(type)` reads one;
+a `dragstart` handler adds a type with `set_data(type, value)`, and its
+`prevent_default` cancels the drag:
+
+```rust
+fn on_card_drag(ev: int) {
+    let e = event(ev);
+    e.set_data("application/x-card", card_json(e.target().id()));
+}
+
+fn on_lane_drop(ev: int) {
+    move_card(event(ev).get_data("application/x-card"));
+}
+```
+
+[Drag and drop](os-integration.md#drag-and-drop) covers the markup side.
 
 A module raises events of its own, under names of its own: a dock raises
 `layoutchange` when its panels move and `panelclose` before a user closes one.

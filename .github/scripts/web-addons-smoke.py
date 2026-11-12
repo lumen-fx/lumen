@@ -60,6 +60,7 @@ EXPECTED = {
     "browser-file": "file refused",
     "svg-count": "1",
     "canvas-size": "40x20",
+    "commands-keys": "Ctrl+Shift+H|Alt+B",
 }
 
 
@@ -344,6 +345,31 @@ def run(url, chrome):
         switched = script(dock)
         if (switched["a"], switched["b"]) != (True, False):
             fail(f"picking a tab left the dock reading {switched}")
+
+        # Commands: a chord runs one, and the palette opens on its own chord
+        # and lists them.
+        script(
+            "document.body.dispatchEvent(new KeyboardEvent('keydown',"
+            " { key: 'H', code: 'KeyH', ctrlKey: true, shiftKey: true, bubbles: true }));"
+        )
+        ran = None
+        until = time.time() + 5
+        while time.time() < until:
+            ran = script("return document.getElementById('commands-ran').textContent;")
+            if ran == "say.hello":
+                break
+            time.sleep(0.2)
+        if ran != "say.hello":
+            fail(f"Ctrl+Shift+H ran {ran!r}")
+        listed = script(
+            "document.body.dispatchEvent(new KeyboardEvent('keydown',"
+            " { key: 'P', code: 'KeyP', ctrlKey: !navigator.platform.includes('Mac'),"
+            "   metaKey: navigator.platform.includes('Mac'), shiftKey: true, bubbles: true }));"
+            "return [...document.querySelectorAll('.lm-command-palette-item')]"
+            ".map((r) => r.dataset.id);"
+        )
+        if listed != ["say.hello", "say.bye"]:
+            fail(f"the palette lists {listed}")
 
         if noise:
             fail("the page logged something")

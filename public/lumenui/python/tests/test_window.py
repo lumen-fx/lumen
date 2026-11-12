@@ -26,10 +26,10 @@ class WindowSurfaceTests(unittest.TestCase):
     def test_the_app_can_quit(self) -> None:
         self.assertTrue(callable(lumen.App.quit))
 
-    def test_the_sdk_expects_abi_0_18(self) -> None:
+    def test_the_sdk_expects_abi_0_20(self) -> None:
         from lumen import _ffi
 
-        self.assertEqual((_ffi.ABI_MAJOR, _ffi.ABI_MINOR), (0, 19))
+        self.assertEqual((_ffi.ABI_MAJOR, _ffi.ABI_MINOR), (0, 20))
 
 
 if __name__ == "__main__":

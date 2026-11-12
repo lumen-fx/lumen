@@ -316,7 +316,7 @@ pub fn scroll_on_keys(
             With<crate::tabs::TabStripButton>,
             // A freshly-opened menu parks focus on the panel itself
             // until the first arrow press picks a row.
-            With<crate::popup::PopupPanel>,
+            With<crate::popup::Popover>,
         )>,
     >,
     children: Query<(&ChildOf, &Transform)>,

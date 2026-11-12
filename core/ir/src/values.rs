@@ -993,6 +993,89 @@ pub fn bad(ctx: &str, name: &str, value: &str, reason: String) -> ParseError {
     }
 }
 
+/// CSS `position-area`, the subset a popover uses: a side (`top`,
+/// `bottom`, `left`, `right`), alone for centred on the anchor, or with a
+/// span toward one end (`bottom span-right` lines up the left edges, `bottom
+/// span-left` the right edges; `right span-bottom` the top edges, `right
+/// span-top` the bottom edges). The two words come in either order.
+pub fn parse_position_area(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::PositionAreaSpec, ParseError> {
+    use crate::layout_ir::{AreaAlignSpec as A, AreaSideSpec as S, PositionAreaSpec};
+    let words: Vec<&str> = value.split_whitespace().collect();
+    let side_of = |w: &str| match w {
+        "top" => Some(S::Top),
+        "bottom" => Some(S::Bottom),
+        "left" => Some(S::Left),
+        "right" => Some(S::Right),
+        _ => None,
+    };
+    let (side, span) = match words.as_slice() {
+        [one] => (side_of(one), None),
+        [a, b] if side_of(a).is_some() => (side_of(a), Some(*b)),
+        [a, b] => (side_of(b), Some(*a)),
+        _ => (None, None),
+    };
+    let unsupported = || {
+        bad(
+            ctx,
+            name,
+            value,
+            "expected a side (`top`, `bottom`, `left`, `right`), optionally with a \
+             `span-*` toward one end, such as `bottom span-right`"
+                .to_string(),
+        )
+    };
+    let side = side.ok_or_else(unsupported)?;
+    let vertical = matches!(side, S::Top | S::Bottom);
+    let align = match span {
+        None | Some("span-all") => A::Center,
+        Some("span-right") if vertical => A::Start,
+        Some("span-left") if vertical => A::End,
+        Some("span-bottom") if !vertical => A::Start,
+        Some("span-top") if !vertical => A::End,
+        Some(_) => return Err(unsupported()),
+    };
+    Ok(PositionAreaSpec { side, align })
+}
+
+/// CSS `position-try-fallbacks`: `none`, or a comma-separated list of
+/// `flip-block`, `flip-inline` and `flip-block flip-inline`. A popover may
+/// make any flip the list names.
+pub fn parse_position_try(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<crate::layout_ir::PositionTrySpec, ParseError> {
+    let mut spec = crate::layout_ir::PositionTrySpec::default();
+    if value.trim() == "none" {
+        return Ok(spec);
+    }
+    for option in value.split(',') {
+        let words: Vec<&str> = option.split_whitespace().collect();
+        if words.is_empty() {
+            return Err(bad(ctx, name, value, "an empty fallback".to_string()));
+        }
+        for word in words {
+            match word {
+                "flip-block" => spec.flip_block = true,
+                "flip-inline" => spec.flip_inline = true,
+                other => {
+                    return Err(bad(
+                        ctx,
+                        name,
+                        value,
+                        format!("unsupported fallback '{other}': use flip-block or flip-inline"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(spec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

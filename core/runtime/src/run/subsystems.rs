@@ -246,6 +246,12 @@ pub(crate) fn register_reactive(app: &mut App) {
     // What the stylesheet asks of elements entering and leaving the tree,
     // and the removal of a leaving element once its exit has run.
     lumen_scene::style_sheet::install_entry_exit(app);
+    // A virtualized grid learns its new column count from the layout after
+    // a resize, so that layout asks for the tick that re-slots its cells.
+    app.add_systems(
+        TickStage::A11ySync,
+        crate::spawn::request_tick_on_grid_reflow,
+    );
     // A `<split>`'s gutters and a `<tabs>`' strip, however their children
     // got there, and a tab's content once it shows.
     lumen_scene::widgets::install(app);
@@ -285,6 +291,11 @@ pub(crate) fn register_reactive(app: &mut App) {
         crate::spawn::manage_dialog_lifecycle
             .after(crate::spawn::reconcile_if_blocks)
             .after(crate::spawn::mark_dialog_accept_on_default_click),
+    );
+    // A popover that opens moves focus to its `autofocus` element.
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::focus_autofocus_in_popovers.after(lumen_primitives::report_popover_toggles),
     );
     // Esc closes every visible <dialog> by writing "" to its open
     // signal. Runs in Input stage so the next reconcile_if_blocks tick

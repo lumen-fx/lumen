@@ -1,0 +1,72 @@
+# The web half of the commands module: the same registry, key dispatch,
+# palette and key bindings, written in JavaScript. The page keeps the user's
+# bindings in local storage. The desktop half in src/ takes its function
+# signatures from this file, so a script sees the same names on every target.
+[addon]
+namespace = "commands"
+module = "commands.js"
+styles = ["commands.css"]
+
+[[function]]
+name = "register"
+params = ["id: string", "label: string", "keys: string"]
+returns = "bool"
+doc = "Add a command made at run time, or replace the one with the same id. keys is a chord such as Ctrl+Shift+P, or a comma-separated list of them; empty for none. False when the id is empty or a chord does not read."
+
+[[function]]
+name = "unregister"
+params = ["id: string"]
+returns = "bool"
+doc = "Remove the command. False when no command has the id."
+
+[[function]]
+name = "run"
+params = ["id: string"]
+returns = "bool"
+doc = "Run the command: a command event on the document carries its id. False when no command has the id or it is disabled."
+
+[[function]]
+name = "set_enabled"
+params = ["id: string", "enabled: bool"]
+returns = "bool"
+doc = "Turn the command on or off. A disabled command does not run, shows greyed out in menus, and is left out of the palette. False when no command has the id."
+
+[[function]]
+name = "keys"
+params = ["id: string"]
+returns = "string"
+doc = "The chords that run the command now, comma-separated, in the form bind reads back: the user's binding, else the declared keys."
+
+[[function]]
+name = "bind"
+params = ["id: string", "keys: string"]
+returns = "bool"
+doc = "Bind the command to keys in place of what it had; an empty string unbinds it. A chord another command has moves to this one. The binding is kept between runs unless the module's persist is none."
+
+[[function]]
+name = "reset"
+params = ["id: string"]
+returns = "bool"
+doc = "Give the command its declared keys back. False when the user had not bound it."
+
+[[function]]
+name = "record"
+params = ["id: string"]
+returns = "bool"
+doc = "Bind the next chord the user presses to the command, as bind does; Escape cancels. A keyschange event on the document tells when it is done."
+
+[[function]]
+name = "open_palette"
+doc = "Open the command palette."
+
+[[element]]
+tag = "commands"
+html = "div"
+
+[[element]]
+tag = "command"
+html = "div"
+
+[[element]]
+tag = "command-palette"
+html = "div"

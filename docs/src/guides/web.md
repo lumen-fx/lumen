@@ -219,6 +219,17 @@ bordered card with its own fill and an inch of padding; a Lumen dialog is the
 whole window with the app's surface centred inside it, and that is what the
 page shows.
 
+A `popover` is the browser's own too: the page writes `popover`,
+`popovertarget` and the element's anchor as CSS anchor positioning, the
+browser shows it in its top layer and closes an `auto` one on an outside
+press or Escape, and its signal follows whatever the browser did.
+`position-area` and `position-try-fallbacks` go out as written, and a
+popover with neither opens below its anchor and flips the way it does on the
+desktop. Two of the desktop's rules are its own: the browser does not clamp
+a popover to the window or shrink it to the room it has, and `popup-gap` sets
+no gap on a page. The floating lists of `<dropdown>` and `<menu>` stay the
+page elements they were.
+
 An image is emitted with the size of the file the build copied, so the page
 holds its place in the layout before a byte of the image has arrived and the
 text below it does not jump when it lands. The size is the file's own; a
@@ -699,6 +710,13 @@ none of them means anything without an absolute address.
   runtime mounts every row when the page opens and the browser scrolls them,
   the way it scrolls any other list. A site built with `render = "static"`
   carries every row, since nothing runs to add the rest.
+- A virtualized grid (`cell-width`) is written as a CSS grid,
+  `grid-template-columns: repeat(auto-fill, <cell-width>px)` with
+  `grid-auto-rows: <row-height>px`, so the browser wraps the cells and the
+  stylesheet's `gap` spaces them. The document carries the cells a first screen
+  of 1920 by 1080 pixels shows. A grid inside a branch that is not showing when
+  the page is built is mounted by the runtime without that grid style.
+- The runtime mounts the whole list, so a page does not fire `rangechange`.
 - A list whose rows only exist once a script has run is emitted empty under
   `prerender = "seeds"`. `[web.seed]` puts rows in the document without
   anything running, and `prerender = "run"` gets them from the app itself.
@@ -787,10 +805,12 @@ none of them means anything without an absolute address.
   browser can refuse a write that does not follow something the visitor did,
   such as a click, and it asks the visitor before a read; a refused read also
   answers with empty text. `copy_image` and `save_clipboard_image` are desktop only.
-- `on_file_dropped` and the in-app `drag-payload` / `on_drop` pair, which
-  read what was dropped, are desktop only: `draggable="true"` has no effect
-  in a browser, so an element cannot start a drag there in the first place,
-  and a drop on the web target delivers nothing.
+- `on_file_dropped`, the in-app `drag-payload` / `on_drop` pair and the
+  drag events (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`,
+  `dragend`), which read what was dropped, are desktop only:
+  `draggable="true"` has no effect in a browser, so an element cannot start a
+  drag there in the first place, and a drop on the web target delivers
+  nothing.
 - `request_pointer_lock` does nothing in a browser, so `pointerlockchange`
   never fires there and `pointer_lock_element()` stays empty. A pointer's
   `movement_x` and `movement_y`, and a wheel's `delta_mode`, are the

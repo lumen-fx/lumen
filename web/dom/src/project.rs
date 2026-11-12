@@ -194,8 +194,23 @@ pub fn project_visibility(
         };
         match element.dyn_ref::<HtmlDialogElement>() {
             Some(dialog) => show_dialog(dialog, visible.0),
+            None if element.has_attribute("popover") => show_popover(element, visible.0),
             None => set_flag(element, DATA_LM_HIDDEN, !visible.0),
         }
+    }
+}
+
+/// Show a popover in the browser's top layer, or close it. Either refuses
+/// an element already in the state asked for, which is nothing to report.
+fn show_popover(element: &Element, show: bool) {
+    let Some(element) = element.dyn_ref::<HtmlElement>() else {
+        return;
+    };
+    let open = element.matches(":popover-open").unwrap_or(false);
+    if show && !open {
+        let _ = element.show_popover();
+    } else if !show && open {
+        let _ = element.hide_popover();
     }
 }
 

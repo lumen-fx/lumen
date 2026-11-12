@@ -461,6 +461,51 @@ impl Scroll {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScrollOffset(pub Vec2);
 
+/// The sum of every ancestor's [`ScrollOffset`] above `entity` (its own
+/// offset excluded): how far its painted box sits from its laid-out
+/// `Transform::absolute`. Hit testing, the scroll-aware extracts, drop
+/// targets and event-local positions all subtract it, so what the user sees
+/// and where input lands agree.
+///
+/// Pass a `parents` query filtered
+/// [`NotPaintRoot`](crate::render_world::NotPaintRoot) to stop at a surface
+/// root or a top-layer element: neither moves with its ancestors'
+/// scrolling.
+pub fn ancestor_scroll<F: bevy_ecs::query::QueryFilter>(
+    entity: Entity,
+    parents: &Query<&ChildOf, F>,
+    scrolls: &Query<&ScrollOffset>,
+) -> Vec2 {
+    let mut total = Vec2::ZERO;
+    let mut cur = entity;
+    while let Ok(child_of) = parents.get(cur) {
+        let parent = child_of.parent();
+        if let Ok(off) = scrolls.get(parent) {
+            total += off.0;
+        }
+        cur = parent;
+    }
+    total
+}
+
+/// [`ancestor_scroll`] read straight from a world, for an exclusive system;
+/// stops at a surface root or a top-layer element the same way.
+pub fn ancestor_scroll_in(world: &World, entity: Entity) -> Vec2 {
+    let mut total = Vec2::ZERO;
+    let mut cur = entity;
+    while world.get::<crate::window::WindowOf>(cur).is_none()
+        && world.get::<crate::render_world::TopLayer>(cur).is_none()
+        && let Some(child_of) = world.get::<ChildOf>(cur)
+    {
+        let parent = child_of.parent();
+        if let Some(off) = world.get::<ScrollOffset>(parent) {
+            total += off.0;
+        }
+        cur = parent;
+    }
+    total
+}
+
 /// Overlay-scrollbar paint + fade state, auto-attached to every
 /// [`Scroll`] entity by `lumen_primitives::scrollbar::update_scrollbars`
 /// (spec section 16.2 / section 16.6). The interaction FSM (hover / drag) is global
@@ -1659,6 +1704,13 @@ pub struct KeyReleased {
 /// Marker placed by `lumen-input`'s focus router on the keyboard-focused entity. The router maintains at most one [`Focused`] at a time.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Focused;
+
+/// Marker on an element that takes every key while it has keyboard focus:
+/// app-wide shortcuts (a menu bar's accelerators, a command registry) leave
+/// keys to it. An embedded renderer's viewport that forwards every key to
+/// its producer carries it.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct TakesEveryKey;
 
 /// Marker on a focused text field with no edit in flight: focus has just
 /// arrived, or Enter committed a single-line edit, and no key has reached it

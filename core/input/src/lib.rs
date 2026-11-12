@@ -442,6 +442,62 @@ fn edits(ev: &FocusedKey, multiline: bool) -> bool {
     }
 }
 
+/// Whether a focused text field keeps a key press from the app's shortcuts:
+/// plain and Shift-only keys, which type and move, and its editing chords
+/// (Ctrl or Cmd with A, C, X, V, Z, Y, the arrows, Home, End, Backspace and
+/// Delete). Every other chord (Ctrl+S, Ctrl+Shift+P, Alt+F4) and Escape and
+/// the function keys go to the app, so a command bound to one still runs
+/// while the user types. The web target's key routing keeps the same keys
+/// for the browser's own editor.
+pub fn text_field_keeps(key: &Key, modifiers: &Modifiers) -> bool {
+    match key {
+        Key::Named(NamedKey::Escape) => false,
+        Key::Named(
+            NamedKey::ArrowUp
+            | NamedKey::ArrowDown
+            | NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::Backspace
+            | NamedKey::Delete,
+        ) => true,
+        _ if modifiers.ctrl || modifiers.super_ => matches!(
+            key,
+            Key::Character(s) if matches!(s.to_ascii_lowercase().as_str(), "a" | "c" | "x" | "v" | "z" | "y")
+        ),
+        Key::Character(s) => !is_named_key_string(s),
+        Key::Named(_) => true,
+    }
+}
+
+/// Whether the element with keyboard focus keeps a key press from the
+/// app-wide shortcuts (a menu bar's accelerators, a command registry): a
+/// text field keeps what [`text_field_keeps`] says, and an element that
+/// takes every key ([`TakesEveryKey`](lumen_core::input::TakesEveryKey), or
+/// the one holding the pointer lock) keeps them all.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct FocusKeeps<'w, 's> {
+    tracker: Option<Res<'w, FocusTracker>>,
+    fields: Query<'w, 's, (), With<lumen_core::components::TextInput>>,
+    takers: Query<'w, 's, (), With<lumen_core::input::TakesEveryKey>>,
+    lock: Option<Res<'w, lumen_core::input::PointerLockState>>,
+}
+
+impl FocusKeeps<'_, '_> {
+    /// Whether the focused element keeps `key` with `modifiers`.
+    pub fn keeps(&self, key: &Key, modifiers: &Modifiers) -> bool {
+        if self.lock.as_ref().is_some_and(|l| l.owner.is_some()) {
+            return true;
+        }
+        let Some(focused) = self.tracker.as_ref().and_then(|t| t.0) else {
+            return false;
+        };
+        self.takers.contains(focused)
+            || (self.fields.contains(focused) && text_field_keeps(key, modifiers))
+    }
+}
+
 /// Enter on a single-line input, or Shift+Enter on a multiline one, is the
 /// commit signal `activate_focused_on_enter` turns into
 /// [`TextInputCommitted`].
@@ -717,7 +773,7 @@ fn read_clipboard(res: Option<&mut ClipboardHost>) -> String {
 pub fn dispatch_file_drops(
     mut drops: ResMut<PendingFileDrops>,
     candidates: Query<(Entity, &Transform), With<DropTarget>>,
-    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    parents: Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
     scrolls: Query<&ScrollOffset>,
     pointer_events: Query<&lumen_core::input::PointerEvents>,
     (pointer, partitions): (
@@ -1000,30 +1056,7 @@ pub fn update_ime_request(
     });
 }
 
-/// Walk the ChildOf chain starting at `entity`, sum every ancestor's
-/// [`ScrollOffset`] (excluding the entity's own offset). Used by both
-/// hit-test and the scroll-aware extracts so visual + logical positions
-/// agree.
-///
-/// Pass a `parents` query filtered `Without<WindowOf>` to stop at a surface
-/// root: a subtree shown in a window of its own does not move with its
-/// ancestors' scrolling.
-pub fn ancestor_scroll<F: bevy_ecs::query::QueryFilter>(
-    entity: Entity,
-    parents: &Query<&ChildOf, F>,
-    scrolls: &Query<&ScrollOffset>,
-) -> Vec2 {
-    let mut total = Vec2::ZERO;
-    let mut cur = entity;
-    while let Ok(child_of) = parents.get(cur) {
-        let parent = child_of.parent();
-        if let Ok(off) = scrolls.get(parent) {
-            total += off.0;
-        }
-        cur = parent;
-    }
-    total
-}
+pub use lumen_core::input::ancestor_scroll;
 
 /// The half of the input layer every platform needs: a key press reaches the
 /// focused element, Enter activates it, and Escape cancels the press it
@@ -1245,8 +1278,9 @@ impl Plugin for InputPlugin {
 ///
 /// Scroll-aware: the walk carries the ancestors' [`ScrollOffset`] values
 /// down the tree and shifts each box by them, so it matches the visual
-/// position the renderer draws at. A surface root (`WindowOf`) starts its
-/// own scroll and clip context.
+/// position the renderer draws at. A surface root (`WindowOf`) and a
+/// top-layer element (`TopLayer`) each start their own scroll and clip
+/// context.
 ///
 /// Hidden entities never hit (spec section 17.4): an entity is skipped when it
 /// (or any ancestor) carries `Visible(false)` (render-gate hide, the
@@ -1426,6 +1460,7 @@ type HitNode = (
     Has<lumen_core::render_world::OverlayLayer>,
     Has<lumen_core::window::WindowOf>,
     Option<&'static lumen_core::transform::ElementTransform>,
+    Has<lumen_core::render_world::TopLayer>,
 );
 
 /// The elements a [`HitTree`] walk starts from: those with no parent that
@@ -1439,6 +1474,16 @@ pub struct HitTree<'w, 's> {
     roots: Query<'w, 's, Entity, HitRoots>,
     nodes: Query<'w, 's, HitNode>,
     surfaces: Query<'w, 's, (), With<lumen_core::window::WindowOf>>,
+    /// Top-layer elements, with what says whether one is showing.
+    top_layers: Query<
+        'w,
+        's,
+        (
+            Option<&'static lumen_core::components::Visible>,
+            Option<&'static lumen_core::components::Style>,
+        ),
+        With<lumen_core::render_world::TopLayer>,
+    >,
     z_indices: Query<'w, 's, &'static lumen_core::components::ZIndex>,
 }
 
@@ -1486,7 +1531,13 @@ impl HitTree<'_, '_> {
         // Pruning a hidden or clipped subtree is exact only when no surface
         // root below it starts afresh.
         let single_window = scope.partitions.is_none();
-        let no_surfaces = self.surfaces.is_empty();
+        // A showing top-layer element starts afresh like a surface root, so
+        // a clipped subtree holding one cannot be pruned.
+        let no_surfaces = self.surfaces.is_empty()
+            && self.top_layers.iter().all(|(visible, style)| {
+                visible.is_some_and(|v| !v.0)
+                    || style.is_some_and(|s| matches!(s.display, Display::None))
+            });
         let mut best: Option<((u32, u64, u32), Entity)> = None;
         // Roots in entity order and children in document order, each list
         // pushed reversed so the stack pops them in order.
@@ -1515,6 +1566,7 @@ impl HitTree<'_, '_> {
                 overlay,
                 surface,
                 moved,
+                top,
             )) = self.nodes.get(f.entity)
             else {
                 continue;
@@ -1533,8 +1585,9 @@ impl HitTree<'_, '_> {
             if hidden && single_window {
                 continue;
             }
-            // A surface root's ancestors neither scroll nor clip it.
-            let (mut pt, mut clipped) = if surface {
+            // A surface root's ancestors neither scroll nor clip it, and
+            // neither do a top-layer element's.
+            let (mut pt, mut clipped) = if surface || top {
                 (p, false)
             } else {
                 (f.at, f.clipped)
@@ -2329,7 +2382,7 @@ pub fn text_pointer_to_caret(
         With<TextEditable>,
     >,
     (parents, tree): (
-        Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+        Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
         Query<&ChildOf>,
     ),
     scrolls: Query<&ScrollOffset>,
@@ -2464,7 +2517,7 @@ pub fn text_pointer_drag_select(
         Option<&EchoMode>,
         Option<&TextBlockOrigin>,
     )>,
-    parents: Query<&ChildOf, Without<lumen_core::window::WindowOf>>,
+    parents: Query<&ChildOf, lumen_core::render_world::NotPaintRoot>,
     scrolls: Query<&ScrollOffset>,
     mut requests: MessageWriter<TextEditRequest>,
 ) {

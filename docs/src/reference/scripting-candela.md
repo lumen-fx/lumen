@@ -240,9 +240,9 @@ as a runtime failure of the handler.
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |
 | `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |
-| `on_drop(target_id, payload)` | Drop-zone id, the source's text payload. |
-| `on_drag_start(source_id, payload)` | Drag-source id, its text payload. |
-| `on_file_dropped(id, path)` | Element id, dropped file path. |
+| `on_drop(target_id, payload)` | Drop-zone id, the drag's `text/plain` value, or its only value when it carries no text (a dropped file's `text/uri-list`). The DOM `drop` event carries every type. |
+| `on_drag_start(source_id, payload)` | Drag-source id, its payload as for `on_drop`. |
+| `on_file_dropped(id, path)` | Element id, dropped file path. Deprecated: a dropped file is a `drop` event carrying `text/uri-list`, and `on_drop` receives the uri. Removed in the next release. |
 | `on_file_picked(tag, path)` | Dialog tag, chosen path. Empty path on cancel. |
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
@@ -670,7 +670,10 @@ through the accessors below:
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_code(ev: int)` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
-| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as {string: any}`. |
+| `lumen::event_types(ev: int)` | `string[]` | The MIME types a drag event carries (`"text/plain"`, `"application/x-asset"`), in the order they were set; empty for other events. |
+| `lumen::event_get_data(ev: int, kind: string)` | `string` | What a drag event carries under a MIME type, as text; `""` when it carries none. Case and parameters do not count, and `"text"` / `"url"` stand for `text/plain` / `text/uri-list`. |
+| `lumen::event_set_data(ev: int, kind: string, value: string)` | `bool` | In a `dragstart` handler, put a value in the drag under a MIME type, replacing what it carried there. Answers `false` in any other handler. |
+| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries, a `rangechange`'s `first` / `last`, or a popover `toggle`'s `old_state` / `new_state`: a map, empty for the other built-in events. Unwrap it with `as {string: any}`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -681,7 +684,7 @@ through the accessors below:
 | `lumen::event_tilt_x(ev: int)` / `lumen::event_tilt_y(ev: int)` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
 | `lumen::event_twist(ev: int)` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
 | `lumen::event_width(ev: int)` / `lumen::event_height(ev: int)` | `float` | Contact size in logical pixels; `1` for a point device. |
-| `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target. |
+| `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target's top-left as it is painted, scrolling included. |
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
 | `lumen::event_movement_x(ev: int)` / `lumen::event_movement_y(ev: int)` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
@@ -696,13 +699,25 @@ through the accessors below:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`.
+`blur`, `submit`, `scroll`, `rangechange`, `pointerlockchange`,
+`pointerlockerror`, `beforetoggle`, `toggle`, `dragstart`, `dragenter`,
+`dragover`, `dragleave`, `drop`, `dragend`.
+`dragstart` and `dragend` fire on the element an in-app drag began on; the
+other four on the drop target under the pointer whose `accept` list takes the
+drag. A `dragstart` handler's `prevent_default` cancels the drag.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
 way; the module's documentation lists them and says which bubble and which a
 handler can cancel with `prevent_default`. They carry a detail map, which a
-built-in event leaves empty.
+built-in event leaves empty, except `rangechange`.
+
+`rangechange` fires on a `<for virtualized="true">` each time the items it has
+mounted change: a scroll moves its window, a grid's column count changes, or
+the list grows or shrinks. Its detail is `{first, last}`, item indices with
+`first` inclusive and `last` exclusive, so a handler loads thumbnails for those
+items and nothing else. A web build mounts the whole list and does not fire
+it.
 
 A CSS animation raises `animationstart`, `animationiteration`,
 `animationend` and `animationcancel` on its element, on the desktop and in a
@@ -713,9 +728,9 @@ detail. An animation a script started with `animations::animate` raises
 handle under `animation`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
-(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
-`scroll` do not bubble. `keydown` and `keyup` target the focused element, or
-the document root when nothing is focused.
+(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`,
+`scroll` and `rangechange` do not bubble. `keydown` and `keyup` target the
+focused element, or the document root when nothing is focused.
 
 `pointerenter` fires on an element when the pointer reaches it or one of its
 descendants, outermost element first, and `pointerleave` when the pointer is
@@ -936,9 +951,12 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::clear_recent_files()` | Remove every entry from the recent-files list. |
 | `lumen::set_autostart(on: bool)` | Enable or disable launching this app at login. |
 | `lumen::query_autostart(tag: string)` | Request the autostart state; fires `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`. |
-| `lumen::open_menu(id: string)` | Open menu `id` where its styles place it, by setting the `__menu_open:id` signal to true. |
+| `lumen::open_menu(id: string)` | Open menu `id` below where it is written, by setting the `__menu_open:id` signal to true. |
 | `lumen::open_menu_at(id: string, x: float, y: float)` | Open menu `id` with its top-left corner at `(x, y)` in window coordinates. Near the right or bottom edge it opens to the left of or above the point instead. Pass a `contextmenu` event's client position to open a context menu at the pointer. |
 | `lumen::close_menu(id: string)` | Close menu `id`. |
+| `lumen::show_popover(id: string)` | Open the [popover](tags.md#popover) `id`, as the DOM's `showPopover()` does. |
+| `lumen::hide_popover(id: string)` | Close the popover `id`. |
+| `lumen::toggle_popover(id: string)` | Open the popover `id` when it is closed, close it when it is open. |
 
 See [OS integration](../guides/os-integration.md) for the markup these pair with.
 
@@ -1267,6 +1285,7 @@ no producer would.
 | `surface::state(id: string)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
 | `surface::frame_info(id: string)` | `{string: any}` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
 | `surface::frame_meta(id: string)` | `int[]` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::to_texture(id: string, x: float, y: float)` | `float[]` | Where the window position `(x, y)` lands in the frame, in frame pixels: `[x, y]`. Undoes the element's drawn box, its `object-fit` and the device pixel ratio. Empty before the first frame and on the web. |
 | `surface::request_frame(id: string)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
 | `surface::send(id: string, message: string)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
 | `surface::disconnect(id: string)` | | End the session with the producer. The surface keeps listening for another. |
@@ -1284,6 +1303,46 @@ What the producer sends back arrives as events on the element:
 `bytes`). See [`<surface>`](tags.md#surface) for the element and its events,
 and [Showing another renderer's frames](../guides/surfaces.md) for the whole
 picture.
+
+## Commands
+
+These functions come from the `lumen-commands` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-commands = { bundled = true }
+```
+
+They name a command by its `id`, whether a
+[`<command>`](tags.md#commands-command-and-command-palette) declared it or a
+script registered it. Whatever runs a command raises `command` on the
+document, with `id` in its detail; a binding that changes raises `keyschange`
+there with `id` and `keys`. See
+[Commands and shortcuts](../guides/os-integration.md#commands-and-shortcuts).
+
+| Function | Returns | Behaviour |
+| --- | --- | --- |
+| `commands::register(id: string, label: string, keys: string)` | `bool` | Add a command made at run time, or replace the one with the same id. `keys` is a chord such as `Ctrl+Shift+P`, a comma-separated list of them, or empty. `false` when the id is empty or a chord does not read. |
+| `commands::unregister(id: string)` | `bool` | Remove the command. `false` when no command has the id. |
+| `commands::run(id: string)` | `bool` | Run the command: a `command` event on the document carries its id. `false` when no command has the id or it is disabled. |
+| `commands::set_enabled(id: string, enabled: bool)` | `bool` | Turn the command on or off. A disabled command does not run, shows greyed out in its menu items, and is left out of the palette. |
+| `commands::keys(id: string)` | `string` | The chords that run the command now, comma-separated, in the form `bind` reads back. |
+| `commands::bind(id: string, keys: string)` | `bool` | Bind the command to `keys` in place of what it had; `""` unbinds it. A chord another command has moves to this one. Kept between runs unless the module's `persist` is `none`. |
+| `commands::reset(id: string)` | `bool` | Give the command its declared keys back. `false` when the user had not bound it. |
+| `commands::record(id: string)` | `bool` | Bind the next chord the user presses to the command, as `bind` does; Escape cancels. `keyschange` on the document tells when it is done. |
+| `commands::open_palette()` | nothing | Open the command palette. |
+
+```rust
+fn on_command(ev: int) {
+    let detail = lumen::event_detail(ev) as {string: any};
+    if detail["id"] as string == "file.save" { save(); }
+}
+fn on_ready() {
+    lumen::event_on(lumen::node_document(), "command", "on_command");
+    commands::register("view.zoom_in", "Zoom in", "CommandOrControl+Plus");
+}
+```
 
 ## Docks and windows
 

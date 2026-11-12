@@ -324,13 +324,16 @@ pub struct MenuSpec {
 pub enum MenuEntrySpec {
     /// `<menuitem id="open" label="Open" accel="Cmd+O" />`.
     Item {
-        /// `id="..."` - passed back to scripts as `on_menu(id)`.
+        /// `id="..."` - passed back to scripts as `on_menu(id)`. An item
+        /// written with a `command` and no `id` takes the command's id.
         id: String,
         /// Display label.
         label: String,
         /// Optional accelerator string in muda format
         /// (`"CommandOrControl+S"`, `"Alt+F4"`, ...).
         accelerator: Option<String>,
+        /// `command="..."`: the command the item runs.
+        command: Option<String>,
     },
     /// `<separator />`.
     Separator,
@@ -792,13 +795,20 @@ pub struct Attributes {
     /// derives the payload from the element's `id`. Mirrors HTML5
     /// `dataTransfer.setData` / Qt `QMimeData`.
     pub drag_payload: Option<String>,
-    /// `accept="text/plain"` on a drop target - MIME filter
-    /// ([`DropAccept`](lumen_os_dnd::DropAccept)). Absent = accept any.
+    /// `drag-type="<mime>"` - the MIME kind [`Self::drag_payload`] is
+    /// published under (interpolated per-row like it). Absent =
+    /// `text/plain`.
+    pub drag_type: Option<String>,
+    /// `accept="..."` on a drop target - MIME filter
+    /// ([`DropAccept`](lumen_os_dnd::DropAccept)): a comma-separated list of
+    /// types and `type/*` wildcards, as HTML `<input accept>` spells it.
+    /// Absent = accept any.
     pub drop_accept: Option<String>,
     /// `placeholder="..."` on `<input>` - shown when [`text`] is empty.
     pub placeholder: Option<String>,
-    /// `drop="true"` - entity gains a `DropTarget` marker so OS file
-    /// drags landing on its bounds fire `on_file_dropped(id, path)`.
+    /// `drop="true"` / `drop-target` - entity gains a `DropTarget` marker:
+    /// in-app drags and files the OS drops on its bounds land on it, and its
+    /// DOM `drop` event fires.
     pub drop_target: bool,
     /// `drag="true"` on `<title-bar>` - entity gains a
     /// `TitleBarDraggable` marker. Pressing the bar requests a native
@@ -1090,6 +1100,11 @@ pub struct Attributes {
     /// Required when [`Self::virtualized`] is true; defaults to 32 px
     /// at spawn when the attr is absent.
     pub row_height: Option<f32>,
+    /// `<for virtualized="true" cell-width="84">` - lays the virtualized
+    /// list out as a grid of fixed-size cells, each `cell_width` wide and
+    /// [`Self::row_height`] tall, as many to a row as the block's width
+    /// holds. `None` is the plain one-row-per-item list.
+    pub cell_width: Option<f32>,
     /// `signal="loaded"` on `<if>` - name of the `Signals` entry whose
     /// truthiness gates the subtree. Truthy = non-empty AND not literal
     /// `"false"` / `"0"`. Toggle spawns / despawns body on next tick.
@@ -1251,12 +1266,31 @@ pub struct Attributes {
     /// in a part of the item's own, written the way the platform's menus
     /// write one ([`crate::menu::shortcut_label`]).
     pub shortcut: Option<String>,
-    /// Synthesised on the floating panel of a `<dropdown>` / `<menu>`:
-    /// the open-state signal (`__dropdown_open:*` / `__menu_open:*`).
-    /// The runtime attaches a [`lumen_primitives::PopupPanel`] so the
-    /// outside-click dismissal and viewport edge-flip systems can find
-    /// the panel and its bound open signal.
-    pub popup_panel: Option<String>,
+    /// `popover`, or the floating panel of a `<dropdown>` / `<menu>`: the
+    /// element shows in the top layer while its open signal holds, placed
+    /// against its anchor. The runtime attaches a
+    /// [`lumen_primitives::Popover`].
+    pub popover: Option<PopoverSpec>,
+    /// `popovertarget="id"` (with `popovertargetaction`): a click on this
+    /// element shows, hides or toggles the popover with that id and makes
+    /// this element its anchor.
+    pub popover_target: Option<PopoverTargetSpec>,
+    /// `anchor="id"`: the element a `popover` is placed against. Read into
+    /// [`PopoverSpec::anchor`] once the element's attributes are all known,
+    /// so a compiled app never carries it.
+    #[serde(skip)]
+    pub anchor: Option<String>,
+    /// `open="signal"` on an element that is not a `<dialog>`: the signal a
+    /// `popover`'s open state follows, read into
+    /// [`PopoverSpec::open_signal`], so a compiled app never carries it.
+    #[serde(skip)]
+    pub popover_open: Option<String>,
+    /// CSS `position-area`: which side of its anchor a popover opens on, and
+    /// how it lines up with the anchor along that side.
+    pub position_area: Option<PositionAreaSpec>,
+    /// CSS `position-try-fallbacks`: where a popover may go when it does
+    /// not fit on its side.
+    pub position_try: Option<PositionTrySpec>,
     /// `dir="ltr|rtl|auto"` - CSS Logical Properties writing direction
     /// (W5.4). When set, the spawn layer installs a
     /// [`lumen_core::components::LayoutDirection`] component; the
@@ -1430,13 +1464,16 @@ pub struct Attributes {
     pub deferred: Vec<DeferredAttr>,
     /// Every attribute an element with a registered custom tag was written
     /// with, as `(name, value)` in the order they were written; `None` on an
-    /// element whose tag is built in.
+    /// element whose tag is built in, unless the markup wrote one of the
+    /// attributes a built-in tag hands through untouched for a module to
+    /// read (`<menuitem command>`), after which it holds that one and every
+    /// attribute written after it.
     ///
     /// The markup vocabulary cannot say what a custom widget's attributes
-    /// mean, so the parser keeps them as authored and the spawner hands them
-    /// to the widget registered for the tag. `Some` with an empty list is a
-    /// custom element written without attributes, which still gets its
-    /// widget.
+    /// mean, so the parser keeps them as authored, the spawner makes them
+    /// the element's attribute set, and hands them to the widget registered
+    /// for the tag. `Some` with an empty list is a custom element written
+    /// without attributes, which still gets its widget.
     pub widget_attributes: Option<Vec<(String, String)>>,
 }
 
@@ -2157,6 +2194,103 @@ pub enum TextOverflowSpec {
     Clip,
     /// Elide with a trailing `...` (Qt `elideMode`, CSS `ellipsis`).
     Ellipsis,
+}
+
+/// How a popover closes on its own: an `auto` one when the user presses
+/// outside it or presses Escape, a `manual` one only when told to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PopoverModeSpec {
+    /// `popover` / `popover="auto"`: light dismiss.
+    #[default]
+    Auto,
+    /// `popover="manual"`: open until a script or invoker closes it.
+    Manual,
+}
+
+/// A popover: the signal its open state lives in, how it closes, and what
+/// it is placed against.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PopoverSpec {
+    /// The signal that holds while the popover is open: `open="name"`, or
+    /// `__popover_open:<id>` for a popover with an id and no `open`; the
+    /// built panels of `<dropdown>` / `<menu>` use their own
+    /// (`__dropdown_open:*` / `__menu_open:*`).
+    pub open_signal: String,
+    /// How it closes on its own.
+    pub mode: PopoverModeSpec,
+    /// `anchor="id"`: the element it is placed against. Absent, it goes
+    /// against the element that last opened it.
+    pub anchor: Option<String>,
+    /// The panel takes its anchor's width (a `<dropdown>`'s list).
+    pub match_anchor_width: bool,
+}
+
+/// What a `popovertarget` element does to its popover when clicked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PopoverActionSpec {
+    /// Open it when closed, close it when open (the default).
+    #[default]
+    Toggle,
+    /// Open it.
+    Show,
+    /// Close it.
+    Hide,
+}
+
+/// `popovertarget="id"` with its `popovertargetaction`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PopoverTargetSpec {
+    /// The id of the popover.
+    pub target: String,
+    /// What a click does to it.
+    pub action: PopoverActionSpec,
+}
+
+/// The side of its anchor a popover opens on (CSS `position-area`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AreaSideSpec {
+    /// Above the anchor.
+    Top,
+    /// Below the anchor.
+    #[default]
+    Bottom,
+    /// Left of the anchor.
+    Left,
+    /// Right of the anchor.
+    Right,
+}
+
+/// How a popover lines up with its anchor along the side it opens on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AreaAlignSpec {
+    /// Its start edge on the anchor's start edge, spanning toward the end
+    /// (`span-right` below or above the anchor, `span-bottom` beside it).
+    #[default]
+    Start,
+    /// Centred on the anchor.
+    Center,
+    /// Its end edge on the anchor's end edge (`span-left` / `span-top`).
+    End,
+}
+
+/// CSS `position-area`, the subset a popover uses: one side and an
+/// alignment along it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PositionAreaSpec {
+    /// The side of the anchor.
+    pub side: AreaSideSpec,
+    /// The alignment along that side.
+    pub align: AreaAlignSpec,
+}
+
+/// CSS `position-try-fallbacks`: the flips a popover may make when it does
+/// not fit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PositionTrySpec {
+    /// `flip-block`: to the other side of the anchor on the block axis.
+    pub flip_block: bool,
+    /// `flip-inline`: to the other side on the inline axis.
+    pub flip_inline: bool,
 }
 
 /// `<if mode="render|hide">` policy.

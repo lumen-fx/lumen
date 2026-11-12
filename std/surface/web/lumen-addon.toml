@@ -34,6 +34,12 @@ returns = "int[]"
 doc = "The producer's bytes about the frame on screen, such as the camera it was drawn with."
 
 [[function]]
+name = "to_texture"
+params = ["id: string", "x: float", "y: float"]
+returns = "float[]"
+doc = "Where the window position (x, y), in logical pixels as an event's client position reads, lands in the frame, in texture pixels: [x, y]. The element's box as drawn, its object-fit and the device pixel ratio are undone. Empty when no surface has the id, before the first frame, and on the web."
+
+[[function]]
 name = "request_frame"
 params = ["id: string"]
 doc = "Ask a paced producer for a frame now, so a still scene shows an edit."
