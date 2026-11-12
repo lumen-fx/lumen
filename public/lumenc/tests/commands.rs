@@ -368,6 +368,25 @@ fn the_palette_filters_moves_and_runs() {
         Some("Zoom")
     );
     assert_eq!(app.world.resource::<Palette>().shown(), vec!["view.zoom"]);
+    // The list shrinks to the one row it holds now.
+    let list = app
+        .world
+        .get::<bevy_ecs::hierarchy::Children>(panel)
+        .and_then(|kids| kids.iter().nth(1).copied())
+        .expect("the list follows the field");
+    let row_h = {
+        let mut q = app
+            .world
+            .query_filtered::<&lumen_core::components::Transform, bevy_ecs::query::With<lumen_commands::PaletteRow>>();
+        q.single(&app.world).expect("one row").size.y
+    };
+    let list_h = app
+        .world
+        .get::<lumen_core::components::Transform>(list)
+        .expect("laid out")
+        .size
+        .y;
+    assert!(list_h <= row_h + 1.0, "list {list_h} for one {row_h} row");
     app.world.entity_mut(input).insert(TextContent("o".into()));
     ticks(app, 2);
     assert_eq!(
@@ -383,6 +402,38 @@ fn the_palette_filters_moves_and_runs() {
     assert!(!app.world.resource::<Palette>().is_open());
     assert_eq!(ran(app).as_deref(), Some("view.zoom"));
     assert_ne!(app.world.resource::<FocusTracker>().0, Some(input));
+
+    // Rows that go while the search stays put shrink the list too.
+    call(app, |c| c.open_palette());
+    ticks(app, 3);
+    let list = app.world.resource::<Palette>().shown().len();
+    assert!(list > 1, "several commands shown");
+    let list_e = app
+        .world
+        .get::<bevy_ecs::hierarchy::Children>(panel)
+        .and_then(|kids| kids.iter().nth(1).copied())
+        .expect("the list follows the field");
+    let full = app
+        .world
+        .get::<lumen_core::components::Transform>(list_e)
+        .expect("laid out")
+        .size
+        .y;
+    for id in ["file.save", "edit.undo", "view.zoom"] {
+        call(app, |c| c.set_enabled(id, false)).expect("a command");
+    }
+    ticks(app, 3);
+    let after = app
+        .world
+        .get::<lumen_core::components::Transform>(list_e)
+        .expect("laid out")
+        .size
+        .y;
+    assert!(after < full, "the list shrank: {full} -> {after}");
+    for id in ["file.save", "edit.undo", "view.zoom"] {
+        call(app, |c| c.set_enabled(id, true)).expect("a command");
+    }
+    press_with(app, "Escape", Modifiers::default());
 
     // Escape closes it, and running nothing.
     call(app, |c| c.open_palette());

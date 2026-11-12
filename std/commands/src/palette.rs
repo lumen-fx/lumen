@@ -383,6 +383,14 @@ pub fn refresh(world: &mut World, shared: &Shared) {
         p.rows = rows;
         p.highlight = 0;
     }
+    // The list is a scroll container, which layout re-solves inside the box
+    // it already had (lumen-fx/lumen#634); its height follows its rows up to
+    // the cap, so the panel around it lays out again.
+    if let Some(panel) = parent(world, list) {
+        world
+            .entity_mut(panel)
+            .insert(lumen_module::lumen_core::components::DirtyLayout);
+    }
     mark_highlight(world);
 }
 
