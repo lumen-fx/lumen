@@ -113,6 +113,7 @@ pub const ATTRS: &[&str] = &[
     "anchor",
     "drop-target",
     "drag-payload",
+    "drag-type",
     "accept",
     "layout-boundary",
     // scroll
@@ -445,14 +446,19 @@ multi-line clamp. Not inherited."
         "focus-outline" => {
             "**`focus-outline`** - `<width>px <color>`. Outline ring when focused (any source). Use `:focus-visible { outline: ... }` for a keyboard-only ring and `outline-offset` for a gap between box edge and ring."
         }
-        "drop" => "**`drop`** - boolean. Accept dropped files; fires `on_file_dropped`.",
+        "drop" => "**`drop`** - boolean. Older spelling of `drop-target`.",
         "drop-target" => {
-            "**`drop-target`** - boolean. Marks an in-app drop zone. Pair with `accept` to filter payloads by MIME type."
+            "**`drop-target`** - boolean. Marks a drop zone for in-app drags and dropped files; hears `dragenter`, `dragover`, `dragleave` and `drop`. Pair with `accept` to filter by MIME type."
         }
         "drag-payload" => {
-            "**`drag-payload`** - string carried by an in-app drag (web `dataTransfer.setData`). May contain `{row.field}` placeholders; empty derives the payload from `id`."
+            "**`drag-payload`** - string carried by an in-app drag (web `dataTransfer.setData`). May contain `{row.field}` placeholders; empty derives the payload from `id`. `drag-type` names its MIME type."
         }
-        "accept" => "**`accept`** - MIME type filter on a drop target. Unset accepts any payload.",
+        "drag-type" => {
+            "**`drag-type`** - MIME type `drag-payload` is published under (`application/x-asset`). Default `text/plain`. May contain `{row.field}` placeholders."
+        }
+        "accept" => {
+            "**`accept`** - MIME types a drop target takes, comma-separated, with `type/*` wildcards (`image/*, application/x-asset`), as HTML `<input accept>`. A dropped file is `text/uri-list`. Unset accepts anything."
+        }
         "layout-boundary" => {
             "**`layout-boundary`** - boolean. Confines relayout to this subtree. Inferred for scroll containers and for elements with a fixed width and height."
         }

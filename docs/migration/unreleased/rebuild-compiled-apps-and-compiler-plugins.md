@@ -4,8 +4,9 @@ The compiled-app format moved on: a `<menu>` keeps its `menu`, `menuitem`
 and `separator` elements, a menu item carries the keyboard shortcut it
 shows, a stylesheet can style an input's `::placeholder`, an element
 carries its transforms, its animations and the `@keyframes` blocks they name,
-and any element can be a `popover`. The runtime refuses an artifact written
-by an earlier toolchain.
+any element can be a `popover`, and an element carries the MIME type of its
+drag payload (`drag-type`). The runtime refuses an artifact written by an
+earlier toolchain.
 
 This affects you if you load a precompiled app (`lumenc run --artifact`, a
 `.lmna` written by `lumenc build`, or `lumen_app_new_from_lmna` from the C ABI

@@ -805,10 +805,12 @@ none of them means anything without an absolute address.
   browser can refuse a write that does not follow something the visitor did,
   such as a click, and it asks the visitor before a read; a refused read also
   answers with empty text. `copy_image` and `save_clipboard_image` are desktop only.
-- `on_file_dropped` and the in-app `drag-payload` / `on_drop` pair, which
-  read what was dropped, are desktop only: `draggable="true"` has no effect
-  in a browser, so an element cannot start a drag there in the first place,
-  and a drop on the web target delivers nothing.
+- `on_file_dropped`, the in-app `drag-payload` / `on_drop` pair and the
+  drag events (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`,
+  `dragend`), which read what was dropped, are desktop only:
+  `draggable="true"` has no effect in a browser, so an element cannot start a
+  drag there in the first place, and a drop on the web target delivers
+  nothing.
 - `request_pointer_lock` does nothing in a browser, so `pointerlockchange`
   never fires there and `pointer_lock_element()` stays empty. A pointer's
   `movement_x` and `movement_y`, and a wheel's `delta_mode`, are the

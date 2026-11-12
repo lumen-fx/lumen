@@ -34,6 +34,11 @@ inline ::lumen::Value frame_meta(std::string_view id) {
     return ::lumen::call("surface", "frame_meta", {::lumen::Value::string(std::string(id))});
 }
 
+/// Where the window position (x, y), in logical pixels as an event's client position reads, lands in the frame, in texture pixels: [x, y]. The element's box as drawn, its object-fit and the device pixel ratio are undone. Empty when no surface has the id, before the first frame, and on the web.
+inline ::lumen::Value to_texture(std::string_view id, double x, double y) {
+    return ::lumen::call("surface", "to_texture", {::lumen::Value::string(std::string(id)), ::lumen::Value::floating(x), ::lumen::Value::floating(y)});
+}
+
 /// Ask a paced producer for a frame now, so a still scene shows an edit.
 inline void request_frame(std::string_view id) {
     ::lumen::call("surface", "request_frame", {::lumen::Value::string(std::string(id))});

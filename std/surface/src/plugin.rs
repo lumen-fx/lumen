@@ -583,6 +583,23 @@ fn script_fns() -> Result<Vec<lumen_module::lumen_script::ScriptFn>, String> {
             }),
         ),
         (
+            "to_texture".into(),
+            Arc::new(move |cx| {
+                let client = glam::Vec2::new(cx.float_arg(1) as f32, cx.float_arg(2) as f32);
+                Ok(ScriptValue::Array(
+                    id(cx)
+                        .and_then(|e| crate::paint::to_texture(&e.shared, client))
+                        .map(|at| {
+                            vec![
+                                ScriptValue::F64(f64::from(at.x)),
+                                ScriptValue::F64(f64::from(at.y)),
+                            ]
+                        })
+                        .unwrap_or_default(),
+                ))
+            }),
+        ),
+        (
             "request_frame".into(),
             Arc::new(move |cx| {
                 if let Some(e) = id(cx) {

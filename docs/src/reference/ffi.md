@@ -397,7 +397,8 @@ keep.
 | `LumenNode lumen_pointer_lock_element(void)` | The element holding the pointer lock, or `0`. |
 
 The C++, Python, and Rust SDKs expose the same readings on their `Event`
-(`code()`, `movement()`, `delta_mode()` and `detail()` included), the capture and lock calls on their
+(`code()`, `movement()`, `delta_mode()`, `detail()`, and the drag payload's
+`types()`, `get_data(kind)` and `set_data(kind, value)` included), the capture and lock calls on their
 `Node`, and `exit_pointer_lock` / `pointer_lock_element` beside their
 document functions.
 
@@ -409,8 +410,20 @@ only inside the callback:
   key of a key event sits, by the DOM `code` name (`KeyW`, `ShiftLeft`), the
   same on every layout
 - `lumen_event_detail(LumenValue *out)` - what a module's custom event
-  carries, or a `rangechange`'s `first` / `last`, as a map; an empty map for
-  any other built-in event. Release it with `lumen_value_free`
+  carries, a `rangechange`'s `first` / `last`, or a popover `toggle`'s
+  `old_state` / `new_state`, as a map; an empty map for any other built-in
+  event. Release it with `lumen_value_free`
+- `lumen_event_types(LumenStrList *out)` - the MIME types a drag event
+  (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`, `dragend`)
+  carries, in the order they were set; an empty list for other events.
+  Release it with `lumen_strlist_free`
+- `lumen_event_data(const char *kind, char *buf, size_t buf_len, size_t
+  *out_len)` - what a drag event carries under a MIME type, as text, by the
+  string-out convention; an empty string when it carries none. `"text"` and
+  `"url"` stand for `text/plain` and `text/uri-list`
+- `lumen_event_set_data(const char *kind, const char *value)` - from a
+  `dragstart` callback, put a value in the drag under a MIME type;
+  `LUMEN_ERR_BAD_ARG` from any other callback
 - `lumen_event_target()` / `lumen_event_current_target()` - packed handles, `0`
   outside a callback
 - `lumen_event_prevent_default()` - cancel the default action, which is link
@@ -423,7 +436,8 @@ Event types and propagation match the script hosts; see
 names of its own, such as a dock's `layoutchange`: bind them with `lumen_on`
 like a built-in event and read what they carry with `lumen_event_detail`.
 `lumen_event_prevent_default` on a cancelable one tells the module not to go
-ahead.
+ahead. On a `dragstart` it cancels the drag. A file dropped from another
+application is a `drop` carrying `text/uri-list`.
 
 ## C++ SDK
 
@@ -466,7 +480,9 @@ covering the whole surface live in `public/lumenui/cpp/examples`; see
 
 `lumen::call(ns, name, {args...})` calls a script function and returns a
 `lumen::Value`, throwing `lumen::Error` when the call fails, and an event's
-`detail()` is a `lumen::Value` map. Each first-party module also has a
+`detail()` is a `lumen::Value` map. A drag event reads its payload with
+`types()` and `get_data(kind)`, and a `dragstart` handler adds to it with
+`set_data(kind, value)`. Each first-party module also has a
 generated header, `<lumen_<module>.hpp>`, whose functions take and return the
 types the module declares and call `lumen::call` for you:
 
@@ -546,7 +562,9 @@ Handlers and watches fire on Lumen's tick thread. See
 
 `lumen.call(ns, name, *args)` calls a script function with plain Python
 values and returns one, raising `LumenBadArgError` or `LumenScriptError` when
-the call fails, and an event's `detail()` is a `dict`. Each first-party
+the call fails, and an event's `detail()` is a `dict`. A drag event reads its
+payload with `types()` and `get_data(kind)`, and a `dragstart` handler adds to
+it with `set_data(kind, value)`. Each first-party
 module also has a generated wrapper module, named after it without its
 `lumen-` prefix, whose functions carry the module's types:
 
@@ -755,6 +773,8 @@ fn main() -> lumenui::Result<()> {
 | `on_toggle(id, f)` | the `<toggle>`, `<switch>` or `<checkbox>` `id` flips |
 | `on_slider(id, f)` | the `<slider>` `id` moves |
 | `on_menu(id, f)` | the `<menuitem>` `id` is chosen |
+| `on_drag_start(id, f)` | an in-app drag begins on `id` (an element with a `drag-payload`) |
+| `on_drop(id, f)` | something is dropped on the drop target `id`: an in-app drag its `accept` list takes, or a file from another application (`text/uri-list`) |
 | `on_any_click(f)`, `on(kind, id, f)`, `on_any(kind, f)` | the same, for any element or kind |
 | `on_ready(f)` | once, on the first tick the element tree can be queried |
 
@@ -764,7 +784,17 @@ handler. With none, it goes to the `on_any_*` handler of its kind. The
 `Event` says what happened: `id()` (the id of the element whose handler runs;
 for an `on_any_*` handler, the nearest id at or above the target), `target()`
 (the innermost element, as a `Node`), `row()` (the `<for>` row the target is
-in), `position()`, `button()`, `checked()`, `value()` and `modifiers()`.
+in), `position()` (window coordinates), `local()` (relative to the target's
+top-left as it is painted, scrolling included), `button()`, `checked()`,
+`value()` and `modifiers()`. A drag start or a drop reads its payload with
+`types()` (the MIME types it carries) and `data(kind)` (one of them, as
+text).
+
+The DOM events with no `EventKind` of their own (a virtualized `<for>`'s
+`rangechange`, a popover's `beforetoggle` and `toggle`, `pointermove`, the
+key events) are heard on the element itself, with `Node::on`:
+`ui.get_by_id("assets").unwrap().on("rangechange", |ev| ...)` from an
+`on_ready` handler.
 
 A module's own events are a kind too: `on(EventKind::Custom("layoutchange"),
 "editor", f)` runs when the module raises `layoutchange` on `editor` or
@@ -1280,7 +1310,10 @@ fn main() -> lumenui::Result<()> {
 
 `Surfaces` answers by element id: `endpoint` (the string a producer connects
 with), `state`, `frame`, `request_frame`, `send` (bytes for the producer's
-application) and `disconnect`. On the element's entity, `SurfaceState` says
+application), `disconnect`, and `to_texture(id, position)`, which maps a
+window position (an event's `position()`) into the frame's pixels, undoing
+the element's drawn box, its `object-fit` and the device pixel ratio; `None`
+before the first frame. On the element's entity, `SurfaceState` says
 where it stands and `SurfaceFrame` is the frame on screen, with the producer's
 bytes about it in `meta()`. `SurfaceEvent` messages report connects,
 resizes, stalls, disconnects, errors and the producer's messages, the same

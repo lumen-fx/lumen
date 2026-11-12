@@ -681,16 +681,23 @@ pub fn apply_mask_image(ent: &mut bevy_ecs::world::EntityWorldMut<'_>, attrs: &A
     }
 }
 
-/// The in-app drag source a `drag-payload` attribute publishes. An empty
-/// payload names the element by its `id`.
+/// The in-app drag source a `drag-payload` attribute publishes, under the
+/// kind `drag-type` names (`text/plain` without one). An empty payload names
+/// the element by its `id`.
 fn drag_source(attrs: &Attributes) -> Option<lumen_os_dnd::DragSource> {
+    use lumen_os_dnd::mime::{MimeKind, MimePayload};
     let payload = attrs.drag_payload.as_ref()?;
     let text = if payload.is_empty() {
         attrs.id.clone().unwrap_or_default()
     } else {
         payload.clone()
     };
-    Some(lumen_os_dnd::DragSource::new(text).with_effects(lumen_os_dnd::DropEffectSet::ANY))
+    let kind = attrs
+        .drag_type
+        .as_deref()
+        .map_or(MimeKind::TextPlain, MimeKind::from);
+    let payload = MimePayload::new().with(kind, text.into_bytes());
+    Some(lumen_os_dnd::DragSource::new(payload).with_effects(lumen_os_dnd::DropEffectSet::ANY))
 }
 
 fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
@@ -997,9 +1004,7 @@ fn spawn_node(world: &mut World, el: &Element, parent: Option<Entity>) -> (Entit
         // `acceptProposedAction`). No `accept="..."` => accept any payload,
         // matching the file-drop path's "accept anything" default.
         let accept = match &el.attrs.drop_accept {
-            Some(mime) => {
-                lumen_os_dnd::DropAccept::only([lumen_os_dnd::mime::MimeKind::from(mime.as_str())])
-            }
+            Some(list) => lumen_os_dnd::DropAccept::from_list(list),
             None => lumen_os_dnd::DropAccept::any(),
         }
         .with_effects(lumen_os_dnd::DropEffectSet::ANY);
@@ -2679,6 +2684,7 @@ fn reads_row_index(el: &Element) -> bool {
         &a.style_role,
         &a.placeholder,
         &a.drag_payload,
+        &a.drag_type,
     ]
     .into_iter()
     .flatten()
@@ -2839,7 +2845,7 @@ impl RowStringChanges {
             classes: old.classes != new.classes,
             src: old.src != new.src,
             style_role: old.style_role != new.style_role,
-            drag_payload: old.drag_payload != new.drag_payload,
+            drag_payload: old.drag_payload != new.drag_payload || old.drag_type != new.drag_type,
         }
     }
 

@@ -168,6 +168,9 @@ host "lumen" {
     bool event_ctrl(int);
     bool event_alt(int);
     bool event_super(int);
+    string[] event_types(int);
+    string event_get_data(int, string);
+    bool event_set_data(int, string, string);
     event_prevent_default(int);
     event_stop_propagation(int);
     event_stop_immediate_propagation(int);

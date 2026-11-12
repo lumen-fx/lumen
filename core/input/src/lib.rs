@@ -1000,31 +1000,7 @@ pub fn update_ime_request(
     });
 }
 
-/// Walk the ChildOf chain starting at `entity`, sum every ancestor's
-/// [`ScrollOffset`] (excluding the entity's own offset). Used by both
-/// hit-test and the scroll-aware extracts so visual + logical positions
-/// agree.
-///
-/// Pass a `parents` query filtered
-/// [`NotPaintRoot`](lumen_core::render_world::NotPaintRoot) to stop at a
-/// surface root or a top-layer element: neither moves with its ancestors'
-/// scrolling.
-pub fn ancestor_scroll<F: bevy_ecs::query::QueryFilter>(
-    entity: Entity,
-    parents: &Query<&ChildOf, F>,
-    scrolls: &Query<&ScrollOffset>,
-) -> Vec2 {
-    let mut total = Vec2::ZERO;
-    let mut cur = entity;
-    while let Ok(child_of) = parents.get(cur) {
-        let parent = child_of.parent();
-        if let Ok(off) = scrolls.get(parent) {
-            total += off.0;
-        }
-        cur = parent;
-    }
-    total
-}
+pub use lumen_core::input::ancestor_scroll;
 
 /// The half of the input layer every platform needs: a key press reaches the
 /// focused element, Enter activates it, and Escape cancels the press it

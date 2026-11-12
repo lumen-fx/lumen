@@ -10,6 +10,7 @@
 //! into its texture table; tests use one that records instead, so the whole
 //! protocol runs without a GPU.
 
+use lumen_module::lumen_core::components::ImageFit;
 use lumen_surface_protocol::consumer::{Expected, check_hello};
 use lumen_surface_protocol::endpoint::{AdapterHint, Endpoint, Transport};
 use lumen_surface_protocol::transport::{
@@ -213,9 +214,9 @@ pub struct Shared {
     /// where only an in-process producer feeds the surface.
     transport: Option<Transport>,
     adapter_hint: Mutex<Option<(AdapterHint, String)>>,
-    /// Where the element showed in the last frame painted, in logical
-    /// pixels: `x, y, width, height`. `None` when it was not drawn.
-    placement: Mutex<Option<[f32; 4]>>,
+    /// Where the element showed in the last frame painted, and how its
+    /// frame fit it. `None` when it was not drawn.
+    placement: Mutex<Option<Placement>>,
     /// The last reason a draw of the surface was refused, so each is
     /// reported once.
     refused: Mutex<Option<&'static str>>,
@@ -229,6 +230,18 @@ pub struct Shared {
 }
 
 static SESSIONS: AtomicU64 = AtomicU64::new(1);
+
+/// Where a surface element was drawn in the last frame painted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    /// The element's painted box in window logical pixels, scrolled with its
+    /// containers: `x, y, width, height`.
+    pub rect: [f32; 4],
+    /// How the frame fits the box (the element's `object-fit`).
+    pub fit: ImageFit,
+    /// The window's device pixels per logical pixel.
+    pub scale: f32,
+}
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -280,12 +293,12 @@ impl Shared {
     }
 
     /// Record where the element was drawn (`None`: it was not).
-    pub fn set_placement(&self, placement: Option<[f32; 4]>) {
+    pub fn set_placement(&self, placement: Option<Placement>) {
         *self.placement.lock().unwrap_or_else(|e| e.into_inner()) = placement;
     }
 
     /// Where the element was drawn in the last frame painted.
-    pub fn placement(&self) -> Option<[f32; 4]> {
+    pub fn placement(&self) -> Option<Placement> {
         *self.placement.lock().unwrap_or_else(|e| e.into_inner())
     }
 

@@ -12,7 +12,13 @@
 //! `pointerup` / `pointermove` / `pointercancel` / `pointerenter` /
 //! `pointerleave`, `gotpointercapture` / `lostpointercapture`, `wheel`,
 //! `keydown` / `keyup`, `input`, `change`, `focus`, `blur`, `submit`,
-//! `scroll`, `rangechange`.
+//! `scroll`, `rangechange`, `beforetoggle`, `toggle`, and the drag events
+//! `dragstart`, `dragenter`, `dragover`, `dragleave`, `drop` and `dragend`.
+//!
+//! Every positional event's `local` is relative to the element's painted
+//! box: its laid-out position less the scroll offsets of the containers
+//! above it, so a click inside a scrolled `<scroll>` reads where it landed
+//! on what the user sees, as the web's `offsetX` does.
 //!
 //! Sources and current limitations:
 //! - Pointer events target the entity under the pointer: the one carrying
@@ -62,6 +68,16 @@
 //!   `old_state` and `new_state` (`"open"` / `"closed"`), the DOM's
 //!   `ToggleEvent` fields. Neither bubbles, and `beforetoggle` cannot cancel
 //!   the change: it reports one that already happened.
+//! - The drag events come from the in-app drag session (`lumen-os-dnd`, or a
+//!   page's own drag): `dragstart` and `dragend` on the element the drag
+//!   began on, `dragenter`, `dragover`, `dragleave` and `drop` on the drop
+//!   target under the pointer whose `accept` list takes the drag (the one
+//!   `:drag-over` lights). A file the platform drops is a `drop` carrying
+//!   `text/uri-list`. Each carries the drag's payload, read with
+//!   `ev.types()` and `ev.get_data(kind)`; a `dragstart` handler adds to it
+//!   with `ev.set_data(kind, value)`, and its `prevent_default` cancels the
+//!   drag.
+//!
 //! - A custom event is one a module raises on an element with a
 //!   [`CustomEvent`] message: a name of its own and a detail map. It
 //!   travels the same capture -> target -> bubble path, so `n.on(name, ..)`
@@ -88,6 +104,8 @@ use lumen_core::signals::MountedRangeChanged;
 use crate::ScriptHost;
 use crate::event::{self, EventData};
 use crate::runtime::ScriptCommandEvent;
+#[cfg(not(target_arch = "wasm32"))]
+use lumen_os_dnd::mime::MimePayload;
 
 /// Root-first ancestor chain (packed handles) of `entity`, excluding itself,
 /// read from the current DOM snapshot. Empty when `entity` is not (yet) in
@@ -218,6 +236,12 @@ pub const BUILT_IN_EVENTS: &[&str] = &[
     "pointerlockerror",
     "beforetoggle",
     "toggle",
+    "dragstart",
+    "dragenter",
+    "dragover",
+    "dragleave",
+    "drop",
+    "dragend",
 ];
 
 /// The DOM events read from this tick's input, waiting for delivery.
@@ -322,6 +346,12 @@ pub fn deliver_input_events(world: &mut World) {
     for queued in events {
         match queued.step {
             Some(step) => deliver_pointer(world, &hosts, queued, step),
+            #[cfg(not(target_arch = "wasm32"))]
+            None if queued.data.event_type == "dragstart" => {
+                if let Some(source) = queued.target {
+                    deliver_drag_start(world, &hosts, queued.data, source);
+                }
+            }
             None => {
                 if let Some(target) = queued.target {
                     deliver(world, &hosts, queued.data, target);
@@ -444,10 +474,15 @@ fn deliver_pointer(world: &mut World, hosts: &EventHosts, queued: QueuedInput, s
         let mut data = data.clone();
         if Some(to) != target {
             // Local coordinates follow the node the event is delivered to.
-            let origin = world
-                .get::<Transform>(to)
-                .map(|t| t.absolute)
-                .unwrap_or(Vec2::ZERO);
+            let origin = world.get::<Transform>(to).map_or(Vec2::ZERO, |t| {
+                // A page's boxes are the browser's, and its pointer events
+                // say where they landed; the scroll walk is the desktop's.
+                #[cfg(not(target_arch = "wasm32"))]
+                let scrolled = lumen_core::input::ancestor_scroll_in(world, to);
+                #[cfg(target_arch = "wasm32")]
+                let scrolled = Vec2::ZERO;
+                t.absolute - scrolled
+            });
             data.local = (
                 data.client.0 - origin.x as f64,
                 data.client.1 - origin.y as f64,
@@ -578,24 +613,50 @@ fn base(entity: Entity, event_type: &str) -> EventData {
     }
 }
 
+/// Where elements are painted: what an event's `local` position is measured
+/// from.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct Boxes<'w, 's> {
+    transforms: Query<'w, 's, &'static Transform>,
+    #[cfg(not(target_arch = "wasm32"))]
+    parents: Query<'w, 's, &'static ChildOf, lumen_core::render_world::NotPaintRoot>,
+    #[cfg(not(target_arch = "wasm32"))]
+    scrolls: Query<'w, 's, &'static ScrollOffset>,
+}
+
+impl Boxes<'_, '_> {
+    /// The top-left of `entity`'s painted box in window coordinates: its
+    /// laid-out position less the scroll offsets above it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn origin(&self, entity: Entity) -> Vec2 {
+        self.transforms.get(entity).map_or(Vec2::ZERO, |t| {
+            t.absolute - lumen_core::input::ancestor_scroll(entity, &self.parents, &self.scrolls)
+        })
+    }
+
+    /// On a page the browser measures every box itself and hands the event
+    /// its local position, so this fallback only serves an event that came
+    /// with none.
+    #[cfg(target_arch = "wasm32")]
+    fn origin(&self, entity: Entity) -> Vec2 {
+        self.transforms
+            .get(entity)
+            .map_or(Vec2::ZERO, |t| t.absolute)
+    }
+}
+
 /// Fill in where the pointer was: `position` in window coordinates, and
-/// relative to `entity`'s box. A backend that measured the box itself hands
-/// the relative position over as `local`; otherwise it comes from the box
-/// Lumen's layout gave the entity.
+/// relative to `entity`'s painted box. A backend that measured the box
+/// itself hands the relative position over as `local`; otherwise it comes
+/// from the box Lumen's layout gave the entity, scrolled as it is on screen.
 fn with_position(
     mut data: EventData,
-    transforms: &Query<&Transform>,
+    boxes: &Boxes,
     entity: Entity,
     position: Vec2,
     local: Option<Vec2>,
 ) -> EventData {
-    let local = local.unwrap_or_else(|| {
-        let origin = transforms
-            .get(entity)
-            .map(|t| t.absolute)
-            .unwrap_or(Vec2::ZERO);
-        position - origin
-    });
+    let local = local.unwrap_or_else(|| position - boxes.origin(entity));
     data.local = (local.x as f64, local.y as f64);
     data.client = (position.x as f64, position.y as f64);
     data
@@ -639,6 +700,10 @@ pub fn register_dom_event_messages(world: &mut World) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         register::<MountedRangeChanged>(world);
+        register::<lumen_os_dnd::DragStarted>(world);
+        register::<lumen_os_dnd::DragHovered>(world);
+        register::<lumen_os_dnd::DropAccepted>(world);
+        register::<lumen_os_dnd::DragEnded>(world);
         register::<lumen_primitives::PopoverToggled>(world);
     }
 }
@@ -672,7 +737,7 @@ pub fn queue_pointer_and_key_events(
     mut keydowns: MessageReader<FocusedKey>,
     mut key_presses: MessageReader<KeyPressed>,
     focus: Option<Res<FocusTracker>>,
-    transforms: Query<&Transform>,
+    boxes: Boxes,
     hovered: Query<Entity, With<Hovered>>,
     focused: Query<Entity, With<Focused>>,
     dom: Option<Res<AppDom>>,
@@ -691,7 +756,7 @@ pub fn queue_pointer_and_key_events(
     for c in clicks.read() {
         let mut data = with_position(
             base(c.entity, "click"),
-            &transforms,
+            &boxes,
             c.entity,
             c.position,
             c.local,
@@ -703,7 +768,7 @@ pub fn queue_pointer_and_key_events(
     for d in doubles.read() {
         let data = with_position(
             base(d.entity, "dblclick"),
-            &transforms,
+            &boxes,
             d.entity,
             d.position,
             None,
@@ -715,7 +780,7 @@ pub fn queue_pointer_and_key_events(
     for m in menus.read() {
         let mut data = with_position(
             base(m.entity, "contextmenu"),
-            &transforms,
+            &boxes,
             m.entity,
             m.position,
             m.local,
@@ -743,7 +808,7 @@ pub fn queue_pointer_and_key_events(
                          pointer: PointerData,
                          button: i64| {
         let mut data = match target {
-            Some(e) => with_position(base(e, event_type), &transforms, e, position, local),
+            Some(e) => with_position(base(e, event_type), &boxes, e, position, local),
             None => EventData {
                 event_type: event_type.to_string(),
                 client: (position.x as f64, position.y as f64),
@@ -811,7 +876,7 @@ pub fn queue_pointer_and_key_events(
     lumen_core::order::sort_by_rank(&mut queue[start..], |q| q.data.pointer.order);
     for w in wheels.read() {
         let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);
+        let mut data = with_position(base(e, "wheel"), &boxes, e, w.position, w.local);
         data.delta = (w.delta.x as f64, w.delta.y as f64);
         data.delta_mode = w.delta_mode;
         queue.push(plain(data, e));
@@ -993,6 +1058,91 @@ pub fn queue_state_events(
     #[cfg(not(target_arch = "wasm32"))]
     for error in lock_errors.iter_mut().flat_map(|r| r.read()) {
         queue.push((base(error.entity, "pointerlockerror"), error.entity));
+    }
+}
+
+/// The drag messages [`queue_drag_events`] reads, grouped so the system
+/// stays under the parameter limit.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct DragReaders<'w, 's> {
+    starts: MessageReader<'w, 's, lumen_os_dnd::DragStarted>,
+    hovers: MessageReader<'w, 's, lumen_os_dnd::DragHovered>,
+    drops: MessageReader<'w, 's, lumen_os_dnd::DropAccepted>,
+    ends: MessageReader<'w, 's, lumen_os_dnd::DragEnded>,
+    active: Option<Res<'w, lumen_os_dnd::ActiveDrag>>,
+}
+
+/// Read this tick's drag session as DOM events, delivered by
+/// [`deliver_input_events`] after the pointer events: `dragstart` on the
+/// source, then `dragleave` / `dragenter` / `dragover` on the drop targets the
+/// pointer moved across, then `drop` on the target, then `dragend` on the
+/// source.
+///
+/// Desktop only: a page has no in-app drag session, so the browser module
+/// carries none of this.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn queue_drag_events(
+    mut pending: ResMut<PendingDomEvents>,
+    mut drags: DragReaders,
+    boxes: Boxes,
+    dom: Option<Res<AppDom>>,
+) {
+    let _dom = dom.as_deref().map(AppDom::enter);
+    let queue = &mut pending.input;
+    let empty = lumen_os_dnd::mime::MimePayload::new();
+    let payload = drags
+        .active
+        .as_ref()
+        .and_then(|a| a.0.as_ref())
+        .map_or(&empty, |d| &d.payload);
+    let event = |kind: &str, entity: Entity, position: Vec2, data: &MimePayload| {
+        let mut ev = with_position(base(entity, kind), &boxes, entity, position, None);
+        ev.data = data.clone();
+        QueuedInput {
+            data: ev,
+            target: Some(entity),
+            step: None,
+        }
+    };
+    for s in drags.starts.read() {
+        queue.push(event("dragstart", s.source, s.position, &s.payload));
+    }
+    for h in drags.hovers.read() {
+        if let Some(left) = h.left {
+            queue.push(event("dragleave", left, h.position, payload));
+        }
+        if let Some(over) = h.over {
+            if h.entered {
+                queue.push(event("dragenter", over, h.position, payload));
+            }
+            queue.push(event("dragover", over, h.position, payload));
+        }
+    }
+    for d in drags.drops.read() {
+        queue.push(event("drop", d.target, d.position, &d.payload));
+    }
+    for e in drags.ends.read() {
+        queue.push(event("dragend", e.source, e.position, &empty));
+    }
+}
+
+/// Deliver a `dragstart`: what its handlers put in the payload with
+/// `set_data` becomes the drag's payload, and a `prevent_default` cancels the
+/// drag, as on the web.
+#[cfg(not(target_arch = "wasm32"))]
+fn deliver_drag_start(world: &mut World, hosts: &EventHosts, data: EventData, source: Entity) {
+    let Some(result) = dispatch(world, hosts, data, source, true) else {
+        return;
+    };
+    if let Some(mut active) = world.get_resource_mut::<lumen_os_dnd::ActiveDrag>()
+        && active.0.as_ref().is_some_and(|d| d.source == source)
+    {
+        if result.default_prevented {
+            active.0 = None;
+        } else if let Some(drag) = active.0.as_mut() {
+            drag.payload = result.data;
+        }
     }
 }
 

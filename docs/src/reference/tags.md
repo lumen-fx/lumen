@@ -56,7 +56,7 @@ list do not see it. Text fields (`<input>`, `<textarea>`) are the exception;
 their text always fills the field.
 
 `{...}` placeholders are substituted in `text`, `placeholder`, `src`,
-`id`, `class`, `style`, `drag-payload`, a `<tooltip>`'s `text`, and every
+`id`, `class`, `style`, `drag-payload`, `drag-type`, a `<tooltip>`'s `text`, and every
 attribute of a custom widget's tag:
 
 | Placeholder | Resolves to |
@@ -222,8 +222,9 @@ children stack left to right.
 | `disabled` | boolean | Input routing skips the element and the default render dims it. |
 | `draggable` | boolean | Pointer drags translate the element. |
 | `drag-payload` | text | Makes the element an in-app drag source publishing this payload. An empty value uses the element's `id`. Interpolated per row inside `<for>`. |
-| `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. |
-| `accept` | MIME type | Restricts what an in-app drop target accepts. Absent accepts anything. |
+| `drag-type` | MIME type | The type `drag-payload` is published under. Defaults to `text/plain`. Interpolated per row inside `<for>`. |
+| `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. It hears the `dragenter`, `dragover`, `dragleave` and `drop` events. |
+| `accept` | MIME type list | The types a drop target takes: comma-separated, with `type/*` wildcards (`image/*, application/x-asset`), as HTML `<input accept>` spells it. A drag carrying none of them neither lights `:drag-over` nor drops. A dropped file is `text/uri-list`. Absent accepts anything. |
 
 An element receives the pointer when it is focusable (it has a
 `tab-index`, which the controls and `<a href>` carry by default), when it

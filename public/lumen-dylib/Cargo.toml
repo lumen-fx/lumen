@@ -99,6 +99,10 @@ lumen-widget-macros = { path = "../../core/widget/macros" }
 # this copy.
 lumen-os-clipboard = { path = "../../os/clipboard" }
 lumen-os-filedialog = { path = "../../os/filedialog" }
+# The drag session's messages, which the Rust SDK's drag and drop handlers
+# read. Already in the engine through the runtime; named here so the SDK
+# reaches this copy.
+lumen-os-dnd = { path = "../../os/dnd" }
 # The control messages and the `<for>` rows the Rust SDK's event handlers
 # read. Already in the engine through the runtime; named here so the SDK
 # reaches this copy.

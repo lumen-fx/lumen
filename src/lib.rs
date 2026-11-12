@@ -71,6 +71,7 @@ pub mod sdk {
     pub use bevy_ecs;
     pub use lumen_core;
     pub use lumen_os_clipboard;
+    pub use lumen_os_dnd;
     pub use lumen_os_filedialog;
     pub use lumen_primitives;
     pub use lumen_runtime;
@@ -227,7 +228,13 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// 0.19 told a notched wheel from a touchpad: [`LumenEvent`] gains
 /// `delta_mode` at its end, the DOM `deltaMode` of the unit the wheel
 /// reported in. Additive, so a minor bump.
-pub const LUMEN_ABI_MINOR: u32 = 19;
+///
+/// 0.20 reached a drag's payload: [`lumen_event_types`] lists the MIME kinds
+/// a drag event (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`,
+/// `dragend`) carries, [`lumen_event_data`] reads one of them, and
+/// [`lumen_event_set_data`] adds one from a `dragstart` callback. Additive, so
+/// a minor bump.
+pub const LUMEN_ABI_MINOR: u32 = 20;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -4037,6 +4044,90 @@ pub unsafe extern "C" fn lumen_event_detail(out: *mut LumenValue) -> LumenStatus
     })
 }
 
+/// Write the MIME kinds the current drag event carries into `*out`
+/// (`text/plain`, `application/x-asset`, ...), in the order they were set;
+/// an empty list for any other event. Release it with
+/// [`lumen_strlist_free`]. Valid only inside a [`LumenEventFn`] callback.
+/// Thread-safe.
+///
+/// # Safety
+///
+/// `out` must be null or point to writable storage for one [`LumenStrList`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_event_types(out: *mut LumenStrList) -> LumenStatus {
+    catch(|| {
+        if out.is_null() {
+            set_last_error("lumen_event_types: out is null");
+            return LumenStatus::ErrBadArg;
+        }
+        // SAFETY: the caller hands writable storage for one list.
+        unsafe { *out = strlist_from(lumen_script::event::event_types()) };
+        LumenStatus::Ok
+    })
+}
+
+/// Copy what the current drag event carries under the MIME kind `kind` into
+/// `buf`, as text; an empty string when it carries none. `kind` reads as the
+/// web reads it: case and parameters do not count, and `text` / `url` stand
+/// for `text/plain` / `text/uri-list`. See [`lumen_event_type`] for the
+/// buffer convention. Thread-safe.
+///
+/// # Safety
+///
+/// `kind` must be null or a NUL-terminated string; `buf` / `out_len` follow
+/// [`lumen_event_type`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_event_data(
+    kind: *const c_char,
+    buf: *mut c_char,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> LumenStatus {
+    catch(|| {
+        let kind = match ffi_selector(kind, "lumen_event_data") {
+            Ok(s) => s,
+            Err(status) => return status,
+        };
+        write_string_out(
+            &lumen_script::event::event_get_data(&kind),
+            buf,
+            buf_len,
+            out_len,
+        )
+    })
+}
+
+/// From a `dragstart` callback, put `value` in the drag under the MIME kind
+/// `kind`, replacing what it carried there. A drop target's `accept` list
+/// matches the kinds the drag ends up with. Returns
+/// [`LumenStatus::ErrBadArg`] outside a `dragstart` callback. Thread-safe.
+///
+/// # Safety
+///
+/// `kind` and `value` must be null or NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_event_set_data(
+    kind: *const c_char,
+    value: *const c_char,
+) -> LumenStatus {
+    catch(|| {
+        let kind = match ffi_selector(kind, "lumen_event_set_data") {
+            Ok(s) => s,
+            Err(status) => return status,
+        };
+        let value = match ffi_selector(value, "lumen_event_set_data") {
+            Ok(s) => s,
+            Err(status) => return status,
+        };
+        if lumen_script::event::event_set_data(&kind, &value) {
+            LumenStatus::Ok
+        } else {
+            set_last_error("lumen_event_set_data: only a dragstart callback fills the drag");
+            LumenStatus::ErrBadArg
+        }
+    })
+}
+
 // ============================================================
 // Calling the app's script functions (ABI 0.17).
 // ============================================================
@@ -4923,6 +5014,74 @@ mod tests {
             unsafe { lumen_event_detail(ptr::null_mut()) },
             LumenStatus::ErrBadArg
         );
+    }
+
+    /// A drag event's payload reads by kind through the C ABI, and only a
+    /// `dragstart` callback adds to it.
+    #[test]
+    fn lumen_event_drag_data_reads_and_writes_the_payload() {
+        let _event = CURRENT_EVENT.lock().unwrap_or_else(|e| e.into_inner());
+        let _last_error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+        lumen_script::event::set_current_event(lumen_script::event::EventData {
+            event_type: "dragstart".into(),
+            data: "card-3".into(),
+            ..Default::default()
+        });
+        let kind = CString::new("application/x-card").unwrap();
+        let value = CString::new("3").unwrap();
+        assert_eq!(
+            unsafe { lumen_event_set_data(kind.as_ptr(), value.as_ptr()) },
+            LumenStatus::Ok
+        );
+        let mut list = LumenStrList {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(unsafe { lumen_event_types(&mut list) }, LumenStatus::Ok);
+        let types: Vec<String> = (0..list.len)
+            .map(|i| {
+                unsafe { CStr::from_ptr(*list.ptr.add(i)) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        unsafe { lumen_strlist_free(list) };
+        assert_eq!(types, ["text/plain", "application/x-card"]);
+        let mut buf = [0 as c_char; 16];
+        let mut len = 0usize;
+        let text = CString::new("text").unwrap();
+        assert_eq!(
+            unsafe { lumen_event_data(text.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut len) },
+            LumenStatus::Ok
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap(),
+            "card-3"
+        );
+        assert_eq!(
+            unsafe { lumen_event_data(kind.as_ptr(), ptr::null_mut(), 0, &mut len) },
+            LumenStatus::ErrBufferTooSmall
+        );
+        assert_eq!(len, 2, "the value and its NUL");
+
+        lumen_script::event::set_current_event(lumen_script::event::EventData {
+            event_type: "drop".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            unsafe { lumen_event_set_data(kind.as_ptr(), value.as_ptr()) },
+            LumenStatus::ErrBadArg,
+            "a drop cannot write"
+        );
+        assert_eq!(
+            unsafe { lumen_event_data(ptr::null(), buf.as_mut_ptr(), buf.len(), &mut len) },
+            LumenStatus::ErrBadArg
+        );
+        assert_eq!(
+            unsafe { lumen_event_types(ptr::null_mut()) },
+            LumenStatus::ErrBadArg
+        );
+        lumen_script::event::set_current_event(lumen_script::event::EventData::default());
     }
 
     /// A key event's physical key reads through `lumen_event_code`, and the

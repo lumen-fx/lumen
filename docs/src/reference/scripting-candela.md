@@ -240,9 +240,9 @@ as a runtime failure of the handler.
 | `on_toggle(id, checked)` | Element id, `bool`. |
 | `on_slider(id, value)` | Element id, `float`. |
 | `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |
-| `on_drop(target_id, payload)` | Drop-zone id, the source's text payload. |
-| `on_drag_start(source_id, payload)` | Drag-source id, its text payload. |
-| `on_file_dropped(id, path)` | Element id, dropped file path. |
+| `on_drop(target_id, payload)` | Drop-zone id, the drag's `text/plain` value, or its only value when it carries no text (a dropped file's `text/uri-list`). The DOM `drop` event carries every type. |
+| `on_drag_start(source_id, payload)` | Drag-source id, its payload as for `on_drop`. |
+| `on_file_dropped(id, path)` | Element id, dropped file path. Deprecated: a dropped file is a `drop` event carrying `text/uri-list`, and `on_drop` receives the uri. Removed in the next release. |
 | `on_file_picked(tag, path)` | Dialog tag, chosen path. Empty path on cancel. |
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
@@ -670,7 +670,10 @@ through the accessors below:
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_code(ev: int)` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
-| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries, or a `rangechange`'s `first` / `last`: a map, empty for the other built-in events. Unwrap it with `as {string: any}`. |
+| `lumen::event_types(ev: int)` | `string[]` | The MIME types a drag event carries (`"text/plain"`, `"application/x-asset"`), in the order they were set; empty for other events. |
+| `lumen::event_get_data(ev: int, kind: string)` | `string` | What a drag event carries under a MIME type, as text; `""` when it carries none. Case and parameters do not count, and `"text"` / `"url"` stand for `text/plain` / `text/uri-list`. |
+| `lumen::event_set_data(ev: int, kind: string, value: string)` | `bool` | In a `dragstart` handler, put a value in the drag under a MIME type, replacing what it carried there. Answers `false` in any other handler. |
+| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries, a `rangechange`'s `first` / `last`, or a popover `toggle`'s `old_state` / `new_state`: a map, empty for the other built-in events. Unwrap it with `as {string: any}`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -681,7 +684,7 @@ through the accessors below:
 | `lumen::event_tilt_x(ev: int)` / `lumen::event_tilt_y(ev: int)` | `float` | Pen tilt toward the right and toward the user, `-90` to `90` degrees. |
 | `lumen::event_twist(ev: int)` | `float` | Pen rotation about its axis, `0` to `359` degrees. |
 | `lumen::event_width(ev: int)` / `lumen::event_height(ev: int)` | `float` | Contact size in logical pixels; `1` for a point device. |
-| `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target. |
+| `lumen::event_x(ev: int)` / `lumen::event_y(ev: int)` | `float` | Pointer position relative to the target's top-left as it is painted, scrolling included. |
 | `lumen::event_client_x(ev: int)` / `lumen::event_client_y(ev: int)` | `float` | Pointer position in window coordinates. |
 | `lumen::event_movement_x(ev: int)` / `lumen::event_movement_y(ev: int)` | `float` | How far the pointer moved since its previous move, in logical pixels. Under a pointer lock the position stays put and these carry the device's motion. |
 | `lumen::event_delta_x(ev: int)` / `lumen::event_delta_y(ev: int)` | `float` | Wheel delta in logical pixels. As in the DOM, positive `delta_y` scrolls down (the wheel turned toward the user) and positive `delta_x` scrolls right. |
@@ -697,7 +700,11 @@ through the accessors below:
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
 `blur`, `submit`, `scroll`, `rangechange`, `pointerlockchange`,
-`pointerlockerror`, `beforetoggle`, `toggle`.
+`pointerlockerror`, `beforetoggle`, `toggle`, `dragstart`, `dragenter`,
+`dragover`, `dragleave`, `drop`, `dragend`.
+`dragstart` and `dragend` fire on the element an in-app drag began on; the
+other four on the drop target under the pointer whose `accept` list takes the
+drag. A `dragstart` handler's `prevent_default` cancels the drag.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
@@ -1278,6 +1285,7 @@ no producer would.
 | `surface::state(id: string)` | `string` | `waiting`, `live`, `stalled`, `lost` or `unsupported`. |
 | `surface::frame_info(id: string)` | `{string: any}` | The frame on screen: `frame`, `width`, `height`, `generation`, `input_seq`, `meta_len`. Empty before the first frame. |
 | `surface::frame_meta(id: string)` | `int[]` | The producer's bytes about the frame on screen, such as the camera it drew it with. |
+| `surface::to_texture(id: string, x: float, y: float)` | `float[]` | Where the window position `(x, y)` lands in the frame, in frame pixels: `[x, y]`. Undoes the element's drawn box, its `object-fit` and the device pixel ratio. Empty before the first frame and on the web. |
 | `surface::request_frame(id: string)` | | Ask a paced producer for a frame now, so a still scene shows an edit. |
 | `surface::send(id: string, message: string)` | `bool` | Send a message to the producer's application; `false` when none is connected. |
 | `surface::disconnect(id: string)` | | End the session with the producer. The surface keeps listening for another. |

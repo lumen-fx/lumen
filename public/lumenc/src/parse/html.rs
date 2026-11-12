@@ -2710,9 +2710,10 @@ fn apply_attribute(
         "drop-target" => {
             attrs.drop_target = ctx.bool_value(tag, name, value);
         }
-        // MIME filter for a drop target - mirrors HTML5 `dropzone` /
-        // `DataTransfer` type filtering. Empty = accept any.
-        "accept" if !value.is_empty() => attrs.drop_accept = Some(value.trim().to_string()),
+        // MIME filter for a drop target: a comma-separated list of types
+        // and `type/*` wildcards, spelled as HTML `<input accept>`. Empty =
+        // accept any.
+        "accept" if !value.trim().is_empty() => attrs.drop_accept = Some(value.trim().to_string()),
         "drag" if tag == "title-bar" => {
             attrs.title_bar_drag = ctx.bool_value(tag, name, value);
         }
@@ -3267,6 +3268,9 @@ fn apply_attribute(
         // Value may be a `{row.field}` placeholder (substituted per-row in
         // a `<for>`); empty string means "derive the payload from `id`".
         "drag-payload" => attrs.drag_payload = Some(value.to_string()),
+        // The MIME kind `drag-payload` is published under (`text/plain` when
+        // absent), what a target's `accept` list matches.
+        "drag-type" if !value.trim().is_empty() => attrs.drag_type = Some(value.trim().to_string()),
         "draggable" => {
             attrs.draggable = ctx.bool_value(tag, name, value);
         }
