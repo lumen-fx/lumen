@@ -372,7 +372,7 @@ fn the_palette_filters_moves_and_runs() {
     let list = app
         .world
         .get::<bevy_ecs::hierarchy::Children>(panel)
-        .and_then(|kids| kids.iter().nth(1).copied())
+        .and_then(|kids| kids.get(1).copied())
         .expect("the list follows the field");
     let row_h = {
         let mut q = app
@@ -411,7 +411,7 @@ fn the_palette_filters_moves_and_runs() {
     let list_e = app
         .world
         .get::<bevy_ecs::hierarchy::Children>(panel)
-        .and_then(|kids| kids.iter().nth(1).copied())
+        .and_then(|kids| kids.get(1).copied())
         .expect("the list follows the field");
     let full = app
         .world
