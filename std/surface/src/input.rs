@@ -9,7 +9,8 @@
 //!
 //! Keyboard rules, after play-in-editor tools and the browser's pointer
 //! lock: while the surface has focus, keys go to the producer except Tab
-//! (which moves focus) and the menu bar's shortcuts; under a pointer lock,
+//! (which moves focus) and the chords the app answers app-wide (the menu
+//! bar's shortcuts, commands: [`ReservedChords`]); under a pointer lock,
 //! or with `keyboard="all"`, every key goes except Escape, which ends the
 //! lock. When the surface loses focus the producer hears it and lets go of
 //! every key and button it held.
@@ -18,13 +19,13 @@ use crate::api::SurfaceElement;
 use crate::paint::{motion_scale, to_texture};
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
+use lumen_module::lumen_core::chord::ReservedChords;
 use lumen_module::lumen_core::components::LumenAttributes;
 use lumen_module::lumen_core::input::{
-    Focused, HoverWithin, Hovered, ImeEvent, Key, KeyPressed, KeyReleased, Modifiers, MouseWheel,
-    NamedKey, PointerData, PointerKind, PointerLockChanged, PointerLockState, PointerMoved,
-    PointerPressed, PointerReleased, WindowFocused,
+    Focused, HoverWithin, Hovered, ImeEvent, Key, KeyCode, KeyPressed, KeyReleased, Modifiers,
+    MouseWheel, NamedKey, PointerData, PointerKind, PointerLockChanged, PointerLockState,
+    PointerMoved, PointerPressed, PointerReleased, WindowFocused,
 };
-use lumen_module::lumen_primitives::MenuAccelerators;
 use lumen_surface_protocol::wire::{InputEvent, PointerInput, modifiers};
 
 /// What the forwarding remembers between ticks.
@@ -145,7 +146,27 @@ pub struct Targets<'w, 's> {
     lost_focus: RemovedComponents<'w, 's, Focused>,
     left: RemovedComponents<'w, 's, HoverWithin>,
     lock: Option<Res<'w, PointerLockState>>,
-    accelerators: Option<Res<'w, MenuAccelerators>>,
+    reserved: Option<Res<'w, ReservedChords>>,
+}
+
+/// Whether a key on the focused surface goes to its producer: Escape unless
+/// the surface holds the pointer lock (it ends the lock), Tab only when the
+/// surface takes every key (it moves focus), and anything else unless the
+/// app answers it app-wide ([`ReservedChords`]) and the surface does not take
+/// every key.
+fn forwards_key(
+    key: &Key,
+    code: KeyCode,
+    mods: &Modifiers,
+    locked_here: bool,
+    takes_all: bool,
+    reserved: Option<&ReservedChords>,
+) -> bool {
+    match key {
+        Key::Named(NamedKey::Escape) => !locked_here,
+        Key::Named(NamedKey::Tab) => takes_all,
+        _ => takes_all || !reserved.is_some_and(|r| r.matches(key, code, mods)),
+    }
 }
 
 /// Forward this tick's input on every surface to its producer.
@@ -326,17 +347,13 @@ pub fn forward_input(
         return;
     };
     let takes_all = locked == Some(entity) || attrs.and_then(|a| a.get("keyboard")) == Some("all");
-    let accelerators = targets.accelerators.as_deref();
-    let forwards = |key: &Key, mods: &Modifiers| -> bool {
-        match key {
-            // Escape ends a lock and is not the producer's; Tab moves focus.
-            Key::Named(NamedKey::Escape) => locked != Some(entity),
-            Key::Named(NamedKey::Tab) => takes_all,
-            _ => takes_all || !accelerators.is_some_and(|a| a.matches(key, mods)),
-        }
+    let reserved = targets.reserved.as_deref();
+    let locked_here = locked == Some(entity);
+    let forwards = |key: &Key, code: KeyCode, mods: &Modifiers| -> bool {
+        forwards_key(key, code, mods, locked_here, takes_all, reserved)
     };
     for key in readers.keys.read() {
-        if !forwards(&key.key, &key.modifiers) {
+        if !forwards(&key.key, key.code, &key.modifiers) {
             continue;
         }
         element.shared.send_input(InputEvent::Key {
@@ -357,7 +374,7 @@ pub fn forward_input(
         }
     }
     for key in readers.key_ups.read() {
-        if !forwards(&key.key, &key.modifiers) {
+        if !forwards(&key.key, key.code, &key.modifiers) {
             continue;
         }
         element.shared.send_input(InputEvent::Key {
@@ -374,5 +391,85 @@ pub fn forward_input(
                 element.shared.send_input(InputEvent::Text(text.clone()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_module::lumen_core::chord::Chord;
+
+    /// A chord the app answers app-wide (a menu bar's, a command's) stays
+    /// with the app, unless the surface takes every key; other keys go to
+    /// the producer.
+    #[test]
+    fn reserved_chords_stay_with_the_app() {
+        let mut reserved = ReservedChords::default();
+        reserved.set("menubar", vec![Chord::parse_for("Ctrl+O", false).unwrap()]);
+        reserved.set(
+            "lumen-commands",
+            vec![Chord::parse_for("Ctrl+K", false).unwrap()],
+        );
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        let o = Key::Character("o".into());
+        let k = Key::Character("k".into());
+        let w = Key::Character("w".into());
+        assert!(!forwards_key(
+            &o,
+            KeyCode::KeyO,
+            &ctrl,
+            false,
+            false,
+            Some(&reserved)
+        ));
+        assert!(!forwards_key(
+            &k,
+            KeyCode::KeyK,
+            &ctrl,
+            false,
+            false,
+            Some(&reserved)
+        ));
+        assert!(forwards_key(
+            &w,
+            KeyCode::KeyW,
+            &ctrl,
+            false,
+            false,
+            Some(&reserved)
+        ));
+        assert!(forwards_key(
+            &k,
+            KeyCode::KeyK,
+            &ctrl,
+            false,
+            true,
+            Some(&reserved)
+        ));
+        assert!(forwards_key(&k, KeyCode::KeyK, &ctrl, false, false, None));
+        let esc = Key::Named(NamedKey::Escape);
+        let tab = Key::Named(NamedKey::Tab);
+        let none = Modifiers::default();
+        assert!(!forwards_key(
+            &esc,
+            KeyCode::Escape,
+            &none,
+            true,
+            true,
+            None
+        ));
+        assert!(forwards_key(
+            &esc,
+            KeyCode::Escape,
+            &none,
+            false,
+            false,
+            None
+        ));
+        assert!(!forwards_key(&tab, KeyCode::Tab, &none, false, false, None));
+        assert!(forwards_key(&tab, KeyCode::Tab, &none, false, true, None));
     }
 }

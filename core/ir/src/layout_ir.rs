@@ -324,13 +324,16 @@ pub struct MenuSpec {
 pub enum MenuEntrySpec {
     /// `<menuitem id="open" label="Open" accel="Cmd+O" />`.
     Item {
-        /// `id="..."` - passed back to scripts as `on_menu(id)`.
+        /// `id="..."` - passed back to scripts as `on_menu(id)`. An item
+        /// written with a `command` and no `id` takes the command's id.
         id: String,
         /// Display label.
         label: String,
         /// Optional accelerator string in muda format
         /// (`"CommandOrControl+S"`, `"Alt+F4"`, ...).
         accelerator: Option<String>,
+        /// `command="..."`: the command the item runs.
+        command: Option<String>,
     },
     /// `<separator />`.
     Separator,
@@ -1461,13 +1464,16 @@ pub struct Attributes {
     pub deferred: Vec<DeferredAttr>,
     /// Every attribute an element with a registered custom tag was written
     /// with, as `(name, value)` in the order they were written; `None` on an
-    /// element whose tag is built in.
+    /// element whose tag is built in, unless the markup wrote one of the
+    /// attributes a built-in tag hands through untouched for a module to
+    /// read (`<menuitem command>`), after which it holds that one and every
+    /// attribute written after it.
     ///
     /// The markup vocabulary cannot say what a custom widget's attributes
-    /// mean, so the parser keeps them as authored and the spawner hands them
-    /// to the widget registered for the tag. `Some` with an empty list is a
-    /// custom element written without attributes, which still gets its
-    /// widget.
+    /// mean, so the parser keeps them as authored, the spawner makes them
+    /// the element's attribute set, and hands them to the widget registered
+    /// for the tag. `Some` with an empty list is a custom element written
+    /// without attributes, which still gets its widget.
     pub widget_attributes: Option<Vec<(String, String)>>,
 }
 

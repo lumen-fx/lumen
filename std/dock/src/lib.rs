@@ -49,7 +49,7 @@ pub use drag::{DockDrag, Payload, TearoffProbe, Zone};
 pub use frame::{
     DockFloat, DockFloatHandle, DockPinButton, DockSlideOut, DockUnpinButton, Edges, FLOAT_MIN,
 };
-pub use keys::{Chord, Keys};
+pub use keys::Keys;
 pub use lumen_dock_model as model;
 pub use lumen_dock_model::Workspace as Layout;
 pub use menu::{DockMenuItem, MENU_ID, MenuAction};

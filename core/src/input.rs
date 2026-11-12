@@ -1705,6 +1705,13 @@ pub struct KeyReleased {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Focused;
 
+/// Marker on an element that takes every key while it has keyboard focus:
+/// app-wide shortcuts (a menu bar's accelerators, a command registry) leave
+/// keys to it. An embedded renderer's viewport that forwards every key to
+/// its producer carries it.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct TakesEveryKey;
+
 /// Marker on a focused text field with no edit in flight: focus has just
 /// arrived, or Enter committed a single-line edit, and no key has reached it
 /// since. A field with an edit in flight holds back signal writes so a script

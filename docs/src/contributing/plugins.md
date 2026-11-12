@@ -923,6 +923,35 @@ the input layer; an event raised under one is refused with a warning. Pick
 names a reader can tell apart from them, as the DOM's own custom events do,
 and list them, with their detail fields, in the plugin's documentation.
 
+## Keyboard shortcuts
+
+A plugin that binds keys reads them through `lumen_core::chord::Chord`, so its
+chords are written the way every other part of Lumen writes them
+(`Ctrl+Shift+P`, `CommandOrControl+S`, `Alt+F4`): `Chord::parse` and
+`Chord::parse_list` read them, `matches(key, code, modifiers)` tests a
+`KeyPressed`, `Display` shows a chord the way the platform's menus do, and
+`to_text` writes it back in the form `parse` reads.
+
+A plugin that answers chords app-wide lists them in the
+`lumen_core::chord::ReservedChords` resource under its own name, and keeps the
+list current as its bindings change:
+
+```rust
+world
+    .get_resource_or_init::<ReservedChords>()
+    .set("my-plugin", vec![Chord::parse("F5").unwrap()]);
+```
+
+An element that hands keys to something else, such as a `<surface>` forwarding
+them to its producer, leaves those chords to the app. The other way round, an
+element that takes every key while focused carries
+`lumen_core::input::TakesEveryKey`, and a plugin's app-wide chords leave it
+alone. `lumen_input::FocusKeeps` is the system parameter that says whether the
+focused element keeps a key press: a text field keeps its typing and editing
+chords (`lumen_input::text_field_keeps`), and a `TakesEveryKey` element or the
+pointer-lock holder keeps everything. Check it before answering a chord, as
+the menu bar and the commands module do.
+
 ## Exposing functions to scripts
 
 A plugin can give the app's script functions of its own. One description covers

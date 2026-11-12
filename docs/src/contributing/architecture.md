@@ -154,6 +154,18 @@ bucket/            the Scoop manifest; the repository is Lumen's Scoop bucket
   static build compiles the same plugin in. Its web half in `std/canvas/web`
   draws the same calls with Canvas 2D; a unit test in this crate holds the web
   half's functions equal to the ones it registers.
+- **lumen-commands** (`std/commands`): commands, as a self-contained module
+  the engine knows nothing about. The registry (commands, the user's
+  bindings, what is due) sits behind one lock the script functions, the C ABI
+  and the `Commands` system parameter share. One system reads key presses,
+  menu clicks and palette clicks and queues the module's world work: it adopts
+  `<command>` elements, runs commands as a `command` custom event on the
+  document, writes the label, `accel` and disabled state of every
+  `<menuitem command>` through the item's ordinary attributes, lists its
+  chords in the core `ReservedChords`, and keeps the palette, a core popover,
+  in step. Keys go through the core `Chord` and `lumen_input::FocusKeeps`, the
+  same text-field rule the in-window menu bar uses. Its web half does the same
+  in JavaScript.
 - **lumen-dock** (`std/dock`): docks and windows, as a self-contained module
   the engine knows nothing about. The arrangement is a plain-data model in
   `lumen-dock-model` (`std/dock/model`): docks of splits and tab stacks, the

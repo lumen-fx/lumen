@@ -194,7 +194,9 @@ action to prevent:
 `contextmenu` keeps a browser from opening its own menu in a web build. Key
 events go to the focused element; with nothing focused they go to the
 document, so bind
-app-wide shortcuts on `document_node()`. A key event's `key` is what the key
+app-wide shortcuts on `document_node()`, or declare them as
+[commands](os-integration.md#commands-and-shortcuts), which also put them in
+menus and a command palette and let the user rebind them. A key event's `key` is what the key
 means under the user's layout and its `code` is where the key sits (`KeyW`,
 `ShiftLeft`), named after the US layout; bind a game's movement keys by
 `code`, so they stay put on every layout.

@@ -15,6 +15,7 @@
 
 use bevy_ecs::hierarchy::Children;
 use bevy_ecs::prelude::{Entity, Resource, World};
+use lumen_core::chord::ReservedChords;
 use lumen_core::style_overrides::StyleOverrides;
 use lumen_ir::css::{MediaContext, apply_css_with_media};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, MenuEntrySpec};
@@ -101,6 +102,13 @@ pub(crate) fn finish_in_window_menubar(
     root: Entity,
     mounted: Option<MenuAccelerators>,
 ) {
+    let chords = mounted
+        .as_ref()
+        .map(MenuAccelerators::chords)
+        .unwrap_or_default();
+    world
+        .get_resource_or_init::<ReservedChords>()
+        .set(lumen_primitives::menubar::OWNER, chords);
     let Some(accelerators) = mounted else {
         world.insert_resource(MenuAccelerators::default());
         return;
@@ -136,6 +144,7 @@ mod tests {
                     id: "open".to_string(),
                     label: "Open".to_string(),
                     accelerator: Some("Ctrl+O".to_string()),
+                    command: None,
                 }],
             }],
         });

@@ -38,6 +38,8 @@ use lumen_candela as _;
 #[cfg(feature = "static-run")]
 use lumen_canvas as _;
 #[cfg(feature = "static-run")]
+use lumen_commands as _;
+#[cfg(feature = "static-run")]
 use lumen_cookie as _;
 #[cfg(feature = "static-run")]
 use lumen_dock as _;

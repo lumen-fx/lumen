@@ -88,7 +88,9 @@ Pointer and key input on the surface goes to the producer, with positions in
 the frame's own pixels. Children of the surface (labels, selection boxes, a
 toolbar) take the pointer first; give them `pointer-events: none` to let it
 through. While the surface has focus its keys go to the producer, except Tab
-and your menu bar's shortcuts; `keyboard="all"` sends those too. A game that
+and the shortcuts your app answers app-wide (the menu bar's, and its
+[commands'](os-integration.md#commands-and-shortcuts)); `keyboard="all"` sends
+those too, and then the app's shortcuts leave the surface's keys alone. A game that
 takes the mouse asks for the pointer lock, which the surface grants when it
 has focus and was just clicked; Escape always gives the mouse back. When the
 surface loses focus the producer hears it and lets go of every key and button

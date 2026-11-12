@@ -24,6 +24,8 @@ use lumen_browser as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_canvas as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_commands as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_cookie as _;
 #[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
 use lumen_dock as _;

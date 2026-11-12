@@ -1,0 +1,64 @@
+/* The command palette's default look, at user-agent origin: the app's CSS
+   and a markup attribute override it, and so does a skin rule that matches
+   as specifically. Each value reads a --lumen-command-palette-* token first,
+   then the skin's token, then a value that suits the dark window an app with
+   no skin opens.
+
+   command-palette               (a strip across the top of the window)
+     .command-palette-panel      (the popover, opened below the strip)
+       .command-palette-input    (the search field)
+       .command-palette-list
+         .command-palette-item   (one per command; .highlighted on one)
+           .command-palette-label
+           .command-palette-keys
+         .command-palette-empty  (when nothing matches) */
+
+/* Declarations render nothing. */
+commands, command { display: none; }
+
+command-palette {
+  position: absolute;
+  inset: var(--lumen-command-palette-top, 48) 0 auto 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.command-palette-panel {
+  flex-direction: column;
+  position-area: bottom;
+  popup-gap: 0;
+  width: var(--lumen-command-palette-width, 520);
+  padding: 6;
+  gap: 6;
+  pointer-events: auto;
+  bg: var(--lumen-command-palette-bg, var(--lumen-panel, #1a1b21));
+  border: 1px solid var(--lumen-command-palette-border, var(--lumen-border, #ffffff26));
+  radius: var(--lumen-command-palette-radius, var(--lumen-radius-sm, 6));
+  shadow: var(--lumen-shadow-panel, 0 6 18 #00000088);
+}
+
+.command-palette-input { width: 100%; }
+
+.command-palette-list {
+  flex-direction: column;
+  max-height: var(--lumen-command-palette-list-height, 320);
+  overflow-y: scroll;
+}
+
+.command-palette-item {
+  flex-direction: row;
+  align: center;
+  height: var(--lumen-command-palette-row-height, 28);
+  padding: 0 8;
+  radius: var(--lumen-radius-sm, 4);
+  text-color: var(--lumen-command-palette-text, var(--lumen-text, #ffffff));
+}
+.command-palette-item:hover { bg: var(--lumen-command-palette-hover-bg, var(--lumen-panel-hover, #ffffff12)); }
+.command-palette-item.highlighted {
+  bg: var(--lumen-command-palette-highlight-bg, var(--lumen-accent, #2f6fdb));
+  text-color: var(--lumen-command-palette-highlight-text, var(--lumen-selection-text, #ffffff));
+}
+.command-palette-label { grow: 1; }
+.command-palette-keys { text-color: var(--lumen-command-palette-keys-text, var(--lumen-text-muted, #ffffffa6)); padding: 0 0 0 24; }
+.command-palette-item.highlighted .command-palette-keys { text-color: var(--lumen-command-palette-highlight-text, var(--lumen-selection-text, #ffffff)); }
+.command-palette-empty { padding: 4 8; text-color: var(--lumen-text-muted, #ffffffa6); }

@@ -1,0 +1,50 @@
+# Commands for a Lumen app: named actions with keyboard shortcuts, menu items
+# that run them, a palette that finds them, and bindings the user changes and
+# keeps. A self-contained runtime module: the engine knows nothing about
+# commands. It adopts its elements through the generic tag registry, registers
+# the `commands` script namespace through the generic `ScriptFnRegistry`,
+# raises `command` through the custom-event seam, lists its chords in the
+# core's reserved-chords resource, builds its palette on the core popover, and
+# ships its look as a user-agent stylesheet. The cdylib is the bundled
+# `lumen-commands` module an app declares in `lumen.toml`; the lib is the same
+# plugin compiled into a static build.
+[package]
+name = "lumen-commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's commands module: named actions with keyboard shortcuts, menu items that run them, a command palette, and user key bindings."
+keywords = ["ui", "gui", "shortcuts", "commands", "keybindings"]
+categories = ["gui"]
+publish = false
+
+[lib]
+# `lumen_commands` is the spelling the module loader's bundled probe derives
+# from `lumen-commands = { bundled = true }`: the cdylib builds to
+# `liblumen_commands.so`.
+name = "lumen_commands"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The one engine-facing dependency.
+lumen-module = { workspace = true }
+serde_json = { workspace = true }
+# Named directly for `#[derive(Component)]` / `#[derive(Resource)]`, whose
+# expansion spells the crate by name; the types arrive through the SDK.
+bevy_ecs = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+engine-dylib = ["lumen-module/engine-dylib"]
+
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+lumen-candela-dev = { workspace = true }

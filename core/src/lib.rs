@@ -10,6 +10,7 @@
 pub mod app;
 pub mod app_paths;
 pub mod backends;
+pub mod chord;
 pub mod command;
 pub mod components;
 pub mod i18n;

@@ -283,6 +283,7 @@ pub fn open_list(world: &mut World, stack: Entity) {
             label: title.clone(),
             disabled: false,
             accel: None,
+            command: None,
         })
         .collect();
     let (_, items) = crate::menu::open_popup(world, container, LIST_ID, &rows, at);

@@ -1304,6 +1304,46 @@ What the producer sends back arrives as events on the element:
 and [Showing another renderer's frames](../guides/surfaces.md) for the whole
 picture.
 
+## Commands
+
+These functions come from the `lumen-commands` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-commands = { bundled = true }
+```
+
+They name a command by its `id`, whether a
+[`<command>`](tags.md#commands-command-and-command-palette) declared it or a
+script registered it. Whatever runs a command raises `command` on the
+document, with `id` in its detail; a binding that changes raises `keyschange`
+there with `id` and `keys`. See
+[Commands and shortcuts](../guides/os-integration.md#commands-and-shortcuts).
+
+| Function | Returns | Behaviour |
+| --- | --- | --- |
+| `commands::register(id: string, label: string, keys: string)` | `bool` | Add a command made at run time, or replace the one with the same id. `keys` is a chord such as `Ctrl+Shift+P`, a comma-separated list of them, or empty. `false` when the id is empty or a chord does not read. |
+| `commands::unregister(id: string)` | `bool` | Remove the command. `false` when no command has the id. |
+| `commands::run(id: string)` | `bool` | Run the command: a `command` event on the document carries its id. `false` when no command has the id or it is disabled. |
+| `commands::set_enabled(id: string, enabled: bool)` | `bool` | Turn the command on or off. A disabled command does not run, shows greyed out in its menu items, and is left out of the palette. |
+| `commands::keys(id: string)` | `string` | The chords that run the command now, comma-separated, in the form `bind` reads back. |
+| `commands::bind(id: string, keys: string)` | `bool` | Bind the command to `keys` in place of what it had; `""` unbinds it. A chord another command has moves to this one. Kept between runs unless the module's `persist` is `none`. |
+| `commands::reset(id: string)` | `bool` | Give the command its declared keys back. `false` when the user had not bound it. |
+| `commands::record(id: string)` | `bool` | Bind the next chord the user presses to the command, as `bind` does; Escape cancels. `keyschange` on the document tells when it is done. |
+| `commands::open_palette()` | nothing | Open the command palette. |
+
+```rust
+fn on_command(ev: int) {
+    let detail = lumen::event_detail(ev) as {string: any};
+    if detail["id"] as string == "file.save" { save(); }
+}
+fn on_ready() {
+    lumen::event_on(lumen::node_document(), "command", "on_command");
+    commands::register("view.zoom_in", "Zoom in", "CommandOrControl+Plus");
+}
+```
+
 ## Docks and windows
 
 These functions come from the `lumen-dock` runtime module and exist only

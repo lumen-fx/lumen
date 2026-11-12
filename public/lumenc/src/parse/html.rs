@@ -1007,12 +1007,19 @@ fn extract_menubar(
         for child in menu_node.children().filter(|c| c.is_element()) {
             match child.tag_name().name() {
                 "menuitem" => {
+                    let command = child
+                        .attribute("command")
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string);
                     let id = child
                         .attribute("id")
                         .map(|s| s.to_string())
+                        .or_else(|| command.clone())
                         .ok_or_else(|| {
                             ParseError::Xml(
-                                "<menuitem> requires an id=\"...\" attribute".to_string(),
+                                "<menuitem> requires an id=\"...\" or a command=\"...\" attribute"
+                                    .to_string(),
                             )
                             .at(child.range().start)
                         })?;
@@ -1025,6 +1032,7 @@ fn extract_menubar(
                         id,
                         label: item_label,
                         accelerator,
+                        command,
                     });
                 }
                 "separator" => items.push(MenuEntrySpec::Separator),
@@ -1437,13 +1445,13 @@ fn build_menu(
 
 /// Refuse what a menu cannot hold: anything but `<menuitem>`,
 /// `<separator>`, or (directly in the menu) a `<for>` whose rows are those,
-/// and an item with no `id`.
+/// and an item with neither an `id` nor a `command`.
 fn check_menu_row(node: roxmltree::Node, in_for: bool) -> Result<(), ParseError> {
     match node.tag_name().name() {
-        "menuitem" if node.attribute("id").is_none() => Err(ParseError::Xml(
-            "<menuitem> requires id=\"...\"".to_string(),
-        )
-        .at(node.range().start)),
+        "menuitem" if node.attribute("id").is_none() && node.attribute("command").is_none() => Err(
+            ParseError::Xml("<menuitem> requires id=\"...\" or command=\"...\"".to_string())
+                .at(node.range().start),
+        ),
         "menuitem" | "separator" => Ok(()),
         "for" if !in_for => node
             .children()
@@ -2250,7 +2258,16 @@ fn build_element(
         frag,
         in_for_body,
     )?;
-    // A menu item with no label shows its id.
+    // A menu item written with a command and no id takes the command's id,
+    // and one with no label shows its id.
+    if tag == "menuitem" && attrs.id.is_none() {
+        attrs.id = attrs
+            .widget_attributes
+            .iter()
+            .flatten()
+            .find(|(name, _)| name == "command")
+            .map(|(_, value)| value.clone());
+    }
     if tag == "menuitem" && attrs.text.is_none() {
         attrs.text = attrs.id.clone();
     }
@@ -2611,6 +2628,15 @@ fn apply_attribute(
         "label" if tag == "menuitem" => attrs.text = Some(value.to_string()),
         "accel" if tag == "menuitem" => {
             attrs.shortcut = Some(value.to_string()).filter(|a| !a.trim().is_empty());
+        }
+        // `<menuitem command>`: the command the item runs, handed through
+        // untouched for whatever module keeps the commands to read off the
+        // element's attributes.
+        "command" if tag == "menuitem" => {
+            let bag = attrs.widget_attributes.get_or_insert_with(Vec::new);
+            if !bag.iter().any(|(name, _)| name == "command") {
+                bag.push(("command".to_string(), value.trim().to_string()));
+            }
         }
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
         "height" => attrs.height = Some(parse_length(tag, name, value)?),

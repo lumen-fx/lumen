@@ -20,6 +20,7 @@ use lumen_browser as _;
 use lumen_candela as _;
 use lumen_candela_dev as _;
 use lumen_canvas as _;
+use lumen_commands as _;
 use lumen_cookie as _;
 use lumen_dock as _;
 use lumen_download as _;

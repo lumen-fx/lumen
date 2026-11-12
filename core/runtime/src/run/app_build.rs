@@ -711,6 +711,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                                 id,
                                 label,
                                 accelerator,
+                                ..
                             } => MenuEntry::Item {
                                 id: id.clone(),
                                 label: label.clone(),
