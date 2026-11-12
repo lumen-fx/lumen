@@ -449,9 +449,15 @@ fn bindings_are_recorded_rebound_reset_and_kept() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let data = std::env::temp_dir().join(format!("lumenc_commands_data_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
-    // SAFETY: the tests in this file run one at a time under SERIAL, and
-    // nothing else in this process reads the variable concurrently.
-    unsafe { std::env::set_var("XDG_DATA_HOME", &data) };
+    // The per-user data root each platform reads, pointed under `data` so
+    // the keymap lands there and not in the real one.
+    let roots = ["XDG_DATA_HOME", "HOME", "APPDATA"];
+    let saved: Vec<Option<std::ffi::OsString>> = roots.iter().map(std::env::var_os).collect();
+    for key in roots {
+        // SAFETY: the tests in this file run one at a time under SERIAL, and
+        // nothing else in this process reads the variables concurrently.
+        unsafe { std::env::set_var(key, &data) };
+    }
     let dir = std::env::temp_dir().join(format!("lumenc_commands_keep_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     {
@@ -486,11 +492,12 @@ fn bindings_are_recorded_rebound_reset_and_kept() {
         press(app, "z");
         assert_eq!(ran(app).as_deref(), Some("view.zoom"));
     }
-    let file = lumen_core::app_paths::data_dir_under(
-        &data,
-        &format!("lumenc-commands-keep-{}", std::process::id()),
-    )
-    .join(lumen_commands::FILE);
+    let file = lumen_core::app_paths::data_dir().join(lumen_commands::FILE);
+    assert!(
+        file.starts_with(&data),
+        "{} is under the test's root",
+        file.display()
+    );
     assert!(file.exists(), "{} was written", file.display());
     {
         let mut t = build_in(dir.clone(), "keep", "");
@@ -510,8 +517,15 @@ fn bindings_are_recorded_rebound_reset_and_kept() {
     }
     let _ = std::fs::remove_dir_all(&data);
     let _ = std::fs::remove_dir_all(&dir);
-    // SAFETY: as above.
-    unsafe { std::env::remove_var("XDG_DATA_HOME") };
+    for (key, value) in roots.iter().zip(saved) {
+        // SAFETY: as above.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 }
 
 /// An item of the menu bar drawn in the window that has both an `accel` and a
