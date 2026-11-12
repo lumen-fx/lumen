@@ -1362,6 +1362,47 @@ fn unknown_attribute_records_lint_finding() {
 }
 
 #[test]
+fn cell_width_lays_out_a_virtualized_for_and_warns_anywhere_else() {
+    use lumenc::layout_ir::{LintKind, LintSeverity};
+    let ir = parse_html(
+        r##"<root><for each="a" virtualized="true" row-height="92" cell-width="84"/></root>"##,
+    )
+    .expect("html");
+    assert_eq!(ir.root.children[0].attrs.cell_width, Some(84.0));
+    assert!(
+        !ir.lint_findings
+            .iter()
+            .any(|f| f.kind == LintKind::UnknownAttribute),
+        "a virtualized grid does not lint, got {:?}",
+        ir.lint_findings,
+    );
+
+    // Without `virtualized`, on a `<for>` or on any other tag, it warns.
+    for markup in [
+        r##"<root><for each="a" cell-width="84"/></root>"##,
+        r##"<root><column cell-width="84"/></root>"##,
+    ] {
+        let ir = parse_html(markup).expect("html");
+        let ignored: Vec<_> = ir
+            .lint_findings
+            .iter()
+            .filter(|f| f.kind == LintKind::UnknownAttribute)
+            .collect();
+        assert_eq!(ignored.len(), 1, "{markup}: {:?}", ir.lint_findings);
+        assert_eq!(ignored[0].severity, LintSeverity::Warn);
+        assert!(
+            ignored[0].message.contains("cell-width"),
+            "{}",
+            ignored[0].message
+        );
+    }
+    // `virtualized` written after it counts.
+    let ir = parse_html(r##"<root><for cell-width="84" each="a" virtualized="true"/></root>"##)
+        .expect("html");
+    assert!(ir.lint_findings.is_empty(), "{:?}", ir.lint_findings);
+}
+
+#[test]
 fn known_attributes_record_no_unknown_finding() {
     use lumenc::layout_ir::LintKind;
     let ir = parse_html(r##"<root skin="macos" frameless="true"><label id="a" class="b" text="hi" width="10"/></root>"##)
@@ -2236,6 +2277,9 @@ fn virtualized_for_inserts_style_only_when_changed() {
                 key_field: None,
                 virtualized: true,
                 row_height: 20.0,
+                cell_width: None,
+                grid: None,
+                range: 0..0,
                 rows: Vec::new(),
                 cascaded_body: None,
                 row_items: Vec::new(),
@@ -2329,6 +2373,9 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
                     key_field: None,
                     virtualized: true,
                     row_height: 20.0,
+                    cell_width: None,
+                    grid: None,
+                    range: 0..0,
                     rows: Vec::new(),
                     cascaded_body: None,
                     row_items: Vec::new(),

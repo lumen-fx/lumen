@@ -182,6 +182,8 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `popover`, `popover_target`, `anchor`, `popover_open`, `position_area`
 /// and `position_try`: any element can be a popover, placed against an
 /// anchor in the top layer.
+/// It also gains `cell_width`, the cell width that lays a virtualized
+/// `<for>` out as a grid.
 ///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads

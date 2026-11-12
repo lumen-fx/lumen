@@ -1924,9 +1924,11 @@ fn apply_authored_attributes(
     let mut src_off: Option<usize> = None;
     let mut id_off: Option<usize> = None;
     let mut class_off: Option<usize> = None;
+    let mut cell_width_off: Option<usize> = None;
     for a in node.attributes() {
         let off = a.range_value().start;
         match a.name() {
+            "cell-width" => cell_width_off = Some(off),
             "text" => text_off = Some(off),
             "label" if tag == "menuitem" => text_off = Some(off),
             "placeholder" => placeholder_off = Some(off),
@@ -1968,6 +1970,23 @@ fn apply_authored_attributes(
                 .markup_styles
                 .push((property.to_string(), a.value().to_string()));
         }
+    }
+
+    // `cell-width` only means something to the windowing a virtualized
+    // `<for>` does; anywhere else it would silently do nothing.
+    if attrs.cell_width.is_some() && !attrs.virtualized {
+        let (line, col) = line_col_of(src, cell_width_off.unwrap_or(0));
+        lint_findings.push(LintFinding {
+            kind: LintKind::UnknownAttribute,
+            severity: LintSeverity::Warn,
+            message: format!(
+                "`cell-width` on `<{tag}>` is ignored: it lays out a `<for virtualized=\"true\">` \
+                 as a grid, and this element is not one."
+            ),
+            line,
+            col,
+            suggest: None,
+        });
     }
 
     // Normalise `{$name}` -> `{name}` in string-valued attrs that may
@@ -2909,6 +2928,7 @@ fn apply_attribute(
         "key" => attrs.key = Some(value.trim().to_string()),
         "virtualized" => attrs.virtualized = ctx.bool_value(tag, name, value),
         "row-height" => attrs.row_height = Some(parse_f32(tag, name, value)?),
+        "cell-width" => attrs.cell_width = Some(parse_f32(tag, name, value)?),
         "wrap" => {
             if value == "ellipsis" {
                 // Single-line elision: lowered by the spawn layer onto

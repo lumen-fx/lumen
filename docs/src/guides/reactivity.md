@@ -97,7 +97,27 @@ a rule that reads a class its record gave the row (`.row.selected .name`) or
 an ancestor of the list (`#list .name`) reaches the row's parts.
 
 For a long list, add `virtualized="true"` and `row-height="56"` and only the
-rows in the visible window are built.
+rows in the visible window are built. Add `cell-width="84"` as well and the
+list becomes a grid of 84-pixel cells, as many to a row as the list's width
+holds, spaced by its CSS `gap`: an asset browser or a photo grid with
+thousands of items builds only the cells on screen.
+
+A virtualized list tells you what it has built: its `rangechange` event
+carries the `first` and `last` item indices it mounted (`last` exclusive), so
+a handler can load thumbnails for those items and nothing else. A web build
+mounts the whole list and does not fire it.
+
+```html
+<scroll height="600">
+  <for id="assets" each="assets" key="id" virtualized="true" row-height="92" cell-width="84">
+    <column class="asset"><image src="{row.thumb}" /><label text="{row.name}" /></column>
+  </for>
+</scroll>
+```
+
+```css
+#assets { gap: 8px; }
+```
 
 A script fills the array by name. Every host exposes an array-signal handle for
 this, with `set`, `push`, `get`, and `len` on it. See

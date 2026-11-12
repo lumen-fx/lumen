@@ -469,7 +469,8 @@ LumenEventToken lumen_on(LumenNode node,
 
 /*
  * What the current event carries (ABI 0.17): a module's custom event writes
- * its detail map into `*out`, a built-in event an empty map. The caller owns
+ * its detail map into `*out`, a `rangechange` its `first` / `last` item
+ * indices, any other built-in event an empty map. The caller owns
  * the value and releases it with lumen_value_free. Valid only inside a
  * LumenEventFn callback. Thread-safe.
  */

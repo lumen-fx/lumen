@@ -885,11 +885,25 @@ column.
 | `each` | array signal name | Required for iteration. Without it the children spawn once, unrepeated. |
 | `key` | field name | Record field used as the reconciliation key. Without it the item index is the key. A row whose key is still in the array keeps its elements wherever the key moves, and is updated in place when its record's fields change; only rows whose keys came or went are built or removed. |
 | `virtualized` | `true`, `yes` | Spawn only the rows in the visible scroll window. Needs a `<scroll>` ancestor. |
-| `row-height` | number | Pixel height per virtualized row. Defaults to `32`. |
+| `row-height` | number | Pixel height per virtualized row, and of each cell of a grid. Defaults to `32`. |
+| `cell-width` | number | Lay a virtualized `<for>` out as a grid of fixed-size cells this many pixels wide. Ignored, with a warning, without `virtualized`. |
 
 Inside the body, `{row.field}` reads the current record and `{$index}`
 the row index. A virtualized `<for>` is forced to full width so its rows
 have a reference box.
+
+With `cell-width`, each item is a cell `cell-width` wide and `row-height`
+tall. A grid row holds as many cells as fit the block's width, spaced by the
+block's CSS `column-gap` and `row-gap`, and never fewer than one; the cells
+sit at the left and the leftover width stays at the end of the row, as
+`grid-template-columns: repeat(auto-fill, <cell-width>px)` lays them out on
+the web. A change in the block's width moves the cells to the new column
+count. Only the grid rows in the visible window are built, plus a buffer of
+at least two grid rows.
+
+| Event | Detail | Fires |
+| --- | --- | --- |
+| `rangechange` | `{first, last}` | On a virtualized `<for>`, each time the items it has mounted change: a scroll, a new column count, or the list growing or shrinking. `first` is the index of the first mounted item and `last` one past the last. Does not bubble. Not fired on the web, where the whole list mounts. |
 
 ### `<if>`
 

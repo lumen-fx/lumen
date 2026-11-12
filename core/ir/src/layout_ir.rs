@@ -1090,6 +1090,11 @@ pub struct Attributes {
     /// Required when [`Self::virtualized`] is true; defaults to 32 px
     /// at spawn when the attr is absent.
     pub row_height: Option<f32>,
+    /// `<for virtualized="true" cell-width="84">` - lays the virtualized
+    /// list out as a grid of fixed-size cells, each `cell_width` wide and
+    /// [`Self::row_height`] tall, as many to a row as the block's width
+    /// holds. `None` is the plain one-row-per-item list.
+    pub cell_width: Option<f32>,
     /// `signal="loaded"` on `<if>` - name of the `Signals` entry whose
     /// truthiness gates the subtree. Truthy = non-empty AND not literal
     /// `"false"` / `"0"`. Toggle spawns / despawns body on next tick.
