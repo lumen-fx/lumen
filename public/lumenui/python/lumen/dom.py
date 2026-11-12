@@ -621,7 +621,10 @@ class Event:
         return _read_string_out(get_library().lumen_event_value)
 
     def detail(self) -> dict:
-        """What a module's custom event carries; empty for a built-in one."""
+        """What a module's custom event carries, or a rangechange's first / last.
+
+        Empty for the other built-in events.
+        """
 
         from .api import take_value
 

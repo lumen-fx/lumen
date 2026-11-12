@@ -177,10 +177,10 @@ receives an event it can inspect and control, with `target`, `current_target`,
 The bindable types are `click`, `dblclick`, `contextmenu`, `pointerdown`,
 `pointerup`, `pointermove`, `pointercancel`, `pointerenter`, `pointerleave`,
 `gotpointercapture`, `lostpointercapture`, `wheel`, `keydown`, `keyup`,
-`input`, `change`, `focus`, `blur`, `submit`, `scroll`, `pointerlockchange`,
-`pointerlockerror`, `beforetoggle` and `toggle`. A popover hears
-`beforetoggle` and then `toggle` when it opens or closes, with `old_state`
-and `new_state` in the event's detail. Of those, `input`
+`input`, `change`, `focus`, `blur`, `submit`, `scroll`, `rangechange`,
+`pointerlockchange`, `pointerlockerror`, `beforetoggle` and `toggle`. A
+popover hears `beforetoggle` and then `toggle` when it opens or closes, with
+`old_state` and `new_state` in the event's detail. Of those, `input`
 fires on every edit to a text field, while `change` and `submit` wait for the
 field to commit; leaving a field after an edit raises `change` too. Checkboxes,
 toggles, switches, sliders, radios, dropdowns and color fields raise `input` and
@@ -194,6 +194,10 @@ app-wide shortcuts on `document_node()`. A key event's `key` is what the key
 means under the user's layout and its `code` is where the key sits (`KeyW`,
 `ShiftLeft`), named after the US layout; bind a game's movement keys by
 `code`, so they stay put on every layout.
+
+`rangechange` fires on a virtualized `<for>` when the items it has built
+change, with their indices in `detail()` as `first` and `last` (`last`
+exclusive); see [Reactivity](reactivity.md) for loading only what is shown.
 
 A `wheel` event's `delta_x` and `delta_y` are always in logical pixels, a
 wheel's notches converted at 32 pixels a line. Its `delta_mode` says what the

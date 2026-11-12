@@ -1564,8 +1564,8 @@ public:
     std::pair<double, double> movement() const {
         return ev_ ? std::make_pair(ev_->movement_x, ev_->movement_y) : std::make_pair(0.0, 0.0);
     }
-    /// What a module's custom event carries, a map; empty for a built-in
-    /// event.
+    /// What a module's custom event carries, a map, or a `rangechange`'s
+    /// `first` / `last`; empty for the other built-in events.
     Value detail() const {
         LumenValue out{};
         out.kind = LUMEN_NIL;

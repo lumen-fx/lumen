@@ -397,7 +397,7 @@ keep.
 | `LumenNode lumen_pointer_lock_element(void)` | The element holding the pointer lock, or `0`. |
 
 The C++, Python, and Rust SDKs expose the same readings on their `Event`
-(`code()`, `movement()` and `delta_mode()` included), the capture and lock calls on their
+(`code()`, `movement()`, `delta_mode()` and `detail()` included), the capture and lock calls on their
 `Node`, and `exit_pointer_lock` / `pointer_lock_element` beside their
 document functions.
 
@@ -409,8 +409,8 @@ only inside the callback:
   key of a key event sits, by the DOM `code` name (`KeyW`, `ShiftLeft`), the
   same on every layout
 - `lumen_event_detail(LumenValue *out)` - what a module's custom event
-  carries, as a map; an empty map for a built-in event. Release it with
-  `lumen_value_free`
+  carries, or a `rangechange`'s `first` / `last`, as a map; an empty map for
+  any other built-in event. Release it with `lumen_value_free`
 - `lumen_event_target()` / `lumen_event_current_target()` - packed handles, `0`
   outside a callback
 - `lumen_event_prevent_default()` - cancel the default action, which is link

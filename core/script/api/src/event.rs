@@ -69,8 +69,9 @@ pub struct EventData {
     pub delta_mode: lumen_core::input::WheelDeltaMode,
     /// Text value for `input` / `change` events.
     pub value: String,
-    /// What a custom event carries ([`crate::dom_events::CustomEvent`]);
-    /// empty for the built-in events.
+    /// What a custom event carries ([`crate::dom_events::CustomEvent`]), or
+    /// a `rangechange`'s `first` / `last`; empty for the other built-in
+    /// events.
     pub detail: std::collections::HashMap<String, crate::ScriptValue>,
     /// Set by `prevent_default`: the event's default action is cancelled.
     pub default_prevented: bool,
@@ -216,7 +217,8 @@ pub fn event_value() -> String {
         .unwrap_or_default()
 }
 
-/// `ev.detail()`: what a custom event carries, empty for a built-in one.
+/// `ev.detail()`: what a custom event carries, or a `rangechange`'s
+/// `first` / `last`; empty for the other built-in events.
 pub fn event_detail() -> std::collections::HashMap<String, crate::ScriptValue> {
     current_cell()
         .read()
@@ -505,11 +507,20 @@ pub fn has_default_action(event_type: &str) -> bool {
 
 /// Whether `event_type` bubbles (fires bubble-phase handlers on ancestors
 /// after the target). Mirrors the DOM: `focus` / `blur`, pointer
-/// `enter` / `leave`, and `scroll` do not bubble; everything else does.
+/// `enter` / `leave`, and `scroll` do not bubble; neither does
+/// `rangechange`, which is about the one list it fires on. Everything else
+/// does.
 pub fn event_bubbles(event_type: &str) -> bool {
     !matches!(
         event_type,
-        "focus" | "blur" | "pointerenter" | "pointerleave" | "scroll" | "beforetoggle" | "toggle"
+        "focus"
+            | "blur"
+            | "pointerenter"
+            | "pointerleave"
+            | "scroll"
+            | "rangechange"
+            | "beforetoggle"
+            | "toggle"
     )
 }
 

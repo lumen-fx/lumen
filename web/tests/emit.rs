@@ -1256,6 +1256,57 @@ fn a_virtualized_block_emits_the_rows_a_first_screen_shows() {
     );
 }
 
+/// A virtualized grid over `items`: 84 by 92 pixel cells.
+fn grid_page(virtualized: bool) -> PageSpec {
+    let block = element(
+        "for",
+        Attributes {
+            each: Some("items".into()),
+            key: Some("id".into()),
+            virtualized,
+            row_height: Some(92.0),
+            cell_width: Some(84.0),
+            ..Attributes::default()
+        },
+        vec![row_label("{row.name}")],
+    );
+    PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    )
+}
+
+#[test]
+fn a_virtualized_grid_is_a_css_grid_carrying_a_first_screen_of_cells() {
+    let names: Vec<String> = (0..400).map(|n| format!("cell {n}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut spec = site(vec![grid_page(true)]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&refs));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(
+        html.contains(
+            r#"<div class="lm-for" data-lm="0.0" style="display:grid;grid-template-columns:repeat(auto-fill,84px);grid-auto-rows:92px">"#
+        ),
+        "the browser wraps the cells itself: {html}"
+    );
+    // ceil(1080 / 92) grid rows of floor(1920 / 84) cells.
+    assert_eq!(node_paths(&html).len(), 2 + 12 * 22);
+    assert_well_formed(&html);
+}
+
+#[test]
+fn a_cell_width_on_a_list_that_is_not_virtualized_lays_nothing_out() {
+    let mut spec = site(vec![grid_page(false)]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(!html.contains("display:grid"), "{html}");
+    assert_eq!(node_paths(&html).len(), 4);
+}
+
 #[test]
 fn a_virtualized_block_with_no_runtime_to_finish_it_emits_every_row() {
     let names: Vec<String> = (0..40).map(|n| format!("row {n}")).collect();

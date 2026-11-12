@@ -670,7 +670,7 @@ through the accessors below:
 | `lumen::event_key(ev: int)` | `string` | Key name for keyboard events. |
 | `lumen::event_code(ev: int)` | `string` | Where the key sits, by the DOM `code` name (`"KeyW"`, `"ShiftLeft"`, `"Numpad1"`): the same key on every layout, which is what a game binds movement to. |
 | `lumen::event_value(ev: int)` | `string` | Text value for `input` / `change` / `submit`. |
-| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries: a map, empty for a built-in event. Unwrap it with `as {string: any}`. |
+| `lumen::event_detail(ev: int)` | `any` | What a module's custom event carries, or a `rangechange`'s `first` / `last`: a map, empty for the other built-in events. Unwrap it with `as {string: any}`. |
 | `lumen::event_button(ev: int)` | `int` | The web `button` code: `0` primary, `1` middle, `2` secondary, `3` back, `4` forward, `5` pen eraser, `-1` none (a move). |
 | `lumen::event_buttons(ev: int)` | `int` | Buttons held, as a mask: `1` primary, `2` secondary, `4` middle, `8` back, `16` forward, `32` eraser. |
 | `lumen::event_pointer_id(ev: int)` | `int` | The pointer's id; the mouse is `1`, each touch and pen has its own. |
@@ -696,14 +696,21 @@ through the accessors below:
 `click`, `dblclick`, `contextmenu`, `pointerdown`, `pointerup`, `pointermove`,
 `pointercancel`, `pointerenter`, `pointerleave`, `gotpointercapture`,
 `lostpointercapture`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`,
-`blur`, `submit`, `scroll`, `pointerlockchange`, `pointerlockerror`,
-`beforetoggle`, `toggle`.
+`blur`, `submit`, `scroll`, `rangechange`, `pointerlockchange`,
+`pointerlockerror`, `beforetoggle`, `toggle`.
 
 A module adds event types of its own, under names it chooses (a dock's
 `layoutchange`, `panelclose`), raised on its elements and dispatched the same
 way; the module's documentation lists them and says which bubble and which a
 handler can cancel with `prevent_default`. They carry a detail map, which a
-built-in event leaves empty.
+built-in event leaves empty, except `rangechange`.
+
+`rangechange` fires on a `<for virtualized="true">` each time the items it has
+mounted change: a scroll moves its window, a grid's column count changes, or
+the list grows or shrinks. Its detail is `{first, last}`, item indices with
+`first` inclusive and `last` exclusive, so a handler loads thumbnails for those
+items and nothing else. A web build mounts the whole list and does not fire
+it.
 
 A CSS animation raises `animationstart`, `animationiteration`,
 `animationend` and `animationcancel` on its element, on the desktop and in a
@@ -714,9 +721,9 @@ detail. An animation a script started with `animations::animate` raises
 handle under `animation`.
 
 Dispatch runs capture (root down to the target), then the target, then bubble
-(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
-`scroll` do not bubble. `keydown` and `keyup` target the focused element, or
-the document root when nothing is focused.
+(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`,
+`scroll` and `rangechange` do not bubble. `keydown` and `keyup` target the
+focused element, or the document root when nothing is focused.
 
 `pointerenter` fires on an element when the pointer reaches it or one of its
 descendants, outermost element first, and `pointerleave` when the pointer is

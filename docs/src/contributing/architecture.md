@@ -822,6 +822,13 @@ reconcilers in the `Systems` stage keep in sync with the data behind them.
 `<for>` keeps a row whose key survives a write: when its record changed, the
 row's placeholders are resolved again and written onto the entities it
 already has, so focus, scroll, and animation state stay with it.
+A virtualized `<for>` mounts only the rows its scroll window shows and holds
+each one in an absolute slot; with `cell-width` the slot is a grid cell, and
+the column count comes from the block's width as the previous layout left
+it. When a layout changes that count, `request_tick_on_grid_reflow` asks for
+the tick that re-slots the cells. The reconciler reports the mounted range
+with a `MountedRangeChanged` message, which `lumen-script` raises as the DOM
+`rangechange` event.
 `<if>` has two policies: rebuild the subtree on each transition, or mount it
 once and toggle visibility, which preserves focus, scroll position, and
 per-row state.

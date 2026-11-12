@@ -151,6 +151,7 @@ pub const ATTRS: &[&str] = &[
     "key",
     "virtualized",
     "row-height",
+    "cell-width",
     "mode",
     "eq",
     "name",
@@ -459,7 +460,10 @@ multi-line clamp. Not inherited."
             "**`virtualized`** - boolean on `<for>`. Spawn only the rows inside the visible scroll window. Needs a `<scroll>` ancestor; pair with `row-height`."
         }
         "row-height" => {
-            "**`row-height`** - pixels per row of a virtualized `<for>`. Defaults to `32`."
+            "**`row-height`** - pixels per row of a virtualized `<for>`, and the height of a grid's cells. Defaults to `32`."
+        }
+        "cell-width" => {
+            "**`cell-width`** - pixels per cell on a virtualized `<for>`. Lays the items out as a grid of fixed-size cells, as many to a row as the block's width holds, spaced by its CSS `gap`. Only on `<for virtualized=\"true\">`."
         }
         "eq" => {
             "**`eq`** - value on `<if>`. Mounts the children when the signal equals this string, instead of testing truthiness."

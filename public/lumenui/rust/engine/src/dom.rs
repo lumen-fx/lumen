@@ -691,6 +691,13 @@ impl Event {
         ev::event_modifiers()
     }
 
+    /// What the event carries: a module's custom event's detail, or a
+    /// `rangechange`'s `first` / `last` item indices. Empty for the other
+    /// built-in events.
+    pub fn detail(&self) -> HashMap<String, lumen_script::ScriptValue> {
+        ev::event_detail()
+    }
+
     /// Cancel the event's default action.
     pub fn prevent_default(&self) {
         ev::event_prevent_default();

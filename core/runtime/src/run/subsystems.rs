@@ -246,6 +246,12 @@ pub(crate) fn register_reactive(app: &mut App) {
     // What the stylesheet asks of elements entering and leaving the tree,
     // and the removal of a leaving element once its exit has run.
     lumen_scene::style_sheet::install_entry_exit(app);
+    // A virtualized grid learns its new column count from the layout after
+    // a resize, so that layout asks for the tick that re-slots its cells.
+    app.add_systems(
+        TickStage::A11ySync,
+        crate::spawn::request_tick_on_grid_reflow,
+    );
     // A `<split>`'s gutters and a `<tabs>`' strip, however their children
     // got there, and a tab's content once it shows.
     lumen_scene::widgets::install(app);

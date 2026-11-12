@@ -778,6 +778,24 @@ pub fn signal_as_bool(value: &str) -> Option<bool> {
 /// One row of a reactive array; field name -> stringified value.
 pub type ArrayItem = HashMap<String, String>;
 
+/// The items a virtualized `<for>` block has mounted changed: a scroll moved
+/// its window, a resize changed how many cells a grid row holds, or the
+/// array grew or shrank under it. `first..last` are item indices, first
+/// inclusive and last exclusive.
+///
+/// The scene's reconciler writes it; the script event driver raises it as
+/// the DOM `rangechange` event on the block, which is how an app loads
+/// what is shown and nothing else.
+#[derive(bevy_ecs::message::Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MountedRangeChanged {
+    /// The `<for>` block.
+    pub block: Entity,
+    /// Index of the first item mounted.
+    pub first: usize,
+    /// One past the index of the last item mounted.
+    pub last: usize,
+}
+
 /// Reactive array store paired with [`Signals`]; ordered vectors of [`ArrayItem`] keyed by name.
 /// Written through `ScriptCommand::SetArray`; the reconciler system spawns/despawns markup children to match the stored vector.
 ///

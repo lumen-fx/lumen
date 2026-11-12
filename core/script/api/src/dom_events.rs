@@ -12,7 +12,7 @@
 //! `pointerup` / `pointermove` / `pointercancel` / `pointerenter` /
 //! `pointerleave`, `gotpointercapture` / `lostpointercapture`, `wheel`,
 //! `keydown` / `keyup`, `input`, `change`, `focus`, `blur`, `submit`,
-//! `scroll`.
+//! `scroll`, `rangechange`.
 //!
 //! Sources and current limitations:
 //! - Pointer events target the entity under the pointer: the one carrying
@@ -47,6 +47,12 @@
 //!   field) raise no `input`, `change` or `submit`; the widget raises its
 //!   own.
 //! - `scroll` comes from a changed scroll offset and does not bubble.
+//! - `rangechange` fires on a virtualized `<for>` each time the items it
+//!   has mounted change (a scroll, a grid's column count, the array's
+//!   length), from the reconciler's [`MountedRangeChanged`]. Its detail is
+//!   `{ first, last }`, item indices, first inclusive and last exclusive.
+//!   It does not bubble. A page does not raise it: the browser mounts and
+//!   scrolls the whole list.
 //! - `contextmenu` comes from the input layer's [`ContextMenuEvent`]: a
 //!   secondary-button press (a release on Windows), the ContextMenu key or
 //!   Shift+F10, or an assistive technology's request.
@@ -76,6 +82,8 @@ use glam::Vec2;
 use lumen_core::components::WidgetInternal;
 use lumen_core::input::ControlInput;
 use lumen_core::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use lumen_core::signals::MountedRangeChanged;
 
 use crate::ScriptHost;
 use crate::event::{self, EventData};
@@ -205,6 +213,7 @@ pub const BUILT_IN_EVENTS: &[&str] = &[
     "blur",
     "submit",
     "scroll",
+    "rangechange",
     "pointerlockchange",
     "pointerlockerror",
     "beforetoggle",
@@ -322,7 +331,8 @@ pub fn deliver_input_events(world: &mut World) {
     }
 }
 
-/// Deliver the focus, hover, edit, commit and scroll events read this tick.
+/// Deliver the focus, hover, edit, commit, scroll and range events read this
+/// tick.
 pub fn deliver_state_events(world: &mut World) {
     let _dom = world.get_resource::<AppDom>().map(AppDom::enter);
     let Some(mut pending) = world.get_resource_mut::<PendingDomEvents>() else {
@@ -627,7 +637,10 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<CustomEvent>(world);
     register::<CustomEventDelivered>(world);
     #[cfg(not(target_arch = "wasm32"))]
-    register::<lumen_primitives::PopoverToggled>(world);
+    {
+        register::<MountedRangeChanged>(world);
+        register::<lumen_primitives::PopoverToggled>(world);
+    }
 }
 
 /// The pointer messages [`queue_pointer_and_key_events`] reads, grouped so
@@ -840,14 +853,17 @@ pub fn queue_pointer_and_key_events(
     }
 }
 
-/// Read this tick's focus, hover, edit, commit and scroll changes as DOM
-/// events, for [`deliver_state_events`].
+/// Read this tick's focus, hover, edit, commit, scroll and mounted-range
+/// changes as DOM events, for [`deliver_state_events`].
 #[allow(clippy::too_many_arguments)]
 pub fn queue_state_events(
     mut pending: ResMut<PendingDomEvents>,
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
     mut controls: MessageReader<ControlInput>,
+    // Optional: a world built without the scene has no list to report. A
+    // page has none to report either: the browser mounts the whole list.
+    #[cfg(not(target_arch = "wasm32"))] mut ranges: Option<MessageReader<MountedRangeChanged>>,
     internal: Query<(), With<WidgetInternal>>,
     gained_focus: Query<Entity, Added<Focused>>,
     mut lost_focus: RemovedComponents<Focused>,
@@ -953,6 +969,17 @@ pub fn queue_state_events(
     // scroll (does not bubble).
     for e in scrolled.iter() {
         queue.push((base(e, "scroll"), e));
+    }
+    // rangechange (does not bubble): the items a virtualized `<for>`
+    // mounted, first inclusive, last exclusive.
+    #[cfg(not(target_arch = "wasm32"))]
+    for range in ranges.iter_mut().flat_map(|r| r.read()) {
+        let mut data = base(range.block, "rangechange");
+        for (key, index) in [("first", range.first), ("last", range.last)] {
+            let index = i64::try_from(index).unwrap_or(i64::MAX);
+            data.detail.insert(key.to_string(), index.into());
+        }
+        queue.push((data, range.block));
     }
     // pointerlockchange on the element that lost the lock, then on the one
     // that took it; pointerlockerror on one refused it.

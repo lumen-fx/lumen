@@ -848,7 +848,7 @@ fn event_fns() -> Vec<ScriptFn> {
         ),
         accessor(
             "event_detail",
-            "What a module's custom event carries, as a map; empty for a built-in event.",
+            "What a module's custom event carries, as a map, or a `rangechange`'s `first` / `last`; empty for the other built-in events.",
             T::Dynamic,
             || ScriptValue::Map(event::event_detail()),
         ),

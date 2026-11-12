@@ -710,6 +710,13 @@ none of them means anything without an absolute address.
   runtime mounts every row when the page opens and the browser scrolls them,
   the way it scrolls any other list. A site built with `render = "static"`
   carries every row, since nothing runs to add the rest.
+- A virtualized grid (`cell-width`) is written as a CSS grid,
+  `grid-template-columns: repeat(auto-fill, <cell-width>px)` with
+  `grid-auto-rows: <row-height>px`, so the browser wraps the cells and the
+  stylesheet's `gap` spaces them. The document carries the cells a first screen
+  of 1920 by 1080 pixels shows. A grid inside a branch that is not showing when
+  the page is built is mounted by the runtime without that grid style.
+- The runtime mounts the whole list, so a page does not fire `rangechange`.
 - A list whose rows only exist once a script has run is emitted empty under
   `prerender = "seeds"`. `[web.seed]` puts rows in the document without
   anything running, and `prerender = "run"` gets them from the app itself.

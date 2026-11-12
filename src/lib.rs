@@ -4015,7 +4015,8 @@ pub extern "C" fn lumen_event_stop_immediate_propagation() -> LumenStatus {
 }
 
 /// Write what the current event carries into `*out`: the detail map of a
-/// module's custom event, an empty map for a built-in event. The caller owns
+/// module's custom event, a `rangechange`'s `first` / `last` item indices,
+/// an empty map for any other built-in event. The caller owns
 /// the value and releases it with [`lumen_value_free`]. Valid only inside a
 /// [`LumenEventFn`] callback. Thread-safe.
 ///

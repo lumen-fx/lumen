@@ -1816,7 +1816,7 @@ pub const BUILTINS: &[BuiltinFn] = &[
             ty: "int",
         }],
         ret: "any",
-        doc: "What a module's custom event carries, as a map; empty for a built-in event.",
+        doc: "What a module's custom event carries, as a map, or a `rangechange`'s `first` / `last`; empty for the other built-in events.",
     },
     BuiltinFn {
         name: "event_button",

@@ -478,6 +478,14 @@ fn emit_element(
         }
         style.push_str(&anchoring);
     }
+    if ir_tag == "for"
+        && let Some(grid) = grid_style(element)
+    {
+        if !style.is_empty() {
+            style.push(';');
+        }
+        style.push_str(&grid);
+    }
     if !style.is_empty() {
         write_attr(out, "style", &style);
     }
@@ -793,6 +801,11 @@ fn emit_rows(
 /// virtualized list whole, and the runtime builds the rest below it.
 const FOLD_PX: f32 = 1080.0;
 
+/// How wide a first screen is taken to be, in CSS pixels, for a virtualized
+/// grid. Nominal, and wide: the gap between cells is the stylesheet's, which
+/// the build does not resolve, so a grid row is counted as if it had none.
+const FOLD_WIDTH_PX: f32 = 1920.0;
+
 /// How many of a `<for>` block's rows the document carries.
 ///
 /// Every row, except for a virtualized block on a page whose runtime mounts
@@ -807,7 +820,27 @@ fn row_limit(element: &Element, len: usize, runtime: bool) -> usize {
     // The row height the spawner reads, with the same default and the same
     // guard against a zero or negative one.
     let row_height = element.attrs.row_height.unwrap_or(32.0).max(1.0);
-    len.min((FOLD_PX / row_height).ceil().max(1.0) as usize)
+    let rows = (FOLD_PX / row_height).ceil().max(1.0) as usize;
+    // A grid's first screen is as many grid rows, each as many cells as a
+    // wide screen holds.
+    let columns = element.attrs.cell_width.map_or(1, |w| {
+        (FOLD_WIDTH_PX / w.max(1.0)).floor().max(1.0) as usize
+    });
+    len.min(rows * columns)
+}
+
+/// The inline style that lays a virtualized grid out: the browser wraps its
+/// cells into as many fixed-width columns as fit, as the desktop reconciler
+/// does, and scrolls them itself. The gap between cells is the stylesheet's.
+/// `None` for a block that is not a grid.
+fn grid_style(element: &Element) -> Option<String> {
+    let attrs = &element.attrs;
+    let cell_width = attrs.cell_width.filter(|_| attrs.virtualized)?.max(1.0);
+    let row_height = attrs.row_height.unwrap_or(32.0).max(1.0);
+    Some(format!(
+        "display:grid;grid-template-columns:repeat(auto-fill,{cell_width}px);\
+         grid-auto-rows:{row_height}px"
+    ))
 }
 
 /// What Lumen's cascade resolved for this element, as an inline style.
