@@ -1491,14 +1491,15 @@ it. That trade defines it:
 
 ### Authoring a portable plugin
 
-A plugin crate is a `cdylib` depending on the SDK crate at a release tag:
+A plugin crate is a `cdylib` depending on the SDK crate from crates.io, at
+the version of the Lumen release it is for:
 
 ```toml
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-lumen-plugin = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
+lumen-plugin = "=0.0.11"
 ```
 
 Implement `RuntimePlugin` and export it with `lumen_plugin!`. Registration
@@ -1575,8 +1576,8 @@ An app declares its plugins in `lumen.toml` (see the
 [`[[plugins]]` reference](../reference/lumen-toml.md#plugins)); they run on
 every compile path, `lumenc check` included.
 
-Author one by depending on the SDK crate from the Lumen repo at a release tag
-and building a cdylib:
+Author one by depending on the SDK crate from crates.io, at the version of the
+Lumen release it is for, and building a cdylib:
 
 ```toml
 [package]
@@ -1586,7 +1587,8 @@ name = "markdown"
 crate-type = ["cdylib"]
 
 [dependencies]
-lumenc-plugin = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
+lumenc-plugin = "=0.0.11"
+serde = { version = "1", features = ["derive"] }
 ```
 
 Implement the `CompilerPlugin` trait and export it. Every hook has a default

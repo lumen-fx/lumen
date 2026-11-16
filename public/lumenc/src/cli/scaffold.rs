@@ -198,16 +198,25 @@ pub fn write_template(name: &str, dest: &Path) -> Result<Vec<String>, Error> {
     let mut written = Vec::new();
     copy_dir(&source, dest, "", &mut written)?;
     adapt_cargo_manifest(dest, env!("CARGO_PKG_VERSION"))?;
-    if let Some(file) = pin_rust_toolchain(dest, RUST_CHANNEL)? {
+    if let Some(file) = pin_rust_toolchain(dest, rust_channel())? {
         written.push(file);
     }
     written.sort();
     Ok(written)
 }
 
-/// The Rust toolchain this release's prebuilt engine was compiled with, which
-/// lumenc's build script reads from the toolchain pin it was built under.
-const RUST_CHANNEL: Option<&str> = option_env!("LUMEN_RUST_CHANNEL");
+/// The toolchain pin this `lumenc` was built from. The release's prebuilt
+/// engine is readable only by the compiler that built it, which is the one
+/// this file names, so `lumenc new` pins a Rust SDK app to the same channel.
+const RUST_TOOLCHAIN_PIN: &str = include_str!("../../../../rust-toolchain.toml");
+
+/// The `channel` the toolchain pin names.
+fn rust_channel() -> Option<&'static str> {
+    RUST_TOOLCHAIN_PIN.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("channel")?.trim_start();
+        Some(value.strip_prefix('=')?.trim().trim_matches('"'))
+    })
+}
 
 /// The file that pins a Rust SDK app's toolchain.
 const RUST_TOOLCHAIN: &str = "rust-toolchain.toml";
@@ -542,13 +551,12 @@ mod tests {
 
     #[test]
     fn this_build_knows_the_toolchain_it_pins() {
-        // A checkout build reads it from the workspace pin.
-        let pin = include_str!("../../../../rust-toolchain.toml");
-        let channel = RUST_CHANNEL.expect("build.rs sets LUMEN_RUST_CHANNEL");
+        let channel = rust_channel().expect("rust-toolchain.toml names a channel");
         assert!(
-            pin.contains(&format!("channel = \"{channel}\"")),
+            RUST_TOOLCHAIN_PIN.contains(&format!("channel = \"{channel}\"")),
             "{channel}"
         );
+        assert!(!channel.is_empty() && !channel.contains('"'), "{channel}");
     }
 
     #[test]

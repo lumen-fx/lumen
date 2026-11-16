@@ -7,8 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "The byte-level plumbing shared by Lumen's plugin systems: the C-ABI scalars, the wire codec, the lumen.toml schema, and the loader helpers."
-# Not published: it reaches plugin authors through the SDK crate that depends
-# on it, as a cargo git dependency on the Lumen repo at a release tag.
+# Not published: it reaches plugin authors inside the SDK crates' published
+# bundles (tools/release/bundle-crate.py).
 publish = false
 
 [lib]

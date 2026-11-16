@@ -9,6 +9,10 @@ rust-version.workspace = true
 description = "Lumen markup compiler + runner: parse main.lmn / main.css, spawn ECS, run."
 keywords = ["ui", "gui", "cli", "compiler", "lumen"]
 categories = ["command-line-utilities", "gui", "development-tools"]
+# Published as a bundle rather than from here: tools/release/bundle-crate.py
+# writes this crate out with the source of the Lumen crates it uses, none of
+# which is on crates.io, and publish.yml uploads that package.
+publish = false
 
 [lib]
 name = "lumenc"
@@ -399,13 +403,3 @@ runtime-parse = [
     "dep:lumen-i18n",
     "lumen-runtime?/runtime-parse",
 ]
-
-[build-dependencies]
-# A source install (`cargo install lumenc`) fetches the matching tagged source
-# and builds the engine and the launcher stub from it, because those two are
-# release files rather than cargo artifacts and `lumenc package` cannot
-# assemble a folder without them. See build.rs; in a Lumen checkout the script
-# does nothing and none of this runs.
-ureq.workspace = true
-tar.workspace = true
-flate2.workspace = true

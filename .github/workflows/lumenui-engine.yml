@@ -62,7 +62,6 @@ on:
       # What scaffolds the rust template: the gallery, the manifest and
       # toolchain pin it writes, and the download of the template's tree.
       - public/lumenc/src/cli/scaffold.rs
-      - public/lumenc/build.rs
       - tools/fetch-templates.sh
       - rust-toolchain.toml
       - .github/workflows/lumenui-engine.yml
