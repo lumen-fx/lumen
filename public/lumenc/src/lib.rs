@@ -70,6 +70,11 @@ pub mod parse;
 /// The compiler side of the injected compiler-plugin boundary: builds an
 /// app's `[[plugins]]` chain over the `lumenc-plugin` loader.
 pub mod plugin_host;
+// The build script's placement of the candela standard library beside a
+// `lumenc` installed from crates.io. The library compiles it only to test it;
+// cargo runs a build script but never tests one.
+#[cfg(test)]
+mod script_library_install;
 /// `lumenc web` - emit an app as a static site, serve it locally, and render
 /// it per-request over SSR.
 pub mod web;
