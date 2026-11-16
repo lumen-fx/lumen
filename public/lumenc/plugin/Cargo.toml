@@ -6,10 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "SDK for lumenc compiler plugins: the CompilerPlugin trait, the C-ABI export macro, and the loader lumenc itself uses."
-# Not published: plugin authors take this crate as a cargo git dependency on
-# the Lumen repo at a release tag, which resolves lumen-ir and its closure as
-# path dependencies inside the clone.
+description = "SDK for lumenc compiler plugins: the CompilerPlugin trait and the C-ABI export macro."
+# Published as a bundle rather than from here: tools/release/bundle-crate.py
+# writes this crate out with the source of the Lumen crates it uses, none of
+# which is on crates.io, and publish.yml uploads that package.
 publish = false
 
 [lib]

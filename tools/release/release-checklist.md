@@ -280,11 +280,8 @@ The tag push starts `release.yml` again, this time as the release itself:
 
    Every one of the four keeps a manual trigger in the Actions tab, so a leg that
    failed is re-run on its own rather than by cutting another release, and a
-   leg missing its credential verifies instead of uploading. The `lumenc` job
-   on crates.io is the exception while the workspace blocks its publish: it
-   fails before it reaches the verify, in every mode, and leaves the Rust SDK
-   job beside it alone. Each of those files lists the credentials it wants at
-   the top.
+   leg missing its credential verifies instead of uploading. Each of those
+   files lists the credentials it wants at the top.
 
    `publish.yml` and `publish-extensions.yml` both ask their registry what it
    already holds and upload only what is missing, so re-running either one is
@@ -370,10 +367,9 @@ and the next click releases exactly that version.
 That is safe because nothing turns a version number into a download
 address. Every version-keyed lookup asks the releases page what exists:
 `lumenc` resolves the release its toolchain files come from through
-`releases/latest` (or through its install receipt), the update check
-compares against `releases/latest`, and `public/lumenc/build.rs` confirms
-the tag it needs is published before fetching source from it. A number with
-no tag behind it resolves to nothing and says so.
+`releases/latest` (or through its install receipt), and the update check
+compares against `releases/latest`. A number with no tag behind it resolves
+to nothing and says so.
 
 The commit is pushed over SSH with the write deploy key in
 `REPIN_DEPLOY_KEY`, and `ci` runs against it on `main` like any other
@@ -513,16 +509,17 @@ upload is a job in `release.yml` itself; the section on PyPI below says why.
 | `lumenui` | crates.io | the Rust SDK                 |
 | `lumenui-canvas` | crates.io | the Rust SDK's canvas module |
 | `lumenc`  | crates.io | the CLI, for `cargo install` |
+| `lumenc-plugin` | crates.io | the SDK for compiler plugins |
+| `lumen-plugin` | crates.io | the SDK for portable runtime plugins |
 
 The Python distribution is pure Python and ships no binary, so one wheel covers
 every platform; it finds `liblumen` from an installed toolchain or a checkout
 at run time (`public/lumenui/python/README.md` documents the search order).
 
-That table is the whole list. Every other crate in the workspace is
-`publish = false`, because the engine does not travel through crates.io as
-source: the Rust SDK links the release's prebuilt engine, and
-`public/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
-the launcher beside the installed binary.
+That table is the whole list. Every crate in the workspace is
+`publish = false`, because the engine's crates do not go to crates.io one by
+one: the Rust SDK links the release's prebuilt engine, and the three bundled
+crates carry the engine source they use inside their own packages.
 
 ### The Rust SDK
 
@@ -560,20 +557,29 @@ LUMEN_ENGINE_ARTIFACTS=<unpacked set> tools/release/publish-crates.py --sdk --dr
 A module crate's dry run builds against the checkout's `lumenui` while that
 version is not on the registry.
 
-### lumenc
+### The bundled crates
 
-`lumenc` does not go out yet. It names many `lumen-*` crates as dependencies,
-and cargo will not publish a crate whose dependency is not on the registry.
-Until that is unwound, `tools/release/publish-crates.py --plan` refuses to
-start and lists exactly which crates are in the way, and
-`cargo publish -p lumenc --dry-run` names the first of them.
+`lumenc`, `lumenc-plugin` and `lumen-plugin` are workspace crates built on
+engine crates that are not published. `tools/release/bundle-crate.py` writes
+each one out as a single package: every Lumen crate it uses becomes a module
+under `src/vendor/`, with its paths re-rooted and its features fixed at what
+the crate's default build enables, and the crates.io crates those use become
+the package's dependencies. A derive from a Lumen proc-macro crate is expanded
+in place; any other Lumen proc-macro crate travels under `macros/` and the
+package's build script compiles it. The package's build script also runs the
+build scripts of the crates it carries. To look at one:
 
-The `lumenc on crates.io` job fails when the plan refuses, with the list on the
-run summary. It runs after the SDK job whatever that job's result, so a red
-`lumenc` job leaves the SDK published. A release whose `lumenc` job is red
-uploaded no workspace crate; the rest of that release still shipped. Once the
-block is cleared, re-run the workflow from the Actions tab and it picks up
-from whatever is already on the registry.
+```sh
+tools/release/bundle-crate.py lumenc --out /tmp/lumenc-bundle
+cargo publish --manifest-path /tmp/lumenc-bundle/Cargo.toml --dry-run
+```
+
+The `lumenc and the plugin SDKs on crates.io` job publishes the three. It runs
+after the SDK job whatever that job's result, so a red bundled job leaves the
+SDK published. Verifying `lumenc` compiles the whole engine as one crate, which
+is most of the job's time. A bundling step that meets something it cannot
+carry (a build script that needs another Lumen crate, a file read from outside
+the repository) stops the plan with the reason on the run summary.
 
 ### The publish script
 
@@ -584,7 +590,7 @@ state each crate is in, and publishes them one at a time:
 tools/release/publish-crates.py --sdk --plan      # the Rust SDK set
 tools/release/publish-crates.py --sdk --dry-run
 tools/release/publish-crates.py --sdk --execute   # needs CARGO_REGISTRY_TOKEN
-tools/release/publish-crates.py --plan            # the lumenc set
+tools/release/publish-crates.py --plan            # the bundled crates
 tools/release/publish-crates.py --dry-run
 tools/release/publish-crates.py --execute         # needs CARGO_REGISTRY_TOKEN
 ```
@@ -597,8 +603,7 @@ while a later release takes minutes.
 
 What it refuses to start on, all worth knowing before a release:
 
-- A crate the published set depends on that is `publish = false`. The `lumenc`
-  set is in that state today; the section above describes it.
+- A crate that does not bundle; the section above lists what stops one.
 - A crate whose version is not the workspace version.
 - A crate name on crates.io that belongs to another project. The script
   compares the `repository` field of an existing crate against this one.

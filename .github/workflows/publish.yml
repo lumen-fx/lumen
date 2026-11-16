@@ -1,10 +1,11 @@
 name: publish
 
 # Publishes the Lumen crates to crates.io: the Rust SDK (`lumenui` and its
-# `lumenui-<name>` module crates) and `lumenc`. This is a different channel
-# from the toolchain archives people install with install.sh; both go out for
-# the same release, and release.yml starts both. The Python SDK goes to PyPI
-# from release.yml itself; its `pypi` job says why it cannot live here.
+# `lumenui-<name>` module crates), `lumenc`, and the plugin SDKs
+# (`lumenc-plugin`, `lumen-plugin`). This is a different channel from the
+# toolchain archives people install with install.sh; both go out for the same
+# release, and release.yml starts both. The Python SDK goes to PyPI from
+# release.yml itself; its `pypi` job says why it cannot live here.
 #
 # release.yml calls this once the release is published, off the tag it was cut
 # from. Waiting on `release: published` instead would never fire: release.yml
@@ -25,8 +26,7 @@ name: publish
 # is already published, so a leg that failed halfway is fixed by running the
 # workflow again.
 #
-# crates.io gets two jobs, because the two sets have nothing in common and one
-# of them cannot publish yet:
+# crates.io gets two jobs, because the two sets have nothing in common:
 #
 #   - The Rust SDK. `lumenui` (public/lumenui/rust) names no engine crate: its
 #     build script downloads, by its own version, the prebuilt engine set the
@@ -36,12 +36,13 @@ name: publish
 #     is up, which is why release.yml calls this after its upload, and
 #     tools/release/publish-crates.py refuses to start when the release is
 #     not there.
-#   - `lumenc`, for `cargo install lumenc`. It depends on many workspace
-#     crates that are `publish = false`, so the script refuses to start and
-#     this job fails, with the list on the run summary, until that is unwound.
+#   - The bundled crates: `lumenc`, for `cargo install lumenc`, and the plugin
+#     SDKs. Each is built on engine crates that are not published, so
+#     tools/release/bundle-crate.py writes it out as one package carrying the
+#     source of every Lumen crate it uses, and that package is what uploads.
 #     It runs after the SDK job, whatever that job's result, so it never holds
 #     the SDK back, and the two never share the crates.io rate limit at once.
-#     A release whose `lumenc` job is red still published the SDK; see the
+#     A release whose bundled job is red still published the SDK; see the
 #     registries section of tools/release/release-checklist.md.
 
 on:
@@ -209,19 +210,17 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: python3 -u tools/release/publish-crates.py --sdk --execute
 
-  # `lumenc` and the workspace crates it needs, in dependency order, for
-  # `cargo install lumenc`. Same script, workspace set.
+  # `lumenc` and the plugin SDKs, each bundled into one package. Same script,
+  # bundled set.
   #
   # It runs after the SDK job whatever that job's result: the SDK does not
   # depend on it, and running them one after the other keeps both inside one
   # account's rate limit.
   #
-  # The timeout is generous because the first publish is: crates.io lets an
-  # account create a few new crates and then meters the rest. Later releases
-  # publish new versions of crates that exist, which is metered far more
-  # loosely.
+  # The timeout is generous because verifying `lumenc` compiles the whole
+  # engine as one crate before it uploads.
   crates-io-lumenc:
-    name: lumenc on crates.io
+    name: lumenc and the plugin SDKs on crates.io
     needs: [preflight, crates-io-sdk]
     if: always() && needs.preflight.result == 'success'
     runs-on: ubuntu-24.04
@@ -247,12 +246,10 @@ jobs:
           key: publish
 
       # The script exits 2 when something makes the run pointless to start: a
-      # crate the published set depends on that is `publish = false`, a crate
-      # name that belongs to another project, a git dependency with no
-      # published release. A green job that uploaded nothing reads as a
-      # successful publish, so the leg fails here instead, with the reason on
-      # the run summary where a release is watched. Today it fails here on the
-      # first reason.
+      # crate that does not bundle, a crate name that belongs to another
+      # project. A green job that uploaded nothing reads as a successful
+      # publish, so the leg fails here instead, with the reason on the run
+      # summary where a release is watched.
       - name: Plan the publish order
         id: plan
         run: |
@@ -264,10 +261,10 @@ jobs:
           python3 -u tools/release/publish-crates.py --plan 2>&1 | tee "$log" || status=$?
           if [ "$status" != "0" ]; then
             {
-              echo "## crates.io: lumenc was not published"
+              echo "## crates.io: lumenc and the plugin SDKs were not published"
               echo
               echo "\`publish-crates.py --plan\` exited $status, so this run"
-              echo "uploaded no workspace crates. The end of its output:"
+              echo "uploaded none of the bundled crates. The end of its output:"
               echo
               echo '```'
               tail -n 40 "$log"

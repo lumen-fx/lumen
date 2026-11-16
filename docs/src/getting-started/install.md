@@ -197,18 +197,23 @@ Releases cover Linux, macOS, and Windows, each on x86_64 and aarch64. On
 anything else install from source:
 
 ```sh
-cargo install lumenc
+cargo install lumenc --locked
 ```
 
-This needs a Rust toolchain. It builds `lumenc`, then fetches the matching
-Lumen source and builds the runtime library, the launcher, the `lumen-crash`
-helper, and the candela standard library from it, putting them beside the
-installed `lumenc` so
-running and packaging an app work the same as they do from a release. Expect it
-to take a while: it is compiling the engine.
+`--locked` builds with the dependency versions the release was tested with;
+without it cargo picks the newest compatible ones, and a newer release of a
+dependency can break the build.
 
-`lumenc` is not on crates.io yet: it depends on engine crates that are not
-published, so this command fails until that changes.
+This needs a Rust toolchain and a C compiler. It builds `lumenc` with the
+engine compiled in, so `lumenc check`, `build`, and `run` work, and puts the
+candela standard library (`libs/`) beside the installed binary. Expect it to
+take a while: it is compiling the engine.
+
+It does not build the runtime library, the launcher, or the `lumen-crash`
+helper that `lumenc package` assembles an app folder from. Build them from a
+Lumen checkout of the same version with `cargo build --release -p lumen -p
+lumen-launcher -p lumen-crash`, and point `LUMEN_LIB_DIR` (or `lumenc package
+--lib-dir`) at `target/release`.
 
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
@@ -228,13 +233,6 @@ from a Lumen checkout of the same version with `cargo build --release -p
 lumen-server`, and point `LUMEN_SERVER` at the binary. The language server is
 the same: build it with `cargo build --release -p lumen-lsp` and put it beside
 `lumenc` or on your `PATH`.
-
-Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
-building the rest yourself. `lumenc run`, `build`, and `check` work without the
-runtime library and the launcher; `lumenc package` needs them, and it says so
-and names the directory to put them in. A script that reaches for
-`import "std/..."` needs the `libs/` directory beside `lumenc`, or
-`CANDELA_LIB_PATH` naming one elsewhere.
 
 ## Nightly builds
 

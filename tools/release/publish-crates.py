@@ -20,21 +20,20 @@ It publishes one of two sets, chosen on the command line:
     an engine crate: `lumenui`'s build script downloads the prebuilt engine
     set from the release tagged with its version, so these publish after
     that release exists, and the script checks that it does.
-  - The workspace crates reachable from the roots (default `lumenc`,
-    `lumen-launcher`), the `cargo install lumenc` path. These depend on
-    crates that are `publish = false`, so this set refuses to start today.
+  - The bundled crates (the default): `lumenc` for `cargo install lumenc`, and
+    the plugin SDKs `lumenc-plugin` and `lumen-plugin`. Each is built on
+    engine crates that are not published, so `tools/release/bundle-crate.py`
+    writes it out, into a temporary directory outside the checkout, as one
+    package carrying the source of every Lumen crate it uses. The packages
+    depend on crates.io crates only and on none of each other.
 
 What it does, in order:
 
   1. Reads the set's manifests and builds its dependency graph, using normal
-     and build dependencies only. Dev-dependencies are excluded on purpose:
-     cargo strips them from the published manifest, so a dev-only edge
-     (lumenc -> lumen-devtools, for one) is not a publish-order edge and would
-     otherwise turn the graph cyclic.
-  2. For the workspace set, reduces that graph to the crates reachable from
-     the roots and refuses a `publish = false` one among them. Then
-     topo-sorts: a crate must exist on crates.io before anything that depends
-     on it can be verified, so the order is the whole point.
+     and build dependencies only; cargo strips dev-dependencies from a
+     published manifest, so they decide nothing here. Then topo-sorts: a
+     crate must exist on crates.io before anything that depends on it can be
+     verified.
   3. Preflights every crate: the version must be the workspace version, the
      name must not belong to somebody else, and no dependency may be a git
      dependency without a version (cargo rejects those on publish). For the
@@ -49,7 +48,7 @@ Usage:
     tools/release/publish-crates.py --sdk --plan     # the Rust SDK set
     tools/release/publish-crates.py --sdk --dry-run
     tools/release/publish-crates.py --sdk --execute
-    tools/release/publish-crates.py --plan           # the workspace set
+    tools/release/publish-crates.py --plan           # the bundled crates
     tools/release/publish-crates.py --dry-run
     tools/release/publish-crates.py --execute
 
@@ -86,13 +85,10 @@ REPO = Path(__file__).resolve().parents[2]
 CRATES_IO_API = "https://crates.io/api/v1/crates"
 USER_AGENT = "lumen-release (https://github.com/lumen-fx/lumen)"
 
-# The workspace set's entry points. Everything else in that set is there
-# because one of these needs it: `lumenc` is the CLI people `cargo install`,
-# and `lumen-launcher` is the stub `lumenc package` turns into an app
-# executable, which a source install has no other way to obtain. The Rust SDK
-# is the other set (`--sdk`): its crates depend on no crate here, so they are
-# not part of this order.
-DEFAULT_ROOTS = ("lumenc", "lumen-launcher")
+# The crates published as bundles: `lumenc`, for `cargo install lumenc`, and
+# the SDKs plugin authors build against. tools/release/bundle-crate.py says
+# what a bundle carries.
+BUNDLED = ("lumenc-plugin", "lumen-plugin", "lumenc")
 
 # The Rust SDK crates in the tree: the build-script crate, which `lumenui`'s
 # own build script and every app's depend on, and `lumenui`. The module
@@ -120,23 +116,6 @@ def plural(count: int, noun: str) -> str:
 
 
 # ----------------------------------------------------------------- metadata
-
-
-def cargo_metadata() -> dict:
-    out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0:
-        raise SystemExit("cargo metadata failed:\n" + out.stderr.strip())
-    return json.loads(out.stdout)
-
-
-def workspace_packages(meta: dict) -> dict[str, dict]:
-    members = set(meta["workspace_members"])
-    return {p["name"]: p for p in meta["packages"] if p["id"] in members}
 
 
 def publishable(pkg: dict) -> bool:
@@ -179,10 +158,7 @@ def publish_order(packages: dict[str, dict], roots: list[str]) -> list[str]:
 
     skipped = sorted(n for n in reachable if not publishable(packages[n]))
     if skipped:
-        raise Preflight(
-            "these crates are `publish = false` but something published "
-            "depends on them: " + ", ".join(skipped)
-        )
+        raise Preflight("these crates are `publish = false`: " + ", ".join(skipped))
 
     order: list[str] = []
     state: dict[str, int] = {}
@@ -357,6 +333,26 @@ def sdk_packages(wrapper_dir: Path) -> dict[str, dict]:
     return packages
 
 
+def bundled_packages(work_dir: Path) -> dict[str, dict]:
+    """The bundled crates, each written by bundle-crate.py into `work_dir`."""
+    packages = {}
+    for name in BUNDLED:
+        out = work_dir / name
+        proc = subprocess.run(
+            [sys.executable, str(REPO / "tools" / "release" / "bundle-crate.py"),
+             name, "--out", str(out)],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise Preflight(f"bundle-crate.py {name} failed:\n"
+                            + (proc.stdout + proc.stderr).strip())
+        pkg = manifest_package(out / "Cargo.toml")
+        packages[pkg["name"]] = pkg
+    return packages
+
+
 def release_assets(version: str) -> set[str] | None:
     """The asset names the release's sha256sums.txt lists, or None when the
     release (or that file) is not published."""
@@ -420,17 +416,14 @@ def engine_set_problems(version: str, targets: list[str]) -> tuple[list[str], li
 
 def run_cargo_publish(
     pkg: dict,
-    sdk: bool,
     dry_run: bool,
     allow_dirty: bool,
     patches: dict[str, Path],
 ) -> tuple[int, str]:
-    if sdk:
-        # Each SDK crate is a workspace of its own with no committed lockfile,
-        # so there is no lockfile for `--locked` to hold it to.
-        cmd = ["cargo", "publish", "--manifest-path", pkg["manifest_path"]]
-    else:
-        cmd = ["cargo", "publish", "-p", pkg["name"], "--locked"]
+    # Every crate here is a package of its own outside the checkout's
+    # workspace. A bundle carries the workspace's Cargo.lock, which still names
+    # the crates it carries, so `--locked` would refuse it; cargo trims it.
+    cmd = ["cargo", "publish", "--manifest-path", pkg["manifest_path"]]
     if dry_run:
         cmd.append("--dry-run")
     if allow_dirty:
@@ -498,10 +491,7 @@ def main() -> int:
     mode.add_argument("--execute", action="store_true", help="publish for real")
     parser.add_argument("--sdk", action="store_true",
                         help="publish the Rust SDK (lumenui and its generated module "
-                             "crates) instead of the workspace set")
-    parser.add_argument("--root", action="append", default=[], metavar="CRATE",
-                        help="workspace entry point to publish, repeatable (default: "
-                             + ", ".join(DEFAULT_ROOTS) + ")")
+                             "crates) instead of the bundled crates")
     parser.add_argument("--allow-dirty", action="store_true",
                         help="pass --allow-dirty to cargo publish")
     parser.add_argument("--no-wait", action="store_true",
@@ -509,35 +499,29 @@ def main() -> int:
     parser.add_argument("--stop-after", type=int, default=0, metavar="N",
                         help="publish at most N crates this run")
     args = parser.parse_args()
-    if args.sdk and args.root:
-        parser.error("--root names workspace crates; --sdk publishes the SDK set")
 
     version = workspace_version()
-    if not args.sdk:
-        return publish(args, version, None)
     # Outside the checkout: the workspace above would claim the crates, and an
     # untracked file in the tree reads as a dirty working tree to cargo.
-    wrapper_dir = Path(tempfile.mkdtemp(prefix="lumenui-sdk-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="lumen-crates-"))
     try:
-        return publish(args, version, wrapper_dir)
+        return publish(args, version, work_dir)
     finally:
-        shutil.rmtree(wrapper_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def publish(args: argparse.Namespace, version: str, wrapper_dir: Path | None) -> int:
-    sdk = wrapper_dir is not None
+def publish(args: argparse.Namespace, version: str, work_dir: Path) -> int:
+    sdk = args.sdk
     problems: list[str] = []
     warnings: list[str] = []
     try:
-        if wrapper_dir is not None:
-            packages = sdk_packages(wrapper_dir)
-            roots = sorted(packages)
+        if sdk:
+            packages = sdk_packages(work_dir)
             label = "the Rust SDK"
         else:
-            packages = workspace_packages(cargo_metadata())
-            roots = args.root or list(DEFAULT_ROOTS)
-            label = ", ".join(roots)
-        order = publish_order(packages, roots)
+            packages = bundled_packages(work_dir)
+            label = "the bundled crates"
+        order = publish_order(packages, sorted(packages))
     except Preflight as err:
         print(f"preflight: {err}", file=sys.stderr)
         return 2
@@ -620,11 +604,11 @@ def publish(args: argparse.Namespace, version: str, wrapper_dir: Path | None) ->
         pkg = packages[name]
         patches = sibling_patches(pkg, packages, pending) if sdk and args.dry_run else {}
         print(f"\n>> {name} {version} ({state})")
-        code, output = run_cargo_publish(pkg, sdk, args.dry_run, args.allow_dirty, patches)
+        code, output = run_cargo_publish(pkg, args.dry_run, args.allow_dirty, patches)
         if code != 0 and rate_limited(output) and not args.dry_run:
             print("    rate limited, waiting before one retry")
             time.sleep(NEW_CRATE_INTERVAL)
-            code, output = run_cargo_publish(pkg, sdk, False, args.allow_dirty, {})
+            code, output = run_cargo_publish(pkg, False, args.allow_dirty, {})
         if code != 0 and args.dry_run:
             blocker = waiting_on_a_sibling(output, pending)
             if blocker:

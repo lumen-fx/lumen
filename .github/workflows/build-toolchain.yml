@@ -288,11 +288,6 @@ jobs:
       # module here was compiled against.
       - name: Build lumenc + liblumen (dynamic engine, Unix)
         if: runner.os != 'Windows'
-        env:
-          # The engine is fetched and built by lumenc's build script only when
-          # it is installed from outside a checkout; say so explicitly here so
-          # a workspace change can never turn a release build into a download.
-          LUMEN_SKIP_ENGINE_BUILD: "1"
         run: |
           triple="$(rustc -vV | sed -n 's/^host: //p')"
           echo "triple=$triple" >> "$GITHUB_ENV"
@@ -362,8 +357,6 @@ jobs:
       - name: Build lumenc (Windows)
         if: runner.os == 'Windows'
         run: cargo build --release -p lumenc
-        env:
-          LUMEN_SKIP_ENGINE_BUILD: "1"
 
       - name: Build liblumen (Windows)
         if: runner.os == 'Windows'
@@ -631,8 +624,6 @@ jobs:
       # would pull in half a module.
       - name: Build the static launcher and record the link
         shell: bash
-        env:
-          LUMEN_SKIP_ENGINE_BUILD: "1"
         run: |
           set -eo pipefail
           triple="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"

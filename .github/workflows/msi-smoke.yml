@@ -60,8 +60,6 @@ jobs:
 
       - name: Build lumenc, liblumen, the launcher stub, the servers, and the crash helper
         run: cargo build -p lumenc -p lumen -p lumen-launcher -p lumen-server -p lumen-lsp -p lumen-crash
-        env:
-          LUMEN_SKIP_ENGINE_BUILD: "1"
 
       # The templates travel in the package, so the one under test carries
       # them; the layout check below reads one back out of the install.
