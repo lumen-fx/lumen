@@ -584,8 +584,10 @@ impl Node {
     }
 }
 
-/// A bound event listener. Drop it or call [`Listener::off`] to unbind
-/// (`removeEventListener`).
+/// A bound event listener. Call [`Listener::off`] to unbind
+/// (`removeEventListener`). Dropping a `Listener` does not unbind: the
+/// handler stays bound until `off`, so a caller that binds once can let the
+/// handle go.
 #[derive(Debug)]
 pub struct Listener {
     token: u64,

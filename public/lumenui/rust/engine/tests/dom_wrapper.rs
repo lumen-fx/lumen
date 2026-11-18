@@ -214,3 +214,61 @@ fn a_node_animates_and_its_handle_controls_it() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A listener stays bound when its handle is dropped, as a bind-and-forget
+/// caller expects and as the C++ and Python SDKs have it; only `off()`
+/// unbinds it.
+#[test]
+fn a_dropped_listener_stays_bound_until_off() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir(r#"<root><button id="go" text="Go"/></root>"#);
+    let (mut app, _window) = build_headless_app(RunOptions::new(&dir)).expect("build headless app");
+    settle(&mut app);
+    let entity = app
+        .world
+        .query::<(lumenui::prelude::Entity, &lumenui::prelude::LumenId)>()
+        .iter(&app.world)
+        .find(|(_, id)| id.0 == "go")
+        .map(|(e, _)| e)
+        .expect("the button");
+    let click = |app: &mut EcsApp| {
+        app.world.write_message(lumenui::prelude::ClickEvent {
+            entity,
+            position: lumenui::prelude::Vec2::ZERO,
+            button: lumenui::prelude::PointerButton::Primary,
+            local: None,
+        });
+        settle(app);
+    };
+    let go = dom::get_by_id("go").expect("the button");
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let kept = Arc::new(AtomicUsize::new(0));
+    {
+        let dropped = dropped.clone();
+        // The handle goes as soon as the statement ends.
+        let _ = go.on("click", move |_| {
+            dropped.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+    let listener = {
+        let kept = kept.clone();
+        go.on("click", move |_| {
+            kept.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    settle(&mut app);
+    click(&mut app);
+    assert_eq!(
+        dropped.load(Ordering::SeqCst),
+        1,
+        "a dropped handle still hears"
+    );
+    assert_eq!(kept.load(Ordering::SeqCst), 1);
+    listener.off();
+    settle(&mut app);
+    click(&mut app);
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    assert_eq!(kept.load(Ordering::SeqCst), 1, "off() unbinds");
+}
