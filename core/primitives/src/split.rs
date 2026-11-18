@@ -43,7 +43,8 @@ use bevy_ecs::message::{Message, MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
 use lumen_core::components::{
-    A11yValue, BoxSizing, FlexDirection, Length, LumenAttributes, LumenClasses, Style, StyleDirty,
+    A11yValue, BoxSizing, Display, FlexDirection, Length, LumenAttributes, LumenClasses, Style,
+    StyleDirty,
 };
 use lumen_core::input::FocusedKey;
 use lumen_core::prelude::*;
@@ -278,12 +279,17 @@ pub struct GutterValues<'w, 's> {
 }
 
 /// Hold every pane of `split` at `sizes`, and give each gutter the value
-/// they leave it.
+/// they leave it. A pane that is not displayed and would only be held at the
+/// size it measured, nothing, is left to its styles, so it shows again at
+/// the size they give it.
 fn hold_sizes(split: &Split, sizes: &[f32], writes: &mut SplitWrites) {
     for (pane, size) in split.panes.iter().zip(sizes) {
         let Ok((mut style, mut overrides)) = writes.panes.get_mut(pane.entity) else {
             continue;
         };
+        if style.display == Display::None && *size == pane.size {
+            continue;
+        }
         let basis = Length::Px((size - pane.frame).max(0.0));
         if overrides
             .held_by::<SplitPane>()
@@ -923,6 +929,50 @@ mod tests {
             .run_system_once(move |sizes: SplitSizes| sizes.get(_gutter))
             .unwrap();
         assert_eq!(gutter, None, "a gutter is not a split");
+    }
+
+    /// A drag holds the panes that show; a pane that is not displayed, and
+    /// so measured at nothing, keeps the basis its styles give it, so it
+    /// shows again at its own size rather than its minimum.
+    #[test]
+    fn a_drag_leaves_a_hidden_pane_to_its_styles() {
+        let (mut world, split, [a, b], gutter) = split_world();
+        let hidden = world
+            .spawn((
+                SplitPane,
+                Style {
+                    display: Display::None,
+                    basis: Length::Px(264.0),
+                    ..Style::default()
+                },
+                ChildOf(split),
+            ))
+            .id();
+        world
+            .get_mut::<Split>(split)
+            .unwrap()
+            .panes
+            .push(pane(hidden, 506.0, 0.0, 160.0));
+        world.entity_mut(gutter).insert(Hovered);
+        world.write_message(PointerPressed {
+            position: Vec2::new(203.0, 50.0),
+            button: PointerButton::Primary,
+            local: None,
+            pointer: Default::default(),
+        });
+        world.write_message(PointerMoved {
+            position: Vec2::new(253.0, 80.0),
+            local: None,
+            pointer: Default::default(),
+        });
+        world.run_system_once(drag_split_gutters).unwrap();
+        assert_eq!(basis(&world, a), Length::Px(250.0));
+        assert_eq!(basis(&world, b), Length::Px(250.0));
+        assert_eq!(basis(&world, hidden), Length::Px(264.0), "its own basis");
+        let held = world
+            .get::<StyleOverrides>(hidden)
+            .and_then(|o| o.held_by::<SplitPane>().cloned());
+        assert!(held.is_none(), "nothing holds it: {held:?}");
     }
 
     /// Arrow keys step a focused gutter and Home takes the pane before it to
