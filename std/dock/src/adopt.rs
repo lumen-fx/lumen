@@ -587,6 +587,8 @@ fn adopt_dock(world: &mut World, shared: &Shared, dock: Entity) {
                     slot: 0,
                     basis: None,
                     grow: None,
+                    beside: None,
+                    side: None,
                 }),
                 ..lumen_dock_model::Home::default()
             },
