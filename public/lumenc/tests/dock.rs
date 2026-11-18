@@ -2895,3 +2895,62 @@ fn a_tab_kept_for_another_panel_shows_that_panel() {
     assert_ne!(files_stack, log_stack);
     assert_tabs_name_their_panels(app, "after a swap");
 }
+
+const COLUMN: &str = r#"<root>
+  <dock id="editor">
+    <dock-split axis="column">
+      <dock-stack grow="1"><dock-panel id="top" title="Top"><label text="top"/></dock-panel></dock-stack>
+      <dock-stack grow="1"><dock-panel id="middle" title="Middle"><label text="middle"/></dock-panel></dock-stack>
+      <dock-stack basis="200"><dock-panel id="bottom" title="Bottom"><label text="bottom"/></dock-panel></dock-stack>
+    </dock-split>
+  </dock>
+  <script src="main.cdl"/>
+</root>"#;
+
+/// A collapsed stack keeps only its header's height in its split, whether
+/// the split sized it by `grow` or by `basis`, and the stacks beside it take
+/// the room it gave up.
+#[test]
+fn a_collapsed_stack_gives_its_room_back_to_its_split() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("collapse-room", COLUMN, CANDELA, "");
+    let app = &mut t.app;
+    let stack = |app: &mut App, panel: &str| {
+        let p = entity(app, panel);
+        stack_of(app, p).0
+    };
+    let (top, middle, bottom) = (
+        stack(app, "top"),
+        stack(app, "middle"),
+        stack(app, "bottom"),
+    );
+    let height = |app: &App, e: Entity| rect(app, e).1.y;
+    let (top_before, bottom_before) = (height(app, top), height(app, bottom));
+    assert!(
+        (bottom_before - 200.0).abs() < 1.0,
+        "the basis sizes it: {bottom_before}"
+    );
+
+    for (panel, e) in [("middle", middle), ("bottom", bottom)] {
+        call(app, |d| d.collapse(panel, true).unwrap());
+        ticks(app, 3);
+        let h = height(app, e);
+        assert!(h < 40.0, "collapsed `{panel}` keeps only its header: {h}");
+        call(app, |d| d.collapse(panel, false).unwrap());
+        ticks(app, 3);
+    }
+    call(app, |d| d.collapse("middle", true).unwrap());
+    ticks(app, 3);
+    let top_after = height(app, top);
+    assert!(
+        top_after > top_before + 50.0,
+        "the top stack takes the room: {top_before} -> {top_after}"
+    );
+    call(app, |d| d.collapse("middle", false).unwrap());
+    ticks(app, 3);
+    assert!(
+        (height(app, top) - top_before).abs() < 1.0,
+        "expanding gives the share back"
+    );
+    assert!((height(app, bottom) - bottom_before).abs() < 1.0);
+}
