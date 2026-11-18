@@ -245,7 +245,15 @@ fn build(
             );
             let on_path = pass.max_path.contains(&split.id);
             for &(pane, child) in &panes {
-                let basis = child.basis.map(|b| format!("{b}px"));
+                // A collapsed stack keeps its header and gives up its share:
+                // its size in the split is its header's, whatever the split
+                // holds for it.
+                let collapsed = matches!(&child.node, Node::Stack(s) if s.collapsed);
+                let basis = if collapsed {
+                    Some("auto".to_string())
+                } else {
+                    child.basis.map(|b| format!("{b}px"))
+                };
                 let before = world
                     .get::<InlineStyle>(pane)
                     .and_then(|s| s.get("flex-basis"))
@@ -264,8 +272,13 @@ fn build(
                     // leave, as `flex: 1` does, whatever its content measures.
                     Some(basis.unwrap_or_else(|| "0px".into())),
                 );
-                set_inline(world, pane, "flex-grow", Some(format!("{}", child.grow)));
-                set_inline(world, pane, "flex-shrink", Some("1".into()));
+                let (grow, shrink) = if collapsed {
+                    (0.0, "0")
+                } else {
+                    (child.grow, "1")
+                };
+                set_inline(world, pane, "flex-grow", Some(format!("{grow}")));
+                set_inline(world, pane, "flex-shrink", Some(shrink.into()));
                 if on_path {
                     let keep = world
                         .get::<DockStack>(pane)
