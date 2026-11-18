@@ -11,7 +11,8 @@ use lumen_module::ModuleConfig;
 use lumen_module::lumen_core::app::{App, Plugin};
 use lumen_module::lumen_core::components::Transform;
 use lumen_module::lumen_core::components::{
-    A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, LumenAttributes, LumenClasses, StyleDirty,
+    A11yAnnouncementQueue, A11yLabel, A11yLive, A11yRole, DirtyLayout, LumenAttributes,
+    LumenClasses, StyleDirty, TextContent,
 };
 use lumen_module::lumen_core::input::{
     ClickEvent, ContextMenuEvent, DoubleClickEvent, DragEndEvent, DragMoveEvent, DragStartEvent,
@@ -327,7 +328,7 @@ struct ReportDue<'w, 's> {
     persist: Option<Res<'w, Persist>>,
     focus: Res<'w, FocusTracker>,
     focused: MessageReader<'w, 's, WindowFocused>,
-    new_tabs: Query<'w, 's, (), Added<TabStripButton>>,
+    new_tabs: Query<'w, 's, (), Changed<TabStripButton>>,
     windows: Query<'w, 's, (), With<DockWindow>>,
     moved: Query<'w, 's, (), (With<DockWindow>, WindowMoved)>,
     primary: Query<'w, 's, (), (With<PrimaryWindow>, Changed<Window>)>,
@@ -1197,79 +1198,131 @@ fn show_with_the_primary(
 }
 
 /// Give each new tab of a closable panel its close button, labelled for
-/// assistive technology, and mark the strip buttons the dock's.
+/// assistive technology, and mark the strip buttons the dock's; a button the
+/// strip pointed at another tab is decorated again for its new panel.
 fn decorate_tabs(
     _: In<()>,
     mut commands: Commands,
-    new: Query<(Entity, &TabStripButton), Added<TabStripButton>>,
+    changed: Query<(Entity, &TabStripButton, Has<DockTabButton>), Changed<TabStripButton>>,
     tabs: Query<&DockTab>,
     shared: Res<Shared>,
 ) {
-    if new.is_empty() {
+    if changed.is_empty() {
         return;
     }
     let core = shared.lock();
     let close = text("lumen-dock-close", "Close");
-    for (button, b) in &new {
+    for (button, b, decorated) in &changed {
         let Ok(tab) = tabs.get(b.tab) else { continue };
         let Some(rec) = core.panels.get(&tab.panel) else {
             continue;
         };
-        commands
-            .entity(button)
-            .insert((DockTabButton, A11yLabel(rec.attrs.title.clone())));
-        let closable = rec.attrs.closable;
-        let close_label = format!("{close} {}", rec.attrs.title);
-        let title = rec.attrs.title.clone();
-        let panel = tab.panel.clone();
-        let icon = rec.attrs.icon.clone();
-        commands.queue(move |world: &mut World| {
-            if world.get_entity(button).is_err() {
-                return;
+        let parts = TabParts {
+            title: rec.attrs.title.clone(),
+            close_label: rec
+                .attrs
+                .closable
+                .then(|| format!("{close} {}", rec.attrs.title)),
+            panel: tab.panel.clone(),
+            icon: rec.attrs.icon.clone(),
+        };
+        commands.queue(move |world: &mut World| decorate_tab(world, button, decorated, parts));
+    }
+}
+
+/// What a dock tab's strip button shows for its panel.
+struct TabParts {
+    title: String,
+    /// The close button's label, when the panel can be closed.
+    close_label: Option<String>,
+    panel: String,
+    icon: Option<String>,
+}
+
+/// Give the strip button `button` its panel's caption, close button and
+/// icon. The core strip keeps its buttons when the tabs it shows change and
+/// points a kept button at another tab, so a button decorated before has its
+/// parts brought in step with the panel it shows now.
+fn decorate_tab(world: &mut World, button: Entity, decorated: bool, parts: TabParts) {
+    if world.get_entity(button).is_err() {
+        return;
+    }
+    let TabParts {
+        title,
+        close_label,
+        panel,
+        icon,
+    } = parts;
+    world
+        .entity_mut(button)
+        .insert((DockTabButton, A11yLabel(title.clone())));
+    let part = |world: &World, find: fn(&World, Entity) -> bool| {
+        world
+            .get::<bevy_ecs::hierarchy::Children>(button)
+            .and_then(|kids| kids.iter().find(|&k| find(world, k)))
+    };
+    if !decorated {
+        let mut e = world.entity_mut(button);
+        let mut cl = e.take::<LumenClasses>().unwrap_or_default();
+        if !cl.has("dock-tab") {
+            cl.0.push("dock-tab".into());
+        }
+        e.insert((cl, StyleDirty));
+        // The stack's shown tab is marked from its first frame, and its
+        // strip fitted to its tabs from then on.
+        if let Some(strip) = world.get::<ChildOf>(button).map(ChildOf::parent) {
+            let stack = world.get::<ChildOf>(strip).map(ChildOf::parent);
+            let shown = stack
+                .and_then(|stack| world.get::<Tabs>(stack))
+                .and_then(|t| t.shown);
+            crate::realize::mark_active_tab(world, strip, shown);
+            if let Some(stack) = stack.filter(|&s| world.get::<DockStack>(s).is_some()) {
+                crate::overflow::mark_strip(world, stack, strip);
             }
-            {
-                let mut e = world.entity_mut(button);
-                let mut cl = e.take::<LumenClasses>().unwrap_or_default();
-                if !cl.has("dock-tab") {
-                    cl.0.push("dock-tab".into());
-                }
-                e.insert((cl, StyleDirty));
+        }
+    }
+    // The title, then the close button, then the icon put first.
+    match part(world, |w, k| w.get::<DockTabCaption>(k).is_some()) {
+        Some(caption) => {
+            if world.get::<TextContent>(caption).map(|t| t.0.as_str()) != Some(title.as_str()) {
+                world
+                    .entity_mut(caption)
+                    .insert((TextContent(title), DirtyLayout));
             }
-            // The stack's shown tab is marked from its first frame, and its
-            // strip fitted to its tabs from then on.
-            if let Some(strip) = world.get::<ChildOf>(button).map(ChildOf::parent) {
-                let stack = world.get::<ChildOf>(strip).map(ChildOf::parent);
-                let shown = stack
-                    .and_then(|stack| world.get::<Tabs>(stack))
-                    .and_then(|t| t.shown);
-                crate::realize::mark_active_tab(world, strip, shown);
-                if let Some(stack) = stack.filter(|&s| world.get::<DockStack>(s).is_some()) {
-                    crate::overflow::mark_strip(world, stack, strip);
-                }
-            }
-            // The title, then the close button, then the icon put first.
+        }
+        None => {
             let caption = spawn_part(world, button, "label", "dock-tab-label", Some(title));
             world.entity_mut(caption).insert(DockTabCaption);
-            if closable {
-                let x = spawn_part(
-                    world,
-                    button,
-                    "button",
-                    "dock-tab-close",
-                    Some(CLOSE.into()),
-                );
-                world.entity_mut(x).insert((
-                    lumen_module::lumen_core::components::TabIndex(-1),
-                    A11yRole::Button,
-                    A11yLabel(close_label),
-                    DockCloseButton { panel },
-                ));
-            }
-            if let Some(src) = icon {
-                set_tab_icon(world, button, Some(&src));
-            }
-        });
+        }
     }
+    let existing = part(world, |w, k| w.get::<DockCloseButton>(k).is_some());
+    match (existing, close_label) {
+        (Some(x), Some(label)) => {
+            world
+                .entity_mut(x)
+                .insert((A11yLabel(label), DockCloseButton { panel }));
+        }
+        (Some(x), None) => {
+            world.entity_mut(x).despawn();
+        }
+        (None, Some(label)) => {
+            let x = spawn_part(
+                world,
+                button,
+                "button",
+                "dock-tab-close",
+                Some(CLOSE.into()),
+            );
+            world.entity_mut(x).insert((
+                lumen_module::lumen_core::components::TabIndex(-1),
+                A11yRole::Button,
+                A11yLabel(label),
+                DockCloseButton { panel },
+            ));
+        }
+        (None, None) => {}
+    }
+    set_tab_icon(world, button, icon.as_deref());
 }
 
 /// The close button's mark, the multiplication sign, until a stylesheet
@@ -1443,10 +1496,9 @@ fn follow_panel_attrs(
                             .find(|&k| world.get::<DockTabCaption>(k).is_some())
                     });
                 if let Some(caption) = caption {
-                    world.entity_mut(caption).insert((
-                        lumen_module::lumen_core::components::TextContent(title.clone()),
-                        lumen_module::lumen_core::components::DirtyLayout,
-                    ));
+                    world
+                        .entity_mut(caption)
+                        .insert((TextContent(title.clone()), DirtyLayout));
                 }
             }
             if let Some(label) = close {
