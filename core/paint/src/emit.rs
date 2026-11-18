@@ -302,13 +302,28 @@ fn emit_shadow_at(painter: &mut dyn Painter, cmd: &ExtractedShadow, ox: f64, oy:
         if rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
-        painter.draw_blurred_rounded_rect(
-            Affine::IDENTITY,
-            rect,
-            peniko_color(cmd.color),
-            (cmd.radius as f64 + spread).max(0.0),
-            cmd.blur.max(0.0) as f64,
-        );
+        let radius = (cmd.radius as f64 + spread).max(0.0);
+        let color = peniko_color(cmd.color);
+        if cmd.blur > 0.0 {
+            painter.draw_blurred_rounded_rect(
+                Affine::IDENTITY,
+                rect,
+                color,
+                radius,
+                cmd.blur as f64,
+            );
+        } else {
+            // A sharp shadow is a filled shape, the ring idiom of focus
+            // rings: a path both rasterizers cover alike, where the blurred
+            // rect's analytic edge at no blur differs between them.
+            painter.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                color.into(),
+                None,
+                &Shape::RoundedRect(RoundedRect::from_rect(rect, radius)),
+            );
+        }
         return;
     }
     // Inner (inset) shadow, CSS Backgrounds section 7.1.1: the shadow
@@ -1349,6 +1364,26 @@ mod tests {
         emit_shadow_cached(&mut sink, &mut cache, &shadow());
         assert_eq!(cache.stats().hits, 1);
         assert_eq!(sink.frame.len(), 2);
+    }
+
+    /// A shadow with no blur is a filled rounded rect grown by its spread,
+    /// not a blurred rect of no blur, so both rasterizers draw its rounded
+    /// edge the same way.
+    #[test]
+    fn a_sharp_shadow_is_a_filled_rounded_rect() {
+        let mut sharp = shadow();
+        sharp.blur = 0.0;
+        let mut target = Recording::default();
+        emit_shadow(&mut target, &sharp);
+        assert_eq!(target.len(), 1);
+        let Command::Fill { shape, .. } = &target.commands()[0] else {
+            panic!("expected a fill, got {:?}", target.commands());
+        };
+        let OwnedShape::RoundedRect(rounded) = shape else {
+            panic!("expected a rounded rect, got {shape:?}");
+        };
+        assert_eq!(rounded.rect(), Rect::new(10.0, 20.0, 54.0, 44.0));
+        assert_eq!(rounded.radii().top_left, 6.0);
     }
 
     /// An inset shadow is its colour over its box, masked out where a

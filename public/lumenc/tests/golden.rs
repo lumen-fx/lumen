@@ -819,6 +819,18 @@ fn golden_decor_tiles() {
     );
 }
 
+/// A sharp spread shadow, the ring a focus ring draws, around a rounded
+/// box: both backends draw its rounded outer edge the same.
+#[test]
+fn golden_shadow_ring() {
+    run_case(
+        "shadow_ring",
+        r##"<root skin="default" bg="#11141b"><row padding="40"><tile class="b" width="70px" height="70px" radius="10" /></row></root>"##,
+        ".b { bg: #bb88cc; box-shadow: 0 0 0 6px #b4566a; }",
+        &no_drive,
+    );
+}
+
 /// Gradient fills: linear, radial, conic. `linear-gradient(90deg, ...)`
 /// runs left to right, as CSS has it.
 ///
