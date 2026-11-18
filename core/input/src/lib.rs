@@ -1753,8 +1753,10 @@ type FocusProbe = (
 /// Focus lands on the press rather than the release (Qt timing too): the
 /// caret must land and start blinking before the button is released, and a
 /// press-drag selection needs focus even when the release happens outside the
-/// field. Pressing where nothing is focusable clears input focus. Without the
-/// clear, the placeholder stays hidden after users tap "outside" an input.
+/// field. Pressing where nothing is focusable clears focus, whatever held it,
+/// as a browser moves focus to the body: a button focused by an earlier click
+/// would otherwise still take Enter and Space after the user pressed
+/// somewhere else, and an input would keep its placeholder hidden.
 pub fn focus_on_press(
     mut commands: Commands,
     mut presses: MessageReader<PointerPressed>,
@@ -1763,7 +1765,6 @@ pub fn focus_on_press(
     nodes: Query<FocusProbe>,
     parents: Query<&ChildOf>,
 ) {
-    let is_input = |e: Entity| nodes.get(e).is_ok_and(|(_, input, _)| input);
     for press in presses.read() {
         if !press.is_primary() {
             continue;
@@ -1796,17 +1797,10 @@ pub fn focus_on_press(
                 tracker.0 = Some(e);
             }
             None => {
-                if let Some(prev) = tracker.0
-                    && is_input(prev)
-                {
-                    // Only clear focus when the *previously* focused
-                    // entity was an input. Buttons / tiles can hold
-                    // focus via Tab and shouldn't lose it on every
-                    // stray press.
+                if let Some(prev) = tracker.0.take() {
                     commands
                         .entity(prev)
                         .remove::<(Focused, lumen_core::input::FocusVisible)>();
-                    tracker.0 = None;
                 }
             }
         }
@@ -3916,6 +3910,23 @@ mod focus_visible_tests {
             world.get::<Focused>(text_child).is_none(),
             "the child itself is not focused"
         );
+    }
+
+    /// A press where nothing is focusable takes focus from whatever held it,
+    /// a button as well as an input, as a browser blurs to the body; so a
+    /// button clicked earlier no longer takes the keys.
+    #[test]
+    fn a_press_on_nothing_focusable_clears_any_focus() {
+        let mut world = World::new();
+        world.init_resource::<Messages<PointerPressed>>();
+        world.insert_resource(FocusTracker(None));
+        let button = world.spawn((TabIndex(0), DocumentOrder(0))).id();
+        let canvas = world.spawn_empty().id();
+        press_on(&mut world, button);
+        assert_eq!(world.resource::<FocusTracker>().0, Some(button));
+        press_on(&mut world, canvas);
+        assert_eq!(world.resource::<FocusTracker>().0, None, "focus went");
+        assert!(world.get::<Focused>(button).is_none());
     }
 
     /// A press on a child of a DISABLED focusable does not focus it.

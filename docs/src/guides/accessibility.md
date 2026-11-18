@@ -60,7 +60,8 @@ and container elements, becomes focusable when you give it a `tab-index`.
 Pressing a focusable element with the pointer focuses it, as it does in a
 browser: a button you click takes focus from the field you were typing in. A
 press on a child, such as a button's label, focuses the element it belongs to.
-Pointer focus matches `:focus` but not `:focus-visible`, so a focus ring keyed
+A press where nothing is focusable takes focus away from whatever had it, so a
+button you clicked earlier no longer answers Enter or Space. Pointer focus matches `:focus` but not `:focus-visible`, so a focus ring keyed
 on `:focus-visible` shows for the keyboard only.
 
 Disabled elements and hidden subtrees are skipped. While a `dialog` is open,
