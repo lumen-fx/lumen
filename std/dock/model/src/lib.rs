@@ -536,7 +536,8 @@ pub struct WindowLayout {
 }
 
 /// A spot in a dock a panel goes back to: its stack and its tab index, and,
-/// for when that stack is gone, the split it was in and its slot there.
+/// for when that stack is gone, the split it was in and its slot there, and
+/// for when the split is gone as well, the node it was beside.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Spot {
     /// The dock.
@@ -559,6 +560,13 @@ pub struct Spot {
     /// The share of the split's spare room the stack had.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grow: Option<f32>,
+    /// A node beside the stack in that split, for when the split is gone
+    /// too: a two-child split that loses one child is replaced by the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beside: Option<String>,
+    /// The side of `beside` the stack was on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<Side>,
 }
 
 /// Where a panel that is hidden or popped out goes back to.
@@ -2014,24 +2022,41 @@ impl Workspace {
     }
 
     fn spot_of(&self, dock: &str, loc: &Location) -> Spot {
-        let (split, slot, basis, grow) = self
-            .docks
-            .get(dock)
-            .and_then(|d| d.root.parent_of(&loc.stack))
-            .map(|(s, i)| {
-                let child = &s.children[i];
-                (Some(s.id.clone()), i, child.basis, Some(child.grow))
-            })
-            .unwrap_or((None, 0, None, None));
-        Spot {
+        let mut spot = Spot {
             dock: dock.to_string(),
             stack: loc.stack.clone(),
             index: loc.index,
-            split,
-            slot,
-            basis,
-            grow,
+            split: None,
+            slot: 0,
+            basis: None,
+            grow: None,
+            beside: None,
+            side: None,
+        };
+        let Some((split, i)) = self
+            .docks
+            .get(dock)
+            .and_then(|d| d.root.parent_of(&loc.stack))
+        else {
+            return spot;
+        };
+        let child = &split.children[i];
+        spot.split = Some(split.id.clone());
+        spot.slot = i;
+        spot.basis = child.basis;
+        spot.grow = Some(child.grow);
+        // The node before it, the stack on its far side; else the node after.
+        let (at, after) = if i > 0 { (i - 1, true) } else { (i + 1, false) };
+        if let Some(next) = split.children.get(at) {
+            spot.beside = Some(next.node.id().to_string());
+            spot.side = Some(match (split.axis, after) {
+                (Axis::Row, true) => Side::Right,
+                (Axis::Row, false) => Side::Left,
+                (Axis::Column, true) => Side::Bottom,
+                (Axis::Column, false) => Side::Top,
+            });
         }
+        spot
     }
 
     /// Remember where a panel leaving view was.
@@ -2131,6 +2156,9 @@ impl Workspace {
                 if let Some(x) = &s.split {
                     used.insert(x.clone());
                 }
+                if let Some(x) = &s.beside {
+                    used.insert(x.clone());
+                }
             }
         }
         (1..)
@@ -2185,7 +2213,30 @@ impl Workspace {
             );
             return Some(spot.dock.clone());
         }
-        None
+        // The split collapsed into the node the stack was beside: split that
+        // node again, with the stack on the side it was on.
+        let (Some(beside), Some(side)) = (spot.beside.as_deref(), spot.side) else {
+            return None;
+        };
+        self.docks.get(&spot.dock)?.root.find(beside)?;
+        let container = Container::Dock(spot.dock.clone());
+        self.insert_beside(
+            &container,
+            beside,
+            side,
+            Node::Stack(Stack::with(stack_id.clone(), [panel])),
+        );
+        let root = &mut self.docks.get_mut(&spot.dock)?.root;
+        let parent = root.parent_of(&stack_id).map(|(s, _)| s.id.clone());
+        if let Some(Node::Split(split)) = parent.and_then(|id| root.find_mut(&id))
+            && let Some(child) = split.children.iter_mut().find(|c| c.node.id() == stack_id)
+        {
+            child.basis = spot.basis;
+            child.grow = spot
+                .grow
+                .unwrap_or(if spot.basis.is_some() { 0.0 } else { 1.0 });
+        }
+        Some(spot.dock.clone())
     }
 
     /// Put the panel where `info` places it in a dock.

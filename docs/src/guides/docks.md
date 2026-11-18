@@ -72,8 +72,10 @@ until the app shows it; `place` says where it goes the first time:
 
 `dock::show`, `dock::hide` and `dock::toggle` take a panel's id. A hidden
 panel stays mounted and remembers where it was, so showing it again puts it
-back in the same stack at the same tab. Closing a panel with its tab's close
-button, a middle click or Delete hides it the same way, unless the panel has
+back in the same stack at the same tab. When its stack went with it, it comes
+back in a stack of its own where that stack was, beside the stack it sat next
+to, even if their split has since folded away. Closing a panel with its tab's
+close button, a middle click or Delete hides it the same way, unless the panel has
 `destroy-on-close`, which removes its element: the shape for documents the
 user opens and closes.
 

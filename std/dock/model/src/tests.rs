@@ -351,6 +351,57 @@ fn a_stack_made_again_takes_the_room_the_old_one_had() {
     w.check().unwrap();
 }
 
+/// A panel that leaves a two-stack column takes its stack with it, and the
+/// column collapses into the stack that stayed: docking it back splits that
+/// stack again, with the panel on the side it was on, not in the center.
+#[test]
+fn a_panel_comes_back_beside_the_stack_its_collapsed_split_left() {
+    let mut w = editor();
+    w.detach("assets", WindowPlace::default(), &docked())
+        .unwrap();
+    assert!(w.stack("s2").is_none(), "the emptied stack went");
+    let Node::Split(root) = &w.docks["editor"].root else {
+        panic!("a split")
+    };
+    assert_eq!(root.children[0].node.id(), "s1", "the column collapsed");
+    w.attach("assets", &docked()).unwrap();
+    w.check().unwrap();
+    let loc = w.find("assets").unwrap();
+    assert_ne!(loc.stack, "center", "not in the center stack");
+    let Node::Split(root) = &w.docks["editor"].root else {
+        panic!("a split")
+    };
+    assert_eq!(
+        root.children[0].basis,
+        Some(260.0),
+        "the column kept its width"
+    );
+    let Node::Split(column) = &root.children[0].node else {
+        panic!("the left column is a split again")
+    };
+    assert_eq!(column.axis, Axis::Column);
+    let ids: Vec<&str> = column.children.iter().map(|c| c.node.id()).collect();
+    assert_eq!(ids, ["s1", loc.stack.as_str()], "below the hierarchy");
+
+    // Hidden and shown again, the same.
+    w.hide("hierarchy").unwrap();
+    w.show("hierarchy", &docked()).unwrap();
+    w.check().unwrap();
+    let Node::Split(root) = &w.docks["editor"].root else {
+        panic!("a split")
+    };
+    let Node::Split(column) = &root.children[0].node else {
+        panic!("the left column is a split again")
+    };
+    let ids: Vec<&str> = column.children.iter().map(|c| c.node.id()).collect();
+    assert_eq!(ids[1], loc.stack.as_str());
+    assert_eq!(
+        w.find("hierarchy").unwrap().stack,
+        ids[0],
+        "above the assets"
+    );
+}
+
 #[test]
 fn detaching_a_group_moves_the_stack_and_leaves_the_center() {
     let mut w = editor();
