@@ -79,20 +79,13 @@ fn try_compile() -> Result<(), String> {
         .join("lumen")
         .join("app.lmna");
     let stamp = out.with_extension("stamp");
-    let inputs = {
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(format!("{version}\n{}", ui_fingerprint(&dir)));
-        digest
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
+    let lumenc = find_lumenc(version)?;
+    let inputs = compile_inputs(version, &dir, &lumenc);
     if out.is_file() && std::fs::read_to_string(&stamp).is_ok_and(|s| s == inputs) {
         println!("cargo:rustc-env={UI_ENV}={}", out.display());
         return Ok(());
     }
 
-    let lumenc = find_lumenc(version)?;
     let output = Command::new(&lumenc)
         .arg("build")
         .arg("--ui")
@@ -114,6 +107,49 @@ fn try_compile() -> Result<(), String> {
     let _ = std::fs::write(&stamp, &inputs);
     println!("cargo:rustc-env={UI_ENV}={}", out.display());
     Ok(())
+}
+
+/// What a compiled UI was made from, as a digest the stamp keeps: the
+/// version, the UI sources ([`ui_fingerprint`]) and the `lumenc` that
+/// compiles them ([`lumenc_identity`]). A `lumenc` of the same version built
+/// from another commit may write another artifact format, which the engine
+/// beside it reads and the old artifact's does not.
+fn compile_inputs(version: &str, dir: &Path, lumenc: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!(
+        "{version}\n{}\n{}",
+        lumenc_identity(lumenc),
+        ui_fingerprint(dir)
+    ));
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The `lumenc` binary as found on disk: its path, size and modification
+/// time, so a rebuilt or replaced compiler reads as another one. A bare name
+/// is looked up on `PATH`, as running it does.
+fn lumenc_identity(lumenc: &Path) -> String {
+    let found = if lumenc.components().count() == 1 {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+            .flat_map(|d| [d.join(lumenc), d.join(lumenc).with_extension("exe")])
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| lumenc.to_path_buf())
+    } else {
+        lumenc.to_path_buf()
+    };
+    let meta = std::fs::metadata(&found).ok();
+    let modified = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos());
+    format!(
+        "{} {:?} {:?}",
+        found.display(),
+        meta.map(|m| m.len()),
+        modified
+    )
 }
 
 /// What the UI compile reads, as one string to compare: the path and text of
@@ -292,6 +328,41 @@ mod tests {
 
         std::fs::write(dir.join("src").join("main.lmn"), "<root><label/></root>").unwrap();
         assert_ne!(ui_fingerprint(&dir), paged, "a markup edit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A compiled UI is reused only with the compiler that made it: a
+    /// `lumenc` of the same version rebuilt in place, which may write another
+    /// artifact format, compiles the UI again.
+    #[test]
+    fn a_rebuilt_lumenc_compiles_the_ui_again() {
+        let dir = std::env::temp_dir().join(format!("lumenui-build-lumenc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[app]\nentry = \"main.lmn\"\n").unwrap();
+        std::fs::write(dir.join("src").join("main.lmn"), "<root/>").unwrap();
+        let lumenc = dir.join("lumenc");
+        std::fs::write(&lumenc, "format 24").unwrap();
+        let first = compile_inputs("0.0.12", &dir, &lumenc);
+        assert_eq!(
+            compile_inputs("0.0.12", &dir, &lumenc),
+            first,
+            "nothing moved"
+        );
+
+        std::fs::write(&lumenc, "format 25, rebuilt").unwrap();
+        assert_ne!(
+            compile_inputs("0.0.12", &dir, &lumenc),
+            first,
+            "the same version, another build"
+        );
+        let other = dir.join("other-lumenc");
+        std::fs::copy(&lumenc, &other).unwrap();
+        assert_ne!(
+            compile_inputs("0.0.12", &dir, &other),
+            compile_inputs("0.0.12", &dir, &lumenc),
+            "another compiler"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
