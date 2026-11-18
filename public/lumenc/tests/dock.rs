@@ -2799,3 +2799,99 @@ fn a_split_off_stack_shares_the_room() {
         "the stack along the bottom is {fs}"
     );
 }
+
+/// Every dock tab's strip button against the panel its tab holds: the
+/// caption, the accessible label and the close button all name that panel.
+fn assert_tabs_name_their_panels(app: &mut App, when: &str) {
+    use bevy_ecs::hierarchy::Children;
+    use lumen_core::components::{A11yLabel, TextContent};
+    use lumen_dock::{DockCloseButton, DockTab, DockTabButton, DockTabCaption};
+    use lumen_primitives::TabStripButton;
+    let mut q = app
+        .world
+        .query_filtered::<(Entity, &TabStripButton), bevy_ecs::query::With<DockTabButton>>();
+    let buttons: Vec<(Entity, Entity)> = q.iter(&app.world).map(|(e, b)| (e, b.tab)).collect();
+    assert!(!buttons.is_empty(), "{when}: the dock has tabs");
+    for (button, tab) in buttons {
+        let panel = app
+            .world
+            .get::<DockTab>(tab)
+            .expect("a dock tab")
+            .panel
+            .clone();
+        let element = entity(app, &panel);
+        let title = app
+            .world
+            .get::<LumenAttributes>(element)
+            .and_then(|a| a.get("title"))
+            .unwrap_or_default()
+            .to_string();
+        let kids: Vec<Entity> = app
+            .world
+            .get::<Children>(button)
+            .map(|k| k.iter().copied().collect())
+            .unwrap_or_default();
+        let caption = kids
+            .iter()
+            .find(|&&k| app.world.get::<DockTabCaption>(k).is_some())
+            .and_then(|&k| app.world.get::<TextContent>(k))
+            .map(|t| t.0.clone());
+        assert_eq!(
+            caption.as_deref(),
+            Some(title.as_str()),
+            "{when}: {panel}'s caption"
+        );
+        assert_eq!(
+            app.world.get::<A11yLabel>(button).map(|l| l.0.as_str()),
+            Some(title.as_str()),
+            "{when}: {panel}'s label"
+        );
+        let closes: Vec<String> = kids
+            .iter()
+            .filter_map(|&k| app.world.get::<DockCloseButton>(k))
+            .map(|c| c.panel.clone())
+            .collect();
+        assert_eq!(
+            closes,
+            std::slice::from_ref(&panel),
+            "{when}: {panel}'s close button"
+        );
+    }
+}
+
+#[test]
+fn a_tab_kept_for_another_panel_shows_that_panel() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("retab", MARKUP, CANDELA, "");
+    let app = &mut t.app;
+    assert_tabs_name_their_panels(app, "at start");
+    let mut first = None;
+    call(app, |d| {
+        first = Some(d.save());
+        d.apply_layout("Focus").unwrap();
+    });
+    ticks(app, 3);
+    assert_tabs_name_their_panels(app, "in Focus");
+    call(app, |d| d.restore(first.as_ref().unwrap()));
+    ticks(app, 3);
+    assert_tabs_name_their_panels(app, "back from Focus");
+    // A layout with two panels trading stacks: each stack keeps its strip
+    // button and points it at the panel that arrived.
+    let mut swapped = String::new();
+    call(app, |d| {
+        swapped = d
+            .save()
+            .to_json()
+            .replace("\"files\"", "\"@\"")
+            .replace("\"log\"", "\"files\"")
+            .replace("\"@\"", "\"log\"");
+    });
+    call(app, |d| {
+        d.restore_json(&swapped).expect("the swapped layout")
+    });
+    ticks(app, 3);
+    let (files, log) = (entity(app, "files"), entity(app, "log"));
+    let (files_stack, log_stack) = (stack_of(app, files).0, stack_of(app, log).0);
+    assert_ne!(files_stack, log_stack);
+    assert_tabs_name_their_panels(app, "after a swap");
+}
